@@ -37,6 +37,7 @@ theorem fromDefraDB_toDefraDB (phase : ReconcilePhase) :
 end ReconcilePhase
 
 structure ResolvedSnapshot where
+  /-- Upstream chooser metadata; request admission always requires its own explicit selection. -/
   defaultBehavior : BehaviorId
   runnable : Finset BehaviorId
   unavailable : Finset BehaviorId
@@ -150,11 +151,6 @@ def effectiveDispatchers (s : RuntimeState) : Finset BehaviorId :=
 def effectiveUnavailable (s : RuntimeState) : Finset BehaviorId :=
   s.active.unavailable ∪ s.startupDemoted
 
-def selectedBehavior (s : RuntimeState) (sessionId : SessionId) : BehaviorId :=
-  match s.sessionBehavior sessionId with
-  | some behaviorId => behaviorId
-  | none => s.active.defaultBehavior
-
 def bindSessionIfNeeded
     (s : RuntimeState)
     (sessionId : SessionId)
@@ -164,17 +160,12 @@ def bindSessionIfNeeded
   | some _ => s.sessionBehavior
   | none => Function.update s.sessionBehavior sessionId (some behaviorId)
 
-theorem bindSessionIfNeeded_selected
-    (s : RuntimeState)
-    (sessionId : SessionId) :
-    s.bindSessionIfNeeded sessionId (s.selectedBehavior sessionId) sessionId =
-      some (s.selectedBehavior sessionId) := by
-  unfold bindSessionIfNeeded selectedBehavior
-  cases h : s.sessionBehavior sessionId with
-  | none =>
-      simp [h, Function.update]
-  | some behaviorId =>
-      simp [h]
+theorem bindSessionIfNeeded_requested
+    (s : RuntimeState) (sessionId : SessionId) (requested : BehaviorId)
+    (h : (s.sessionBehavior sessionId).all (· == requested) = true) :
+    s.bindSessionIfNeeded sessionId requested sessionId = some requested := by
+  unfold bindSessionIfNeeded
+  cases hs : s.sessionBehavior sessionId <;> simp_all
 
 theorem bindSessionIfNeeded_other
     {s : RuntimeState}
@@ -217,17 +208,18 @@ def CanAdmitRequest
     (process : ProcessState)
     (s : RuntimeState)
     (sessionId : SessionId)
-    (requestId : RequestId) : Prop :=
+    (requestId : RequestId) (requested : BehaviorId) : Prop :=
   requestId ∉ s.accepted ∧
     requestId ∉ s.inFlight ∧
-    BehaviorAdmissible process s (s.selectedBehavior sessionId)
+    BehaviorAdmissible process s requested ∧
+    (s.sessionBehavior sessionId).all (· == requested) = true
 
 instance
     (process : ProcessState)
     (s : RuntimeState)
     (sessionId : SessionId)
-    (requestId : RequestId) :
-    Decidable (CanAdmitRequest process s sessionId requestId) := by
+    (requestId : RequestId) (requested : BehaviorId) :
+    Decidable (CanAdmitRequest process s sessionId requestId requested) := by
   unfold CanAdmitRequest
   infer_instance
 
@@ -403,11 +395,13 @@ theorem ready_implies_runtime_admission_when_fresh
     {s : RuntimeState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    (hReady : project (.observed process s) (s.selectedBehavior sessionId) .backendTemporarilyUnavailable = .ready)
+    {requested : BehaviorId}
+    (hBinding : (s.sessionBehavior sessionId).all (· == requested) = true)
+    (hReady : project (.observed process s) requested .backendTemporarilyUnavailable = .ready)
     (hUnaccepted : requestId ∉ s.accepted)
     (hNotInFlight : requestId ∉ s.inFlight) :
-    CanAdmitRequest process s sessionId requestId := by
-  exact ⟨hUnaccepted, hNotInFlight, ready_sound hReady⟩
+    CanAdmitRequest process s sessionId requestId requested := by
+  exact ⟨hUnaccepted, hNotInFlight, ready_sound hReady, hBinding⟩
 
 end ClientBehaviorReadiness
 

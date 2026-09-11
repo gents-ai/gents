@@ -13,11 +13,11 @@
 //! ```
 //!
 //! Endpoint/model are overridable:
-//! - `GENTS_LIVE_SUBAGENT_ENDPOINT` (default `http://100.73.235.38:8000/v1`)
-//! - `GENTS_LIVE_SUBAGENT_MODEL` (default `d4f`)
+//! - `GENTS_LIVE_SUBAGENT_ENDPOINT` (default `http://workstation-1:8000/v1`)
+//! - `GENTS_LIVE_SUBAGENT_MODEL` (default `GLM-5.3-Flash-NVFP4`)
 //!
 //! The #937 standard-path backgrounding test has its own gate and defaults to
-//! the GLM-5.2 deployment on workstation-1:
+//! the GLM-5.3 Flash deployment on workstation-1:
 //!
 //! ```bash
 //! GENTS_LIVE_BACKGROUNDING=1 \
@@ -25,8 +25,8 @@
 //!   live_standard_backgrounding_uses_real_inference -- --ignored --nocapture
 //! ```
 //!
-//! - `GENTS_LIVE_BACKGROUNDING_ENDPOINT` (default `http://100.73.235.38:8000/v1`)
-//! - `GENTS_LIVE_BACKGROUNDING_MODEL` (default `GLM-5.2`)
+//! - `GENTS_LIVE_BACKGROUNDING_ENDPOINT` (default `http://workstation-1:8000/v1`)
+//! - `GENTS_LIVE_BACKGROUNDING_MODEL` (default `GLM-5.3-Flash-NVFP4`)
 //!
 //! ## Cross-node delegation (Test 3)
 //!
@@ -51,25 +51,29 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{
+    AgentBehavior, AgentContext, BackendAuth, BashTools, HostTools, InferenceBackend,
+    InferenceProfile, SubagentTools, Tools,
+};
 use gents::graphql::escape_graphql_string;
 use gents::{
     agent::p2p_reconcile::resolve_template, default_behavior_id_for_agent,
-    default_inference_profile_id_for_behavior, ensure_agent_principal, load_agent_behavior,
-    resolve_descendant_graph, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
-    AgentIdentity, DescendantGraphAccess, DescendantMaterializationState, DescendantPage,
-    DescendantQuery, DocumentRuntimeOptions, Gents, SubagentTarget, ToolCeiling,
-    ToolSelectionDocument,
+    default_inference_profile_id_for_behavior, ensure_agent_principal, resolve_descendant_graph,
+    AgentIdentity, BackendProviderKind, BashMode, Collection, DescendantGraphAccess,
+    DescendantMaterializationState, DescendantPage, DescendantQuery, DocumentRuntimeOptions, Gents,
+    OpenAiWireApi, SubagentTargetDocument, ToolCeiling,
 };
+use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
-use crate::support::fixtures::test_identity;
+use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::{first_optional_row, test_db, test_p2p_db, TestDb};
 
-const DEFAULT_LIVE_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
-const DEFAULT_LIVE_MODEL: &str = "d4f";
-const DEFAULT_BACKGROUNDING_MODEL: &str = "GLM-5.2";
+const DEFAULT_LIVE_ENDPOINT: &str = "http://workstation-1:8000/v1";
+const DEFAULT_LIVE_MODEL: &str = "GLM-5.3-Flash-NVFP4";
+const DEFAULT_BACKGROUNDING_MODEL: &str = "GLM-5.3-Flash-NVFP4";
 const LIVE_BACKEND_ID: &str = "backend-live-subagent";
 const RESEARCHER_BEHAVIOR_ID: &str = "live-researcher";
 const FAST_WORKER_BEHAVIOR_ID: &str = "live-fast-worker";
@@ -129,13 +133,8 @@ async fn live_local_subagent_delegation() -> Result<()> {
     let agent_did = identity.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&agent_did);
 
-    // Ensure the principal + default (orchestrator) behavior documents exist.
-    // This also creates the default inference profile we reuse for both behaviors.
-    ensure_agent_principal(db.node.as_ref(), &agent_did)
-        .await
-        .expect("ensure principal");
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
-    upsert_live_backend(db.node.as_ref(), &endpoint, &model).await;
+    upsert_live_backend(db.node.as_ref(), &agent_did, &endpoint).await;
 
     // Orchestrator behavior: system prompt instructs delegation to the
     // researcher subagent (foreground is fine locally).
@@ -147,6 +146,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
         &profile_id,
         ORCHESTRATOR_SYSTEM_PROMPT,
         None,
+        true,
     )
     .await;
 
@@ -159,6 +159,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
         &profile_id,
         "You answer the user's question concisely and factually in one short sentence.",
         Some("Researches factual questions and returns a concise factual answer."),
+        false,
     )
     .await;
 
@@ -168,11 +169,14 @@ async fn live_local_subagent_delegation() -> Result<()> {
         db.node.as_ref(),
         &agent_did,
         &orchestrator_behavior_id,
-        vec![SubagentTarget {
-            name: RESEARCHER_TARGET_NAME.to_string(),
+        vec![SubagentTargetDocument {
+            target_id: RESEARCHER_TARGET_NAME.to_string(),
             agent_did: agent_did.clone(),
+            target_agent_did: agent_did.clone(),
+            name: RESEARCHER_TARGET_NAME.to_string(),
             behavior_id: RESEARCHER_BEHAVIOR_ID.to_string(),
             description: Some("Researches factual questions.".to_string()),
+            tags: Vec::new(),
         }],
         /* spawn */ true,
         /* background */ true,
@@ -282,9 +286,9 @@ async fn live_local_subagent_delegation() -> Result<()> {
 
 /// Exercise both background-work lanes through the production owned loop:
 ///
-/// 1. GLM-5.2 chooses `spawn_subagent`; the configured default await mode makes
+/// 1. The model chooses `spawn_subagent`; the configured default await mode makes
 ///    the child background without an `await_mode` argument.
-/// 2. GLM-5.2 chooses `spawn_process` for `bash_unrestricted`.
+/// 2. The model chooses `spawn_process` for `bash_unrestricted`.
 /// 3. The resolved model-facing surface contains every spawn/list/read/wait/
 ///    cancel tool for both lanes.
 /// 4. In the fire-and-continue lanes the initial parent request completes while
@@ -374,11 +378,8 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
         Arc::new(test_identity("backgrounding-live-standard-path"));
     let agent_did = identity.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&agent_did);
-    ensure_agent_principal(db.node.as_ref(), &agent_did)
-        .await
-        .expect("ensure backgrounding principal");
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
-    upsert_live_backend(db.node.as_ref(), &endpoint, &model).await;
+    upsert_live_backend(db.node.as_ref(), &agent_did, &endpoint).await;
     configure_behavior(
         db.node.as_ref(),
         &orchestrator_behavior_id,
@@ -387,6 +388,7 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
         &profile_id,
         &parent_system_prompt,
         None,
+        true,
     )
     .await;
     configure_behavior(
@@ -397,6 +399,7 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
         &profile_id,
         &child_system_prompt,
         Some("Runs a deliberately blocked background integration-test job."),
+        false,
     )
     .await;
     configure_standard_backgrounding_tools(
@@ -407,6 +410,10 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
     )
     .await;
 
+    // Runtime startup probes before resolving its runnable snapshot. This test
+    // inspects the resolved surfaces before `run`, so perform the same probe
+    // first rather than assuming an unobserved backend is already healthy.
+    gents::backend_registry::probe_and_promote_enabled_backends(db.node.as_ref()).await;
     let loaded_agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
@@ -424,7 +431,7 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
     let agent = boot_loaded_document_agent(&db, loaded_agent).await;
 
     // Lane 1: the model invokes spawn_subagent without await_mode. The
-    // ToolSelection default must make the standard path background.
+    // Tools default must make the standard path background.
     let agent_request_id = "req-live-standard-background-agent";
     let agent_session_id = "session-live-standard-background-agent";
     create_runtime_request(
@@ -915,12 +922,9 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     let orchestrator_behavior_id = default_behavior_id_for_agent(&did_a);
 
     // --- Node B: host the fast-worker and reviewer behaviors owned by DID-B. ---
-    ensure_agent_principal(db_b.node.as_ref(), &did_b)
-        .await
-        .expect("ensure principal B");
     let profile_b =
         default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(&did_b));
-    upsert_live_backend(db_b.node.as_ref(), &endpoint, &model).await;
+    upsert_live_backend(db_b.node.as_ref(), &did_b, &endpoint).await;
     configure_behavior(
         db_b.node.as_ref(),
         FAST_WORKER_BEHAVIOR_ID,
@@ -929,6 +933,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         &profile_b,
         CROSS_NODE_FAST_WORKER_SYSTEM_PROMPT,
         Some("Delegates its draft to the reviewer before returning it."),
+        true,
     )
     .await;
     configure_behavior(
@@ -939,17 +944,21 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         &profile_b,
         "When asked to review the capital of France, reply exactly REVIEWER_OK: Paris is the capital of France.",
         Some("Reviews the fast worker's factual answer."),
+        false,
     )
     .await;
     authorize_subagents(
         db_b.node.as_ref(),
         &did_b,
         FAST_WORKER_BEHAVIOR_ID,
-        vec![SubagentTarget {
-            name: REVIEWER_TARGET_NAME.to_string(),
+        vec![SubagentTargetDocument {
+            target_id: REVIEWER_TARGET_NAME.to_string(),
             agent_did: did_b.clone(),
+            target_agent_did: did_b.clone(),
+            name: REVIEWER_TARGET_NAME.to_string(),
             behavior_id: REVIEWER_BEHAVIOR_ID.to_string(),
             description: Some("Reviews the fast worker's answer.".to_string()),
+            tags: Vec::new(),
         }],
         /* spawn */ true,
         /* background */ true,
@@ -958,11 +967,8 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     .await;
 
     // --- Node A: host the orchestrator owned by DID-A. ---
-    ensure_agent_principal(db_a.node.as_ref(), &did_a)
-        .await
-        .expect("ensure principal A");
     let profile_a = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
-    upsert_live_backend(db_a.node.as_ref(), &endpoint, &model).await;
+    upsert_live_backend(db_a.node.as_ref(), &did_a, &endpoint).await;
     configure_behavior(
         db_a.node.as_ref(),
         &orchestrator_behavior_id,
@@ -971,6 +977,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         &profile_a,
         CROSS_NODE_NESTED_ORCHESTRATOR_SYSTEM_PROMPT,
         None,
+        true,
     )
     .await;
 
@@ -982,11 +989,14 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         db_a.node.as_ref(),
         &did_a,
         &orchestrator_behavior_id,
-        vec![SubagentTarget {
+        vec![SubagentTargetDocument {
+            target_id: FAST_WORKER_TARGET_NAME.to_string(),
+            agent_did: did_a.clone(),
+            target_agent_did: did_b.clone(),
             name: FAST_WORKER_TARGET_NAME.to_string(),
-            agent_did: did_b.clone(),
             behavior_id: FAST_WORKER_BEHAVIOR_ID.to_string(),
             description: Some("Produces a reviewed factual answer.".to_string()),
+            tags: Vec::new(),
         }],
         /* spawn */ true,
         /* background */ true,
@@ -1366,7 +1376,12 @@ fn assert_standard_backgrounding_tool_surfaces(
         .behaviors()
         .iter()
         .find(|behavior| behavior.behavior_id == parent_behavior_id)
-        .expect("loaded orchestrator behavior");
+        .unwrap_or_else(|| {
+            panic!(
+                "loaded orchestrator behavior {parent_behavior_id}; active behaviors: {active_behavior_ids:?}; unavailable: {:?}",
+                agent.unavailable_behaviors()
+            )
+        });
     let parent_surface = parent
         .tools
         .explain_with_runtime(false, agent_did, &active_behavior_ids);
@@ -1391,8 +1406,9 @@ fn assert_standard_backgrounding_tool_surfaces(
     ] {
         assert!(
             parent_names.contains(required),
-            "backgrounding-enabled behavior did not provision {required}; resolved={:?}",
-            parent_surface.tool_names
+            "backgrounding-enabled behavior did not provision {required}; resolved={:?}; config={:?}",
+            parent_surface.tool_names,
+            parent.tools
         );
     }
     assert!(
@@ -1445,48 +1461,30 @@ fn assert_standard_backgrounding_tool_surfaces(
 }
 
 /// Upsert the live inference backend document (OpenAI-compatible vLLM).
-async fn upsert_live_backend(node: &EmbeddedNode, endpoint: &str, model: &str) {
-    let escaped_backend_id = escape_graphql_string(LIVE_BACKEND_ID);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let escaped_model = escape_graphql_string(model);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 4,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model}"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 4,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model}"],
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert live backend failed: {:?}",
-        response.errors
-    );
+async fn upsert_live_backend(node: &EmbeddedNode, agent_did: &str, endpoint: &str) {
+    let backend = InferenceBackend {
+        agent_did: agent_did.to_string(),
+        backend_id: LIVE_BACKEND_ID.to_string(),
+        name: LIVE_BACKEND_ID.to_string(),
+        provider_kind: BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
+        endpoint: endpoint.to_string(),
+        auth: BackendAuth::Unauthenticated,
+        connect_timeout_secs: None,
+        discovery_timeout_secs: None,
+        max_concurrent: Some(4),
+        max_queue_depth: Some(100),
+        enabled: true,
+        tags: Vec::new(),
+    };
+    apply_fixture_documents(
+        node,
+        vec![(
+            Collection::InferenceBackend,
+            serde_json::to_value(backend).expect("serialize live backend"),
+        )],
+    )
+    .await;
 }
 
 /// Upsert an `AgentBehavior` document backed by the live backend, with an
@@ -1499,84 +1497,137 @@ async fn configure_behavior(
     inference_profile_id: &str,
     system_prompt: &str,
     description: Option<&str>,
+    default_for_principal: bool,
 ) {
-    let mut behavior = load_agent_behavior(node, behavior_id)
+    let mut principal = ensure_agent_principal(node, agent_did)
         .await
-        .expect("load behavior")
-        .unwrap_or_else(|| AgentBehaviorDocument {
-            behavior_id: behavior_id.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some(behavior_id.to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-06-02T00:00:00Z".to_string()),
-        });
-    behavior.agent_did = agent_did.to_string();
-    behavior.backend_id = Some(LIVE_BACKEND_ID.to_string());
-    behavior.model_name = Some(model.to_string());
-    behavior.inference_profile_id = Some(inference_profile_id.to_string());
-    behavior.system_prompt = Some(system_prompt.to_string());
-    behavior.description = description.map(ToOwned::to_owned);
-    behavior.enabled = true;
-    upsert_agent_behavior(node, &behavior)
-        .await
-        .expect("upsert behavior");
+        .expect("ensure live fixture principal");
+    let context_id = format!("{behavior_id}:context");
+    let profile = InferenceProfile {
+        agent_did: agent_did.to_string(),
+        profile_id: inference_profile_id.to_string(),
+        backend_id: LIVE_BACKEND_ID.to_string(),
+        model_name: model.to_string(),
+        ..Default::default()
+    };
+    let context = AgentContext {
+        context_id: context_id.clone(),
+        agent_did: agent_did.to_string(),
+        display_name: None,
+        description: None,
+        system_prompt: Some(system_prompt.to_string()),
+        tools_id: None,
+        compaction_id: None,
+        skill_ids: Vec::new(),
+        tags: Vec::new(),
+    };
+    let behavior = AgentBehavior {
+        behavior_id: behavior_id.to_string(),
+        agent_did: agent_did.to_string(),
+        display_name: Some(behavior_id.to_string()),
+        description: description.map(ToOwned::to_owned),
+        context_id: Some(context_id),
+        inference_profile_id: inference_profile_id.to_string(),
+        enabled: true,
+        tags: Vec::new(),
+        created_at: Some("2026-06-02T00:00:00Z".to_string()),
+    };
+    let mut documents = vec![
+        (
+            Collection::InferenceProfile,
+            serde_json::to_value(profile).expect("serialize live inference profile"),
+        ),
+        (
+            Collection::AgentContext,
+            serde_json::to_value(context).expect("serialize live agent context"),
+        ),
+        (
+            Collection::AgentBehavior,
+            serde_json::to_value(behavior).expect("serialize live behavior"),
+        ),
+    ];
+    if default_for_principal {
+        principal.default_behavior_id = Some(behavior_id.to_string());
+        documents.push((
+            Collection::AgentPrincipal,
+            serde_json::to_value(principal).expect("serialize live principal"),
+        ));
+    }
+    apply_fixture_documents(node, documents).await;
 }
 
-/// Upsert a ToolSelectionDocument enabling subagent spawning and link it to
-/// `behavior_id`.
+async fn apply_fixture_documents(
+    node: &EmbeddedNode,
+    documents: Vec<(Collection, serde_json::Value)>,
+) {
+    use gents::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+
+    let plan = DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .expect("build live fixture plan");
+    gents::ConfigAccess::transact_local(node, None, "test.live_subagent_fixture", |txn| {
+        let plan = &plan;
+        Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+    })
+    .await
+    .expect("apply live fixture documents");
+}
+
+/// Publish canonical tools enabling subagent spawning for `behavior_id`.
 async fn authorize_subagents(
     node: &EmbeddedNode,
     agent_did: &str,
     behavior_id: &str,
-    subagent_targets: Vec<SubagentTarget>,
+    subagent_targets: Vec<SubagentTargetDocument>,
     spawn_enabled: bool,
     background_enabled: bool,
     allow_cross_deployment: bool,
 ) {
-    let selection_id = format!("{behavior_id}-subagent-tools");
-    let target_entries = subagent_targets
+    let tools_id = format!("{behavior_id}-subagent-tools");
+    let target_ids = subagent_targets
         .iter()
-        .map(SubagentTarget::to_entry)
+        .map(|target| target.target_id.clone())
         .collect();
-    upsert_tool_selection(
+    let referenced_documents = subagent_targets
+        .into_iter()
+        .map(|target| {
+            (
+                Collection::SubagentTarget,
+                serde_json::to_value(target).expect("serialize subagent target"),
+            )
+        })
+        .collect();
+    configure_behavior_tools(
         node,
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
+        agent_did,
+        behavior_id,
+        None,
+        Tools {
+            tools_id,
             agent_did: agent_did.to_string(),
-            subagent_targets: Some(target_entries),
-            subagent_spawn_enabled: Some(spawn_enabled),
-            subagent_background_enabled: Some(background_enabled),
-            subagent_allow_cross_deployment: Some(allow_cross_deployment),
-            // Keep the orchestrator's toolset focused on delegation so the live
-            // model reliably reaches for spawn_subagent rather than defra_query.
-            enable_meta_tools: Some(false),
-            enable_defra_query: Some(false),
+            subagents: Some(SubagentTools {
+                target_ids,
+                spawn_enabled: Some(spawn_enabled),
+                steering_enabled: Some(true),
+                background_enabled: Some(background_enabled),
+                allow_cross_principal: Some(allow_cross_deployment),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        referenced_documents,
     )
-    .await
-    .expect("upsert tool selection");
-
-    let mut behavior = load_agent_behavior(node, behavior_id)
-        .await
-        .expect("load behavior for tool-selection link")
-        .expect("behavior must exist before linking tool selection");
-    behavior.tool_selection_id = Some(selection_id);
-    upsert_agent_behavior(node, &behavior)
-        .await
-        .expect("link tool selection");
+    .await;
 }
 
 /// Configure the parent with both standard background lanes and the child with
@@ -1588,64 +1639,73 @@ async fn configure_standard_backgrounding_tools(
     parent_behavior_id: &str,
     workspace: &Path,
 ) {
-    let parent_selection_id = format!("{parent_behavior_id}-standard-background-tools");
-    let parent_target = SubagentTarget {
-        name: BACKGROUND_WORKER_TARGET_NAME.to_string(),
+    let parent_tools_id = format!("{parent_behavior_id}-standard-background-tools");
+    let parent_target = SubagentTargetDocument {
+        target_id: BACKGROUND_WORKER_TARGET_NAME.to_string(),
         agent_did: agent_did.to_string(),
+        target_agent_did: agent_did.to_string(),
         behavior_id: BACKGROUND_WORKER_BEHAVIOR_ID.to_string(),
+        name: BACKGROUND_WORKER_TARGET_NAME.to_string(),
         description: Some("Runs a deliberately blocked background job.".to_string()),
+        tags: Vec::new(),
     };
-    upsert_tool_selection(
+    configure_behavior_tools(
         node,
-        &ToolSelectionDocument {
-            selection_id: parent_selection_id.clone(),
+        agent_did,
+        parent_behavior_id,
+        None,
+        Tools {
+            tools_id: parent_tools_id,
             agent_did: agent_did.to_string(),
-            enable_bash: Some(true),
-            bash_mode: Some("Unrestricted".to_string()),
-            file_tool_root: Some(workspace.display().to_string()),
-            backgroundable_tool_names: Some(vec!["bash_unrestricted".to_string()]),
-            subagent_targets: Some(vec![parent_target.to_entry()]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            subagent_default_await_mode: Some("background".to_string()),
-            subagent_allow_cross_deployment: Some(false),
-            enable_meta_tools: Some(false),
-            enable_defra_query: Some(false),
+            host: Some(HostTools {
+                root: Some(workspace.display().to_string()),
+                bash: Some(BashTools {
+                    mode: BashMode::Unrestricted,
+                    background_enabled: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            subagents: Some(SubagentTools {
+                target_ids: vec![parent_target.target_id.clone()],
+                spawn_enabled: Some(true),
+                steering_enabled: Some(false),
+                background_enabled: Some(true),
+                default_await_mode: Some("background".to_string()),
+                allow_cross_principal: Some(false),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        vec![(
+            Collection::SubagentTarget,
+            serde_json::to_value(parent_target).expect("serialize background worker target"),
+        )],
     )
-    .await
-    .expect("upsert parent standard backgrounding selection");
-    link_tool_selection(node, parent_behavior_id, &parent_selection_id).await;
+    .await;
 
-    let child_selection_id = format!("{BACKGROUND_WORKER_BEHAVIOR_ID}-foreground-bash-tools");
-    upsert_tool_selection(
+    let child_tools_id = format!("{BACKGROUND_WORKER_BEHAVIOR_ID}-foreground-bash-tools");
+    configure_behavior_tools(
         node,
-        &ToolSelectionDocument {
-            selection_id: child_selection_id.clone(),
+        agent_did,
+        BACKGROUND_WORKER_BEHAVIOR_ID,
+        None,
+        Tools {
+            tools_id: child_tools_id,
             agent_did: agent_did.to_string(),
-            enable_bash: Some(true),
-            bash_mode: Some("Unrestricted".to_string()),
-            file_tool_root: Some(workspace.display().to_string()),
-            enable_meta_tools: Some(false),
-            enable_defra_query: Some(false),
+            host: Some(HostTools {
+                root: Some(workspace.display().to_string()),
+                bash: Some(BashTools {
+                    mode: BashMode::Unrestricted,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        Vec::new(),
     )
-    .await
-    .expect("upsert child foreground bash selection");
-    link_tool_selection(node, BACKGROUND_WORKER_BEHAVIOR_ID, &child_selection_id).await;
-}
-
-async fn link_tool_selection(node: &EmbeddedNode, behavior_id: &str, selection_id: &str) {
-    let mut behavior = load_agent_behavior(node, behavior_id)
-        .await
-        .expect("load behavior for tool-selection link")
-        .expect("behavior must exist before linking tool selection");
-    behavior.tool_selection_id = Some(selection_id.to_string());
-    upsert_agent_behavior(node, &behavior)
-        .await
-        .expect("link tool selection");
+    .await;
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2365,7 +2425,7 @@ async fn wait_for_message_containing(
 #[derive(Debug, Clone, Deserialize)]
 struct WakeRequestRow {
     request_id: String,
-    metadata: Option<String>,
+    input: Option<RequestInput>,
 }
 
 async fn wait_for_background_wake(
@@ -2376,13 +2436,14 @@ async fn wait_for_background_wake(
 ) -> WakeRequestRow {
     let deadline = tokio::time::Instant::now() + timeout;
     let escaped_session_id = escape_graphql_string(session_id);
+    let expected_queue_key = format!("background_completion:{session_id}");
     loop {
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                     order: {{ created_at: ASC }}
-                ) {{ request_id metadata }}
+                ) {{ request_id input }}
             }}"#
         );
         let response = node.execute(&query).await;
@@ -2400,16 +2461,16 @@ async fn wait_for_background_wake(
             .flatten()
             .filter_map(|row| serde_json::from_value::<WakeRequestRow>(row.clone()).ok())
             .find(|row| {
-                let metadata = row
-                    .metadata
-                    .as_deref()
-                    .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
-                metadata.as_ref().is_some_and(|metadata| {
-                    metadata["queue"]["source"] == "background_completion"
-                        && metadata["queue"]["policy"] == "coalesce"
-                        && metadata["queue"]["key"] == format!("background_completion:{session_id}")
-                        && metadata["queue"]["queued_after_request_id"] == queued_after_request_id
-                })
+                row.input
+                    .as_ref()
+                    .and_then(|input| input.queue.as_ref())
+                    .is_some_and(|queue| {
+                        queue.source == QueueSource::BackgroundCompletion
+                            && queue.policy == QueuePolicy::Coalesce
+                            && queue.key.as_deref() == Some(expected_queue_key.as_str())
+                            && queue.queued_after_request_id.as_deref()
+                                == Some(queued_after_request_id)
+                    })
             });
         if let Some(wake) = wake {
             return wake;

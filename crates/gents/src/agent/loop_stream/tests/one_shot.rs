@@ -21,7 +21,7 @@ async fn run_loop_to_text_persists_assistant_reply() {
     assert_eq!(reply, "the answer");
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
     assert!(
@@ -60,7 +60,7 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
     assert_eq!(reply, "done");
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
     assert!(
@@ -112,7 +112,7 @@ async fn run_loop_to_text_retract_persists_only_the_resample() {
     assert_eq!(reply, "The answer is 42");
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
     let assistant_texts: Vec<String> = history

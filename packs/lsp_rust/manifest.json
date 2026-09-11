@@ -12,20 +12,15 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "agent_behaviors/lsp_coder/object.json",
     "agent_behaviors/lsp_coder/system_prompt.md",
-    "agent_principal.json",
-    "event_triggers/lsp_hover/object.json",
     "experiment.json",
-    "inference_backends/exp_deepseek/object.json",
-    "inference_profiles/exp_profile/object.json",
+    "pack_config.json",
     "schemas/lsp_demo_job.graphql",
-    "tasks/lsp_hover_task/object.json",
     "tasks/lsp_hover_task/prompt.md",
-    "tool_selections/lsp_readonly/object.json",
     "unscripted_prompt.md",
     "workspace/Cargo.toml",
     "workspace/src/lib.rs"
   ],
-  "dependencies": []
+  "dependencies": [],
+  "config": "pack_config.json"
 }

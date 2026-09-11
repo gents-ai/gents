@@ -18,17 +18,8 @@ instance (row : ExpiredChildRow) : Decidable (expiredChildStale row) := by
 def expiredChildRecover (row : ExpiredChildRow) : ExpiredChildRow :=
   { row with state := .dead }
 
-def expiredChildUninterruptedTerminalize (row : ExpiredChildRow) : ExpiredChildRow :=
-  { row with state := .dead }
-
 def expiredChildMeasure (row : ExpiredChildRow) : Nat :=
   if expiredChildStale row then 1 else 0
-
-theorem expiredChildRecover_matches_uninterrupted :
-    ∀ row, expiredChildStale row →
-      expiredChildRecover row = expiredChildUninterruptedTerminalize row := by
-  intro row _h_stale
-  simp [expiredChildRecover, expiredChildUninterruptedTerminalize]
 
 theorem expiredChild_stale_positive :
     ∀ row, expiredChildStale row → expiredChildMeasure row > 0 := by
@@ -68,11 +59,6 @@ def expiredSubagentChildSweep : RecoverySweep :=
   , h_recover_zero := expiredChildRecover_zero
   }
 
-def expiredChildRecoveryEquivalence : RecoveryEquivalence expiredSubagentChildSweep :=
-  { uninterrupted := expiredChildUninterruptedTerminalize
-  , h_recover_eq_uninterrupted := expiredChildRecover_matches_uninterrupted
-  }
-
 structure QueuedDescendantRow where
   state : RequestState
   parentTerminal : Bool
@@ -89,18 +75,8 @@ instance (row : QueuedDescendantRow) : Decidable (queuedDescendantStale row) := 
 def queuedDescendantRecover (row : QueuedDescendantRow) : QueuedDescendantRow :=
   { row with state := .interrupted }
 
-def queuedDescendantUninterruptedTerminalize
-    (row : QueuedDescendantRow) : QueuedDescendantRow :=
-  { row with state := .interrupted }
-
 def queuedDescendantMeasure (row : QueuedDescendantRow) : Nat :=
   if queuedDescendantStale row then 1 else 0
-
-theorem queuedDescendantRecover_matches_uninterrupted :
-    ∀ row, queuedDescendantStale row →
-      queuedDescendantRecover row = queuedDescendantUninterruptedTerminalize row := by
-  intro row _h_stale
-  simp [queuedDescendantRecover, queuedDescendantUninterruptedTerminalize]
 
 theorem queuedDescendant_stale_positive :
     ∀ row, queuedDescendantStale row → queuedDescendantMeasure row > 0 := by
@@ -137,11 +113,6 @@ def queuedDescendantSweep : RecoverySweep :=
   , h_stale_positive := queuedDescendant_stale_positive
   , h_recover_terminal := queuedDescendantRecover_terminal
   , h_recover_zero := queuedDescendantRecover_zero
-  }
-
-def queuedDescendantRecoveryEquivalence : RecoveryEquivalence queuedDescendantSweep :=
-  { uninterrupted := queuedDescendantUninterruptedTerminalize
-  , h_recover_eq_uninterrupted := queuedDescendantRecover_matches_uninterrupted
   }
 
 end Recovery

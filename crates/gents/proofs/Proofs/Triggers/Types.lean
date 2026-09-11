@@ -33,8 +33,24 @@ inductive ConcurrencyMode where
   | latestOnly
   deriving DecidableEq, Repr
 
+/-- Omission uses one source-independent default, including graph delivery. -/
+def resolveConcurrency (_source : TriggerKind) (configured : Option ConcurrencyMode) :
+    ConcurrencyMode := configured.getD .parallel
+
+def resolveEventKind (configured : Option String) : String := configured.getD "created"
+
+theorem concurrency_default_parallel (source : TriggerKind) :
+    resolveConcurrency source none = .parallel := rfl
+
+theorem concurrency_source_independent (a b : TriggerKind) (c : Option ConcurrencyMode) :
+    resolveConcurrency a c = resolveConcurrency b c := rfl
+
+theorem event_kind_default_created : resolveEventKind none = "created" := rfl
+
+/-- Resolved runtime projections, not authored schedule/event configuration. -/
 structure ActiveSchedule where
   triggerId : String
+  taskId : String
   enabled : Bool
   deriving DecidableEq, Repr
 
@@ -96,17 +112,21 @@ theorem wellFormed_manual_triggerId_none
 
 end FireIntent
 
+/-- Selected task and lineage; execution resolves the task under the runtime principal. -/
 structure RequestSeed where
+  taskId : String
   causedByTriggerId : Option String
   causedByTriggerKind : TriggerKind
   deriving Repr
 
-abbrev TriggerKey := String × TriggerKind
+/-- Logical trigger identity within one runtime principal. Source kind selects a
+source, not a concurrency namespace; TriggerWideKey models explicit owner scoping. -/
+abbrev TriggerKey := String
 
 namespace FireIntent
 
 def SerialForKey (t : TriggerKey) (intent : FireIntent) : Prop :=
-  intent.triggerId = some t.1 → intent.triggerKind = t.2 → intent.concurrency = .serial
+  intent.triggerId = some t → intent.concurrency = .serial
 
 instance (t : TriggerKey) (intent : FireIntent) : Decidable (FireIntent.SerialForKey t intent) := by
   unfold FireIntent.SerialForKey
@@ -116,10 +136,9 @@ theorem serialForKey_target_is_serial
     {t : TriggerKey}
     {intent : FireIntent}
     (h_serial : intent.SerialForKey t)
-    (h_triggerId : intent.triggerId = some t.1)
-    (h_kind : intent.triggerKind = t.2) :
+    (h_triggerId : intent.triggerId = some t) :
     intent.concurrency = .serial :=
-  h_serial h_triggerId h_kind
+  h_serial h_triggerId
 
 end FireIntent
 

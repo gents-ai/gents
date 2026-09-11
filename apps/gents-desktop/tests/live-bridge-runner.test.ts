@@ -294,7 +294,7 @@ function requestDiagnosticsBundle({
     requestId: "request-1",
     turnState,
     latestRequestId: "request-1",
-    conversationUpdatedAt: "2026-04-22T00:00:02Z",
+    sessionUpdatedAt: "2026-04-22T00:00:02Z",
     request: {
       status: turnState === "completed" ? "complete" : "processing",
       lifecycleState: turnState === "completed" ? "completed" : "claimed",

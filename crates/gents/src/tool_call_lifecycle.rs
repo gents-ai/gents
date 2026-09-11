@@ -21,7 +21,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCallState {
     Pending,
-    AwaitingApproval,
     Running,
     Completed,
     Failed,
@@ -31,9 +30,8 @@ pub enum ToolCallState {
 
 impl ToolCallState {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Pending,
-        Self::AwaitingApproval,
         Self::Running,
         Self::Completed,
         Self::Failed,
@@ -44,7 +42,6 @@ impl ToolCallState {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
-            Self::AwaitingApproval => "awaitingApproval",
             Self::Running => "running",
             Self::Completed => "completed",
             Self::Failed => "failed",
@@ -56,7 +53,6 @@ impl ToolCallState {
     pub fn from_persisted(value: &str) -> Option<Self> {
         match value {
             "pending" => Some(Self::Pending),
-            "awaitingApproval" => Some(Self::AwaitingApproval),
             "running" => Some(Self::Running),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
@@ -71,11 +67,6 @@ impl ToolCallState {
             self,
             Self::Completed | Self::Failed | Self::TimedOut | Self::Cancelled
         )
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn is_cancellable(self) -> bool {
-        matches!(self, Self::Pending | Self::AwaitingApproval | Self::Running)
     }
 }
 
@@ -211,7 +202,10 @@ pub struct CascadeIntent {
 
 #[derive(Clone, Debug)]
 pub enum CascadeDispatch {
-    Local(CascadeIntent),
+    Local {
+        intent: CascadeIntent,
+        child: gents_protocol::row::AgentRequestRow,
+    },
     RemoteIntentWritten,
 }
 
@@ -480,6 +474,10 @@ impl ToolCallLifecycle {
         self.state
     }
 
+    pub(crate) fn request_doc_id(&self) -> Option<&str> {
+        self.request_doc_id.as_deref()
+    }
+
     pub(crate) fn request_id(&self) -> &str {
         &self.request_id
     }
@@ -548,18 +546,6 @@ mod tests {
     }
 
     #[test]
-    fn cancellable_iff_non_terminal() {
-        for state in ToolCallState::ALL {
-            assert_eq!(state.is_cancellable(), !state.is_terminal());
-        }
-    }
-
-    #[test]
-    fn all_lists_seven_states() {
-        assert_eq!(ToolCallState::ALL.len(), 7);
-    }
-
-    #[test]
     fn failure_class_round_trip_persisted_vocabulary() {
         for fc in FailureClass::ALL {
             assert_eq!(FailureClass::from_persisted(fc.as_str()), Some(fc));
@@ -567,25 +553,79 @@ mod tests {
         assert_eq!(FailureClass::from_persisted("unknown"), None);
     }
 
-    #[test]
-    fn failure_class_all_lists_seven_variants() {
-        assert_eq!(FailureClass::ALL.len(), 7);
-    }
-
-    #[test]
-    fn lifecycle_new_signature_compiles() {
-        // Compile-only sanity test: behavior verified in Bucket 3 integration tests.
-        let _: fn(
-            std::sync::Arc<defra_node::EmbeddedNode>,
-            String,
-            String,
-            String,
-            String,
-            u32,
-            String,
-            String,
-            chrono::DateTime<chrono::Utc>,
-        ) -> ToolCallLifecycle = ToolCallLifecycle::new;
+    #[tokio::test]
+    async fn constructors_preserve_bridge_classification_and_terminal_status() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
+        let check = |tool: &ToolCallLifecycle, subagent, background, plain: &str, reason: &str| {
+            assert_eq!(tool.is_subagent_bridge(), subagent);
+            assert_eq!(tool.is_background_tool_bridge(), background);
+            assert_eq!(tool.is_bridge(), subagent || background);
+            assert_eq!(tool.terminal_persistence_status(None), plain);
+            assert_eq!(
+                tool.terminal_persistence_status(Some("tool_failed")),
+                reason
+            );
+        };
+        let mut native = ToolCallLifecycle::new(
+            node.clone(),
+            "request".into(),
+            "session".into(),
+            "did:test:owner".into(),
+            "native".into(),
+            0,
+            "tool".into(),
+            "{}".into(),
+            deadline,
+        );
+        check(&native, false, false, "completed", "completed");
+        for (input, expected) in [
+            (Some("  did:test:requester  "), Some("did:test:requester")),
+            (Some(""), None),
+            (Some("  "), None),
+            (None, None),
+        ] {
+            native = native.with_requester_did(input.map(str::to_string));
+            assert_eq!(native.requester_did.as_deref(), expected);
+        }
+        let background = ToolCallLifecycle::new_background_tool(
+            node.clone(),
+            "request".into(),
+            "session".into(),
+            "did:test:owner".into(),
+            "background".into(),
+            0,
+            "tool".into(),
+            "{}".into(),
+            deadline,
+        );
+        // Recovery selects completionPending rows to redrive native-tool effects.
+        check(
+            &background,
+            false,
+            true,
+            "completionPending",
+            "completionPending:tool_failed",
+        );
+        for mode in [AwaitMode::Foreground, AwaitMode::Background] {
+            let subagent = ToolCallLifecycle::new_subagent(
+                node.clone(),
+                "request".into(),
+                "session".into(),
+                "did:test:owner".into(),
+                "subagent".into(),
+                0,
+                "spawn_agent".into(),
+                "{}".into(),
+                deadline,
+                mode,
+                CancelPolicy::Cascade,
+                "child".into(),
+                "did:test:target".into(),
+            );
+            check(&subagent, true, false, "completed", "completed");
+        }
+        node.shutdown().await;
     }
 
     use crate::lean_vocab_test::{
@@ -661,7 +701,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod bucket_1_subagent_vocabulary {
+mod subagent_vocabulary {
     use super::*;
 
     #[test]
@@ -669,15 +709,6 @@ mod bucket_1_subagent_vocabulary {
         for &mode in AwaitMode::ALL {
             assert_eq!(AwaitMode::from_persisted(mode.as_str()), Some(mode));
         }
-    }
-
-    #[test]
-    fn await_mode_all_has_two_variants() {
-        assert_eq!(AwaitMode::ALL.len(), 2);
-    }
-
-    #[test]
-    fn await_mode_from_persisted_unknown_returns_none() {
         assert_eq!(AwaitMode::from_persisted("unknown"), None);
     }
 
@@ -686,15 +717,6 @@ mod bucket_1_subagent_vocabulary {
         for &policy in CancelPolicy::ALL {
             assert_eq!(CancelPolicy::from_persisted(policy.as_str()), Some(policy));
         }
-    }
-
-    #[test]
-    fn cancel_policy_all_has_two_variants() {
-        assert_eq!(CancelPolicy::ALL.len(), 2);
-    }
-
-    #[test]
-    fn cancel_policy_from_persisted_unknown_returns_none() {
         assert_eq!(CancelPolicy::from_persisted("unknown"), None);
     }
 
@@ -703,25 +725,7 @@ mod bucket_1_subagent_vocabulary {
         for &cause in CancelCause::ALL {
             assert_eq!(CancelCause::from_persisted(cause.as_str()), Some(cause));
         }
-    }
-
-    #[test]
-    fn cancel_cause_all_has_three_variants() {
-        assert_eq!(CancelCause::ALL.len(), 3);
-    }
-
-    #[test]
-    fn cancel_cause_from_persisted_unknown_returns_none() {
         assert_eq!(CancelCause::from_persisted("unknown"), None);
-    }
-
-    #[test]
-    fn child_terminal_all_kind_has_four_variants() {
-        assert_eq!(ChildTerminal::ALL_KIND.len(), 4);
-        assert_eq!(
-            ChildTerminal::ALL_KIND,
-            &["failed", "dead", "interrupted", "superseded"]
-        );
     }
 
     #[test]

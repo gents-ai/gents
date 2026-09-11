@@ -25,7 +25,7 @@ export type RequestDiagnostics = {
   requestId: string;
   turnState?: string | null;
   latestRequestId?: string | null;
-  conversationUpdatedAt?: string | null;
+  sessionUpdatedAt?: string | null;
   request?: {
     status?: string | null;
     lifecycleState?: string | null;

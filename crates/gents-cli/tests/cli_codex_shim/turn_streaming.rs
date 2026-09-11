@@ -173,15 +173,22 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
             &graphql,
             &format!(
                 r#"{{
-                AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                AgentSession(filter: {{
+                    session_id: {{ _eq: "{}" }},
+                    agent_did: {{ _eq: "{}" }},
+                    requester_did: {{ _eq: "{}" }}
+                }}, limit: 1) {{
                     session_id
                     agent_did
+                    requester_did
                     behavior_id
-                    status
-                    started
+                    created_at
+                    closed_at
                 }}
             }}"#,
                 escape_graphql_string(&thread_id),
+                escape_graphql_string(&agent_did),
+                escape_graphql_string(&agent_did),
             ),
         ))
         .await?;
@@ -200,15 +207,16 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         Some(expected_behavior_id.as_str())
     );
     assert_eq!(
-        session.get("status").and_then(Value::as_str),
-        Some("active")
+        session.get("requester_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
     );
+    assert_eq!(session.get("closed_at"), Some(&Value::Null));
     assert!(
         session
-            .get("started")
+            .get("created_at")
             .and_then(Value::as_str)
             .is_some_and(|value| !value.trim().is_empty()),
-        "AgentSession.started should be populated: {session}"
+        "AgentSession.created_at should be populated: {session}"
     );
 
     send_client_request(

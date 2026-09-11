@@ -18,11 +18,11 @@ native-e2e = []
 anyhow.workspace = true
 blake3 = "1"
 chrono.workspace = true
-gents = { path = "../gents" }
+gents = { path = "../gents", features = ["typescript"] }
 gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
 gents-chatgpt-login.workspace = true
 gents-desktop-core.workspace = true
-gents-protocol.workspace = true
+gents-protocol = { workspace = true, features = ["typescript"] }
 hostname.workspace = true
 reqwest.workspace = true
 serde.workspace = true

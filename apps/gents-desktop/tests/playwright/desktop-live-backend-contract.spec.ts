@@ -102,19 +102,6 @@ async function fulfillBridgeRoute(
     );
     return;
   }
-  if (method === "POST" && path === "/desktop/tool-call-holds/list") {
-    const body = route.request().postDataJSON() as { agentDid: string };
-    await fulfillJson(route, await fixture.adapter.listToolCallHolds(body.agentDid));
-    return;
-  }
-  if (method === "POST" && path === "/desktop/tool-call-holds/resolve") {
-    await fulfillJson(
-      route,
-      await fixture.adapter.resolveToolCallHold(route.request().postDataJSON()),
-    );
-    return;
-  }
-
   await route.fulfill({
     status: 404,
     contentType: "application/json",

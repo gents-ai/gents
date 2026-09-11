@@ -215,11 +215,10 @@ theorem drop_blockValid_of_pending_empty {msgs : List MessageRow} {n : Nat}
 
 /-! ## The reducer -/
 
-open Classical in
 /-- Retain the tail from the pair-safe boundary and record a summary handle for
 everything dropped. Identity below the gate (nothing to summarize) and identity
 while the modelled `safeToReduce` gate is closed. -/
-noncomputable def summarize (policy : SplitPolicy) (handle : SummaryHandle) :
+def summarize (policy : SplitPolicy) (handle : SummaryHandle) :
     TranscriptReducer := fun v =>
   if 0 < pairSafeBoundary v.messages (policy v.messages) ∧ PromptView.safeToReduce v then
     { v with
@@ -242,16 +241,15 @@ theorem summarize_coherent (policy : SplitPolicy) (handle : SummaryHandle) (v : 
     (h : PromptView.ViewCoherent v) : PromptView.ViewCoherent (summarize policy handle v) := by
   unfold summarize
   split
-  · refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · refine ⟨?_, ?_, ?_, ?_⟩
     · exact drop_pairs_closed_of_pending_empty h.blockValid h.announcementsAssistant
         (pairSafeBoundary_pending_empty _ _)
     · exact strictlyIncreasing_drop _ _ h.ordered
-    · exact uniqueSequences_of_strictlyIncreasing (strictlyIncreasing_drop _ _ h.ordered)
     · exact drop_blockValid_of_pending_empty h.blockValid (pairSafeBoundary_pending_empty _ _)
     · exact announcementsAreAssistant_drop _ h.announcementsAssistant
   · exact h
 
-noncomputable instance instIsValidReducerSummarize (policy : SplitPolicy)
+instance instIsValidReducerSummarize (policy : SplitPolicy)
     (handle : SummaryHandle) : IsValidReducer (summarize policy handle) where
   gate v := 0 < pairSafeBoundary v.messages (policy v.messages)
   decGate v := Nat.decLt _ _

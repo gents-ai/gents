@@ -70,7 +70,7 @@ async fn load_wakes(
                     session_id: {{ _eq: "{session_id}" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}
-            ) {{ metadata }}
+            ) {{ input }}
         }}"#
     );
     let response = node.execute(&query).await;

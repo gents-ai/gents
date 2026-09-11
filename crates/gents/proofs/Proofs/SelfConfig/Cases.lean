@@ -20,8 +20,16 @@ def rowPatch (r : CaseRow) : Patch :=
         | some v => PatchOp.set v
         | none => PatchOp.clear })
 
+/-- Fixture decoder for the two canonical nested values used below. Production
+uses the shared typed decoder, not this finite fixture table. -/
+def decodeEnabled (doc : Doc) : Option Bool :=
+  match doc "self_config" with
+  | some "{\"enable_self_config\":true}" => some true
+  | some "{\"enable_self_config\":false}" => some false
+  | _ => none
+
 def caseGuard (r : CaseRow) : Doc → Bool :=
-  if r.guarded then gateOn else fun _ => true
+  if r.guarded then gateOn decodeEnabled else fun _ => true
 
 def project (t : Target) (doc : Doc) : List (FieldKey × FieldValue) :=
   (allFields t).filterMap (fun k => (doc k).map (fun v => (k, v)))
@@ -57,139 +65,62 @@ def buildWitness (r : CaseRow) : CaseWitness :=
   , unchangedOnReject :=
       outcome.isSome || decide (project r.target result = project r.target stored)
   , gateOnAfterAccept :=
-      !(r.guarded && outcome.isSome) || gateOn result
+      !(r.guarded && outcome.isSome) || gateOn decodeEnabled result
   }
 
-def behaviorDoc : List (FieldKey × FieldValue) :=
-  [ ("behavior_id", "beh-1"), ("agent_did", "did:key:agent-a")
-  , ("system_prompt", "You are concise."), ("backend_id", "backend-local")
-  , ("model_name", "m-small"), ("inference_profile_id", "profile-default")
-  , ("enabled", "true"), ("created_at", "2026-01-01T00:00:00Z") ]
+/-- Values are decoded group values abstracted as strings; nested validation
+is supplied to `step`, using the same owner as ordinary configuration. -/
+def examples : List (Target × FieldKey × FieldValue) :=
+  [ (.agentBehavior, "context_id", "context-1")
+  , (.agentContext, "system_prompt", "You are concise.")
+  , (.compaction, "threshold", "0.75")
+  , (.tools, "host", "{root: /workspace}")
+  , (.inferenceProfile, "model_name", "model-1")
+  , (.inferenceSampling, "temperature", "0.2")
+  , (.inferenceExecution, "max_turns", "40")
+  , (.inferenceRetryPolicy, "max_transport_retries", "3")
+  , (.inferenceBackend, "endpoint", "http://localhost:8080/v1")
+  , (.toolServiceRegistry, "hostname", "tools.local")
+  , (.task, "prompt_template", "Review {{doc}}")
+  , (.schedule, "cadence", "{interval_secs: 3600}")
+  , (.trigger, "source", "{kind: schedule, schedule_id: schedule-1}")
+  , (.eventSource, "group", "{expected_count: {kind: fixed, count: 3}}") ]
 
-def selectionDoc : List (FieldKey × FieldValue) :=
-  [ ("selection_id", "sel-1"), ("agent_did", "did:key:agent-a")
-  , ("tool_policy_version", "v1"), ("enable_defra_query", "false")
-  , ("enable_self_config", "true"), ("enable_bash", "false") ]
+def examplesToRows : List CaseRow := examples.map fun (t, k, v) =>
+  { name := t.collectionName ++ "_configured_field_accepted"
+  , target := t, guarded := false, validates := true
+  , doc := [(t.uniqueField, "doc-1"), ("agent_did", "did:key:agent-a")]
+  , patch := [(k, some v)] }
 
-def profileDoc : List (FieldKey × FieldValue) :=
-  [ ("profile_id", "profile-default"), ("temperature", "0.7")
-  , ("max_turns", "40"), ("deadline_duration_secs", "600") ]
-
-def backendDoc : List (FieldKey × FieldValue) :=
-  [ ("backend_id", "backend-local"), ("name", "local")
-  , ("endpoint", "http://127.0.0.1:11434/v1"), ("api_key", "sk-secret")
-  , ("probe_status", "healthy"), ("enabled", "true") ]
-
-def serviceDoc : List (FieldKey × FieldValue) :=
-  [ ("service_id", "svc-1"), ("hostname", "tools.local")
-  , ("mcp_port", "8931"), ("status", "online") ]
-
-def taskDoc : List (FieldKey × FieldValue) :=
-  [ ("task_id", "task-1"), ("behavior_id", "beh-1")
-  , ("prompt_template", "Summarize {{doc}}"), ("enabled", "true") ]
-
-def scheduleDoc : List (FieldKey × FieldValue) :=
-  [ ("schedule_id", "sched-1"), ("task_id", "task-1")
-  , ("interval_secs", "3600"), ("enabled", "true"), ("fire_count", "12")
-  , ("next_run_at", "2026-01-02T00:00:00Z") ]
-
-def triggerDoc : List (FieldKey × FieldValue) :=
-  [ ("trigger_id", "trig-1"), ("task_id", "task-1")
-  , ("source_collection", "AgentRequest"), ("event_kind", "create")
-  , ("enabled", "false"), ("fire_count", "3") ]
-
-def scenarios : List CaseRow :=
-  [ { name := "behavior_prompt_and_model_patch_accepted"
+def scenarios : List CaseRow := examplesToRows ++
+  [ { name := "behavior_owner_patch_rejected"
     , target := .agentBehavior, guarded := false, validates := true
-    , doc := behaviorDoc
-    , patch := [ ("system_prompt", some "You are thorough.")
-               , ("model_name", some "m-large") ] }
-  , { name := "behavior_agent_did_patch_inadmissible"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := behaviorDoc
-    , patch := [ ("agent_did", some "did:key:attacker")
-               , ("system_prompt", some "hijacked") ] }
-  , { name := "behavior_unique_key_patch_inadmissible"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := behaviorDoc
-    , patch := [ ("behavior_id", some "beh-2") ] }
-  , { name := "behavior_validation_failure_rejects_wholesale"
+    , doc := [("agent_did", "did:key:agent-a")]
+    , patch := [("agent_did", some "did:key:agent-b")] }
+  , { name := "behavior_invalid_reference_rejected"
     , target := .agentBehavior, guarded := false, validates := false
-    , doc := behaviorDoc
-    , patch := [ ("backend_id", some "backend-missing") ] }
-  , { name := "tools_gate_patch_accepted"
-    , target := .toolSelection, guarded := false, validates := true
-    , doc := selectionDoc
-    , patch := [ ("enable_defra_query", some "true")
-               , ("defra_query_collections", some "agent-config") ] }
-  , { name := "tools_policy_version_patch_inadmissible"
-    , target := .toolSelection, guarded := false, validates := true
-    , doc := selectionDoc
-    , patch := [ ("tool_policy_version", some "v2") ] }
+    , doc := [("context_id", "context-1")]
+    , patch := [("context_id", some "missing-context")] }
   , { name := "tools_self_disable_unguarded_accepted"
-    , target := .toolSelection, guarded := false, validates := true
-    , doc := selectionDoc
-    , patch := [ ("enable_self_config", some "false") ] }
-  , { name := "tools_self_disable_no_lockout_rejected"
-    , target := .toolSelection, guarded := true, validates := true
-    , doc := selectionDoc
-    , patch := [ ("enable_self_config", some "false") ] }
-  , { name := "tools_guarded_unrelated_patch_accepted"
-    , target := .toolSelection, guarded := true, validates := true
-    , doc := selectionDoc
-    , patch := [ ("enable_bash", some "true")
-               , ("bash_mode", some "read_only") ] }
-  , { name := "profile_set_and_clear_accepted"
+    , target := .tools, guarded := false, validates := true
+    , doc := [("self_config", "{\"enable_self_config\":true}")]
+    , patch := [("self_config", some "{\"enable_self_config\":false}")] }
+  , { name := "tools_self_disable_guarded_rejected"
+    , target := .tools, guarded := true, validates := true
+    , doc := [("self_config", "{\"enable_self_config\":true}")]
+    , patch := [("self_config", some "{\"enable_self_config\":false}")] }
+  , { name := "tools_guarded_host_patch_accepted"
+    , target := .tools, guarded := true, validates := true
+    , doc := [("self_config", "{\"enable_self_config\":true}")]
+    , patch := [("host", some "{root: /workspace}")] }
+  , { name := "backend_observation_patch_rejected"
+    , target := .inferenceBackend, guarded := false, validates := true
+    , doc := [("backend_id", "backend-1")]
+    , patch := [("probe_status", some "healthy")] }
+  , { name := "profile_optional_sampling_clear_accepted"
     , target := .inferenceProfile, guarded := false, validates := true
-    , doc := profileDoc
-    , patch := [ ("temperature", some "0.2")
-               , ("deadline_duration_secs", none) ] }
-  , { name := "backend_endpoint_patch_accepted"
-    , target := .inferenceBackend, guarded := false, validates := true
-    , doc := backendDoc
-    , patch := [ ("endpoint", some "http://127.0.0.1:8080/v1")
-               , ("api_key_env_var", some "LOCAL_KEY") ] }
-  , { name := "backend_api_key_patch_inadmissible"
-    , target := .inferenceBackend, guarded := false, validates := true
-    , doc := backendDoc
-    , patch := [ ("api_key", some "sk-stolen") ] }
-  , { name := "backend_probe_status_patch_inadmissible"
-    , target := .inferenceBackend, guarded := false, validates := true
-    , doc := backendDoc
-    , patch := [ ("probe_status", some "healthy")
-               , ("endpoint", some "http://127.0.0.1:8080/v1") ] }
-  , { name := "mcp_service_endpoint_patch_accepted"
-    , target := .toolServiceRegistry, guarded := false, validates := true
-    , doc := serviceDoc
-    , patch := [ ("hostname", some "tools2.local")
-               , ("mcp_port", some "9000") ] }
-  , { name := "task_prompt_patch_accepted"
-    , target := .task, guarded := false, validates := true
-    , doc := taskDoc
-    , patch := [ ("prompt_template", some "Review {{doc}} carefully")
-               , ("description", some "nightly review") ] }
-  , { name := "task_behavior_link_patch_inadmissible"
-    , target := .task, guarded := false, validates := true
-    , doc := taskDoc
-    , patch := [ ("behavior_id", some "beh-other") ] }
-  , { name := "schedule_cadence_patch_accepted"
-    , target := .schedule, guarded := false, validates := true
-    , doc := scheduleDoc
-    , patch := [ ("interval_secs", none), ("cron", some "0 3 * * *")
-               , ("timezone", some "UTC") ] }
-  , { name := "schedule_runtime_fields_patch_inadmissible"
-    , target := .schedule, guarded := false, validates := true
-    , doc := scheduleDoc
-    , patch := [ ("fire_count", some "0")
-               , ("next_run_at", some "2030-01-01T00:00:00Z") ] }
-  , { name := "event_trigger_filter_patch_accepted"
-    , target := .eventTrigger, guarded := false, validates := true
-    , doc := triggerDoc
-    , patch := [ ("filter", some "{\"status\":\"failed\"}")
-               , ("correlation_field", some "run_id")
-               , ("fire_mode", some "per_group")
-               , ("expected_count", some "3")
-               , ("enabled", some "true") ] }
+    , doc := [("sampling_id", "sampling-1")]
+    , patch := [("sampling_id", none)] }
   ]
 
 def selfConfigCases : List CaseWitness :=

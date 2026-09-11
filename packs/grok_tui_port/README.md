@@ -10,6 +10,12 @@ full **code-review** graph, proves that exact reviewed head with live GLM turns,
 and opens one GitHub PR. Small sealed slices use one direct reviewer; the final
 combined edge starts the full multi-stage embedded graph.
 
+Runtime configuration is authored once in `pack_config.json`. The distribution
+`manifest.json` points to that canonical bundle and lists it with the schema and
+prompt sidecars needed to install the pack; there are no per-collection JSON
+document fragments. The bundled code-review dependency is configured through
+the scenario's dependency environment instead of copied configuration rows.
+
 Every model-driven Task also provisions a controller-owned durable goal. Its
 tool surface exposes only `get_goal` and `update_goal`—never model-side goal
 creation—and the stage prompt completes that goal only after its required

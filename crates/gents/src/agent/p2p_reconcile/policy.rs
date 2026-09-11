@@ -219,7 +219,6 @@ fn client_route_filters(
         "AgentToolCall",
         "AgentToolResult",
         "AgentSession",
-        "AgentConversation",
         "CompactionEntry",
         "MailboxItem",
         "PersonaConfigRequest",
@@ -330,8 +329,14 @@ mod tests {
         let template = resolve_template(CLIENT_TEMPLATE).unwrap();
         for collection in [
             "AgentBehavior",
-            "ToolSelection",
+            "AgentContext",
+            "CompactionConfig",
+            "Tools",
+            "SubagentTarget",
             "InferenceProfile",
+            "InferenceSampling",
+            "InferenceExecution",
+            "InferenceRetryPolicy",
             "ToolServiceRegistry",
             "Skill",
             "DatastoreToolSurface",
@@ -339,7 +344,8 @@ mod tests {
             "EthTool",
             "Task",
             "Schedule",
-            "EventTrigger",
+            "Trigger",
+            "EventSource",
         ] {
             assert!(
                 template.collections.contains(&collection),

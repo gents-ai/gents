@@ -33,8 +33,7 @@ export type { InferenceSetupOptions } from "./types.js";
 export function useInferenceSetup({
   deployment,
   onClose,
-  onSaveBackendConfig,
-  onSaveBehaviorConfig,
+  onPatchConfigComponents,
   onProbeInferenceEndpoint,
   onCodexLogin,
   onCancelCodexLogin,
@@ -80,8 +79,7 @@ export function useInferenceSetup({
             setLocalModel(result.models[0]);
             return;
           }
-        } catch {
-        }
+        } catch {}
       }
       if (!cancelled) setDetection({ status: "none", url: "", models: [] });
     })();
@@ -98,10 +96,8 @@ export function useInferenceSetup({
 
   const cancelAndClose = useCallback(() => {
     if (signingIn) {
-      void Promise.resolve(onCancelCodexLogin?.()).catch(() => {
-      });
-      void Promise.resolve(onCancelGrokLogin?.()).catch(() => {
-      });
+      void Promise.resolve(onCancelCodexLogin?.()).catch(() => {});
+      void Promise.resolve(onCancelGrokLogin?.()).catch(() => {});
     }
     onClose();
   }, [signingIn, onCancelCodexLogin, onCancelGrokLogin, onClose]);
@@ -118,8 +114,7 @@ export function useInferenceSetup({
     return persistInferenceBackend({
       deployment,
       options,
-      onSaveBackendConfig,
-      onSaveBehaviorConfig,
+      onPatchConfigComponents,
     });
   }
 
@@ -137,8 +132,8 @@ export function useInferenceSetup({
         providerKind: PROVIDER_OPENAI,
         openaiWireApi: WIRE_RESPONSES,
         endpoint: OPENAI_ENDPOINT,
-        models: [openaiModel.trim()],
-        apiKey: openaiKey,
+        modelName: openaiModel.trim(),
+        auth: { kind: "api_key", key: openaiKey },
       });
       setDone(`OpenAI · ${openaiModel.trim()}`);
     } catch (caught) {
@@ -160,8 +155,8 @@ export function useInferenceSetup({
         providerKind: PROVIDER_OPENAI,
         openaiWireApi: WIRE_CHAT_COMPLETIONS,
         endpoint: url,
-        models: [model],
-        clearApiKey: true,
+        modelName: model,
+        auth: { kind: "unauthenticated" },
       });
       setDone(`${url} · ${model}`);
     } catch (caught) {
@@ -200,9 +195,10 @@ export function useInferenceSetup({
         providerKind: PROVIDER_OPENAI,
         openaiWireApi: WIRE_CHAT_COMPLETIONS,
         endpoint: url,
-        models: [model],
-        apiKey: customKey.trim() ? customKey : undefined,
-        clearApiKey: !customKey.trim(),
+        modelName: model,
+        auth: customKey.trim()
+          ? { kind: "api_key", key: customKey }
+          : { kind: "unauthenticated" },
       });
       setDone(`${url} · ${model}`);
     } catch (caught) {
@@ -226,8 +222,8 @@ export function useInferenceSetup({
         name: backendName("ChatGPT / Codex"),
         providerKind: PROVIDER_CODEX,
         endpoint: CODEX_ENDPOINT,
-        models: [CODEX_DEFAULT_MODEL],
-        clearApiKey: true,
+        modelName: CODEX_DEFAULT_MODEL,
+        auth: { kind: "principal_oauth" },
       });
       setDone(`ChatGPT / Codex · ${CODEX_DEFAULT_MODEL}`);
     } catch (caught) {
@@ -258,8 +254,8 @@ export function useInferenceSetup({
         name: backendName("Grok subscription"),
         providerKind: PROVIDER_GROK,
         endpoint: GROK_ENDPOINT,
-        models: [GROK_DEFAULT_MODEL],
-        clearApiKey: true,
+        modelName: GROK_DEFAULT_MODEL,
+        auth: { kind: "principal_oauth" },
       });
       setDone(`Grok · ${GROK_DEFAULT_MODEL}`);
     } catch (caught) {

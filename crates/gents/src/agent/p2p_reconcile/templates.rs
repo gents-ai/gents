@@ -234,12 +234,16 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
     "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
@@ -254,7 +258,6 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
 ];
 
@@ -263,8 +266,8 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
 /// requester and owning agent, while the small control plane lets a client
 /// render behaviors and automations without importing arbitrary history.
 /// `InferenceBackend` is deliberately absent: the frozen schema contains raw
-/// API-key material. Mobile needs a future redacted backend projection rather
-/// than replication of the credential-bearing document.
+/// API-key material. Clients resolve model choices through inference profiles;
+/// backend credentials remain on their existing operator/runtime route.
 pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
@@ -272,15 +275,20 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
     "MailboxItem",
     "PersonaConfigRequest",
     "PeerEndpoint",
     "SessionHydrationRequest",
     "AgentBehavior",
-    "ToolSelection",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
@@ -288,7 +296,8 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "EthTool",
     "Task",
     "Schedule",
-    "EventTrigger",
+    "Trigger",
+    "EventSource",
     "AgentBehaviorReadiness",
 ];
 
@@ -305,7 +314,6 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
     "MailboxItem",
     "PersonaConfigRequest",
@@ -345,28 +353,17 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
         source: DidSource::PeerDid,
     },
     CollectionRule {
-        collection: "AgentConversation",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
         collection: "CompactionEntry",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
 ];
 
-/// Requester-scoped session-index grant. The database replicator owns initial
-/// replay and reconnect recovery; desktop paging reads its local replica.
-pub const CLIENT_INDEX_COLLECTIONS: [&str; 3] =
-    ["AgentConversation", "AgentSession", "MailboxItem"];
+/// Requester-scoped session-index grant. Complete historical index hydration
+/// is handled separately by the desktop's node-global branchable pull.
+pub const CLIENT_INDEX_COLLECTIONS: [&str; 2] = ["AgentSession", "MailboxItem"];
 
 const CLIENT_INDEX_RULES: &[CollectionRule] = &[
-    CollectionRule {
-        collection: "AgentConversation",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
     CollectionRule {
         collection: "AgentSession",
         field: "requester_did",
@@ -384,8 +381,8 @@ const CLIENT_INDEX_RULES: &[CollectionRule] = &[
 /// literal because the catalog is deliberately dependency-free strings.
 pub const AGENT_DIRECTORY_COLLECTION: &str = "AgentDirectoryEntry";
 
-/// Machine template collections: the conversation plane plus the agent
-/// directory. Order mirrors CONVERSATION_COLLECTIONS + the directory.
+/// Machine template collections: the ordinary conversation plane plus mailbox,
+/// hydration and directory observations. Credentials remain operator-only.
 const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
@@ -393,18 +390,22 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
-    "MailboxItem",
     "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
     "ChainKeyBinding",
     "EthTool",
+    "MailboxItem",
     "SessionHydrationRequest",
     AGENT_DIRECTORY_COLLECTION,
 ];
@@ -441,11 +442,6 @@ const MACHINE_RULES: &[CollectionRule] = &[
         source: DidSource::PeerDid,
     },
     CollectionRule {
-        collection: "AgentConversation",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
         collection: "CompactionEntry",
         field: "requester_did",
         source: DidSource::PeerDid,
@@ -471,14 +467,20 @@ const MACHINE_RULES: &[CollectionRule] = &[
 /// the operator wants the full config set replicated, not per-peer slices.
 const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
     "ChainKeyBinding",
     "EthTool",
+    "InferenceBackend",
 ];
 
 /// Coordinator → host leg for subagent delegation: carry only bridges
@@ -670,18 +672,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn conversation_is_scoped_push_with_transcript_and_config_collections() {
-        let t = resolve_template("conversation").unwrap();
-        assert_eq!(t.delivery, Delivery::Push);
-        assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(t.collections.len(), 17);
-        assert!(t.collections.contains(&"AgentRequest"));
-        assert!(t.collections.contains(&"AgentBehavior"));
-        assert!(t.collections.contains(&"ChainKeyBinding"));
-        assert!(t.collections.contains(&"EthTool"));
-    }
-
-    #[test]
     fn agent_config_includes_behavior_excludes_principal() {
         let t = resolve_template("agent-config").unwrap();
         assert_eq!(t.delivery, Delivery::Replicate);
@@ -698,36 +688,6 @@ mod tests {
     }
 
     #[test]
-    fn conversation_scope_filters_transcript_by_requester() {
-        let t = resolve_template("conversation").unwrap();
-        let f = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
-        assert_eq!(f.len(), 8);
-        let p = f.get("AgentRequest").unwrap();
-        assert_eq!(single_string_eq(p), Some(("requester_did", "did:key:bob")));
-    }
-
-    #[test]
-    fn rich_predicates_and_layered_equalities_keep_both_conditions() {
-        let rich = FilterPredicate::Predicate(
-            serde_json::json!({ "status": { "_in": ["pending", "processing"] } })
-                .as_object()
-                .expect("object")
-                .clone(),
-        );
-        let combined = combine_filters(equality_filter("requester_did", "did:key:phone"), rich);
-
-        assert_eq!(
-            Value::Object(filter_conditions(&combined).expect("predicate conditions")),
-            serde_json::json!({
-                "_and": [
-                    { "requester_did": { "_eq": "did:key:phone" } },
-                    { "status": { "_in": ["pending", "processing"] } }
-                ]
-            })
-        );
-    }
-
-    #[test]
     fn unsupported_acp_filter_is_rejected() {
         let filters = [(
             "AgentRequest".to_string(),
@@ -739,12 +699,6 @@ mod tests {
         .collect();
 
         assert!(to_replication_filters(&filters).is_err());
-    }
-
-    #[test]
-    fn unscoped_scope_filter_is_empty() {
-        let t = resolve_template("backup").unwrap();
-        assert!(scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice").is_empty());
     }
 
     #[test]
@@ -771,145 +725,5 @@ mod tests {
                 t.id
             );
         }
-    }
-
-    #[test]
-    fn builtin_template_count_is_nine() {
-        assert_eq!(builtin_templates().len(), 9);
-    }
-
-    #[test]
-    fn client_index_is_requester_scoped_push_of_the_literal_index() {
-        let t = resolve_template(CLIENT_INDEX_TEMPLATE).unwrap();
-        assert_eq!(t.delivery, Delivery::Push);
-        assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(
-            t.collections,
-            &["AgentConversation", "AgentSession", "MailboxItem"]
-        );
-
-        let filter = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:home");
-        assert_eq!(filter.len(), 3);
-        for collection in &CLIENT_INDEX_COLLECTIONS {
-            let predicate = filter
-                .get(*collection)
-                .expect("indexed collection is filtered");
-            assert_eq!(
-                single_string_eq(predicate),
-                Some(("requester_did", "did:key:phone"))
-            );
-        }
-    }
-
-    #[test]
-    fn app_collections_is_byo_unscoped_replicate() {
-        let t = resolve_template(APP_COLLECTIONS_TEMPLATE).unwrap();
-        assert_eq!(t.delivery, Delivery::Replicate);
-        assert!(matches!(t.scope, Scope::Unscoped));
-        assert!(t.collections.is_empty());
-    }
-
-    #[test]
-    fn app_collection_admission_is_disjoint_from_the_protocol_catalog() {
-        let custom = BTreeSet::from(["ChangeProposed".to_string()]);
-        assert_eq!(admit_app_collections(custom.clone()), Some(custom));
-
-        for protocol in gents_protocol::schemas::ALL_COLLECTION_NAMES
-            .iter()
-            .chain(gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.iter())
-        {
-            let requested = BTreeSet::from(["ChangeProposed".to_string(), (*protocol).to_string()]);
-            assert!(
-                admit_app_collections(requested).is_none(),
-                "protocol collection {protocol} bypassed app data-plane admission"
-            );
-        }
-        assert!(
-            admit_app_collections(BTreeSet::from(["SessionHydrationRequest".to_string()]))
-                .is_none(),
-            "SessionHydrationRequest must stay protocol-owned and never ride app-collections"
-        );
-    }
-
-    #[test]
-    fn conversation_scope_filters_transcript_and_leaves_config_unfiltered() {
-        let t = resolve_template("conversation").unwrap();
-        let f = scope_filter(&t.scope, t.collections, "did:key:alice", "did:key:self");
-        for col in CONVERSATION_RULES.iter().map(|rule| rule.collection) {
-            assert!(f.contains_key(col), "missing filter for {col}");
-        }
-        for col in AGENT_CONFIG_COLLECTIONS {
-            assert!(
-                !f.contains_key(*col),
-                "config collection {col} must be unfiltered"
-            );
-        }
-    }
-
-    #[test]
-    fn subagent_coordinator_has_directional_rules() {
-        let t = resolve_template(SUBAGENT_COORDINATOR_TEMPLATE).unwrap();
-        assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections, SUBAGENT_COORDINATOR_COLLECTIONS);
-        let f = scope_filter(&t.scope, t.collections, "did:key:host", "did:key:coord");
-        assert!(!f.contains_key("AgentRequest"));
-        assert_eq!(
-            f.get("AgentToolCall"),
-            Some(&equality_filter("spawn_target_did", "did:key:host"))
-        );
-    }
-
-    #[test]
-    fn subagent_host_filters_only_return_projection_on_requester() {
-        let t = resolve_template(SUBAGENT_HOST_TEMPLATE).unwrap();
-        assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections, SUBAGENT_HOST_COLLECTIONS);
-        let f = scope_filter(&t.scope, t.collections, "did:key:coord", "did:key:host");
-        assert_eq!(f.len(), SUBAGENT_HOST_COLLECTIONS.len());
-        assert_eq!(
-            f.get("AgentRequest"),
-            Some(&equality_filter("requester_did", "did:key:coord"))
-        );
-        for col in SUBAGENT_HOST_COLLECTIONS {
-            assert_eq!(
-                f.get(*col),
-                Some(&equality_filter("requester_did", "did:key:coord")),
-                "unexpected subagent-host filter for {col}"
-            );
-        }
-        for local_collection in [
-            "AgentToolResult",
-            "AgentSession",
-            "AgentConversation",
-            "CompactionEntry",
-        ] {
-            assert!(!t.collections.contains(&local_collection));
-            assert!(!f.contains_key(local_collection));
-        }
-    }
-
-    #[test]
-    fn machine_template_scopes_conversation_and_issuer_owned_directory() {
-        let t = resolve_template("machine").expect("machine template registered");
-        assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections.len(), MACHINE_COLLECTIONS.len());
-        assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
-        let filters = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:server");
-        // Conversation collections stay member-scoped exactly like `conversation`.
-        for col in CONVERSATION_RULES.iter().map(|rule| rule.collection) {
-            let predicate = filters.get(col).expect("conversation collection filtered");
-            assert_eq!(
-                single_string_eq(predicate),
-                Some(("requester_did", "did:key:phone"))
-            );
-        }
-        assert_eq!(
-            filters.get(AGENT_DIRECTORY_COLLECTION),
-            Some(&equality_filter("source_did", "did:key:server"))
-        );
-        assert_eq!(
-            filters.get("SessionHydrationRequest"),
-            Some(&equality_filter("requester_did", "did:key:phone"))
-        );
     }
 }

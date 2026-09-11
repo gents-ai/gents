@@ -79,21 +79,6 @@ theorem admitted_fresh_create_records_prefix (state : RegistryState)
       request.identity.itemKey ∈ (applyCreate state request).itemKeys := by
   simp [applyCreate, hstamped, hclosed, hfresh]
 
-theorem create_preserves_graph_edges (state : RegistryState)
-    (request : CreateRequest) :
-    (applyCreate state request).graphEdges = state.graphEdges := by
-  unfold applyCreate
-  split
-  · rfl
-  · split
-    · rfl
-    · split <;> rfl
-
-theorem terminalize_preserves_graph_edges (state : RegistryState)
-    (ownerPrefix : OwnerPrefix) :
-    (terminalizePrefix state ownerPrefix).graphEdges = state.graphEdges := by
-  rfl
-
 theorem terminalize_never_reopens (state : RegistryState)
     (ownerPrefix : OwnerPrefix) :
     ownerPrefix ∉ (terminalizePrefix state ownerPrefix).openPrefixes := by

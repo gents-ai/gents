@@ -4,8 +4,10 @@ import type { FormEvent } from "react";
 import type {
   DeploymentView,
   InferenceProfileDeleteRequest,
-  InferenceProfileSaveRequest,
-  InferenceProfileView,
+  ConfigComponentsApplyRequest,
+  InferenceSampling,
+  InferenceExecution,
+  InferenceProfile,
 } from "@source-inc/gents-desktop-client";
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { isDirty } from "./configDirty";
@@ -25,9 +27,7 @@ export type InferenceProfileConfigPanelProps = {
   onSelectProfile: (profileId: string) => void;
   onCreateProfile: () => void;
   onSavedStatusChange: (value: string) => void;
-  onSaveInferenceProfileConfig: (
-    request: InferenceProfileSaveRequest,
-  ) => Promise<unknown>;
+  onApplyConfigComponents: (request: ConfigComponentsApplyRequest) => Promise<unknown>;
   onDeleteInferenceProfileConfig: (
     request: InferenceProfileDeleteRequest,
   ) => Promise<unknown>;
@@ -42,14 +42,14 @@ export function InferenceProfileConfigPanel({
   onSelectProfile,
   onCreateProfile,
   onSavedStatusChange,
-  onSaveInferenceProfileConfig,
+  onApplyConfigComponents,
   onDeleteInferenceProfileConfig,
   onDeletedProfile,
 }: InferenceProfileConfigPanelProps) {
   const selectedProfile = useMemo(
     () =>
       deployment.inferenceProfiles.find(
-        (profile) => profile.profileId === selectedProfileId,
+        (profile) => profile.profile_id === selectedProfileId,
       ) ?? null,
     [deployment.inferenceProfiles, selectedProfileId],
   );
@@ -59,11 +59,11 @@ export function InferenceProfileConfigPanel({
       <ConfigDocumentList
         eyebrow="Inference"
         items={deployment.inferenceProfiles.map((profile) => ({
-          id: profile.profileId,
-          title: profile.displayName ?? profile.profileId,
+          id: profile.profile_id,
+          title: profile.display_name ?? profile.profile_id,
           meta:
-            profile.maxOutputTokens != null
-              ? `${profile.maxOutputTokens} max output`
+            profile.max_output_tokens != null
+              ? `${profile.max_output_tokens} max output`
               : "profile",
         }))}
         selectedId={selectedProfileId}
@@ -76,13 +76,15 @@ export function InferenceProfileConfigPanel({
       <InferenceProfileConfigEditor
         agentDid={deployment.agentDid}
         profile={selectedProfile}
+        samplingConfigs={deployment.inferenceSampling}
+        executionConfigs={deployment.inferenceExecution}
         savedStatus={savedStatus}
         saving={saving}
         onSaved={(profileId) => {
           onSelectProfile(profileId);
           onSavedStatusChange(`profile:${profileId}`);
         }}
-        onSaveInferenceProfileConfig={onSaveInferenceProfileConfig}
+        onApplyConfigComponents={onApplyConfigComponents}
         onDeleteInferenceProfileConfig={onDeleteInferenceProfileConfig}
         onDeleted={() => {
           onDeletedProfile();
@@ -94,13 +96,13 @@ export function InferenceProfileConfigPanel({
 
 export type InferenceProfileConfigEditorProps = {
   agentDid: string;
-  profile: InferenceProfileView | null;
+  profile: InferenceProfile | null;
+  samplingConfigs: InferenceSampling[];
+  executionConfigs: InferenceExecution[];
   savedStatus: string | null;
   saving: boolean;
   onSaved: (profileId: string) => void;
-  onSaveInferenceProfileConfig: (
-    request: InferenceProfileSaveRequest,
-  ) => Promise<unknown>;
+  onApplyConfigComponents: (request: ConfigComponentsApplyRequest) => Promise<unknown>;
   onDeleteInferenceProfileConfig: (
     request: InferenceProfileDeleteRequest,
   ) => Promise<unknown>;
@@ -110,10 +112,12 @@ export type InferenceProfileConfigEditorProps = {
 export function InferenceProfileConfigEditor({
   agentDid,
   profile,
+  samplingConfigs,
+  executionConfigs,
   savedStatus,
   saving,
   onSaved,
-  onSaveInferenceProfileConfig,
+  onApplyConfigComponents,
   onDeleteInferenceProfileConfig,
   onDeleted,
 }: InferenceProfileConfigEditorProps) {
@@ -126,13 +130,17 @@ export function InferenceProfileConfigEditor({
     }
     try {
       await onDeleteInferenceProfileConfig({
-        profileId: profile.profileId,
+        profileId: profile.profile_id,
         agentDid,
       });
       onDeleted();
     } catch {}
   }
   const [profileId, setProfileId] = useState("");
+  const [backendId, setBackendId] = useState("");
+  const [modelName, setModelName] = useState("");
+  const [samplingId, setSamplingId] = useState("");
+  const [executionId, setExecutionId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [contextWindow, setContextWindow] = useState("");
   const [maxOutputTokens, setMaxOutputTokens] = useState("");
@@ -145,8 +153,12 @@ export function InferenceProfileConfigEditor({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    const b = profileFormValues(profile);
+    const b = profileFormValues(profile, samplingConfigs, executionConfigs);
     setProfileId(b.profileId);
+    setBackendId(b.backendId);
+    setModelName(b.modelName);
+    setSamplingId(b.samplingId);
+    setExecutionId(b.executionId);
     setDisplayName(b.displayName);
     setContextWindow(b.contextWindow);
     setMaxOutputTokens(b.maxOutputTokens);
@@ -156,7 +168,7 @@ export function InferenceProfileConfigEditor({
     setStreamLivenessSecs(b.streamLivenessSecs);
     setDeadlineSecs(b.deadlineSecs);
     setSaveError(null);
-  }, [profile?.profileId]);
+  }, [profile?.profile_id]);
 
   const contextWindowValid = isOptionalInt(contextWindow, { min: 1 });
   const maxOutputTokensValid = isOptionalInt(maxOutputTokens, { min: 1 });
@@ -168,18 +180,66 @@ export function InferenceProfileConfigEditor({
 
   async function submitProfile(event: FormEvent) {
     event.preventDefault();
-    const nextId = profileId.trim();
+    const nextId = profile?.profile_id ?? profileId.trim();
     try {
-      await onSaveInferenceProfileConfig({
-        profileId: nextId,
-        displayName,
-        contextWindow: parseOptionalInt(contextWindow),
-        maxOutputTokens: parseOptionalInt(maxOutputTokens),
-        maxTurns: parseOptionalInt(maxTurns),
-        temperature: parseOptionalFloat(temperature),
-        streamBatchMs: parseOptionalInt(streamBatchMs),
-        streamLivenessTimeoutSecs: parseOptionalInt(streamLivenessSecs),
-        deadlineDurationSecs: parseOptionalInt(deadlineSecs),
+      if (!samplingId && temperature !== "")
+        throw new Error("Choose a sampling document ID to configure temperature.");
+      if (
+        !executionId &&
+        [maxTurns, streamBatchMs, streamLivenessSecs, deadlineSecs].some(
+          (value) => value !== "",
+        )
+      )
+        throw new Error(
+          "Choose an execution document ID to configure execution limits.",
+        );
+      const sampling = samplingConfigs.find(
+        (entry) => entry.sampling_id === samplingId,
+      );
+      const execution = executionConfigs.find(
+        (entry) => entry.execution_id === executionId,
+      );
+      await onApplyConfigComponents({
+        document: {
+          agent_principal: { agent_did: agentDid },
+          inference_profiles: [
+            {
+              ...profile,
+              agent_did: agentDid,
+              profile_id: nextId,
+              backend_id: backendId,
+              model_name: modelName,
+              sampling_id: samplingId || null,
+              execution_id: executionId || null,
+              display_name: displayName || null,
+              context_window: parseOptionalInt(contextWindow),
+              max_output_tokens: parseOptionalInt(maxOutputTokens),
+            },
+          ],
+          inference_sampling: samplingId
+            ? [
+                {
+                  ...sampling,
+                  agent_did: agentDid,
+                  sampling_id: samplingId,
+                  temperature: parseOptionalFloat(temperature),
+                },
+              ]
+            : [],
+          inference_execution: executionId
+            ? [
+                {
+                  ...execution,
+                  agent_did: agentDid,
+                  execution_id: executionId,
+                  max_turns: parseOptionalInt(maxTurns),
+                  stream_batch_ms: parseOptionalInt(streamBatchMs),
+                  stream_liveness_timeout_secs: parseOptionalInt(streamLivenessSecs),
+                  deadline_duration_secs: parseOptionalInt(deadlineSecs),
+                },
+              ]
+            : [],
+        },
       });
       onSaved(nextId);
       setSaveError(null);
@@ -194,6 +254,10 @@ export function InferenceProfileConfigEditor({
         dirty={isDirty(
           {
             profileId,
+            backendId,
+            modelName,
+            samplingId,
+            executionId,
             displayName,
             contextWindow,
             maxOutputTokens,
@@ -203,13 +267,84 @@ export function InferenceProfileConfigEditor({
             streamLivenessSecs,
             deadlineSecs,
           },
-          profileFormValues(profile),
+          profileFormValues(profile, samplingConfigs, executionConfigs),
         )}
         eyebrow="Profile"
         saved={savedStatus === `profile:${profileId.trim()}`}
         title={displayName || profileId || "New Profile"}
       />
       {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
+      <div className="grid-2">
+        <label className="field">
+          <span>Backend ID</span>
+          <input
+            data-testid="profile-backend-id"
+            value={backendId}
+            onChange={(event) => setBackendId(event.currentTarget.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Model</span>
+          <input
+            data-testid="profile-model-name"
+            value={modelName}
+            onChange={(event) => setModelName(event.currentTarget.value)}
+          />
+        </label>
+      </div>
+      <div className="grid-2">
+        <label className="field">
+          <span>Sampling document ID</span>
+          <input
+            data-testid="profile-sampling-id"
+            value={samplingId}
+            onChange={(event) => {
+              const id = event.currentTarget.value;
+              setSamplingId(id);
+              const selected = samplingConfigs.find(
+                (entry) => entry.sampling_id === id,
+              );
+              setTemperature(
+                selected?.temperature == null ? "" : String(selected.temperature),
+              );
+            }}
+          />
+          <span>Reuse an existing ID or name a new sampling document.</span>
+        </label>
+        <label className="field">
+          <span>Execution document ID</span>
+          <input
+            data-testid="profile-execution-id"
+            value={executionId}
+            onChange={(event) => {
+              const id = event.currentTarget.value;
+              setExecutionId(id);
+              const selected = executionConfigs.find(
+                (entry) => entry.execution_id === id,
+              );
+              setMaxTurns(
+                selected?.max_turns == null ? "" : String(selected.max_turns),
+              );
+              setStreamBatchMs(
+                selected?.stream_batch_ms == null
+                  ? ""
+                  : String(selected.stream_batch_ms),
+              );
+              setStreamLivenessSecs(
+                selected?.stream_liveness_timeout_secs == null
+                  ? ""
+                  : String(selected.stream_liveness_timeout_secs),
+              );
+              setDeadlineSecs(
+                selected?.deadline_duration_secs == null
+                  ? ""
+                  : String(selected.deadline_duration_secs),
+              );
+            }}
+          />
+          <span>Shared policies affect every profile that references them.</span>
+        </label>
+      </div>
       <div className="grid-2">
         <label className="field">
           <span>Profile document ID</span>
@@ -328,7 +463,7 @@ export function InferenceProfileConfigEditor({
         <ConfirmDialog
           open={confirmingDelete}
           title="Delete profile"
-          message={`Delete profile "${profile?.profileId ?? ""}"? Behaviors still pointing at it will block the delete.`}
+          message={`Delete profile "${profile?.profile_id ?? ""}"? Behaviors still pointing at it will block the delete.`}
           confirmLabel="Delete"
           danger
           onConfirm={() => {
@@ -342,7 +477,8 @@ export function InferenceProfileConfigEditor({
           disabled={
             saving ||
             !profileId.trim() ||
-            !displayName.trim() ||
+            !backendId.trim() ||
+            !modelName.trim() ||
             !contextWindowValid ||
             !maxOutputTokensValid ||
             !maxTurnsValid ||
@@ -360,21 +496,32 @@ export function InferenceProfileConfigEditor({
   );
 }
 
-function profileFormValues(profile: InferenceProfileView | null) {
+function profileFormValues(
+  profile: InferenceProfile | null,
+  samplingConfigs: InferenceSampling[],
+  executionConfigs: InferenceExecution[],
+) {
+  const sampling = samplingConfigs.find(
+    (entry) => entry.sampling_id === profile?.sampling_id,
+  );
+  const execution = executionConfigs.find(
+    (entry) => entry.execution_id === profile?.execution_id,
+  );
+  const text = (value: number | null | undefined) =>
+    value == null ? "" : String(value);
   return {
-    profileId: profile?.profileId ?? "",
-    displayName: profile?.displayName ?? profile?.profileId ?? "",
-    contextWindow: profile?.contextWindow != null ? String(profile.contextWindow) : "",
-    maxOutputTokens:
-      profile?.maxOutputTokens != null ? String(profile.maxOutputTokens) : "",
-    maxTurns: profile?.maxTurns != null ? String(profile.maxTurns) : "",
-    temperature: profile?.temperature != null ? String(profile.temperature) : "",
-    streamBatchMs: profile?.streamBatchMs != null ? String(profile.streamBatchMs) : "",
-    streamLivenessSecs:
-      profile?.streamLivenessTimeoutSecs != null
-        ? String(profile.streamLivenessTimeoutSecs)
-        : "",
-    deadlineSecs:
-      profile?.deadlineDurationSecs != null ? String(profile.deadlineDurationSecs) : "",
+    profileId: profile?.profile_id ?? "",
+    backendId: profile?.backend_id ?? "",
+    modelName: profile?.model_name ?? "",
+    samplingId: profile?.sampling_id ?? "",
+    executionId: profile?.execution_id ?? "",
+    displayName: profile?.display_name ?? "",
+    contextWindow: text(profile?.context_window),
+    maxOutputTokens: text(profile?.max_output_tokens),
+    maxTurns: text(execution?.max_turns),
+    temperature: text(sampling?.temperature),
+    streamBatchMs: text(execution?.stream_batch_ms),
+    streamLivenessSecs: text(execution?.stream_liveness_timeout_secs),
+    deadlineSecs: text(execution?.deadline_duration_secs),
   };
 }

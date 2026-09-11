@@ -13,7 +13,7 @@ function dep(agentDid: string, label: string): DeploymentView {
     behaviorEnvironments: [],
     behaviors: [],
     tasks: [],
-    conversations: [],
+    sessions: [],
     dialSucceeded: true,
   } as unknown as DeploymentView;
 }

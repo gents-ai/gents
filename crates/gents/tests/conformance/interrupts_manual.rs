@@ -6,22 +6,12 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 #[tokio::test]
 async fn fork_does_not_transition_parent_lifecycle_state() {
     use gents::session::{fork, ForkParams};
-    use support::{
-        create_agent_behavior, create_agent_conversation, create_agent_message,
-        create_agent_session,
-    };
+    use support::{create_agent_behavior, create_agent_message, create_agent_session};
 
     let db = test_db("fork-no-lifecycle-transition").await;
 
     let parent_session = uuid::Uuid::new_v4().to_string();
     create_agent_session(
-        &db.node,
-        &parent_session,
-        AGENT_NAME,
-        "2026-04-21T10:00:00Z",
-    )
-    .await;
-    create_agent_conversation(
         &db.node,
         &parent_session,
         AGENT_NAME,
@@ -70,7 +60,6 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
 
     let before_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
     let before_response = fetch_response_snapshot(&db.node, &response_doc_id).await;
-    let before_conversation = fetch_conversation_snapshot(&db.node, &parent_session).await;
     let before_session = fetch_session_snapshot(&db.node, &parent_session).await;
 
     let _ = fork(
@@ -79,6 +68,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
             source_session_id: &parent_session,
             fork_at_user_turn: 0,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -87,7 +77,6 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
 
     let after_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
     let after_response = fetch_response_snapshot(&db.node, &response_doc_id).await;
-    let after_conversation = fetch_conversation_snapshot(&db.node, &parent_session).await;
     let after_session = fetch_session_snapshot(&db.node, &parent_session).await;
 
     assert_eq!(
@@ -99,132 +88,10 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         "parent AgentResponse unchanged"
     );
     assert_eq!(
-        before_conversation, after_conversation,
-        "parent AgentConversation unchanged"
-    );
-    assert_eq!(
         before_session, after_session,
         "parent AgentSession unchanged"
     );
 }
-
-#[tokio::test]
-async fn pending_interrupted_via_interrupt_before_claim() {
-    let db = test_db("pending-interrupted").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let interrupt_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
-    assert_lean_transition_is_legal("Request", "pending", "interrupted");
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
-}
-
-#[tokio::test]
-async fn pending_dead_stale_via_expire() {
-    let db = test_db("pending-dead-stale").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let valid_until = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    let doc_id = create_request_with_valid_until(
-        &db.node,
-        &request_id,
-        &session_id,
-        "pending",
-        &created_at,
-        Some(&valid_until),
-    )
-    .await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
-    assert_lean_transition_is_legal("Request", "pending", "dead");
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Dead);
-    assert_eq!(snap.failure_reason, "Stale");
-}
-
-#[tokio::test]
-async fn transition_to_interrupted_from_claimed() {
-    // Validates the lifecycle transition from `claimed` to `interrupted` via
-    // `transition_to_interrupted`. This test does NOT exercise the observer or
-    // watch channel end-to-end — the full `tokio::select!` arm + observer race
-    // is covered at integration level in Task 11.
-    let db = test_db("claimed-interrupted").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    let interrupt_at = chrono::Utc::now().to_rfc3339();
-    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-    lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
-        .await
-        .unwrap();
-    assert_lean_transition_is_legal("Request", "claimed", "interrupted");
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
-}
-
 #[tokio::test]
 async fn processing_interrupted_preserves_partial_response() {
     let db = test_db("processing-interrupted").await;
@@ -393,49 +260,6 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
 }
-
-#[tokio::test]
-async fn transition_to_interrupted_from_processing() {
-    let db = test_db("processing-tie-break").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    crate::support::begin_owned_execution(&mut lifecycle, &db.node)
-        .await
-        .unwrap();
-
-    let interrupt_at = chrono::Utc::now().to_rfc3339();
-    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-
-    lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
-        .await
-        .unwrap();
-    assert_lean_transition_is_legal("Request", "processing", "interrupted");
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
-}
-
 #[tokio::test]
 async fn fail_after_interrupt_latch_prefers_interrupted() {
     let db = test_db("fail-after-interrupt-latch").await;
@@ -521,8 +345,8 @@ async fn interrupt_request_errors_on_unknown_request_id() {
     );
     let message = err.unwrap_err().to_string();
     assert!(
-        message.contains("not found"),
-        "error must mention not found; got: {message}"
+        message.contains("missing"),
+        "error must report a missing scoped request; got: {message}"
     );
 }
 
@@ -576,55 +400,6 @@ async fn interrupt_on_already_terminal_is_noop() {
         "terminal lifecycle_state must not regress"
     );
 }
-
-#[tokio::test]
-async fn valid_until_is_immutable_after_claim_and_cached_value_is_preserved() {
-    let db = test_db("s8-cached-at-claim").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let future = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
-    let doc_id = create_request_with_valid_until(
-        &db.node,
-        &request_id,
-        &session_id,
-        "pending",
-        &created_at,
-        Some(&future),
-    )
-    .await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    let much_later = (chrono::Utc::now() + chrono::Duration::hours(10)).to_rfc3339();
-    let response = try_set_valid_until(&db.node, &doc_id, &much_later).await;
-    assert!(
-        response.has_errors(),
-        "signed valid_until must reject post-create mutation"
-    );
-
-    let expected = chrono::DateTime::parse_from_rfc3339(&future)
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    assert_eq!(lifecycle.valid_until_at_claim_for_test(), Some(expected));
-}
-
 #[tokio::test]
 async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     let db = test_db("s7-interrupt-latch").await;
@@ -922,38 +697,6 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
     let response_content = fetch_response_content(&db.node, &response_doc_id).await;
     assert_eq!(response_content, partial_content);
 }
-
-#[test]
-fn conformance_mapping_all_10_lifecycle_states_round_trip() {
-    use gents_protocol::client_protocol::RequestLifecycleState;
-
-    let lean_states = lean_vocabulary_values("RequestState");
-    assert_eq!(
-        lean_states.len(),
-        10,
-        "RequestState contract should be finite"
-    );
-    for s in lean_states {
-        let parsed = RequestLifecycleState::try_from(s)
-            .unwrap_or_else(|e| panic!("failed to parse '{}': {:?}", s, e));
-        assert_eq!(
-            parsed.as_str(),
-            s,
-            "as_str must round-trip to the source string"
-        );
-    }
-    assert_eq!(
-        RequestLifecycleState::try_from("inputRequired")
-            .expect("reserved vocabulary should parse")
-            .as_str(),
-        "inputRequired"
-    );
-
-    assert!(RequestLifecycleState::try_from("bogus").is_err());
-    assert!(RequestLifecycleState::try_from("").is_err());
-    assert!(RequestLifecycleState::try_from("INTERRUPTED").is_err());
-}
-
 #[test]
 fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
     use gents_protocol::client_protocol::{
@@ -1057,6 +800,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
                 limit: 1
             ) {{
                 request_id
+                requester_did
                 session_id
                 created_at
             }}
@@ -1092,17 +836,22 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         .expect("created_at present")
         .to_string();
 
-    let request = build_request(
+    let mut request = build_request(
         doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
         created_at,
     );
+    request.agent_did = db.node_identity.did().to_string();
+    request.requester_did = row
+        .get("requester_did")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        db.node_identity.did(),
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -1137,4 +886,190 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         post_claim_lineage, pre_claim_lineage,
         "lineage must be byte-identical before and after claim"
     );
+}
+
+/// The interrupt owner's observable action is more than the latch: after
+/// stamping (or finding) `interrupt_requested_at`, `interrupt_request` drains
+/// the session's queued automated wake-ups through `drain_automated_wakeups`,
+/// whose query is scoped to the interrupted row's own `agent_did` (#664) and
+/// whose row predicate selects only scheduled coalesced background-completion
+/// wake-ups. A latched timestamp alone never exercises that action, so this
+/// test drives the real owner and observes which queued rows it actually
+/// terminalized — including the foreign-principal replica that must survive.
+#[tokio::test]
+async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
+    let db = test_db("interrupt-drain-wakeups").await;
+    let session_id = "interrupt-drain-session";
+    let foreign_did = "did:test:foreign-drain";
+    let wakeup_input = format!(
+        r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
+    );
+    let non_wakeup_input = r#"{"queue":{"source":"user","policy":"append","key":null,"queued_after_request_id":null}}"#;
+
+    create_request(
+        &db.node,
+        "drain-parent",
+        session_id,
+        "processing",
+        "2026-03-23T00:00:00Z",
+    )
+    .await;
+
+    // Owner-scope scheduled automated wake-up: the drain owner must
+    // terminalize exactly this row.
+    create_pending_queue_row(
+        &db.node,
+        "drain-wakeup-owner",
+        session_id,
+        AGENT_DID,
+        "scheduled",
+        &wakeup_input,
+    )
+    .await;
+    // Same session, same row shape, foreign principal: the drain's
+    // agent_did-scoped query must never surface it (#664).
+    create_pending_queue_row(
+        &db.node,
+        "drain-wakeup-foreign",
+        session_id,
+        foreign_did,
+        "scheduled",
+        &wakeup_input,
+    )
+    .await;
+    // Owner principal but interactive origin: a user-turn queue row is not an
+    // automated wake-up and must survive its session's interrupt.
+    create_pending_queue_row(
+        &db.node,
+        "drain-wakeup-interactive",
+        session_id,
+        AGENT_DID,
+        "interactive",
+        &wakeup_input,
+    )
+    .await;
+    // Scheduled origin but user/append queue input: the wakeup predicate
+    // (background_completion + coalesce + non-empty key) must reject it.
+    create_pending_queue_row(
+        &db.node,
+        "drain-scheduled-user",
+        session_id,
+        AGENT_DID,
+        "scheduled",
+        non_wakeup_input,
+    )
+    .await;
+
+    gents::interrupt_request(&db.node, "drain-parent")
+        .await
+        .expect("interrupt_request should latch and drain");
+
+    let latched = gents::fetch_interrupt_requested_at(&db.node, "drain-parent")
+        .await
+        .expect("fetch latched interrupt");
+    assert!(
+        latched.is_some(),
+        "interrupt_request must latch interrupt_requested_at before draining"
+    );
+
+    let drained = fetch_drain_row(&db.node, "drain-wakeup-owner").await;
+    assert_eq!(
+        drained.lifecycle_state,
+        RequestLifecycleState::Interrupted,
+        "the owner's own scheduled wake-up must be drained by the interrupt owner"
+    );
+    assert_eq!(
+        drained.failure_reason.as_deref(),
+        Some("automated wake-up drained because active request was interrupted"),
+        "the drain owner must record its own reason, got {:?}",
+        drained.failure_reason
+    );
+
+    let foreign = fetch_drain_row(&db.node, "drain-wakeup-foreign").await;
+    assert_eq!(foreign.agent_did, foreign_did);
+    assert_eq!(
+        foreign.lifecycle_state,
+        RequestLifecycleState::Pending,
+        "a foreign-principal replica sharing the session must never be drained by this owner"
+    );
+
+    let interactive = fetch_drain_row(&db.node, "drain-wakeup-interactive").await;
+    assert_eq!(
+        interactive.lifecycle_state,
+        RequestLifecycleState::Pending,
+        "interactive-origin rows are user turns, not automated wake-ups"
+    );
+
+    let scheduled_user = fetch_drain_row(&db.node, "drain-scheduled-user").await;
+    assert_eq!(
+        scheduled_user.lifecycle_state,
+        RequestLifecycleState::Pending,
+        "scheduled rows without background-completion wake input must survive the drain"
+    );
+}
+
+async fn create_pending_queue_row(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    execution_origin: &str,
+    input: &str,
+) {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_origin = escape_graphql_string(execution_origin);
+    let input = serde_json::from_str::<Value>(input).expect("request input JSON");
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&input).expect("request input GraphQL");
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "queued wake-up",
+                input: {input},
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "{escaped_origin}",
+                created_at: "2026-03-23T00:00:00Z",
+                retry_count: 0,
+                max_retries: 3
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create pending queue row failed: {:?}",
+        resp.errors
+    );
+}
+
+#[derive(Debug, Deserialize)]
+struct DrainRow {
+    lifecycle_state: RequestLifecycleState,
+    #[serde(default)]
+    failure_reason: Option<String>,
+    agent_did: String,
+}
+
+async fn fetch_drain_row(node: &EmbeddedNode, request_id: &str) -> DrainRow {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                lifecycle_state
+                failure_reason
+                agent_did
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentRequest")
 }

@@ -161,6 +161,8 @@ impl DefraSessionHook {
                 if let Some(sequence) = session::message_sequence_for_request_content(
                     &self.node,
                     &session_id,
+                    &self.agent_did,
+                    current_requester_did.as_deref(),
                     request_id,
                     &content,
                 )
@@ -786,37 +788,17 @@ impl DefraSessionHook {
         }
 
         let parent_workspace = ParentWorkspaceStamp::from_fields(
+            &self.agent_did,
             parent_context.workspace_id.as_deref(),
+            parent_context.workspace_owner_agent_did.as_deref(),
             parent_context.workspace_authority.as_deref(),
-            parent_context.workspace_owner_deployment_id.as_deref(),
             parent_context.workspace_seal_hash.as_deref(),
         );
-        if target_host == SubagentTargetHost::Remote
-            && parent_workspace.spawn_is_workspace_bound(parsed.workspace.as_ref())
-        {
-            return self
-                .fail_spawn_subagent_tool_call(
-                    session_id,
-                    request_id,
-                    parent_context.request_deadline_at,
-                    seq,
-                    internal_call_id,
-                    args,
-                    FailureClass::ServiceUnavailable,
-                    service_unavailable_payload(
-                        SPAWN_SUBAGENT_TOOL_NAME,
-                        "/workspace",
-                        "workspace-bound spawn cannot target a remote host until the child can be materialized on the workspace owner deployment",
-                        false,
-                    ),
-                )
-                .await;
-        }
         let resolved_workspace = match resolve_spawn_workspace(
             &self.node,
             &parent_workspace,
             parsed.workspace.as_ref(),
-            &self.agent_did,
+            &target.target_agent_did,
             internal_call_id,
             &request_id,
             self.operator_tool_root.as_deref(),
@@ -861,7 +843,7 @@ impl DefraSessionHook {
         // deployment never needs to re-resolve the friendly name (it has no
         // access to the parent's target table), which is what removes the
         // resolution seam.
-        let target_agent_did = target.agent_did.clone();
+        let target_agent_did = target.target_agent_did.clone();
         let mut bridge_args = serde_json::json!({
             "name": name,
             "agent_did": target_agent_did.clone(),
@@ -870,6 +852,15 @@ impl DefraSessionHook {
             "deadline": parsed.deadline,
             "parent_subagent_depth": parent_context.subagent_depth,
         });
+        // Keep the already validated intent so materialization revalidates
+        // provisioned child ownership rather than treating it as inheritance.
+        if let Some(workspace) = serde_json::from_str::<serde_json::Value>(args)?
+            .get("workspace")
+            .filter(|value| !value.is_null())
+            .cloned()
+        {
+            bridge_args["workspace"] = workspace;
+        }
         if let Some(workspace) = resolved_workspace.as_ref() {
             merge_workspace_lineage(&mut bridge_args, workspace);
         }
@@ -940,11 +931,13 @@ impl DefraSessionHook {
     }
 
     /// Classify a resolved target as local or remote by comparing the target's
-    /// `agent_did` to this deployment's own DID. No behavior DB lookup is
-    /// needed: the target carries the owning agent's DID directly, which is
-    /// also what removes the cross-node resolution seam.
-    pub(super) fn subagent_target_host(&self, target: &SubagentTarget) -> SubagentTargetHost {
-        if target.agent_did == self.agent_did {
+    /// destination principal to this runtime principal. Configuration ownership
+    /// does not determine the destination.
+    pub(super) fn subagent_target_host(
+        &self,
+        target: &SubagentTargetDocument,
+    ) -> SubagentTargetHost {
+        if target.target_agent_did == self.agent_did {
             SubagentTargetHost::Local
         } else {
             SubagentTargetHost::Remote

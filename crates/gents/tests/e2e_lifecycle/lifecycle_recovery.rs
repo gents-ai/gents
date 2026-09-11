@@ -12,7 +12,7 @@ use crate::support::snapshots::{
 };
 use crate::support::{
     create_agent_session, create_request, create_request_for_agent_with_signed_fields, first_row,
-    test_db, upsert_conversation, upsert_conversation_for_agent, AGENT_DID, AGENT_NAME, BACKEND_ID,
+    test_db, AGENT_DID, AGENT_NAME, BACKEND_ID,
 };
 
 type StatusRow = AgentRequestRow;
@@ -28,35 +28,51 @@ struct NotificationDeliveryRow {
     completion_notification_delivered_at: Option<String>,
 }
 
+fn background_wake_input(session_id: &str) -> gents_protocol::request_input::RequestInput {
+    use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+    RequestInput {
+        queue: Some(RequestQueue {
+            source: QueueSource::BackgroundCompletion,
+            policy: QueuePolicy::Coalesce,
+            key: Some(format!("background_completion:{session_id}")),
+            queued_after_request_id: Some("foreground-parent".into()),
+            interrupted_request_id: None,
+            background_completion_wake_version: Some(1),
+        }),
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
 async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
+    let _trace = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::WARN)
+            .finish(),
+    );
     let db = test_db("lifecycle-background-wake-redrive").await;
     let agent_did = db.node_identity.did().to_string();
-    let metadata = serde_json::json!({
-        "queue": {
-            "source": "background_completion",
-            "policy": "coalesce",
-            "key": "background_completion:wake-redrive-session",
-            "queued_after_request_id": "foreground-parent"
-        },
-        "background_completion_wake_version": 1
-    })
-    .to_string();
-    let escaped_metadata = gents::graphql::escape_graphql_string(&metadata);
+    let input = background_wake_input("wake-redrive-session");
+    let input_literal =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(&input).unwrap())
+            .unwrap();
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "failed-wake",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "wake-redrive-session",
                 retry_parent_request: "",
                 retry_root_request: "failed-wake",
                 superseded_by_request: "",
                 content: "continue after background completion",
-                metadata: "{escaped_metadata}",
+                input: {input_literal},
                 lifecycle_state: "failed",
                 backend_id: "{BACKEND_ID}",
+                max_total_tokens: 4096,
                 execution_origin: "scheduled",
                 failure_reason: "backend admission failed",
                 terminalized_at: "2026-08-12T00:00:00Z",
@@ -76,15 +92,59 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         "create failed wake: {:?}",
         response.errors
     );
-    upsert_conversation_for_agent(
+    let mut session = crate::support::session_document(
+        "wake-redrive-session",
+        AGENT_NAME,
+        "2026-08-12T00:00:00Z",
+    );
+    session.agent_did = agent_did.clone();
+    session.requester_did = Some(agent_did.clone());
+    crate::support::create_session_document(&db.node, &session).await;
+    crate::support::seed_session_observation_from_request(
         &db.node,
-        &agent_did,
         "wake-redrive-session",
         "failed-wake",
         "continue after background completion",
-        "active",
     )
     .await;
+
+    // Background wake recovery deliberately checks the head across requesters.
+    // A newer interactive request blocks the old wake even in another scope.
+    let foreign = serde_json::json!({
+        "request_id":"foreign-interactive", "agent_did":agent_did,
+        "requester_did":"did:test:foreign-requester", "behavior_id":AGENT_NAME,
+        "session_id":"wake-redrive-session", "content":"foreign interactive",
+        "lifecycle_state":"pending", "execution_origin":"interactive",
+        "created_at":"2099-01-01T00:00:00Z", "retry_count":0, "max_retries":3,
+        "subagent_depth":0
+    });
+    let foreign_input = gents_protocol::graphql::graphql_input_literal(&foreign).unwrap();
+    let response = db
+        .node
+        .execute(&format!(
+            "mutation {{ create_AgentRequest(input: {foreign_input}) {{ _docID }} }}"
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "foreign request fixture: {:?}",
+        response.errors
+    );
+    let blocked = RequestLifecycle::redrive_failed_background_wakeups(&db.node, &agent_did)
+        .await
+        .expect("newer interactive head gate");
+    assert_eq!(blocked.ineligible, 1);
+    assert_eq!(blocked.redriven, 0);
+    assert_eq!(blocked.failed, 0);
+    // Remove only the competing fixture to exercise successful recovery below.
+    let response = db.node.execute(&format!(
+        r#"mutation {{ delete_AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, request_id: {{ _eq: "foreign-interactive" }} }}) {{ _docID }} }}"#
+    )).await;
+    assert!(
+        !response.has_errors(),
+        "remove competing fixture: {:?}",
+        response.errors
+    );
 
     let (first, concurrent) = tokio::join!(
         RequestLifecycle::redrive_failed_background_wakeups(&db.node, &agent_did),
@@ -94,7 +154,11 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     let concurrent = concurrent.expect("second concurrent redrive");
     assert_eq!(first.scanned, 1);
     assert_eq!(concurrent.scanned, 1);
-    assert_eq!(first.redriven + concurrent.redriven, 1);
+    assert_eq!(
+        first.redriven + concurrent.redriven,
+        1,
+        "redrive reports: {first:?}, {concurrent:?}"
+    );
     assert_eq!(first.already_redriven + concurrent.already_redriven, 1);
     assert_eq!(first.failed + concurrent.failed, 0);
 
@@ -102,13 +166,37 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     assert_eq!(rows.len(), 2);
     let successor = rows
         .iter()
-        .find(|row| row.request_id != "failed-wake")
+        .find(|row| {
+            row.request_id != "failed-wake"
+                && row.requester_did.as_deref() == Some(agent_did.as_str())
+        })
         .expect("retry successor");
     assert_eq!(
         successor.lifecycle_state,
         Some(RequestLifecycleState::Pending)
     );
     assert_eq!(successor.execution_origin.as_deref(), Some("scheduled"));
+    let source = rows
+        .iter()
+        .find(|row| row.request_id == "failed-wake")
+        .unwrap();
+    assert!(source.doc_id.is_some());
+    assert_eq!(successor.retry_parent_request_doc_id, source.doc_id);
+    assert_eq!(
+        successor.admission_kind.as_deref(),
+        Some("runtime-internal")
+    );
+    assert_eq!(
+        successor.admission_signer_did.as_deref(),
+        Some(agent_did.as_str())
+    );
+    assert!(successor
+        .admission_signature
+        .as_deref()
+        .is_some_and(|signature| !signature.is_empty()));
+    // Claim owns inference selection and budget pinning for the new request.
+    assert_eq!(successor.backend_id, None);
+    assert_eq!(successor.max_total_tokens, None);
     assert_eq!(
         successor.retry_parent_request.as_deref(),
         Some("failed-wake")
@@ -120,7 +208,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     );
     assert_eq!(successor.retry_count, Some(2));
     assert_eq!(successor.max_retries, Some(3));
-    assert_eq!(successor.metadata.as_deref(), Some(metadata.as_str()));
+    assert_eq!(successor.input.as_ref(), Some(&input));
     assert_eq!(successor.deadline, None);
     assert_eq!(successor.valid_until, None);
 
@@ -141,17 +229,10 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
 async fn failed_background_wake_waits_for_persisted_backoff() {
     let db = test_db("lifecycle-background-wake-backoff").await;
     let session_id = "wake-backoff-session";
-    let metadata = serde_json::json!({
-        "queue": {
-            "source": "background_completion",
-            "policy": "coalesce",
-            "key": format!("background_completion:{session_id}"),
-            "queued_after_request_id": "foreground-parent"
-        },
-        "background_completion_wake_version": 1
-    })
-    .to_string();
-    let escaped_metadata = gents::graphql::escape_graphql_string(&metadata);
+    let input = background_wake_input(session_id);
+    let input_literal =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(&input).unwrap())
+            .unwrap();
     let terminalized_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -159,7 +240,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
                 request_id: "failed-wake-backoff", agent_did: "{AGENT_DID}",
                 behavior_id: "{AGENT_NAME}", session_id: "{session_id}",
                 retry_parent_request: "", retry_root_request: "failed-wake-backoff",
-                superseded_by_request: "", content: "continue", metadata: "{escaped_metadata}",
+                superseded_by_request: "", content: "continue", input: {input_literal},
                 lifecycle_state: "failed", backend_id: "{BACKEND_ID}",
                 execution_origin: "scheduled", failure_reason: "provider failed",
                 terminalized_at: "{terminalized_at}", terminal_redrive_attempts: 0,
@@ -174,12 +255,12 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         "create failed wake: {:?}",
         response.errors
     );
-    upsert_conversation(
+    create_agent_session(&db.node, session_id, AGENT_NAME, &terminalized_at).await;
+    crate::support::seed_session_observation_from_request(
         &db.node,
         session_id,
         "failed-wake-backoff",
         "continue",
-        "active",
     )
     .await;
     let message = format!(
@@ -222,12 +303,19 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     assert_eq!(diagnostics.epochs[0].attempt_count, 2);
     assert!(diagnostics.epochs[0].next_retry_at.is_some());
 
-    upsert_conversation(
+    create_request(
+        &db.node,
+        "later-interactive-request",
+        session_id,
+        "pending",
+        "2099-01-01T00:00:00Z",
+    )
+    .await;
+    crate::support::seed_session_observation_from_request(
         &db.node,
         session_id,
         "later-interactive-request",
         "new user turn",
-        "active",
     )
     .await;
     let displaced = gents::load_background_completion_diagnostics(
@@ -254,9 +342,10 @@ async fn background_wake_retry_rows(
                     filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                     order: {{ created_at: ASC }}
                 ) {{
-                    request_id content lifecycle_state execution_origin
-                    retry_parent_request retry_root_request retry_count max_retries
-                    metadata deadline valid_until
+                    _docID request_id requester_did content lifecycle_state execution_origin
+                    retry_parent_request retry_parent_request_doc_id retry_root_request retry_count max_retries
+                    admission_kind admission_signer_did admission_signature backend_id max_total_tokens
+                    input deadline valid_until
                 }}
             }}"#
         ))
@@ -293,7 +382,13 @@ async fn seed_accepted_request_projection(
     request_id: &str,
 ) {
     create_agent_session(node, session_id, AGENT_NAME, "2026-03-23T00:00:00Z").await;
-    upsert_conversation(node, session_id, request_id, "stuck request", "active").await;
+    crate::support::seed_session_observation_from_request(
+        node,
+        session_id,
+        request_id,
+        "stuck request",
+    )
+    .await;
 }
 
 async fn set_execution_lease(
@@ -487,103 +582,6 @@ async fn recover_all_preserves_completed_response_after_lease_expiry() {
     assert_eq!(response.status, "complete");
     assert_eq!(response.content, "", "completed content must be preserved");
 }
-
-#[tokio::test]
-async fn recover_all_marks_partial_streams_error() {
-    let db = test_db("lifecycle-recover-partial").await;
-    let request_doc_id = create_request(
-        &db.node,
-        "stuck-partial",
-        "session-partial",
-        "processing",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
-    set_execution_lease(
-        &db.node,
-        &request_doc_id,
-        "expired-partial-generation",
-        chrono::Utc::now() - chrono::Duration::minutes(1),
-        7,
-    )
-    .await;
-    seed_accepted_request_projection(&db.node, "session-partial", "stuck-partial").await;
-    create_response_for_request(
-        &db.node,
-        "stuck-partial",
-        "stuck-partial",
-        &request_doc_id,
-        "session-partial",
-        "partial reply",
-        "streaming",
-    )
-    .await;
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
-        .await
-        .unwrap();
-    assert_eq!(report.responses_recovered, 1);
-    assert_eq!(report.requests_recovered, 1);
-
-    let response_resp = db
-        .node
-        .execute(
-            r#"{
-                AgentResponse(
-                    filter: { response_key: { _eq: "stuck-partial" } },
-                    limit: 1
-                ) { status content }
-            }"#,
-        )
-        .await;
-    let response = first_row::<ResponseStatusRow>(&response_resp, "AgentResponse");
-    assert_eq!(response.status, "error");
-    assert!(response.content.contains("[Response interrupted"));
-}
-
-#[tokio::test]
-async fn recover_all_creates_error_response_when_response_doc_is_missing() {
-    let db = test_db("lifecycle-recover-missing").await;
-    let request_doc_id = create_request(
-        &db.node,
-        "stuck-missing",
-        "session-missing",
-        "processing",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
-    set_execution_lease(
-        &db.node,
-        &request_doc_id,
-        "expired-missing-generation",
-        chrono::Utc::now() - chrono::Duration::minutes(1),
-        0,
-    )
-    .await;
-    seed_accepted_request_projection(&db.node, "session-missing", "stuck-missing").await;
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
-        .await
-        .unwrap();
-    assert_eq!(report.responses_recovered, 1);
-    assert_eq!(report.requests_recovered, 1);
-
-    let response_resp = db
-        .node
-        .execute(
-            r#"{
-                AgentResponse(
-                    filter: { response_key: { _eq: "stuck-missing" } },
-                    limit: 1
-                ) { status content }
-            }"#,
-        )
-        .await;
-    let response = first_row::<ResponseStatusRow>(&response_resp, "AgentResponse");
-    assert_eq!(response.status, "error");
-    assert!(response
-        .content
-        .contains("daemon restarted before response could be generated"));
-}
-
 #[tokio::test]
 async fn recover_all_leaves_live_execution_lease_untouched() {
     let db = test_db("lifecycle-recover-live-lease").await;
@@ -932,14 +930,6 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
         "2026-03-23T00:00:00Z",
     )
     .await;
-    create_request(
-        &db.node,
-        "tool-cascade-child",
-        "tool-cascade-child-session",
-        "processing",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
     mark_request_interrupted(&db.node, &interrupted_doc).await;
 
     let mut lifecycle = ToolCallLifecycle::new_subagent(
@@ -955,9 +945,32 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         "tool-cascade-child".to_string(),
-        "did:test:target".to_string(),
+        AGENT_DID.to_string(),
     );
+    lifecycle = lifecycle.with_request_doc_id(Some(interrupted_doc.clone()));
     lifecycle.start_running().await.unwrap();
+    let child = serde_json::json!({
+        "request_id":"tool-cascade-child", "agent_did":AGENT_DID,
+        "behavior_id":AGENT_NAME, "session_id":"tool-cascade-child-session",
+        "content":"child", "lifecycle_state":"processing", "execution_origin":"interactive",
+        "created_at":"2026-03-23T00:00:00Z", "retry_count":0, "max_retries":3, "subagent_depth":1,
+        "caused_by_parent_request_id":"tool-cascade-parent",
+        "caused_by_parent_request_doc_id":interrupted_doc,
+        "caused_by_parent_tool_call_id":"tool-cascade-call",
+        "caused_by_parent_tool_call_doc_id":lifecycle.doc_id().unwrap()
+    });
+    let input = gents_protocol::graphql::graphql_input_literal(&child).unwrap();
+    let response = db
+        .node
+        .execute(&format!(
+            "mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "child fixture: {:?}",
+        response.errors
+    );
 
     let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
         .await
@@ -988,14 +1001,6 @@ async fn recover_all_leaves_detached_subagent_tool_running() {
         "2026-03-23T00:00:00Z",
     )
     .await;
-    create_request(
-        &db.node,
-        "tool-detach-child",
-        "tool-detach-child-session",
-        "processing",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
     mark_request_interrupted(&db.node, &interrupted_doc).await;
 
     let mut lifecycle = ToolCallLifecycle::new_subagent(
@@ -1011,9 +1016,32 @@ async fn recover_all_leaves_detached_subagent_tool_running() {
         AwaitMode::Background,
         CancelPolicy::Detach,
         "tool-detach-child".to_string(),
-        "did:test:target".to_string(),
+        AGENT_DID.to_string(),
     );
+    lifecycle = lifecycle.with_request_doc_id(Some(interrupted_doc.clone()));
     lifecycle.start_running().await.unwrap();
+    let child = serde_json::json!({
+        "request_id":"tool-detach-child", "agent_did":AGENT_DID,
+        "behavior_id":AGENT_NAME, "session_id":"tool-detach-child-session",
+        "content":"child", "lifecycle_state":"processing", "execution_origin":"interactive",
+        "created_at":"2026-03-23T00:00:00Z", "retry_count":0, "max_retries":3, "subagent_depth":1,
+        "caused_by_parent_request_id":"tool-detach-parent",
+        "caused_by_parent_request_doc_id":interrupted_doc,
+        "caused_by_parent_tool_call_id":"tool-detach-call",
+        "caused_by_parent_tool_call_doc_id":lifecycle.doc_id().unwrap()
+    });
+    let input = gents_protocol::graphql::graphql_input_literal(&child).unwrap();
+    let response = db
+        .node
+        .execute(&format!(
+            "mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "child fixture: {:?}",
+        response.errors
+    );
 
     let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
         .await

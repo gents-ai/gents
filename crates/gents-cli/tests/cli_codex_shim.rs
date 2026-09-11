@@ -24,7 +24,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use gents::subagent_target_entry;
 use gents_codex_protocol as codex;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -45,6 +44,84 @@ fn gents_model_selection_id(backend_id: &str, model_name: &str) -> String {
 
 fn default_backend_id(agent_did: &str) -> String {
     format!("{agent_did}:backend")
+}
+
+async fn select_default_behavior_skills(
+    graphql: &str,
+    agent_did: &str,
+    skill_ids: &[&str],
+) -> Result<()> {
+    let behavior_id = escape_graphql_string(&format!("{agent_did}:default"));
+    let agent_did = escape_graphql_string(agent_did);
+    let behavior = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{agent_did}"}}, behavior_id: {{_eq: "{behavior_id}"}}}}, limit: 1) {{context_id}} }}"#
+        ),
+    )
+    .await?;
+    let context_id = behavior
+        .pointer("/data/AgentBehavior/0/context_id")
+        .and_then(Value::as_str)
+        .context("default behavior has no canonical AgentContext")?;
+    let skills = skill_ids
+        .iter()
+        .map(|skill| format!(r#""{}""#, escape_graphql_string(skill)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    graphql_query(
+        graphql,
+        &format!(
+            r#"mutation {{ update_AgentContext(filter: {{agent_did: {{_eq: "{agent_did}"}}, context_id: {{_eq: "{}"}}}}, input: {{skill_ids: [{skills}]}}) {{_docID}} }}"#,
+            escape_graphql_string(context_id)
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn seed_backend_catalog(
+    graphql: &str,
+    agent_did: &str,
+    backend_id: &str,
+    model_name: &str,
+) -> Result<()> {
+    let query = format!(
+        r#"mutation($catalogs: JSON) {{
+            update_InferenceBackend(
+                filter: {{agent_did: {{_eq: "{}"}}, backend_id: {{_eq: "{}"}}}},
+                input: {{catalogs: $catalogs, probe_status: "healthy", last_probe: "{}"}}
+            ) {{_docID}}
+        }}"#,
+        escape_graphql_string(agent_did),
+        escape_graphql_string(backend_id),
+        chrono::Utc::now().to_rfc3339(),
+    );
+    let response = reqwest::Client::new()
+        .post(graphql)
+        .json(&json!({
+            "query": query,
+            "variables": {
+                "catalogs": {"entries": [{
+                    "agent_did": null,
+                    "observed_at": chrono::Utc::now().to_rfc3339(),
+                    "models": [{"model_name": model_name}]
+                }]}
+            }
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
+    anyhow::ensure!(
+        response
+            .get("errors")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "seed backend catalog failed: {response}"
+    );
+    Ok(())
 }
 
 #[path = "cli_codex_shim/background_continuations.rs"]

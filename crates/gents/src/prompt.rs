@@ -26,7 +26,7 @@ use crate::llm::message::Message;
 use crate::llm::message::{Text, UserContent};
 use anyhow::Result;
 
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::tool_surface::ToolSurface;
 
 const TITLE_GENERATION_SUFFIX: &str =
@@ -77,7 +77,7 @@ pub struct LayeredPromptBuilder {
 
 impl LayeredPromptBuilder {
     pub fn new(
-        behavior: &AgentBehavior,
+        behavior: &ResolvedBehavior,
         tool_surface: &ToolSurface,
         allowed_targets: &[(String, String)],
     ) -> Self {

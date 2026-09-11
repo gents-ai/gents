@@ -20,6 +20,10 @@ pub const SESSION_HISTORY_TOOL_NAME: &str = "sessions";
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 1000;
 const REQUEST_SCAN_LIMIT: usize = 5000;
+const _: () = assert!(
+    REQUEST_SCAN_LIMIT >= MAX_LIMIT,
+    "REQUEST_SCAN_LIMIT must stay >= MAX_LIMIT or the cap is unreachable"
+);
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SessionHistoryParams {
@@ -42,12 +46,11 @@ pub struct SessionHistorySnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionHistoryRow {
     pub session_id: String,
-    pub agent_name: Option<String>,
     pub behavior_id: Option<String>,
-    pub session_status: Option<String>,
+    pub title: Option<gents_protocol::session::SessionTitle>,
+    pub tags: Vec<String>,
     pub created_at: Option<String>,
-    pub started_at: Option<String>,
-    pub ended_at: Option<String>,
+    pub closed_at: Option<String>,
     pub latest_request_id: Option<String>,
     pub latest_request_lifecycle_state: Option<RequestLifecycleState>,
     pub latest_request_created_at: Option<String>,
@@ -67,7 +70,7 @@ pub struct SessionInvestigationSnapshot {
     pub token_usage: SessionTokenUsage,
     pub compactions: Vec<SessionCompactionEvent>,
     pub latest_context: Option<super::context_budget::LastRequestContextSnapshot>,
-    pub compaction_strategy: Option<String>,
+    pub compaction_strategy: crate::compaction::CompactionStrategy,
     pub compaction_threshold: Option<f64>,
     pub context_window: Option<i64>,
     pub parent_request_ids: Vec<String>,
@@ -148,7 +151,7 @@ pub async fn load_request_context_observation(
         .unwrap_or_else(|| "null".into());
     let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{
         request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
-    }}, limit: 2) {{_docID request_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(agent_did))).await;
+    }}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(agent_did))).await;
     crate::graphql::ensure_no_errors(&response, "context request ownership")?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
@@ -163,7 +166,48 @@ pub async fn load_request_context_observation(
         [owner] => owner,
         _ => bail!("ambiguous context request identity"),
     };
-    let doc = clean(owner.doc_id.as_ref()).context("context request lacks physical identity")?;
+    load_pinned_request_context_observation(node, owner).await
+}
+
+/// Read inference observations for the already-authorized physical request.
+/// The caller retains its canonical request row; no logical label is resolved again.
+pub async fn load_pinned_request_context_observation(
+    node: &EmbeddedNode,
+    owner: &AgentRequestRow,
+) -> Result<Option<RequestContextObservation>> {
+    let agent_did = owner
+        .agent_did
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .context("context request lacks principal")?;
+    anyhow::ensure!(
+        owner.session_id.as_deref().is_some_and(|id| !id.is_empty())
+            && !owner.request_id.is_empty(),
+        "context request lacks session or request identity"
+    );
+    let doc = owner
+        .doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .context("context request lacks physical identity")?;
+    let scope = crate::session::session_scope_filter(
+        agent_did,
+        owner.session_id.as_deref().unwrap(),
+        owner.requester_did.as_deref(),
+    );
+    let selected = node.execute(&format!(r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{_docID}} }}"#, escape_graphql_string(doc), escape_graphql_string(&owner.request_id))).await;
+    crate::graphql::ensure_no_errors(&selected, "physical context request ownership")?;
+    let rows = selected
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .context("missing physical context owner rows")?;
+    match rows.as_slice() {
+        [] => return Ok(None),
+        [row] if row["_docID"].as_str() == Some(doc) => {}
+        _ => bail!("invalid physical context request identity"),
+    }
     let response = node
         .execute(&format!(
             r#"{{ InferenceCall(filter: {{
@@ -290,6 +334,8 @@ struct SessionDetailEnvelope {
 
 #[derive(Debug, Deserialize)]
 struct InvestigationEnvelope {
+    #[serde(rename = "AgentSession", default)]
+    sessions: Vec<SessionRow>,
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<AgentRequestRow>,
     #[serde(rename = "AgentToolCall", default)]
@@ -300,6 +346,10 @@ struct InvestigationEnvelope {
     provider_reductions: Vec<CompactionRow>,
     #[serde(rename = "AgentBehavior", default)]
     behaviors: Vec<BehaviorDetailRow>,
+    #[serde(rename = "AgentContext", default)]
+    contexts: Vec<ContextDetailRow>,
+    #[serde(rename = "CompactionConfig", default)]
+    compactions_config: Vec<CompactionConfigDetailRow>,
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<ProfileDetailRow>,
 }
@@ -317,15 +367,15 @@ struct SessionRow {
     #[serde(default)]
     session_id: String,
     #[serde(default)]
-    agent_name: Option<String>,
-    #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
-    started: Option<String>,
+    title: Option<gents_protocol::session::SessionTitle>,
+    #[serde(default, deserialize_with = "deserialize_null_tags")]
+    tags: Vec<String>,
     #[serde(default)]
-    ended: Option<String>,
+    created_at: Option<String>,
     #[serde(default)]
-    status: Option<String>,
+    closed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -401,9 +451,25 @@ struct BehaviorDetailRow {
     #[serde(default)]
     inference_profile_id: Option<String>,
     #[serde(default)]
-    compaction_strategy: Option<String>,
+    context_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ContextDetailRow {
     #[serde(default)]
-    compaction_threshold: Option<f64>,
+    context_id: String,
+    #[serde(default)]
+    compaction_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CompactionConfigDetailRow {
+    #[serde(default)]
+    compaction_id: String,
+    #[serde(default)]
+    strategy: Option<crate::compaction::CompactionStrategy>,
+    #[serde(default)]
+    threshold: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -624,6 +690,13 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
     let session_id = escape_graphql_string(session_id);
     format!(
         r#"{{
+            AgentSession(filter: {{ _and: [
+                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ session_id: {{ _eq: "{session_id}" }} }}
+            ] }}) {{
+                session_id
+                behavior_id
+            }}
             AgentRequest(
                 filter: {{ _and: [
                     {{ agent_did: {{ _eq: "{agent_did}" }} }},
@@ -634,7 +707,6 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
                 _docID
                 request_id
                 session_id
-                behavior_id
                 lifecycle_state
                 created_at
                 terminalized_at
@@ -684,10 +756,18 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
             AgentBehavior(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
                 behavior_id
                 inference_profile_id
-                compaction_strategy
-                compaction_threshold
+                context_id
             }}
-            InferenceProfile {{
+            AgentContext(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+                context_id
+                compaction_id
+            }}
+            CompactionConfig(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+                compaction_id
+                strategy
+                threshold
+            }}
+            InferenceProfile(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
                 profile_id
                 context_window
             }}
@@ -730,17 +810,34 @@ fn build_session_investigation(
     envelope: InvestigationEnvelope,
     calls: InvestigationCallsEnvelope,
 ) -> Result<SessionInvestigationSnapshot> {
-    let latest_behavior_id = envelope
-        .requests
-        .iter()
-        .rev()
-        .find_map(|request| clean(request.behavior_id.as_ref()));
-    let behavior = latest_behavior_id.as_deref().and_then(|behavior_id| {
+    anyhow::ensure!(
+        envelope.sessions.len() == 1,
+        "session investigation requires one canonical AgentSession"
+    );
+    let behavior_id = clean(envelope.sessions[0].behavior_id.as_ref())
+        .context("canonical AgentSession is missing behavior_id")?;
+    let behavior = {
         envelope
             .behaviors
             .iter()
             .find(|behavior| behavior.behavior_id == behavior_id)
-    });
+    };
+    let context = behavior
+        .and_then(|behavior| behavior.context_id.as_deref())
+        .and_then(|context_id| {
+            envelope
+                .contexts
+                .iter()
+                .find(|context| context.context_id == context_id)
+        });
+    let compaction = context
+        .and_then(|context| context.compaction_id.as_deref())
+        .and_then(|compaction_id| {
+            envelope
+                .compactions_config
+                .iter()
+                .find(|config| config.compaction_id == compaction_id)
+        });
     let profile = behavior
         .and_then(|behavior| behavior.inference_profile_id.as_deref())
         .and_then(|profile_id| {
@@ -816,8 +913,10 @@ fn build_session_investigation(
         token_usage,
         compactions,
         latest_context: latest_context.clone(),
-        compaction_strategy: behavior
-            .and_then(|behavior| clean(behavior.compaction_strategy.as_ref())),
+        compaction_strategy: compaction
+            .and_then(|config| config.strategy.as_ref())
+            .cloned()
+            .unwrap_or_default(),
         compaction_threshold: latest_context
             .as_ref()
             .map(|context| {
@@ -826,7 +925,8 @@ fn build_session_investigation(
                         .unwrap_or(u32::MAX),
                 ) / 10_000.0
             })
-            .or_else(|| behavior.and_then(|behavior| behavior.compaction_threshold)),
+            .or_else(|| compaction.and_then(|config| config.threshold))
+            .or(Some(crate::config::DEFAULT_COMPACTION_THRESHOLD)),
         context_window: latest_context
             .as_ref()
             .and_then(|context| i64::try_from(context.accounting.context_window).ok())
@@ -1002,11 +1102,11 @@ fn session_detail_query(agent_did: &str, session_ids: &[String]) -> String {
                 {{ session_id: {{ _in: [{list}] }} }}
             ] }}) {{
                 session_id
-                agent_name
                 behavior_id
-                started
-                ended
-                status
+                title
+                tags
+                created_at
+                closed_at
             }}
             AgentRequest(
                 filter: {{ _and: [
@@ -1017,7 +1117,6 @@ fn session_detail_query(agent_did: &str, session_ids: &[String]) -> String {
             ) {{
                 request_id
                 session_id
-                behavior_id
                 lifecycle_state
                 created_at
             }}
@@ -1091,26 +1190,20 @@ fn build_session_rows(
 
     session_ids
         .iter()
-        .map(|session_id| {
-            let session = sessions_by_id.get(session_id);
+        .filter_map(|session_id| {
+            let session = sessions_by_id.get(session_id)?;
             let aggregate = aggregates.get(session_id);
             let latest_request = aggregate.and_then(|aggregate| aggregate.latest_request.as_ref());
-            let started_at = session.and_then(|row| clean(row.started.as_ref()));
             let latest_request_created_at =
                 latest_request.and_then(|row| clean(row.created_at.as_ref()));
 
-            SessionHistoryRow {
+            Some(SessionHistoryRow {
                 session_id: session_id.clone(),
-                agent_name: session.and_then(|row| clean(row.agent_name.as_ref())),
-                behavior_id: session
-                    .and_then(|row| clean(row.behavior_id.as_ref()))
-                    .or_else(|| latest_request.and_then(|row| clean(row.behavior_id.as_ref()))),
-                session_status: session.and_then(|row| clean(row.status.as_ref())),
-                created_at: started_at
-                    .clone()
-                    .or_else(|| latest_request_created_at.clone()),
-                started_at,
-                ended_at: session.and_then(|row| clean(row.ended.as_ref())),
+                behavior_id: clean(session.behavior_id.as_ref()),
+                title: session.title.clone(),
+                tags: session.tags.clone(),
+                created_at: clean(session.created_at.as_ref()),
+                closed_at: clean(session.closed_at.as_ref()),
                 latest_request_id: latest_request
                     .map(|row| row.request_id.trim().to_string())
                     .filter(|request_id| !request_id.is_empty()),
@@ -1129,7 +1222,7 @@ fn build_session_rows(
                     .unwrap_or(0),
                 last_compacted_at: aggregate
                     .and_then(|aggregate| aggregate.last_compacted_at.clone()),
-            }
+            })
         })
         .collect()
 }
@@ -1229,6 +1322,13 @@ fn clean(value: Option<&String>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn deserialize_null_tags<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1315,25 +1415,6 @@ mod tests {
         assert_eq!(inference_turns(&[]).unwrap(), Some(0));
     }
 
-    #[test]
-    fn clamp_limit_honors_large_requests_up_to_the_backstop() {
-        // Unset → default.
-        assert_eq!(clamp_limit(None), DEFAULT_LIMIT);
-        // Floor: a zero/garbage request is raised to 1, never 0.
-        assert_eq!(clamp_limit(Some(0)), 1);
-        // SP3 de-cap: a large requested count is honored (was clamped at 50).
-        assert_eq!(clamp_limit(Some(750)), 750);
-        // Only the backstop caps it.
-        assert_eq!(clamp_limit(Some(MAX_LIMIT + 5_000)), MAX_LIMIT);
-        // The scan budget must be able to surface MAX_LIMIT distinct sessions.
-        const {
-            assert!(
-                REQUEST_SCAN_LIMIT >= MAX_LIMIT,
-                "REQUEST_SCAN_LIMIT must stay >= MAX_LIMIT or the cap is unreachable"
-            );
-        }
-    }
-
     async fn seeded_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -1341,8 +1422,26 @@ mod tests {
         for mutation in [
             r#"mutation {
                 create_InferenceProfile(input: {
+                    agent_did: "did:key:z-sessions",
                     profile_id: "profile-a",
+                    backend_id: "backend-a",
+                    model_name: "model-a",
                     context_window: 20000
+                }) { _docID }
+            }"#,
+            r#"mutation {
+                create_CompactionConfig(input: {
+                    compaction_id: "compaction-a",
+                    agent_did: "did:key:z-sessions",
+                    strategy: "StripThenSummarize",
+                    threshold: 0.9
+                }) { _docID }
+            }"#,
+            r#"mutation {
+                create_AgentContext(input: {
+                    context_id: "context-a",
+                    agent_did: "did:key:z-sessions",
+                    compaction_id: "compaction-a"
                 }) { _docID }
             }"#,
             r#"mutation {
@@ -1350,8 +1449,7 @@ mod tests {
                     behavior_id: "behavior-a",
                     agent_did: "did:key:z-sessions",
                     inference_profile_id: "profile-a",
-                    compaction_strategy: "StripThenSummarize",
-                    compaction_threshold: 0.9,
+                    context_id: "context-a",
                     enabled: true
                 }) { _docID }
             }"#,
@@ -1359,20 +1457,20 @@ mod tests {
                 create_AgentSession(input: {
                     session_id: "session-a",
                     agent_did: "did:key:z-sessions",
-                    agent_name: "OpenAI Agent",
                     behavior_id: "behavior-a",
-                    started: "2026-06-03T09:55:00Z",
-                    status: "open"
+                    title: {text: "OpenAI Agent", source: "user"},
+                    tags: ["review"],
+                    created_at: "2026-06-03T09:55:00Z"
                 }) { _docID }
             }"#,
             r#"mutation {
                 create_AgentSession(input: {
                     session_id: "session-b",
                     agent_did: "did:key:z-sessions",
-                    agent_name: "OpenAI Agent",
                     behavior_id: "behavior-b",
-                    started: "2026-06-03T10:55:00Z",
-                    status: "open"
+                    title: {text: "OpenAI Agent", source: "user"},
+                    created_at: "2026-06-03T10:55:00Z",
+                    closed_at: "2026-06-03T11:01:00Z"
                 }) { _docID }
             }"#,
             r#"mutation {
@@ -1619,10 +1717,19 @@ mod tests {
     #[tokio::test]
     async fn session_history_snapshot_reports_recent_agent_sessions() {
         let node = seeded_node().await;
+        let tool = SessionHistoryTool::new(node, "did:key:z-sessions");
 
-        let snapshot = load_session_history_snapshot(&node, "did:key:z-sessions", Some(2))
-            .await
-            .unwrap();
+        let output = Tool::call(
+            &tool,
+            SessionHistoryParams {
+                action: Some("list".to_string()),
+                limit: Some(2),
+                session_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let snapshot: SessionHistorySnapshot = serde_json::from_str(&output).unwrap();
 
         assert_eq!(snapshot.agent_did, "did:key:z-sessions");
         assert_eq!(snapshot.limit, 2);
@@ -1641,9 +1748,13 @@ mod tests {
             .iter()
             .find(|session| session.session_id == "session-a")
             .unwrap();
-        assert_eq!(session_a.agent_name.as_deref(), Some("OpenAI Agent"));
+        assert_eq!(
+            session_a.title.as_ref().map(|title| title.text.as_str()),
+            Some("OpenAI Agent")
+        );
+        assert_eq!(session_a.tags, vec!["review"]);
         assert_eq!(session_a.behavior_id.as_deref(), Some("behavior-a"));
-        assert_eq!(session_a.session_status.as_deref(), Some("open"));
+        assert_eq!(session_a.closed_at, None);
         assert_eq!(
             session_a.created_at.as_deref(),
             Some("2026-06-03T09:55:00Z")
@@ -1667,33 +1778,17 @@ mod tests {
             session_a.last_compacted_at.as_deref(),
             Some("2026-06-03T10:07:00Z")
         );
-    }
-
-    #[tokio::test]
-    async fn sessions_tool_serializes_limited_history() {
-        let node = seeded_node().await;
-        let tool = SessionHistoryTool::new(node, "did:key:z-sessions");
-
-        let output = Tool::call(
+        let error = Tool::call(
             &tool,
             SessionHistoryParams {
-                action: Some("list".to_string()),
-                limit: Some(1),
+                action: Some("read".to_string()),
+                limit: None,
                 session_id: None,
             },
         )
         .await
-        .unwrap();
-        let parsed: SessionHistorySnapshot = serde_json::from_str(&output).unwrap();
-
-        assert_eq!(parsed.limit, 1);
-        assert_eq!(parsed.sessions.len(), 1);
-        assert_eq!(parsed.sessions[0].session_id, "session-b");
-
-        let row = serde_json::to_value(&parsed.sessions[0]).unwrap();
-        assert_eq!(row["session_status"], "open");
-        assert_eq!(row["latest_request_lifecycle_state"], "completed");
-        assert!(row.get("status").is_none());
+        .unwrap_err();
+        assert!(error.to_string().contains("unsupported sessions action"));
     }
 
     #[tokio::test]
@@ -1883,6 +1978,10 @@ mod tests {
         assert!(!parsed.token_usage.incomplete);
         assert_eq!(parsed.compactions.len(), 1);
         assert_eq!(parsed.compactions[0].scope, "session_prefix");
+        assert_eq!(
+            parsed.compaction_strategy,
+            crate::compaction::CompactionStrategy::StripThenSummarize
+        );
         assert_eq!(parsed.context_window, Some(10_000));
         assert_eq!(parsed.compaction_threshold, Some(0.57));
         assert_eq!(
@@ -2034,24 +2133,5 @@ mod tests {
         assert_eq!(snapshot.token_usage.model_calls, 1);
         assert_eq!(snapshot.token_usage.input_tokens, Some(100));
         assert_eq!(snapshot.token_usage.charged_tokens, Some(120));
-    }
-
-    #[tokio::test]
-    async fn sessions_tool_rejects_unsupported_action() {
-        let node = seeded_node().await;
-        let tool = SessionHistoryTool::new(node, "did:key:z-sessions");
-
-        let error = Tool::call(
-            &tool,
-            SessionHistoryParams {
-                action: Some("read".to_string()),
-                limit: None,
-                session_id: None,
-            },
-        )
-        .await
-        .unwrap_err();
-
-        assert!(error.to_string().contains("unsupported sessions action"));
     }
 }

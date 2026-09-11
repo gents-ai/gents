@@ -43,6 +43,94 @@ mod task_control;
 pub(crate) mod turn;
 mod usage;
 
+#[cfg(test)]
+async fn seed_test_behavior_configuration(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    default_behavior_id: &str,
+    model_name: &str,
+    enabled: bool,
+) {
+    gents::ensure_agent_principal(node, agent_did)
+        .await
+        .expect("seed test principal");
+    gents::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "grok.test_behavior_configuration",
+        |txn| {
+            Box::pin(async move {
+                use gents::config_client::{
+                    apply_desired_state_plan, read_desired_state_record_in_txn,
+                    DesiredStateApplyDocument, DesiredStateApplyPlan,
+                };
+                use gents::Collection;
+
+                let (_, mut principal) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentPrincipal,
+                    agent_did,
+                    agent_did,
+                )
+                .await?
+                .expect("seeded principal");
+                principal["default_behavior_id"] = default_behavior_id.into();
+                let backend_id = format!("{behavior_id}-backend");
+                let profile_id = format!("{behavior_id}-inference");
+                let values = [
+                    (Collection::AgentPrincipal, principal),
+                    (
+                        Collection::InferenceBackend,
+                        serde_json::json!({
+                            "agent_did": agent_did,
+                            "backend_id": backend_id,
+                            "name": format!("{behavior_id} test backend"),
+                            "provider_kind": "OpenAiCompatible",
+                            "openai_wire_api": "chat_completions",
+                            "endpoint": "http://127.0.0.1:1/v1",
+                            "auth": {"kind": "unauthenticated"},
+                            "enabled": true
+                        }),
+                    ),
+                    (
+                        Collection::InferenceProfile,
+                        serde_json::json!({
+                            "agent_did": agent_did,
+                            "profile_id": profile_id,
+                            "backend_id": backend_id,
+                            "model_name": model_name
+                        }),
+                    ),
+                    (
+                        Collection::AgentBehavior,
+                        serde_json::json!({
+                            "agent_did": agent_did,
+                            "behavior_id": behavior_id,
+                            "display_name": behavior_id,
+                            "inference_profile_id": profile_id,
+                            "enabled": enabled
+                        }),
+                    ),
+                ];
+                let plan = DesiredStateApplyPlan::new(
+                    values
+                        .into_iter()
+                        .map(|(collection, value)| DesiredStateApplyDocument {
+                            collection,
+                            add: value.clone(),
+                            update: value,
+                        })
+                        .collect(),
+                )?;
+                apply_desired_state_plan(txn, &plan).await
+            })
+        },
+    )
+    .await
+    .expect("seed canonical test behavior configuration");
+}
+
 use crate::commands::grok_shim::projection::resolve_bound_model_context;
 use crate::commands::grok_shim::server::{
     spawn_leader, AcpDelegate, LeaderHandle, LeaderServerConfig, Registration,
@@ -67,7 +155,7 @@ pub(crate) struct GrokShimBindArgs {
     pub(crate) behavior_id: Option<String>,
     /// Agent DID requests are submitted for.
     pub(crate) agent_did: String,
-    /// Display name stamped on `AgentSession.agent_name`.
+    /// Display name used in shim diagnostics.
     pub(crate) agent_name: String,
     /// Unix socket path the leader binds and the pager connects to.
     pub(crate) socket_path: std::path::PathBuf,
@@ -77,8 +165,7 @@ pub(crate) struct GrokShimBindArgs {
 ///
 /// Resolution order mirrors the Codex shim's bound-behavior resolution: an
 /// explicit `--grok-shim-behavior-id` override wins, then the agent
-/// principal's configured `default_behavior_id`, then the synthesized
-/// `<did>:default` fallback. The behavior must exist and select a model and
+/// principal's configured `default_behavior_id`. The behavior must exist and select a model and
 /// backend before the socket is published, so a misconfigured home fails fast
 /// instead of serving a fabricated model catalog.
 ///
@@ -90,8 +177,8 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
     let node = args.node.clone();
     let behavior_id =
         resolve_grok_shim_behavior_id(node.as_ref(), args.behavior_id.as_deref(), &args.agent_did)
-            .await;
-    let bound = resolve_bound_model_context(node.as_ref(), &behavior_id)
+            .await?;
+    let bound = resolve_bound_model_context(node.as_ref(), &args.agent_did, &behavior_id)
         .await
         .with_context(|| {
             format!(
@@ -100,6 +187,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
             )
         })?;
     tracing::info!(
+        agent_name = %args.agent_name,
         behavior_id = %behavior_id,
         model_id = %bound.model_id,
         total_context_tokens = bound.total_context_tokens,
@@ -115,7 +203,6 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
         node: args.node.clone(),
         graphql: args.graphql.clone(),
         agent_did: args.agent_did.clone(),
-        agent_name: args.agent_name.clone(),
         behavior_id: behavior_id.clone(),
         bound: bound.clone(),
     };
@@ -147,7 +234,6 @@ struct AcpDelegateFactoryInputs {
     node: Arc<EmbeddedNode>,
     graphql: String,
     agent_did: String,
-    agent_name: String,
     behavior_id: String,
     bound: crate::commands::grok_shim::projection::BoundModelContext,
 }
@@ -196,7 +282,6 @@ impl AcpDelegateFactoryInputs {
             crate::commands::grok_shim::acp::AcpServiceConfig {
                 node: inputs.node.clone(),
                 agent_did: Arc::from(inputs.agent_did.as_str()),
-                agent_name: Arc::from(inputs.agent_name.as_str()),
                 behavior_id: Arc::from(inputs.behavior_id.as_str()),
                 current_model: crate::commands::grok_shim::acp::BoundModel {
                     model_id: inputs.bound.model_id.clone(),
@@ -213,44 +298,13 @@ impl AcpDelegateFactoryInputs {
     }
 }
 
-/// Resolve the behavior the Grok shim binds to.
-///
-/// An explicit override always wins. Otherwise the agent principal's
-/// configured `default_behavior_id` is used — that is the id behaviors are
-/// actually stored under — and only a missing or unset principal falls back to
-/// the synthesized `<did>:default` form, keeping legacy homes compatible.
-pub(crate) async fn resolve_grok_shim_behavior_id(
-    node: &EmbeddedNode,
-    override_behavior_id: Option<&str>,
-    agent_did: &str,
-) -> String {
-    if let Some(value) = explicit_behavior_override(override_behavior_id) {
-        return value;
-    }
-    match gents::load_agent_principal(node, agent_did).await {
-        Ok(Some(principal)) => principal
-            .default_behavior_id
-            .filter(|id| !id.trim().is_empty())
-            .unwrap_or_else(|| gents::default_behavior_id_for_agent(agent_did)),
-        _ => gents::default_behavior_id_for_agent(agent_did),
-    }
-}
-
-/// The trimmed, non-empty form of an explicit behavior override, if any.
-///
-/// Exposed `pub(crate)` so the CLI surface and tests can share the exact
-/// trimming rule the async resolver applies.
-pub(crate) fn explicit_behavior_override(override_behavior_id: Option<&str>) -> Option<String> {
-    override_behavior_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
+pub(crate) use crate::commands::inference_binding::resolve_bound_behavior_id as resolve_grok_shim_behavior_id;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::grok_shim::server::AcpDelegateFactory;
+    use crate::commands::inference_binding::explicit_behavior_override;
 
     /// A leader-side registration: `yolo_mode=true`, `auto_mode=false`,
     /// `terminal=false` — the exact capabilities the edge probe registers.
@@ -328,33 +382,21 @@ mod tests {
         gents::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
-        let response = node
-            .execute(&format!(
-                r#"mutation {{
-                    create_AgentPrincipal(input: {{
-                        agent_did: "{agent_did}"
-                        display_name: "Grok shim factory test"
-                        default_behavior_id: "{behavior_id}"
-                        enabled: true
-                    }}) {{ _docID }}
-                    create_AgentBehavior(input: {{
-                        behavior_id: "{behavior_id}"
-                        agent_did: "{agent_did}"
-                        display_name: "Grok shim factory test"
-                        enabled: true
-                    }}) {{ _docID }}
-                }}"#,
-            ))
-            .await;
-        gents::graphql::ensure_no_errors(&response, "seed admitted factory behavior")
-            .expect("seed admitted factory behavior");
+        seed_test_behavior_configuration(
+            node.as_ref(),
+            &agent_did,
+            &behavior_id,
+            &behavior_id,
+            "GLM-5.3-NVFP4",
+            true,
+        )
+        .await;
         let graphql = spawn_mock_graphql(node.clone()).await;
         let inputs = AcpDelegateFactoryInputs {
             background_executions: Default::default(),
             node: node.clone(),
             graphql,
             agent_did,
-            agent_name: "grok-shim".to_string(),
             behavior_id,
             bound: crate::commands::grok_shim::projection::BoundModelContext::new(
                 "GLM-5.3-NVFP4".to_string(),
@@ -378,13 +420,33 @@ mod tests {
         }
         let (_dir, node, inputs) = factory_fixture().await;
         let did = &inputs.agent_did;
-        let seeded = node.execute(&format!(r#"mutation {{
-            create_AgentBehavior(input:{{behavior_id:"reviewer",agent_did:"{did}",enabled:true,
-                model_name:"review-model",backend_id:"review-backend"}}){{_docID}}
-            create_AgentBehavior(input:{{behavior_id:"disabled",agent_did:"{did}",enabled:false}}){{_docID}}
-            create_AgentBehavior(input:{{behavior_id:"foreign",agent_did:"did:key:foreign",enabled:true}}){{_docID}}
-        }}"#)).await;
-        gents::graphql::ensure_no_errors(&seeded, "seed behavior choices").unwrap();
+        seed_test_behavior_configuration(
+            node.as_ref(),
+            did,
+            "reviewer",
+            &inputs.behavior_id,
+            "review-model",
+            true,
+        )
+        .await;
+        seed_test_behavior_configuration(
+            node.as_ref(),
+            did,
+            "disabled",
+            &inputs.behavior_id,
+            "disabled-model",
+            false,
+        )
+        .await;
+        seed_test_behavior_configuration(
+            node.as_ref(),
+            "did:key:foreign",
+            "foreign",
+            "foreign",
+            "foreign-model",
+            true,
+        )
+        .await;
         let factory = production_acp_delegate_factory(inputs.clone());
         let registration = production_registration();
         let selected = factory(1, &registration).unwrap();

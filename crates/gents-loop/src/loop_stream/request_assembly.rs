@@ -1,12 +1,12 @@
 use super::*;
 
-/// Assemble the per-request message tail: the optional `<context>` message rides
-/// immediately before the prompt, which is always last (rig prompt semantics).
+/// Assemble the per-request message tail: an optional runtime context message
+/// rides immediately before the prompt, which is always last for rig.
 ///
-/// This mirrors Lean `PromptAssembly.Template.assembleWithContext`, whose
-/// `assembleWithContext_tail` theorem fixes the order as `... contextPreamble,
-/// prompt`. Fenced by `tests` (`assembles_context_immediately_before_prompt`);
-/// reordering here breaks that test and contradicts the proof.
+/// The Lean prompt-assembly model deliberately excludes this runtime-only
+/// workspace context. Its local ordering is fenced by
+/// `assembles_context_immediately_before_prompt`; the generated Lean layer
+/// cases exercise the canonical prompt tail without it.
 pub fn assemble_new_messages(context_message: Option<Message>, prompt: Message) -> Vec<Message> {
     let mut new_messages: Vec<Message> = Vec::with_capacity(2);
     if let Some(context_message) = context_message {

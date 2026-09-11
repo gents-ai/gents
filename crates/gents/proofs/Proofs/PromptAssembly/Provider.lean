@@ -2,95 +2,26 @@ import Proofs.PromptAssembly.Content
 import Proofs.PromptAssembly.Properties
 
 /-!
-# The provider-bound sanitizer, content and all
+# Content-bearing provider model with global resolution
 
-`Proofs.PromptAssembly.Executable.sanitize` models the inner two stages of the
-Rust provider sanitizer:
+This module models assistant text retention, empty-message pruning, and content
+ordering. `sanitizeForProviderGlobal` still resolves calls against one transcript-wide
+set; production resolves within each turn. Soundness here requires unique call
+IDs, and does not establish safety for arbitrary persisted histories that reuse
+an ID. `PromptAssembly.sanitizeTurn` models per-turn row resolution, but does not
+carry assistant prose, so replacing this module with that projection would lose
+a real guarantee.
 
-```
-sanitize = dropUnpairedCalls ∘ dropOrphanedResults
-```
+The row-only refinement additionally requires calls-only assistant content and
+nondegenerate messages. Outside that fragment a row with prose plus an unresolved
+call must survive as ordinary content, while empty messages must disappear.
 
-Production (`sanitize_history_for_provider`, `src/compaction.rs`) runs THREE:
-
-```
-normalize_assistant_content_order ∘ drop_unpaired_tool_calls ∘ drop_orphaned_tool_results
-```
-
-This file closes that gap by lifting the row model to carry assistant content,
-so the whole composition is modeled.
-
-## The divergence this exposed
-
-Enriching the model made a real Rust/Lean disagreement visible for the first
-time. On an assistant message carrying **text plus a tool call that never
-resolved**:
-
-* Rust `drop_unpaired_tool_calls` filters the content list, keeps every
-  non-call item unconditionally, and keeps the message when anything survives.
-  The message stays, carrying its text.
-* Lean `filterCallsBy` sees `callIds ∩ resolved = ∅` and drops the row whole.
-
-Assistant-text-plus-tool-calls is the *common* production shape —
-`AssistantTurnAccumulator::build_message` writes exactly that. The old pure-row
-model could not express the case, which is why the social fence never caught
-it.
-
-**Rust is right**: dropping the row would silently delete assistant prose from
-the provider-bound history. So `filterCallsByP` below adopts Rust's rule — keep
-the row when non-call content survives, demoting its kind to `.ordinary` — and
-soundness is re-proven against it. `sanitize` and its theorems are left
-untouched; `project_sanitizeForProvider_eq_sanitize` relates the two.
-
-## Empty messages
-
-The same enrichment exposed a second divergence. Rust drops empty messages, and
-does it asymmetrically: `drop_orphaned_tool_results` pushes a user message only
-when content survives, while assistant messages ride through and are pruned by
-`drop_unpaired_tool_calls`. The row-only model has no notion of an empty message
-and kept every `.ordinary` row. `emptyUserRow` / `emptyAssistantRow` model the
-two prunes, `NonDegenerate` names the invariant they establish, and the fixpoint
-theorems take it as a hypothesis — an input still carrying an empty row is not a
-fixpoint, because sanitizing it removes that row.
-
-## Model boundary: call-occurrence multiplicity
-
-`MessageKind.assistantToolCalls` carries a `Finset ToolCallId`, so the row model
-cannot express the *same* call id appearing twice in one turn: two occurrences
-and one collapse to the same row. `Coherent` inherits that blindness, equating a
-content list's call *set* with `callIds`.
-
-This is a genuine limit, not an oversight, and it is why the model did not catch
-the duplicate-key defect fixed alongside this file: Rust paired through a
-`HashSet`, so a turn announcing the same id twice was closed by a single result
-while both calls survived — provider-invalid output from the function whose job
-is to prevent exactly that. `drop_unpaired_tool_calls` now drops duplicate
-occurrences within a turn, which restores the correspondence by making the set
-abstraction *true* of production output rather than merely assumed.
-
-Modeling multiplicity properly would mean replacing `Finset` in the shared
-`Transcript.MessageKind`, which every pairing theorem in `Transcript` and
-`PairingReconcile` is stated over. That is a larger change than this one. The
-occurrence-level behaviour is fenced in Rust instead, by
-`compaction::tests::duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call`
-and `::call_key_reuse_across_turns_survives`.
-
-## Model boundary: global vs per-turn resolution
-
-`resolvedInP` is a single set over the whole transcript, while Rust scopes
-resolution to the *active turn* (`resolved_keys_per_turn`). The two coincide
-exactly under `UniqueCallIds` — the hypothesis of `sanitizeForProvider_sound`,
-which forbids a call id announced by one turn from appearing anywhere in the
-rest — so the model and production agree on every input the theorems speak
-about, and `witnessesHaveUniqueCallIds` discharges that for every emitted
-witness.
-
-They diverge only when an id is *reused across turns*, which `UniqueCallIds`
-excludes but arbitrary loaded history does not. A global set lets an earlier
-turn's result resolve a later turn's reuse, stranding a dangling call — the
-second defect review found. Rust must be correct without the precondition, so it
-scopes per turn; the reused-id shape is fenced by
-`compaction::tests::incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first`.
+Remaining owner migration: use per-turn resolution in this content-bearing model,
+prove soundness/fixpoint/idempotence directly, transfer compaction prefix/cursor
+lemmas to that owner, then delete the global filters and conditional bridges.
+Do not remove those hypotheses without replacing the proofs. Intra-turn duplicate
+call occurrences are also outside the Finset row abstraction; native sanitizer
+regressions currently fence multiplicity and cross-turn key reuse.
 -/
 
 namespace PromptAssembly.Provider
@@ -126,7 +57,7 @@ instance (pr : ProviderRow) : Decidable (Coherent pr) := by
   unfold Coherent
   cases pr.row.kind <;> infer_instance
 
-/-- `UniqueCallIds` is the other premise of `sanitizeForProvider_sound`. Making
+/-- `UniqueCallIds` is the other premise of `sanitizeForProviderGlobal_sound`. Making
 it decidable lets the contract witnesses discharge it by `decide`, so a witness
 that reuses a call id fails the build rather than silently voiding the soundness
 claim the emitted rows rest on. -/
@@ -461,7 +392,7 @@ theorem allCoherent_dropOrphanedFromP {rows : List ProviderRow}
 
 /-! ## Stage 2 — unpaired tool calls
 
-This is where the model follows Rust rather than the other way round. -/
+Content retention follows Rust; the supplied resolved set remains global. -/
 
 /-- Keep every non-call item; keep a call only when it resolved. Mirrors the
 closure in Rust `drop_unpaired_tool_calls`. -/
@@ -507,7 +438,7 @@ def restrictRow (resolved : Finset ToolExecution.ToolCallId)
   { row := { pr.row with kind := restrictedKind resolved callIds }
   , content := restrictContent resolved pr.content }
 
-/-- Mirrors Rust `drop_unpaired_tool_calls`: an assistant row survives exactly
+/-- Content-preserving filter over an explicitly supplied resolved set. A row survives exactly
 when content survives the filter, and its kind is demoted to `.ordinary` when
 no announced call resolved. -/
 def filterCallsByP (resolved : Finset ToolExecution.ToolCallId) :
@@ -532,8 +463,9 @@ def resolvedInP (rows : List ProviderRow) : Finset ToolExecution.ToolCallId :=
 def dropUnpairedCallsP (rows : List ProviderRow) : List ProviderRow :=
   filterCallsByP (resolvedInP rows) rows
 
-/-- The full production composition. -/
-def sanitizeForProvider (rows : List ProviderRow) : List ProviderRow :=
+/-- Three-stage content projection using global resolution. This is a
+conditional proof model, not the unrestricted production algorithm. -/
+def sanitizeForProviderGlobal (rows : List ProviderRow) : List ProviderRow :=
   normalizeOrder (dropUnpairedCallsP (dropOrphanedResultsP rows))
 
 section FilterReduction
@@ -903,11 +835,11 @@ theorem activeBlockValidFrom_filterCallsByP (rows : List ProviderRow) :
             activeBlockValidFrom_cons_ordinary row.row _ _ hk]
           exact ⟨hstart, htail⟩
 
-/-- **Soundness of the full three-stage production sanitizer.** -/
-theorem sanitizeForProvider_sound {rows : List ProviderRow}
+/-- Soundness of the content model on coherent, unique-call-ID inputs. -/
+theorem sanitizeForProviderGlobal_sound {rows : List ProviderRow}
     (huniq : UniqueCallIds (project rows)) (hcoh : AllCoherent rows) :
-    ProviderValid (project (sanitizeForProvider rows)) := by
-  unfold sanitizeForProvider dropUnpairedCallsP dropOrphanedResultsP resolvedInP
+    ProviderValid (project (sanitizeForProviderGlobal rows)) := by
+  unfold sanitizeForProviderGlobal dropUnpairedCallsP dropOrphanedResultsP resolvedInP
   constructor
   rw [project_normalizeOrder]
   simpa using
@@ -915,11 +847,11 @@ theorem sanitizeForProvider_sound {rows : List ProviderRow}
 
 /-- Split-stability: a suffix of a unique-id transcript sanitizes to valid
 provider input on its own, with no view of what preceded it. -/
-theorem sanitizeForProvider_split_stable {old recent : List ProviderRow}
+theorem sanitizeForProviderGlobal_split_stable {old recent : List ProviderRow}
     (huniq : UniqueCallIds (project (old ++ recent)))
     (hcoh : AllCoherent recent) :
-    ProviderValid (project (sanitizeForProvider recent)) := by
-  refine sanitizeForProvider_sound ?_ hcoh
+    ProviderValid (project (sanitizeForProviderGlobal recent)) := by
+  refine sanitizeForProviderGlobal_sound ?_ hcoh
   refine UniqueCallIds.of_append_right (a := project old) ?_
   simpa [project, List.map_append] using huniq
 
@@ -1077,20 +1009,20 @@ theorem nonemptyAnnouncements_filterCallsByP
         exact ih
 
 theorem nonemptyAnnouncements_sanitizeForProvider (rows : List ProviderRow) :
-    NonemptyAnnouncements (project (sanitizeForProvider rows)) := by
-  unfold sanitizeForProvider dropUnpairedCallsP
+    NonemptyAnnouncements (project (sanitizeForProviderGlobal rows)) := by
+  unfold sanitizeForProviderGlobal dropUnpairedCallsP
   rw [project_normalizeOrder]
   exact nonemptyAnnouncements_filterCallsByP _ _
 
 theorem allCoherent_sanitizeForProvider {rows : List ProviderRow}
-    (hcoh : AllCoherent rows) : AllCoherent (sanitizeForProvider rows) := by
-  unfold sanitizeForProvider dropUnpairedCallsP dropOrphanedResultsP
+    (hcoh : AllCoherent rows) : AllCoherent (sanitizeForProviderGlobal rows) := by
+  unfold sanitizeForProviderGlobal dropUnpairedCallsP dropOrphanedResultsP
   exact allCoherent_normalizeOrder
     (allCoherent_filterCallsByP _ (allCoherent_dropOrphanedFromP hcoh ∅))
 
 /-! ### The sanitizer's output carries no empty messages
 
-This is what makes the fixpoint hypothesis discharge for `sanitizeForProvider`'s
+This is what makes the fixpoint hypothesis discharge for `sanitizeForProviderGlobal`'s
 own output, and therefore what makes idempotence hold: an output that still
 carried an empty row would not be a fixpoint, because a second pass would drop
 it. -/
@@ -1221,46 +1153,46 @@ theorem allNonDegenerate_normalizeOrder {rows : List ProviderRow}
   exact nonDegenerate_normalizeRow (h source hsource)
 
 theorem allNonDegenerate_sanitizeForProvider (rows : List ProviderRow) :
-    AllNonDegenerate (sanitizeForProvider rows) := by
-  unfold sanitizeForProvider dropUnpairedCallsP dropOrphanedResultsP
+    AllNonDegenerate (sanitizeForProviderGlobal rows) := by
+  unfold sanitizeForProviderGlobal dropUnpairedCallsP dropOrphanedResultsP
   exact allNonDegenerate_normalizeOrder
     (allNonDegenerate_filterCallsByP _ (orphanStagePruned_dropOrphanedFromP rows ∅))
 
 /-- **Fixpoint.** Already-narrowed, already-ordered provider input is untouched. -/
-theorem sanitizeForProvider_fixpoint {rows : List ProviderRow}
+theorem sanitizeForProviderGlobal_fixpoint {rows : List ProviderRow}
     (hvalid : ProviderValid (project rows))
     (hne : NonemptyAnnouncements (project rows))
     (hcoh : AllCoherent rows)
     (hnd : AllNonDegenerate rows)
     (hordered : normalizeOrder rows = rows) :
-    sanitizeForProvider rows = rows := by
-  unfold sanitizeForProvider dropUnpairedCallsP dropOrphanedResultsP resolvedInP
+    sanitizeForProviderGlobal rows = rows := by
+  unfold sanitizeForProviderGlobal dropUnpairedCallsP dropOrphanedResultsP resolvedInP
   rw [dropOrphanedFromP_eq_self rows hnd ∅ hvalid.activeBlockValid]
   rw [filterCallsByP_eq_self rows hnd (resolvedIn (project rows)) ∅
     hvalid.activeBlockValid hne hcoh (Finset.Subset.refl _)]
   exact hordered
 
 /-- **Idempotence.** A second pass at the provider boundary is a no-op. -/
-theorem sanitizeForProvider_idempotent {rows : List ProviderRow}
+theorem sanitizeForProviderGlobal_idempotent {rows : List ProviderRow}
     (huniq : UniqueCallIds (project rows)) (hcoh : AllCoherent rows) :
-    sanitizeForProvider (sanitizeForProvider rows) = sanitizeForProvider rows := by
-  refine sanitizeForProvider_fixpoint
-    (sanitizeForProvider_sound huniq hcoh)
+    sanitizeForProviderGlobal (sanitizeForProviderGlobal rows) = sanitizeForProviderGlobal rows := by
+  refine sanitizeForProviderGlobal_fixpoint
+    (sanitizeForProviderGlobal_sound huniq hcoh)
     (nonemptyAnnouncements_sanitizeForProvider rows)
     (allCoherent_sanitizeForProvider hcoh)
     (allNonDegenerate_sanitizeForProvider rows) ?_
-  unfold sanitizeForProvider
+  unfold sanitizeForProviderGlobal
   exact normalizeOrder_idempotent _
 
-/-! ## Refinement: how this relates to the row-only `sanitize`
+/-! ## Refinement: how this relates to the row-only `sanitizeGlobal`
 
-`Proofs.PromptAssembly.Executable.sanitize` is the coarser model. The two agree
+`Proofs.PromptAssembly.Executable.sanitizeGlobal` is the coarser model. The two agree
 exactly on the fragment the coarser model can faithfully describe — assistant
 rows whose content is nothing but tool calls.
 
 Outside that fragment they genuinely differ, and the difference is the finding
 this file documents: on an assistant message carrying text alongside a tool call
-that never resolved, `sanitize` drops the row and production keeps it. The
+that never resolved, `sanitizeGlobal` drops the row and production keeps it. The
 refinement is therefore stated *conditionally*, on purpose. Stating it
 unconditionally would be false. -/
 
@@ -1411,17 +1343,17 @@ theorem project_filterCallsByP_of_callsOnly (rows : List ProviderRow)
         filterCallsBy_cons_ordinary row.row (project rest) R hk, ih hrestCoh hrestOnly hrestNd]
 
 /-- **Conditional refinement.** On the calls-only, non-degenerate fragment the
-enriched production model and the row-only `sanitize` agree exactly.
+enriched global model and the row-only `sanitizeGlobal` agree exactly.
 
 Off that fragment they differ by design, in two ways, both of them cases the
 row-only model cannot express: an assistant message carrying text alongside an
 unresolved call (see the module docstring), and an empty message, which
-production drops and `sanitize` keeps. -/
-theorem project_sanitizeForProvider_eq_sanitize {rows : List ProviderRow}
+production drops and `sanitizeGlobal` keeps. -/
+theorem project_sanitizeForProviderGlobal_eq_sanitizeGlobal {rows : List ProviderRow}
     (hcoh : AllCoherent rows) (honly : AllCallsOnly rows)
     (hnd : AllNonDegenerate rows) :
-    project (sanitizeForProvider rows) = sanitize (project rows) := by
-  unfold sanitizeForProvider dropUnpairedCallsP dropOrphanedResultsP resolvedInP sanitize
+    project (sanitizeForProviderGlobal rows) = sanitizeGlobal (project rows) := by
+  unfold sanitizeForProviderGlobal dropUnpairedCallsP dropOrphanedResultsP resolvedInP sanitizeGlobal
     dropUnpairedCalls dropOrphanedResults
   rw [project_normalizeOrder,
     project_filterCallsByP_of_callsOnly (dropOrphanedFromP ∅ rows) _

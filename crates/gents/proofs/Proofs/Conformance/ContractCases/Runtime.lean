@@ -1,4 +1,5 @@
 import Proofs.RuntimeReconcile
+import Mathlib.Data.Finset.Sort
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases
@@ -49,9 +50,16 @@ def runtimeCaseFromStep
     (action : RuntimeState.Action)
     (trackedRequestId : RequestId := 0)
     (trackedSessionId : SessionId := 0) : RuntimeReconcileCase :=
+  let requested := match action with
+    | .acceptRequest _ _ _ behavior => some behavior
+    | _ => none
   match RuntimeState.step? pre action with
   | some post =>
-      { name := name
+      { requestedBehavior := requested
+      , preDefaultBehavior := pre.active.defaultBehavior
+      , preSessionBehavior := pre.sessionBehavior trackedSessionId
+      , preRunnable := pre.effectiveDispatchers.sort (· ≤ ·)
+      , name := name
       , action := actionName
       , legal := true
       , prePhase := pre.phase.toDefraDB
@@ -77,7 +85,11 @@ def runtimeCaseFromStep
           | none => 0
       }
   | none =>
-      { name := name
+      { requestedBehavior := requested
+      , preDefaultBehavior := pre.active.defaultBehavior
+      , preSessionBehavior := pre.sessionBehavior trackedSessionId
+      , preRunnable := pre.effectiveDispatchers.sort (· ≤ ·)
+      , name := name
       , action := actionName
       , legal := false
       , prePhase := pre.phase.toDefraDB
@@ -100,8 +112,34 @@ def runtimeCaseFromStep
       , trackedSessionBehavior := 0
       }
 
+def runtimeTwoBehaviors : RuntimeState := RuntimeState.bootState
+  { defaultBehavior := 10, runnable := {10, 20}, unavailable := ∅,
+    dependenciesSatisfied := {10, 20} }
+
+def runtimeExplicitSelectionCases : List RuntimeReconcileCase :=
+  [ runtimeCaseFromStep "default-A-explicit-B-binds-B" "acceptRequest" runtimeTwoBehaviors
+      (.acceptRequest .ready 100 500 20) 500 100
+  , runtimeCaseFromStep "existing-A-requested-B-rejected" "acceptRequest"
+      { runtimeTwoBehaviors with sessionBehavior := fun _ => some 10 }
+      (.acceptRequest .ready 100 500 20) 500 100
+  , runtimeCaseFromStep "existing-A-requested-A-accepted" "acceptRequest"
+      { runtimeTwoBehaviors with sessionBehavior := fun _ => some 10 }
+      (.acceptRequest .ready 100 500 10) 500 100
+  , runtimeCaseFromStep "unknown-selection-never-falls-back" "acceptRequest" runtimeTwoBehaviors
+      (.acceptRequest .ready 100 500 999) 500 100
+  , runtimeCaseFromStep "unobserved-generation-rejects-explicit-request" "acceptRequest"
+      runtimePublishedBeforeRouter (.acceptRequest .ready 100 500 20) 500 100
+  , runtimeCaseFromStep "demoted-selection-never-falls-back" "acceptRequest"
+      { runtimeTwoBehaviors with startupDemoted := {20} }
+      (.acceptRequest .ready 100 500 20) 500 100 ]
+
+theorem explicit_selection_cases_pinned : runtimeExplicitSelectionCases.map
+    (fun c => (c.legal, c.trackedRequestBehavior, c.trackedSessionBehavior)) =
+    [(true, 20, 20), (false, 0, 0), (true, 10, 10), (false, 0, 0),
+     (false, 0, 0), (false, 0, 0)] := by native_decide
+
 def runtimeReconcileCases : List RuntimeReconcileCase :=
-  [ runtimeCaseFromStep
+  runtimeExplicitSelectionCases ++ [ runtimeCaseFromStep
       "publish_changed_snapshot"
       "publish"
       runtimeApplyingChanged
@@ -115,7 +153,7 @@ def runtimeReconcileCases : List RuntimeReconcileCase :=
       "accept_request_after_router_observe"
       "acceptRequest"
       runtimeRouterObserved
-      (.acceptRequest .ready 100 500)
+      (.acceptRequest .ready 100 500 20)
       500
       100
   , runtimeCaseFromStep
@@ -129,7 +167,7 @@ def runtimeReconcileCases : List RuntimeReconcileCase :=
       "replayed_request_is_not_accepted_twice"
       "acceptRequest"
       { runtimeWithInFlight with inFlight := ∅ }
-      (.acceptRequest .ready 100 500)
+      (.acceptRequest .ready 100 500 20)
       500
       100
   , runtimeCaseFromStep

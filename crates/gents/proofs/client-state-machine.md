@@ -275,7 +275,7 @@ A compliant client should observe these collections with these filters:
 | `AgentToolResult` | `session_id = <session>` | Full tool output |
 | `AgentMessage` | `session_id = <session>` | Scroll-back transcript |
 | `InferenceCall` | `request_id = <active request>` | Backend-call progress/debug state |
-| `AgentConversation` | `agent_did = <agent>` | Conversation list |
+| `AgentSession` | Owner and exact requester scope | Session list and compact observation |
 
 For turn-scoped observation, filter `AgentRequest` by
 `retry_root_request = <turn root>` to see all attempts in a retry chain.
@@ -331,7 +331,7 @@ enforces these parts:
 | C4/C4' session selection is local | `onSelectSession` latches the clicked session and clears the loaded session snapshot if it belongs to another session. Store presence affects projection only. | Generated `stale_workflow_after_session_switch` is consumed by TypeScript projection tests and Rust conformance. |
 | C6 start-submit is gated | `onSendMessage` checks `shellProjection.sendStatus === ready` before calling `sendChatMessage`; Rust submission APIs still validate required agent/session fields. | Generated `blocked_submit_*` cases cover offline client, missing agent, empty composer, mutation in flight, awaiting observation, missing session, and non-terminal turn gates. |
 | C9 awaiting retires only on matching request | Rust `build_session_snapshot_from_store(..., preferred_request_id)` reports a preferred request only if that request is actually in the observed store; TypeScript keeps `awaitingObservation` while latest/pending request ids do not match. | Generated stale/matching observation cases are consumed by both `projectChatShell` and desktop session snapshot tests. |
-| Terminal follow-up allowance | A terminal turn is trustworthy for a follow-up even when the conversation summary is missing but the session snapshot is present. | Generated terminal cases cover both summary-present and session-snapshot-only frontend paths. |
+| Terminal follow-up allowance | Follow-up uses the selected session/request observation, with no separate conversation summary. | Generated terminal cases exercise the single session observation path. |
 
 `Proofs.Conformance.Contracts` now includes `frontend_client_shell_case_count`,
 `frontend_client_shell_cases`, `desktop_client_shell_case_count`, and

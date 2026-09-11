@@ -4,7 +4,7 @@ namespace ComposedState
 namespace ReachabilityWitness
 
 def startupCtx : ProcessState.StartupContext :=
-  { hasStuckRequests := false, activeRequestCount := 0 }
+  { hasStuckRequests := false }
 
 def ready : ComposedState :=
   { initial with process := .ready }
@@ -339,7 +339,7 @@ theorem c2_running_reachable_domain_nonempty :
   · simp [interruptedWithRunningTool, interruptLatchedRunning, withRunningTool]
   · rfl
   · simp [IsDetached, runningTool, pendingTool]
-  · exact Or.inr (Or.inr rfl)
+  · exact Or.inr rfl
 
 end ReachabilityWitness
 end ComposedState

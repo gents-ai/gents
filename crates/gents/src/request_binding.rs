@@ -57,6 +57,20 @@ pub(crate) async fn load_agent_request(
     let Some(request_doc_id) = resolve_request_doc_id(node, request_id).await? else {
         return Ok(None);
     };
+    let request = load_agent_request_by_doc_id(node, &request_doc_id).await?;
+    if let Some(request) = request.as_ref() {
+        anyhow::ensure!(
+            request.request_id == request_id,
+            "AgentRequest {request_doc_id} changed logical request binding while loading {request_id}"
+        );
+    }
+    Ok(request)
+}
+
+pub(crate) async fn load_agent_request_by_doc_id(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+) -> Result<Option<AgentRequest>> {
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -67,13 +81,8 @@ pub(crate) async fn load_agent_request(
                 behavior_id
                 session_id
                 content
-                temperature
-                top_p
-                top_k
-                seed
-                max_tokens
                 max_total_tokens
-                metadata
+                input
                 execution_origin
                 created_at
                 deadline
@@ -89,7 +98,7 @@ pub(crate) async fn load_agent_request(
                 caused_by_trigger_context
                 workspace_id
                 workspace_authority
-                workspace_owner_deployment_id
+                workspace_owner_agent_did
                 workspace_seal_hash
             }}
         }}"#,
@@ -102,8 +111,8 @@ pub(crate) async fn load_agent_request(
         return Ok(None);
     };
     anyhow::ensure!(
-        row.doc_id.as_deref() == Some(request_doc_id.as_str()) && row.request_id == request_id,
-        "AgentRequest {request_doc_id} changed logical request binding while loading {request_id}"
+        row.doc_id.as_deref() == Some(request_doc_id),
+        "AgentRequest physical binding changed while loading {request_doc_id}"
     );
     Ok(Some(AgentRequest::try_from(row)?))
 }

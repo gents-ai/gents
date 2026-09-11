@@ -23,60 +23,48 @@ pub fn read_json_file(path: &Path) -> Result<Value> {
 }
 
 pub fn rewrite_manifest_agent_dids(root: &Path, agent_did: &str) -> Result<()> {
-    let principal_path = root.join("agent_principal.json");
-    let mut principal = read_json_file(&principal_path)?;
-    principal["agent_did"] = Value::String(agent_did.to_string());
-    write_json_file(&principal_path, &principal)?;
-
-    for dir_name in ["agent_behaviors", "tool_selections"] {
-        let collection_dir = root.join(dir_name);
-        if !collection_dir.exists() {
-            continue;
-        }
-        for entry in fs::read_dir(&collection_dir)
-            .with_context(|| format!("reading {}", collection_dir.display()))?
-        {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
+    let path = root.join("pack_config.json");
+    let mut config = read_json_file(&path)?;
+    config["agent_principal"]["agent_did"] = Value::String(agent_did.to_string());
+    if let Some(object) = config.as_object_mut() {
+        for value in object.values_mut() {
+            let Some(rows) = value.as_array_mut() else {
                 continue;
+            };
+            for row in rows {
+                if row.get("agent_did").is_some() {
+                    row["agent_did"] = Value::String(agent_did.to_string());
+                }
             }
-            let path = entry.path().join("object.json");
-            let mut object = read_json_file(&path)?;
-            object["agent_did"] = Value::String(agent_did.to_string());
-            write_json_file(&path, &object)?;
         }
     }
-
+    write_json_file(&path, &config)?;
     Ok(())
 }
 
 pub fn assert_manifest_agent_dids(root: &Path, expected_agent_did: &str) -> Result<()> {
-    let principal = read_json_file(&root.join("agent_principal.json"))?;
+    let config = read_json_file(&root.join("pack_config.json"))?;
+    let principal = &config["agent_principal"];
     assert_eq!(
         principal.get("agent_did").and_then(Value::as_str),
         Some(expected_agent_did)
     );
 
-    for dir_name in ["agent_behaviors", "tool_selections"] {
-        let collection_dir = root.join(dir_name);
-        if !collection_dir.exists() {
-            continue;
-        }
-        for entry in fs::read_dir(&collection_dir)
-            .with_context(|| format!("reading {}", collection_dir.display()))?
-        {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
+    if let Some(collections) = config.as_object() {
+        for (collection, value) in collections {
+            let Some(rows) = value.as_array() else {
                 continue;
+            };
+            for object in rows {
+                if object.get("agent_did").is_none() {
+                    continue;
+                }
+                assert_eq!(
+                    object.get("agent_did").and_then(Value::as_str),
+                    Some(expected_agent_did),
+                    "wrong agent_did in {collection}"
+                );
             }
-            let path = entry.path().join("object.json");
-            let object = read_json_file(&path)?;
-            assert_eq!(
-                object.get("agent_did").and_then(Value::as_str),
-                Some(expected_agent_did),
-                "wrong agent_did in {}",
-                path.display()
-            );
         }
     }
 
@@ -116,200 +104,14 @@ pub fn read_captured_log(log: Option<&tempfile::NamedTempFile>) -> Result<String
 }
 
 pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<()> {
-    write_json_file(
-        &root.join("agent_principal.json"),
-        &project_object_fields(
-            exported
-                .get("agent_principal")
-                .ok_or_else(|| anyhow!("exported bundle missing agent_principal"))?,
-            &[
-                "agent_did",
-                "display_name",
-                "default_behavior_id",
-                "enabled",
-            ],
-        )?,
-    )?;
-
-    write_per_doc_collection(
-        root,
-        "agent_behaviors",
-        "behavior_id",
-        exported
-            .get("agent_behaviors")
-            .ok_or_else(|| anyhow!("exported bundle missing agent_behaviors"))?,
-        &[
-            "behavior_id",
-            "agent_did",
-            "display_name",
-            "system_prompt",
-            "backend_id",
-            "model_name",
-            "tool_selection_id",
-            "inference_profile_id",
-            "compaction_strategy",
-            "compaction_threshold",
-            "enabled",
-        ],
-    )?;
-    write_per_doc_collection(
-        root,
-        "tool_selections",
-        "selection_id",
-        exported
-            .get("tool_selections")
-            .ok_or_else(|| anyhow!("exported bundle missing tool_selections"))?,
-        &[
-            "selection_id",
-            "agent_did",
-            "display_name",
-            "enable_file_tools",
-            "file_tools_mode",
-            "file_tool_root",
-            "enable_bash",
-            "bash_mode",
-            "command_execution_policy",
-            "command_allowed_argv_prefixes",
-            "command_forbidden_argv_prefixes",
-            "command_network_mode",
-            "cli_tool_names",
-            "enable_meta_tools",
-            "allowed_mcp_service_ids",
-            "backgroundable_tool_names",
-            "enable_defra_query",
-            "defra_query_collections",
-            "subagent_targets",
-            "subagent_spawn_enabled",
-            "subagent_steering_enabled",
-            "subagent_background_enabled",
-            "subagent_default_await_mode",
-            "subagent_allow_cross_deployment",
-            "cross_deployment_spawn_timeout_seconds",
-        ],
-    )?;
-    write_per_doc_collection(
-        root,
-        "inference_backends",
-        "backend_id",
-        exported
-            .get("inference_backends")
-            .ok_or_else(|| anyhow!("exported bundle missing inference_backends"))?,
-        &[
-            "backend_id",
-            "name",
-            "endpoint",
-            "api_key_env_var",
-            "max_concurrent",
-            "max_queue_depth",
-            "enabled",
-            "models",
-        ],
-    )?;
-    if let Some(profiles) = exported.get("inference_profiles") {
-        write_per_doc_collection(
-            root,
-            "inference_profiles",
-            "profile_id",
-            profiles,
-            &[
-                "profile_id",
-                "display_name",
-                "context_window",
-                "max_output_tokens",
-                "max_turns",
-                "temperature",
-                "stream_batch_ms",
-                "stream_liveness_timeout_secs",
-                "deadline_duration_secs",
-                "retry_max_transport",
-                "retry_backoff_ms",
-                "retry_max_resample",
-                "retry_allow_repair",
-                "retry_interactive_max",
-            ],
-        )?;
+    let mut config = exported.clone();
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("exported configuration is not an object"))?;
+    for metadata in ["format", "agent_did", "exported_at", "access_mode"] {
+        object.remove(metadata);
     }
-    if let Some(services) = exported.get("tool_service_registries") {
-        write_per_doc_collection(
-            root,
-            "tool_services",
-            "service_id",
-            services,
-            &[
-                "service_id",
-                "display_name",
-                "description",
-                "hostname",
-                "tailscale_ip",
-                "lan_ip",
-                "mcp_port",
-                "mcp_path",
-                "send_agent_did",
-            ],
-        )?;
-    }
-    if let Some(tasks) = exported.get("tasks") {
-        write_per_doc_collection(
-            root,
-            "tasks",
-            "task_id",
-            tasks,
-            &[
-                "task_id",
-                "name",
-                "description",
-                "behavior_id",
-                "prompt_template",
-                "enabled",
-                "output_schema_ref",
-            ],
-        )?;
-    }
-    if let Some(schedules) = exported.get("schedules") {
-        write_per_doc_collection(
-            root,
-            "schedules",
-            "schedule_id",
-            schedules,
-            &[
-                "schedule_id",
-                "task_id",
-                "interval_secs",
-                "cron",
-                "timezone",
-                "missed_run_policy",
-                "enabled",
-                "concurrency",
-            ],
-        )?;
-    }
-
-    Ok(())
-}
-
-fn write_per_doc_collection(
-    root: &Path,
-    dir_name: &str,
-    unique_field: &str,
-    rows: &Value,
-    fields: &[&str],
-) -> Result<()> {
-    let Some(rows) = rows.as_array() else {
-        return Ok(());
-    };
-    for row in rows {
-        let object = project_object_fields(row, fields)?;
-        let handle = object
-            .get(unique_field)
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("row missing {unique_field}: {row}"))?;
-        let dir = root
-            .join(dir_name)
-            .join(crate::support::document_handle(&handle));
-        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        write_json_file(&dir.join("object.json"), &object)?;
-    }
-    Ok(())
+    write_json_file(&root.join("pack_config.json"), &config)
 }
 
 pub fn project_object_fields(value: &Value, fields: &[&str]) -> Result<Value> {
@@ -345,7 +147,7 @@ pub async fn assert_runtime_init_state(
     expected_api_key: Option<&str>,
     expected_api_key_env_var: Option<&str>,
     model_name: &str,
-    tool_selection_id: &str,
+    tools_id: &str,
     expected_file_tools_mode: &str,
     expected_bash_mode: &str,
     expected_prompt_snippet: &str,
@@ -363,61 +165,49 @@ pub async fn assert_runtime_init_state(
             }}
             AgentBehavior(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
                 behavior_id
-                backend_id
-                model_name
-                tool_selection_id
+                context_id
                 inference_profile_id
-                system_prompt
                 enabled
+            }}
+            AgentContext(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
+                context_id
+                system_prompt
+                tools_id
             }}
             InferenceProfile(filter: {{ profile_id: {{ _eq: "{}" }} }}, limit: 1) {{
                 profile_id
                 display_name
-                context_window
+                backend_id
+                model_name
                 max_output_tokens
-                max_turns
-                temperature
-                stream_batch_ms
-                stream_liveness_timeout_secs
-                deadline_duration_secs
-                retry_max_transport
-                retry_backoff_ms
-                retry_max_resample
-                retry_allow_repair
-                retry_interactive_max
             }}
             InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 1) {{
                 backend_id
                 provider_kind
                 endpoint
-                api_key
-                api_key_env_var
+                auth
                 enabled
                 probe_status
-                models
             }}
-            ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                selection_id
-                enable_file_tools
-                file_tools_mode
-                enable_bash
-                bash_mode
-                enable_meta_tools
-                allowed_mcp_service_ids
+            Tools(filter: {{ agent_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                tools_id agent_did host remote subagents built_ins datastore integrations self_config tags
             }}
         }}"#,
         escape_graphql_string(agent_did),
         escape_graphql_string(agent_did),
+        escape_graphql_string(agent_did),
         escape_graphql_string(&default_profile_id),
         escape_graphql_string(backend_id),
-        escape_graphql_string(tool_selection_id),
+        escape_graphql_string(agent_did),
+        escape_graphql_string(tools_id),
     );
     let response = graphql_query(graphql, &query).await?;
     let principal = first_graphql_row(&response, "AgentPrincipal")?;
     let behavior = first_graphql_row(&response, "AgentBehavior")?;
+    let context = first_graphql_row(&response, "AgentContext")?;
     let inference_profile = first_graphql_row(&response, "InferenceProfile")?;
     let backend = first_graphql_row(&response, "InferenceBackend")?;
-    let tool_selection = first_graphql_row(&response, "ToolSelection")?;
+    let tools = first_graphql_row(&response, "Tools")?;
 
     assert_eq!(
         principal.get("agent_did").and_then(Value::as_str),
@@ -437,27 +227,19 @@ pub async fn assert_runtime_init_state(
         Some(default_behavior_id.as_str())
     );
     assert_eq!(
-        behavior.get("backend_id").and_then(Value::as_str),
-        Some(backend_id)
-    );
-    assert_eq!(
-        behavior.get("model_name").and_then(Value::as_str),
-        Some(model_name)
-    );
-    assert_eq!(
-        behavior.get("tool_selection_id").and_then(Value::as_str),
-        Some(tool_selection_id)
-    );
-    assert_eq!(
         behavior.get("inference_profile_id").and_then(Value::as_str),
         Some(default_profile_id.as_str())
     );
     assert!(
-        behavior
+        context
             .get("system_prompt")
             .and_then(Value::as_str)
             .is_some_and(|prompt| prompt.contains(expected_prompt_snippet)),
-        "expected system_prompt to contain {expected_prompt_snippet}: {behavior}"
+        "expected system_prompt to contain {expected_prompt_snippet}: {context}"
+    );
+    assert_eq!(
+        context.get("tools_id").and_then(Value::as_str),
+        Some(tools_id)
     );
     assert_eq!(behavior.get("enabled").and_then(Value::as_bool), Some(true));
 
@@ -472,10 +254,12 @@ pub async fn assert_runtime_init_state(
         Some("Default")
     );
     assert_eq!(
-        inference_profile
-            .get("max_output_tokens")
-            .and_then(Value::as_i64),
-        Some(32768)
+        inference_profile.get("backend_id").and_then(Value::as_str),
+        Some(backend_id)
+    );
+    assert_eq!(
+        inference_profile.get("model_name").and_then(Value::as_str),
+        Some(model_name)
     );
 
     assert_eq!(
@@ -490,58 +274,36 @@ pub async fn assert_runtime_init_state(
         backend.get("provider_kind").and_then(Value::as_str),
         Some(expected_provider_kind)
     );
-    assert_eq!(
-        backend.get("api_key").and_then(Value::as_str),
-        expected_api_key
-    );
-    assert_eq!(
-        backend.get("api_key_env_var").and_then(Value::as_str),
-        expected_api_key_env_var
-    );
+    let auth = backend.get("auth").cloned().unwrap_or(Value::Null);
+    let auth = auth
+        .as_str()
+        .map(serde_json::from_str)
+        .transpose()?
+        .unwrap_or(auth);
+    match (expected_api_key, expected_api_key_env_var) {
+        (Some(value), _) => assert_eq!(auth.get("key").and_then(Value::as_str), Some(value)),
+        (_, Some(name)) => assert_eq!(auth.get("variable").and_then(Value::as_str), Some(name)),
+        _ => assert_eq!(
+            auth.get("kind").and_then(Value::as_str),
+            Some("unauthenticated")
+        ),
+    }
     assert_eq!(backend.get("enabled").and_then(Value::as_bool), Some(true));
     assert_eq!(
         backend.get("probe_status").and_then(Value::as_str),
         Some("healthy")
     );
     assert_eq!(
-        backend.pointer("/models/0").and_then(Value::as_str),
-        Some(model_name)
+        tools.get("tools_id").and_then(Value::as_str),
+        Some(tools_id)
     );
     assert_eq!(
-        tool_selection.get("selection_id").and_then(Value::as_str),
-        Some(tool_selection_id)
-    );
-    assert_eq!(
-        tool_selection
-            .get("enable_file_tools")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        tool_selection
-            .get("file_tools_mode")
-            .and_then(Value::as_str),
+        tools.pointer("/host/files/mode").and_then(Value::as_str),
         Some(expected_file_tools_mode)
     );
     assert_eq!(
-        tool_selection.get("enable_bash").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        tool_selection.get("bash_mode").and_then(Value::as_str),
+        tools.pointer("/host/bash/mode").and_then(Value::as_str),
         Some(expected_bash_mode)
-    );
-    assert_eq!(
-        tool_selection
-            .get("enable_meta_tools")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    let mcp_allowlist = tool_selection.get("allowed_mcp_service_ids");
-    assert!(
-        mcp_allowlist
-            .is_none_or(|value| { value.is_null() || value.as_array().is_some_and(Vec::is_empty) }),
-        "expected default tool selection MCP allowlist to be empty (null or []): {tool_selection}"
     );
 
     Ok(())

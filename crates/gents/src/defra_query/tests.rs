@@ -188,8 +188,8 @@ async fn invalid_tool_call_created_at_suggests_started_and_completed_at() {
     assert!(msg.contains("tool_call_key"), "inventory missing: {msg}");
 }
 
-/// `AgentRequest.agent_name` (lives on AgentConversation, not AgentRequest)
-/// and `AgentRequest.updated_at` (only `created_at` exists) are the canonical
+/// `AgentRequest.agent_name` (a retired field)
+/// and `AgentRequest.updated_at` (only `created_at` exists) are common
 /// operator mistakes from #592 — both must get suggestions.
 #[tokio::test]
 async fn invalid_agent_request_fields_get_suggestions() {

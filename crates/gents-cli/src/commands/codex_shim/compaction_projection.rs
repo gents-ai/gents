@@ -58,20 +58,22 @@ mod tests {
 
     #[test]
     fn lean_fenced_compaction_states_project_native_codex_events() {
-        assert_eq!(
-            compaction_projection_events(None, "running"),
-            [CompactionProjectionEvent::Started]
-        );
+        for active in ["queued", "running"] {
+            assert_eq!(
+                compaction_projection_events(None, active),
+                [CompactionProjectionEvent::Started]
+            );
+            assert_eq!(
+                compaction_projection_events(Some(active), "completed"),
+                [CompactionProjectionEvent::Completed]
+            );
+        }
         assert_eq!(
             compaction_projection_events(None, "completed"),
             [
                 CompactionProjectionEvent::Started,
                 CompactionProjectionEvent::Completed
             ]
-        );
-        assert_eq!(
-            compaction_projection_events(Some("running"), "completed"),
-            [CompactionProjectionEvent::Completed]
         );
         assert!(compaction_projection_events(None, "failed").is_empty());
         assert!(compaction_projection_events(None, "cancelled").is_empty());

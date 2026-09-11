@@ -1,0 +1,15 @@
+type InferenceSampling @branchable @index(fields: ["agent_did", "sampling_id"], unique: true) {
+    sampling_id: String
+    agent_did: String @index
+    display_name: String
+    temperature: Float
+    top_p: Float
+    top_k: Int
+    seed: Int
+    min_p: Float
+    frequency_penalty: Float
+    presence_penalty: Float
+    repetition_penalty: Float
+    tags: [String!]
+    updated_at: DateTime @index(direction: DESC)
+}

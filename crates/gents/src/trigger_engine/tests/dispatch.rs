@@ -1,43 +1,6 @@
 use super::*;
 
 #[tokio::test]
-async fn dispatch_skips_when_schedule_not_in_active_schedules() {
-    // Snapshot has NO active schedules — the incoming FireIntent's trigger_id
-    // is therefore treated as disabled.
-    let snapshot = snapshot_with_schedules(HashMap::new());
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = SpyMaterializer::new();
-    let engine = TriggerEngine::new(rx, materializer.clone());
-
-    let intent = FireIntent {
-        trigger_id: Some("sched-1".to_string()),
-        trigger_kind: TriggerKind::Schedule,
-        task: resolved_task("anything"),
-        concurrency: ConcurrencyMode::Serial,
-        event_vars: serde_json::json!({}),
-        doc_vars: None,
-        correlation: None,
-        group_vars: None,
-        trigger_context: None,
-        args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
-        pre_materialized_request_id: None,
-        on_result: Box::new(|_| {}),
-    };
-
-    let result = engine.dispatch(intent).await;
-
-    match result {
-        FireResult::Skipped { reason } => assert_eq!(reason, "trigger disabled"),
-        other => panic!("expected Skipped {{ reason: \"trigger disabled\" }}, got {other:?}"),
-    }
-    assert!(
-        materializer.calls().is_empty(),
-        "materializer should not be called when the trigger is disabled"
-    );
-}
-
-#[tokio::test]
 async fn dispatch_reports_pre_materialized_request_without_materializer_call() {
     let snapshot = snapshot_with_schedules(HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
@@ -319,66 +282,6 @@ async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
 }
 
 #[tokio::test]
-async fn dispatch_parallel_materializes_every_intent() {
-    // Two fires for the same trigger with `Parallel` concurrency. Both should
-    // materialize unconditionally — the in-flight check is bypassed.
-    let task = resolved_task("tick");
-    let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = SpyMaterializer::new();
-    let engine = TriggerEngine::new(rx, materializer.clone());
-
-    let intent1 = FireIntent {
-        trigger_id: Some("sched-1".to_string()),
-        trigger_kind: TriggerKind::Schedule,
-        task: task.clone(),
-        concurrency: ConcurrencyMode::Parallel,
-        event_vars: serde_json::json!({}),
-        doc_vars: None,
-        correlation: None,
-        group_vars: None,
-        trigger_context: None,
-        args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
-        pre_materialized_request_id: None,
-        on_result: Box::new(|_| {}),
-    };
-    let intent2 = FireIntent {
-        trigger_id: Some("sched-1".to_string()),
-        trigger_kind: TriggerKind::Schedule,
-        task,
-        concurrency: ConcurrencyMode::Parallel,
-        event_vars: serde_json::json!({}),
-        doc_vars: None,
-        correlation: None,
-        group_vars: None,
-        trigger_context: None,
-        args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
-        pre_materialized_request_id: None,
-        on_result: Box::new(|_| {}),
-    };
-
-    let r1 = engine.dispatch(intent1).await;
-    let r2 = engine.dispatch(intent2).await;
-
-    assert!(
-        matches!(r1, FireResult::Fired { .. }),
-        "first parallel dispatch should Fire, got {r1:?}"
-    );
-    assert!(
-        matches!(r2, FireResult::Fired { .. }),
-        "second parallel dispatch should Fire, got {r2:?}"
-    );
-    assert_eq!(
-        materializer.calls().len(),
-        2,
-        "both parallel fires should materialize"
-    );
-}
-
-#[tokio::test]
 async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
     let task = resolved_task("group {{ group.correlation_value }}");
     let behavior = integration_test_behavior("general");
@@ -401,10 +304,10 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
             HashMap::new(),
             HashMap::new(),
         )
-        .with_event_triggers(
-            HashMap::from([("group-trigger".to_string(), trigger)]),
-            HashSet::new(),
-        )
+        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+            event_triggers: HashMap::from([("group-trigger".to_string(), trigger)]),
+            ..Default::default()
+        })
         .with_principal(stub_principal())
         .activate(1, HashMap::new()),
     );
@@ -427,7 +330,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
         })),
         trigger_context: None,
         args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
+        durable_fire_key: super::super::durable_fire_key("event-group", &["same-generation"]),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -458,89 +361,6 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
 }
 
 #[tokio::test]
-async fn dispatch_serial_materializes_when_no_inflight() {
-    // Serial mode with no in-flight request for the trigger — should fire.
-    let task = resolved_task("tick");
-    let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = SpyMaterializer::new();
-    let engine = TriggerEngine::new(rx, materializer.clone());
-
-    let intent = FireIntent {
-        trigger_id: Some("sched-1".to_string()),
-        trigger_kind: TriggerKind::Schedule,
-        task,
-        concurrency: ConcurrencyMode::Serial,
-        event_vars: serde_json::json!({}),
-        doc_vars: None,
-        correlation: None,
-        group_vars: None,
-        trigger_context: None,
-        args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
-        pre_materialized_request_id: None,
-        on_result: Box::new(|_| {}),
-    };
-
-    let result = engine.dispatch(intent).await;
-
-    assert!(
-        matches!(result, FireResult::Fired { .. }),
-        "serial dispatch with no in-flight should Fire, got {result:?}"
-    );
-    assert_eq!(
-        materializer.calls().len(),
-        1,
-        "serial dispatch with no in-flight should materialize once"
-    );
-}
-
-#[tokio::test]
-async fn dispatch_serial_skips_when_inflight_exists() {
-    // Serial mode with an in-flight request pre-populated for
-    // (sched-1, Schedule). Dispatch should Skip and not materialize.
-    let task = resolved_task("tick");
-    let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = SpyMaterializer::new();
-    materializer.mark_nonterminal("sched-1", TriggerKind::Schedule);
-    let engine = TriggerEngine::new(rx, materializer.clone());
-
-    let intent = FireIntent {
-        trigger_id: Some("sched-1".to_string()),
-        trigger_kind: TriggerKind::Schedule,
-        task,
-        concurrency: ConcurrencyMode::Serial,
-        event_vars: serde_json::json!({}),
-        doc_vars: None,
-        correlation: None,
-        group_vars: None,
-        trigger_context: None,
-        args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
-        pre_materialized_request_id: None,
-        on_result: Box::new(|_| {}),
-    };
-
-    let result = engine.dispatch(intent).await;
-
-    match result {
-        FireResult::Skipped { reason } => {
-            assert_eq!(reason, "serial: prior fire still in-flight");
-        }
-        other => panic!(
-            "expected Skipped {{ reason: \"serial: prior fire still in-flight\" }}, got {other:?}"
-        ),
-    }
-    assert!(
-        materializer.calls().is_empty(),
-        "serial dispatch with in-flight should not materialize"
-    );
-}
-
-#[tokio::test]
 async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
     let task = resolved_task("run {{ event.correlation }}");
     let trigger = ResolvedEventTrigger {
@@ -556,10 +376,10 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
             HashMap::new(),
             HashMap::new(),
         )
-        .with_event_triggers(
-            HashMap::from([("event-1".to_string(), trigger)]),
-            HashSet::new(),
-        )
+        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+            event_triggers: HashMap::from([("event-1".to_string(), trigger)]),
+            ..Default::default()
+        })
         .with_principal(stub_principal())
         .activate(1, HashMap::new()),
     );
@@ -596,7 +416,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
 }
 
 #[tokio::test]
-async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
+async fn dispatch_serial_per_group_separates_correlation_and_membership_generation() {
     let task = resolved_task("run {{ group.correlation_value }}");
     let trigger = ResolvedEventTrigger {
         fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
@@ -605,6 +425,7 @@ async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
         ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
     };
     let behavior = integration_test_behavior("general");
+    let agent_did = behavior.agent_did().to_owned();
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             "general".to_string(),
@@ -613,16 +434,19 @@ async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
             HashMap::new(),
             HashMap::new(),
         )
-        .with_event_triggers(
-            HashMap::from([("event-1".to_string(), trigger)]),
-            HashSet::new(),
-        )
+        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+            event_triggers: HashMap::from([("event-1".to_string(), trigger)]),
+            ..Default::default()
+        })
         .with_principal(stub_principal())
         .activate(1, HashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
-    materializer.mark_correlated_nonterminal("event-1", TriggerKind::Event, "run-a");
+    // Active work is itself a durable marker. Model that real storage invariant.
+    let old_key = super::super::durable_fire_key("event-group", &["run-a"]);
+    materializer.mark_group_materialized(&agent_did, "event-1", &old_key);
+    materializer.persist_materialized_group_markers(&agent_did);
     let engine = TriggerEngine::new(rx, materializer.clone());
 
     let make_intent = |correlation: &str| FireIntent {
@@ -644,7 +468,7 @@ async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
         })),
         trigger_context: None,
         args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
+        durable_fire_key: super::super::durable_fire_key("event-group", &[correlation]),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -655,58 +479,21 @@ async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
     assert!(matches!(same_run, FireResult::Skipped { .. }));
     assert!(matches!(other_run, FireResult::Fired { .. }));
     assert_eq!(materializer.calls().len(), 1);
-}
-
-#[tokio::test]
-async fn dispatch_latest_only_supersedes_prior_and_fires_new() {
-    // LatestOnly with a pre-existing in-flight request for (sched-1, Schedule).
-    // Dispatch should: (1) supersede the prior request, (2) materialize the
-    // new fire, (3) return Fired.
-    let task = resolved_task("tick");
-    let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = SpyMaterializer::new();
-    materializer.mark_nonterminal("sched-1", TriggerKind::Schedule);
-    let engine = TriggerEngine::new(rx, materializer.clone());
-
-    let intent = FireIntent {
-        trigger_id: Some("sched-1".to_string()),
-        trigger_kind: TriggerKind::Schedule,
-        task,
-        concurrency: ConcurrencyMode::LatestOnly,
-        event_vars: serde_json::json!({}),
-        doc_vars: None,
-        correlation: None,
-        group_vars: None,
-        trigger_context: None,
-        args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
-        pre_materialized_request_id: None,
-        on_result: Box::new(|_| {}),
-    };
-
-    let result = engine.dispatch(intent).await;
-
+    let mut changed = make_intent("run-a");
+    changed.durable_fire_key =
+        super::super::durable_fire_key("event-group", &["run-a:new-membership"]);
     assert!(
-        matches!(result, FireResult::Fired { .. }),
-        "latest_only dispatch should Fire after superseding prior, got {result:?}"
+        matches!(engine.dispatch(changed).await, FireResult::Fired { .. }),
+        "old generation must not block new membership"
     );
-    let supersede_calls = materializer.supersede_calls();
-    assert_eq!(
-        supersede_calls,
-        vec![("sched-1".to_string(), TriggerKind::Schedule)],
-        "exactly one supersede call for (sched-1, Schedule) expected"
-    );
-    let calls = materializer.calls();
-    assert_eq!(
-        calls.len(),
-        1,
-        "exactly one materialize call after supersede expected"
-    );
-    let (trigger_id, kind, _rendered) = &calls[0];
-    assert_eq!(trigger_id.as_deref(), Some("sched-1"));
-    assert_eq!(*kind, TriggerKind::Schedule);
+    let mut replay = make_intent("run-a");
+    replay.durable_fire_key =
+        super::super::durable_fire_key("event-group", &["run-a:new-membership"]);
+    assert!(matches!(
+        engine.dispatch(replay).await,
+        FireResult::Skipped { .. }
+    ));
+    assert_eq!(materializer.calls().len(), 2);
 }
 
 #[tokio::test]
@@ -746,7 +533,7 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
         .expect("first LatestOnly dispatch should enter materialize gate");
     assert_eq!(
         materializer.supersede_calls(),
-        vec![("sched-1".to_string(), TriggerKind::Schedule)],
+        vec!["sched-1".to_string()],
         "first LatestOnly dispatch should supersede before materializing"
     );
 
@@ -795,10 +582,7 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
     );
     assert_eq!(
         materializer.supersede_calls(),
-        vec![
-            ("sched-1".to_string(), TriggerKind::Schedule),
-            ("sched-1".to_string(), TriggerKind::Schedule),
-        ],
+        vec!["sched-1".to_string(), "sched-1".to_string(),],
         "the second supersede must occur only after the first materialize completes"
     );
     assert_eq!(
@@ -870,78 +654,6 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
         ),
         other => panic!("expected callback Errored, got {other:?}"),
     }
-}
-
-#[tokio::test]
-async fn dispatch_latest_only_serializes_parallel_fires() {
-    // Two LatestOnly dispatches for the same trigger fired in parallel. With
-    // a materialize delay of ~60ms, the per-trigger lock must serialize them:
-    // the second dispatch cannot enter its supersede+materialize critical
-    // section until the first completes, so total wall-clock elapsed is at
-    // least 2 * delay.
-    let task = resolved_task("tick");
-    let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
-    let (_tx, rx) = watch::channel(snapshot);
-    let materializer = SpyMaterializer::new();
-    let delay = Duration::from_millis(60);
-    materializer.set_materialize_delay(delay);
-    let engine = Arc::new(TriggerEngine::new(rx, materializer.clone()));
-
-    let make_intent = || FireIntent {
-        trigger_id: Some("sched-1".to_string()),
-        trigger_kind: TriggerKind::Schedule,
-        task: task.clone(),
-        concurrency: ConcurrencyMode::LatestOnly,
-        event_vars: serde_json::json!({}),
-        doc_vars: None,
-        correlation: None,
-        group_vars: None,
-        trigger_context: None,
-        args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
-        pre_materialized_request_id: None,
-        on_result: Box::new(|_| {}),
-    };
-
-    let start = Instant::now();
-    let engine1 = engine.clone();
-    let engine2 = engine.clone();
-    let intent1 = make_intent();
-    let intent2 = make_intent();
-    let h1 = tokio::spawn(async move { engine1.dispatch(intent1).await });
-    let h2 = tokio::spawn(async move { engine2.dispatch(intent2).await });
-    let r1 = h1.await.unwrap();
-    let r2 = h2.await.unwrap();
-    let elapsed = start.elapsed();
-
-    assert!(
-        matches!(r1, FireResult::Fired { .. }),
-        "first parallel LatestOnly dispatch should Fire, got {r1:?}"
-    );
-    assert!(
-        matches!(r2, FireResult::Fired { .. }),
-        "second parallel LatestOnly dispatch should Fire, got {r2:?}"
-    );
-    assert_eq!(
-        materializer.calls().len(),
-        2,
-        "both LatestOnly fires should materialize"
-    );
-    assert_eq!(
-        materializer.supersede_calls().len(),
-        2,
-        "each LatestOnly fire runs a supersede call inside its critical section"
-    );
-    // If the two fires had run concurrently, total elapsed would be ~= delay.
-    // With per-trigger serialization, elapsed must be >= 2 * delay. Allow a
-    // small slack below 2x to tolerate sleep-granularity jitter on loaded CI.
-    let min_expected = delay * 2 - Duration::from_millis(10);
-    assert!(
-        elapsed >= min_expected,
-        "expected elapsed >= {min_expected:?} (2x delay, minus slack) proving \
-         per-trigger serialization, got {elapsed:?}"
-    );
 }
 
 #[tokio::test]

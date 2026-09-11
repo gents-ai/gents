@@ -2,6 +2,12 @@
 
 This self-contained pack performs a whole-repository, behavior-preserving cleanup round. It follows the code-review pack's durable graph, but scans the current tree and recent history, plans focused work units, and executes them as an ordered commit series rather than stopping at recommendations:
 
+Runtime configuration is authored once in `pack_config.json`. The distribution
+`manifest.json` points to that canonical bundle and lists it with the schema and
+prompt sidecars needed to install the pack; there are no per-collection JSON
+document fragments. The bundle connects AgentContext, Tools, Task, EventSource,
+Trigger, callback, inference, and repository-placement documents directly.
+
 ```text
 MaintenanceJob -> recon -> N MaintenanceArea scanners
                -> MaintenanceCandidate + MaintenanceScanResult

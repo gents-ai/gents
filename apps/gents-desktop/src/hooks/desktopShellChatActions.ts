@@ -16,7 +16,7 @@ type ChatActionParams = {
   api: DesktopApiAdapter;
   behaviorReadiness: BehaviorReadinessDecision;
   draft: string;
-  newConversationAgentRef: MutableRefObject<string | null>;
+  newSessionAgentRef: MutableRefObject<string | null>;
   refreshSession: (
     nextSessionId: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
@@ -24,7 +24,6 @@ type ChatActionParams = {
   selectedDeployment: DeploymentView | null;
   selectedSessionId: string | null;
   pendingMailboxCauseId: string | null;
-  session: DesktopSessionSnapshot | null;
   setDraft: Dispatch<SetStateAction<string>>;
   setError: Dispatch<SetStateAction<string | null>>;
   setLocalWorkflow: Dispatch<SetStateAction<ChatWorkflowState>>;
@@ -42,13 +41,12 @@ export function createDesktopShellChatActions({
   api,
   behaviorReadiness,
   draft,
-  newConversationAgentRef,
+  newSessionAgentRef,
   refreshSession,
   refreshSnapshot,
   selectedDeployment,
   selectedSessionId,
   pendingMailboxCauseId,
-  session,
   setDraft,
   setError,
   setLocalWorkflow,
@@ -90,7 +88,7 @@ export function createDesktopShellChatActions({
         causedBySourceDocId: pendingMailboxCauseId,
       });
       setPendingMailboxCauseId(null);
-      newConversationAgentRef.current = null;
+      newSessionAgentRef.current = null;
       setSelectedSessionId(result.sessionId);
       setOptimisticPendingTurn({
         sessionId: result.sessionId,
@@ -160,13 +158,13 @@ export function createDesktopShellChatActions({
     return retryRequest(requestId);
   }
 
-  async function onRenameConversationTitle(sessionId: string, title: string) {
+  async function onRenameSessionTitle(sessionId: string, title: string) {
     if (!selectedDeployment) {
       return;
     }
     setError(null);
     try {
-      await api.renameConversation({
+      await api.renameSession({
         agentDid: selectedDeployment.agentDid,
         sessionId,
         title,
@@ -181,20 +179,20 @@ export function createDesktopShellChatActions({
 
   function onSelectSession(sessionId: string) {
     setPendingMailboxCauseId(null);
-    const conversation = selectedDeployment?.conversations.find(
-      (conversation) => conversation.sessionId === sessionId,
+    const sessionSummary = selectedDeployment?.sessions.find(
+      (item) => item.sessionId === sessionId,
     );
-    if (conversation?.behaviorId) {
-      setSelectedBehaviorId(conversation.behaviorId);
+    if (sessionSummary?.behaviorId) {
+      setSelectedBehaviorId(sessionSummary.behaviorId);
     }
-    newConversationAgentRef.current = null;
-    if (session?.sessionId !== sessionId) {
+    newSessionAgentRef.current = null;
+    if (sessionSummary?.sessionId !== sessionId) {
       setSession(null);
     }
     setSelectedSessionId(sessionId);
   }
 
-  function onStartNewConversation(behaviorId?: string | null) {
+  function onStartNewSession(behaviorId?: string | null) {
     if (!selectedDeployment) {
       return;
     }
@@ -207,7 +205,7 @@ export function createDesktopShellChatActions({
     ) {
       setSelectedBehaviorId(behaviorId);
     }
-    newConversationAgentRef.current = selectedDeployment.agentDid;
+    newSessionAgentRef.current = selectedDeployment.agentDid;
     setSelectedSessionId(null);
     setSession(null);
     setLocalWorkflow({ kind: "ready" });
@@ -215,10 +213,10 @@ export function createDesktopShellChatActions({
   }
 
   return {
-    onRenameConversationTitle,
+    onRenameSessionTitle,
     onRetryMessage,
     onSelectSession,
     onSendMessage,
-    onStartNewConversation,
+    onStartNewSession,
   };
 }

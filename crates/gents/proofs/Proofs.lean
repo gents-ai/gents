@@ -8,6 +8,8 @@ import Proofs.RequestExecutionLease
 import Proofs.InferenceCall
 import Proofs.CrossMachineComposed
 import Proofs.Fleet
+import Proofs.AgentSession
+import Proofs.SessionFork
 import Proofs.SessionRecovery
 import Proofs.SessionHydration
 import Proofs.Session.Properties
@@ -78,3 +80,10 @@ import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.OperatorBaseFreeze
 
 import Proofs.GraphPipeline.WorkspaceLineage
+
+import Proofs.Configuration
+import Proofs.ToolPolicy.Configuration
+import Proofs.SelfConfig.Auth
+import Proofs.GraphPipeline.Configuration
+
+import Proofs.TaskHooks

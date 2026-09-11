@@ -63,11 +63,13 @@ async fn transcript_pages_bound_defradb_rows_and_use_stable_sequence_cursors() {
         .messages
         .iter()
         .all(|row| row.sequence.is_some_and(|sequence| sequence < 591)));
-    assert!(tip_sequences.iter().all(|sequence| older
-        .store
-        .messages
-        .iter()
-        .all(|row| row.sequence != Some(*sequence))));
+    assert!(tip_sequences.iter().all(|sequence| {
+        older
+            .store
+            .messages
+            .iter()
+            .all(|row| row.sequence != Some(*sequence))
+    }));
 
     let tool_cursor = tool_group_cursor_sequence("tools-42");
     assert_eq!(tool_cursor, Some(42));

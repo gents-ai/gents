@@ -71,13 +71,13 @@ fn sync_health_view_keeps_database_quarantine_failed() {
 #[test]
 fn pairing_collection_view_preserves_retry_stuck_and_timestamps() {
     let stuck_at = t(80);
-    let mut pairing = PairingCollectionStatus::new("AgentConversation");
+    let mut pairing = PairingCollectionStatus::new("AgentSession");
     for _ in 0..STUCK_THRESHOLD_ATTEMPTS {
         pairing.record_retry(PairingErrorClass::RpcTimeout);
     }
     pairing.update_stuck_indicator(stuck_at);
     let view = to_pairing_collection_view(&pairing);
-    assert_eq!(view.collection_id, "AgentConversation");
+    assert_eq!(view.collection_id, "AgentSession");
     assert_eq!(view.pairing_retry_count, STUCK_THRESHOLD_ATTEMPTS);
     assert_eq!(view.last_retry_error_class.as_deref(), Some("RpcTimeout"));
     assert_eq!(

@@ -18,7 +18,6 @@ structure Identity where
 
 structure Explicit where
   workspaceId : Option Nat := none
-  owner : Option Nat := none
   sealHash : Option Nat := none
   authority : Option BindingAuthority := none
   deriving DecidableEq, Repr
@@ -60,9 +59,8 @@ def optionalMatches {α : Type} [DecidableEq α] (provided : Option α) (expecte
   provided.all (fun value => value == expected)
 
 def identityMatches (explicit : Explicit) : Option Identity → Bool
-  | none => explicit.workspaceId.isNone && explicit.owner.isNone && explicit.sealHash.isNone
+  | none => explicit.workspaceId.isNone && explicit.sealHash.isNone
   | some expected => optionalMatches explicit.workspaceId expected.workspaceId &&
-      optionalMatches explicit.owner expected.owner &&
       explicit.sealHash.all (fun sealHash => expected.sealHash == some sealHash)
 
 def explicitMatches (context : Context) (explicit : Explicit) (identity : Option Identity) : Bool :=
@@ -70,10 +68,11 @@ def explicitMatches (context : Context) (explicit : Explicit) (identity : Option
     explicit.authority.all (fun authority => context.destinationAuthority == some authority)
 
 /-- Bootstrap may add an owner-verified sealHash when omitted by the CLI, but
-cannot introduce a workspace ID/owner absent from the controller's stored input. -/
+cannot introduce a workspace ID absent from the controller's stored input.
+The principal owner comes from the verified workspace, never caller input. -/
 def controllerMatches (context : Context) (input : Explicit) (stamped : Option Identity) : Bool :=
   input.workspaceId == stamped.map Identity.workspaceId &&
-  input.owner == stamped.map Identity.owner && explicitMatches context input stamped
+  explicitMatches context input stamped
 
 def rootMatches (context : Context) (root : Root) : Bool :=
   root.authenticatedTarget && root.correlation == context.correlation &&
@@ -192,8 +191,7 @@ theorem bootstrap_input_bound (context : Context) (input explicit : Explicit)
 theorem bootstrap_cannot_introduce_workspace (context : Context) (input explicit : Explicit)
     (stamped : Option Identity) (seed owner : Bool) (result : Resolved)
     (h : resolve context (.bootstrap input stamped seed owner) explicit = some result) :
-    input.workspaceId = stamped.map Identity.workspaceId ∧
-    input.owner = stamped.map Identity.owner := by
+    input.workspaceId = stamped.map Identity.workspaceId := by
   have hm := (bootstrap_input_bound context input explicit stamped seed owner result h).1
   simp only [controllerMatches, Bool.and_eq_true, beq_iff_eq] at hm
   exact hm.1

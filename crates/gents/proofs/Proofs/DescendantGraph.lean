@@ -4,7 +4,7 @@ import Proofs.Basic
 # Canonical descendant graph
 
 `AgentToolCall` is the parent-authored durable edge receipt.  A child request
-may materialize later (and on another deployment), so visibility is defined
+may materialize later (and under another principal), so visibility is defined
 from the receipt and the root ownership tuple.  Once a child is materialized,
 the logical and physical request/tool-call links must corroborate the receipt.
 
@@ -16,7 +16,6 @@ steer/cancel authority.
 namespace DescendantGraph
 
 abbrev PrincipalId := Nat
-abbrev DeploymentId := Nat
 abbrev ToolCallId := Nat
 abbrev LineageId := Nat
 abbrev Cursor := ToolCallId × RequestId
@@ -103,7 +102,6 @@ structure Edge where
   controlPrincipal : PrincipalId
   childPrincipal : PrincipalId
   behaviorId : BehaviorId
-  deploymentId : DeploymentId
   lineageId : LineageId
   awaitMode : AwaitMode
   materialization : Materialization
@@ -193,11 +191,6 @@ def afterCursor (target : Cursor) : List Edge → Option (List Edge)
 theorem behavior_change_preserves_visibility
     (viewer : Viewer) (edge : Edge) (behavior : BehaviorId) :
     visible viewer { edge with behaviorId := behavior } = visible viewer edge := by
-  rfl
-
-theorem deployment_change_preserves_visibility
-    (viewer : Viewer) (edge : Edge) (deployment : DeploymentId) :
-    visible viewer { edge with deploymentId := deployment } = visible viewer edge := by
   rfl
 
 theorem await_change_preserves_visibility

@@ -7,7 +7,7 @@ pub(super) struct LiveCodexShim {
     pub(super) graphql: String,
     pub(super) agent_did: String,
     pub(super) behavior_id: String,
-    tool_selection_id: String,
+    tools_id: String,
     pub(super) backend_id: String,
     pub(super) inference_profile_id: String,
     pub(super) model_name: String,
@@ -76,7 +76,7 @@ pub(super) async fn start_live_codex_shim_with_write_tools(
     let init = run_init_json(&home_dir, &init_args)?;
     let agent_did = agent_did_from_init(&init)?;
     let behavior_id = init_output_string(&init, "default_behavior_id")?;
-    let tool_selection_id = init_output_string(&init, "tool_selection_id")?;
+    let tools_id = init_output_string(&init, "tools_id")?;
     let backend_id = init_output_string(&init, "backend_id")?;
     let inference_profile_id = init_output_string(&init, "inference_profile_id")?;
     let model_name = init_output_string(&init, "model_name")?;
@@ -108,7 +108,7 @@ pub(super) async fn start_live_codex_shim_with_write_tools(
         graphql,
         agent_did,
         behavior_id,
-        tool_selection_id,
+        tools_id,
         backend_id,
         inference_profile_id,
         model_name,
@@ -129,161 +129,104 @@ fn init_output_string(init: &Value, key: &str) -> Result<String> {
 
 pub(super) async fn configure_live_local_subagent(smoke: &LiveCodexShim) -> Result<String> {
     let child_behavior_id = format!("{}:codex-live-child", smoke.agent_did);
-    let child_tool_selection_id = format!("{child_behavior_id}:tools");
-    let parent_prompt_path = smoke.tempdir.path().join("parent-subagent-prompt.txt");
-    let child_prompt_path = smoke.tempdir.path().join("child-subagent-prompt.txt");
-    fs::write(
-        &parent_prompt_path,
+    let child_tools_id = format!("{child_behavior_id}:tools");
+    let config_root = smoke.tempdir.path().join("subagent-config");
+    run_cli_text(
+        &smoke.home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            config_root.to_str().context("config root is not UTF-8")?,
+            "--graphql",
+            &smoke.graphql,
+            "--agent-did",
+            &smoke.agent_did,
+        ],
+    )?;
+    let config_path = config_root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let parent_context_id = config["agent_behaviors"]
+        .as_array()
+        .context("exported agent_behaviors is not an array")?
+        .iter()
+        .find(|behavior| behavior["behavior_id"] == smoke.behavior_id)
+        .and_then(|behavior| behavior["context_id"].as_str())
+        .context("exported parent behavior has no context")?
+        .to_string();
+    let parent_context = config["contexts"]
+        .as_array_mut()
+        .context("exported contexts is not an array")?
+        .iter_mut()
+        .find(|context| context["context_id"] == parent_context_id)
+        .context("exported parent context is missing")?;
+    parent_context["system_prompt"] = Value::String(
         "You are a coordinator. Follow explicit delegation instructions exactly. When the user \
          requests spawn_subagent, call it with the named target, prompt, and await_mode before \
-         answering. Never replace a requested tool call with a textual simulation.",
-    )?;
-    fs::write(
-        &child_prompt_path,
-        "You are a leaf subagent. Never delegate or call tools. Follow the assigned prompt \
-         directly and keep the answer exact and concise.",
-    )?;
-
-    run_cli_json(
-        &smoke.home_dir,
-        &[
-            "config",
-            "tools",
-            "set",
-            "--graphql",
-            &smoke.graphql,
-            "--agent-did",
-            &smoke.agent_did,
-            "--selection-id",
-            &child_tool_selection_id,
-            "--display-name",
-            "Codex Live Child Tools",
-            "--clear-subagent-targets",
-            "--subagent-spawn-enabled",
-            "false",
-            "--subagent-background-enabled",
-            "false",
-            "--subagent-steering-enabled",
-            "false",
-            "--subagent-allow-cross-deployment",
-            "false",
-            "--enable-file-tools",
-            "false",
-            "--enable-bash",
-            "false",
-            "--enable-meta-tools",
-            "false",
-            "--enable-memory",
-            "false",
-            "--enable-session-history-tool",
-            "false",
-            "--enable-context-budget",
-            "false",
-            "--enable-defra-query",
-            "false",
-        ],
-    )?;
-    run_cli_json(
-        &smoke.home_dir,
-        &[
-            "config",
-            "behavior",
-            "set",
-            "--graphql",
-            &smoke.graphql,
-            "--agent-did",
-            &smoke.agent_did,
-            "--behavior-id",
-            &child_behavior_id,
-            "--display-name",
-            "Codex Live Child",
-            "--system-prompt-file",
-            child_prompt_path
-                .to_str()
-                .ok_or_else(|| anyhow!("child prompt path is not UTF-8"))?,
-            "--backend-id",
-            &smoke.backend_id,
-            "--model-name",
-            &smoke.model_name,
-            "--tool-selection-id",
-            &child_tool_selection_id,
-            "--inference-profile-id",
-            &smoke.inference_profile_id,
-        ],
-    )?;
-
-    let child_target = subagent_target_entry(
-        "codex-live-child",
-        &smoke.agent_did,
-        &child_behavior_id,
-        Some("Live leaf child used by the Codex shim e2e".to_string()),
+         answering. Never replace a requested tool call with a textual simulation."
+            .to_string(),
     );
+    let parent_tools = config["tools"]
+        .as_array_mut()
+        .context("exported tools is not an array")?
+        .iter_mut()
+        .find(|tools| tools["tools_id"] == smoke.tools_id)
+        .context("exported parent Tools document is missing")?;
+    parent_tools["display_name"] = Value::String("Codex Live Coordinator Tools".to_string());
+    parent_tools["subagents"] = serde_json::json!({
+        "target_ids": ["codex-live-child"],
+        "spawn_enabled": true,
+        "background_enabled": false,
+        "steering_enabled": false,
+        "allow_cross_principal": false
+    });
+    config["contexts"]
+        .as_array_mut()
+        .context("exported contexts is not an array")?
+        .push(serde_json::json!({
+            "context_id": format!("{child_behavior_id}:context"),
+            "display_name": "Codex Live Child",
+            "system_prompt": "You are a leaf subagent. Never delegate or call tools. Follow the assigned prompt directly and keep the answer exact and concise.",
+            "tools_id": child_tools_id
+        }));
+    config["tools"]
+        .as_array_mut()
+        .context("exported tools is not an array")?
+        .push(serde_json::json!({
+            "tools_id": child_tools_id,
+            "display_name": "Codex Live Child Tools"
+        }));
+    config["agent_behaviors"]
+        .as_array_mut()
+        .context("exported agent_behaviors is not an array")?
+        .push(serde_json::json!({
+            "behavior_id": child_behavior_id,
+            "display_name": "Codex Live Child",
+            "context_id": format!("{child_behavior_id}:context"),
+            "inference_profile_id": smoke.inference_profile_id
+        }));
+    config["subagent_targets"]
+        .as_array_mut()
+        .context("exported subagent_targets is not an array")?
+        .push(serde_json::json!({
+            "target_id": "codex-live-child",
+            "target_agent_did": smoke.agent_did,
+            "behavior_id": child_behavior_id,
+            "name": "codex-live-child",
+            "description": "Live leaf child used by the Codex shim e2e"
+        }));
+    write_json_file(&config_path, &config)?;
     run_cli_json(
         &smoke.home_dir,
         &[
             "config",
-            "tools",
-            "set",
+            "apply",
+            "--root",
+            config_root.to_str().context("config root is not UTF-8")?,
             "--graphql",
             &smoke.graphql,
-            "--agent-did",
-            &smoke.agent_did,
-            "--selection-id",
-            &smoke.tool_selection_id,
-            "--display-name",
-            "Codex Live Coordinator Tools",
-            "--subagent-target",
-            &child_target,
-            "--subagent-spawn-enabled",
-            "true",
-            "--subagent-background-enabled",
-            "false",
-            "--subagent-steering-enabled",
-            "false",
-            "--subagent-allow-cross-deployment",
-            "false",
-            "--enable-file-tools",
-            "false",
-            "--enable-bash",
-            "false",
-            "--enable-meta-tools",
-            "false",
-            "--enable-memory",
-            "false",
-            "--enable-session-history-tool",
-            "false",
-            "--enable-context-budget",
-            "false",
-            "--enable-defra-query",
-            "false",
-        ],
-    )?;
-    run_cli_json(
-        &smoke.home_dir,
-        &[
-            "config",
-            "behavior",
-            "set",
-            "--graphql",
-            &smoke.graphql,
-            "--agent-did",
-            &smoke.agent_did,
-            "--behavior-id",
-            &smoke.behavior_id,
-            "--display-name",
-            "Codex Live Coordinator",
-            "--system-prompt-file",
-            parent_prompt_path
-                .to_str()
-                .ok_or_else(|| anyhow!("parent prompt path is not UTF-8"))?,
-            "--backend-id",
-            &smoke.backend_id,
-            "--model-name",
-            &smoke.model_name,
-            "--tool-selection-id",
-            &smoke.tool_selection_id,
-            "--inference-profile-id",
-            &smoke.inference_profile_id,
+            "--bind-agent-did",
+            "live",
         ],
     )?;
 

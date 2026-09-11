@@ -1,9 +1,0 @@
-{
-  "task_id": "maintenance-integrate-task",
-  "name": "Apply a sealed maintenance workspace",
-  "description": null,
-  "behavior_id": "maintenance-integrate",
-  "prompt_template": "./prompt.md",
-  "enabled": true,
-  "output_schema_ref": null
-}

@@ -10,3 +10,6 @@ description = "Test helper for loading Gents Lean conformance contracts"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+gents-protocol.workspace = true

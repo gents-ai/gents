@@ -287,11 +287,24 @@ pub fn spawn_cli(home_dir: &Path, args: &[&str]) -> Result<Child> {
 }
 
 pub fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
-    let output = Command::new(cli_bin())
+    run_cli_json_with_env(home_dir, args, &[])
+}
+
+pub fn run_cli_json_with_env(
+    home_dir: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<Value> {
+    let mut command = Command::new(cli_bin());
+    command
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
         .current_dir(home_dir)
-        .args(args)
+        .args(args);
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+    let output = command
         .output()
         .with_context(|| format!("running gents {}", args.join(" ")))?;
     if !output.status.success() {
@@ -328,10 +341,23 @@ pub fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
 }
 
 pub fn run_cli_failure_stderr(home_dir: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new(cli_bin())
+    run_cli_failure_stderr_with_env(home_dir, args, &[])
+}
+
+pub fn run_cli_failure_stderr_with_env(
+    home_dir: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<String> {
+    let mut command = Command::new(cli_bin());
+    command
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
-        .args(args)
+        .args(args);
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+    let output = command
         .output()
         .with_context(|| format!("running gents {}", args.join(" ")))?;
     if output.status.success() {

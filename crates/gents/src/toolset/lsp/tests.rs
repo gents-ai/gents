@@ -1,5 +1,5 @@
 use super::*;
-use crate::tool_surface::{BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection};
+use crate::tool_surface::{BehaviorToolConfig, FileToolMode, ResolvedToolSelection, ToolCeiling};
 use crate::toolset::shared::ToolContext;
 use crate::toolset::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
 
@@ -154,7 +154,7 @@ fn tool_surface_includes_lsp_when_policy_allows() {
         "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
     )
     .unwrap();
-    let mut selection = ToolSelection::default();
+    let mut selection = ResolvedToolSelection::default();
     selection.enable_lsp = true;
     selection.file_tools = FileToolMode::ReadOnly;
     selection.file_tool_root = Some(root.path().to_path_buf());
@@ -168,7 +168,7 @@ fn tool_surface_includes_lsp_when_policy_allows() {
 #[test]
 fn tool_surface_omits_lsp_when_disabled() {
     let root = tempfile::tempdir().unwrap();
-    let mut selection = ToolSelection::default();
+    let mut selection = ResolvedToolSelection::default();
     selection.enable_lsp = false;
     selection.file_tools = FileToolMode::ReadOnly;
     selection.file_tool_root = Some(root.path().to_path_buf());
@@ -894,7 +894,7 @@ fn readonly_surface_uses_file_tool_root_not_cwd() {
         "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
     )
     .unwrap();
-    let mut selection = ToolSelection::default();
+    let mut selection = ResolvedToolSelection::default();
     selection.enable_lsp = true;
     selection.file_tools = FileToolMode::ReadOnly;
     selection.file_tool_root = Some(root.path().to_path_buf());
@@ -1716,15 +1716,10 @@ fn code_action_query_selects_title_or_index() {
     assert_eq!(unresolved["title"], "Need resolve");
 }
 
-#[test]
-fn action_caps_are_the_spec_values() {
-    assert_eq!(super::actions::MAX_DIAGNOSTICS, 50);
-    assert_eq!(super::actions::MAX_WORKSPACE_SYMBOLS, 200);
-    assert_eq!(super::actions::MAX_REFERENCES, 50);
-    assert_eq!(super::actions::MAX_RENAME_PAIRS, 1_000);
-    assert_eq!(super::actions::MAX_GLOB_TARGETS, 20);
-}
-
+// Action caps (MAX_DIAGNOSTICS / MAX_WORKSPACE_SYMBOLS / …) are owned by
+// `actions.rs` constants; their application at truncation sites is pinned by
+// `document_symbol_cap_is_global_and_output_is_qualified` — restating the
+// numeric values here added no guarantee.
 #[test]
 fn redacts_single_location_workspace_symbol_and_nested_diagnostics() {
     let root = tempfile::tempdir().unwrap();

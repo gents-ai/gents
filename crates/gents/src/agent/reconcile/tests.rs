@@ -9,32 +9,14 @@ use super::*;
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::PendingAgentBehavior;
 use crate::backend_provider::BackendProviderKind;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::{AgentIdentity as _, AgentPrincipal, KeyIdentity};
-use crate::lean_vocab_test::{
-    assert_state_machine_contract_is_complete, lean_runtime_reconcile_case,
-    lean_state_machine_contract,
-};
+use crate::identity::{AgentIdentity as _, KeyIdentity, RuntimePrincipal};
+use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime_status::RuntimeStatusHandle;
-use crate::tool_surface::{
-    BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection, ToolSurface,
-};
+use crate::tool_surface::{BehaviorToolConfig, ToolCeiling, ToolSurface};
 use crate::watcher::AgentRequest;
-
-#[derive(Debug)]
-struct PairingReconcileRuntimeProbes {
-    operator_write_diverges: bool,
-    operator_delete_diverges: bool,
-    read_failure_self_loops: bool,
-    install_converges: bool,
-    teardown_converges: bool,
-    replicator_install_converges: bool,
-    replicator_teardown_converges: bool,
-    dial_converges: bool,
-    crash_restarts_slot: bool,
-}
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
@@ -45,7 +27,7 @@ fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-fn stub_principal() -> Arc<AgentPrincipal> {
+fn stub_principal() -> Arc<RuntimePrincipal> {
     let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
@@ -53,7 +35,7 @@ fn stub_principal() -> Arc<AgentPrincipal> {
         )
         .unwrap(),
     );
-    Arc::new(AgentPrincipal {
+    Arc::new(RuntimePrincipal {
         agent_did: identity.did().to_string(),
         identity,
         default_behavior_id: String::new(),
@@ -65,11 +47,15 @@ fn stub_principal() -> Arc<AgentPrincipal> {
 async fn snapshot_for_behaviors(
     node: &defra_node::EmbeddedNode,
     default_behavior_id: &str,
-    behaviors: Vec<Arc<AgentBehavior>>,
+    behaviors: Vec<Arc<ResolvedBehavior>>,
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = HashMap::new();
     for behavior in &behaviors {
-        let tool_surface = behavior.tools.resolve(node).await.unwrap();
+        let tool_surface = behavior
+            .tools
+            .resolve(node, behavior.agent_did())
+            .await
+            .unwrap();
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts(
@@ -84,12 +70,16 @@ async fn snapshot_for_behaviors(
 async fn snapshot_for_behaviors_with_admission(
     node: &defra_node::EmbeddedNode,
     default_behavior_id: &str,
-    behaviors: Vec<Arc<AgentBehavior>>,
+    behaviors: Vec<Arc<ResolvedBehavior>>,
     backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = HashMap::new();
     for behavior in &behaviors {
-        let tool_surface = behavior.tools.resolve(node).await.unwrap();
+        let tool_surface = behavior
+            .tools
+            .resolve(node, behavior.agent_did())
+            .await
+            .unwrap();
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
@@ -124,16 +114,11 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
         request_id: format!("child-request-{index}"),
         agent_did: "did:test:background-fanout-test".to_string(),
         requester_did: None,
-        behavior_id: Some(behavior_id.to_string()),
+        behavior_id: behavior_id.to_string(),
         session_id: format!("child-session-{index}"),
         content: format!("background child {index}"),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
+        input: Default::default(),
         execution_origin: Some("interactive".to_string()),
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
@@ -152,145 +137,41 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
         caused_by_trigger_context: None,
         workspace_id: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
+        workspace_owner_agent_did: None,
         workspace_seal_hash: None,
     }
 }
 
 #[tokio::test]
-async fn pairing_reconcile_state_machine_contract_is_complete() {
-    assert_state_machine_contract_is_complete("PairingReconcile");
-    let machine = lean_state_machine_contract("PairingReconcile");
+async fn operator_write_changes_snapshot_fingerprint() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let probes = PairingReconcileRuntimeProbes {
-        operator_write_diverges: operator_write_changes_snapshot_fingerprint(node.as_ref()).await,
-        operator_delete_diverges: operator_delete_yields_teardown_diff(),
-        read_failure_self_loops: read_failure_is_noop_self_loop(node.clone()).await,
-        install_converges: reconcile_install_applies_added_behavior(node.as_ref()).await,
-        teardown_converges: reconcile_teardown_applies_removed_behavior(node.as_ref()).await,
-        replicator_install_converges: pairing_replicator_install_diff_converges(),
-        replicator_teardown_converges: pairing_replicator_teardown_diff_converges(),
-        dial_converges: pairing_dial_is_available_for_desired_addresses(),
-        crash_restarts_slot: slot_panic_restarts_behavior(node.as_ref()).await,
-    };
+    let mut initial_behavior = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("pairing-contract-initial"));
+    initial_behavior.system_prompt = "before operator write".to_string();
+    let mut updated_behavior = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("pairing-contract-updated"));
+    updated_behavior.system_prompt = "after operator write".to_string();
+    let current_resolved =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(initial_behavior)]).await;
+    let proposed =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(updated_behavior)]).await;
+    let current = current_resolved.activate(1, HashMap::new());
+    let diff = diff_counts(&current, &proposed);
 
-    let mut rust_legal_pairs = BTreeSet::new();
-    for from in &machine.states {
-        for action in &machine.actions {
-            if let Some(post) = rust_pairing_reconcile_step(from, action, &probes) {
-                rust_legal_pairs.insert((from.clone(), post.to_string()));
-            }
-        }
-    }
-
-    let lean_legal_pairs = machine
-        .legal_transitions
-        .iter()
-        .map(|pair| (pair.from.clone(), pair.to.clone()))
-        .collect::<BTreeSet<_>>();
-    let lean_illegal_pairs = machine
-        .illegal_transitions
-        .iter()
-        .map(|pair| (pair.from.clone(), pair.to.clone()))
-        .collect::<BTreeSet<_>>();
-
-    assert_eq!(
-        rust_legal_pairs, lean_legal_pairs,
-        "PairingReconcile Lean legal transitions drifted from Rust diff/slot behavior"
+    assert_ne!(
+        current.configuration_fingerprint(),
+        proposed.configuration_fingerprint(),
+        "an operator write must change the configuration fingerprint"
     );
-    assert!(
-        rust_legal_pairs.is_disjoint(&lean_illegal_pairs),
-        "PairingReconcile Rust transitions overlap Lean illegal transitions"
-    );
+    assert_eq!(diff.updated, 1);
+    assert_eq!(diff.added, 0);
+    assert_eq!(diff.removed, 0);
 }
 
-fn rust_pairing_reconcile_step(
-    phase: &str,
-    action: &str,
-    probes: &PairingReconcileRuntimeProbes,
-) -> Option<&'static str> {
-    match (phase, action) {
-        ("idle" | "converged" | "crashed", "operatorWrite") if probes.operator_write_diverges => {
-            Some("diverged")
-        }
-        ("idle" | "converged" | "crashed", "operatorDelete") if probes.operator_delete_diverges => {
-            Some("diverged")
-        }
-        ("idle", "readFailure") if probes.read_failure_self_loops => Some("idle"),
-        ("converged", "readFailure") if probes.read_failure_self_loops => Some("converged"),
-        ("diverged", "readFailure") if probes.read_failure_self_loops => Some("diverged"),
-        ("crashed", "readFailure") if probes.read_failure_self_loops => Some("crashed"),
-        ("diverged", "dial") if probes.dial_converges => Some("converged"),
-        ("converged" | "diverged", "peerDisconnected") => Some("diverged"),
-        ("diverged", "reconcileInstall") if probes.install_converges => Some("converged"),
-        ("diverged", "reconcileTeardown") if probes.teardown_converges => Some("converged"),
-        ("diverged", "reconcileInstallReplicator") if probes.replicator_install_converges => {
-            Some("converged")
-        }
-        ("diverged", "reconcileTeardownReplicator") if probes.replicator_teardown_converges => {
-            Some("converged")
-        }
-        (_, "crash") if probes.crash_restarts_slot => Some("crashed"),
-        _ => None,
-    }
-}
-
-fn pairing_replicator_install_diff_converges() -> bool {
-    use crate::agent::p2p_reconcile::{
-        compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
-    };
-    let desired = PairingDesired {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    let actual = PairingActual::default();
-    let applied = PairingApplied::default();
-    compute_owned_pairing_diff(&desired, &actual, &applied)
-        == vec![DiffOp::InstallReplicator("addr1".into())]
-}
-
-fn pairing_replicator_teardown_diff_converges() -> bool {
-    use crate::agent::p2p_reconcile::{
-        compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
-    };
-    let desired = PairingDesired::default();
-    let actual = PairingActual {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    let applied = PairingApplied {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    compute_owned_pairing_diff(&desired, &actual, &applied)
-        == vec![DiffOp::TeardownReplicator("addr1".into())]
-}
-
-/// Probe for the `operatorDelete` transition: when the operator deletes the
-/// desired row (desired empty) but the managed/live state still carries what was
-/// installed, the diff must be non-empty (a teardown of the managed set), so the
-/// state diverges and the reconciler has work to do. Distinct from the
-/// `operatorWrite` probe — this exercises desired-None-over-non-empty-applied.
-fn operator_delete_yields_teardown_diff() -> bool {
-    use crate::agent::p2p_reconcile::{
-        compute_owned_pairing_diff, PairingActual, PairingApplied, PairingDesired,
-    };
-    let desired = PairingDesired::default();
-    let actual = PairingActual {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    let applied = PairingApplied {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    !compute_owned_pairing_diff(&desired, &actual, &applied).is_empty()
+#[tokio::test]
+async fn pairing_desired_read_failure_applies_no_operations() {
+    assert!(read_failure_is_noop_self_loop(test_node().await).await);
 }
 
 /// Probe for the `readFailure` transition: a failed `load_desired` read makes a
@@ -332,36 +213,10 @@ async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> 
     }
 }
 
-fn pairing_dial_is_available_for_desired_addresses() -> bool {
-    use crate::agent::p2p_reconcile::PairingDesired;
-    PairingDesired {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    }
-    .has_wiring()
-}
-
-async fn operator_write_changes_snapshot_fingerprint(node: &defra_node::EmbeddedNode) -> bool {
-    let mut initial_behavior = PendingAgentBehavior::new("general")
-        .build_with_identity_for_test(test_identity("pairing-contract-initial"));
-    initial_behavior.system_prompt = "before operator write".to_string();
-    let mut updated_behavior = PendingAgentBehavior::new("general")
-        .build_with_identity_for_test(test_identity("pairing-contract-updated"));
-    updated_behavior.system_prompt = "after operator write".to_string();
-    let current_resolved =
-        snapshot_for_behaviors(node, "general", vec![Arc::new(initial_behavior)]).await;
-    let proposed = snapshot_for_behaviors(node, "general", vec![Arc::new(updated_behavior)]).await;
-    let current = current_resolved.activate(1, HashMap::new());
-    let diff = diff_counts(&current, &proposed);
-
-    current.configuration_fingerprint() != proposed.configuration_fingerprint()
-        && diff.updated == 1
-        && diff.added == 0
-        && diff.removed == 0
-}
-
-async fn reconcile_install_applies_added_behavior(node: &defra_node::EmbeddedNode) -> bool {
+#[tokio::test]
+async fn reconcile_install_applies_added_behavior() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-install"));
     let current_resolved = ResolvedRuntimeSnapshot::from_parts(
@@ -371,24 +226,28 @@ async fn reconcile_install_applies_added_behavior(node: &defra_node::EmbeddedNod
         HashMap::new(),
     )
     .with_principal(stub_principal());
-    let proposed = snapshot_for_behaviors(node, "general", vec![Arc::new(behavior)]).await;
+    let proposed = snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(behavior)]).await;
     let current = current_resolved.activate(1, HashMap::new());
     let diff = diff_counts(&current, &proposed);
     let applied = proposed.clone().activate(2, HashMap::new());
     let rediff = diff_counts(&applied, &proposed);
 
-    diff.added == 1
-        && diff.updated == 0
-        && diff.removed == 0
-        && rediff.added == 0
-        && rediff.updated == 0
-        && rediff.removed == 0
+    assert_eq!(diff.added, 1, "install registers one added behavior");
+    assert_eq!(diff.updated, 0);
+    assert_eq!(diff.removed, 0);
+    assert_eq!(rediff.added, 0, "applying the added behavior converges");
+    assert_eq!(rediff.updated, 0);
+    assert_eq!(rediff.removed, 0);
 }
 
-async fn reconcile_teardown_applies_removed_behavior(node: &defra_node::EmbeddedNode) -> bool {
+#[tokio::test]
+async fn reconcile_teardown_applies_removed_behavior() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-teardown"));
-    let current_resolved = snapshot_for_behaviors(node, "general", vec![Arc::new(behavior)]).await;
+    let current_resolved =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(behavior)]).await;
     let proposed = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         Vec::new(),
@@ -401,26 +260,35 @@ async fn reconcile_teardown_applies_removed_behavior(node: &defra_node::Embedded
     let applied = proposed.clone().activate(2, HashMap::new());
     let rediff = diff_counts(&applied, &proposed);
 
-    diff.removed == 1
-        && diff.added == 0
-        && diff.updated == 0
-        && rediff.added == 0
-        && rediff.updated == 0
-        && rediff.removed == 0
+    assert_eq!(diff.removed, 1, "teardown registers one removed behavior");
+    assert_eq!(diff.added, 0);
+    assert_eq!(diff.updated, 0);
+    assert_eq!(rediff.added, 0, "applying the removal converges");
+    assert_eq!(rediff.updated, 0);
+    assert_eq!(rediff.removed, 0);
 }
 
-async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
+#[tokio::test]
+async fn slot_panic_restarts_behavior() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = Arc::new(
         PendingAgentBehavior::new("general")
             .build_with_identity_for_test(test_identity("pairing-contract-slot-crash")),
     );
-    let tool_surface = Arc::new(behavior.tools.resolve(node).await.unwrap());
+    let tool_surface = Arc::new(
+        behavior
+            .tools
+            .resolve(node.as_ref(), behavior.agent_did())
+            .await
+            .unwrap(),
+    );
     let starts = Arc::new(AtomicUsize::new(0));
     let (starts_tx, mut starts_rx) = watch::channel(0usize);
     let runner = {
         let starts = starts.clone();
         let starts_tx = starts_tx.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _generation: u64,
@@ -470,7 +338,10 @@ async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
     .is_ok_and(|result| result.is_ok());
     let _ = shutdown_tx.send(true);
     retire_slot(slot);
-    restarted
+    assert!(
+        restarted,
+        "a panicked slot must restart the behavior on its retry policy"
+    );
 }
 
 #[tokio::test]
@@ -496,7 +367,7 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
     let release = Arc::new(Notify::new());
     let runner = {
         let release = release.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _generation: u64,
@@ -616,7 +487,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     )
     .await;
 
-    let runner = move |_behavior: Arc<AgentBehavior>,
+    let runner = move |_behavior: Arc<ResolvedBehavior>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                        _generation: u64,
@@ -760,7 +631,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
 
     let runner = {
         let starts = starts.clone();
-        move |behavior: Arc<AgentBehavior>,
+        move |behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _generation: u64,
@@ -925,7 +796,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     )
     .with_principal(stub_principal());
 
-    let runner = move |_behavior: Arc<AgentBehavior>,
+    let runner = move |_behavior: Arc<ResolvedBehavior>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                        _generation: u64,
@@ -1131,7 +1002,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
     let started_generations = Arc::new(StdMutex::new(Vec::new()));
     let runner = {
         let started_generations = started_generations.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               generation: u64,
@@ -1233,7 +1104,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         let generation_one_exit = generation_one_exit.clone();
         let generation_two_exit = generation_two_exit.clone();
         let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               generation: u64,
@@ -1380,7 +1251,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
         let generation_one_exit = generation_one_exit.clone();
         let generation_two_exit = generation_two_exit.clone();
         let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               generation: u64,
@@ -1486,7 +1357,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let agent_did = "did:test:reconcile-tool-surface-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
     let identity = Arc::new(test_identity("tool-surface-general"));
-    let principal = Arc::new(AgentPrincipal {
+    let principal = Arc::new(RuntimePrincipal {
         agent_did: identity.did().to_string(),
         identity: identity.clone(),
         default_behavior_id: String::new(),
@@ -1494,7 +1365,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         enabled: true,
     });
 
-    let initial_behavior = Arc::new(AgentBehavior {
+    let initial_behavior = Arc::new(ResolvedBehavior {
         skills: Vec::new(),
         behavior_id: "general".to_string(),
         principal: principal.clone(),
@@ -1502,17 +1373,16 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-        backend_api_key: None,
-        backend_api_key_env_var: None,
+        backend_auth: crate::document_config::BackendAuth::Unauthenticated,
         model_name: "default".to_string(),
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
         system_prompt: "initial".to_string(),
-        request_context_template: None,
         tools: BehaviorToolConfig::meta_only(),
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
-        compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
+        compaction: None,
+        compaction_inference: None,
+        max_total_tokens: None,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -1521,66 +1391,22 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: crate::config::SamplingConfig::default(),
     });
-    let updated_behavior = Arc::new(AgentBehavior {
-        skills: Vec::new(),
-        behavior_id: "general".to_string(),
-        principal: principal.clone(),
-        backend_id: Some("backend-general".to_string()),
-        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
-        backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-        backend_api_key: None,
-        backend_api_key_env_var: None,
-        model_name: "default".to_string(),
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: crate::config::DEFAULT_MAX_TURNS,
-        system_prompt: "initial".to_string(),
-        request_context_template: None,
-        tools: BehaviorToolConfig::from_selection(
+    let updated_tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "general-tools",
+        "agent_did": principal.agent_did,
+        "host": {"files": {"mode": "ReadOnly"}},
+        "built_ins": {"enable_context_budget": true}
+    }))
+    .unwrap();
+    let updated_behavior = Arc::new(ResolvedBehavior {
+        tools: BehaviorToolConfig::from_tools_document(
             "general",
-            ToolSelection {
-                file_tools: FileToolMode::ReadOnly,
-                file_tool_root: None,
-                bash: crate::tool_surface::BashMode::Off,
-                command_policy: None,
-                cli_tool_names: Vec::new(),
-                enable_meta_tools: false,
-                enable_goal_tools: false,
-                enable_goal_creation: false,
-                allowed_mcp_service_ids: Vec::new(),
-                required_mcp_service_ids: Vec::new(),
-                backgroundable_tool_names: Vec::new(),
-                approval_required_tools: Vec::new(),
-                enable_memory: false,
-                enable_session_history_tool: false,
-                enable_context_budget: true,
-                enable_defra_query: false,
-                defra_query_collections: Vec::new(),
-                write_tools: Vec::new(),
-                query_tools: Vec::new(),
-                enable_self_config: false,
-                self_config_categories: None,
-                self_config_no_lockout: false,
-                self_config_dry_run: false,
-                enable_lsp: false,
-                lsp_config: None,
-                eth_queries: Vec::new(),
-                eth_calls: Vec::new(),
-            },
+            &updated_tools,
             &ToolCeiling::readonly(),
             Vec::new(),
         )
         .unwrap(),
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
-        compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
-        stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
-        stream_liveness_timeout: Duration::from_secs(
-            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-        ),
-        deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
-        completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: crate::config::SamplingConfig::default(),
+        ..initial_behavior.as_ref().clone()
     });
 
     let initial_snapshot =
@@ -1591,7 +1417,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let observed_tool_names = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
     let runner = {
         let observed_tool_names = observed_tool_names.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _generation: u64,
@@ -1722,7 +1548,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         snapshot_for_behaviors(node.as_ref(), "general", vec![behavior.clone()]).await;
     // A runner that parks until shutdown: the behavior never "starts", exactly
     // the mid-startup window the retirement release exists for.
-    let runner = |_behavior: Arc<AgentBehavior>,
+    let runner = |_behavior: Arc<ResolvedBehavior>,
                   _tool_surface: Arc<ToolSurface>,
                   _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                   _generation: u64,

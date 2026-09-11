@@ -16,8 +16,6 @@ members = [
     "crates/gents-loop",
     "crates/gents-migration",
     "crates/gents-lenses/fixture_add_label",
-    "crates/gents-lenses/workspace_capability",
-    "crates/gents-lenses/workspace_receipt_capability",
     "crates/gents-callbacks/fixture_create_workspace",
     "crates/gents-fs-runner",
     "crates/gents-protocol",

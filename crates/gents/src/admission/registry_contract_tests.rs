@@ -76,21 +76,25 @@ fn observe(registry: &AdmissionRegistry, backend_id: &str) -> Result<Observation
 fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmissionConfig> {
     // Go through the real backend mapping: otherwise a test-only fingerprint
     // would hide metadata-triggered controller replacement.
-    let backend = crate::backend_registry::InferenceBackend {
-        backend_id: backend_id.to_owned(),
-        name: desired.name.clone(),
-        provider_kind: crate::backend_provider::BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: None,
-        endpoint: format!("http://127.0.0.1/resource-{}/v1", desired.key),
-        api_key: None,
-        api_key_env_var: None,
-        max_concurrent: desired.capacity.try_into()?,
-        max_queue_depth: 0,
-        enabled: true,
-        models: vec![desired.catalog.clone()],
-        probe_status: crate::backend_registry::HEALTHY_PROBE_STATUS.to_owned(),
-    };
-    Ok(BackendAdmissionConfig::from_backend(&backend)?.with_measured_unhealthy(!desired.available))
+    let backend: crate::document_config::InferenceBackend = serde_json::from_value(
+        serde_json::json!({
+            "agent_did":"did:test:registry", "backend_id":backend_id, "name":desired.name,
+            "provider_kind":"OpenAiCompatible", "endpoint":format!("http://127.0.0.1/resource-{}/v1", desired.key),
+            "auth":{"kind":"unauthenticated"}, "max_concurrent":i64::try_from(desired.capacity)?,
+            "max_queue_depth":0
+        }),
+    )?;
+    let observation = serde_json::from_value::<crate::document_config::InferenceBackendObservation>(
+        serde_json::json!({
+            "backend_id":backend_id, "probe_status":crate::backend_registry::HEALTHY_PROBE_STATUS,
+            "catalogs":[{"agent_did":null,"observed_at":"2026-01-01T00:00:00Z",
+                "models":[{"model_name":desired.catalog}]}]
+        }),
+    )?;
+    Ok(
+        BackendAdmissionConfig::from_backend(&backend, &observation)?
+            .with_measured_unhealthy(!desired.available),
+    )
 }
 
 async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {

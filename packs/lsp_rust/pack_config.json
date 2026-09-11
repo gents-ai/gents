@@ -1,0 +1,102 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "lsp-coder",
+      "display_name": "LSP rust-analyzer coder",
+      "context_id": "lsp-coder-context",
+      "inference_profile_id": "exp-profile"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "lsp-coder-context",
+      "display_name": "LSP rust-analyzer coder",
+      "system_prompt": "./agent_behaviors/lsp_coder/system_prompt.md",
+      "tools_id": "lsp-readonly"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "lsp-readonly",
+      "display_name": "ReadOnly files + lsp (bash off)",
+      "host": {
+        "root": "${GENTS_LSP_WORKSPACE:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        }
+      },
+      "integrations": {
+        "lsp": {
+          "config": "{\"servers\":{\"rust-analyzer\":{\"warmup_timeout_ms\":60000,\"workspace_ready_timings\":{\"initial\":45000},\"settings\":{\"rust-analyzer\":{\"checkOnSave\":false}}}}}"
+        }
+      }
+    }
+  ],
+  "inference_backends": [
+    {
+      "backend_id": "exp-deepseek",
+      "name": "DeepSeek V4 Flash (workstation-1)",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "${GENTS_EXP_ENDPOINT:-http://127.0.0.1:8080/v1}",
+      "auth": {
+        "kind": "unauthenticated"
+      },
+      "max_concurrent": 4,
+      "max_queue_depth": 100
+    }
+  ],
+  "inference_profiles": [
+    {
+      "profile_id": "exp-profile",
+      "display_name": "Experiment default",
+      "backend_id": "exp-deepseek",
+      "model_name": "${GENTS_EXP_MODEL:-d4f}",
+      "max_output_tokens": 8192,
+      "sampling_id": "exp-profile-sampling",
+      "execution_id": "exp-profile-execution"
+    }
+  ],
+  "inference_sampling": [
+    {
+      "sampling_id": "exp-profile-sampling",
+      "display_name": "Experiment default sampling",
+      "temperature": 0.2
+    }
+  ],
+  "inference_execution": [
+    {
+      "execution_id": "exp-profile-execution",
+      "display_name": "Experiment default execution"
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "lsp-hover-task",
+      "display_name": "lsp-hover-task",
+      "behavior_id": "lsp-coder",
+      "prompt_template": "./tasks/lsp_hover_task/prompt.md"
+    }
+  ],
+  "event_sources": [
+    {
+      "event_source_id": "lsp-hover",
+      "display_name": "lsp-hover",
+      "source_collection": "LspDemoJob",
+      "event_kind": "created"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "lsp-hover",
+      "display_name": "lsp-hover",
+      "task_id": "lsp-hover-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "lsp-hover"
+      },
+      "concurrency": "parallel"
+    }
+  ]
+}

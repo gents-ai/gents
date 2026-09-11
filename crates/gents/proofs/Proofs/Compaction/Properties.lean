@@ -2,20 +2,6 @@ import Proofs.Compaction.Transition
 
 namespace Compaction
 
-theorem uniqueSequences_of_strictlyIncreasing
-    {msgs : List Transcript.MessageRow}
-    (h : Transcript.StrictlyIncreasingMessages msgs) :
-    Transcript.UniqueMessageSequences msgs := by
-  induction msgs with
-  | nil => trivial
-  | cons row rest ih =>
-      refine ⟨?_, ?_⟩
-      · intro other h_mem h_eq
-        have h_lt := h.1 other h_mem
-        rw [h_eq] at h_lt
-        exact Nat.lt_irrefl other.sequence h_lt
-      · exact ih h.2
-
 variable {r : TranscriptReducer} [IsValidReducer r]
 
 theorem reduction_preserves_view_coherent

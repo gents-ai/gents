@@ -85,6 +85,7 @@ async fn setup_hook(
         &session_id,
         "r4c-read-tool-output",
         AGENT_DID,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -124,6 +125,7 @@ async fn setup_hook_on_db(
         session_id,
         "r4c-read-tool-output",
         AGENT_DID,
+        None,
         FailurePolicy::default(),
     )
     .await

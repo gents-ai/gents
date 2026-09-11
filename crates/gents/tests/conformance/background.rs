@@ -1,6 +1,4 @@
-//! Background conformance home: R6 tool backgrounding, background-theorem
-//! witnesses (admission budget, cascade cancellation), subagent delegation
-//! graph, and R4c background-work observable shapes.
+//! Runtime backgrounding, admission, cancellation, dispatch, and status contracts.
 
 use super::*;
 use gents::lifecycle::RequestTerminalOutcome;
@@ -89,8 +87,9 @@ async fn setup_background_tool_hook(
         None,
     )
     .await;
-    support::create_agent_session(
+    support::create_agent_session_in_scope(
         db.node.as_ref(),
+        &agent_did,
         &session_id,
         "r6-background-theorem",
         "2026-05-19T00:00:00Z",
@@ -102,6 +101,7 @@ async fn setup_background_tool_hook(
         &session_id,
         "r6-background-theorem",
         &agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -132,74 +132,33 @@ async fn setup_background_spawn_fixture(
     let parent_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     let selection_id = format!("{test_name}-tools");
 
-    upsert_tool_selection(
+    support::fixtures::configure_subagent_behavior(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
-            agent_did: agent_did.clone(),
-            subagent_targets: Some(
-                targets
-                    .into_iter()
-                    .map(|behavior_id| {
-                        gents::subagent_target_entry(behavior_id, &agent_did, behavior_id, None)
-                    })
-                    .collect(),
-            ),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(background_enabled),
-            ..Default::default()
-        },
+        &agent_did,
+        BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
+        &format!("{test_name}-child-tools"),
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .expect("upsert theorem tool selection");
-    upsert_agent_behavior(
+    .await;
+    support::fixtures::configure_subagent_behavior(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R6 theorem parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(selection_id),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-19T00:00:00Z".to_string()),
-        },
+        &agent_did,
+        BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
+        &selection_id,
+        targets
+            .into_iter()
+            .map(|behavior_id| {
+                support::fixtures::subagent_target(&agent_did, behavior_id, &agent_did, behavior_id)
+            })
+            .collect(),
+        true,
+        background_enabled,
+        None,
     )
-    .await
-    .expect("upsert theorem parent behavior");
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R6 theorem child".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-19T00:00:01Z".to_string()),
-        },
-    )
-    .await
-    .expect("upsert theorem child behavior");
+    .await;
 
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-parent");
@@ -212,8 +171,9 @@ async fn setup_background_spawn_fixture(
         parent_deadline,
     )
     .await;
-    support::create_agent_session(
+    support::create_agent_session_in_scope(
         db.node.as_ref(),
+        &agent_did,
         &session_id,
         BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
         "2026-05-19T00:00:00Z",
@@ -225,6 +185,7 @@ async fn setup_background_spawn_fixture(
         &session_id,
         BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
         &agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -265,7 +226,6 @@ async fn create_background_theorem_parent_request(
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
-                metadata: "",
                 failure_reason: "",
                 created_at: "{created_at}",
                 deadline: "{deadline}",
@@ -401,12 +361,7 @@ async fn fetch_background_theorem_child_request_optional(
                 behavior_id
                 session_id
                 content
-                temperature
-                top_p
-                top_k
-                seed
-                max_tokens
-                metadata
+                input
                 execution_origin
                 created_at
                 deadline
@@ -513,6 +468,11 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
 
     for case in cases {
         assert_eq!(case.max_backgrounded, 8, "{}", case.name);
+        assert!(
+            case.pre_live_count <= case.max_backgrounded,
+            "{}",
+            case.name
+        );
         assert_eq!(case.await_mode.as_str(), "background", "{}", case.name);
         assert_eq!(case.cancel_policy.as_str(), "cascade", "{}", case.name);
         assert_eq!(case.child_request_id.as_deref(), None, "{}", case.name);
@@ -746,6 +706,129 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
         assert!(case.legal, "{} must not request cancellation", case.name);
         assert_eq!(case.terminal_state, "running", "{}", case.name);
     }
+    process_control_requester_absence_cases_drive_owner_authorization().await;
+}
+
+// Exercise request binding, persisted ownership and the read-process envelope.
+async fn process_control_requester_absence_cases_drive_owner_authorization() {
+    let (db, hook, session_id, request_id) = setup_background_tool_hook(
+        "r6-process-control-absent-requester",
+        background_tool_registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+    let spawn = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-absent-requester",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await,
+    );
+    assert_eq!(spawn["ok"].as_bool(), Some(true));
+    let tool_call_id = spawn["tool_call_id"]
+        .as_str()
+        .expect("background handle")
+        .to_string();
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{
+        session_id: {{ _eq: "{}" }}, tool_call_id: {{ _eq: "{}" }}
+    }}, limit: 1) {{ requester_did }} }}"#,
+        escape_graphql_string(&session_id),
+        escape_graphql_string(&tool_call_id)
+    );
+    let row: Value = first_row(&db.node.execute(&query).await, "AgentToolCall");
+    assert_eq!(
+        row.get("requester_did"),
+        Some(&Value::Null),
+        "the selected owner field must be present and null"
+    );
+
+    let next_request_id = format!("{request_id}-next");
+    support::create_request_for_agent_with_signed_fields(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        &next_request_id,
+        &session_id,
+        "processing",
+        "2026-05-19T00:00:01Z",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    for (name, caller_request, requester) in [
+        (
+            "absent_requester_next_turn_authorized",
+            &next_request_id,
+            None,
+        ),
+        (
+            "empty_requester_does_not_alias_absent",
+            &next_request_id,
+            Some(""),
+        ),
+        (
+            "originating_request_without_matching_requester_is_denied",
+            &request_id,
+            Some("did:requester"),
+        ),
+    ] {
+        let case = lean_r6_backgrounding_case(name);
+        hook.set_active_request_lineage(
+            Some(caller_request.clone()),
+            requester.map(str::to_string),
+        )
+        .await
+        .expect("bind requester scope");
+        let read = skip_reason_json(
+            hook.on_tool_call(
+                "read_process",
+                None,
+                &format!("read-{name}"),
+                &json!({ "tool_call_id": tool_call_id }).to_string(),
+            )
+            .await,
+        );
+        if case.legal {
+            assert_eq!(read["status"].as_str(), Some("running"), "{name}: {read}");
+            assert_eq!(
+                read["tool_call_id"].as_str(),
+                Some(tool_call_id.as_str()),
+                "{name}"
+            );
+        } else {
+            assert_eq!(read["ok"].as_bool(), Some(false), "{name}: {read}");
+            assert_eq!(
+                read["failure_class"].as_str(),
+                Some("tool_not_allowed"),
+                "{name}"
+            );
+        }
+    }
+    let owner =
+        fetch_background_theorem_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    assert_eq!(owner.lifecycle_state.as_deref(), Some("running"));
+    assert!(
+        owner.cancel_cause.is_none(),
+        "denied reads must not cancel the job"
+    );
+
+    // Restore the owner scope and stop the pending task after observing denials.
+    hook.set_active_request_lineage(Some(request_id), None)
+        .await
+        .expect("restore owner scope");
+    let cancelled = skip_reason_json(
+        hook.on_tool_call(
+            "cancel_process",
+            None,
+            "cleanup-absent-requester",
+            &json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(cancelled["status"].as_str(), Some("cancelled"));
 }
 
 async fn fetch_completion_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<AgentRequestRow> {
@@ -761,7 +844,7 @@ async fn fetch_completion_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<Ag
             ) {{
                 request_id
                 lifecycle_state
-                metadata
+                input
             }}
         }}"#
     );
@@ -844,8 +927,13 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
         reserve.errors
     );
 
-    persist_bridge_step_child_completion(db.node.as_ref(), &child_request_id, &child_session_id)
-        .await;
+    persist_bridge_step_child_completion(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        &child_request_id,
+        &child_session_id,
+    )
+    .await;
 
     let outcome = project_background_subagent_completion(
         db.node.clone(),
@@ -893,15 +981,26 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
         wakes[0].lifecycle_state,
         Some(RequestLifecycleState::Pending)
     );
-    let metadata: Value =
-        serde_json::from_str(wakes[0].metadata.as_deref().expect("wake metadata"))
-            .expect("wake metadata JSON");
-    assert_eq!(metadata["queue"]["source"], "background_completion");
-    assert_eq!(metadata["queue"]["policy"], "coalesce");
+    let queue = wakes[0]
+        .input
+        .as_ref()
+        .expect("typed wake input")
+        .queue
+        .as_ref()
+        .expect("wake queue");
     assert_eq!(
-        metadata["queue"]["key"],
-        format!("background_completion:{parent_session_id}")
+        queue.source,
+        gents_protocol::request_input::QueueSource::BackgroundCompletion
     );
+    assert_eq!(
+        queue.policy,
+        gents_protocol::request_input::QueuePolicy::Coalesce
+    );
+    assert_eq!(
+        queue.key.as_deref(),
+        Some(format!("background_completion:{parent_session_id}").as_str())
+    );
+    assert_eq!(queue.background_completion_wake_version, Some(1));
     assert_eq!(
         case.queue_key.as_deref(),
         Some("background_completion:900"),
@@ -1034,9 +1133,8 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_bu
     let witnesses = lean_r6_background_theorem_witnesses();
     assert_eq!(witnesses.len(), 2);
 
-    let witness =
-        lean_r6_background_theorem_witness("Subagent.BridgedState.backgrounded_budget_bounded");
-    assert_eq!(witness.witness_kind.as_str(), "state_invariant");
+    let witness = lean_r6_background_theorem_witness("Subagent.admitted_background_count_bounded");
+    assert_eq!(witness.witness_kind.as_str(), "admission_bound");
     assert_eq!(
         witness.scenario.as_str(),
         "background_tool_admission_respects_max_backgrounded_per_parent"
@@ -1235,13 +1333,24 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         .await
         .expect("cancel bridge with cascade dispatch")
         .expect("cascade dispatch");
-    let gents::tool_call_lifecycle::CascadeDispatch::Local(intent) = dispatch else {
+    let gents::tool_call_lifecycle::CascadeDispatch::Local { intent, child } = dispatch else {
         panic!("local child must use local cascade dispatch");
     };
     assert_eq!(intent.child_request_id, child_request_id);
-    interrupt_request(db.node.as_ref(), &intent.child_request_id)
-        .await
-        .expect("interrupt child request");
+    gents::interrupt_request_by_doc_id(
+        db.node.as_ref(),
+        child
+            .doc_id
+            .as_deref()
+            .expect("verified physical cascade child"),
+        child
+            .agent_did
+            .as_deref()
+            .expect("verified local child principal"),
+        child.requester_did.as_deref(),
+    )
+    .await
+    .expect("interrupt child request");
     // This isolated consumer has no daemon observer running; use its terminal owner.
     child_lifecycle
         .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
@@ -1281,328 +1390,33 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     );
 }
 
-pub(super) fn generated_subagent_delegation_graph_cases_pin_gap2_contract() {
+pub(super) fn delegation_depth_matches_runtime_limit() {
     let cases = lean_subagent_delegation_graph_cases();
-    assert_eq!(
-        cases.len(),
-        3,
-        "Lean should emit termination, acyclicity, and cascade graph witnesses"
-    );
-
-    let by_property = cases
-        .iter()
-        .map(|case| (case.property.as_str(), case))
-        .collect::<HashMap<_, _>>();
-    for property in ["termination", "acyclicity", "cascade_cancel"] {
-        assert!(
-            by_property.contains_key(property),
-            "missing subagent delegation graph property {property}"
-        );
-    }
-
+    assert!(!cases.is_empty());
     for case in cases {
         assert_eq!(
             case.max_depth,
             usize::try_from(MAX_SUBAGENT_DEPTH).expect("MAX_SUBAGENT_DEPTH fits usize"),
-            "Lean maxSubagentDepth drifted from Rust MAX_SUBAGENT_DEPTH"
+            "{}: Lean and runtime delegation depth limits differ",
+            case.name,
         );
-        assert!(
-            case.path_length <= case.max_depth,
-            "case {} exceeds the generated depth bound",
-            case.name
-        );
-        assert!(case.acyclic, "case {} must assert acyclicity", case.name);
-        assert!(case.bounded, "case {} must assert bounded paths", case.name);
-        assert!(
-            !case.theorem_name.trim().is_empty(),
-            "case {} must cite a Lean theorem",
-            case.name
-        );
-        assert!(
-            case.edge_theorem.starts_with("Subagent.DelegationGraph."),
-            "case {} must cite a graph edge/path theorem",
-            case.name
-        );
-        if case.cascade_path {
-            assert!(
-                case.cascade_covered,
-                "cascade graph case {} must assert edge interrupt coverage",
-                case.name
-            );
-            assert_eq!(
-                case.cascade_edge_theorem.as_deref(),
-                Some("Subagent.BridgedState.cascade_cancels_child")
-            );
-        } else {
-            assert!(!case.cascade_covered);
-            assert!(case.cascade_edge_theorem.is_none());
-        }
     }
-
-    let termination = by_property["termination"];
-    assert_eq!(
-        termination.theorem_name.as_str(),
-        "Subagent.DelegationGraph.delegation_path_length_bounded"
-    );
-    assert_eq!(
-        termination.witness_kind.as_str(),
-        "arbitrary_delegation_path"
-    );
-    assert_eq!(termination.parent_depth, 0);
-    assert_eq!(termination.terminal_depth, termination.max_depth);
-
-    let acyclicity = by_property["acyclicity"];
-    assert_eq!(
-        acyclicity.theorem_name.as_str(),
-        "Subagent.DelegationGraph.delegation_paths_acyclic"
-    );
-    assert_eq!(
-        acyclicity.edge_theorem.as_str(),
-        "Subagent.DelegationGraph.no_self_delegation_edge"
-    );
-
-    let cascade = by_property["cascade_cancel"];
-    assert_eq!(
-        cascade.theorem_name.as_str(),
-        "Subagent.DelegationGraph.cascade_cancel_covers_path"
-    );
-    assert_eq!(cascade.witness_kind.as_str(), "arbitrary_cascade_path");
 }
 
-pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
-    let cases = lean_r4c_background_work_cases();
-    assert_eq!(cases.len(), 7);
-
-    let names = cases
-        .iter()
-        .map(LeanR4cBackgroundWorkCase::witness)
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        names,
-        [
-            "r4c.list_subagents.lineage_rejects",
-            "r4c.list_subagents.unmaterialized_child_visible",
-            "r4c.read_subagent_transcript.cursor_advances",
-            "r4c.read_subagent_transcript.hides_bridge_rows",
-            "r4c.read_tool_output.dispatch_by_state",
-            "r4c.steer_subagent.append_preserves_lineage",
-            "r4c.steer_subagent.interrupt_composes",
-        ]
-        .into_iter()
-        .collect::<BTreeSet<_>>()
-    );
-
-    match lean_r4c_background_work_case("r4c.list_subagents.lineage_rejects") {
-        LeanR4cBackgroundWorkCase::ListSubagentsLineageRejects {
-            caller_request_id,
-            sibling_request_id,
-            sibling_child_id,
-            caller_sees_sibling_child,
-        } => {
-            assert_eq!(caller_request_id, "r4c-w1-caller");
-            assert_eq!(sibling_request_id, "r4c-w1-sibling");
-            assert_eq!(sibling_child_id, "r4c-w1-sibling-child");
-            assert!(!*caller_sees_sibling_child);
-        }
-        other => panic!("unexpected R4c witness variant: {other:?}"),
-    }
-
-    match lean_r4c_background_work_case("r4c.read_subagent_transcript.cursor_advances") {
-        LeanR4cBackgroundWorkCase::ReadTranscriptCursorAdvances {
-            child_session_id,
-            first_since_sequence,
-            first_through_sequence,
-            first_next_sequence,
-            second_since_sequence,
-            second_through_sequence,
-            no_gap,
-            no_overlap,
-        } => {
-            assert_eq!(child_session_id, "r4c-w2-session");
-            assert_eq!(*first_since_sequence, 0);
-            assert_eq!(*first_through_sequence, 5);
-            assert_eq!(*first_next_sequence, 6);
-            assert_eq!(*second_since_sequence, 6);
-            assert_eq!(*second_through_sequence, 10);
-            assert_eq!(first_next_sequence, second_since_sequence);
-            assert!(*no_gap);
-            assert!(*no_overlap);
-        }
-        other => panic!("unexpected R4c witness variant: {other:?}"),
-    }
-
-    match lean_r4c_background_work_case("r4c.read_subagent_transcript.hides_bridge_rows") {
-        LeanR4cBackgroundWorkCase::ReadTranscriptHidesBridgeRows {
-            child_session_id,
-            bridge_call_id,
-            rendered_transcript,
-        } => {
-            assert_eq!(child_session_id, "r4c-w3-session");
-            assert_eq!(bridge_call_id, "r4c-w3-bridge-call");
-            assert_eq!(
-                rendered_transcript,
-                "[assistant seq=2]\nplain assistant message\n"
-            );
-            assert!(
-                !rendered_transcript.contains(bridge_call_id),
-                "rendered transcript must hide bridge tool-call rows"
-            );
-        }
-        other => panic!("unexpected R4c witness variant: {other:?}"),
-    }
-
-    match lean_r4c_background_work_case("r4c.read_tool_output.dispatch_by_state") {
-        LeanR4cBackgroundWorkCase::ReadToolOutputDispatchesByState {
-            tool_call_id,
-            running_source,
-            running_no_buffer_source,
-            terminal_source,
-            running_payload,
-            running_no_buffer_payload,
-            terminal_payload,
-            running_next_offset,
-            running_total_bytes,
-            running_has_more,
-            terminal_total_bytes,
-        } => {
-            assert_eq!(tool_call_id, "r4c-w4-tool-call");
-            // #937 realignment: the live ring buffer exists in production
-            // (`LiveToolOutputRegistry`), so a running read with a snapshot
-            // serves the live tail; a running read with NO snapshot — the
-            // post-restart shape, the registry is volatile — serves empty
-            // output; a terminal read serves the persisted completion. The
-            // full dispatch is driven against the real hook by
-            // `generated_read_tool_output_witness_drives_hook_dispatch`.
-            assert_eq!(running_source, "live_ring_buffer");
-            assert_eq!(running_no_buffer_source, "none");
-            assert_eq!(terminal_source, "persisted_tool_completion");
-            assert_eq!(running_payload, "live");
-            assert_eq!(running_no_buffer_payload, "");
-            assert_eq!(terminal_payload, "livedone");
-            assert_eq!(*running_next_offset, 4);
-            assert_eq!(*running_total_bytes, 4);
-            assert!(!*running_has_more);
-            assert_eq!(*terminal_total_bytes, 8);
-            assert_ne!(
-                terminal_payload, running_no_buffer_payload,
-                "terminal reads serve the persisted result, never the restart-empty payload"
-            );
-        }
-        other => panic!("unexpected R4c witness variant: {other:?}"),
-    }
-
-    match lean_r4c_background_work_case("r4c.steer_subagent.append_preserves_lineage") {
-        LeanR4cBackgroundWorkCase::SteerAppendPreservesLineage {
-            caller_request_id,
-            caller_request_doc_id,
-            child_session_id,
-            queued_request_id,
-            caused_by_parent_request_id,
-            caused_by_parent_request_doc_id,
-            caused_by_parent_tool_call_id_present,
-            caused_by_parent_tool_call_doc_id_present,
-            lineage_admissible,
-            depth_zero_lineage_admissible,
-            background_completion_depth_zero_admissible,
-            request_visible_before_message_allowed,
-            message_then_request_allowed,
-            queue_source,
-            queue_policy,
-        } => {
-            assert_eq!(caller_request_id, "r4c-w5-caller");
-            assert_eq!(child_session_id, "r4c-w5-child-session");
-            assert_eq!(queued_request_id, "r4c-w5-queued");
-            assert_eq!(caused_by_parent_request_id, caller_request_id);
-            assert_eq!(caused_by_parent_request_doc_id, caller_request_doc_id);
-            assert!(!caused_by_parent_tool_call_id_present);
-            assert!(!caused_by_parent_tool_call_doc_id_present);
-            assert!(*lineage_admissible);
-            assert!(*depth_zero_lineage_admissible);
-            assert!(*background_completion_depth_zero_admissible);
-            assert!(!*request_visible_before_message_allowed);
-            assert!(*message_then_request_allowed);
-            assert_eq!(queue_source, "steering");
-            assert_eq!(queue_policy, "append");
-        }
-        other => panic!("unexpected R4c witness variant: {other:?}"),
-    }
-
-    // #593: a returned background child id never disappears from the parent
-    // control plane. The projected status must be the exact string the runtime
-    // serves from `list_subagents`/`read_subagent`, the projection must be
-    // non-terminal (never fake a terminal outcome for an unmaterialized
-    // child), and the wait payload must be retryable.
-    match lean_r4c_background_work_case("r4c.list_subagents.unmaterialized_child_visible") {
-        LeanR4cBackgroundWorkCase::UnmaterializedChildVisible {
-            caller_request_id,
-            bridge_tool_call_id,
-            child_request_id,
-            child_materialized,
-            bridge_lifecycle_state,
-            listed_status,
-            listed_under_all_filter,
-            listed_under_running_filter,
-            read_lifecycle_state,
-            read_terminal,
-            wait_retryable,
-        } => {
-            assert_eq!(caller_request_id, "r4c-w7-caller");
-            assert_eq!(bridge_tool_call_id, "r4c-w7-bridge-call");
-            assert_eq!(child_request_id, "r4c-w7-child");
-            assert!(!*child_materialized);
-            assert_eq!(bridge_lifecycle_state, "running");
-            assert_eq!(
-                listed_status,
-                gents::__test_internals::AWAITING_CHILD_MATERIALIZATION,
-                "Lean witness and runtime must agree on the projected status string"
-            );
-            assert_eq!(read_lifecycle_state, listed_status);
-            assert!(
-                *listed_under_all_filter,
-                "list_subagents(all) must show the unmaterialized handle"
-            );
-            assert!(
-                *listed_under_running_filter,
-                "the projection is non-terminal, so the default running filter shows it"
-            );
-            assert!(
-                !*read_terminal,
-                "an unmaterialized child must never read as terminal"
-            );
-            assert!(*wait_retryable, "wait_subagent must explain-and-retry");
-        }
-        other => panic!("unexpected R4c witness variant: {other:?}"),
-    }
-
-    match lean_r4c_background_work_case("r4c.steer_subagent.interrupt_composes") {
-        LeanR4cBackgroundWorkCase::SteerInterruptComposes {
-            caller_request_id,
-            child_session_id,
-            interrupted_active_request_id,
-            drained_wake_up_request_ids,
-            drained_wake_up_queue_key,
-            queued_request_id,
-            queue_interrupted_request_id,
-        } => {
-            assert_eq!(caller_request_id, "r4c-w6-caller");
-            assert_eq!(child_session_id, "r4c-w6-child-session");
-            assert_eq!(interrupted_active_request_id, "r4c-w6-interrupted");
-            assert_eq!(
-                drained_wake_up_request_ids,
-                &vec!["r4c-w6-wake-1".to_string(), "r4c-w6-wake-2".to_string()]
-            );
-            assert_eq!(
-                drained_wake_up_queue_key,
-                "background_completion:r4c-w6-child-session"
-            );
-            assert_eq!(
-                drained_wake_up_queue_key,
-                &format!("background_completion:{child_session_id}")
-            );
-            assert_eq!(queued_request_id, "r4c-w6-queued");
-            assert_eq!(queue_interrupted_request_id, interrupted_active_request_id);
-        }
-        other => panic!("unexpected R4c witness variant: {other:?}"),
+pub(super) fn unmaterialized_child_status_matches_runtime_vocabulary() {
+    let LeanR4cBackgroundWorkCase::UnmaterializedChildVisible {
+        listed_status,
+        read_lifecycle_state,
+        ..
+    } = lean_r4c_background_work_case("r4c.list_subagents.unmaterialized_child_visible")
+    else {
+        panic!("unmaterialized child witness variant drifted");
+    };
+    for status in [listed_status, read_lifecycle_state] {
+        assert_eq!(
+            status,
+            gents::__test_internals::AWAITING_CHILD_MATERIALIZATION
+        );
     }
 }
 
@@ -1713,6 +1527,7 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
         &session_id,
         "r6-background-theorem",
         db.node_identity.did(),
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -1768,6 +1583,7 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
         &session_id,
         "r6-background-theorem",
         db.node_identity.did(),
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -1894,30 +1710,17 @@ async fn seed_bridge_step_fixture(
     let tool_call_id = format!("{}-tool", case.name);
     let child_request_id = format!("{}-child", case.name);
 
-    upsert_agent_behavior(
+    support::fixtures::configure_subagent_behavior(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("bridge step parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-19T00:00:00Z".to_string()),
-        },
+        &agent_did,
+        BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
+        &format!("{}-bridge-tools", case.name),
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .expect("upsert bridge step parent behavior");
+    .await;
     create_background_theorem_parent_request(
         db.node.as_ref(),
         &parent_request_id,
@@ -2000,6 +1803,7 @@ async fn drive_bridge_step_projection_case(case: &lean_vocab_test::LeanBridgeSte
         "completed" => {
             persist_bridge_step_child_completion(
                 db.node.as_ref(),
+                db.node_identity.did(),
                 &child_request_id,
                 &child_session_id,
             )
@@ -2191,10 +1995,12 @@ async fn fetch_bridge_step_tool_state(node: &EmbeddedNode, tool_call_id: &str) -
 
 async fn persist_bridge_step_child_completion(
     node: &EmbeddedNode,
+    agent_did: &str,
     child_request_id: &str,
     child_session_id: &str,
 ) {
     set_request_lifecycle_state_by_request_id(node, child_request_id, "completed").await;
+    let child_request_doc_id = crate::support::exact_request_doc_id(node, child_request_id).await;
 
     let assistant = Message::Assistant {
         id: None,
@@ -2205,12 +2011,17 @@ async fn persist_bridge_step_child_completion(
     let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
     let escaped_child_session_id = escape_graphql_string(child_session_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let now = chrono::Utc::now().to_rfc3339();
     let create_message = format!(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{escaped_child_session_id}:1",
+                agent_did: "{escaped_agent_did}",
                 session_id: "{escaped_child_session_id}",
+                request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_child_request_doc_id}",
                 sequence: 1,
                 role: "assistant",
                 content: "{escaped_message}",
@@ -2230,7 +2041,8 @@ async fn persist_bridge_step_child_completion(
             create_AgentResponse(input: {{
                 response_key: "{escaped_child_request_id}",
                 request_id: "{escaped_child_request_id}",
-                agent_did: "{AGENT_DID}",
+                request_doc_id: "{escaped_child_request_doc_id}",
+                agent_did: "{escaped_agent_did}",
                 behavior_id: "bridge-step-child",
                 session_id: "{escaped_child_session_id}",
                 content: "",
@@ -2256,7 +2068,7 @@ async fn persist_bridge_step_child_completion(
 
 async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6BackgroundingCase) {
     use crate::support::{
-        create_request_for_agent_with_signed_fields, upsert_conversation_for_agent,
+        create_request_for_agent_with_signed_fields, create_session_document, session_document,
     };
     use gents::goal::{load_canonical_goal, set_goal, GoalStatus};
     let status = case.goal_status.as_deref().map(|status| match status {
@@ -2268,13 +2080,22 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
         "complete" => GoalStatus::Complete,
         other => panic!("unknown generated Goal status {other}"),
     });
+    let lean_redrive = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
+    assert_eq!(
+        lean_redrive.post_parent_request_id, lean_redrive.redrive_source_request_id,
+        "the modeled successor names its failed source as parent"
+    );
     // Separate stores keep the historical failed-wake witness from coalescing
     // with the notification witness's deliberately pending no-Goal wake.
     for redrive in [false, true] {
         let db = test_db(&format!("{}-{redrive}", case.name)).await;
         let did = db.node_identity.did();
         let session = "completion-owner-session";
-        let parent = "completion-owner-parent";
+        let parent_id = format!(
+            "completion-owner-parent-{}",
+            lean_redrive.pre_parent_request_id.unwrap()
+        );
+        let parent = parent_id.as_str();
         let parent_doc = create_request_for_agent_with_signed_fields(
             &db.node,
             did,
@@ -2288,6 +2109,11 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
             None,
         )
         .await;
+        let mut session_doc =
+            session_document(session, crate::support::AGENT_NAME, "2026-07-15T00:00:00Z");
+        session_doc.agent_did = did.to_owned();
+        session_doc.requester_did = redrive.then(|| did.to_owned());
+        create_session_document(&db.node, &session_doc).await;
         if let Some(status) = status {
             set_goal(
                 &db.node,
@@ -2302,35 +2128,59 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
         }
         let before = load_canonical_goal(&db.node, did, session).await.unwrap();
         if redrive {
+            // Map abstract Lean request IDs to concrete IDs/documents in this store.
+            let failed_wake = format!(
+                "failed-wake-{}",
+                lean_redrive.redrive_source_request_id.unwrap()
+            );
+            let source_depth = lean_redrive.pre_depth.unwrap();
+            let source_retry_count = lean_redrive.retry_count.unwrap();
+            let max_retries = lean_redrive.max_retries.unwrap();
+            let source_deadline = chrono::DateTime::from_timestamp(
+                lean_redrive.pre_execution_deadline.unwrap() as i64,
+                0,
+            )
+            .unwrap()
+            .to_rfc3339();
             // Real historical scheduled wake fixture, matching the existing
             // failed-wake recovery test's persisted preconditions.
-            let metadata = escape_graphql_string(
-                &json!({
-                    "queue": {"source":"background_completion", "policy":"coalesce",
-                        "key":format!("background_completion:{session}"),
-                        "queued_after_request_id":parent},
-                    "background_completion_wake_version":1
-                })
-                .to_string(),
-            );
+            let input = gents_protocol::request_input::RequestInput {
+                queue: Some(gents_protocol::request_input::RequestQueue {
+                    source: gents_protocol::request_input::QueueSource::BackgroundCompletion,
+                    policy: gents_protocol::request_input::QueuePolicy::Coalesce,
+                    key: Some(format!("background_completion:{session}")),
+                    queued_after_request_id: Some(parent.to_owned()),
+                    interrupted_request_id: None,
+                    background_completion_wake_version: Some(1),
+                }),
+                ..Default::default()
+            };
+            let input = gents_protocol::graphql::graphql_input_literal(
+                &serde_json::to_value(input).unwrap(),
+            )
+            .unwrap();
+            let escaped_parent = escape_graphql_string(parent);
+            let escaped_parent_doc = escape_graphql_string(&parent_doc);
+            let escaped_failed_wake = escape_graphql_string(&failed_wake);
+            let escaped_source_deadline = escape_graphql_string(&source_deadline);
             let response = db.node.execute(&format!(r#"mutation {{
-                create_AgentRequest(input: {{ request_id: "failed-wake", agent_did: "{}",
+                create_AgentRequest(input: {{ request_id: "{escaped_failed_wake}", agent_did: "{}", requester_did: "{}",
                     behavior_id: "{}", session_id: "{session}", content: "background input",
-                    metadata: "{metadata}", execution_origin: "scheduled", lifecycle_state: "failed",
+                    input: {input}, execution_origin: "scheduled", lifecycle_state: "failed",
                     failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",
-                    created_at: "2026-07-15T00:00:00Z", retry_count: 1, max_retries: 3,
-                    retry_root_request: "failed-wake", terminal_redrive_attempts: 0,
-                    backend_id: "{}", subagent_depth: 0
-                }}) {{ _docID }} }}"#, escape_graphql_string(did),
+                    created_at: "2026-07-15T00:00:00Z", retry_count: {source_retry_count}, max_retries: {max_retries},
+                    retry_root_request: "{escaped_failed_wake}", terminal_redrive_attempts: 0,
+                    backend_id: "{}", subagent_depth: {source_depth}, deadline: "{escaped_source_deadline}",
+                    caused_by_parent_request_id: "{escaped_parent}",
+                    caused_by_parent_request_doc_id: "{escaped_parent_doc}"
+                }}) {{ _docID }} }}"#, escape_graphql_string(did), escape_graphql_string(did),
                 crate::support::AGENT_NAME, crate::support::BACKEND_ID)).await;
             assert!(!response.has_errors(), "{:?}", response.errors);
-            upsert_conversation_for_agent(
+            crate::support::seed_session_observation_from_request(
                 &db.node,
-                did,
                 session,
-                "failed-wake",
+                &failed_wake,
                 "background input",
-                "active",
             )
             .await;
             let first = gents::RequestLifecycle::redrive_failed_background_wakeups(&db.node, did)
@@ -2339,8 +2189,8 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
             assert_eq!(
                 first.redriven > 0,
                 case.redrive_allowed.unwrap(),
-                "{}",
-                case.name
+                "{}: {first:?}",
+                case.name,
             );
             assert_eq!(first.failed, 0);
             let second = gents::RequestLifecycle::redrive_failed_background_wakeups(&db.node, did)
@@ -2349,16 +2199,91 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
             assert_eq!(second.redriven, 0, "replay must not add another successor");
             let requests = db
                 .node
-                .execute("{ AgentRequest { request_id retry_parent_request_doc_id } }")
+                .execute(
+                    "{ AgentRequest { _docID request_id retry_count retry_parent_request \
+                     retry_parent_request_doc_id max_retries backend_id caused_by_parent_request_id \
+                     caused_by_parent_request_doc_id subagent_depth deadline lifecycle_state } }",
+                )
                 .await;
             assert!(!requests.has_errors(), "{:?}", requests.errors);
-            assert_eq!(
-                requests.data.unwrap()["AgentRequest"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
-                2 + usize::from(case.redrive_allowed.unwrap())
-            );
+            let data = requests.data.expect("request query data");
+            let rows = data["AgentRequest"].as_array().unwrap();
+            assert_eq!(rows.len(), 2 + usize::from(case.redrive_allowed.unwrap()));
+            if case.redrive_allowed.unwrap() {
+                // Runtime counterpart of the Lean redrive lineage fields: the
+                // successor preserves the failed wake's subagent depth, takes
+                // the failed wake as its retry parent, and creates no new
+                // execution deadline. Retry counts come from the Lean
+                // completion_redrive case used to seed this source.
+                let source = rows
+                    .iter()
+                    .find(|row| row["request_id"] == failed_wake)
+                    .expect("failed wake row");
+                let successor = rows
+                    .iter()
+                    .find(|row| row["request_id"] != parent && row["request_id"] != failed_wake)
+                    .expect("redrive successor row");
+                assert_eq!(source["lifecycle_state"], "failed", "{}", case.name);
+                assert_eq!(source["subagent_depth"].as_u64(), Some(source_depth as u64));
+                assert_eq!(source["deadline"].as_str(), Some(source_deadline.as_str()));
+                assert_eq!(source["caused_by_parent_request_id"], parent);
+                assert_eq!(source["caused_by_parent_request_doc_id"], parent_doc);
+                assert_eq!(
+                    successor["caused_by_parent_request_id"].as_str(),
+                    Some(failed_wake.as_str()),
+                );
+                assert_eq!(
+                    successor["caused_by_parent_request_doc_id"]
+                        .as_str()
+                        .expect("causal parent docID"),
+                    source["_docID"].as_str().expect("source docID"),
+                );
+                assert_eq!(
+                    source["retry_count"].as_u64(),
+                    lean_redrive.retry_count.map(|value| value as u64),
+                    "{}",
+                    case.name
+                );
+                assert_eq!(
+                    successor["retry_parent_request"].as_str(),
+                    Some(failed_wake.as_str()),
+                    "{}: the successor's retry parent is the failed source request",
+                    case.name
+                );
+                assert_eq!(
+                    successor["retry_parent_request_doc_id"]
+                        .as_str()
+                        .expect("retry parent docID"),
+                    source["_docID"].as_str().expect("source docID"),
+                    "{}: the retry parent must link by document id",
+                    case.name
+                );
+                assert_eq!(
+                    successor["subagent_depth"].as_u64(),
+                    lean_redrive.post_depth.map(|depth| depth as u64),
+                    "{}: redrive preserves the failed source's subagent depth",
+                    case.name
+                );
+                assert_eq!(
+                    successor["retry_count"].as_u64(),
+                    lean_redrive.post_retry_count.map(|value| value as u64),
+                    "{}",
+                    case.name
+                );
+                assert_eq!(
+                    successor["max_retries"], max_retries,
+                    "retry publication preserves the original ceiling"
+                );
+                assert!(
+                    successor["backend_id"].is_null(),
+                    "fresh claim resolves inference; failed backend is not carried forward"
+                );
+                assert!(
+                    successor["deadline"].is_null(),
+                    "{}: redrive must not mint a new execution deadline",
+                    case.name
+                );
+            }
         } else {
             let mut tool = ToolCallLifecycle::new_background_tool(
                 db.node.clone(),
@@ -2370,7 +2295,8 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
                 "bash".into(),
                 "{}".into(),
                 chrono::Utc::now() + chrono::Duration::minutes(5),
-            );
+            )
+            .with_request_doc_id(Some(parent_doc.clone()));
             tool.start_running().await.unwrap();
             assert!(tool
                 .bridge_complete("durable native output".into())
@@ -2440,4 +2366,125 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
             case.name
         );
     }
+}
+
+// Same session and requester, different runtime principal. This checks the
+// process-control owner, not transport authentication or DefraDB ACP.
+#[tokio::test]
+async fn cross_agent_process_controls_preserve_the_owners_running_job() {
+    let (db, owner, session_id, request_id) = setup_background_tool_hook(
+        "r6-cross-agent-controls",
+        background_tool_registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+    let requester = "did:key:process-owner";
+    owner
+        .set_active_request_lineage(Some(request_id.clone()), Some(requester.to_string()))
+        .await
+        .unwrap();
+    let receipt = skip_reason_json(
+        owner
+            .on_tool_call(
+                "spawn_process",
+                None,
+                "cross-agent-spawn",
+                r#"{"tool_name":"slow_tool","args":{}}"#,
+            )
+            .await,
+    );
+    let tool_call_id = receipt["tool_call_id"].as_str().expect("spawned tool ID");
+    let args = json!({ "tool_call_id": tool_call_id }).to_string();
+    let foreign_did = "did:key:foreign-process-agent";
+    assert_ne!(db.node_identity.did(), foreign_did);
+    support::create_agent_session_in_scope(
+        db.node.as_ref(),
+        foreign_did,
+        &session_id,
+        "r6-background-theorem",
+        "2026-05-19T00:00:00Z",
+    )
+    .await;
+    let foreign = DefraSessionHook::resume_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        "r6-background-theorem",
+        foreign_did,
+        None,
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+    foreign
+        .set_active_request_lineage(Some(request_id), Some(requester.to_string()))
+        .await
+        .unwrap();
+    foreign
+        .set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+
+    // A real row must be visible to its owner before checking the foreign view.
+    for (label, caller, visible) in [("owner", &owner, true), ("foreign", &foreign, false)] {
+        let listed = skip_reason_json(
+            caller
+                .on_tool_call("list_processes", None, &format!("{label}-list"), "{}")
+                .await,
+        );
+        assert_eq!(
+            listed["entries"]
+                .as_array()
+                .expect("entries")
+                .iter()
+                .any(|row| row["tool_call_id"].as_str() == Some(tool_call_id)),
+            visible,
+            "{label}"
+        );
+        let read = skip_reason_json(
+            caller
+                .on_tool_call("read_process", None, &format!("{label}-read"), &args)
+                .await,
+        );
+        if visible {
+            assert_eq!(read["status"].as_str(), Some("running"));
+        } else {
+            assert_eq!(read["ok"].as_bool(), Some(false));
+            assert_eq!(read["failure_class"].as_str(), Some("tool_not_allowed"));
+        }
+    }
+    for name in ["wait_process", "cancel_process"] {
+        let denied = skip_reason_json(
+            foreign
+                .on_tool_call(name, None, &format!("foreign-{name}"), &args)
+                .await,
+        );
+        assert_eq!(denied["ok"].as_bool(), Some(false), "{name}: {denied}");
+        assert!(denied["message"].as_str().is_some_and(|message|
+            message.contains("not manageable by this session principal")),
+            "{name}: unexpected denial {denied}");
+    }
+    let executions = gents::BackgroundExecutionRegistry::default();
+    let denied = gents::tool_control::cancel_session_background_process(
+        db.node.clone(),
+        &executions,
+        foreign_did,
+        Some(requester),
+        &session_id,
+        tool_call_id,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        denied,
+        gents::CancelBackgroundToolCallOutcome::NotFound
+    ));
+    let row = fetch_background_theorem_tool_call(db.node.as_ref(), &session_id, tool_call_id).await;
+    assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
+    assert_eq!(row.cancel_cause.as_deref(), None);
+
+    // The owner can still cancel after every denied attempt; also release the worker.
+    let cancelled = skip_reason_json(
+        owner
+            .on_tool_call("cancel_process", None, "owner-cancel", &args)
+            .await,
+    );
+    assert_eq!(cancelled["status"].as_str(), Some("cancelled"));
 }

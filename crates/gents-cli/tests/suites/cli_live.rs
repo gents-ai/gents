@@ -7,6 +7,96 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+fn apply_live_file_behavior_config(
+    home: &std::path::Path,
+    root: &std::path::Path,
+    graphql: &str,
+    agent_did: &str,
+    tools_id: &str,
+    file_root: &std::path::Path,
+    system_prompt: &std::path::Path,
+    behavior_ids: &[&str],
+) -> Result<()> {
+    run_cli_text(
+        home,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().context("config root is not UTF-8")?,
+            "--graphql",
+            graphql,
+            "--agent-did",
+            agent_did,
+        ],
+    )?;
+    let path = root.join("pack_config.json");
+    let mut config = read_json_file(&path)?;
+    let tools = config["tools"]
+        .as_array_mut()
+        .context("tools is not an array")?
+        .iter_mut()
+        .find(|tools| tools["tools_id"] == tools_id)
+        .context("default Tools document is missing")?;
+    tools["host"] = serde_json::json!({
+        "root": file_root.to_str().context("file root is not UTF-8")?,
+        "files": {"mode": "ReadOnly"}
+    });
+    let prompt = fs::read_to_string(system_prompt)?;
+    let base_behavior = config["agent_behaviors"][0].clone();
+    let base_context = config["contexts"][0].clone();
+    for behavior_id in behavior_ids {
+        let existing_context_id = config["agent_behaviors"]
+            .as_array()
+            .context("agent_behaviors is not an array")?
+            .iter()
+            .find(|behavior| behavior["behavior_id"] == *behavior_id)
+            .and_then(|behavior| behavior["context_id"].as_str())
+            .map(ToOwned::to_owned);
+        let context_id = if let Some(context_id) = existing_context_id {
+            context_id
+        } else {
+            let context_id = format!("{behavior_id}:context");
+            let mut behavior = base_behavior.clone();
+            behavior["behavior_id"] = Value::String((*behavior_id).to_string());
+            behavior["context_id"] = Value::String(context_id.clone());
+            config["agent_behaviors"]
+                .as_array_mut()
+                .context("agent_behaviors is not an array")?
+                .push(behavior);
+            let mut context = base_context.clone();
+            context["context_id"] = Value::String(context_id.clone());
+            context["tools_id"] = Value::String(tools_id.to_string());
+            config["contexts"]
+                .as_array_mut()
+                .context("contexts is not an array")?
+                .push(context);
+            context_id
+        };
+        let context = config["contexts"]
+            .as_array_mut()
+            .context("contexts is not an array")?
+            .iter_mut()
+            .find(|context| context["context_id"] == context_id)
+            .context("behavior context is missing")?;
+        context["system_prompt"] = Value::String(prompt.clone());
+        context["tools_id"] = Value::String(tools_id.to_string());
+    }
+    write_json_file(&path, &config)?;
+    run_cli_json(
+        home,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root.to_str().context("config root is not UTF-8")?,
+            "--graphql",
+            graphql,
+        ],
+    )?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a reachable external OpenAI-compatible endpoint"]
 async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools() -> Result<()>
@@ -57,40 +147,15 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
     let agent_did = agent_did_from_init(&init)?;
-    let backend_id = init
-        .pointer("/init/backend_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
-        .to_string();
-    let backend_name = init
-        .pointer("/init/backend_name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing backend_name: {init}"))?
-        .to_string();
-    let endpoint = init
-        .pointer("/init/endpoint")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing endpoint: {init}"))?
-        .to_string();
-    let model_name = init
-        .pointer("/init/model_name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing model_name: {init}"))?
-        .to_string();
     let behavior_id = init
         .pointer("/init/default_behavior_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
         .to_string();
-    let selection_id = init
-        .pointer("/init/tool_selection_id")
+    let tools_id = init
+        .pointer("/init/tools_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
-        .to_string();
-    let inference_profile_id = init
-        .pointer("/init/inference_profile_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing inference_profile_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
 
     let (mut serve, readiness) =
@@ -157,78 +222,15 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some(graphql.as_str())
     );
 
-    let backend_args = vec![
-        "config",
-        "backend",
-        "set",
-        "--graphql",
+    apply_live_file_behavior_config(
+        &home_dir,
+        &tempdir.path().join("live-config"),
         &graphql,
-        "--backend-id",
-        &backend_id,
-        "--name",
-        &backend_name,
-        "--provider-kind",
-        "OpenAiCompatible",
-        "--endpoint",
-        &endpoint,
-        "--max-concurrent",
-        "2",
-        "--max-queue-depth",
-        "4",
-    ];
-    run_cli_json(&home_dir, &backend_args)?;
-
-    run_cli_json(
+        &agent_did,
+        &tools_id,
         &home_dir,
-        &[
-            "config",
-            "tools",
-            "set",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--selection-id",
-            &selection_id,
-            "--display-name",
-            "Standard Onboarding Demo Tools",
-            "--enable-file-tools",
-            "--file-tools-mode",
-            "ReadOnly",
-            "--file-tool-root",
-            home_dir
-                .to_str()
-                .ok_or_else(|| anyhow!("demo home path is not UTF-8"))?,
-        ],
-    )?;
-
-    run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "behavior",
-            "set",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--behavior-id",
-            &behavior_id,
-            "--display-name",
-            "Standard Onboarding Demo",
-            "--system-prompt-file",
-            system_prompt
-                .to_str()
-                .ok_or_else(|| anyhow!("system prompt path is not UTF-8"))?,
-            "--backend-id",
-            &backend_id,
-            "--model-name",
-            &model_name,
-            "--tool-selection-id",
-            &selection_id,
-            "--inference-profile-id",
-            &inference_profile_id,
-        ],
+        &system_prompt,
+        &[&behavior_id],
     )?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
 
@@ -355,81 +357,30 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
     let agent_did = agent_did_from_init(&init)?;
-    let backend_id = init
-        .pointer("/init/backend_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
-        .to_string();
     let behavior_id = init
         .pointer("/init/default_behavior_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
         .to_string();
-    let selection_id = init
-        .pointer("/init/tool_selection_id")
+    let tools_id = init
+        .pointer("/init/tools_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
-        .to_string();
-    let inference_profile_id = init
-        .pointer("/init/inference_profile_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing inference_profile_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    run_cli_json(
+    apply_live_file_behavior_config(
         &home_dir,
-        &[
-            "config",
-            "tools",
-            "set",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--selection-id",
-            &selection_id,
-            "--display-name",
-            "Live Projection File Tools",
-            "--enable-file-tools",
-            "--file-tools-mode",
-            "ReadOnly",
-            "--file-tool-root",
-            home_dir
-                .to_str()
-                .ok_or_else(|| anyhow!("home path is not UTF-8"))?,
-        ],
-    )?;
-    run_cli_json(
+        &tempdir.path().join("projection-config"),
+        &graphql,
+        &agent_did,
+        &tools_id,
         &home_dir,
-        &[
-            "config",
-            "behavior",
-            "set",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--behavior-id",
-            &behavior_id,
-            "--display-name",
-            "Live Projection",
-            "--system-prompt-file",
-            system_prompt
-                .to_str()
-                .context("system prompt path is not UTF-8")?,
-            "--backend-id",
-            &backend_id,
-            "--model-name",
-            &model_name,
-            "--tool-selection-id",
-            &selection_id,
-            "--inference-profile-id",
-            &inference_profile_id,
-        ],
+        &system_prompt,
+        &[&behavior_id],
     )?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
 
@@ -745,75 +696,29 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
         .to_string();
-    let selection_id = init
-        .pointer("/init/tool_selection_id")
+    let tools_id = init
+        .pointer("/init/tools_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
-        .to_string();
-    let inference_profile_id = init
-        .pointer("/init/inference_profile_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing inference_profile_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    run_cli_json(
+    let behavior_ids = request_specs
+        .iter()
+        .map(|spec| spec.behavior_id.as_str())
+        .collect::<Vec<_>>();
+    apply_live_file_behavior_config(
         &home_dir,
-        &[
-            "config",
-            "tools",
-            "set",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--selection-id",
-            &selection_id,
-            "--display-name",
-            "Live Smoke File Tools",
-            "--enable-file-tools",
-            "--file-tools-mode",
-            "ReadOnly",
-            "--file-tool-root",
-            home_dir
-                .to_str()
-                .ok_or_else(|| anyhow!("demo home path is not UTF-8"))?,
-        ],
+        &tempdir.path().join("smoke-config"),
+        &graphql,
+        &agent_did,
+        &tools_id,
+        &home_dir,
+        &system_prompt,
+        &behavior_ids,
     )?;
-
-    for (index, spec) in request_specs.iter().enumerate() {
-        let display_name = format!("Live Smoke {}", index + 1);
-        run_cli_json(
-            &home_dir,
-            &[
-                "config",
-                "behavior",
-                "set",
-                "--graphql",
-                &graphql,
-                "--agent-did",
-                &agent_did,
-                "--behavior-id",
-                &spec.behavior_id,
-                "--display-name",
-                &display_name,
-                "--system-prompt-file",
-                system_prompt
-                    .to_str()
-                    .context("system prompt path is not UTF-8")?,
-                "--backend-id",
-                &backend_id,
-                "--model-name",
-                &model_name,
-                "--tool-selection-id",
-                &selection_id,
-                "--inference-profile-id",
-                &inference_profile_id,
-            ],
-        )?;
-    }
     wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
 
     let mut children = Vec::new();

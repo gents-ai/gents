@@ -1,0 +1,776 @@
+//! R5 cross-principal subagent delegation conformance.
+//!
+//! Routing is keyed on agent DID identity (AgentPrincipal), not deployment
+//! identity: the "cross" route spawns on a different principal's runtime and
+//! the "same-principal" route falls back locally.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
+use gents::llm::ToolCallHookAction;
+use gents::{
+    default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
+    DefraSessionHook, DocumentRuntimeOptions, FailurePolicy, Gents, ToolCeiling,
+};
+use gents_protocol::row::AgentRequestRow;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::lean_vocab_test::{lean_r5_cross_principal_cases, LeanR5CrossPrincipalCase};
+use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
+use crate::support::fixtures::{
+    bind_default_behavior_backend, configure_subagent_behavior, subagent_target, test_identity,
+};
+use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
+use crate::support::mock_endpoint::MockModelEndpoint;
+use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
+use crate::support::{first_optional_row, test_db, test_p2p_db, TestDb};
+
+struct RunningChildAgent {
+    db: TestDb,
+    booted: BootedAgent,
+    identity: Arc<dyn AgentIdentity>,
+    _endpoint: MockModelEndpoint,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallRow {
+    request_id: String,
+    tool_name: String,
+    tool_call_id: String,
+    lifecycle_state: Option<String>,
+    await_mode: Option<String>,
+    cancel_policy: Option<String>,
+    child_request_id: Option<String>,
+    unclaimed_deadline_at: Option<String>,
+}
+
+pub(super) async fn generated_r5_cross_principal_cases_drive_production_dispatch() {
+    let cases = lean_r5_cross_principal_cases();
+    assert_eq!(
+        cases.len(),
+        2,
+        "Lean should emit cross- and same-principal R5 rows"
+    );
+
+    for case in cases {
+        assert_eq!(case.action.as_str(), "spawn_subagent", "{}", case.name);
+        assert_eq!(case.await_mode.as_str(), "background", "{}", case.name);
+        assert_eq!(case.cancel_policy.as_str(), "cascade", "{}", case.name);
+        assert_eq!(
+            case.child_request_id.as_str(),
+            "runtime_generated",
+            "{}",
+            case.name
+        );
+
+        if case.cross_principal_routing_fired {
+            drive_cross_principal_case(case).await;
+        } else {
+            drive_same_principal_case(case).await;
+        }
+    }
+}
+
+async fn drive_cross_principal_case(case: &LeanR5CrossPrincipalCase) {
+    assert_eq!(case.route.as_str(), "cross_principal", "{}", case.name);
+    assert_ne!(
+        case.parent_principal, case.child_principal,
+        "{} should cross principals",
+        case.name
+    );
+    assert!(case.child_owned_by_target_principal, "{}", case.name);
+
+    let child_agent = boot_child_agent(case).await;
+    let parent_db = test_p2p_db(&format!("{}-parent", case.name)).await;
+    let parent_identity = parent_db.node_identity.clone();
+    let parent_agent_did = parent_identity.did().to_string();
+    let (parent_peer, parent_address) = wait_for_peer_identity(parent_db.node.as_ref()).await;
+    install_one_way_replicator(
+        parent_db.node.as_ref(),
+        child_agent.db.node.as_ref(),
+        &["AgentToolCall"],
+    )
+    .await;
+    authorize_enrollment_peer(
+        child_agent.db.node.clone(),
+        &format!("network-{}", case.name),
+        &format!("R5 {}", case.name),
+        child_agent.identity.clone(),
+        parent_identity,
+        &parent_peer,
+        &parent_address,
+    )
+    .await;
+    let (parent_db, hook, parent_session_id, _parent_behavior_id) = setup_parent_hook_on_db(
+        case,
+        &parent_agent_did,
+        false,
+        Some(child_agent.booted.agent_did.as_str()),
+        parent_db,
+    )
+    .await;
+
+    let spawn_before = chrono::Utc::now();
+    let child_request_id = spawn_from_parent_hook(case, &hook).await;
+    let spawn_after = chrono::Utc::now();
+    assert!(
+        fetch_child_request_optional(parent_db.node.as_ref(), &child_request_id)
+            .await
+            .is_none(),
+        "{}: A must persist the bridge without materializing B's child request",
+        case.name
+    );
+
+    let bridge = fetch_tool_call(
+        parent_db.node.as_ref(),
+        &parent_session_id,
+        &case.parent_tool_call_id,
+    )
+    .await;
+    assert_bridge_matches_case(case, &bridge, &child_request_id);
+    if let Some(value) = bridge.unclaimed_deadline_at.as_deref() {
+        let deadline = chrono::DateTime::parse_from_rfc3339(value)
+            .expect("persisted spawn deadline")
+            .with_timezone(&chrono::Utc);
+        // Bracket the owner call instead of assuming a maximum scheduler delay
+        // between deadline computation and start_running's timestamp.
+        let timeout = chrono::Duration::seconds(60); // Explicit fixture configuration below.
+        assert!(
+            (chrono::DateTime::from_timestamp(spawn_before.timestamp(), 0).unwrap() + timeout
+                ..=spawn_after + timeout)
+                .contains(&deadline),
+            "{}: unclaimed deadline must use the configured spawn timeout",
+            case.name,
+        );
+    }
+
+    let replicated_bridge = wait_for_tool_call(
+        child_agent.db.node.as_ref(),
+        &parent_session_id,
+        &case.parent_tool_call_id,
+    )
+    .await;
+    assert_bridge_matches_case(case, &replicated_bridge, &child_request_id);
+    assert!(
+        fetch_child_request_optional(child_agent.db.node.as_ref(), &case.parent_request_id)
+            .await
+            .is_none(),
+        "{}: the targeted bridge must not drag the coordinator parent request to B",
+        case.name
+    );
+
+    let child = wait_for_child_request(child_agent.db.node.as_ref(), &child_request_id).await;
+    assert_child_matches_case(case, &child, &child_request_id);
+    let child_agent_did = child_agent.booted.agent_did.clone();
+    assert_ne!(
+        parent_agent_did, child_agent_did,
+        "{}: cross-principal route must use distinct runtime DIDs",
+        case.name
+    );
+    assert_eq!(
+        child.agent_did.as_deref(),
+        Some(child_agent_did.as_str()),
+        "{}: cross-principal child must be locally owned by B",
+        case.name
+    );
+    assert_eq!(
+        child.requester_did.as_deref(),
+        Some(child_agent_did.as_str()),
+        "{}: the target runtime must attest and own the child request",
+        case.name
+    );
+
+    let RunningChildAgent {
+        db: child_db,
+        booted,
+        identity: _,
+        _endpoint,
+    } = child_agent;
+    booted.shutdown().await;
+    parent_db.node.shutdown().await;
+    child_db.node.shutdown().await;
+}
+
+async fn drive_same_principal_case(case: &LeanR5CrossPrincipalCase) {
+    assert_eq!(case.route.as_str(), "same_principal", "{}", case.name);
+    assert_eq!(
+        case.parent_principal, case.child_principal,
+        "{} should stay within one principal",
+        case.name
+    );
+    assert!(case.same_principal_fallback, "{}", case.name);
+
+    let (parent_db, hook, parent_session_id, parent_behavior_id) =
+        setup_parent_hook(case, true).await;
+    let _source = super::support::fixtures::spawn_subagent_source(
+        parent_db.node.clone(),
+        parent_db.node_identity.did(),
+        &parent_behavior_id,
+        &case.target_behavior_id,
+    );
+    let child_request_id = spawn_from_parent_hook(case, &hook).await;
+
+    let bridge = fetch_tool_call(
+        parent_db.node.as_ref(),
+        &parent_session_id,
+        &case.parent_tool_call_id,
+    )
+    .await;
+    assert_bridge_matches_case(case, &bridge, &child_request_id);
+
+    let child = wait_for_child_request(parent_db.node.as_ref(), &child_request_id).await;
+    assert_child_matches_case(case, &child, &child_request_id);
+    assert_eq!(
+        child.agent_did.as_deref(),
+        Some(parent_db.node_identity.did()),
+        "{}: same-principal fallback should keep child ownership local",
+        case.name
+    );
+}
+
+async fn boot_child_agent(case: &LeanR5CrossPrincipalCase) -> RunningChildAgent {
+    let db = test_p2p_db(&format!("{}-child", case.name)).await;
+
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(&format!("{}-child", case.name)));
+    let child_agent_did = identity.did().to_string();
+    let default_behavior_id = default_behavior_id_for_agent(&child_agent_did);
+    let endpoint = MockModelEndpoint::start("default").expect("mock endpoint");
+    bind_default_behavior_backend(
+        db.node.as_ref(),
+        &child_agent_did,
+        &format!("{}-backend", case.name),
+        endpoint.endpoint(),
+    )
+    .await;
+    upsert_active_child_behavior_from_default(
+        db.node.as_ref(),
+        &default_behavior_id,
+        &case.target_behavior_id,
+    )
+    .await;
+
+    let agent = Gents::from_default_behavior_documents(
+        db.node.clone(),
+        identity.clone(),
+        DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("child agent");
+    let child_agent_did = agent.agent_did().to_string();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+    wait_for_runtime_ready(db.node.as_ref(), &child_agent_did).await;
+
+    RunningChildAgent {
+        db,
+        booted: BootedAgent::new(shutdown_tx, handle, child_agent_did),
+        identity,
+        _endpoint: endpoint,
+    }
+}
+
+async fn setup_parent_hook(
+    case: &LeanR5CrossPrincipalCase,
+    target_is_local: bool,
+) -> (TestDb, DefraSessionHook, String, String) {
+    let db = test_db(&format!("{}-parent", case.name)).await;
+    let parent_agent_did = db.node_identity.did().to_string();
+    setup_parent_hook_on_db(case, &parent_agent_did, target_is_local, None, db).await
+}
+
+async fn setup_parent_hook_on_db(
+    case: &LeanR5CrossPrincipalCase,
+    parent_agent_did: &str,
+    target_is_local: bool,
+    remote_target_owner_did: Option<&str>,
+    db: TestDb,
+) -> (TestDb, DefraSessionHook, String, String) {
+    let parent_behavior_id = format!("{}-parent-behavior", case.name);
+    let parent_session_id = format!("{}-session", case.parent_request_id);
+    let selection_id = format!("{parent_behavior_id}-tools");
+
+    let target_owner_did = if target_is_local {
+        parent_agent_did.to_string()
+    } else {
+        remote_target_owner_did
+            .expect("cross-principal case must pass the booted child agent DID")
+            .to_string()
+    };
+
+    if target_is_local {
+        configure_subagent_behavior(
+            db.node.as_ref(),
+            parent_agent_did,
+            &case.target_behavior_id,
+            &format!("{}-child-tools", case.target_behavior_id),
+            Vec::new(),
+            false,
+            false,
+            None,
+        )
+        .await;
+    }
+
+    configure_subagent_behavior(
+        db.node.as_ref(),
+        parent_agent_did,
+        &parent_behavior_id,
+        &selection_id,
+        vec![subagent_target(
+            parent_agent_did,
+            case.target_behavior_id.clone(),
+            target_owner_did,
+            case.target_behavior_id.clone(),
+        )],
+        true,
+        true,
+        Some(true),
+    )
+    .await;
+
+    create_parent_request(
+        db.node.as_ref(),
+        &case.parent_request_id,
+        &parent_session_id,
+        &parent_behavior_id,
+        parent_agent_did,
+    )
+    .await;
+    crate::support::create_agent_session_in_scope(
+        db.node.as_ref(),
+        parent_agent_did,
+        &parent_session_id,
+        &parent_behavior_id,
+        "2026-05-20T00:00:00Z",
+    )
+    .await;
+
+    let hook = DefraSessionHook::resume_with_identity_policy(
+        db.node.clone(),
+        &parent_session_id,
+        &parent_behavior_id,
+        parent_agent_did,
+        None,
+        FailurePolicy::default(),
+    )
+    .await
+    .expect("parent hook");
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), &case.parent_request_id).await;
+    hook.set_active_request_binding(
+        Some(case.parent_request_id.clone()),
+        Some(parent_request_doc_id),
+        None,
+    )
+    .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+
+    (db, hook, parent_session_id, parent_behavior_id)
+}
+
+async fn spawn_from_parent_hook(
+    case: &LeanR5CrossPrincipalCase,
+    hook: &DefraSessionHook,
+) -> String {
+    let args = json!({
+        "name": case.target_behavior_id.as_str(),
+        "prompt": format!("child prompt for {}", case.name),
+        "await_mode": case.await_mode.as_str()
+    })
+    .to_string();
+
+    let action = hook
+        .on_tool_call(
+            &case.action,
+            Some(format!("model-{}", case.parent_tool_call_id)),
+            &case.parent_tool_call_id,
+            &args,
+        )
+        .await;
+    let receipt = skip_reason_json(action);
+    assert_eq!(receipt["ok"], true, "{}", case.name);
+    assert_eq!(
+        receipt["behavior_id"].as_str(),
+        Some(case.target_behavior_id.as_str()),
+        "{}",
+        case.name
+    );
+    assert_eq!(
+        receipt["await_mode"].as_str(),
+        Some(case.await_mode.as_str()),
+        "{}",
+        case.name
+    );
+    assert_eq!(receipt["status"], "running", "{}", case.name);
+    receipt["child_request_id"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| panic!("{}: spawn receipt omitted child_request_id", case.name))
+        .to_string()
+}
+
+async fn upsert_active_child_behavior_from_default(
+    node: &EmbeddedNode,
+    default_behavior_id: &str,
+    target_behavior_id: &str,
+) {
+    let mut behavior = load_agent_behavior(node, default_behavior_id)
+        .await
+        .expect("load default child behavior")
+        .expect("default child behavior");
+    let child_agent_did = behavior.agent_did.clone();
+    let selection_id = format!("{target_behavior_id}-r5-cross-principal-tools");
+    behavior.behavior_id = target_behavior_id.to_string();
+    behavior.display_name = Some(target_behavior_id.to_string());
+    upsert_agent_behavior(node, &behavior)
+        .await
+        .expect("upsert target child behavior");
+    configure_subagent_behavior(
+        node,
+        &child_agent_did,
+        target_behavior_id,
+        &selection_id,
+        Vec::new(),
+        true,
+        true,
+        Some(true),
+    )
+    .await;
+}
+
+async fn create_parent_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    behavior_id: &str,
+    agent_did: &str,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let session_id = escape_graphql_string(session_id);
+    let behavior_id = escape_graphql_string(behavior_id);
+    let agent_did = escape_graphql_string(agent_did);
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let deadline = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "R5 parent prompt",
+                lifecycle_state: "processing",
+                backend_id: "",
+                execution_origin: "interactive",
+                failure_reason: "",
+                created_at: "{created_at}",
+                deadline: "{deadline}",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    exec(node, &mutation, "create parent AgentRequest").await;
+}
+
+async fn install_one_way_replicator(
+    sender: &EmbeddedNode,
+    receiver: &EmbeddedNode,
+    collections: &[&str],
+) {
+    let sender_addr = wait_for_listen_addr(sender).await;
+    let receiver_addr = wait_for_listen_addr(receiver).await;
+    let sender_p2p = sender.p2p().expect("sender p2p");
+    let receiver_p2p = receiver.p2p().expect("receiver p2p");
+
+    sender_p2p
+        .connect_peer(&receiver_addr)
+        .await
+        .expect("connect sender to receiver");
+    wait_for_connected_peer(sender).await;
+    wait_for_connected_peer(receiver).await;
+
+    let collection_names = collections
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    sender_p2p
+        .add_collections(collection_names.clone())
+        .await
+        .expect("add sender p2p collections");
+    receiver_p2p
+        .add_collections(collection_names.clone())
+        .await
+        .expect("add receiver p2p collections");
+    receiver_p2p
+        .add_replicator(
+            collection_names.clone(),
+            Some(&sender_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("authorize sender as receiver-side replicator");
+    sender_p2p
+        .add_replicator(
+            collection_names,
+            Some(&receiver_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("install sender to receiver replicator");
+}
+
+async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> ToolCallRow {
+    fetch_tool_call_optional(node, session_id, tool_call_id)
+        .await
+        .unwrap_or_else(|| panic!("AgentToolCall {session_id}/{tool_call_id} not found"))
+}
+
+async fn fetch_tool_call_optional(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> Option<ToolCallRow> {
+    let session_id = escape_graphql_string(session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    tool_call_id: {{ _eq: "{tool_call_id}" }}
+                }},
+                limit: 1
+            ) {{
+                request_id
+                tool_name
+                tool_call_id
+                lifecycle_state
+                await_mode
+                cancel_policy
+                child_request_id
+                unclaimed_deadline_at
+            }}
+        }}"#
+    );
+    first_optional_row(&node.execute(&query).await, "AgentToolCall")
+}
+
+async fn fetch_child_request_optional(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+) -> Option<AgentRequestRow> {
+    let child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{child_request_id}" }} }}, limit: 1) {{
+                request_id
+                agent_did
+                requester_did
+                behavior_id
+                caused_by_parent_request_id
+                caused_by_parent_tool_call_id
+                caused_by_trigger_id
+                caused_by_trigger_kind
+            }}
+        }}"#
+    );
+    first_optional_row(&node.execute(&query).await, "AgentRequest")
+}
+
+async fn wait_for_tool_call(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> ToolCallRow {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(tool_call) = fetch_tool_call_optional(node, session_id, tool_call_id).await {
+            return tool_call;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let diagnostic = agent_tool_call_diagnostic(node).await;
+            panic!("tool call {tool_call_id} was not replicated; {diagnostic}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> AgentRequestRow {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(child) = fetch_child_request_optional(node, child_request_id).await {
+            return child;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let diagnostic = agent_request_diagnostic(node).await;
+            panic!("child request {child_request_id} was not materialized; {diagnostic}");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn agent_request_diagnostic(node: &EmbeddedNode) -> String {
+    let response = node
+        .execute(
+            r#"{
+                AgentRequest {
+                    request_id
+                    agent_did
+                    requester_did
+                    behavior_id
+                    caused_by_parent_request_id
+                    caused_by_parent_tool_call_id
+                    caused_by_trigger_id
+                    caused_by_trigger_kind
+                }
+            }"#,
+        )
+        .await;
+    format!(
+        "AgentRequest errors={:?} data={:?}",
+        response.errors, response.data
+    )
+}
+
+async fn agent_tool_call_diagnostic(node: &EmbeddedNode) -> String {
+    let response = node
+        .execute(
+            r#"{
+                AgentToolCall {
+                    request_id
+                    session_id
+                    tool_name
+                    tool_call_id
+                    lifecycle_state
+                    child_request_id
+                }
+            }"#,
+        )
+        .await;
+    format!(
+        "AgentToolCall errors={:?} data={:?}",
+        response.errors, response.data
+    )
+}
+
+fn assert_bridge_matches_case(
+    case: &LeanR5CrossPrincipalCase,
+    bridge: &ToolCallRow,
+    child_request_id: &str,
+) {
+    assert!(case.parent_trigger_persisted, "{}", case.name);
+    assert_eq!(
+        bridge.request_id, case.parent_request_id,
+        "{}: bridge parent request",
+        case.name
+    );
+    assert_eq!(
+        bridge.tool_call_id, case.parent_tool_call_id,
+        "{}: bridge tool id",
+        case.name
+    );
+    assert_eq!(bridge.tool_name, "spawn_subagent", "{}", case.name);
+    assert_eq!(
+        bridge.lifecycle_state.as_deref(),
+        Some("running"),
+        "{}",
+        case.name
+    );
+    assert_eq!(
+        bridge.await_mode.as_deref(),
+        Some(case.await_mode.as_str()),
+        "{}",
+        case.name
+    );
+    assert_eq!(
+        bridge.cancel_policy.as_deref(),
+        Some(case.cancel_policy.as_str()),
+        "{}",
+        case.name
+    );
+    assert_eq!(
+        bridge.child_request_id.as_deref(),
+        Some(child_request_id),
+        "{}: bridge child_request_id",
+        case.name
+    );
+    assert_eq!(
+        bridge.unclaimed_deadline_at.is_some(),
+        case.unclaimed_deadline_set,
+        "{}: unclaimed deadline",
+        case.name
+    );
+}
+
+fn assert_child_matches_case(
+    case: &LeanR5CrossPrincipalCase,
+    child: &AgentRequestRow,
+    child_request_id: &str,
+) {
+    assert!(case.child_materialized, "{}", case.name);
+    assert_eq!(child.request_id, child_request_id, "{}", case.name);
+    assert_eq!(
+        child.behavior_id.as_deref(),
+        Some(case.target_behavior_id.as_str()),
+        "{}: child target behavior",
+        case.name
+    );
+    assert_eq!(
+        child.caused_by_parent_request_id.as_deref(),
+        case.caused_by_parent_request_id_matches
+            .then_some(case.parent_request_id.as_str()),
+        "{}: parent request linkage",
+        case.name
+    );
+    assert_eq!(
+        child.caused_by_parent_tool_call_id.as_deref(),
+        case.caused_by_parent_tool_call_id_matches
+            .then_some(case.parent_tool_call_id.as_str()),
+        "{}: parent tool linkage",
+        case.name
+    );
+    assert_eq!(
+        child.caused_by_trigger_id.as_deref(),
+        Some(case.parent_tool_call_id.as_str()),
+        "{}: trigger id linkage",
+        case.name
+    );
+    assert_eq!(
+        child.caused_by_trigger_kind.as_deref(),
+        Some(case.caused_by_trigger_kind.as_str()),
+        "{}: trigger kind linkage",
+        case.name
+    );
+}
+
+fn skip_reason_json(action: ToolCallHookAction) -> Value {
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("expected Skip action, got {action:?}");
+    };
+    serde_json::from_str(&reason).expect("skip reason should be JSON")
+}
+
+async fn exec(node: &EmbeddedNode, statement: &str, context: &str) {
+    let response = node.execute(statement).await;
+    assert!(
+        !response.has_errors(),
+        "{context} failed: {:?}\n{statement}",
+        response.errors
+    );
+}

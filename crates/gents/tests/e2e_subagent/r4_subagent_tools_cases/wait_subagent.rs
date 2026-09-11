@@ -379,7 +379,6 @@ async fn corrupt_materialized_child_is_nonretryable_and_remains_listed() {
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
-                metadata: "",
                 failure_reason: "",
                 created_at: "2026-07-01T00:00:00Z",
                 deadline: "2026-07-01T00:10:00Z",
@@ -558,6 +557,7 @@ async fn assert_resumed_wait_cascades_callers_interrupt(later_turn: bool) {
         &session_id,
         PARENT_BEHAVIOR_ID,
         &agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await

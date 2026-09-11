@@ -1,10 +1,11 @@
 import Proofs.ApplyReconcile.Collections
+import Mathlib.Data.Finset.Basic
 
 namespace ApplyReconcile
 
 structure DesiredFields where
   content : String
-  refs    : Finset DocRef
+  refs    : List DocRef
   deriving DecidableEq
 
 abbrev LiveFields := String
@@ -29,21 +30,5 @@ namespace LiveState
 def contains (L : LiveState) (d : DocRef) : Bool := (L.desired d).isSome
 
 end LiveState
-
-def referencesOf : DesiredFields → Finset DocRef := fun f => f.refs
-
-def Manifest.WellFormed (m : Manifest) : Prop :=
-  (∀ d : DocRef, ∀ f, m.docs d = some f →
-    ∀ r ∈ referencesOf f, m.contains r = true) ∧
-  (∀ d : DocRef, ∀ f, m.docs d = some f →
-    ∀ r ∈ referencesOf f,
-      r.collection.applyOrder < d.collection.applyOrder)
-
-def LiveState.WellFormed (L : LiveState) : Prop :=
-  (∀ d : DocRef, ∀ f, L.desired d = some f →
-    ∀ r ∈ referencesOf f, L.contains r = true) ∧
-  (∀ d : DocRef, ∀ f, L.desired d = some f →
-    ∀ r ∈ referencesOf f,
-      r.collection.applyOrder < d.collection.applyOrder)
 
 end ApplyReconcile

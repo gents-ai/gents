@@ -40,8 +40,10 @@ async fn create_owned_request(
 }
 
 async fn seed_owned_request_projection(node: &EmbeddedNode, session_id: &str, request_id: &str) {
-    create_agent_session(node, session_id, AGENT_NAME, CONVERGENCE_CREATED_AT).await;
-    upsert_conversation(node, session_id, request_id, "hello", "processing").await;
+    let mut session = support::session_document(session_id, AGENT_NAME, CONVERGENCE_CREATED_AT);
+    session.agent_did = OWNER_DID.into();
+    support::create_session_document(node, &session).await;
+    support::seed_session_observation_from_request(node, session_id, request_id, "hello").await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -174,7 +176,7 @@ struct QueueConvergenceRow {
     superseded_by_request: Option<String>,
 }
 
-fn coalesce_wakeup_metadata(session_id: &str) -> String {
+fn coalesce_wakeup_input(session_id: &str) -> String {
     format!(
         r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
     )
@@ -186,14 +188,16 @@ async fn create_queue_request(
     session_id: &str,
     agent_did: &str,
     execution_origin: &str,
-    metadata: &str,
+    input: &str,
     created_at: &str,
 ) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_execution_origin = escape_graphql_string(execution_origin);
-    let escaped_metadata = escape_graphql_string(metadata);
+    let input = serde_json::from_str::<Value>(input).expect("request input JSON");
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&input).expect("request input GraphQL");
     let escaped_created_at = escape_graphql_string(created_at);
     let mutation = format!(
         r#"mutation {{
@@ -206,7 +210,7 @@ async fn create_queue_request(
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "wake up",
-                metadata: "{escaped_metadata}",
+                input: {input},
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{escaped_execution_origin}",
@@ -667,7 +671,7 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
 pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
     let db = test_db("convergence-coalesce-foreign").await;
     let session_id = "convergence-coalesce-foreign-session";
-    let metadata = coalesce_wakeup_metadata(session_id);
+    let input = coalesce_wakeup_input(session_id);
     let key = format!("background_completion:{session_id}");
 
     create_queue_request(
@@ -676,7 +680,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         session_id,
         OWNER_DID,
         "scheduled",
-        &metadata,
+        &input,
         "2026-03-23T00:00:00Z",
     )
     .await;
@@ -686,7 +690,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         session_id,
         OWNER_DID,
         "scheduled",
-        &metadata,
+        &input,
         "2026-03-23T00:00:01Z",
     )
     .await;
@@ -696,7 +700,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         session_id,
         FOREIGN_DID,
         "scheduled",
-        &metadata,
+        &input,
         "2026-03-23T00:00:02Z",
     )
     .await;
@@ -754,7 +758,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     let db = test_db("convergence-drain-foreign").await;
     let session_id = "convergence-drain-foreign-session";
-    let metadata = coalesce_wakeup_metadata(session_id);
+    let input = coalesce_wakeup_input(session_id);
 
     create_queue_request(
         &db.node,
@@ -762,7 +766,7 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
         session_id,
         OWNER_DID,
         "scheduled",
-        &metadata,
+        &input,
         "2026-03-23T00:00:00Z",
     )
     .await;
@@ -772,7 +776,7 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
         session_id,
         FOREIGN_DID,
         "scheduled",
-        &metadata,
+        &input,
         "2026-03-23T00:00:01Z",
     )
     .await;
@@ -781,6 +785,7 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
         &db.node,
         session_id,
         OWNER_DID,
+        None,
         "automated wake-up drained because active request was interrupted",
     )
     .await

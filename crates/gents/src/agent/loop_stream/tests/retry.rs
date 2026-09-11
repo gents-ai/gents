@@ -36,6 +36,11 @@ async fn pre_stream_transport_failure_retries_and_succeeds() {
         histories[0], histories[1],
         "transport retry must reissue the identical provider request"
     );
+    assert_eq!(
+        model.seen_tools().await[0],
+        model.seen_tools().await[1],
+        "transport retry must reissue the identical toolset"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -297,36 +302,6 @@ async fn deadline_fail_fast_pre_sleep() {
         started_at,
         "deadline fail-fast must not sleep before failing"
     );
-}
-
-#[tokio::test(start_paused = true)]
-async fn retry_reissues_same_request() {
-    let model = ScriptedModel::new_calls(vec![
-        ScriptedCall::FailStream(transient_provider_error("reset")),
-        ScriptedCall::Turn(vec![
-            RawStreamingChoice::Message("ok".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ]),
-    ]);
-
-    let stream = run_loop_stream(
-        model.clone(),
-        None::<crate::hook::DefraSessionHook>,
-        Message::user("use the tool"),
-        Vec::new(),
-        Arc::new(vec![echo_tool()]),
-        config(1),
-    );
-    let collected = collect_scripted_stream(stream).await;
-
-    assert_eq!(collected.final_text.as_deref(), Some("ok"));
-    assert_eq!(collected.error, None);
-    let histories = model.seen_histories().await;
-    let tools = model.seen_tools().await;
-    assert_eq!(histories.len(), 2);
-    assert_eq!(tools.len(), 2);
-    assert_eq!(histories[0], histories[1]);
-    assert_eq!(tools[0], tools[1]);
 }
 
 #[tokio::test(start_paused = true)]

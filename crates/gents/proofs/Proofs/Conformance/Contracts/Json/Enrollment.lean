@@ -180,8 +180,8 @@ def agentRequestAdmissionCaseJson (c : AgentRequestAdmissionCase) : String :=
     ++ "\"bridge_author_binding_current\":" ++ boolJson c.bridgeAuthorBindingCurrent ++ ","
     ++ "\"bridge_author_authorization_fresh\":" ++
       boolJson c.bridgeAuthorAuthorizationFresh ++ ","
-    ++ "\"target_cross_deployment_policy_allows\":" ++
-      boolJson c.targetCrossDeploymentPolicyAllows ++ ","
+    ++ "\"target_cross_principal_policy_allows\":" ++
+      boolJson c.targetCrossPrincipalPolicyAllows ++ ","
     ++ "\"expected_admitted\":" ++ boolJson c.expectedAdmitted ++ ","
     ++ "\"expected_disposition\":" ++ jsonString c.expectedDisposition
     ++ "}"

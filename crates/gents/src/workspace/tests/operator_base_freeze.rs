@@ -38,10 +38,52 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                 &mut fx.ctx(&mut docs, seal_caps()),
             )
             .expect("prepare actual operator seal, never fabricate a writer request");
-            docs.workspaces
-                .get_mut("workspace-1")
-                .unwrap()
-                .lifecycle_state = case["before_state"].as_str().unwrap().into();
+            if case["before_state"] == "cleaned" {
+                // Cleanup must produce both the cleaned row and missing checkout.
+                execute_cleanup_workspace_plan(
+                    &emit_cleanup_workspace_plan(CleanupWorkspaceAction {
+                        workspace_id: "workspace-1".into(),
+                    }),
+                    &mut Vec::new(),
+                    &mut fx.ctx(&mut docs, cleanup_caps()),
+                )
+                .expect("prepare the cleaned row through the real cleanup owner");
+            } else if case["before_state"] == "cleaning" {
+                // Fail removal after cleanup persists Cleaning, then restore the
+                // placement so the freeze observes the declared Lean input.
+                let real_host_path = docs.placements["workspace-1"].host_path.clone();
+                docs.placements.get_mut("workspace-1").unwrap().host_path = dest
+                    .with_file_name("gents-ws-workspace-1-drifted")
+                    .display()
+                    .to_string();
+                let cleanup_error = execute_cleanup_workspace_plan(
+                    &emit_cleanup_workspace_plan(CleanupWorkspaceAction {
+                        workspace_id: "workspace-1".into(),
+                    }),
+                    &mut Vec::new(),
+                    &mut fx.ctx(&mut docs, cleanup_caps()),
+                )
+                .expect_err("drifted placement must stop the cleanup effect");
+                assert!(
+                    cleanup_error
+                        .to_string()
+                        .contains("does not match host-chosen path"),
+                    "{cleanup_error}"
+                );
+                assert_eq!(
+                    docs.workspaces["workspace-1"].lifecycle_state, "cleaning",
+                    "the owner must have persisted the Cleaning row before failing"
+                );
+                assert!(
+                    dest.is_dir(),
+                    "the real tree must survive the failed effect"
+                );
+                docs.placements.get_mut("workspace-1").unwrap().host_path = real_host_path;
+            } else if case["before_state"] == "sealed" {
+                // The freeze above already produced this state.
+            } else {
+                panic!("unmapped emitted operator-freeze before_state {case:?}");
+            }
         }
         let mut caps = seal_caps();
         let mut wrong_owner = false;
@@ -63,7 +105,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                     "existing-writer",
                     "existing-writer-doc",
                     crate::toolset::WorkspaceAuthority::ReadWrite,
-                    "deploy-1",
+                    "did:key:zWorkspaceOwner",
                     None,
                 ))
                 .unwrap();
@@ -76,9 +118,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                 git(&dest, &["add", "README.md"]);
                 git(&dest, &["commit", "-m", "different head"]);
             }
-            "missing_checkout_denied"
-            | "identical_replay_without_checkout"
-            | "cleaned_replay_denied" => {
+            "missing_checkout_denied" | "identical_replay_without_checkout" => {
                 fs::remove_dir_all(&dest).unwrap();
             }
             "malformed_manifest_denied" => {
@@ -94,7 +134,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                 docs.workspaces.get_mut("workspace-1").unwrap().seal_hash =
                     Some("other-tree".into());
             }
-            "cleaning_replay_denied" => {}
+            "cleaning_replay_denied" | "cleaned_replay_denied" => {}
             other => panic!("unmapped emitted operator-freeze case {other}"),
         }
         assert_eq!(case["base_tree"], "base-tree");
@@ -102,7 +142,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
             case["expected_binding"]["workspace_id"],
             action.workspace_id
         );
-        assert_eq!(case["expected_binding"]["owner"], "host-1"); // abstract host-1 -> Fixture deploy-1
+        assert_eq!(case["expected_binding"]["owner"], "host-1"); // abstract owner -> fixture principal
         assert_eq!(case["expected_binding"]["tree"], "base-tree"); // abstract base-tree -> actual Git tree
         assert_eq!(case["expected_binding"]["capability"], case["capability"]);
         assert_eq!(
@@ -154,7 +194,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
         let result = {
             let mut ctx = fx.ctx(&mut docs, caps);
             if wrong_owner {
-                ctx.deployment_id = "foreign-deployment".into();
+                ctx.owner_agent_did = "foreign-owner".into();
             }
             execute_freeze_workspace_base_plan(&plan, &mut journal, &mut ctx)
         };
@@ -216,6 +256,85 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
     }
 }
 
+// The emitted wrong-owner case does not exercise either placement guard.
+#[test]
+fn freeze_rejects_drifted_placement_binding() {
+    let fx = Fixture::new();
+    let mut docs = MemoryWorkspaceDocuments::default();
+    let mut create = fx.action("freeze-placement", "freeze-work", "freeze-placement-branch");
+    create.path_capability = WorkspacePathCapability::exact_paths(Vec::new()).unwrap();
+    execute_create_workspace_plan(
+        &emit_create_workspace_plan(create),
+        &mut Vec::new(),
+        &mut fx.ctx(&mut docs, git_worktree_caps()),
+    )
+    .unwrap();
+    let before_workspace = docs.workspaces["freeze-placement"].clone();
+    let freeze_plan = emit_freeze_workspace_base_plan(FreezeWorkspaceBaseAction {
+        workspace_id: "freeze-placement".into(),
+        base_sha: fx.base_sha.clone(),
+    });
+
+    // Isolate the repository-binding guard.
+    docs.placements
+        .get_mut("freeze-placement")
+        .unwrap()
+        .repository_placement_id = "repo-2".into();
+    let mut journal = Vec::new();
+    let error = execute_freeze_workspace_base_plan(
+        &freeze_plan,
+        &mut journal,
+        &mut fx.ctx(&mut docs, seal_caps()),
+    )
+    .expect_err("drifted placement binding must not freeze");
+    assert!(matches!(error, HostExecuteError::Denied { .. }), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("owner/repository/placement mismatch"),
+        "{error}"
+    );
+    assert_eq!(
+        docs.workspaces["freeze-placement"], before_workspace,
+        "denial must not mutate the authoritative workspace"
+    );
+    assert!(docs.receipts.is_empty());
+    assert_eq!(
+        super::super::journal::current_state(&journal, 0),
+        Some(ActionJournalState::Validated)
+    );
+
+    // Restore the repository binding, then isolate the host-path guard.
+    docs.placements
+        .get_mut("freeze-placement")
+        .unwrap()
+        .repository_placement_id = "repo-1".into();
+    let real_host_path = docs.placements["freeze-placement"].host_path.clone();
+    docs.placements
+        .get_mut("freeze-placement")
+        .unwrap()
+        .host_path = PathBuf::from(&real_host_path)
+        .with_file_name("gents-ws-freeze-placement-drifted")
+        .display()
+        .to_string();
+    let mut journal = Vec::new();
+    let error = execute_freeze_workspace_base_plan(
+        &freeze_plan,
+        &mut journal,
+        &mut fx.ctx(&mut docs, seal_caps()),
+    )
+    .expect_err("drifted placement host path must not freeze");
+    assert!(matches!(error, HostExecuteError::Denied { .. }), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("placement differs from host-chosen workspace path"),
+        "{error}"
+    );
+    assert_eq!(docs.workspaces["freeze-placement"], before_workspace);
+    assert!(docs.receipts.is_empty());
+}
+
 // Partial result-document persistence must converge through the existing executor.
 
 struct FailFreezePlacementOnce {
@@ -262,10 +381,10 @@ fn freeze_fault_context<'a>(
     docs: &'a mut dyn WorkspaceDocuments,
 ) -> HostExecutorContext<'a> {
     HostExecutorContext {
-        deployment_id: "deploy-1".into(),
+        owner_agent_did: "did:key:zWorkspaceOwner".into(),
         repository: RepositoryPlacementRef {
             repository_id: "repo-1".into(),
-            deployment_id: "deploy-1".into(),
+            owner_agent_did: "did:key:zWorkspaceOwner".into(),
             host_path: fx.repo.clone(),
             enabled: true,
         },

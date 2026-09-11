@@ -1,103 +1,69 @@
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
+use gents::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
+};
+use gents::document_config::PackConfig;
 use gents::self_config::build_self_config_tools;
 use gents::tool_surface::SelfConfigToolConfig;
-use gents::{load_agent_behavior, load_tool_selection, ToolSelectionDocument};
+use gents::Collection;
 use serde_json::{json, Value};
 
 use crate::support::test_db;
 
 const AGENT_DID: &str = "did:key:zSelfConfigE2E";
 const BEHAVIOR_ID: &str = "self-config-behavior";
-const SELECTION_ID: &str = "self-config-selection";
+const CONTEXT_ID: &str = "self-config-context";
+const TOOLS_ID: &str = "self-config-tools";
 const PROFILE_ID: &str = "self-config-profile";
 const BACKEND_ID: &str = "self-config-backend";
+const SECRET: &str = "sk-secret-should-never-leak";
 
 async fn seed_config(node: &Arc<EmbeddedNode>) {
-    let behavior_mutation = format!(
-        r#"mutation {{
-            create_AgentBehavior(input: {{
-                behavior_id: "{BEHAVIOR_ID}",
-                agent_did: "{AGENT_DID}",
-                system_prompt: "original prompt",
-                model_name: "model-small",
-                backend_id: "{BACKEND_ID}",
-                tool_selection_id: "{SELECTION_ID}",
-                inference_profile_id: "{PROFILE_ID}",
-                enabled: true,
-                created_at: "2026-01-01T00:00:00Z"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&behavior_mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed behavior: {:?}",
-        response.errors
-    );
+    let config: PackConfig = serde_json::from_value(json!({
+        "agent_principal":{"agent_did":AGENT_DID,"default_behavior_id":BEHAVIOR_ID},
+        "agent_behaviors":[{"agent_did":AGENT_DID,"behavior_id":BEHAVIOR_ID,"context_id":CONTEXT_ID,"inference_profile_id":PROFILE_ID}],
+        "contexts":[{"agent_did":AGENT_DID,"context_id":CONTEXT_ID,"system_prompt":"original prompt","tools_id":TOOLS_ID}],
+        "tools":[{"agent_did":AGENT_DID,"tools_id":TOOLS_ID,"self_config":{"enable_self_config":true}}],
+        "inference_profiles":[{"agent_did":AGENT_DID,"profile_id":PROFILE_ID,"backend_id":BACKEND_ID,"model_name":"model-small","sampling_id":"sampling","execution_id":"execution"}],
+        "inference_sampling":[{"agent_did":AGENT_DID,"sampling_id":"sampling","temperature":0.7}],
+        "inference_execution":[{"agent_did":AGENT_DID,"execution_id":"execution","max_turns":40}],
+        "inference_backends":[{"agent_did":AGENT_DID,"backend_id":BACKEND_ID,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:11434/v1","auth":{"kind":"api_key","key":SECRET},"max_concurrent":1}]
+    })).unwrap();
+    let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    ConfigAccess::Local(node.clone())
+        .transact("test.self_config.seed", |txn| {
+            let plan = plan.clone();
+            Box::pin(async move { apply_desired_state_plan(txn, &plan).await })
+        })
+        .await
+        .unwrap();
+}
 
-    gents::document_config::upsert_tool_selection(
-        node,
-        &ToolSelectionDocument {
-            selection_id: SELECTION_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
-            enable_self_config: Some(true),
-            enable_defra_query: Some(false),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("seed selection");
-
-    let profile_mutation = format!(
-        r#"mutation {{
-            create_InferenceProfile(input: {{
-                profile_id: "{PROFILE_ID}",
-                temperature: 0.7,
-                max_turns: 40
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&profile_mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed profile: {:?}",
-        response.errors
-    );
-
-    let backend_mutation = format!(
-        r#"mutation {{
-            create_InferenceBackend(input: {{
-                backend_id: "{BACKEND_ID}",
-                name: "local",
-                provider_kind: "OpenAiCompatible",
-                endpoint: "http://127.0.0.1:11434/v1",
-                api_key: "sk-secret-should-never-leak",
-                max_concurrent: 1,
-                max_queue_depth: 1,
-                enabled: true,
-                models: ["model-small", "model-large"],
-                probe_status: "healthy"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&backend_mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed backend: {:?}",
-        response.errors
-    );
+async fn read(node: &Arc<EmbeddedNode>, collection: Collection, id: &str) -> Value {
+    let id = id.to_owned();
+    ConfigAccess::Local(node.clone())
+        .transact("test.self_config.read", |txn| {
+            let id = id.clone();
+            Box::pin(async move {
+                Ok(
+                    read_desired_state_record_in_txn(txn, collection, AGENT_DID, &id)
+                        .await?
+                        .unwrap()
+                        .1,
+                )
+            })
+        })
+        .await
+        .unwrap()
 }
 
 fn tool_config(categories: &[&str], no_lockout: bool, dry_run: bool) -> SelfConfigToolConfig {
     SelfConfigToolConfig {
         enabled: true,
-        behavior_id: BEHAVIOR_ID.to_string(),
-        categories: categories
-            .iter()
-            .map(|category| category.to_string())
-            .collect(),
+        behavior_id: BEHAVIOR_ID.into(),
+        categories: categories.iter().map(|s| s.to_string()).collect(),
         no_lockout,
         dry_run,
     }
@@ -108,673 +74,402 @@ async fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<String, String> {
-    let tool = tools
+    tools
         .iter()
         .find(|tool| tool.name() == name)
-        .unwrap_or_else(|| panic!("tool {name} not registered"));
-    tool.call(args.to_string())
+        .unwrap_or_else(|| panic!("missing tool {name}"))
+        .call(args.to_string())
         .await
         .map_err(|error| format!("{error:#}"))
 }
 
 #[tokio::test]
-async fn configure_behavior_patches_and_rejects_wholesale() {
-    let db = test_db("self-config-behavior").await;
+async fn configure_context_and_profile_preserve_identity_and_reject_partial_commits() {
+    let db = test_db("self-config-bindings").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.to_string(),
+        AGENT_DID.into(),
         None,
-        &tool_config(&["behavior"], false, false),
+        &tool_config(&["behavior", "profile"], false, false),
     );
-
-    let output = call_tool(
+    call_tool(
         &tools,
         "configure_behavior",
-        json!({ "patch": { "system_prompt": "sharper prompt", "model_name": "model-large" } }),
+        json!({"target":"context","patch":{"system_prompt":"sharper prompt"}}),
     )
     .await
-    .expect("behavior patch should commit");
-    assert!(output.contains("\"committed\": true"), "{output}");
-
-    let behavior = load_agent_behavior(&db.node, BEHAVIOR_ID)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
-    assert_eq!(behavior.system_prompt.as_deref(), Some("sharper prompt"));
-    assert_eq!(behavior.model_name.as_deref(), Some("model-large"));
-    assert_eq!(behavior.agent_did, AGENT_DID, "identity untouched");
-
-    let error = call_tool(
+    .unwrap();
+    call_tool(
         &tools,
-        "configure_behavior",
-        json!({ "patch": { "agent_did": "did:key:zAttacker", "system_prompt": "hijacked" } }),
+        "configure_profile",
+        json!({"patch":{"model_name":"model-large"}}),
     )
     .await
-    .expect_err("identity patch must be rejected");
-    assert!(error.contains("protected"), "{error}");
-    let behavior = load_agent_behavior(&db.node, BEHAVIOR_ID)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
+    .unwrap();
     assert_eq!(
-        behavior.system_prompt.as_deref(),
-        Some("sharper prompt"),
-        "rejected patch must leave every field unchanged (transactional totality)"
+        read(&db.node, Collection::AgentContext, CONTEXT_ID).await["system_prompt"],
+        "sharper prompt"
     );
-
-    let error = call_tool(
-        &tools,
-        "configure_behavior",
-        json!({ "patch": { "backend_id": "missing-backend", "system_prompt": "half applied?" } }),
-    )
-    .await
-    .expect_err("dangling backend_id must be rejected");
-    // `AgentBehavior::validate_references` (#1331, the single owner) phrases
-    // this as "references missing backend_id", not "does not exist".
-    assert!(error.contains("references missing backend_id"), "{error}");
-    let behavior = load_agent_behavior(&db.node, BEHAVIOR_ID)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
-    assert_eq!(behavior.backend_id.as_deref(), Some(BACKEND_ID));
-    assert_eq!(behavior.system_prompt.as_deref(), Some("sharper prompt"));
+    let before = read(&db.node, Collection::InferenceProfile, PROFILE_ID).await;
+    assert_eq!(before["model_name"], "model-large");
+    for patch in [
+        json!({"agent_did":"did:key:zAttacker","model_name":"hijacked"}),
+        json!({"backend_id":"missing-backend","model_name":"half applied?"}),
+    ] {
+        call_tool(&tools, "configure_profile", json!({"patch":patch}))
+            .await
+            .expect_err("identity/reference validation must reject the entire patch");
+        assert_eq!(
+            read(&db.node, Collection::InferenceProfile, PROFILE_ID).await,
+            before
+        );
+    }
+    assert_eq!(
+        read(&db.node, Collection::AgentBehavior, BEHAVIOR_ID).await["agent_did"],
+        AGENT_DID
+    );
 }
 
 #[tokio::test]
 async fn configure_tools_respects_gate_and_no_lockout() {
     let db = test_db("self-config-tools").await;
     seed_config(&db.node).await;
-
-    let guarded = build_self_config_tools(
+    let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.to_string(),
+        AGENT_DID.into(),
         None,
         &tool_config(&["tools"], true, false),
     );
-    let output = call_tool(
-        &guarded,
+    call_tool(
+        &tools,
         "configure_tools",
-        json!({ "patch": { "enable_defra_query": true } }),
+        json!({"patch":{"built_ins":{"enable_context_budget":true}}}),
     )
     .await
-    .expect("unrelated selection patch commits under the guard");
-    assert!(output.contains("\"committed\": true"), "{output}");
+    .unwrap();
+    let before = read(&db.node, Collection::Tools, TOOLS_ID).await;
     let error = call_tool(
-        &guarded,
+        &tools,
         "configure_tools",
-        json!({ "patch": { "enable_self_config": false } }),
+        json!({"patch":{"self_config":{"enable_self_config":false}}}),
     )
     .await
-    .expect_err("no-lockout guard must refuse gate removal");
+    .unwrap_err();
     assert!(error.contains("no-lockout"), "{error}");
-
-    let error = call_tool(
-        &guarded,
+    call_tool(
+        &tools,
         "configure_tools",
-        json!({ "patch": { "tool_policy_version": "v2" } }),
+        json!({"patch":{"tools_id":"replacement"}}),
     )
     .await
-    .expect_err("tool_policy_version is protected");
-    assert!(error.contains("protected"), "{error}");
-
-    let selection = load_tool_selection(&db.node, SELECTION_ID)
-        .await
-        .expect("load selection")
-        .expect("selection exists");
-    assert_eq!(selection.enable_defra_query, Some(true));
-    assert_eq!(selection.enable_self_config, Some(true));
-
-    let unguarded = build_self_config_tools(
+    .expect_err("identity is protected");
+    assert_eq!(read(&db.node, Collection::Tools, TOOLS_ID).await, before);
+    let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.to_string(),
+        AGENT_DID.into(),
         None,
         &tool_config(&["tools"], false, false),
     );
     call_tool(
-        &unguarded,
+        &tools,
         "configure_tools",
-        json!({ "patch": { "enable_self_config": false } }),
+        json!({"patch":{"self_config":{"enable_self_config":false}}}),
     )
     .await
-    .expect("without the guard, self-disable is a legal one-way door");
-    let selection = load_tool_selection(&db.node, SELECTION_ID)
-        .await
-        .expect("load selection")
-        .expect("selection exists");
-    assert_eq!(selection.enable_self_config, Some(false));
+    .unwrap();
+    assert_eq!(
+        read(&db.node, Collection::Tools, TOOLS_ID).await["self_config"]["enable_self_config"],
+        false
+    );
 }
 
 #[tokio::test]
-async fn get_my_config_reports_documents_and_never_the_api_key() {
+async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
     let db = test_db("self-config-read").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.to_string(),
+        AGENT_DID.into(),
         None,
         &tool_config(&["behavior", "tools", "profile", "backend"], false, true),
     );
-
-    let output = call_tool(&tools, "get_my_config", json!({}))
-        .await
-        .expect("read succeeds");
-    let config: Value = serde_json::from_str(&output).expect("json output");
-    assert_eq!(config["agent_did"], AGENT_DID);
+    let output = call_tool(&tools, "get_my_config", json!({})).await.unwrap();
+    let config: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(config["behavior"]["behavior_id"], BEHAVIOR_ID);
-    assert_eq!(config["tool_selection"]["selection_id"], SELECTION_ID);
+    assert_eq!(config["context"]["context_id"], CONTEXT_ID);
     assert_eq!(config["inference_profile"]["profile_id"], PROFILE_ID);
-    assert_eq!(config["inference_backend"]["backend_id"], BACKEND_ID);
-    assert!(
-        !output.contains("sk-secret-should-never-leak") && !output.contains("api_key"),
-        "the backend secret must never round-trip through get_my_config"
-    );
-
-    let preview = call_tool(
-        &tools,
-        "get_my_config",
-        json!({ "preview": {
-            "category": "behavior",
-            "patch": { "system_prompt": "previewed prompt" },
-        }}),
-    )
-    .await
-    .expect("preview succeeds");
-    assert!(preview.contains("previewed prompt"), "{preview}");
-    assert!(preview.contains("dry-run"), "{preview}");
-    let behavior = load_agent_behavior(&db.node, BEHAVIOR_ID)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
+    assert_eq!(config["documents"]["Tools"]["tools_id"], TOOLS_ID);
     assert_eq!(
-        behavior.system_prompt.as_deref(),
-        Some("original prompt"),
-        "preview must not write"
+        config["documents"]["InferenceBackend"]["backend_id"],
+        BACKEND_ID
     );
-}
-
-/// A patch value is a scalar in the model (`FieldValue := String` in
-/// `proofs/Proofs/SelfConfig/Apply.lean`), but the tool schema accepts
-/// arbitrary JSON. An object value used to reach the mutation renderer,
-/// whose object keys land in identifier position — letting a patch on one
-/// writable field write a protected field, or a document in another
-/// collection entirely. Both must be refused before anything commits.
-#[tokio::test]
-async fn configure_rejects_non_scalar_patch_values() {
-    let db = test_db("self-config-nonscalar").await;
-    seed_config(&db.node).await;
-    let tools = build_self_config_tools(
-        db.node.clone(),
-        AGENT_DID.to_string(),
-        None,
-        &tool_config(&["backend", "automation"], false, false),
-    );
-
-    let error = call_tool(
-        &tools,
-        "configure_backend",
-        json!({ "patch": { "endpoint": {
-            r#"x: 1 }, api_key: "leaked-by-injection", endpoint: "http://injected/v1""#: 1
-        }}}),
-    )
-    .await
-    .expect_err("an object-valued patch must be refused");
     assert!(
-        error.contains("scalar") || error.contains("identifier"),
-        "rejection should name the value-shape rule: {error}"
+        !output.contains(SECRET),
+        "backend credentials must never leave the read owner"
     );
-
-    let stored = db
-        .node
-        .execute(
-            r#"query { InferenceBackend(filter: { backend_id: { _eq: "self-config-backend" } }) { endpoint api_key } }"#,
-        )
-        .await;
-    let row = stored
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceBackend"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("backend row");
-    assert_eq!(
-        row["endpoint"], "http://127.0.0.1:11434/v1",
-        "the injected endpoint must not have landed"
+    let before = read(&db.node, Collection::AgentContext, CONTEXT_ID).await;
+    let preview=call_tool(&tools,"get_my_config",json!({"preview":{"category":"behavior","kind":"context","patch":{"system_prompt":"previewed prompt"}}})).await.unwrap();
+    assert!(
+        preview.contains("previewed prompt") && preview.contains("dry-run"),
+        "{preview}"
     );
     assert_eq!(
-        row["api_key"], "sk-secret-should-never-leak",
-        "a patch on a writable field must not reach the protected api_key"
-    );
-
-    call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "task", "id": "nonscalar-task", "patch": { "enabled": true } }),
-    )
-    .await
-    .expect("task create commits");
-    let error = call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "event_trigger", "id": "nonscalar-trigger", "patch": {
-            "task_id": "nonscalar-task",
-            "source_collection": "CustomerSignup",
-            "event_kind": "created",
-            "filter": {
-                r#"x: 1 }) { _docID } create_AgentBehavior(input: { behavior_id: "evil-injected", agent_did: "did:key:zAttacker" }) { _docID } #"#: 1
-            },
-        }}),
-    )
-    .await
-    .expect_err("an object-valued filter must be refused");
-    assert!(
-        error.contains("scalar") || error.contains("identifier"),
-        "rejection should name the value-shape rule: {error}"
-    );
-
-    let forged = db
-        .node
-        .execute(r#"query { AgentBehavior(filter: { behavior_id: { _eq: "evil-injected" } }) { behavior_id } }"#)
-        .await;
-    let rows = forged
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentBehavior"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        rows.is_empty(),
-        "no document may be forged in another collection: {rows:?}"
+        read(&db.node, Collection::AgentContext, CONTEXT_ID).await,
+        before
     );
 }
 
 #[tokio::test]
-async fn configure_backend_rejects_env_var_when_a_secret_key_is_stored() {
-    let db = test_db("self-config-backend-key-xor").await;
+async fn typed_patch_values_reject_injection_and_protected_auth_without_writes() {
+    let db = test_db("self-config-injection").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.to_string(),
+        AGENT_DID.into(),
         None,
         &tool_config(&["backend"], false, false),
     );
-
-    let error = call_tool(
+    let before = read(&db.node, Collection::InferenceBackend, BACKEND_ID).await;
+    for patch in [
+        json!({"endpoint":{r#"x: 1 }, auth: {kind: "api_key", key: "injected"}, endpoint: "http://injected/v1""#:1}}),
+        json!({"auth":{"kind":"api_key","key":"replacement"}}),
+    ] {
+        call_tool(&tools, "configure_backend", json!({"patch":patch}))
+            .await
+            .expect_err("typed fields and protected auth must reject the whole patch");
+        assert_eq!(
+            read(&db.node, Collection::InferenceBackend, BACKEND_ID).await,
+            before
+        );
+    }
+    assert_eq!(before["auth"]["key"], SECRET);
+    // Selecting a reference replaces the auth variant; there is no second key
+    // field to remain accidentally active beside it. Raw key replacement above
+    // stays operator-only.
+    call_tool(
         &tools,
         "configure_backend",
-        json!({ "patch": { "api_key_env_var": "GENTS_TEST_API_KEY" } }),
+        json!({"patch":{"auth":{"kind":"environment","variable":"GENTS_TEST_API_KEY"}}}),
     )
     .await
-    .expect_err("a stored api_key and api_key_env_var must remain mutually exclusive");
-    assert!(
-        error.contains("must not set both api_key and api_key_env_var"),
-        "{error}"
-    );
-
-    let response = db
-        .node
-        .execute(&format!(
-            r#"{{ InferenceBackend(filter: {{ backend_id: {{ _eq: "{BACKEND_ID}" }} }}) {{ api_key_env_var }} }}"#
-        ))
-        .await;
-    let api_key_env_var = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceBackend"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("api_key_env_var"));
-    assert!(
-        api_key_env_var.is_none_or(Value::is_null),
-        "rejected patch must not commit: {response:?}"
+    .unwrap();
+    assert_eq!(
+        read(&db.node, Collection::InferenceBackend, BACKEND_ID).await["auth"],
+        json!({"kind":"environment","variable":"GENTS_TEST_API_KEY"})
     );
 }
 
-/// `filter` is spliced into the trigger engine's probe as a whole object
-/// fragment. The confirmed #1038 payload closes the enclosing `_and: [ ... ]`
-/// and appends its own selections; it must not be writable.
 #[tokio::test]
-async fn configure_automation_rejects_break_out_filter_fragments() {
-    let db = test_db("self-config-filter-injection").await;
+async fn configure_event_source_rejects_filter_and_collection_injection() {
+    let db = test_db("self-config-source-injection").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.to_string(),
+        AGENT_DID.into(),
         None,
         &tool_config(&["automation"], false, false),
     );
-
-    call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "task", "id": "filter-task", "patch": { "enabled": true } }),
-    )
-    .await
-    .expect("task create commits");
-
-    for hostile in [
-        r#"{} ] }, limit: 1) { _docID } AgentBehavior(filter: { _and: [ {} ] }, limit: 1) { system_prompt } X(filter: { _and: [ {}"#,
-        "{ a: 1 } # ",
-        "{ a: 1 }) { x } (",
+    for filter in [
+        json!(
+            r#"{} ] }, limit: 1) { _docID } AgentBehavior(filter: { _and: [ {} ] }, limit: 1) { context_id } X(filter: { _and: [ {}"#
+        ),
+        json!("{ a: 1 } # "),
+        json!("{ a: 1 }) { x } ("),
+        json!({r#"x: 1 }) { _docID } create_AgentBehavior(input: { behavior_id: "evil-injected" }) { _docID } #"#:1}),
     ] {
-        let Err(error) = call_tool(
+        call_tool(&tools,"configure_automation",json!({"kind":"event_source","id":"source","patch":{"source_collection":"CustomerSignup","filter":filter}})).await.expect_err("invalid filter rejected before publication");
+    }
+    for source in [
+        "CustomerSignup) { _docID }",
+        "CustomerSignup #",
+        "CustomerSignup {",
+        "A B",
+        "",
+    ] {
+        call_tool(
             &tools,
             "configure_automation",
-            json!({ "kind": "event_trigger", "id": "filter-trigger", "patch": {
-                "task_id": "filter-task",
-                "source_collection": "CustomerSignup",
-                "event_kind": "created",
-                "filter": hostile,
-            }}),
+            json!({"kind":"event_source","id":"source","patch":{"source_collection":source}}),
         )
         .await
-        else {
-            panic!("break-out filter {hostile:?} must be rejected");
-        };
-        assert!(
-            error.contains("filter"),
-            "rejection should name the filter rule: {error}"
-        );
+        .expect_err("collection identifiers cannot contain GraphQL syntax");
     }
-
-    let output = call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "event_trigger", "id": "filter-trigger", "patch": {
-            "task_id": "filter-task",
-            "source_collection": "CustomerSignup",
-            "event_kind": "created",
-            "filter": r#"{ kind: { _eq: "signup" } }"#,
-        }}),
-    )
-    .await
-    .expect("a well-formed filter still commits");
-    assert!(output.contains("\"created\": true"), "{output}");
+    let rows = ConfigAccess::Local(db.node.clone())
+        .execute("{ EventSource { _docID } AgentBehavior { behavior_id } }")
+        .await
+        .unwrap();
+    assert!(rows["data"]["EventSource"].as_array().unwrap().is_empty());
+    assert_eq!(rows["data"]["AgentBehavior"].as_array().unwrap().len(), 1);
+    call_tool(&tools,"configure_automation",json!({"kind":"event_source","id":"source","patch":{"source_collection":"CustomerSignup","filter":r#"{ kind: { _eq: "signup" } }"#}})).await.unwrap();
+    assert_eq!(
+        read(&db.node, Collection::EventSource, "source").await["source_collection"],
+        "CustomerSignup"
+    );
 }
 
 #[tokio::test]
-async fn configure_automation_creates_owned_chain_and_rejects_foreign_tasks() {
+async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership() {
     let db = test_db("self-config-automation").await;
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.to_string(),
+        AGENT_DID.into(),
         None,
         &tool_config(&["automation"], false, false),
     );
-
-    let output = call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "task", "id": "nightly-review", "patch": {
-            "name": "Nightly review",
-            "prompt_template": "Review yesterday's sessions",
-        }}),
-    )
-    .await
-    .expect("task create commits");
-    assert!(output.contains("\"created\": true"), "{output}");
-
-    call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "schedule", "id": "nightly-review-cron", "patch": {
-            "task_id": "nightly-review",
-            "cron": "0 3 * * *",
-            "timezone": "UTC",
-        }}),
-    )
-    .await
-    .expect("schedule create commits");
-
-    let error = call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "schedule", "id": "nightly-review-cron", "patch": {
-            "fire_count": 0,
-        }}),
-    )
-    .await
-    .expect_err("runtime-owned schedule fields are protected");
-    assert!(error.contains("protected"), "{error}");
-
-    let foreign_task = r#"mutation {
-        create_Task(input: {
-            task_id: "foreign-task",
-            behavior_id: "someone-elses-behavior",
-            enabled: true
-        }) { _docID }
-    }"#;
-    let response = db.node.execute(foreign_task).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let error = call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "schedule", "id": "foreign-schedule", "patch": {
-            "task_id": "foreign-task",
-            "interval_secs": 60,
-        }}),
-    )
-    .await
-    .expect_err("cross-behavior automation must be rejected");
-    assert!(error.contains("owned"), "{error}");
-
-    let error = call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "task", "id": "nightly-review", "patch": {
-            "behavior_id": "someone-elses-behavior",
-        }}),
-    )
-    .await
-    .expect_err("behavior_id is the pinned ownership link");
-    assert!(error.contains("protected"), "{error}");
-}
-
-/// `source_collection` is agent-writable and later interpolated into GraphQL
-/// identifier positions by the trigger engine, where escaping cannot apply.
-/// The self-config apply path is the trust boundary: it must reject any
-/// value that is not a valid GraphQL collection identifier, so a principal
-/// cannot shape the queries the runtime issues.
-#[tokio::test]
-async fn configure_automation_rejects_injection_shaped_source_collection() {
-    let db = test_db("self-config-trigger-injection").await;
-    seed_config(&db.node).await;
-    let tools = build_self_config_tools(
-        db.node.clone(),
-        AGENT_DID.to_string(),
-        None,
-        &tool_config(&["automation"], false, false),
-    );
-
-    call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "task", "id": "watcher-task", "patch": {
-            "name": "Watcher",
-            "prompt_template": "React to new docs",
-        }}),
-    )
-    .await
-    .expect("task create commits");
-
-    for hostile in [
-        "Msg(limit: 1) { _docID } Foo",
-        "AgentResponse { content } #",
-        "__Type",
-        "a b",
-        "naïve",
+    for (kind, id, patch) in [
+        (
+            "task",
+            "nightly",
+            json!({"display_name":"Nightly review","prompt_template":"Review yesterday's sessions"}),
+        ),
+        (
+            "schedule",
+            "cadence",
+            json!({"cadence":{"kind":"cron","expression":"0 3 * * *","timezone":"UTC"}}),
+        ),
+        (
+            "trigger",
+            "nightly-trigger",
+            json!({"task_id":"nightly","source":{"kind":"schedule","schedule_id":"cadence"}}),
+        ),
     ] {
-        let Err(error) = call_tool(
+        call_tool(
             &tools,
             "configure_automation",
-            json!({ "kind": "event_trigger", "id": "watcher-trigger", "patch": {
-                "task_id": "watcher-task",
-                "source_collection": hostile,
-                "event_kind": "created",
-                "concurrency": "serial",
-            }}),
+            json!({"kind":kind,"id":id,"patch":patch}),
         )
         .await
-        else {
-            panic!("injection-shaped source_collection {hostile:?} must be rejected");
-        };
-        assert!(
-            error.contains("identifier") || error.contains("collection"),
-            "rejection for {hostile:?} should name the identifier rule: {error}"
-        );
+        .unwrap();
     }
-
-    let output = call_tool(
+    let before = read(&db.node, Collection::Trigger, "nightly-trigger").await;
+    call_tool(
         &tools,
         "configure_automation",
-        json!({ "kind": "event_trigger", "id": "watcher-trigger", "patch": {
-            "task_id": "watcher-task",
-            "source_collection": "CustomerSignup",
-            "event_kind": "created",
-            "concurrency": "serial",
-        }}),
+        json!({"kind":"trigger","id":"nightly-trigger","patch":{"fire_count":0}}),
     )
     .await
-    .expect("a grammar-valid source_collection commits");
-    assert!(output.contains("\"created\": true"), "{output}");
-
-    // Patching an existing trigger is the realistic attack shape — commit a
-    // benign one, then flip the field. Create and patch share a branch today
-    // because the check reads the merged doc; this keeps them from drifting.
-    let error = call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "event_trigger", "id": "watcher-trigger", "patch": {
-            "source_collection": "Msg(limit: 1) { _docID } Foo",
-        }}),
-    )
-    .await
-    .expect_err("patching source_collection to a hostile value must be rejected");
-    assert!(
-        error.contains("identifier") || error.contains("collection"),
-        "rejection should name the identifier rule: {error}"
-    );
-
-    let stored = db
-        .node
-        .execute(
-            r#"query { EventTrigger(filter: { trigger_id: { _eq: "watcher-trigger" } }) { source_collection } }"#,
-        )
-        .await;
-    let row = stored
-        .data
-        .as_ref()
-        .and_then(|data| data.get("EventTrigger"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("trigger row");
+    .expect_err("runtime observations are protected");
     assert_eq!(
-        row["source_collection"], "CustomerSignup",
-        "the rejected patch must not have landed"
+        read(&db.node, Collection::Trigger, "nightly-trigger").await,
+        before
+    );
+    call_tool(
+        &tools,
+        "configure_automation",
+        json!({"kind":"task","id":"nightly","patch":{"behavior_id":"someone-else"}}),
+    )
+    .await
+    .expect_err("task behavior is protected");
+    assert_eq!(
+        read(&db.node, Collection::Task, "nightly").await["behavior_id"],
+        BEHAVIOR_ID
     );
 }
 
 #[tokio::test]
-async fn writes_carry_the_agent_identity() {
-    let db = test_db("self-config-identity").await;
+async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings() {
+    let db = test_db("self-config-boundaries").await;
     seed_config(&db.node).await;
-
+    // Corrupt storage explicitly to exercise the self-config reader's fail-closed
+    // behavior independently of the normal writer's reference validation.
+    for query in [
+        r#"mutation { create_Tools(input:{agent_did:"did:key:zVictim", tools_id:"victim-tools"}) {_docID} }"#,
+        r#"mutation { create_Task(input:{agent_did:"did:key:zVictim", task_id:"victim-task", behavior_id:"victim", prompt_template:"Victim"}) {_docID} }"#,
+    ] {
+        let response = db.node.execute(query).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+    }
     let tools = build_self_config_tools(
         db.node.clone(),
-        "not-a-did".to_string(),
+        AGENT_DID.into(),
+        None,
+        &tool_config(&["behavior", "tools", "automation"], false, false),
+    );
+    call_tool(&tools,"configure_automation",json!({"kind":"schedule","id":"cadence","patch":{"cadence":{"kind":"interval","interval_secs":60}}})).await.unwrap();
+    call_tool(&tools,"configure_automation",json!({"kind":"trigger","id":"foreign-trigger","patch":{"task_id":"victim-task","source":{"kind":"schedule","schedule_id":"cadence"}}})).await.expect_err("foreign task cannot be bound by logical ID");
+    let before = read(&db.node, Collection::AgentContext, CONTEXT_ID).await;
+    call_tool(
+        &tools,
+        "configure_behavior",
+        json!({"target":"context","patch":{"tools_id":"victim-tools","system_prompt":"hijacked"}}),
+    )
+    .await
+    .expect_err("foreign tools must reject entire context patch");
+    assert_eq!(
+        read(&db.node, Collection::AgentContext, CONTEXT_ID).await,
+        before
+    );
+    // A sibling behavior under the same principal is still outside this
+    // self-config tool's task scope. Retargeting must validate the stored task
+    // as well as the proposed one, so it cannot take over a sibling trigger.
+    for query in [
+        format!(
+            r#"mutation {{ create_AgentBehavior(input:{{agent_did:"{AGENT_DID}", behavior_id:"sibling", context_id:"{CONTEXT_ID}", inference_profile_id:"{PROFILE_ID}"}}) {{_docID}} }}"#
+        ),
+        format!(
+            r#"mutation {{ create_Task(input:{{agent_did:"{AGENT_DID}", task_id:"sibling-task", behavior_id:"sibling", prompt_template:"Sibling work"}}) {{_docID}} }}"#
+        ),
+        format!(
+            r#"mutation {{ create_Trigger(input:{{agent_did:"{AGENT_DID}", trigger_id:"sibling-trigger", task_id:"sibling-task", source:{{kind:"schedule",schedule_id:"cadence"}}}}) {{_docID}} }}"#
+        ),
+    ] {
+        let response = db.node.execute(&query).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+    }
+    call_tool(
+        &tools,
+        "configure_automation",
+        json!({"kind":"task", "id":"my-task", "patch":{"prompt_template":"Own work"}}),
+    )
+    .await
+    .unwrap();
+    call_tool(
+        &tools,
+        "configure_automation",
+        json!({"kind":"trigger", "id":"sibling-trigger", "patch":{"task_id":"my-task"}}),
+    )
+    .await
+    .expect_err("a sibling trigger cannot be taken over by rebinding its task");
+    assert_eq!(
+        read(&db.node, Collection::Trigger, "sibling-trigger").await["task_id"],
+        "sibling-task"
+    );
+    let response=db.node.execute(&format!(r#"mutation {{ update_AgentContext(filter:{{agent_did:{{_eq:"{AGENT_DID}"}}, context_id:{{_eq:"{CONTEXT_ID}"}}}}, input:{{tools_id:"victim-tools"}}) {{_docID}} }}"#)).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    call_tool(
+        &tools,
+        "configure_tools",
+        json!({"patch":{"host":{"bash":{"mode":"Unrestricted"}}}}),
+    )
+    .await
+    .expect_err("corrupt binding must not grant access to foreign tools");
+    let response=db.node.execute(r#"{ Tools(filter:{agent_did:{_eq:"did:key:zVictim"}, tools_id:{_eq:"victim-tools"}}) {host} }"#).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert!(response.data.unwrap()["Tools"][0]["host"].is_null());
+}
+
+#[tokio::test]
+async fn writes_require_an_acp_addressable_agent_identity() {
+    let db = test_db("self-config-identity").await;
+    seed_config(&db.node).await;
+    let tools = build_self_config_tools(
+        db.node.clone(),
+        "not-a-did".into(),
         None,
         &tool_config(&["behavior"], false, false),
     );
     let error = call_tool(
         &tools,
         "configure_behavior",
-        json!({ "patch": { "system_prompt": "should not land" } }),
+        json!({"target":"context","patch":{"system_prompt":"should not land"}}),
     )
     .await
-    .expect_err("a non-did identity must not silently write as node root");
+    .unwrap_err();
     assert!(error.contains("ACP-addressable"), "{error}");
-
-    let behavior = load_agent_behavior(&db.node, BEHAVIOR_ID)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
-    assert_eq!(behavior.system_prompt.as_deref(), Some("original prompt"));
-}
-
-#[tokio::test]
-async fn self_only_boundaries_hold_across_behaviors_and_agents() {
-    let db = test_db("self-config-boundaries").await;
-    seed_config(&db.node).await;
-
-    for mutation in [
-        r#"mutation { create_Task(input: {
-            task_id: "victim-task", behavior_id: "victim-behavior", enabled: true
-        }) { _docID } }"#,
-        r#"mutation { create_Schedule(input: {
-            schedule_id: "victim-schedule", task_id: "victim-task",
-            interval_secs: 300, enabled: true
-        }) { _docID } }"#,
-        r#"mutation { create_ToolSelection(input: {
-            selection_id: "victim-selection", agent_did: "did:key:zVictim",
-            enable_bash: false
-        }) { _docID } }"#,
-    ] {
-        let response = db.node.execute(mutation).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-    }
-
-    let tools = build_self_config_tools(
-        db.node.clone(),
-        AGENT_DID.to_string(),
-        None,
-        &tool_config(&["behavior", "tools", "automation"], false, false),
+    assert_eq!(
+        read(&db.node, Collection::AgentContext, CONTEXT_ID).await["system_prompt"],
+        "original prompt"
     );
-
-    call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "task", "id": "my-task", "patch": { "enabled": true } }),
-    )
-    .await
-    .expect("own task create commits");
-    let error = call_tool(
-        &tools,
-        "configure_automation",
-        json!({ "kind": "schedule", "id": "victim-schedule", "patch": {
-            "task_id": "my-task", "enabled": false,
-        }}),
-    )
-    .await
-    .expect_err("re-pointing a foreign schedule must be rejected");
-    assert!(error.contains("not owned by this behavior"), "{error}");
-
-    let error = call_tool(
-        &tools,
-        "configure_behavior",
-        json!({ "patch": { "tool_selection_id": "victim-selection" } }),
-    )
-    .await
-    .expect_err("binding a foreign selection must be rejected");
-    assert!(error.contains("self only"), "{error}");
-
-    let rebind = format!(
-        r#"mutation {{
-            update_AgentBehavior(filter: {{ behavior_id: {{ _eq: "{BEHAVIOR_ID}" }} }},
-                input: {{ tool_selection_id: "victim-selection" }}) {{ _docID }}
-        }}"#
-    );
-    let response = db.node.execute(&rebind).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let error = call_tool(
-        &tools,
-        "configure_tools",
-        json!({ "patch": { "enable_bash": true } }),
-    )
-    .await
-    .expect_err("patching a foreign selection must be rejected");
-    assert!(error.contains("self only"), "{error}");
 }

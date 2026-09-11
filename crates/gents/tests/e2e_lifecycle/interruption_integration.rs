@@ -403,10 +403,12 @@ async fn boot_streaming_agent(
     max_concurrent: i64,
 ) -> BootedAgent {
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
-    upsert_streaming_backend(
+    bind_streaming_backend(
         db.node.as_ref(),
+        identity.did(),
         STREAM_BACKEND_ID,
         endpoint,
+        behavior_ids,
         max_concurrent,
     )
     .await;
@@ -434,48 +436,42 @@ async fn boot_streaming_agent(
     BootedAgent::new(shutdown_tx, handle, agent_did)
 }
 
-async fn upsert_streaming_backend(
+async fn bind_streaming_backend(
     node: &gents::defra_node::EmbeddedNode,
+    agent_did: &str,
     backend_id: &str,
     endpoint: &str,
+    behavior_ids: &[&str],
     max_concurrent: i64,
 ) {
+    for behavior_id in behavior_ids {
+        crate::support::fixtures::bind_behavior_backend(
+            node,
+            agent_did,
+            behavior_id,
+            backend_id,
+            endpoint,
+            STREAM_MODEL,
+        )
+        .await;
+    }
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_endpoint = escape_graphql_string(endpoint);
     let mutation = format!(
         r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: {max_concurrent},
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{STREAM_MODEL}"],
-                    probe_status: "healthy"
+            update_InferenceBackend(
+                filter: {{
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    backend_id: {{ _eq: "{escaped_backend_id}" }}
                 }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: {max_concurrent},
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{STREAM_MODEL}"],
-                    probe_status: "healthy"
-                }}
+                input: {{ max_concurrent: {max_concurrent} }}
             ) {{ _docID }}
         }}"#
     );
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
-        "upsert streaming backend failed: {:?}",
+        "set streaming backend concurrency failed: {:?}",
         response.errors
     );
 }

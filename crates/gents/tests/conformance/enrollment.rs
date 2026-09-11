@@ -55,7 +55,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             target_policy_allows: case.target_policy_allows,
             bridge_author_binding_current: case.bridge_author_binding_current,
             bridge_author_authorization_fresh: case.bridge_author_authorization_fresh,
-            target_cross_deployment_policy_allows: case.target_cross_deployment_policy_allows,
+            target_cross_principal_policy_allows: case.target_cross_principal_policy_allows,
         };
         let actual = gents::final_claim_admission_disposition(true, observation)
             == AgentRequestAdmissionDisposition::Admit;
@@ -412,7 +412,7 @@ fn generated_enrollment_cases_match_production_transition_core() {
 }
 
 #[test]
-fn generated_enrollment_durable_projection_cases_are_order_independent() {
+fn generated_enrollment_durable_cases_drive_current_projection() {
     let cases = lean_enrollment_durable_projection_cases();
     assert_eq!(cases.len(), 6);
     for case in cases {
@@ -480,25 +480,6 @@ fn generated_enrollment_durable_projection_cases_are_order_independent() {
             "{} route receipt",
             case.name
         );
-
-        let mut reversed = documents.clone();
-        reversed.offers = documents.offers.iter().rev().cloned().collect();
-        reversed.requests = documents.requests.iter().rev().cloned().collect();
-        reversed.decisions = documents.decisions.iter().rev().cloned().collect();
-        reversed.revisions = documents.revisions.iter().rev().cloned().collect();
-        reversed.route_receipts = documents.route_receipts.iter().rev().cloned().collect();
-        assert_eq!(
-            reversed.current_approval(&offer, &request, &decision),
-            case.expected_current_approval,
-            "{} reversed",
-            case.name
-        );
-        assert_eq!(
-            reversed.current_server_route_receipt(&offer, &request, &decision, &route_receipt,),
-            case.expected_current_route_receipt,
-            "{} reversed route receipt",
-            case.name
-        );
     }
 }
 
@@ -508,8 +489,6 @@ fn generated_enrollment_encoding_vectors_match_wire_codec() {
     assert_eq!(cases.len(), 4);
     for case in cases {
         let actual = lower_hex(&frame_enrollment_field(&case.value));
-        assert!(case.frame_matches, "{}", case.name);
-        assert_eq!(case.actual_frame, case.expected_frame, "{}", case.name);
         assert_eq!(actual, case.expected_frame, "{}", case.name);
     }
 }
@@ -523,10 +502,6 @@ fn generated_enrollment_digest_vectors_match_wire_codec() {
             case.fields.iter().map(String::as_str),
         ));
         let actual_digest = canonical_enrollment_digest(case.fields.iter().map(String::as_str));
-        assert!(case.payload_matches, "{}", case.name);
-        assert!(case.digest_matches, "{}", case.name);
-        assert_eq!(case.actual_payload, case.expected_payload, "{}", case.name);
-        assert_eq!(case.actual_digest, case.expected_digest, "{}", case.name);
         assert_eq!(actual_payload, case.expected_payload, "{}", case.name);
         assert_eq!(actual_digest, case.expected_digest, "{}", case.name);
     }

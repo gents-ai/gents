@@ -1,7 +1,7 @@
 import { useEffect, type MutableRefObject } from "react";
 
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
-import { conversationBelongsToBehavior } from "@source-inc/gents-desktop-chat";
+import { sessionBelongsToBehavior } from "@source-inc/gents-desktop-chat";
 import type {
   DeploymentView,
   DesktopApiAdapter,
@@ -29,7 +29,7 @@ type DesktopShellEffectsArgs = {
   localWorkflow: ChatWorkflowState;
   localServerAvailable: MutableRefObject<boolean | null>;
   listenToUpdates: DesktopClientUpdatedListenerFactory;
-  newConversationAgentRef: MutableRefObject<string | null>;
+  newSessionAgentRef: MutableRefObject<string | null>;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
   refreshSessionLiveDelta: () => Promise<boolean>;
   refreshSnapshot: () => Promise<void>;
@@ -64,7 +64,7 @@ export function useDesktopShellEffects({
   localWorkflow,
   localServerAvailable,
   listenToUpdates,
-  newConversationAgentRef,
+  newSessionAgentRef,
   refreshSession,
   refreshSessionLiveDelta,
   refreshSnapshot,
@@ -225,7 +225,7 @@ export function useDesktopShellEffects({
     // A mailbox tap installs an exact compose route. Preserve it while the
     // independently replicated behavior/session rows catch up; explicit user
     // navigation clears the mailbox route at the setter boundary.
-    if (newConversationAgentRef.current === selectedDeployment.agentDid) {
+    if (newSessionAgentRef.current === selectedDeployment.agentDid) {
       return;
     }
 
@@ -240,28 +240,28 @@ export function useDesktopShellEffects({
 
     if (
       selectedSessionId &&
-      (selectedDeployment.conversations.some(
-        (conversation) =>
-          conversation.sessionId === selectedSessionId &&
-          conversationBelongsToBehavior(conversation, effectiveBehaviorId),
+      (selectedDeployment.sessions.some(
+        (session) =>
+          session.sessionId === selectedSessionId &&
+          sessionBelongsToBehavior(session, effectiveBehaviorId),
       ) ||
         ((localWorkflow.kind === "awaitingObservation" ||
           localWorkflow.kind === "turnInProgress") &&
           localWorkflow.agentDid === selectedDeployment.agentDid &&
           localWorkflow.sessionId === selectedSessionId))
     ) {
-      newConversationAgentRef.current = null;
+      newSessionAgentRef.current = null;
       return;
     }
 
     setSelectedSessionId(
-      selectedDeployment.conversations.find((conversation) =>
-        conversationBelongsToBehavior(conversation, effectiveBehaviorId),
+      selectedDeployment.sessions.find((session) =>
+        sessionBelongsToBehavior(session, effectiveBehaviorId),
       )?.sessionId ?? null,
     );
   }, [
     localWorkflow,
-    newConversationAgentRef,
+    newSessionAgentRef,
     selectedBehaviorId,
     selectedDeployment,
     selectedSessionId,

@@ -1,11 +1,24 @@
+//! Contract-section deserialization targets shared by the trigger, apply
+//! publication, runtime-reconcile, client-behavior-readiness, and
+//! startup-readiness conformance consumers. Every struct mirrors the JSON
+//! emitted by the Lean owners:
+//!
+//! - triggers: `Proofs/Conformance/Triggers/Contracts.lean`
+//! - apply publication: `Proofs/ApplyReconcile/Publication.lean` +
+//!   `Proofs/ApplyReconcile/ContractCases.lean`
+//! - runtime reconcile / readiness: `Proofs/RuntimeReconcile/*.lean`
+//!
+//! The trigger consumers (`tests/conformance/triggers.rs`) are owned by the
+//! trigger worker; this file only keeps the deserialization surface honest
+//! against the emitted JSON.
+
 use super::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanTriggerKeyContract {
-    pub(crate) trigger_id: String,
-    pub(crate) trigger_kind: String,
-}
-
+/// A trigger-dispatch case. `intent_task_id` is the task named by the dispatch
+/// intent; `selected_task_id` is the task the dispatcher actually selected.
+/// Schedules and event sources select their configured task before common
+/// context/inference resolution, so a stale intent task id is overridden and
+/// the selected id differs; manual dispatches carry no selected task.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanTriggerDispatchCase {
     pub(crate) name: String,
@@ -14,7 +27,9 @@ pub(crate) struct LeanTriggerDispatchCase {
     pub(crate) concurrency: String,
     pub(crate) active_schedule_ids: Vec<String>,
     pub(crate) active_event_trigger_ids: Vec<String>,
-    pub(crate) prior_nonterminal_keys: Vec<LeanTriggerKeyContract>,
+    pub(crate) intent_task_id: String,
+    pub(crate) selected_task_id: Option<String>,
+    pub(crate) prior_nonterminal_keys: Vec<String>,
     pub(crate) expected_result: String,
     pub(crate) expected_skip_reason: Option<String>,
     pub(crate) expected_materialize_trigger_id: Option<String>,
@@ -22,31 +37,32 @@ pub(crate) struct LeanTriggerDispatchCase {
     pub(crate) expected_request_caused_by_id: Option<String>,
     pub(crate) expected_request_caused_by_kind: Option<String>,
     pub(crate) expected_execution_origin: Option<String>,
-    pub(crate) expected_supersede_call_keys: Vec<LeanTriggerKeyContract>,
+    pub(crate) expected_supersede_call_keys: Vec<String>,
     pub(crate) superseded_prior_ids: Vec<String>,
     pub(crate) target_nonterminal_count_after: Option<usize>,
     pub(crate) request_count_before: usize,
     pub(crate) request_count_after: usize,
 }
 
+/// The shared trigger/callback key, including its owner and config identity.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanCorrelatedTriggerKeyContract {
-    pub(crate) target_agent_did: String,
-    pub(crate) trigger_id: String,
-    pub(crate) trigger_kind: String,
+pub(crate) struct LeanEventGroupKeyContract {
+    pub(crate) agent_did: String,
+    pub(crate) consumer: serde_json::Value,
+    pub(crate) consumer_config_key: String,
     pub(crate) correlation: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanTriggerGroupCase {
+pub(crate) struct LeanEventGroupCase {
     pub(crate) name: String,
-    pub(crate) candidate: LeanCorrelatedTriggerKeyContract,
+    pub(crate) candidate: LeanEventGroupKeyContract,
     pub(crate) actual_count: usize,
     pub(crate) expected_count: Option<usize>,
     pub(crate) minimum_count: usize,
     pub(crate) timed_out: bool,
     pub(crate) well_formed: bool,
-    pub(crate) prior_markers: Vec<LeanCorrelatedTriggerKeyContract>,
+    pub(crate) prior_markers: Vec<LeanEventGroupKeyContract>,
     pub(crate) eligible: bool,
     pub(crate) materialized: bool,
     pub(crate) marker_count_after: usize,
@@ -54,6 +70,10 @@ pub(crate) struct LeanTriggerGroupCase {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanRuntimeReconcileCase {
+    pub(crate) requested_behavior: Option<usize>,
+    pub(crate) pre_default_behavior: usize,
+    pub(crate) pre_session_behavior: Option<usize>,
+    pub(crate) pre_runnable: Vec<usize>,
     pub(crate) name: String,
     pub(crate) action: String,
     pub(crate) legal: bool,
@@ -94,96 +114,58 @@ pub(crate) struct LeanClientBehaviorReadinessCase {
     pub(crate) expected_runtime_admissible: bool,
 }
 
+/// A document key (`{collection, id}`) as referenced inside publication rows.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyDocRef {
+    pub(crate) agent_did: String,
     pub(crate) collection: String,
     pub(crate) id: String,
 }
 
+/// A desired-state row of a publication candidate: its key, owning agent DID,
+/// content, and the references that must close inside the candidate.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanApplyDesiredDoc {
-    pub(crate) collection: String,
-    pub(crate) id: String,
-    pub(crate) content: String,
-    pub(crate) refs: Vec<LeanApplyDocRef>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanApplyLiveDoc {
-    pub(crate) collection: String,
-    pub(crate) id: String,
-    pub(crate) content: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanApplyStep {
-    pub(crate) action: String,
+pub(crate) struct LeanApplyDesiredRow {
+    #[serde(rename = "ref")]
     pub(crate) target: LeanApplyDocRef,
     pub(crate) content: String,
     pub(crate) refs: Vec<LeanApplyDocRef>,
 }
 
+/// A runtime observation row: a document key and the live value recorded for
+/// it. Observations are never written by a publication.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanApplyCollectionWrite {
-    pub(crate) collection: String,
-    pub(crate) graphql_type: String,
-    pub(crate) unique_field: String,
-    pub(crate) apply_order: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanApplySelectedDoc {
-    pub(crate) action: String,
+pub(crate) struct LeanApplyLiveRow {
+    #[serde(rename = "ref")]
     pub(crate) target: LeanApplyDocRef,
-    pub(crate) graphql_type: String,
-    pub(crate) unique_field: String,
-    pub(crate) unique_value: String,
-    pub(crate) content: String,
-    pub(crate) refs: Vec<LeanApplyDocRef>,
+    pub(crate) value: String,
 }
 
-#[derive(Debug, Deserialize)]
+/// An atomic-publication case (`Publication.lean`): `publish old candidate`
+/// replaces the whole desired snapshot with the candidate when the candidate's
+/// reference closure holds, and leaves the prior state untouched otherwise.
+/// The retired ranked/per-write fields (steps, write/prune order, selected
+/// docs, prefix/retry machinery) are no longer emitted and no longer modeled.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyReconcileCase {
     pub(crate) name: String,
-    #[serde(default)]
-    pub(crate) prune_mode: bool,
-    pub(crate) manifest: Vec<LeanApplyDesiredDoc>,
-    pub(crate) pre_desired: Vec<LeanApplyDesiredDoc>,
-    pub(crate) pre_live: Vec<LeanApplyLiveDoc>,
-    pub(crate) expected_external_state_after_abort: Vec<LeanApplyLiveDoc>,
-    pub(crate) expected_create: Vec<LeanApplyDocRef>,
-    pub(crate) expected_update: Vec<LeanApplyDocRef>,
-    #[serde(default)]
-    pub(crate) expected_delete: Vec<LeanApplyDocRef>,
-    pub(crate) expected_unchanged: Vec<LeanApplyDocRef>,
-    pub(crate) expected_live_only: Vec<LeanApplyDocRef>,
-    pub(crate) expected_steps: Vec<LeanApplyStep>,
-    pub(crate) expected_write_order: Vec<LeanApplyCollectionWrite>,
-    #[serde(default)]
-    pub(crate) expected_prune_order: Vec<LeanApplyCollectionWrite>,
-    pub(crate) expected_selected_create_docs: Vec<LeanApplySelectedDoc>,
-    pub(crate) expected_selected_update_docs: Vec<LeanApplySelectedDoc>,
-    #[serde(default)]
-    pub(crate) expected_selected_delete_docs: Vec<LeanApplySelectedDoc>,
-    pub(crate) expected_selected_writes: Vec<LeanApplySelectedDoc>,
-    pub(crate) prefix_len: usize,
-    pub(crate) expected_prefix_desired: Vec<LeanApplyDesiredDoc>,
-    pub(crate) expected_after_desired: Vec<LeanApplyDesiredDoc>,
-    pub(crate) expected_retry_desired: Vec<LeanApplyDesiredDoc>,
-    pub(crate) expected_retry_step_count: usize,
-    pub(crate) expected_rediff_step_count: usize,
-    pub(crate) live_preserved: bool,
-    pub(crate) manifest_realized_after: bool,
-    pub(crate) retry_converges: bool,
-    pub(crate) idempotent_after: bool,
-    pub(crate) write_order_prefix_safe: bool,
-    #[serde(default)]
-    pub(crate) prune_order_referrers_before_dependencies: bool,
-    pub(crate) production_prefixes_referrers_closed: bool,
-    pub(crate) prefix_referrers_closed: bool,
-    pub(crate) desired_references_closed_after_prefix: bool,
-    #[serde(default)]
-    pub(crate) delete_safety_holds: bool,
+    /// Whether the candidate's references close (`referencesClosed`).
+    pub(crate) accepted: bool,
+    /// The complete desired snapshot the publication would install.
+    pub(crate) candidate: Vec<LeanApplyDesiredRow>,
+    /// Desired state before the publication (fixed retained skill row).
+    pub(crate) pre_desired: Vec<LeanApplyDesiredRow>,
+    /// Runtime observations before the publication (fixed key scaffold plus
+    /// the candidate keys).
+    pub(crate) pre_live: Vec<LeanApplyLiveRow>,
+    /// Live state after publication: observations preserved verbatim.
+    pub(crate) expected_after_live: Vec<LeanApplyLiveRow>,
+    /// Desired state after one publication.
+    pub(crate) expected_after_desired: Vec<LeanApplyDesiredRow>,
+    /// Desired state after republishing the same candidate (idempotence).
+    pub(crate) expected_retry_desired: Vec<LeanApplyDesiredRow>,
+    /// Fixture agreement that observations survive the publication.
+    pub(crate) observations_preserved: bool,
 }
 
 /// Semantic readiness publication traces, independent of elapsed idle time.

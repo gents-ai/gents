@@ -48,6 +48,15 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
             root.to_str().expect("utf-8 root"),
         ],
     )?;
+    let config_path = root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    config["agent_principal"]["display_name"] = Value::String("Interrupted principal".to_string());
+    config["agent_behaviors"][0]["display_name"] =
+        Value::String("Interrupted behavior".to_string());
+    config["contexts"][0]["description"] = Value::String("Interrupted context".to_string());
+    config["tools"][0]["display_name"] = Value::String("Interrupted tools".to_string());
+    config["inference_backends"][0]["name"] = Value::String("Interrupted backend".to_string());
+    write_json_file(&config_path, &config)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -57,11 +66,13 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         "InferenceBackend",
         "InferenceProfile",
         "ToolServiceRegistry",
-        "ToolSelection",
+        "Tools",
+        "AgentContext",
         "AgentBehavior",
         "Task",
         "Schedule",
-        "EventTrigger",
+        "EventSource",
+        "Trigger",
         "AgentPrincipal",
     ];
     let mut pre_apply = std::collections::BTreeMap::new();

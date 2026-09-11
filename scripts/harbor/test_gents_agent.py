@@ -466,24 +466,20 @@ class RunnerSupervisionTest(unittest.TestCase):
                 for args in invocations
                 if args[:3] == ["config", "tools", "set"]
             )
-            for option_name, expected in {
-                "--enable-file-tools": "true",
-                "--file-tools-mode": "ReadWrite",
-                "--enable-bash": "true",
-                "--bash-mode": "Unrestricted",
-                "--command-execution-policy": "unrestricted",
-                "--enable-meta-tools": "false",
-                "--backgroundable-tool-name": "bash_unrestricted",
-                "--enable-memory": "false",
-                "--enable-session-history-tool": "false",
-                "--enable-context-budget": "false",
-                "--enable-defra-query": "false",
-                "--subagent-spawn-enabled": "false",
-                "--subagent-steering-enabled": "false",
-                "--subagent-background-enabled": "false",
-                "--subagent-allow-cross-deployment": "false",
-            }.items():
-                self.assertEqual(tools[tools.index(option_name) + 1], expected)
+            tools_file = Path(tools[tools.index("--file") + 1])
+            tools_document = json.loads(tools_file.read_text())
+            self.assertEqual(tools_document["agent_did"], "did:key:fake")
+            self.assertEqual(tools_document["tools_id"], "did:key:fake:tools")
+            self.assertEqual(tools_document["host"]["root"], str(root))
+            self.assertEqual(tools_document["host"]["files"]["mode"], "ReadWrite")
+            self.assertEqual(
+                tools_document["host"]["bash"],
+                {
+                    "mode": "Unrestricted",
+                    "execution_mode": "unrestricted",
+                    "background_enabled": True,
+                },
+            )
             self.assertTrue(
                 any(args[:2] == ["tools", "explain"] for args in invocations)
             )
@@ -522,7 +518,7 @@ if args[:1] == ["init"]:
         "agent_did": "did:key:fake",
         "default_behavior_id": "did:key:fake:default",
         "inference_profile_id": "profile-1",
-        "tool_selection_id": "did:key:fake:tools",
+        "tools_id": "did:key:fake:tools",
     }, indent=2))
 elif args[:1] == ["server"]:
     count_file = home / "server-count"

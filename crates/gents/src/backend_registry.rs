@@ -1,249 +1,183 @@
-//! Backend registry — DefraDB lookups for inference backend documents.
-//!
-//! The runtime uses this to resolve a behavior's backend and check health.
-
-use anyhow::Result;
-use defra_node::EmbeddedNode;
-use tracing::Instrument;
+//! Backend configuration and observation lookups. Logical references are scoped
+//! by their owning principal; authentication remains an explicit selection.
 
 use crate::backend_provider::BackendProviderKind;
+pub use crate::document_config::InferenceBackend;
+use crate::document_config::{BackendAuth, BackendModelCatalog, InferenceBackendObservation};
 use crate::graphql::escape_graphql_string;
 use crate::openai_wire::OpenAiWireApi;
+use anyhow::{Context, Result};
+use defra_node::EmbeddedNode;
 
+pub const DEFAULT_MAX_CONCURRENT: i64 = 1;
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 pub const HEALTHY_PROBE_STATUS: &str = "healthy";
 pub const UNKNOWN_PROBE_STATUS: &str = "unknown";
 
-/// An `InferenceBackend`'s contribution to an `AgentBehavior`: everything a
-/// behavior needs to know about the backend it's bound to, with
-/// `openai_wire_api` already resolved to its effective value. See
-/// [`InferenceBackend::backend_fields`].
+/// Effective provider input assembled from one backend connection. Credentials
+/// retain their explicit selection until resolved by the invoking principal.
 #[derive(Debug, Clone)]
 pub struct BackendFields {
     pub backend_id: Option<String>,
     pub backend_provider_kind: BackendProviderKind,
     pub openai_wire_api: OpenAiWireApi,
     pub backend_endpoint: String,
-    pub backend_api_key: Option<String>,
-    pub backend_api_key_env_var: Option<String>,
+    pub backend_auth: BackendAuth,
 }
 
-#[derive(Debug, Clone)]
-pub struct InferenceBackend {
-    pub backend_id: String,
-    pub name: String,
-    pub provider_kind: BackendProviderKind,
-    pub openai_wire_api: Option<OpenAiWireApi>,
-    pub endpoint: String,
-    pub api_key: Option<String>,
-    pub api_key_env_var: Option<String>,
-    pub max_concurrent: i64,
-    pub max_queue_depth: i64,
-    pub enabled: bool,
-    pub models: Vec<String>,
-    pub probe_status: String,
-}
+pub(crate) const BACKEND_CONFIG_FIELDS: &str = "agent_did backend_id name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 
 impl InferenceBackend {
-    pub fn from_value(v: &serde_json::Value) -> Result<Self> {
-        Ok(Self {
-            backend_id: v
-                .get("backend_id")
-                .and_then(|value| value.as_str())
-                .ok_or_else(|| anyhow::anyhow!("backend_id is required"))?
-                .to_string(),
-            name: v
-                .get("name")
-                .and_then(|value| value.as_str())
-                .ok_or_else(|| anyhow::anyhow!("backend name is required"))?
-                .to_string(),
-            provider_kind: BackendProviderKind::parse_optional(
-                v.get("provider_kind").and_then(|value| value.as_str()),
-            )?,
-            openai_wire_api: OpenAiWireApi::parse_optional(
-                v.get("openai_wire_api").and_then(|value| value.as_str()),
-            )?,
-            endpoint: v
-                .get("endpoint")
-                .and_then(|value| value.as_str())
-                .ok_or_else(|| anyhow::anyhow!("backend endpoint is required"))?
-                .to_string(),
-            api_key: v
-                .get("api_key")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(ToOwned::to_owned),
-            api_key_env_var: v
-                .get("api_key_env_var")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(ToOwned::to_owned),
-            max_concurrent: v
-                .get("max_concurrent")
-                .and_then(|value| value.as_i64())
-                .ok_or_else(|| anyhow::anyhow!("max_concurrent is required"))?,
-            max_queue_depth: v
-                .get("max_queue_depth")
-                .and_then(|value| value.as_i64())
-                .unwrap_or(DEFAULT_MAX_QUEUE_DEPTH),
-            enabled: v
-                .get("enabled")
-                .and_then(|value| value.as_bool())
-                .ok_or_else(|| anyhow::anyhow!("enabled is required"))?,
-            models: v
-                .get("models")
-                .and_then(|value| value.as_array())
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|row| row.as_str())
-                        .map(ToOwned::to_owned)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-            probe_status: v
-                .get("probe_status")
-                .and_then(|v| v.as_str())
-                .unwrap_or(UNKNOWN_PROBE_STATUS)
-                .to_string(),
-        })
+    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
+        let mut config = value.clone();
+        let object = config
+            .as_object_mut()
+            .context("InferenceBackend must be an object")?;
+        // DefraDB identity and runtime observations are envelopes, never desired config.
+        for field in [
+            "_docID",
+            "_deleted",
+            "updated_at",
+            "catalogs",
+            "probe_status",
+            "last_probe",
+        ] {
+            object.remove(field);
+        }
+        let backend: Self =
+            serde_json::from_value(config).context("decoding InferenceBackend configuration")?;
+        backend.validate()?;
+        Ok(backend)
     }
 
-    /// The subset of this backend that becomes an `AgentBehavior`'s
-    /// backend-scoped fields. Single owner of that field mapping —
-    /// `agent.rs`'s document-driven assembler and `agent/builder.rs`'s
-    /// embedder assembler (`PendingAgentBehavior::into_factory`) used to
-    /// duplicate it independently, including the `openai_wire_api`
-    /// effective-value computation.
     pub fn backend_fields(&self) -> BackendFields {
         BackendFields {
             backend_id: Some(self.backend_id.clone()),
             backend_provider_kind: self.provider_kind,
-            openai_wire_api: crate::OpenAiWireApi::effective_for_provider(
+            openai_wire_api: OpenAiWireApi::effective_for_provider(
                 self.provider_kind,
                 self.openai_wire_api,
                 &self.backend_id,
             ),
             backend_endpoint: self.endpoint.clone(),
-            backend_api_key: self.api_key.clone(),
-            backend_api_key_env_var: self.api_key_env_var.clone(),
+            backend_auth: self.auth.clone(),
         }
     }
 
-    pub fn display_state(&self) -> &'static str {
-        derive_display_state(self.enabled, &self.probe_status)
+    pub fn effective_max_concurrent(&self) -> i64 {
+        self.max_concurrent.unwrap_or(DEFAULT_MAX_CONCURRENT)
     }
 
-    /// Validate this backend — the single owner every write path (CLI
-    /// desired state, self-config's `configure_backend`) calls. `provider_kind`
-    /// is already a typed enum by construction ([`Self::from_value`] fails to
-    /// parse an invalid string), so that rule is enforced by the type, not
-    /// repeated here.
-    ///
-    /// `current_model` is the model a specific behavior currently binds
-    /// against this backend, if the caller has one in scope (self-config's
-    /// opt-in no-lockout guard does; desired state — which validates backends
-    /// independently of behaviors, and separately checks each behavior's
-    /// model against its backend's advertised list — passes `None`).
-    pub fn validation_violations(&self, current_model: Option<&str>) -> Vec<String> {
-        self.validation_violations_with_api_key_presence(current_model, false)
+    pub fn effective_max_queue_depth(&self) -> i64 {
+        self.max_queue_depth.unwrap_or(DEFAULT_MAX_QUEUE_DEPTH)
     }
 
-    fn validation_violations_with_api_key_presence(
-        &self,
-        current_model: Option<&str>,
-        stored_api_key_is_present: bool,
-    ) -> Vec<String> {
+    pub fn validation_violations(&self) -> Vec<String> {
         let mut violations = Vec::new();
-
-        if self.backend_id.trim().is_empty() {
-            violations.push("backend_id must not be empty".to_string());
-        }
-        if self.endpoint.trim().is_empty() {
-            violations.push(format!(
-                "backend {} endpoint must not be empty",
-                self.backend_id
-            ));
-        }
-        if self
-            .api_key
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            violations.push(format!(
-                "backend {} api_key must not be empty when present",
-                self.backend_id
-            ));
-        }
-        let has_api_key = stored_api_key_is_present
-            || self
-                .api_key
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty());
-        let has_api_key_env_var = self
-            .api_key_env_var
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-        if has_api_key && has_api_key_env_var {
-            violations.push(format!(
-                "backend {} must not set both api_key and api_key_env_var",
-                self.backend_id
-            ));
-        }
-        if self.max_concurrent <= 0 {
-            violations.push(format!(
-                "backend {} max_concurrent must be positive",
-                self.backend_id
-            ));
-        }
-        if self.max_queue_depth <= 0 {
-            violations.push(format!(
-                "backend {} max_queue_depth must be positive",
-                self.backend_id
-            ));
-        }
-        if let Some(current_model) = current_model.map(str::trim).filter(|v| !v.is_empty()) {
-            if !self.models.is_empty()
-                && !self
-                    .models
-                    .iter()
-                    .any(|model| model.trim() == current_model)
-            {
-                violations.push(format!(
-                    "backend {} models would drop the current model {current_model:?}; no-lockout guard",
-                    self.backend_id
-                ));
+        for (name, value) in [
+            ("agent_did", self.agent_did.as_str()),
+            ("backend_id", self.backend_id.as_str()),
+            ("endpoint", self.endpoint.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                violations.push(format!("{name} must not be empty"));
             }
+        }
+        if self.effective_max_concurrent() <= 0 {
+            violations.push("max_concurrent must be positive".into());
+        }
+        if self.effective_max_queue_depth() < 0 {
+            violations.push("max_queue_depth must not be negative".into());
+        }
+        for (name, value) in [
+            ("connect_timeout_secs", self.connect_timeout_secs),
+            ("discovery_timeout_secs", self.discovery_timeout_secs),
+        ] {
+            if value.is_some_and(|value| value <= 0) {
+                violations.push(format!("{name} must be positive"));
+            }
+        }
+        match &self.auth {
+            BackendAuth::ApiKey { key } if key.trim().is_empty() => {
+                violations.push("API key must not be blank".into())
+            }
+            BackendAuth::Environment { variable } if variable.trim().is_empty() => {
+                violations.push("API key environment variable must not be blank".into())
+            }
+            _ => {}
+        }
+        if matches!(self.auth, BackendAuth::PrincipalOAuth)
+            != self.provider_kind.is_agent_scoped_oauth()
+        {
+            violations
+                .push("backend auth selection is incompatible with the provider adapter".into());
         }
         violations
     }
 
-    /// Validate a secret-redacted backend projection. Self-config never
-    /// reads the stored key value, but it must still enforce the same XOR
-    /// rule when a separate presence-only query says one exists.
-    pub fn validate_with_api_key_presence(
-        &self,
-        current_model: Option<&str>,
-        stored_api_key_is_present: bool,
-    ) -> Result<()> {
-        let violations = self
-            .validation_violations_with_api_key_presence(current_model, stored_api_key_is_present);
-        if violations.is_empty() {
-            Ok(())
-        } else {
-            anyhow::bail!(violations.join("; "))
-        }
-    }
-
-    pub fn validate(&self, current_model: Option<&str>) -> Result<()> {
-        self.validate_with_api_key_presence(current_model, false)
+    pub fn validate(&self) -> Result<()> {
+        let violations = self.validation_violations();
+        anyhow::ensure!(violations.is_empty(), "{}", violations.join("; "));
+        Ok(())
     }
 }
 
-/// Pure function backing [`InferenceBackend::display_state`]. Lives outside
+impl BackendAuth {
+    /// Resolve only shared credentials. OAuth callers must use the existing
+    /// agent-scoped OAuthCredential owner, not fall back to unauthenticated HTTP.
+    pub fn resolve_api_key(&self) -> Result<Option<String>> {
+        match self {
+            Self::Unauthenticated => Ok(None),
+            Self::ApiKey { key } => {
+                anyhow::ensure!(!key.trim().is_empty(), "API key must not be blank");
+                Ok(Some(key.clone()))
+            }
+            Self::Environment { variable } => {
+                anyhow::ensure!(
+                    !variable.trim().is_empty(),
+                    "API key environment variable must not be blank"
+                );
+                let key = std::env::var(variable).with_context(|| {
+                    format!("API key environment variable {variable:?} is unavailable")
+                })?;
+                anyhow::ensure!(
+                    !key.trim().is_empty(),
+                    "API key environment variable {variable:?} is blank"
+                );
+                Ok(Some(key))
+            }
+            Self::PrincipalOAuth => {
+                anyhow::bail!("principal OAuth requires the invoking principal's OAuthCredential")
+            }
+        }
+    }
+}
+
+impl InferenceBackendObservation {
+    pub fn display_state(&self, enabled: bool) -> &'static str {
+        derive_display_state(
+            enabled,
+            self.probe_status.as_deref().unwrap_or(UNKNOWN_PROBE_STATUS),
+        )
+    }
+
+    /// Exact authentication scope: shared credentials do not imply OAuth
+    /// entitlements, and one principal never inherits another's advertised list.
+    pub fn catalog_for(&self, principal: Option<&str>) -> Result<Option<&BackendModelCatalog>> {
+        let mut catalogs = self
+            .catalogs
+            .iter()
+            .filter(|catalog| catalog.agent_did.as_deref() == principal);
+        let catalog = catalogs.next();
+        anyhow::ensure!(
+            catalogs.next().is_none(),
+            "ambiguous backend catalog authentication scope"
+        );
+        Ok(catalog)
+    }
+}
+
+/// Pure function backing [`InferenceBackendObservation::display_state`]. Lives outside
 /// the impl so the Tauri bridge can call it on raw `(enabled, probe_status)`
 /// pairs from the Lean witness fixtures without constructing a full
 /// `InferenceBackend`.
@@ -262,135 +196,81 @@ pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
     }
 }
 
+fn scope_filter(agent_did: &str, backend_id: &str) -> Result<String> {
+    anyhow::ensure!(
+        !agent_did.trim().is_empty(),
+        "backend owner DID must not be blank"
+    );
+    anyhow::ensure!(
+        !backend_id.trim().is_empty(),
+        "backend ID must not be blank"
+    );
+    Ok(format!(
+        r#"{{ agent_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}"#,
+        escape_graphql_string(agent_did),
+        escape_graphql_string(backend_id)
+    ))
+}
+
 pub async fn lookup_backend(
     node: &EmbeddedNode,
+    agent_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackend>> {
-    Ok(lookup_backend_record(node, backend_id)
+    Ok(lookup_backend_record(node, agent_did, backend_id)
         .await?
         .map(|(_, backend)| backend))
 }
 
 pub(crate) async fn lookup_backend_record(
     node: &EmbeddedNode,
+    agent_did: &str,
     backend_id: &str,
 ) -> Result<Option<(String, InferenceBackend)>> {
-    let escaped_id = escape_graphql_string(backend_id);
-    let query = format!(
-        r#"query {{ InferenceBackend(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models probe_status }} }}"#,
-        escaped_id
+    let filter = scope_filter(agent_did, backend_id)?;
+    let mut records = query_backend_records(node, &format!("filter: {filter}")).await?;
+    anyhow::ensure!(
+        records.len() <= 1,
+        "ambiguous backend reference {backend_id:?} for {agent_did:?}"
     );
-
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("query InferenceBackend failed: {:?}", resp.errors);
-    }
-
-    let backend = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("InferenceBackend"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .map(|row| {
-            Ok::<_, anyhow::Error>((
-                row.get("_docID")
-                    .and_then(|value| value.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("InferenceBackend row is missing _docID"))?
-                    .to_string(),
-                InferenceBackend::from_value(row)?,
-            ))
-        })
-        .transpose()?;
-
-    Ok(backend)
+    Ok(records.pop())
 }
 
-pub(crate) async fn lookup_backend_by_doc_id(
+async fn query_backend_records(
     node: &EmbeddedNode,
-    doc_id: &str,
-) -> Result<Option<(String, InferenceBackend)>> {
-    let escaped_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"query {{ InferenceBackend(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{ _docID backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models probe_status }} }}"#,
-        escaped_id
+    arguments: &str,
+) -> Result<Vec<(String, InferenceBackend)>> {
+    let query =
+        format!("query {{ InferenceBackend({arguments}) {{ _docID {BACKEND_CONFIG_FIELDS} }} }}");
+    let response = node.execute(&query).await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "query InferenceBackend failed: {:?}",
+        response.errors
     );
-
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("query InferenceBackend by _docID failed: {:?}", resp.errors);
-    }
-
-    let backend = resp
+    response
         .data
         .as_ref()
-        .and_then(|d| d.get("InferenceBackend"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(serde_json::Value::as_array)
+        .context("InferenceBackend query did not return rows")?
+        .iter()
         .map(|row| {
-            Ok::<_, anyhow::Error>((
-                row.get("_docID")
-                    .and_then(|value| value.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("InferenceBackend row is missing _docID"))?
-                    .to_string(),
-                InferenceBackend::from_value(row)?,
-            ))
+            let doc_id = row
+                .get("_docID")
+                .and_then(serde_json::Value::as_str)
+                .context("InferenceBackend row missing _docID")?;
+            Ok((doc_id.to_owned(), InferenceBackend::from_value(row)?))
         })
-        .transpose()?;
-
-    Ok(backend)
+        .collect()
 }
 
+/// Administrative enumeration only. Callers resolving a logical reference must
+/// use lookup_backend_record with the owning DID.
 pub(crate) async fn list_backend_records(
     node: &EmbeddedNode,
 ) -> Result<Vec<(String, InferenceBackend)>> {
-    let query = r#"query {
-        InferenceBackend(order: { backend_id: ASC }) {
-            _docID
-            backend_id
-            name
-            provider_kind
-            openai_wire_api
-            endpoint
-            api_key
-            api_key_env_var
-            max_concurrent
-            max_queue_depth
-            enabled
-            models
-            probe_status
-        }
-    }"#;
-
-    let resp = node.execute(query).await;
-    if resp.has_errors() {
-        anyhow::bail!("list InferenceBackend failed: {:?}", resp.errors);
-    }
-
-    let backends = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("InferenceBackend"))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .map(|row| {
-                    Ok::<_, anyhow::Error>((
-                        row.get("_docID")
-                            .and_then(|value| value.as_str())
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("InferenceBackend row is missing _docID")
-                            })?
-                            .to_string(),
-                        InferenceBackend::from_value(row)?,
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-
-    Ok(backends)
+    query_backend_records(node, "order: { backend_id: ASC }").await
 }
 
 pub async fn list_all_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
@@ -402,74 +282,244 @@ pub async fn list_all_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBacke
 }
 
 pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
-    let query = r#"query { InferenceBackend(filter: {enabled: {_eq: true}}) { backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled probe_status models last_probe } }"#;
+    Ok(
+        query_backend_records(node, "filter: { enabled: { _eq: true } }")
+            .await?
+            .into_iter()
+            .map(|(_, backend)| backend)
+            .collect(),
+    )
+}
 
-    let resp = node.execute(query).await;
-    if resp.has_errors() {
-        anyhow::bail!("query InferenceBackend failed: {:?}", resp.errors);
-    }
-
-    let backends = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("InferenceBackend"))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .map(InferenceBackend::from_value)
-                .collect::<Result<Vec<_>>>()
+/// Enumerate enabled configuration only within the selected principal.
+pub async fn list_enabled_backends_for_agent(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<Vec<InferenceBackend>> {
+    anyhow::ensure!(
+        !agent_did.trim().is_empty(),
+        "backend owner must be nonempty"
+    );
+    let filter = format!(
+        r#"filter: {{ agent_did: {{ _eq: "{}" }}, enabled: {{ _eq: true }} }}"#,
+        escape_graphql_string(agent_did)
+    );
+    let records = query_backend_records(node, &filter).await?;
+    let mut ids = std::collections::BTreeSet::new();
+    records
+        .into_iter()
+        .map(|(_, backend)| {
+            anyhow::ensure!(
+                ids.insert(backend.backend_id.clone()),
+                "ambiguous backend reference"
+            );
+            Ok(backend)
         })
-        .transpose()?
-        .unwrap_or_default();
+        .collect()
+}
 
-    Ok(backends)
+pub async fn lookup_backend_observation(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    backend_id: &str,
+) -> Result<Option<InferenceBackendObservation>> {
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "backend_registry.observation",
+        |txn| {
+            Box::pin(
+                async move { lookup_backend_observation_in_txn(txn, agent_did, backend_id).await },
+            )
+        },
+    )
+    .await
+}
+
+/// Read the existing observation inside a caller's configuration transaction.
+pub async fn lookup_backend_observation_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    backend_id: &str,
+) -> Result<Option<InferenceBackendObservation>> {
+    let filter = scope_filter(agent_did, backend_id)?;
+    let response = txn.execute(&format!(
+        "query {{ InferenceBackend(filter: {filter}) {{ backend_id catalogs probe_status last_probe }} }}"
+    )).await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(serde_json::Value::as_array)
+        .context("backend observation query did not return rows")?;
+    anyhow::ensure!(rows.len() <= 1, "ambiguous backend observation reference");
+    rows.first()
+        .map(|row| serde_json::from_value(row.clone()).context("decoding backend observation"))
+        .transpose()
 }
 
 pub async fn set_backend_probe_status(
     node: &EmbeddedNode,
+    agent_did: &str,
     backend_id: &str,
     probe_status: &str,
 ) -> Result<()> {
+    write_probe_observation(
+        node,
+        agent_did,
+        backend_id,
+        serde_json::json!({"probe_status": probe_status}),
+    )
+    .await
+}
+
+pub async fn set_backend_probe_status_with_last_probe(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    backend_id: &str,
+    probe_status: &str,
+    last_probe: chrono::DateTime<chrono::Utc>,
+) -> Result<()> {
+    write_probe_observation(
+        node,
+        agent_did,
+        backend_id,
+        serde_json::json!({"probe_status": probe_status, "last_probe": last_probe.to_rfc3339()}),
+    )
+    .await
+}
+
+async fn write_probe_observation(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    backend_id: &str,
+    input: serde_json::Value,
+) -> Result<()> {
+    // Resolve a unique scoped document before writing; a duplicate logical key
+    // must never cause a multi-document update.
+    let (doc_id, _) = lookup_backend_record(node, agent_did, backend_id)
+        .await?
+        .context("backend observation target does not exist")?;
+    let input = gents_protocol::graphql::graphql_input_literal(&input)?;
     let mutation = format!(
-        r#"mutation {{
-            update_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{}" }} }},
-                input: {{ probe_status: "{}" }}
-            ) {{ _docID }}
-        }}"#,
-        escape_graphql_string(backend_id),
-        escape_graphql_string(probe_status),
+        r#"mutation {{ update_InferenceBackend(docID: "{}", input: {input}) {{ _docID }} }}"#,
+        escape_graphql_string(&doc_id)
     );
     crate::config_client::ConfigAccess::write_local_response(
         node,
-        "backend_registry.update_probe_status",
+        "backend_registry.update_probe",
         &mutation,
     )
     .await?;
     Ok(())
 }
 
-pub async fn set_backend_probe_status_with_last_probe(
+/// Record a successful discovery without overwriting another credential scope.
+/// The connection is checked again in the transaction so an in-flight probe
+/// cannot publish a catalog for a replaced provider/authentication selection.
+pub(crate) async fn record_model_catalog(
     node: &EmbeddedNode,
-    backend_id: &str,
-    probe_status: &str,
-    last_probe: chrono::DateTime<chrono::Utc>,
+    backend: &InferenceBackend,
+    catalog: BackendModelCatalog,
 ) -> Result<()> {
-    let mutation = format!(
-        r#"mutation {{
-            update_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{}" }} }},
-                input: {{ probe_status: "{}", last_probe: "{}" }}
-            ) {{ _docID }}
-        }}"#,
-        escape_graphql_string(backend_id),
-        escape_graphql_string(probe_status),
-        last_probe.to_rfc3339(),
-    );
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::config_client::ConfigAccess::transact_local(
         node,
-        "backend_registry.update_probe_status_and_time",
-        &mutation,
+        None,
+        "backend_registry.record_catalog",
+        |txn| {
+            let catalog = catalog.clone();
+            Box::pin(async move { record_model_catalog_in_txn(txn, backend, catalog).await })
+        },
+    )
+    .await
+}
+
+/// Publish through the same observation owner for local and remote transactions.
+/// The caller supplies the backend configuration actually used for discovery.
+pub async fn record_model_catalog_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    backend: &InferenceBackend,
+    catalog: BackendModelCatalog,
+) -> Result<()> {
+    let expected_scope =
+        matches!(backend.auth, BackendAuth::PrincipalOAuth).then_some(backend.agent_did.as_str());
+    anyhow::ensure!(
+        catalog.agent_did.as_deref() == expected_scope,
+        "catalog credential scope does not match backend authentication"
+    );
+    let observed_at = chrono::DateTime::parse_from_rfc3339(&catalog.observed_at)
+        .context("invalid catalog observation timestamp")?;
+    let mut names = std::collections::HashSet::new();
+    for model in &catalog.models {
+        anyhow::ensure!(
+            !model.model_name.trim().is_empty() && model.model_name.trim() == model.model_name,
+            "catalog model name must be nonempty and canonical"
+        );
+        anyhow::ensure!(
+            names.insert(&model.model_name),
+            "duplicate catalog model name"
+        );
+        anyhow::ensure!(
+            model.context_window.is_none_or(|value| value > 0)
+                && model.max_output_tokens.is_none_or(|value| value > 0),
+            "advertised token limits must be positive when known"
+        );
+    }
+    let filter = scope_filter(&backend.agent_did, &backend.backend_id)?;
+    let response = txn.execute(&format!(
+                    "{{ InferenceBackend(filter: {filter}, limit: 2) {{ _docID {BACKEND_CONFIG_FIELDS} catalogs }} }}"
+                )).await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(serde_json::Value::as_array)
+        .context("backend catalog query returned no rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "backend catalog target is absent or ambiguous"
+    );
+    let row = &rows[0];
+    let current = InferenceBackend::from_value(row)?;
+    anyhow::ensure!(
+        current.endpoint == backend.endpoint
+            && current.provider_kind == backend.provider_kind
+            && current.auth == backend.auth,
+        "backend connection changed during discovery"
+    );
+    let mut catalogs = serde_json::from_value::<InferenceBackendObservation>(row.clone())
+        .context("decoding backend catalogs")?
+        .catalogs;
+    let matching: Vec<_> = catalogs
+        .iter()
+        .enumerate()
+        .filter(|(_, old)| old.agent_did == catalog.agent_did)
+        .collect();
+    anyhow::ensure!(
+        matching.len() <= 1,
+        "ambiguous catalog authentication scope"
+    );
+    if let Some((index, old)) = matching.first() {
+        if chrono::DateTime::parse_from_rfc3339(&old.observed_at)? > observed_at {
+            return Ok(());
+        }
+        let index = *index;
+        catalogs[index] = catalog;
+    } else {
+        catalogs.push(catalog);
+    }
+    // DefraDB represents a top-level JSON array as JsonArray, which is not a
+    // Scalar(Json). Keep the array inside a JSON object so the declared scalar
+    // kind and the stored value agree.
+    let catalogs = serde_json::json!({ "entries": catalogs });
+    let doc_id = row
+        .get("_docID")
+        .and_then(serde_json::Value::as_str)
+        .context("backend catalog target has no physical identity")?;
+    txn.execute_with_variables(
+        &format!(
+            "mutation($catalogs: JSON) {{ update_InferenceBackend(docID: \"{}\", input: {{ catalogs: $catalogs }}) {{ _docID }} }}",
+            escape_graphql_string(doc_id)
+        ),
+        &serde_json::json!({ "catalogs": catalogs }),
     )
     .await?;
     Ok(())
@@ -479,97 +529,61 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
     let backends = match list_enabled_backends(node).await {
         Ok(backends) => backends,
         Err(error) => {
-            tracing::warn!(error = %error, "startup backend probe: could not list backends");
+            tracing::warn!(%error, "startup backend probe: could not list backends");
             return;
         }
     };
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(error = %error, "startup backend probe: could not build HTTP client");
-            return;
-        }
-    };
-
     for backend in backends {
-        if backend.probe_status == HEALTHY_PROBE_STATUS {
+        // Agent-scoped credential refresh and discovery remain with the existing
+        // invoking-agent owner. A fleet scan cannot choose an OAuth principal.
+        if matches!(backend.auth, BackendAuth::PrincipalOAuth) {
             continue;
         }
-        if backend.provider_kind.is_agent_scoped_oauth() {
-            tracing::info!(
-                backend_id = %backend.backend_id,
-                endpoint = %backend.endpoint,
-                provider_kind = %backend.provider_kind,
-                "startup backend probe: skipping OAuth backend because OAuthCredential is agent-scoped"
-            );
-            continue;
+        if let Err(error) = probe_shared_backend(node, &backend).await {
+            tracing::warn!(agent_did = %backend.agent_did, backend_id = %backend.backend_id, %error, "startup backend probe failed; preserving previous observations");
         }
-        async {
-            let api_key = match crate::config::resolve_backend_api_key(&backend) {
-                Ok(api_key) => api_key,
-                Err(error) => {
-                    tracing::warn!(
-                        backend_id = %backend.backend_id,
-                        endpoint = %backend.endpoint,
-                        error = %error,
-                        "startup backend probe: could not resolve API key, leaving probe_status unchanged"
-                    );
-                    return;
-                }
-            };
-            match crate::backend_provider::discover_models(
-                &client,
-                backend.provider_kind,
-                &backend.endpoint,
-                api_key.as_deref(),
-                None,
-            )
-            .await
-            {
-                Ok(models) => {
-                    tracing::Span::current().record("model_count", models.len() as i64);
-                    match set_backend_probe_status_with_last_probe(
-                        node,
-                        &backend.backend_id,
-                        HEALTHY_PROBE_STATUS,
-                        chrono::Utc::now(),
-                    )
-                    .await
-                    {
-                        Ok(()) => tracing::info!(
-                            backend_id = %backend.backend_id,
-                            endpoint = %backend.endpoint,
-                            "startup backend probe: promoted to healthy and stamped last_probe"
-                        ),
-                        Err(error) => tracing::warn!(
-                            backend_id = %backend.backend_id,
-                            error = %error,
-                            "startup backend probe: reachable but failed to persist healthy status and last_probe"
-                        ),
-                    }
-                }
-                Err(error) => tracing::warn!(
-                    backend_id = %backend.backend_id,
-                    endpoint = %backend.endpoint,
-                    error = %error,
-                    "startup backend probe: unreachable, leaving probe_status unchanged"
-                ),
-            }
-        }
-        .instrument(tracing::info_span!(
-            "backend.startup_probe",
-            backend_id = %backend.backend_id,
-            endpoint = %backend.endpoint,
-            provider_kind = %backend.provider_kind,
-            previous_probe_status = %backend.probe_status,
-            model_count = tracing::field::Empty,
-        ))
-        .await;
     }
+}
+
+async fn probe_shared_backend(node: &EmbeddedNode, backend: &InferenceBackend) -> Result<()> {
+    backend.validate()?;
+    let discovery_timeout =
+        std::time::Duration::from_secs(backend.discovery_timeout_secs.unwrap_or(10) as u64);
+    let connect_timeout =
+        std::time::Duration::from_secs(backend.connect_timeout_secs.unwrap_or(10) as u64)
+            .min(discovery_timeout);
+    let client = reqwest::Client::builder()
+        .connect_timeout(connect_timeout)
+        .timeout(discovery_timeout)
+        .build()?;
+    let api_key = backend.auth.resolve_api_key()?;
+    let models = crate::backend_provider::discover_models(
+        &client,
+        backend.provider_kind,
+        &backend.endpoint,
+        api_key.as_deref(),
+        None,
+    )
+    .await?;
+    let now = chrono::Utc::now();
+    record_model_catalog(
+        node,
+        backend,
+        BackendModelCatalog {
+            agent_did: None,
+            observed_at: now.to_rfc3339(),
+            models,
+        },
+    )
+    .await?;
+    set_backend_probe_status_with_last_probe(
+        node,
+        &backend.agent_did,
+        &backend.backend_id,
+        HEALTHY_PROBE_STATUS,
+        chrono::Utc::now(),
+    )
+    .await
 }
 
 #[cfg(test)]

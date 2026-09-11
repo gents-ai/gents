@@ -29,6 +29,13 @@ pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPS
     let Some(agent_did) = core.selected_agent_did() else {
         return Ok(Vec::new());
     };
+    load_mcp_services_with_health_for_agent(core, &agent_did).await
+}
+
+pub(crate) async fn load_mcp_services_with_health_for_agent(
+    core: &ClientCore,
+    agent_did: &str,
+) -> Result<Vec<MCPServiceHealthView>> {
     let escaped_agent = escape_graphql_string(&agent_did);
     let query = format!(
         r#"{{

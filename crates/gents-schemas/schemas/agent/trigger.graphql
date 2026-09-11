@@ -1,0 +1,21 @@
+# One task selection with exactly one typed schedule/event source. Runtime
+# observations are excluded by the canonical desired-configuration projection.
+type Trigger @branchable @index(fields: ["agent_did", "trigger_id"], unique: true) {
+    trigger_id: String
+    agent_did: String @index
+    display_name: String
+    description: String
+    task_id: String @index
+    source: JSON
+    enabled: Boolean @index
+    concurrency: String
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+    tags: [String!]
+    next_run_at: DateTime @index(direction: ASC)
+    last_attempt_at: DateTime
+    last_fired_source_doc_id: String
+    last_status: String
+    last_error: String
+    fire_count: Int
+}

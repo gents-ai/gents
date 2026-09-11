@@ -69,7 +69,7 @@
       "permissionSet": "chat-write"
     },
     {
-      "name": "desktop_conversation_rename",
+      "name": "desktop_session_rename",
       "permissionSet": "chat-write"
     },
     {
@@ -149,15 +149,15 @@
       "permissionSet": "interrupt-control"
     },
     {
-      "name": "desktop_list_tool_call_holds",
-      "permissionSet": "holds-read"
-    },
-    {
-      "name": "desktop_resolve_tool_call_hold",
-      "permissionSet": "holds-control"
-    },
-    {
       "name": "desktop_agent_config_save",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_config_components_apply",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_config_components_patch",
       "permissionSet": "config-write"
     },
     {
@@ -181,7 +181,7 @@
       "permissionSet": "config-write"
     },
     {
-      "name": "desktop_event_trigger_delete",
+      "name": "desktop_trigger_delete",
       "permissionSet": "config-write"
     },
     {
@@ -193,7 +193,7 @@
       "permissionSet": "config-write"
     },
     {
-      "name": "desktop_tool_selection_delete",
+      "name": "desktop_tools_delete",
       "permissionSet": "config-write"
     },
     {
@@ -213,7 +213,7 @@
       "permissionSet": "config-write"
     },
     {
-      "name": "desktop_tool_selection_save",
+      "name": "desktop_tools_save",
       "permissionSet": "config-write"
     },
     {
@@ -265,8 +265,16 @@
       "permissionSet": "tasks"
     },
     {
-      "name": "desktop_event_trigger_save",
+      "name": "desktop_trigger_save",
       "permissionSet": "tasks"
+    },
+    {
+      "name": "desktop_event_source_save",
+      "permissionSet": "tasks"
+    },
+    {
+      "name": "desktop_event_source_delete",
+      "permissionSet": "config-write"
     },
     {
       "name": "desktop_task_run",
@@ -281,7 +289,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "6.3",
+  "contractVersion": "7.1",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -385,14 +393,6 @@
     },
     {
       "kind": "read",
-      "name": "holds-read"
-    },
-    {
-      "kind": "mutate",
-      "name": "holds-control"
-    },
-    {
-      "kind": "read",
       "name": "config-read"
     },
     {
@@ -416,5 +416,5 @@
       "name": "full"
     }
   ],
-  "wireSchemaHash": "56091dd558796e1dd812bb794a134de193fee7706e81aa33082f53142232f47e"
+  "wireSchemaHash": "ca91687078715ce91788ea04cb72e3a6d0eae8a845bfb84a7c7cf1b6acbc04da"
 }

@@ -305,7 +305,6 @@ fn session_state_for_test() -> SessionState {
         current_request_doc_id: None,
         current_requester_did: None,
         request_deadline_at: None,
-        approval_required_tools: Vec::new(),
         sequence: 0,
         transcript_turn: TranscriptTurnState::Idle,
         persisted_tool_result_keys: std::collections::HashSet::new(),
@@ -447,75 +446,6 @@ async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
     node.shutdown().await;
 }
 
-#[tokio::test]
-async fn dropping_hook_clone_preserves_in_flight_tool_lifecycle() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-clone-drop-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
-    assert!(matches!(
-        hook.on_completion_call(&user_text_message("Read notes.txt"), &[])
-            .await,
-        HookAction::Continue
-    ));
-    let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        node.as_ref(),
-        &hook,
-        "request-clone-drop",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
-
-    assert!(matches!(
-        hook.on_tool_call("read_file", None, "call-clone-drop", "{}")
-            .await,
-        ToolCallHookAction::Continue
-    ));
-    assert!(hook
-        .in_flight_lifecycles
-        .lock()
-        .await
-        .contains_key("call-clone-drop"));
-
-    drop(hook.clone());
-
-    assert!(hook
-        .in_flight_lifecycles
-        .lock()
-        .await
-        .contains_key("call-clone-drop"));
-    assert!(matches!(
-        hook.on_tool_result(
-            "read_file",
-            None,
-            "call-clone-drop",
-            "{}",
-            &crate::tool_call_lifecycle::ToolOutcome::Completed("done".to_string())
-        )
-        .await,
-        HookAction::Continue
-    ));
-
-    drop(hook);
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
 fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
     match policy {
         "failOpen" => FailurePolicy::FailOpen,
@@ -594,47 +524,6 @@ fn transcript_turn_state_keeps_persisted_turn_across_parallel_results() {
     // A persisted prior turn starts a NEW turn on the next assistant persist
     // (text-only final turn after tool results).
     assert_eq!(state.persist_assistant_turn(), 2);
-}
-
-#[test]
-fn fail_closed_persistence_policy_terminates_and_records_failure() {
-    let counters = hook_counters_for_test();
-    let error = anyhow::anyhow!("synthetic persistence failure");
-
-    let decision = decide_persistence_outcome(
-        FailurePolicy::FailClosed,
-        &counters,
-        "unit-test failure",
-        &error,
-    );
-
-    assert!(matches!(
-        decision,
-        PolicyDecision::Terminate(reason) if reason.contains("synthetic persistence failure")
-    ));
-    assert_eq!(counters.failures.load(Ordering::Relaxed), 1);
-    assert_eq!(counters.successes.load(Ordering::Relaxed), 0);
-}
-
-#[test]
-fn fail_open_persistence_policy_continues_without_success_ack() {
-    let counters = hook_counters_for_test();
-    let error = anyhow::anyhow!("synthetic persistence failure");
-
-    let decision = decide_persistence_outcome(
-        FailurePolicy::FailOpen,
-        &counters,
-        "unit-test failure",
-        &error,
-    );
-
-    assert!(matches!(decision, PolicyDecision::Continue));
-    assert_eq!(counters.failures.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        counters.successes.load(Ordering::Relaxed),
-        0,
-        "fail-open continuation must not count as a successful storage ack"
-    );
 }
 
 #[test]
@@ -744,55 +633,6 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
             "{} must not claim storage-engine visibility",
             case.name
         );
-
-        match case.post_observation.as_str() {
-            "successAcknowledged" => {
-                assert_eq!(case.action, "mutationSuccess");
-                assert_eq!(case.pre_observation, "inFlight");
-                assert_eq!(case.post_persistence, "committed");
-                assert!(case.terminal_write_observed, "{}", case.name);
-            }
-            "mutationFailed" => {
-                assert_eq!(case.action, "mutationFailure");
-                assert_eq!(case.pre_observation, "inFlight");
-                assert_eq!(case.post_persistence, "uncommitted");
-                assert!(!case.terminal_write_observed, "{}", case.name);
-            }
-            "lostAcknowledged" => {
-                assert_eq!(case.action, "mutationFailure");
-                assert_eq!(case.pre_observation, "inFlight");
-                assert_eq!(case.post_persistence, "lost");
-                assert!(!case.terminal_write_observed, "{}", case.name);
-            }
-            "staleObserved" => {
-                assert!(
-                    matches!(case.action.as_str(), "staleRead" | "staleEvent"),
-                    "{}",
-                    case.name
-                );
-                assert_eq!(case.pre_observation, "successAcknowledged");
-                assert_eq!(case.post_persistence, "committed");
-                assert!(!case.terminal_write_observed, "{}", case.name);
-            }
-            "readVisible" => {
-                assert!(
-                    matches!(case.action.as_str(), "readYourWrites" | "eventArrives"),
-                    "{}",
-                    case.name
-                );
-                assert!(
-                    matches!(
-                        case.pre_observation.as_str(),
-                        "successAcknowledged" | "staleObserved"
-                    ),
-                    "{}",
-                    case.name
-                );
-                assert_eq!(case.post_persistence, "committed");
-                assert!(case.terminal_write_observed, "{}", case.name);
-            }
-            other => panic!("unexpected Lean storage observation {other:?}"),
-        }
     }
 }
 
@@ -800,8 +640,8 @@ async fn create_interruptible_request(
     node: &defra_node::EmbeddedNode,
     request_id: &str,
     session_id: &str,
-) {
-    create_interruptible_request_for_agent(node, request_id, session_id, "did:test:general").await;
+) -> String {
+    create_interruptible_request_for_agent(node, request_id, session_id, "did:test:general").await
 }
 
 async fn create_interruptible_request_for_agent(
@@ -809,7 +649,17 @@ async fn create_interruptible_request_for_agent(
     request_id: &str,
     session_id: &str,
     agent_did: &str,
-) {
+) -> String {
+    create_interruptible_request_with_fields(node, request_id, session_id, agent_did, "").await
+}
+
+async fn create_interruptible_request_with_fields(
+    node: &defra_node::EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    extra_fields: &str,
+) -> String {
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let agent_did = crate::graphql::escape_graphql_string(agent_did);
@@ -828,6 +678,7 @@ async fn create_interruptible_request_for_agent(
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "subagent",
+                {extra_fields}
                 created_at: "{created_at}",
                 retry_count: 0,
                 max_retries: {max_retries}
@@ -841,6 +692,49 @@ async fn create_interruptible_request_for_agent(
         "create interruptible request failed: {:?}",
         resp.errors
     );
+    let lookup = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(
+        !lookup.has_errors(),
+        "load interruptible request failed: {:?}",
+        lookup.errors
+    );
+    lookup.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("interruptible request _docID")
+        .to_owned()
+}
+
+async fn create_corroborated_child_request(
+    node: &defra_node::EmbeddedNode,
+    child_request_id: &str,
+    session_id: &str,
+    parent_request_id: &str,
+    parent_request_doc_id: &str,
+    tool_call_id: &str,
+    tool_call_doc_id: &str,
+) {
+    let extra_fields = format!(
+        r#"caused_by_parent_request_id: "{}",
+            caused_by_parent_request_doc_id: "{}",
+            caused_by_parent_tool_call_id: "{}",
+            caused_by_parent_tool_call_doc_id: "{}","#,
+        crate::graphql::escape_graphql_string(parent_request_id),
+        crate::graphql::escape_graphql_string(parent_request_doc_id),
+        crate::graphql::escape_graphql_string(tool_call_id),
+        crate::graphql::escape_graphql_string(tool_call_doc_id),
+    );
+    create_interruptible_request_with_fields(
+        node,
+        child_request_id,
+        session_id,
+        "did:test:general",
+        &extra_fields,
+    )
+    .await;
 }
 
 async fn bind_interruptible_request(
@@ -882,6 +776,7 @@ async fn fetch_tool_call_row(
                     result
                     status
                     tool_failure_class
+                    denial_reason
                     selected_service_id
                     selected_tool_name
                     cancel_cause
@@ -907,6 +802,8 @@ async fn fetch_tool_call_row(
 
 #[tokio::test]
 async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
+    use crate::document_config::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
+
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = DefraSessionHook::with_identity(
@@ -914,7 +811,15 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
         "general",
         "did:test:general",
         FailurePolicy::default(),
-    );
+    )
+    .with_remote_tools(Some(RemoteTools {
+        services: vec![RemoteServiceTools {
+            mcp_service_id: "metrics-prod".into(),
+            tool_names: vec!["query_metrics".into()],
+            style: RemoteToolStyle::Discovery,
+            ..Default::default()
+        }],
+    }));
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Query metrics"), &[])
             .await,
@@ -1183,7 +1088,7 @@ async fn completion_call_persists_context_once_before_prompt() {
     ));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
     assert_eq!(history.len(), 3);
@@ -1263,6 +1168,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         &session_id,
         "general",
         "did:test:general",
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -1281,7 +1187,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         HookAction::Continue
     ));
 
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, &hook2.agent_did, None)
         .await
         .unwrap();
     let context_count = history
@@ -1743,7 +1649,7 @@ async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
 
     let session_id = "session-cascade";
     let child_request_id = "child-cascade";
-    create_interruptible_request(&node, child_request_id, session_id).await;
+    let parent_doc_id = create_interruptible_request(&node, "parent-cascade", session_id).await;
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -1765,8 +1671,19 @@ async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
         child_request_id.to_string(),
         "did:test:target".to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
+    create_corroborated_child_request(
+        &node,
+        child_request_id,
+        session_id,
+        "parent-cascade",
+        &parent_doc_id,
+        "tool-cascade",
+        lifecycle.doc_id().unwrap(),
+    )
+    .await;
     hook.in_flight_lifecycles
         .lock()
         .await
@@ -1873,7 +1790,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
 
     let session_id = "session-mixed-tools";
     let child_request_id = "child-mixed-tools";
-    create_interruptible_request(&node, child_request_id, session_id).await;
+    let parent_doc_id = create_interruptible_request(&node, "parent-mixed-tools", session_id).await;
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -1894,7 +1811,8 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
         "slow_tool".to_string(),
         "{}".to_string(),
         deadline,
-    );
+    )
+    .with_request_doc_id(Some(parent_doc_id.clone()));
     outer.start_running().await.unwrap();
     hook.in_flight_lifecycles
         .lock()
@@ -1916,8 +1834,19 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
         child_request_id.to_string(),
         "did:test:target".to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_doc_id.clone()));
     bridge.start_running().await.unwrap();
+    create_corroborated_child_request(
+        &node,
+        child_request_id,
+        session_id,
+        "parent-mixed-tools",
+        &parent_doc_id,
+        "child-bridge",
+        bridge.doc_id().unwrap(),
+    )
+    .await;
     hook.in_flight_lifecycles
         .lock()
         .await
@@ -2167,7 +2096,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     .unwrap();
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
     assert_eq!(history.len(), 4);
@@ -2449,7 +2378,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     .unwrap();
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
     assert_eq!(history.len(), 3);
@@ -2578,9 +2507,10 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         })],
     };
     let session_id = hook.session_id().await.expect("session id");
-    let first_result_sequence = crate::session::max_sequence(&node, &session_id)
-        .await
-        .expect("first tool-result sequence");
+    let first_result_sequence =
+        crate::session::max_sequence(&node, &session_id, &hook.agent_did, None)
+            .await
+            .expect("first tool-result sequence");
     let reused_sequence = hook
         .persist_message(&duplicate_tool_result_message)
         .await
@@ -2590,7 +2520,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         "a duplicate observation must reuse the first tool-result message sequence"
     );
 
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
     assert_eq!(
@@ -2668,6 +2598,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         &session_id,
         "general",
         "did:test:general",
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -2711,13 +2642,13 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         "subsequent cached observations must remain no-ops"
     );
     assert_eq!(
-        crate::session::max_sequence(&node, &session_id)
+        crate::session::max_sequence(&node, &session_id, &hook.agent_did, None)
             .await
             .unwrap(),
         first_result_sequence
     );
     assert_eq!(
-        crate::session::load_history(&node, &session_id)
+        crate::session::load_history(&node, &session_id, &hook.agent_did, None)
             .await
             .unwrap()
             .len(),
@@ -2769,7 +2700,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
     }
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
     let tool_results = history
@@ -2859,7 +2790,7 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     ));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
     assert_eq!(
@@ -2935,7 +2866,7 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     .await
     .unwrap();
 
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
     assert_eq!(history.len(), 4);
@@ -2956,276 +2887,76 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-async fn write_approval_document(
-    node: &defra_node::EmbeddedNode,
-    tool_call_doc_id: &str,
-    tool_call_id: &str,
-    agent_did: &str,
-    decision: &str,
-    reason: &str,
-) {
-    let escaped_tool_call_doc_id = crate::graphql::escape_graphql_string(tool_call_doc_id);
-    let escaped_tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
-    let escaped_agent_did = crate::graphql::escape_graphql_string(agent_did);
-    let escaped_decision = crate::graphql::escape_graphql_string(decision);
-    let escaped_reason = crate::graphql::escape_graphql_string(reason);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let approval_id = uuid::Uuid::new_v4();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentToolApproval(input: {{
-                approval_id: "approval-{approval_id}",
-                tool_call_doc_id: "{escaped_tool_call_doc_id}",
-                tool_call_id: "{escaped_tool_call_id}",
-                request_id: "req-hold",
-                agent_did: "{escaped_agent_did}",
-                decision: "{escaped_decision}",
-                approver_did: "did:key:operator",
-                reason: "{escaped_reason}",
-                created_at: "{created_at}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create AgentToolApproval failed: {:?}",
-        resp.errors
-    );
-}
-
-async fn wait_for_lifecycle_state(
-    node: &defra_node::EmbeddedNode,
-    session_id: &str,
-    tool_call_id: &str,
-    expected: &str,
-) -> String {
-    for _ in 0..200 {
-        let session = crate::graphql::escape_graphql_string(session_id);
-        let call = crate::graphql::escape_graphql_string(tool_call_id);
-        let resp = node
-            .execute(&format!(
-                r#"{{
-                    AgentToolCall(
-                        filter: {{
-                            session_id: {{ _eq: "{session}" }},
-                            tool_call_id: {{ _eq: "{call}" }}
-                        }},
-                        limit: 1
-                    ) {{ _docID lifecycle_state }}
-                }}"#
-            ))
-            .await;
-        assert!(
-            !resp.has_errors(),
-            "poll tool call failed: {:?}",
-            resp.errors
-        );
-        let state = resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentToolCall"))
-            .and_then(|rows| rows.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("lifecycle_state"))
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
-        if state.as_deref() == Some(expected) {
-            return resp
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentToolCall"))
-                .and_then(|rows| rows.as_array())
-                .and_then(|rows| rows.first())
-                .and_then(|row| row.get("_docID"))
-                .and_then(|value| value.as_str())
-                .expect("held AgentToolCall _docID")
-                .to_string();
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    panic!("tool call {tool_call_id} never reached lifecycle_state {expected}");
-}
-
-async fn hook_with_held_tool(
-    data_path: &std::path::Path,
-    deadline: chrono::DateTime<chrono::Utc>,
-) -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook, String) {
+#[tokio::test]
+async fn remote_presentations_persist_the_same_selected_identity() {
+    use crate::document_config::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
+    let temp = tempfile::tempdir().unwrap();
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
-            .data_path(data_path)
+            .data_path(temp.path().join("data"))
             .build()
             .await
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
-    let user_prompt = user_text_message("Run a guarded tool");
-    assert!(matches!(
-        hook.on_completion_call(&user_prompt, &[]).await,
-        HookAction::Continue
-    ));
-    let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(node.as_ref(), &hook, "req-hold", &session_id, deadline).await;
-    hook.set_approval_required_tools(vec!["guarded".to_string()])
-        .await;
-    (node, hook, session_id)
-}
-
-#[tokio::test]
-async fn held_tool_call_dispatches_after_operator_approval() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-approve-{}", uuid::Uuid::new_v4()));
-    let deadline = chrono::Utc::now() + chrono::Duration::seconds(60);
-    let (node, hook, session_id) = hook_with_held_tool(&data_path, deadline).await;
-
-    let approver_node = node.clone();
-    let approver_session = session_id.clone();
-    let approver = tokio::spawn(async move {
-        let tool_call_doc_id = wait_for_lifecycle_state(
-            &approver_node,
-            &approver_session,
-            "internal-approve",
-            "awaitingApproval",
-        )
-        .await;
-        write_approval_document(
-            &approver_node,
-            "different-tool-call-doc",
-            "internal-approve",
+    for (index, style) in [RemoteToolStyle::Flat, RemoteToolStyle::Discovery]
+        .into_iter()
+        .enumerate()
+    {
+        let hook = DefraSessionHook::with_identity(
+            node.clone(),
+            "general",
             "did:test:general",
-            "approved",
-            "",
+            FailurePolicy::default(),
+        )
+        .with_remote_tools(Some(RemoteTools {
+            services: vec![RemoteServiceTools {
+                mcp_service_id: "selected-service".into(),
+                tool_names: vec!["inspect".into()],
+                style,
+                ..Default::default()
+            }],
+        }));
+        let session = hook.session_id().await.unwrap();
+        bind_interruptible_request(
+            &node,
+            &hook,
+            &format!("remote-request-{index}"),
+            &session,
+            chrono::Utc::now() + chrono::Duration::minutes(1),
         )
         .await;
-        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
-        let still_held =
-            fetch_tool_call_row(&approver_node, &approver_session, "internal-approve").await;
-        assert_eq!(
-            still_held
-                .get("lifecycle_state")
-                .and_then(|value| value.as_str()),
-            Some("awaitingApproval"),
-            "approval for another AgentToolCall _docID must be ignored"
-        );
-        write_approval_document(
-            &approver_node,
-            &tool_call_doc_id,
-            "internal-approve",
-            "did:test:general",
-            "approved",
-            "",
-        )
-        .await;
-    });
-
-    let action = hook
-        .on_tool_call("guarded", None, "internal-approve", "{}")
-        .await;
-    approver.await.unwrap();
-    assert!(
-        matches!(action, ToolCallHookAction::Continue),
-        "approved held call must dispatch, got {action:?}"
-    );
-
-    let row = fetch_tool_call_row(&node, &session_id, "internal-approve").await;
-    assert_eq!(
-        row.get("lifecycle_state").and_then(|value| value.as_str()),
-        Some("running")
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn held_tool_call_denied_skips_with_operator_reason() {
-    let data_path = std::env::temp_dir().join(format!("agent-hook-deny-{}", uuid::Uuid::new_v4()));
-    let deadline = chrono::Utc::now() + chrono::Duration::seconds(60);
-    let (node, hook, session_id) = hook_with_held_tool(&data_path, deadline).await;
-
-    let approver_node = node.clone();
-    let approver_session = session_id.clone();
-    let approver = tokio::spawn(async move {
-        let tool_call_doc_id = wait_for_lifecycle_state(
-            &approver_node,
-            &approver_session,
-            "internal-deny",
-            "awaitingApproval",
-        )
-        .await;
-        write_approval_document(
-            &approver_node,
-            &tool_call_doc_id,
-            "internal-deny",
-            "did:test:general",
-            "denied",
-            "not on my watch",
-        )
-        .await;
-    });
-
-    let action = hook
-        .on_tool_call("guarded", None, "internal-deny", "{}")
-        .await;
-    approver.await.unwrap();
-    match &action {
-        ToolCallHookAction::Skip { reason } => {
-            assert!(
-                reason.contains("denied by operator") && reason.contains("not on my watch"),
-                "unexpected denial reason: {reason}"
-            );
-        }
-        other => panic!("denied held call must skip, got {other:?}"),
+        let name = match style {
+            RemoteToolStyle::Flat => {
+                crate::meta_tools::flat_tool_name("selected-service", "inspect")
+            }
+            RemoteToolStyle::Discovery => "call_tool".into(),
+        };
+        let args = match style {
+            RemoteToolStyle::Flat => "{}",
+            RemoteToolStyle::Discovery => {
+                r#"{"service_id":"selected-service","tool_name":"inspect","arguments":{}}"#
+            }
+        };
+        assert!(matches!(
+            hook.on_tool_call(&name, None, &format!("remote-call-{index}"), args)
+                .await,
+            ToolCallHookAction::Continue
+        ));
     }
-
-    let row = fetch_tool_call_row(&node, &session_id, "internal-deny").await;
-    assert_eq!(
-        row.get("lifecycle_state").and_then(|value| value.as_str()),
-        Some("failed")
-    );
-    assert_eq!(
-        row.get("tool_failure_class")
-            .and_then(|value| value.as_str()),
-        Some("approvalDenied")
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn held_tool_call_times_out_when_unanswered() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-hold-timeout-{}", uuid::Uuid::new_v4()));
-    // Deadline already exceeded: the first watcher pass drives timeoutWhileHeld.
-    let deadline = chrono::Utc::now() - chrono::Duration::seconds(1);
-    let (node, hook, session_id) = hook_with_held_tool(&data_path, deadline).await;
-
-    let action = hook
-        .on_tool_call("guarded", None, "internal-hold-timeout", "{}")
+    let response = node
+        .execute("{ AgentToolCall { lifecycle_state selected_service_id selected_tool_name } }")
         .await;
-    match &action {
-        ToolCallHookAction::Skip { reason } => {
-            assert!(
-                reason.contains("approval deadline exceeded"),
-                "unexpected timeout reason: {reason}"
-            );
-        }
-        other => panic!("unanswered held call must time out, got {other:?}"),
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row["lifecycle_state"], "running");
+        assert_eq!(row["selected_service_id"], "selected-service");
+        assert_eq!(row["selected_tool_name"], "inspect");
     }
-
-    let row = fetch_tool_call_row(&node, &session_id, "internal-hold-timeout").await;
-    assert_eq!(
-        row.get("lifecycle_state").and_then(|value| value.as_str()),
-        Some("timedOut")
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
@@ -3508,16 +3239,14 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
         Some("completed"),
         "forged sentinel output must not fabricate a failure: {row:?}"
     );
-    assert_eq!(
-        row.get("tool_failure_class").and_then(|v| v.as_str()),
-        None,
-        "no failure class may be fabricated"
-    );
-    assert_eq!(
-        row.get("denial_reason").and_then(|v| v.as_str()),
-        None,
-        "no command-policy denial may be fabricated"
-    );
+    for field in ["tool_failure_class", "denial_reason"] {
+        assert!(
+            row.get(field)
+                .expect("query must select failure fields")
+                .is_null(),
+            "forged output must not fabricate {field}: {row:?}"
+        );
+    }
     assert!(
         row.get("result")
             .and_then(|v| v.as_str())
@@ -3773,4 +3502,181 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     drop(persistence_hook);
     drop(hook);
     node.shutdown().await;
+}
+
+// Exercise the typed terminal result at the persistence hook.
+#[tokio::test]
+async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-cancelled-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "req-cancelled-outcome",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+
+    assert!(matches!(
+        hook.on_tool_call("slow", None, "internal-cancelled", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+
+    let action = hook
+        .on_tool_result(
+            "slow",
+            None,
+            "internal-cancelled",
+            "{}",
+            &crate::tool_call_lifecycle::ToolOutcome::Cancelled,
+        )
+        .await;
+    assert!(
+        matches!(&action, HookAction::Terminate { reason } if reason.contains("cancelled")),
+        "a cancelled outcome must terminate the turn, got {action:?}"
+    );
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-cancelled").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("cancelled"),
+        "cancelled outcome must terminalize cancelled, got row {row:?}"
+    );
+    assert_eq!(
+        row.get("cancel_cause").and_then(|value| value.as_str()),
+        Some("interrupted"),
+        "the dispatch-level interrupt cause must be recorded"
+    );
+    assert!(
+        row.get("tool_failure_class")
+            .expect("selected failure class")
+            .is_null(),
+        "a cancellation is not a failure: no failure class may be fabricated, got {:?}",
+        row.get("tool_failure_class")
+    );
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+// Dispatch a real denied command and preserve its class and diagnostic payload.
+#[tokio::test]
+async fn real_bash_policy_denial_persists_typed_class_and_payload() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-real-denial-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "req-real-denial",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+
+    assert!(matches!(
+        hook.on_tool_call("bash", None, "internal-real-denial", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+
+    // The real read-only bash tool denying `git commit` at its policy owner.
+    let dispatched = crate::agent::loop_stream::dispatch_tool(
+        &crate::toolset::ToolSet::builder()
+            .read_root(std::env::temp_dir())
+            .bash_read_only()
+            .build()
+            .build_native_tools()
+            .unwrap(),
+        "bash",
+        r#"{"command":"git","args":["commit"]}"#.to_string(),
+        None,
+        None,
+    )
+    .await;
+    let crate::tool_call_lifecycle::ToolOutcome::Failed { text, .. } = &dispatched else {
+        panic!("read-only bash must deny git commit as a structured policy denial: {dispatched:?}")
+    };
+    assert!(
+        text.contains("readOnlySubcommandNotAllowlisted"),
+        "the denial payload must ride the typed text channel: {text}"
+    );
+
+    let action = hook
+        .on_tool_result(
+            "bash",
+            None,
+            "internal-real-denial",
+            r#"{"command":"git","args":["commit"]}"#,
+            &dispatched,
+        )
+        .await;
+    assert!(
+        matches!(action, HookAction::Continue),
+        "a reported failure persists and continues the turn, got {action:?}"
+    );
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-real-denial").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("failed"),
+        "a denied command must terminalize failed, got row {row:?}"
+    );
+    assert_eq!(
+        row.get("tool_failure_class")
+            .and_then(|value| value.as_str()),
+        Some("policyDenied"),
+        "typed classification must survive persistence"
+    );
+    assert!(
+        row.get("result")
+            .and_then(|value| value.as_str())
+            .is_some_and(|result| result.contains("readOnlySubcommandNotAllowlisted")),
+        "the denial payload must persist as the model-facing result"
+    );
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
 }

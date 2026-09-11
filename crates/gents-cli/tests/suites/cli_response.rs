@@ -81,15 +81,25 @@ async fn insert_materialized_response(
         sequence,
     } = fixture;
     let now = chrono::Utc::now().to_rfc3339();
+    let request = graphql_query(&runtime.graphql, &format!(r#"mutation{{create_AgentRequest(input:{{request_id:"{}",agent_did:"{}",requester_did:null,session_id:"{}",behavior_id:"response-test",content:"test request",created_at:"{}",lifecycle_state:"completed"}}){{_docID}}}}"#, escape_graphql_string(request_id), escape_graphql_string(&runtime.agent_did), escape_graphql_string(session_id), escape_graphql_string(&now))).await?;
+    let request_doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")?;
     let response_key = format!("response-{request_id}");
     let message_mutation = message_content.map_or_else(String::new, |content| {
-        let message_key = format!("{session_id}:{sequence}");
+        let message_key = gents::session::sequence_message_key(
+            &runtime.agent_did,
+            session_id,
+            None,
+            u32::try_from(sequence).expect("fixture sequence fits u32"),
+        );
         format!(
             r#"create_AgentMessage(input: {{
                 message_key: "{message_key}",
                 session_id: "{session_id}",
                 agent_did: "{agent_did}",
                 request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
+                requester_did: null,
                 sequence: {sequence},
                 role: "{message_role}",
                 content: "{content}",
@@ -100,6 +110,7 @@ async fn insert_materialized_response(
             session_id = escape_graphql_string(session_id),
             agent_did = escape_graphql_string(&runtime.agent_did),
             request_id = escape_graphql_string(request_id),
+            request_doc_id = escape_graphql_string(&request_doc_id),
             content = escape_graphql_string(content),
             message_role = escape_graphql_string(message_role),
             message_reasoning = escape_graphql_string(message_reasoning),
@@ -112,6 +123,8 @@ async fn insert_materialized_response(
             create_AgentResponse(input: {{
                 response_key: "{response_key}",
                 request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
+                requester_did: null,
                 agent_did: "{agent_did}",
                 behavior_id: "response-test",
                 session_id: "{session_id}",
@@ -130,6 +143,7 @@ async fn insert_materialized_response(
         }}"#,
         response_key = escape_graphql_string(&response_key),
         request_id = escape_graphql_string(request_id),
+        request_doc_id = escape_graphql_string(&request_doc_id),
         agent_did = escape_graphql_string(&runtime.agent_did),
         session_id = escape_graphql_string(session_id),
         response_content = escape_graphql_string(response_content),

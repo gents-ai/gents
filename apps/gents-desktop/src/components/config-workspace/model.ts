@@ -5,11 +5,12 @@ export type ConfigTab =
   | "backends"
   | "providerAccounts"
   | "profiles"
-  | "toolSelections"
+  | "tools"
   | "metaTools"
   | "tasks"
-  | "timerTriggers"
-  | "eventTriggers";
+  | "schedules"
+  | "eventSources"
+  | "triggers";
 
 export const TABS: Array<{ id: ConfigTab; label: string }> = [
   { id: "agent", label: "Agent" },
@@ -18,11 +19,12 @@ export const TABS: Array<{ id: ConfigTab; label: string }> = [
   { id: "backends", label: "Backends" },
   { id: "providerAccounts", label: "Provider Accounts" },
   { id: "profiles", label: "Profiles" },
-  { id: "toolSelections", label: "Tool Selections" },
+  { id: "tools", label: "Tools" },
   { id: "metaTools", label: "Meta Tools" },
   { id: "tasks", label: "Tasks" },
-  { id: "timerTriggers", label: "Timer Triggers" },
-  { id: "eventTriggers", label: "Event Triggers" },
+  { id: "schedules", label: "Schedules" },
+  { id: "eventSources", label: "Event Sources" },
+  { id: "triggers", label: "Triggers" },
 ];
 
 export const NEW_DOCUMENT_ID = "__new__";

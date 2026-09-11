@@ -25,7 +25,7 @@ use crate::background_tools::{
     subagent_tool_not_allowed_payload, ChildEdge,
 };
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::queue::{QueueHints, QueuePolicy, QueueSource};
+use crate::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
 use crate::session;
 use crate::tool_call_lifecycle::{AwaitMode, FailureClass, ToolCallLifecycle};
 

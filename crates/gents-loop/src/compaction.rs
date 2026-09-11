@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents_protocol::message::Message;
 use rig::completion::CompletionModel;
+use serde::{Deserialize, Serialize};
 
 /// Output budget for the internal compaction summary completion — independent
 /// of the user turn's `max_output_tokens` (#1017).
@@ -225,7 +226,8 @@ pub fn apply_reduction_decision<T, C>(
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum CompactionStrategy {
     StripToolResults,
     #[default]

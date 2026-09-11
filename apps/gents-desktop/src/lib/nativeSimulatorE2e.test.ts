@@ -2,12 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  conversationRowCount,
+  sessionRowCount,
   findAgentChatButton,
   findAgentDeploymentControl,
   findAssistantResponseMarker,
   findNewChatButton,
-  isConversationTurnSettled,
+  isSessionTurnSettled,
   startNativeSimulatorE2e,
 } from "./nativeSimulatorE2e";
 
@@ -117,7 +117,7 @@ describe("findAssistantResponseMarker", () => {
   });
 });
 
-describe("isConversationTurnSettled", () => {
+describe("isSessionTurnSettled", () => {
   it("waits for the interrupt control to clear after the response arrives", () => {
     document.body.innerHTML = `
       <article data-testid="assistant-message">
@@ -126,11 +126,11 @@ describe("isConversationTurnSettled", () => {
       <button data-testid="cancel-button">Interrupt</button>
     `;
 
-    expect(isConversationTurnSettled(document, "UNIQUE_MARKER")).toBe(false);
+    expect(isSessionTurnSettled(document, "UNIQUE_MARKER")).toBe(false);
 
     document.querySelector('[data-testid="cancel-button"]')?.remove();
 
-    expect(isConversationTurnSettled(document, "UNIQUE_MARKER")).toBe(true);
+    expect(isSessionTurnSettled(document, "UNIQUE_MARKER")).toBe(true);
   });
 
   it("does not declare a turn settled before the expected response arrives", () => {
@@ -140,24 +140,24 @@ describe("isConversationTurnSettled", () => {
       </article>
     `;
 
-    expect(isConversationTurnSettled(document, "UNIQUE_MARKER")).toBe(false);
+    expect(isSessionTurnSettled(document, "UNIQUE_MARKER")).toBe(false);
   });
 });
 
-describe("conversationRowCount", () => {
-  it("counts conversation rows without mistaking filters for conversations", () => {
+describe("sessionRowCount", () => {
+  it("counts session rows without mistaking filters for sessions", () => {
     document.body.innerHTML = `
-      <input data-testid="conversation-search" />
-      <div class="conversation-list">
-        <span class="conversation-row">
-          <button data-testid="conversation-session-1">first</button>
+      <input data-testid="session-search" />
+      <div class="session-list">
+        <span class="session-row">
+          <button data-testid="session-session-1">first</button>
         </span>
-        <span class="conversation-row">
-          <button data-testid="conversation-session-2">second</button>
+        <span class="session-row">
+          <button data-testid="session-session-2">second</button>
         </span>
       </div>
     `;
 
-    expect(conversationRowCount(document)).toBe(2);
+    expect(sessionRowCount(document)).toBe(2);
   });
 });

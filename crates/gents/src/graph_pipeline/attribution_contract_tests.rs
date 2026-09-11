@@ -12,7 +12,13 @@ struct Trace {
     name: String,
     initial: Observation,
     events: Vec<Event>,
-    expected: Vec<Observation>,
+    expected: Vec<ExpectedObservation>,
+}
+#[derive(Deserialize)]
+struct ExpectedObservation {
+    #[serde(flatten)]
+    durable: Observation,
+    may_interrupt_for_failure: bool,
 }
 #[derive(Deserialize)]
 struct Event {
@@ -28,7 +34,6 @@ struct Observation {
     cancellation_requested: bool,
     generation: i64,
     primary: Option<u64>,
-    may_interrupt_for_failure: bool,
 }
 fn cause_id(cause: u64) -> &'static str {
     match cause {
@@ -51,11 +56,6 @@ fn observe(view: &GraphRunView, initial_generation: i64) -> Observation {
         cancellation_requested: view.cancellation_requested_at.is_some(),
         generation: view.update_generation - initial_generation,
         primary,
-        // This is an observation of durable owner output, not a transition or
-        // a reference implementation deciding which cause should be selected.
-        may_interrupt_for_failure: view.status == "running"
-            && view.cancellation_requested_at.is_none()
-            && primary.is_some(),
     }
 }
 async fn execute_fixture(node: &EmbeddedNode, query: String) {
@@ -176,6 +176,44 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
                             trace.name
                         );
                     }
+                    // Use the emitted decision to drive and observe the real interrupt owner.
+                    let after_capture = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
+                        .await
+                        .unwrap();
+                    if expected.may_interrupt_for_failure {
+                        assert!(
+                            after_capture.active_request_count > 0,
+                            "capture fixture must retain active work"
+                        );
+                        let reconciled =
+                            reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
+                                .await
+                                .unwrap();
+                        assert_eq!(
+                            reconciled.update_generation, after_capture.update_generation,
+                            "{} event{index}: interrupt pass must not rewrite the run",
+                            trace.name
+                        );
+                        for request in &reconciled.requests {
+                            if request.terminal {
+                                continue;
+                            }
+                            let row = node
+                                .execute(&format!(
+                                    r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ interrupt_requested_at }} }}"#,
+                                    escape_graphql_string(&request.request_id)
+                                ))
+                                .await;
+                            assert!(!row.has_errors(), "{:?}", row.errors);
+                            assert!(
+                                row.data.unwrap()["AgentRequest"][0]["interrupt_requested_at"]
+                                    .is_string(),
+                                "{} event{index}: active {} must carry the owner's interrupt latch",
+                                trace.name,
+                                request.request_id
+                            );
+                        }
+                    }
                 }
                 "cancel" => {
                     let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
@@ -214,7 +252,7 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
                 .unwrap();
             assert_eq!(
                 &observe(&durable, initial_generation),
-                expected,
+                &expected.durable,
                 "{} event{index}",
                 trace.name
             );
@@ -279,6 +317,144 @@ async fn future_failure_code_remains_observable_and_cancellable() {
     .await
     .unwrap();
     assert_eq!(cancelled.status, "cancelled");
+}
+
+#[tokio::test]
+async fn oversized_cancellation_reason_is_rejected_before_any_write() {
+    let (node, run, _) = super::super::runtime::attribution_test_fixture(2).await;
+    let oversized = "x".repeat(1_025);
+    let error = request_graph_run_cancellation(
+        &node,
+        None,
+        graph_test_owner(),
+        &run.run_id,
+        Some(&oversized),
+    )
+    .await
+    .expect_err("the owner must reject a reason beyond its byte ceiling");
+    assert!(
+        error.to_string().contains("cancellation reason exceeds"),
+        "unexpected rejection: {error:#}"
+    );
+    let durable = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
+    assert_eq!(durable.status, "running");
+    assert!(durable.cancellation_requested_at.is_none());
+    assert_eq!(durable.update_generation, 0);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn expired_run_deadline_becomes_durable_failure_evidence() {
+    let (node, run, _) = super::super::runtime::attribution_test_fixture(2).await;
+    // Expire the plan's pinned runtime limit without waiting for the clock.
+    execute_fixture(
+        &node,
+        format!(
+            r#"mutation {{ update_GraphRun(filter: {{ run_id: {{ _eq: "{}" }} }}, input: {{ started_at: "2020-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&run.run_id)
+        ),
+    )
+    .await;
+    let observed = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
+    let evidence = observed
+        .failure_evidence
+        .as_ref()
+        .expect("an exceeded run deadline is failure evidence");
+    assert_eq!(evidence["code"], "run_deadline_exceeded");
+    assert_eq!(evidence["max_runtime_secs"].as_u64(), Some(60));
+    assert!(evidence["deadline_at"].is_string());
+    // Reconciliation must persist the derived deadline evidence.
+    let terminal = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
+    assert_eq!(terminal.status, "failed");
+    assert_eq!(
+        terminal.error.as_ref().unwrap()["code"],
+        "run_deadline_exceeded"
+    );
+    assert!(terminal.completed_at.is_some());
+    let again = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
+    assert_eq!(again.error, terminal.error);
+    assert_eq!(again.update_generation, terminal.update_generation);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn quiesced_pinned_route_group_becomes_durable_failure_evidence() {
+    let (node, run, trigger) = super::super::runtime::attribution_test_fixture(2).await;
+    // Match the pinned trigger and run correlation so load_groups admits it.
+    execute_fixture(
+        &node,
+        format!(
+            r#"mutation {{ create_EventGroupState(input: {{
+                group_key: "pinned-entry-group", agent_did: "{}", consumer: {{ kind: "trigger", trigger_id: "{}" }},
+                correlation: "{}", consumer_config_key: "pinned-entry-group-v1",
+                first_seen_at: "2026-09-05T00:00:00Z",
+                quiesced_at: "2026-09-05T00:01:00Z",
+                quiesced_reason: "operator timeout"
+            }}) {{ _docID }} }}"#,
+            escape_graphql_string(graph_test_owner()),
+            escape_graphql_string(&trigger),
+            escape_graphql_string(&run.correlation),
+        ),
+    )
+    .await;
+    for (key, owner, consumer) in [
+        (
+            "foreign-owner",
+            "did:key:foreign-owner",
+            format!(
+                r#"{{kind: "trigger", trigger_id: "{}"}}"#,
+                escape_graphql_string(&trigger)
+            ),
+        ),
+        (
+            "callback",
+            graph_test_owner(),
+            r#"{kind: "callback_binding", binding_id: "other"}"#.to_string(),
+        ),
+    ] {
+        execute_fixture(
+            &node,
+            format!(
+                r#"mutation {{ create_EventGroupState(input: {{
+            group_key: "{key}", agent_did: "{}", consumer: {consumer}, correlation: "{}",
+            consumer_config_key: "unrelated", first_seen_at: "2026-09-04T00:00:00Z",
+            quiesced_at: "2026-09-04T00:01:00Z", quiesced_reason: "foreign failure"
+        }}) {{_docID}} }}"#,
+                escape_graphql_string(owner),
+                escape_graphql_string(&run.correlation)
+            ),
+        )
+        .await;
+    }
+    let observed = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
+    assert_eq!(observed.groups.len(), 1);
+    assert_eq!(
+        observed.groups[0].quiesced_reason.as_deref(),
+        Some("operator timeout")
+    );
+    let evidence = observed
+        .failure_evidence
+        .as_ref()
+        .expect("a quiesced pinned group is failure evidence");
+    assert_eq!(evidence["code"], "group_quiesced");
+    assert_eq!(evidence["group_key"].as_str(), Some("pinned-entry-group"));
+    assert_eq!(evidence["trigger_id"].as_str(), Some(trigger.as_str()));
+    let terminal = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
+    assert_eq!(terminal.status, "failed");
+    assert_eq!(terminal.error.as_ref().unwrap()["code"], "group_quiesced");
+    node.shutdown().await;
 }
 
 #[tokio::test]

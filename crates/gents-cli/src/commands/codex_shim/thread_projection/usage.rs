@@ -16,6 +16,7 @@ use super::CodexThreadRecord;
 struct UsageScope<'a> {
     agent_did: &'a str,
     behavior_id: &'a str,
+    requester_did: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -62,11 +63,12 @@ struct InferenceCallUsageRow {
     completion_tokens: Option<i64>,
 }
 
-pub(in crate::commands::codex_shim) async fn requests_token_usage(
+async fn requests_token_usage_scoped(
     state: &ShimState,
     request_ids: &[String],
+    scope: UsageScope<'_>,
 ) -> Result<TokenTotals> {
-    let usage = gather_request_usage(state, request_ids, root_usage_scope(state)).await?;
+    let usage = gather_request_usage(state, request_ids, scope).await?;
     Ok(usage
         .into_values()
         .fold(TokenTotals::default(), |mut totals, usage| {
@@ -80,20 +82,26 @@ pub(in crate::commands::codex_shim) async fn requests_token_usage(
         }))
 }
 
-pub(in crate::commands::codex_shim) async fn session_token_usage(
+/// Live root and child streams carry the exact committed request scope.
+pub(in crate::commands::codex_shim) async fn submitted_token_usage(
     state: &ShimState,
-    session_id: &str,
+    request: &crate::SubmittedRequest,
+    turn_request_ids: Option<&[String]>,
 ) -> Result<TokenTotals> {
-    let scope = root_usage_scope(state);
-    let request_ids = session_request_ids(state, session_id, scope).await?;
-    requests_token_usage(state, &request_ids).await
-}
-
-pub(in crate::commands::codex_shim) async fn latest_requests_token_usage(
-    state: &ShimState,
-    request_ids: &[String],
-) -> Result<TokenTotals> {
-    latest_requests_token_usage_scoped(state, request_ids, root_usage_scope(state)).await
+    let scope = UsageScope {
+        agent_did: &request.agent_did,
+        requester_did: request.requester_did.as_deref(),
+        behavior_id: request
+            .behavior_id
+            .as_deref()
+            .context("committed request missing behavior")?,
+    };
+    if let Some(ids) = turn_request_ids {
+        latest_requests_token_usage_scoped(state, ids, scope).await
+    } else {
+        let ids = session_request_ids(state, &request.session_id, scope).await?;
+        requests_token_usage_scoped(state, &ids, scope).await
+    }
 }
 
 pub(in crate::commands::codex_shim) fn latest_inference_usage_observation(
@@ -173,15 +181,14 @@ async fn session_request_ids(
     session_id: &str,
     scope: UsageScope<'_>,
 ) -> Result<Vec<String>> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(scope.agent_did);
+    let session_scope =
+        gents::session::session_scope_filter(scope.agent_did, session_id, scope.requester_did);
     let escaped_behavior_id = escape_graphql_string(scope.behavior_id);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    {session_scope},
                     behavior_id: {{ _eq: "{escaped_behavior_id}" }}
                 }},
                 order: {{ created_at: ASC }}
@@ -200,6 +207,48 @@ async fn session_request_ids(
         .collect())
 }
 
+async fn scoped_request_doc_ids(
+    state: &ShimState,
+    ids: Vec<&str>,
+    scope: UsageScope<'_>,
+) -> Result<Vec<String>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let logical = ids
+        .iter()
+        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let owner = escape_graphql_string(scope.agent_did);
+    let behavior = escape_graphql_string(scope.behavior_id);
+    let requester = scope
+        .requester_did
+        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+        .unwrap_or_else(|| "null".into());
+    let response = query_node_json(&state.node,&format!(r#"{{AgentRequest(filter:{{request_id:{{_in:[{logical}]}},agent_did:{{_eq:"{owner}"}},behavior_id:{{_eq:"{behavior}"}},requester_did:{{_eq:{requester}}}}}){{_docID request_id}}}}"#)).await?;
+    let mut resolved = BTreeMap::new();
+    for row in rows::<Value>(&response, "AgentRequest")? {
+        let id = row["request_id"]
+            .as_str()
+            .context("usage request missing logical ID")?;
+        let physical = row["_docID"]
+            .as_str()
+            .context("usage request missing physical ID")?;
+        anyhow::ensure!(
+            resolved
+                .insert(id.to_owned(), physical.to_owned())
+                .is_none(),
+            "ambiguous scoped usage request"
+        );
+    }
+    anyhow::ensure!(
+        ids.iter().all(|id| resolved.contains_key(*id)),
+        "usage request is absent from exact requester scope"
+    );
+    Ok(resolved.into_values().collect())
+}
+
 async fn gather_request_usage(
     state: &ShimState,
     request_ids: &[String],
@@ -213,7 +262,13 @@ async fn gather_request_usage(
         return Ok(BTreeMap::new());
     }
 
-    let id_list = request_ids
+    let physical_ids = scoped_request_doc_ids(
+        state,
+        request_ids.iter().map(|id| id.as_str()).collect(),
+        scope,
+    )
+    .await?;
+    let id_list = physical_ids
         .iter()
         .map(|request_id| format!(r#""{}""#, escape_graphql_string(request_id)))
         .collect::<Vec<_>>()
@@ -224,7 +279,7 @@ async fn gather_request_usage(
         r#"{{
             AgentResponse(
                 filter: {{
-                    request_id: {{ _in: [{id_list}] }},
+                    request_doc_id: {{ _in: [{id_list}] }},
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
                     behavior_id: {{ _eq: "{escaped_behavior_id}" }}
                 }}
@@ -234,7 +289,7 @@ async fn gather_request_usage(
             }}
             InferenceCall(
                 filter: {{
-                    request_id: {{ _in: [{id_list}] }},
+                    request_doc_id: {{ _in: [{id_list}] }},
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
                     behavior_id: {{ _eq: "{escaped_behavior_id}" }},
                     call_kind: {{ _eq: "inference" }},
@@ -293,8 +348,10 @@ async fn latest_requests_token_usage_scoped(
     if positions.is_empty() {
         return Ok(TokenTotals::default());
     }
-    let id_list = positions
-        .keys()
+    let physical_ids =
+        scoped_request_doc_ids(state, positions.keys().copied().collect(), scope).await?;
+    let id_list = physical_ids
+        .iter()
         .map(|request_id| format!(r#""{}""#, escape_graphql_string(request_id)))
         .collect::<Vec<_>>()
         .join(", ");
@@ -304,7 +361,7 @@ async fn latest_requests_token_usage_scoped(
         r#"{{
             InferenceCall(
                 filter: {{
-                    request_id: {{ _in: [{id_list}] }},
+                    request_doc_id: {{ _in: [{id_list}] }},
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
                     behavior_id: {{ _eq: "{escaped_behavior_id}" }},
                     call_kind: {{ _eq: "inference" }},
@@ -361,6 +418,7 @@ fn root_usage_scope(state: &ShimState) -> UsageScope<'_> {
     UsageScope {
         agent_did: state.agent_did.as_ref(),
         behavior_id: state.behavior_id.as_ref(),
+        requester_did: Some(state.local_requester_did()),
     }
 }
 
@@ -371,6 +429,7 @@ fn record_usage_scope<'a>(state: &'a ShimState, record: &'a CodexThreadRecord) -
         .map(|link| UsageScope {
             agent_did: &link.agent_did,
             behavior_id: &link.behavior_id,
+            requester_did: link.requester_did.as_deref(),
         })
         .unwrap_or_else(|| root_usage_scope(state))
 }
@@ -393,7 +452,7 @@ where
         .pointer(&format!("/data/{name}"))
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
+        .with_context(|| format!("usage query omitted {name} rows"))?
         .into_iter()
         .map(serde_json::from_value)
         .collect::<serde_json::Result<Vec<_>>>()

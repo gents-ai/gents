@@ -242,6 +242,15 @@ pub(crate) async fn scope_request<T>(
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
 
+/// Select an internal call's backend without changing physical request identity,
+/// cancellation, call sequence or the join slot shared with its enclosing scope.
+pub(crate) async fn scope_backend<T>(backend_id: &str, future: impl Future<Output = T>) -> T {
+    let mut context =
+        current_context().expect("backend selection requires request admission context");
+    context.backend_id = backend_id.to_owned();
+    ADMISSION_CALL_CONTEXT.scope(context, future).await
+}
+
 pub(crate) async fn scope_call<T>(
     call_kind: CallKind,
     attempt: i64,
@@ -343,4 +352,47 @@ pub(crate) fn current_call_join() -> Option<CurrentCallJoin> {
         })
         .ok()
         .flatten()
+}
+
+#[cfg(test)]
+mod backend_scope_tests {
+    use super::*;
+    #[tokio::test]
+    async fn summary_backend_scope_preserves_physical_request_and_shared_call_sequence() {
+        let context = AdmissionCallContext {
+            request_id: "request-label".into(),
+            request_doc_id: "physical-request".into(),
+            backend_id: "primary".into(),
+            behavior_id: "behavior".into(),
+            agent_did: "did:key:owner".into(),
+            session_id: "session".into(),
+            call_kind: CallKind::Inference,
+            attempt: 1,
+            call_seq: Arc::new(AtomicU64::new(0)),
+            current_call: Arc::new(Mutex::new(None)),
+            inference_token: Some(CancellationToken::new()),
+            terminal_failure_reason: None,
+        };
+        scope_request(context, async {
+            let first = current_context().unwrap().next_call("runtime");
+            let (second, join) = scope_call_with_join(
+                CallKind::Compaction,
+                1,
+                scope_backend("summary", async {
+                    let context = current_context().unwrap();
+                    assert!(context.inference_token.is_some());
+                    context.next_call("runtime")
+                }),
+            )
+            .await;
+            let third = current_context().unwrap().next_call("runtime");
+            assert_eq!((first.call_seq, second.call_seq, third.call_seq), (1, 2, 3));
+            assert_eq!(second.backend_id, "summary");
+            assert_eq!(third.backend_id, "primary");
+            assert_eq!(second.request_doc_id, first.request_doc_id);
+            assert_eq!(second.agent_did, first.agent_did);
+            assert_eq!(join.unwrap().call_id, second.call_id);
+        })
+        .await;
+    }
 }

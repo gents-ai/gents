@@ -33,7 +33,7 @@ test.describe("desktop async states", () => {
     await page.getByTestId("behavior-save").click();
 
     await expect(page.getByTestId("error-banner")).toContainText(
-      "Harness rejected behavior save",
+      "Harness rejected config apply for sad-path coverage",
     );
     await expect(
       page.locator(".config-editor").getByText("Saved", { exact: true }),

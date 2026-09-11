@@ -1,4 +1,5 @@
-import Proofs.Basic
+import Proofs.Request.State
+import Proofs.StreamingResponse.State
 
 /-!
 # Request execution lease state
@@ -10,25 +11,6 @@ provide a genuinely fresh opaque value when claiming or recovering work.
 -/
 
 namespace RequestExecutionLease
-
-inductive RequestPhase where
-  | pending
-  | claimed
-  | processing
-  | completed
-  | failed
-  | interrupted
-  | dead
-  | superseded
-  deriving DecidableEq, Repr
-
-inductive ResponsePhase where
-  | absent
-  | streaming
-  | completed
-  | failed
-  | interrupted
-  deriving DecidableEq, Repr
 
 inductive Outcome where
   | completed
@@ -57,8 +39,8 @@ request-wide token ledger is modeled separately by `PromptAssembly.AggregateBudg
 They are explicit naturals so a duplicate terminal winner would be observable
 as a value greater than one. -/
 structure World (Generation : Type) where
-  request : RequestPhase
-  response : ResponsePhase
+  request : RequestState
+  response : Option StreamingResponse.Status
   lease : Lease Generation
   usedGenerations : List Generation
   now : Time
@@ -71,7 +53,7 @@ structure World (Generation : Type) where
 
 def initial (Generation : Type) : World Generation :=
   { request := .pending
-  , response := .absent
+  , response := none
   , lease := .vacant
   , usedGenerations := []
   , now := 0
@@ -82,24 +64,24 @@ def initial (Generation : Type) : World Generation :=
   , tokenChargeCount := 0
   }
 
-def Outcome.requestPhase : Outcome → RequestPhase
+def Outcome.requestState : Outcome → RequestState
   | .completed => .completed
   | .failed => .failed
   | .interrupted => .interrupted
   | .dead => .dead
   | .superseded => .superseded
 
-def Outcome.responsePhase : Outcome → ResponsePhase
-  | .completed => .completed
-  | .failed => .failed
-  | .interrupted => .interrupted
-  | .dead | .superseded => .failed
+/-- The lease projects the canonical response status. Interruption remains the
+request outcome; response error detail is owned by StreamingResponse. -/
+def Outcome.responseStatus : Outcome → Option StreamingResponse.Status
+  | .completed => some .completed
+  | .failed | .interrupted | .dead | .superseded => some .error
 
 def terminalAgreement {Generation : Type} (world : World Generation) : Prop :=
   match world.lease with
   | .terminal _ outcome =>
-      world.request = outcome.requestPhase ∧
-        world.response = outcome.responsePhase
+      world.request = outcome.requestState ∧
+        world.response = outcome.responseStatus
   | _ => True
 
 def terminalEffectsBounded {Generation : Type} (world : World Generation) : Prop :=
@@ -119,10 +101,10 @@ def canFinalize {Generation : Type} (world : World Generation)
     (outcome : Outcome) : Prop :=
   match outcome with
   | .completed =>
-      world.request = .processing ∧ world.response = .streaming
+      world.request = .processing ∧ world.response = some .streaming
   | .failed | .interrupted | .dead | .superseded =>
-      (world.request = .claimed ∧ world.response = .absent) ∨
-        (world.request = .processing ∧ world.response = .streaming)
+      (world.request = .claimed ∧ world.response = none) ∨
+        (world.request = .processing ∧ world.response = some .streaming)
 
 instance {Generation : Type} (world : World Generation) (outcome : Outcome) :
     Decidable (canFinalize world outcome) := by
@@ -132,16 +114,16 @@ instance {Generation : Type} (world : World Generation) (outcome : Outcome) :
 def commitTerminalEffects {Generation : Type}
     (world : World Generation) : World Generation :=
   { world with
-    continuationCount := if world.continuationRequired then 1 else 0
-    tokenChargeCount := if world.tokenChargeRequired then 1 else 0 }
+    continuationCount := world.continuationCount + (if world.continuationRequired then 1 else 0)
+    tokenChargeCount := world.tokenChargeCount + (if world.tokenChargeRequired then 1 else 0) }
 
 def terminalize {Generation : Type}
     (world : World Generation) (generation : Generation)
     (outcome : Outcome) : World Generation :=
   commitTerminalEffects
     { world with
-      request := outcome.requestPhase
-      response := outcome.responsePhase
+      request := outcome.requestState
+      response := outcome.responseStatus
       lease := .terminal generation outcome }
 
 /-- EOF is transport observation, not evidence of a completed provider turn. -/

@@ -6,55 +6,58 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
     let db = test_db(test_name).await;
     let agent_did = db.node_identity.did().to_string();
 
-    upsert_tool_selection(
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "r4-parent-tools".to_string(),
-            agent_did: agent_did.clone(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                GHOST_BEHAVIOR_ID,
-                &agent_did,
-                GHOST_BEHAVIOR_ID,
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
+        &agent_did,
+        GHOST_BEHAVIOR_ID,
+        "r4-ghost-child-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .unwrap();
-    upsert_agent_behavior(
+    .await;
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R4 parent (ghost test)".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some("r4-parent-tools".to_string()),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-12T00:00:00Z".to_string()),
-        },
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        "r4-parent-tools",
+        vec![subagent_target(
+            &agent_did,
+            GHOST_BEHAVIOR_ID,
+            &agent_did,
+            GHOST_BEHAVIOR_ID,
+        )],
+        true,
+        true,
+        None,
     )
-    .await
-    .unwrap();
+    .await;
 
     let source = spawn_subagent_source(
         db.node.clone(),
         &agent_did,
         PARENT_BEHAVIOR_ID,
         PARENT_BEHAVIOR_ID,
+    );
+
+    let agent_did_escaped = escape_graphql_string(&agent_did);
+    let ghost_behavior_id = escape_graphql_string(GHOST_BEHAVIOR_ID);
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                delete_AgentBehavior(filter: {{
+                    agent_did: {{ _eq: "{agent_did_escaped}" }},
+                    behavior_id: {{ _eq: "{ghost_behavior_id}" }}
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "delete ghost AgentBehavior failed: {:?}",
+        response.errors
     );
 
     let session_id = format!("{test_name}-session");
@@ -69,8 +72,9 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
         parent_deadline,
     )
     .await;
-    crate::support::create_agent_session(
+    crate::support::create_agent_session_in_scope(
         db.node.as_ref(),
+        &agent_did,
         &session_id,
         PARENT_BEHAVIOR_ID,
         "2026-05-13T00:00:00Z",
@@ -82,6 +86,7 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
         &session_id,
         PARENT_BEHAVIOR_ID,
         &agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -216,7 +221,9 @@ async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
     .await
     .unwrap();
 
-    let history = load_history(db.node.as_ref(), &session_id).await.unwrap();
+    let history = load_history(db.node.as_ref(), &session_id, db.node_identity.did(), None)
+        .await
+        .unwrap();
     assert!(history.iter().any(|message| {
         matches!(
             message,

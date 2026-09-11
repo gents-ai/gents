@@ -12,7 +12,6 @@ structure WriteGrantView where
 
 structure SurfaceView where
   fileRank : Nat
-  meta : Bool
   goalTools : Bool
   goalCreate : Bool
   defraQuery : Bool
@@ -23,7 +22,7 @@ structure SurfaceView where
   spawn : Bool
   steering : Bool
   background : Bool
-  crossDeployment : Bool
+  crossPrincipal : Bool
   skills : Bool
   lsp : Bool
   bashMode : Nat
@@ -191,7 +190,7 @@ def writeOnly (key : String × String) (fields : List String) :
     EndpointScope (String × String) (Finset String) :=
   .only [key].toFinset (fun _ => stringSet fields)
 
-def bashPolicy (mode : ExecMode) (network : NetMode)
+def bashPolicy (mode : CommandPolicy.ExecutionMode) (network : CommandPolicy.NetworkMode)
     (allowed : EndpointScope (List String) Unit) : BashPolicy :=
   { mode := mode
   , network := network
@@ -213,25 +212,24 @@ def bashPolicyRich (forbidden : List (List String))
   , sandbox := true }
 
 def surface (file : FileCap) (bash : BashPolicy)
-    (meta defraQuery spawn : Bool)
+    (ordinary defraQuery spawn : Bool)
     (mcp : EndpointScope ToolId Unit)
     (write : EndpointScope (String × String) (Finset String)) : Surface :=
   { file := file
   , bash := bash
-  , meta := meta
-  , goalTools := meta
-  , goalCreate := meta
+  , goalTools := ordinary
+  , goalCreate := ordinary
   , defraQuery := defraQuery
   , selfConfig := defraQuery
-  , memory := meta
-  , sessionHistory := meta
-  , contextBudget := meta
+  , memory := ordinary
+  , sessionHistory := ordinary
+  , contextBudget := ordinary
   , spawn := spawn
-  , steering := meta
+  , steering := ordinary
   , background := spawn
-  , crossDeployment := spawn
-  , skills := meta
-  , lsp := meta
+  , crossPrincipal := spawn
+  , skills := ordinary
+  , lsp := ordinary
   , cliTools := .all
   , mcpServices := mcp
   , defraCollections := .all
@@ -245,7 +243,6 @@ def surface (file : FileCap) (bash : BashPolicy)
 
 def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : SurfaceView :=
   { fileRank := s.file.rank
-  , meta := s.meta
   , goalTools := s.goalTools
   , goalCreate := s.goalCreate
   , defraQuery := s.defraQuery
@@ -256,11 +253,11 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , spawn := s.spawn
   , steering := s.steering
   , background := s.background
-  , crossDeployment := s.crossDeployment
+  , crossPrincipal := s.crossPrincipal
   , skills := s.skills
   , lsp := s.lsp
-  , bashMode := s.bash.mode.toContractCode
-  , bashNet := s.bash.network.rank
+  , bashMode := ToolPolicy.executionModeContractCode s.bash.mode
+  , bashNet := networkRank s.bash.network
   , bashSandbox := s.bash.sandbox
   , bashAllowedKind := scopeKind s.bash.allowed
   , bashAllowedPrefixes := bashAllowedPrefixes s.bash.allowed
@@ -389,7 +386,7 @@ def ceilingClampsEachCategory : Surface :=
   , contextBudget := false
   , steering := false
   , background := false
-  , crossDeployment := false
+  , crossPrincipal := false
   , skills := false
   , selfConfig := false
   , cliTools := cliOnly [("svc-a", ["field_a"])]
@@ -471,7 +468,7 @@ def behaviorGoalCreate : Surface :=
 def ceilingDeniesGoalCreate : Surface :=
   { wideOpen with goalCreate := false }
 
-def behaviorMetaWithoutGoals : Surface :=
+def behaviorWithoutGoals : Surface :=
   { wideOpen with goalTools := false, goalCreate := false }
 
 def mkCase (name : String) (b c : Surface) (r : Avail)
@@ -509,14 +506,14 @@ def cases : List Case :=
       behaviorQueryA writeAllNoQuery wideOpen "svc-a" probeWrite
   , mkCase "eth_query_methods_intersect"
       behaviorEthA ceilingEthB runtimeEthAll "svc-a" probeWrite
-  , mkCase "goal_tools_independent_from_meta"
+  , mkCase "goal_tools_explicit"
       behaviorGoalOnly wideOpen wideOpen "svc-a" probeWrite
   , mkCase "goal_create_granted_when_all_layers_allow"
       behaviorGoalCreate wideOpen wideOpen "svc-a" probeWrite
   , mkCase "goal_create_clamped_by_ceiling"
       behaviorGoalCreate ceilingDeniesGoalCreate wideOpen "svc-a" probeWrite
-  , mkCase "meta_does_not_force_explicitly_disabled_goals"
-      behaviorMetaWithoutGoals wideOpen wideOpen "svc-a" probeWrite
+  , mkCase "other_capabilities_do_not_enable_goals"
+      behaviorWithoutGoals wideOpen wideOpen "svc-a" probeWrite
   ]
 
 end ToolPolicy.ContractCases

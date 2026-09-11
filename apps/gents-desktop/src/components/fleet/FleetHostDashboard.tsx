@@ -8,8 +8,7 @@ import {
   LocalRuntimeConnect,
 } from "@source-inc/gents-desktop-fleet/local-runtime";
 import type {
-  BackendSaveRequest,
-  BehaviorSaveRequest,
+  ConfigComponentsPatchRequest,
   CodexLoginResult,
   CodexLoginUrl,
   GrokLoginResult,
@@ -30,8 +29,7 @@ export type FleetHostDashboardProps = Omit<
   onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
   onStartManagedServer?: (agentName: string) => Promise<unknown>;
   onCommitManagedServerAutoStart?: (agentName: string) => Promise<unknown>;
-  onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
-  onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onPatchConfigComponents: (request: ConfigComponentsPatchRequest) => Promise<unknown>;
   onProbeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
   onCodexLogin: (agentDid: string) => Promise<CodexLoginResult>;
   onCancelCodexLogin: () => Promise<unknown>;
@@ -44,8 +42,7 @@ export function FleetHostDashboard({
   onInitLocalRuntime,
   onStartManagedServer,
   onCommitManagedServerAutoStart,
-  onSaveBackendConfig,
-  onSaveBehaviorConfig,
+  onPatchConfigComponents,
   onProbeInferenceEndpoint,
   onCodexLogin,
   onCancelCodexLogin,
@@ -90,8 +87,7 @@ export function FleetHostDashboard({
         <InferenceSetupWizard
           deployment={deployment}
           onClose={onClose}
-          onSaveBackendConfig={onSaveBackendConfig}
-          onSaveBehaviorConfig={onSaveBehaviorConfig}
+          onPatchConfigComponents={onPatchConfigComponents}
           onProbeInferenceEndpoint={onProbeInferenceEndpoint}
           onCodexLogin={onCodexLogin}
           onCancelCodexLogin={onCancelCodexLogin}

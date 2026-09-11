@@ -1,4 +1,6 @@
-//! Shared P2P collection profile definitions.
+//! Shared explicit CLI collection selections. Profiles do not grant ACP access.
+//! Runtime/agent are operator selections; desktop/discovery omit backend secrets.
+//! Pairing templates remain the owner of directional DID/requester predicates.
 
 use std::collections::BTreeSet;
 
@@ -83,12 +85,22 @@ pub fn expand_p2p_collection_profile_ids<'a>(
 const RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
+    "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
+    "ToolServiceRegistry",
+    "Skill",
+    "DatastoreToolSurface",
+    "ChainKeyBinding",
+    "EthTool",
+    "InferenceBackend",
     "AgentRuntime",
     "AgentBehaviorReadiness",
-    "ToolSelection",
-    "InferenceProfile",
-    "InferenceBackend",
-    "AgentConversation",
     "AgentRequest",
     "AgentResponse",
     "AgentToolResult",
@@ -99,32 +111,54 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "ProjectionAcpBinding",
     "Task",
     "Schedule",
-    "ToolServiceRegistry",
+    "Trigger",
+    "EventSource",
 ];
 
 const AGENT_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
+    "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
+    "ToolServiceRegistry",
+    "Skill",
+    "DatastoreToolSurface",
+    "ChainKeyBinding",
+    "EthTool",
+    "InferenceBackend",
     "AgentRuntime",
     "AgentBehaviorReadiness",
-    "ToolSelection",
-    "InferenceBackend",
-    "InferenceProfile",
 ];
 
 const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
     "ToolServiceRegistry",
+    "Skill",
+    "DatastoreToolSurface",
+    "ChainKeyBinding",
+    "EthTool",
     "Task",
     "Schedule",
+    "Trigger",
+    "EventSource",
 ];
 
 const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
-    "AgentConversation",
     "AgentRequest",
     "AgentResponse",
     "AgentToolResult",
@@ -140,11 +174,21 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
     "PeerRegistry",
     "AgentPrincipal",
     "AgentBehavior",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
+    "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
+    "ToolServiceRegistry",
+    "Skill",
+    "DatastoreToolSurface",
+    "ChainKeyBinding",
+    "EthTool",
     "AgentRuntime",
     "AgentBehaviorReadiness",
-    "ToolSelection",
-    "InferenceBackend",
-    "InferenceProfile",
 ];
 
 #[cfg(test)]
@@ -187,16 +231,49 @@ mod tests {
     }
 
     #[test]
-    fn fleet_profiles_replicate_diagnostics_and_authoritative_readiness() {
+    fn profiles_select_canonical_documents_without_implicit_client_credentials() {
         for profile in [
             P2pCollectionProfile::Runtime,
             P2pCollectionProfile::Agent,
+            P2pCollectionProfile::DesktopConfig,
+            P2pCollectionProfile::ChatRequests,
+            P2pCollectionProfile::ToolServices,
             P2pCollectionProfile::Discovery,
         ] {
-            assert!(profile.collection_names().contains(&"AgentRuntime"));
-            assert!(profile
-                .collection_names()
-                .contains(&"AgentBehaviorReadiness"));
+            let names = profile.collection_names();
+            assert_eq!(
+                names.len(),
+                names.iter().collect::<BTreeSet<_>>().len(),
+                "duplicate profile member: {}",
+                profile.id()
+            );
+            for name in names {
+                assert!(
+                    gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(name)
+                        || gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.contains(name),
+                    "{} selects retired/unregistered {name}",
+                    profile.id()
+                );
+            }
+        }
+        for profile in [
+            P2pCollectionProfile::DesktopConfig,
+            P2pCollectionProfile::Discovery,
+            P2pCollectionProfile::ChatRequests,
+        ] {
+            for secret in ["InferenceBackend", "OAuthCredential"] {
+                assert!(!profile.collection_names().contains(&secret));
+            }
+        }
+        let operator = super::super::templates::resolve_template("agent-config").unwrap();
+        for profile in [P2pCollectionProfile::Runtime, P2pCollectionProfile::Agent] {
+            for name in operator.collections {
+                assert!(
+                    profile.collection_names().contains(name),
+                    "{} loses operator config {name}",
+                    profile.id()
+                );
+            }
         }
     }
 }

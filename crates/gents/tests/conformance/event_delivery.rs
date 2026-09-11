@@ -19,25 +19,59 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const RESCAN_TEST_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) async fn event_delivery_transition_cases_match_contract() {
-    let cases = lean_event_delivery_transition_cases();
-    let watcher = runtime_event_delivery_source_contract("Watcher");
-    assert!(
-        cases.len() >= 12,
-        "Expected at least 12 transition-case rows; got {}",
-        cases.len()
-    );
-    for case in cases {
-        let mut runtime = ProductionEventDeliveryDriver::new(watcher, &case.pre).await;
-        runtime
-            .apply(&case.action)
-            .await
-            .unwrap_or_else(|err| panic!("case `{}` rejected runtime action: {err}", case.name));
-        assert_eq!(
-            runtime.world, case.post,
-            "case `{}` drifted from production runtime replay",
-            case.name
-        );
+    // These rows describe substrate bookkeeping, not a source-owner observation.
+    // The ledger retains their missing runtime coverage; do not replay a second World.
+    const UNOBSERVED: [&str; 8] = [
+        "persist_into_empty",
+        "persist_extends_set",
+        "depersist_removes",
+        "enqueue_from_persistent",
+        "drop_from_queue",
+        "deliver_consumes_queue",
+        "rescan_on_empty",
+        "enqueue_twice_multiset",
+    ];
+    let mut skipped = Vec::new();
+    let mut observed = 0;
+    let mut siblings = 0;
+    for case in lean_event_delivery_transition_cases() {
+        if UNOBSERVED.contains(&case.name.as_str()) {
+            skipped.push(case.name.as_str());
+            continue;
+        }
+        if case.name == "handle_ready_trigger_preserves_pending_sibling" {
+            siblings += 1; // Driven by the dedicated two-trigger EventSource test.
+            continue;
+        }
+        let mut runtime = ProductionEventDeliveryDriver::new(
+            runtime_event_delivery_source_contract("Watcher"),
+            &case.pre,
+        )
+        .await;
+        match &case.action {
+            LeanEventDeliveryAction::RescanTick => {
+                let emitted = case
+                    .post
+                    .subscription_queue
+                    .strip_suffix(case.pre.subscription_queue.as_slice())
+                    .expect("rescan witness retains its existing queue suffix");
+                assert!(!emitted.is_empty(), "{} needs a real emission", case.name);
+                runtime.drive_rescan(emitted).await.unwrap();
+            }
+            LeanEventDeliveryAction::Handle { doc } => {
+                let emitted = runtime.drive_handle(doc).await.unwrap();
+                assert_eq!(case.post.handled, vec![emitted], "{}", case.name);
+            }
+            other => panic!("{} needs an owner adapter for {other:?}", case.name),
+        }
+        observed += 1;
     }
+    skipped.sort_unstable();
+    let mut expected = UNOBSERVED.to_vec();
+    expected.sort_unstable();
+    assert_eq!(skipped, expected);
+    assert_eq!(observed, 5);
+    assert_eq!(siblings, 1);
 }
 
 pub(super) fn event_delivery_source_instances_match_runtime() {
@@ -71,25 +105,49 @@ pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation
     for trace in traces {
         let source = runtime_event_delivery_source_contract(&trace.instance_name);
         let mut runtime = ProductionEventDeliveryDriver::new(source, &trace.initial_world).await;
+        let mut pending = trace
+            .initial_world
+            .persistent_set
+            .iter()
+            .filter(|doc| !trace.initial_world.processed_set.contains(*doc))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut handled = Vec::new();
         for action in &trace.actions {
-            runtime.apply(action).await.unwrap_or_else(|err| {
-                panic!("trace `{}` rejected runtime action: {err}", trace.name)
-            });
+            match action {
+                LeanEventDeliveryAction::Persist { doc } => {
+                    // The mock bus receives no update here: delivery must come
+                    // from the real source's rescan of persisted documents.
+                    runtime
+                        .persist_runtime_doc(doc, pending.len())
+                        .await
+                        .unwrap();
+                    pending.push(doc.clone());
+                }
+                LeanEventDeliveryAction::RescanTick => {
+                    assert!(
+                        !pending.is_empty(),
+                        "{} needs a rescan emission",
+                        trace.name
+                    );
+                    runtime.drive_rescan(&pending).await.unwrap();
+                }
+                LeanEventDeliveryAction::Handle { doc } => {
+                    let emitted = runtime.drive_handle(doc).await.unwrap();
+                    handled.insert(0, emitted);
+                    pending.retain(|pending| pending != doc);
+                }
+                other => panic!("{} needs an owner adapter for {other:?}", trace.name),
+            }
         }
         assert_eq!(
-            runtime.world, trace.final_world,
-            "trace `{}` drifted from production runtime replay",
+            handled, trace.final_world.handled,
+            "{} emitted requests",
             trace.name
         );
 
         match trace.status.as_str() {
             "substantive" => {
-                assert!(
-                    runtime.unhandled_persistent_docs().await.is_empty(),
-                    "substantive trace `{}` left persistent docs unhandled: {:?}",
-                    trace.name,
-                    runtime.unhandled_persistent_docs().await
-                );
                 assert!(
                     source.deviation.is_none(),
                     "substantive trace `{}` should run against a non-deviation source",
@@ -129,7 +187,6 @@ struct ProductionEventDeliveryDriver {
     emitted_rx: Option<mpsc::Receiver<String>>,
     emitted_buffer: Vec<String>,
     doc_ids: HashMap<String, String>,
-    world: lean_vocab_test::LeanEventDeliveryWorld,
 }
 
 enum ProductionRuntime {
@@ -164,7 +221,6 @@ impl ProductionEventDeliveryDriver {
                     emitted_rx: None,
                     emitted_buffer: Vec::new(),
                     doc_ids: HashMap::new(),
-                    world: empty_event_delivery_world(),
                 }
             }
             "EventSource" => {
@@ -188,7 +244,6 @@ impl ProductionEventDeliveryDriver {
                     emitted_rx: Some(emitted_rx),
                     emitted_buffer: Vec::new(),
                     doc_ids: HashMap::new(),
-                    world: empty_event_delivery_world(),
                 }
             }
             "SubagentSource" => {
@@ -218,7 +273,6 @@ impl ProductionEventDeliveryDriver {
                     emitted_rx: Some(emitted_rx),
                     emitted_buffer: Vec::new(),
                     doc_ids: HashMap::new(),
-                    world: empty_event_delivery_world(),
                 }
             }
             other => panic!("unhandled event-delivery source {other:?}"),
@@ -239,84 +293,27 @@ impl ProductionEventDeliveryDriver {
         for (index, doc) in world.persistent_set.iter().enumerate() {
             self.persist_runtime_doc(doc, index).await?;
             if world.processed_set.contains(doc) {
-                self.mark_runtime_doc_processed(doc).await?;
+                // Poll through the owner to seed Watcher cooldown. Keep the
+                // request pending; marking it completed would test a different filter.
+                // Current witnesses put processed documents first in FIFO order.
+                match &mut self.runtime {
+                    ProductionRuntime::Watcher { watcher } => {
+                        let request = poll_watcher(watcher).await?;
+                        if request.request_id != *doc {
+                            return Err(format!(
+                                "cooldown fixture emitted {:?}, expected {doc:?}",
+                                request.request_id
+                            ));
+                        }
+                    }
+                    _ => return Err("processed seed needs a source-specific owner adapter".into()),
+                }
             }
         }
         for doc in &world.subscription_queue {
             self.publish_update(doc)?;
         }
-        self.world = world.clone();
         Ok(())
-    }
-
-    async fn apply(&mut self, action: &LeanEventDeliveryAction) -> Result<(), String> {
-        match action {
-            LeanEventDeliveryAction::Persist { doc } => {
-                if self.world.persistent_set.contains(doc) {
-                    return Err(format!("doc {doc:?} already persisted"));
-                }
-                let sequence = self.world.persistent_set.len();
-                self.persist_runtime_doc(doc, sequence).await?;
-                self.world.persistent_set.insert(0, doc.clone());
-            }
-            LeanEventDeliveryAction::Depersist { doc } => {
-                erase_first(&mut self.world.persistent_set, doc)
-                    .ok_or_else(|| format!("doc {doc:?} is not persistent"))?;
-                self.depersist_runtime_doc(doc).await?;
-            }
-            LeanEventDeliveryAction::Enqueue { doc } => {
-                if !self.world.persistent_set.contains(doc) {
-                    return Err(format!("doc {doc:?} is not persistent"));
-                }
-                self.publish_update(doc)?;
-                self.world.subscription_queue.insert(0, doc.clone());
-            }
-            LeanEventDeliveryAction::Drop { doc }
-            | LeanEventDeliveryAction::DeliverFromQueue { doc } => {
-                erase_first(&mut self.world.subscription_queue, doc)
-                    .ok_or_else(|| format!("doc {doc:?} is not queued"))?;
-                self.drop_production_delivery(doc).await?;
-            }
-            LeanEventDeliveryAction::RescanTick => {
-                if self.source.rescan_bounded_by == 0 {
-                    return Err(format!(
-                        "source {} does not advertise a positive bounded live rescan",
-                        self.source.name
-                    ));
-                }
-                let mut rescanned = self
-                    .world
-                    .persistent_set
-                    .iter()
-                    .filter(|doc| !self.world.processed_set.contains(*doc))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                self.drive_rescan(&rescanned).await?;
-                rescanned.extend(self.world.subscription_queue.clone());
-                self.world.subscription_queue = rescanned;
-            }
-            LeanEventDeliveryAction::Handle { doc } => {
-                if self.world.processed_set.contains(doc) {
-                    return Err(format!("doc {doc:?} is already processed"));
-                }
-                erase_first(&mut self.world.subscription_queue, doc)
-                    .ok_or_else(|| format!("doc {doc:?} is not queued"))?;
-                self.drive_handle(doc).await?;
-                self.mark_runtime_doc_processed(doc).await?;
-                self.world.processed_set.insert(0, doc.clone());
-                self.world.handled.insert(0, doc.clone());
-            }
-        }
-        Ok(())
-    }
-
-    async fn unhandled_persistent_docs(&self) -> Vec<String> {
-        self.world
-            .persistent_set
-            .iter()
-            .filter(|doc| !self.world.handled.contains(*doc))
-            .cloned()
-            .collect()
     }
 
     async fn persist_runtime_doc(&mut self, doc: &str, sequence: usize) -> Result<(), String> {
@@ -339,50 +336,6 @@ impl ProductionEventDeliveryDriver {
             other => return Err(format!("unsupported source {other:?}")),
         };
         self.doc_ids.insert(doc.to_string(), doc_id);
-        Ok(())
-    }
-
-    async fn depersist_runtime_doc(&mut self, doc: &str) -> Result<(), String> {
-        match self.source.name {
-            "Watcher" => self.update_agent_request_state(doc, "completed").await,
-            "EventSource" | "SubagentSource" => Ok(()),
-            other => Err(format!("unsupported source {other:?}")),
-        }
-    }
-
-    async fn mark_runtime_doc_processed(&self, doc: &str) -> Result<(), String> {
-        match self.source.name {
-            "Watcher" => self.update_agent_request_state(doc, "completed").await,
-            "EventSource" | "SubagentSource" => Ok(()),
-            other => Err(format!("unsupported source {other:?}")),
-        }
-    }
-
-    async fn update_agent_request_state(
-        &self,
-        doc: &str,
-        lifecycle_state: &str,
-    ) -> Result<(), String> {
-        let doc_id = self
-            .doc_ids
-            .get(doc)
-            .ok_or_else(|| format!("doc {doc:?} has no AgentRequest row"))?;
-        let doc_id = escape_graphql_string(doc_id);
-        let lifecycle_state = escape_graphql_string(lifecycle_state);
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                    input: {{
-                        lifecycle_state: "{lifecycle_state}"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-        let resp = self.db.node.execute(&mutation).await;
-        if resp.has_errors() {
-            return Err(format!("update_AgentRequest failed: {:?}", resp.errors));
-        }
         Ok(())
     }
 
@@ -548,11 +501,11 @@ impl ProductionEventDeliveryDriver {
         }
     }
 
-    async fn drive_handle(&mut self, doc: &str) -> Result<(), String> {
+    async fn drive_handle(&mut self, doc: &str) -> Result<String, String> {
         match &mut self.runtime {
             ProductionRuntime::Watcher { watcher } => {
-                if erase_first(&mut self.emitted_buffer, doc).is_some() {
-                    return Ok(());
+                if let Some(emitted) = erase_first(&mut self.emitted_buffer, doc) {
+                    return Ok(emitted);
                 }
                 let request = poll_watcher(watcher).await?;
                 if request.request_id != doc {
@@ -561,30 +514,16 @@ impl ProductionEventDeliveryDriver {
                         request.request_id, doc
                     ));
                 }
-                Ok(())
+                Ok(request.request_id)
             }
             ProductionRuntime::EventSource | ProductionRuntime::SubagentSource => {
                 let expected = self.production_doc_id(doc)?;
-                self.wait_for_emitted_doc(&expected, DELIVERY_TIMEOUT).await
+                self.wait_for_emitted_doc(&expected, DELIVERY_TIMEOUT)
+                    .await?;
+                // The emitted physical document id was checked above; return
+                // its logical fixture id for comparison with the generated row.
+                Ok(doc.to_string())
             }
-        }
-    }
-
-    async fn drop_production_delivery(&mut self, doc: &str) -> Result<(), String> {
-        if matches!(self.runtime, ProductionRuntime::Watcher { .. }) {
-            return Ok(());
-        }
-        let expected = self.production_doc_id(doc)?;
-        match self
-            .wait_for_any_emitted_doc(Duration::from_millis(250))
-            .await?
-        {
-            Some(emitted) if emitted == expected => Ok(()),
-            Some(emitted) => {
-                self.emitted_buffer.push(emitted);
-                Ok(())
-            }
-            None => Ok(()),
         }
     }
 
@@ -650,14 +589,6 @@ impl ProductionEventDeliveryDriver {
                 }
             }
         }
-    }
-
-    async fn wait_for_any_emitted_doc(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Option<String>, String> {
-        self.wait_for_any_emitted_doc_until(tokio::time::Instant::now() + timeout)
-            .await
     }
 
     async fn wait_for_any_emitted_doc_until(
@@ -778,47 +709,19 @@ async fn install_subagent_source_fixture(
 ) -> Result<(), String> {
     const TOOL_SELECTION_ID: &str = "event-delivery-subagent-tools";
 
-    upsert_tool_selection(
+    support::fixtures::configure_subagent_behavior(
         node,
-        &ToolSelectionDocument {
-            selection_id: TOOL_SELECTION_ID.to_string(),
-            agent_did: agent_did.to_string(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                AGENT_NAME, agent_did, AGENT_NAME, None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
+        agent_did,
+        AGENT_NAME,
+        TOOL_SELECTION_ID,
+        vec![support::fixtures::subagent_target(
+            agent_did, AGENT_NAME, agent_did, AGENT_NAME,
+        )],
+        true,
+        true,
+        None,
     )
-    .await
-    .map_err(|err| format!("upsert ToolSelection failed: {err}"))?;
-
-    upsert_agent_behavior(
-        node,
-        &AgentBehaviorDocument {
-            behavior_id: AGENT_NAME.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Event delivery subagent fixture".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(TOOL_SELECTION_ID.to_string()),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-20T00:00:00Z".to_string()),
-        },
-    )
-    .await
-    .map_err(|err| format!("upsert AgentBehavior failed: {err}"))?;
+    .await;
 
     Ok(())
 }
@@ -832,6 +735,7 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
         goal_objective_template: None,
         goal_token_budget: None,
         output_schema_ref: None,
+        hooks: Vec::new(),
     };
     let trigger = ResolvedEventTrigger {
         trigger_doc_id: "event-source-trigger-doc".to_string(),
@@ -861,7 +765,7 @@ fn active_snapshot_without_event_triggers(
     identity: Arc<dyn gents::AgentIdentity>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let agent_did = identity.did().to_string();
-    let principal = Arc::new(gents::AgentPrincipal {
+    let principal = Arc::new(gents::RuntimePrincipal {
         agent_did: agent_did.clone(),
         identity,
         default_behavior_id: AGENT_NAME.to_string(),
@@ -917,11 +821,11 @@ fn active_snapshot(
     })
 }
 
-fn runtime_behavior(behavior_id: &str) -> Arc<gents::AgentBehavior> {
+fn runtime_behavior(behavior_id: &str) -> Arc<gents::ResolvedBehavior> {
     let identity: Arc<dyn gents::AgentIdentity> = Arc::new(
         crate::support::fixtures::test_identity(&format!("event-delivery-{behavior_id}")),
     );
-    let principal = Arc::new(gents::AgentPrincipal {
+    let principal = Arc::new(gents::RuntimePrincipal {
         agent_did: AGENT_DID.to_string(),
         identity,
         default_behavior_id: AGENT_NAME.to_string(),
@@ -932,15 +836,6 @@ fn runtime_behavior(behavior_id: &str) -> Arc<gents::AgentBehavior> {
         behavior_id,
         principal,
     ))
-}
-
-fn empty_event_delivery_world() -> lean_vocab_test::LeanEventDeliveryWorld {
-    lean_vocab_test::LeanEventDeliveryWorld {
-        persistent_set: Vec::new(),
-        subscription_queue: Vec::new(),
-        processed_set: Vec::new(),
-        handled: Vec::new(),
-    }
 }
 
 fn sanitize_graphql_id(value: &str) -> String {

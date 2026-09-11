@@ -13,7 +13,7 @@ private def requestAdmissionKindName : AgentRequestAdmissionKind → String
 
 private def runtimeInternalSourceKindName : RuntimeInternalSourceKind → String
   | .localChild => "local-child"
-  | .crossDeploymentChild => "cross-deployment-child"
+  | .crossPrincipalChild => "cross-principal-child"
   | .localControl => "local-control"
   | .automatedTrigger => "automated-trigger"
 
@@ -50,7 +50,7 @@ private def requestAdmissionCase (name : String)
   , targetPolicyAllows := observation.targetPolicyAllows
   , bridgeAuthorBindingCurrent := observation.bridgeAuthorBindingCurrent
   , bridgeAuthorAuthorizationFresh := observation.bridgeAuthorAuthorizationFresh
-  , targetCrossDeploymentPolicyAllows := observation.targetCrossDeploymentPolicyAllows
+  , targetCrossPrincipalPolicyAllows := observation.targetCrossPrincipalPolicyAllows
   , expectedAdmitted := projectAgentRequestAdmission observation
   , expectedDisposition := requestAdmissionDispositionName
       (projectAgentRequestAdmissionDisposition observationAvailable observation) }
@@ -80,7 +80,7 @@ private def requestAdmissionBase (kind : AgentRequestAdmissionKind) :
   , targetPolicyAllows := false
   , bridgeAuthorBindingCurrent := false
   , bridgeAuthorAuthorizationFresh := false
-  , targetCrossDeploymentPolicyAllows := false }
+  , targetCrossPrincipalPolicyAllows := false }
 
 def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   [ requestAdmissionCase "valid-current-enrollment" (requestAdmissionBase .enrollment)
@@ -105,14 +105,14 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, sourceDocumentBindingCurrent := true
           sourceToolCallBindingCurrent := true, targetPolicyAllows := true }
-  , requestAdmissionCase "valid-runtime-cross-deployment-child-without-parent-document"
+  , requestAdmissionCase "valid-runtime-cross-principal-child-without-parent-document"
       { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .crossDeploymentChild
+          runtimeSourceKind := .crossPrincipalChild
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, sourceDocumentBindingCurrent := false
           sourceToolCallBindingCurrent := true, bridgeAuthorBindingCurrent := true
           bridgeAuthorAuthorizationFresh := true
-          targetCrossDeploymentPolicyAllows := true }
+          targetCrossPrincipalPolicyAllows := true }
   , requestAdmissionCase "valid-runtime-automated-trigger"
       { requestAdmissionBase .runtimeInternal with
           runtimeSourceKind := .automatedTrigger
@@ -155,22 +155,22 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
           sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := true
           sourceDocumentBindingCurrent := true
           sourceToolCallBindingCurrent := true, targetPolicyAllows := false }
-  , requestAdmissionCase "cross-deployment-author-revoked"
+  , requestAdmissionCase "cross-principal-author-revoked"
       { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .crossDeploymentChild
+          runtimeSourceKind := .crossPrincipalChild
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
           bridgeAuthorBindingCurrent := true
           bridgeAuthorAuthorizationFresh := false
-          targetCrossDeploymentPolicyAllows := true }
-  , requestAdmissionCase "cross-deployment-target-policy-denied"
+          targetCrossPrincipalPolicyAllows := true }
+  , requestAdmissionCase "cross-principal-target-policy-denied"
       { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .crossDeploymentChild
+          runtimeSourceKind := .crossPrincipalChild
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
           bridgeAuthorBindingCurrent := true
           bridgeAuthorAuthorizationFresh := true
-          targetCrossDeploymentPolicyAllows := false }
+          targetCrossPrincipalPolicyAllows := false }
   , requestAdmissionCase "cross-target-local-self"
       { requestAdmissionBase .localSelf with requesterMatchesTarget := false }
   , requestAdmissionCase "tampered-signed-request-fields"

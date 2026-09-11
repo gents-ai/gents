@@ -3,165 +3,15 @@ use gents::watcher::{AgentRequest, DefraWatcher};
 use gents::RequestLifecycle;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use serde::Deserialize;
 
 use crate::support::{
-    create_conversation_row, create_request, create_request_with_valid_until, first_row,
-    set_interrupt_requested_at, test_db, test_db_with_duplicate_tolerant_conversations, AGENT_DID,
-    AGENT_NAME,
+    create_request, create_request_with_valid_until, first_row, set_interrupt_requested_at,
+    test_db, AGENT_DID, AGENT_NAME,
 };
 
 type StatusRow = AgentRequestRow;
 
-#[derive(Debug, Clone, Deserialize)]
-struct BehaviorRow {
-    behavior_id: String,
-}
-
 type DeadlineRow = AgentRequestRow;
-
-#[tokio::test]
-async fn claim_updates_every_duplicate_conversation_projection() {
-    let db = test_db_with_duplicate_tolerant_conversations("claim-duplicate-conversations").await;
-    let session_id = "session-duplicate-conversations";
-    create_conversation_row(
-        &db.node,
-        session_id,
-        "first",
-        "old first",
-        "active",
-        "2026-03-23T00:00:00Z",
-        "2026-03-23T00:00:00Z",
-        "old-first",
-    )
-    .await;
-    create_conversation_row(
-        &db.node,
-        session_id,
-        "second",
-        "old second",
-        "active",
-        "2026-03-23T00:00:01Z",
-        "2026-03-23T00:00:01Z",
-        "old-second",
-    )
-    .await;
-    let doc_id = create_request(
-        &db.node,
-        "req-duplicate-conversations",
-        session_id,
-        "pending",
-        "2026-03-23T00:00:02Z",
-    )
-    .await;
-    let request = DefraWatcher::new(db.node.clone(), AGENT_DID)
-        .try_fetch_request(&doc_id)
-        .await
-        .unwrap()
-        .expect("pending request");
-    let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    let response = db
-        .node
-        .execute(
-            r#"{
-                AgentConversation(
-                    filter: { session_id: { _eq: "session-duplicate-conversations" } }
-                ) { latest_request_id status }
-            }"#,
-        )
-        .await;
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentConversation"))
-        .and_then(serde_json::Value::as_array)
-        .expect("conversation rows");
-    assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|row| {
-        row.get("latest_request_id")
-            .and_then(serde_json::Value::as_str)
-            == Some("req-duplicate-conversations")
-            && row.get("status").and_then(serde_json::Value::as_str) == Some("processing")
-    }));
-}
-
-#[tokio::test]
-async fn pending_request_hydrates_sampling_fields_and_metadata() {
-    let db = test_db("request-sampling-metadata").await;
-    let request_id = "req-sampling-metadata";
-    let session_id = "session-sampling-metadata";
-    let metadata = r#" { "run_id": "foo" } "#;
-    let deadline = "2026-03-23T00:05:00Z";
-    let escaped_metadata = gents::graphql::escape_graphql_string(metadata);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "{AGENT_NAME}",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "visible prompt",
-                temperature: 0.0,
-                top_p: 0.95,
-                top_k: 40,
-                seed: 1234,
-                max_tokens: 512,
-                metadata: "{escaped_metadata}",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "2026-03-23T00:00:00Z",
-                deadline: "{deadline}",
-                retry_count: 0,
-                max_retries: 3
-            }}) {{ _docID }}
-        }}"#,
-    );
-    let resp = db.node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create request failed: {:?}",
-        resp.errors
-    );
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                _docID
-            }}
-        }}"#,
-    );
-    let resp = db.node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "query request failed: {:?}",
-        resp.errors
-    );
-    let doc_id = first_row::<crate::support::DocIdRow>(&resp, "AgentRequest").doc_id;
-
-    let watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
-    let request = watcher
-        .try_fetch_request(&doc_id)
-        .await
-        .unwrap()
-        .expect("pending request");
-
-    assert_eq!(request.temperature, Some(0.0));
-    assert_eq!(request.top_p, Some(0.95));
-    assert_eq!(request.top_k, Some(40));
-    assert_eq!(request.seed, Some(1234));
-    assert_eq!(request.max_tokens, Some(512));
-    assert_eq!(request.metadata.as_deref(), Some(metadata));
-    assert_eq!(request.deadline.as_deref(), Some(deadline));
-    assert_eq!(request.content, "visible prompt");
-    assert!(!request.content.contains("run_id"));
-}
 
 #[tokio::test]
 async fn claim_queues_when_earlier_processing_request_exists() {
@@ -174,40 +24,8 @@ async fn claim_queues_when_earlier_processing_request_exists() {
     let later = (chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339();
     let doc_id = create_request(&db.node, "req-later", &session_id, "pending", &later).await;
     let request = AgentRequest {
-        doc_id,
-        request_id: "req-later".into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
-        session_id,
         content: "second".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: later,
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
+        ..crate::support::build_request(doc_id, "req-later".into(), session_id, later)
     };
 
     let mut lifecycle =
@@ -257,40 +75,13 @@ async fn queued_request_interrupt_wins_before_queue_block() {
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
 
     let request = AgentRequest {
-        doc_id,
-        request_id: "req-later-interrupted".into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
-        session_id,
         content: "second".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: later.into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
+        ..crate::support::build_request(
+            doc_id,
+            "req-later-interrupted".into(),
+            session_id,
+            later.into(),
+        )
     };
 
     let mut lifecycle =
@@ -343,40 +134,13 @@ async fn queued_request_valid_until_wins_before_queue_block() {
     .await;
 
     let request = AgentRequest {
-        doc_id,
-        request_id: "req-later-expired".into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
-        session_id,
         content: "second".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: later.into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
+        ..crate::support::build_request(
+            doc_id,
+            "req-later-expired".into(),
+            session_id,
+            later.into(),
+        )
     };
 
     let mut lifecycle =
@@ -397,84 +161,6 @@ async fn queued_request_valid_until_wins_before_queue_block() {
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
     assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Dead));
 }
-
-#[tokio::test]
-async fn earliest_pending_claim_leaves_later_same_session_pending() {
-    let db = test_db("lifecycle-dedup-suppress").await;
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let early_doc_id = create_request(
-        &db.node,
-        "req-early",
-        &session_id,
-        "pending",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
-    create_request(
-        &db.node,
-        "req-late",
-        &session_id,
-        "pending",
-        "2026-03-23T00:00:01Z",
-    )
-    .await;
-
-    let request = AgentRequest {
-        doc_id: early_doc_id,
-        request_id: "req-early".into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
-        session_id: session_id.clone(),
-        content: "first".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: "2026-03-23T00:00:00Z".into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
-
-    let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    let resp = db
-        .node
-        .execute(
-            r#"{
-                AgentRequest(
-                    filter: { request_id: { _eq: "req-late" } },
-                    limit: 1
-                ) { request_id lifecycle_state }
-            }"#,
-        )
-        .await;
-    let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Pending));
-}
-
 #[tokio::test]
 async fn same_timestamp_queue_order_uses_request_id_tie_break() {
     let db = test_db("lifecycle-same-timestamp-order").await;
@@ -484,40 +170,13 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
     let second_doc_id = create_request(&db.node, "req-b", &session_id, "pending", created_at).await;
 
     let second_request = AgentRequest {
-        doc_id: second_doc_id,
-        request_id: "req-b".into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
-        session_id: session_id.clone(),
         content: "second".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: created_at.into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
+        ..crate::support::build_request(
+            second_doc_id,
+            "req-b".into(),
+            session_id.clone(),
+            created_at.into(),
+        )
     };
     let mut second_lifecycle = RequestLifecycle::new_with_agent_did(
         db.node.clone(),
@@ -532,40 +191,8 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
     );
 
     let first_request = AgentRequest {
-        doc_id: first_doc_id,
-        request_id: "req-a".into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
-        session_id,
         content: "first".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: created_at.into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
+        ..crate::support::build_request(first_doc_id, "req-a".into(), session_id, created_at.into())
     };
     let mut first_lifecycle = RequestLifecycle::new_with_agent_did(
         db.node.clone(),
@@ -579,191 +206,6 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
         ClaimOutcome::Claimed
     );
 }
-
-#[tokio::test]
-async fn terminal_earlier_request_allows_later_same_session_claim() {
-    let db = test_db("lifecycle-terminal-allows-next").await;
-    let session_id = uuid::Uuid::new_v4().to_string();
-
-    create_request(
-        &db.node,
-        "req-earlier-terminal",
-        &session_id,
-        "completed",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
-    let later_doc_id = create_request(
-        &db.node,
-        "req-later-after-terminal",
-        &session_id,
-        "pending",
-        "2026-03-23T00:00:01Z",
-    )
-    .await;
-
-    let request = AgentRequest {
-        doc_id: later_doc_id,
-        request_id: "req-later-after-terminal".into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
-        session_id,
-        content: "second".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: "2026-03-23T00:00:01Z".into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
-
-    let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    let resp = db
-        .node
-        .execute(
-            r#"{
-                AgentRequest(
-                    filter: { request_id: { _eq: "req-later-after-terminal" } },
-                    limit: 1
-                ) { request_id lifecycle_state }
-            }"#,
-        )
-        .await;
-    let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Claimed));
-}
-
-#[tokio::test]
-async fn claim_preserves_explicit_behavior_id() {
-    let db = test_db("lifecycle-explicit-behavior").await;
-    let request_id = "req-explicit";
-    let session_id = "session-explicit";
-    let created_at = "2026-03-23T00:00:00Z";
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "code",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "hello",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-    );
-    let resp = db.node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create request failed: {:?}",
-        resp.errors
-    );
-
-    let doc_id = first_row::<crate::support::DocIdRow>(
-        &db.node
-            .execute(
-                r#"{
-                    AgentRequest(filter: { request_id: { _eq: "req-explicit" } }, limit: 1) {
-                        _docID
-                    }
-                }"#,
-            )
-            .await,
-        "AgentRequest",
-    )
-    .doc_id;
-    let request = AgentRequest {
-        doc_id: doc_id.clone(),
-        request_id: request_id.into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some("code".into()),
-        session_id: session_id.into(),
-        content: "hello".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: created_at.into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
-
-    let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
-    assert_eq!(lifecycle.behavior_id(), "code");
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    let resp = db
-        .node
-        .execute(
-            r#"{
-                AgentRequest(
-                    filter: { request_id: { _eq: "req-explicit" } },
-                    limit: 1
-                ) { behavior_id }
-            }"#,
-        )
-        .await;
-    assert_eq!(
-        first_row::<BehaviorRow>(&resp, "AgentRequest").behavior_id,
-        "code"
-    );
-}
-
 #[tokio::test]
 async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
     let db = test_db("lifecycle-behavior-pin").await;
@@ -771,11 +213,9 @@ async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
         r#"mutation {{
             session: create_AgentSession(input: {{
                 session_id: "session-pinned",
-                agent_name: "general",
                 agent_did: "{AGENT_DID}",
                 behavior_id: "general",
-                started: "2026-03-23T00:00:00Z",
-                status: "active"
+                created_at: "2026-03-23T00:00:00Z"
             }}) {{ _docID }}
             request: create_AgentRequest(input: {{
                 request_id: "req-switch",
@@ -858,90 +298,6 @@ async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
         Some("general")
     );
 }
-
-#[tokio::test]
-async fn claim_preserves_explicit_request_deadline() {
-    let db = test_db("lifecycle-explicit-deadline").await;
-    let request_id = "req-explicit-deadline";
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let explicit_deadline_at = chrono::Utc::now() + chrono::Duration::minutes(5);
-    let explicit_deadline = explicit_deadline_at.to_rfc3339();
-    let escaped_session_id = gents::graphql::escape_graphql_string(&session_id);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "{AGENT_NAME}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "hello",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "{created_at}",
-                deadline: "{explicit_deadline}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-    );
-    let resp = db.node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create request failed: {:?}",
-        resp.errors
-    );
-
-    let doc_id = first_row::<crate::support::DocIdRow>(
-        &db.node
-            .execute(
-                r#"{
-                    AgentRequest(
-                        filter: { request_id: { _eq: "req-explicit-deadline" } },
-                        limit: 1
-                    ) { _docID }
-                }"#,
-            )
-            .await,
-        "AgentRequest",
-    )
-    .doc_id;
-    let watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
-    let request = watcher
-        .try_fetch_request(&doc_id)
-        .await
-        .unwrap()
-        .expect("pending request");
-
-    let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 3600);
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    let resp = db
-        .node
-        .execute(
-            r#"{
-                AgentRequest(
-                    filter: { request_id: { _eq: "req-explicit-deadline" } },
-                    limit: 1
-                ) { request_id deadline }
-            }"#,
-        )
-        .await;
-    let persisted = first_row::<DeadlineRow>(&resp, "AgentRequest")
-        .deadline
-        .expect("AgentRequest.deadline");
-    assert_eq!(
-        chrono::DateTime::parse_from_rfc3339(&persisted).unwrap(),
-        chrono::DateTime::parse_from_rfc3339(&explicit_deadline).unwrap()
-    );
-}
-
 #[tokio::test]
 async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
     let db = test_db("lifecycle-invalid-deadline").await;

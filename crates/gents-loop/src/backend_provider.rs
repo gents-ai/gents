@@ -7,6 +7,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum BackendProviderKind {
     #[default]
     #[serde(rename = "OpenAiCompatible")]

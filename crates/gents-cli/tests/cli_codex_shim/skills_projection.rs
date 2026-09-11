@@ -62,8 +62,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
             &agent_did,
             "--skill-id",
             "research",
-            "--scope",
-            "principal",
+            "--enabled",
             "--name",
             "Research",
             "--description",
@@ -76,6 +75,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         added.get("skill_id").and_then(Value::as_str),
         Some("research")
     );
+    select_default_behavior_skills(&graphql, &agent_did, &["research"]).await?;
     let foreign_agent_did = "did:key:zForeignSkillOwner";
     run_cli_json(
         &home_dir,
@@ -89,8 +89,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
             foreign_agent_did,
             "--skill-id",
             "foreign-skill",
-            "--scope",
-            "principal",
+            "--enabled",
             "--name",
             "Foreign",
             "--instructions",
@@ -288,8 +287,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
             &agent_did,
             "--skill-id",
             "inject-skill",
-            "--scope",
-            "principal",
+            "--enabled",
             "--name",
             "Injectable",
             "--description",
@@ -298,6 +296,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
             &body_phrase,
         ],
     )?;
+    select_default_behavior_skills(&graphql, &agent_did, &["inject-skill"]).await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
 
     let (mut ws, _) = serve
@@ -436,8 +435,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
             &agent_did,
             "--skill-id",
             "unscoped-skill",
-            "--scope",
-            "behavior",
+            "--enabled",
             "--name",
             "Unscoped",
             "--description",
@@ -508,7 +506,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     .await?;
     let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(3)).await?;
     let (_text, completed) = read_turn_to_completion(&mut ws).await?;
-    assert_eq!(completed.status, codex::TurnStatus::Completed);
+    assert_eq!(completed.status, codex::TurnStatus::Failed);
 
     let captured = mock_endpoint.captured_chat_requests();
     assert!(

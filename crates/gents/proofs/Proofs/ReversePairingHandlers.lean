@@ -1,8 +1,9 @@
-import Proofs.ApplyReconcile.Collections
+import Proofs.ConfigDocuments
+import Mathlib.Data.Finset.Basic
 
 namespace ReversePairingHandlers
 
-abbrev Collection := ApplyReconcile.Collection
+abbrev Collection := ConfigDocuments.Collection
 
 structure ReceiverState where
   subscribed : Finset Collection

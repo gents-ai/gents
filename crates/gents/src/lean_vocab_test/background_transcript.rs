@@ -171,6 +171,25 @@ pub(crate) struct LeanR6BackgroundingCase {
     pub(crate) max_retries: Option<usize>,
     #[serde(default)]
     pub(crate) post_retry_count: Option<usize>,
+    /// Lean's opaque numeric redrive source request id (`wake.requestId`).
+    #[serde(default)]
+    pub(crate) redrive_source_request_id: Option<u64>,
+    /// Before/after subagent depth: redrive preserves the failed source's depth.
+    #[serde(default)]
+    pub(crate) pre_depth: Option<u64>,
+    #[serde(default)]
+    pub(crate) post_depth: Option<u64>,
+    /// Before/after retry parent: the successor's parent is the failed source
+    /// request itself.
+    #[serde(default)]
+    pub(crate) pre_parent_request_id: Option<u64>,
+    #[serde(default)]
+    pub(crate) post_parent_request_id: Option<u64>,
+    /// Before/after execution deadline: redrive creates no new deadline.
+    #[serde(default)]
+    pub(crate) pre_execution_deadline: Option<u64>,
+    #[serde(default)]
+    pub(crate) post_execution_deadline: Option<u64>,
     #[serde(default)]
     pub(crate) retry_delay_seconds: Option<usize>,
     #[serde(default)]
@@ -186,12 +205,12 @@ pub(crate) struct LeanR6BackgroundingCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanR5CrossDeploymentCase {
+pub(crate) struct LeanR5CrossPrincipalCase {
     pub(crate) name: String,
     pub(crate) route: String,
     pub(crate) action: String,
-    pub(crate) parent_deployment: String,
-    pub(crate) child_deployment: String,
+    pub(crate) parent_principal: String,
+    pub(crate) child_principal: String,
     pub(crate) parent_request_id: String,
     pub(crate) parent_tool_call_id: String,
     pub(crate) child_request_id: String,
@@ -200,12 +219,12 @@ pub(crate) struct LeanR5CrossDeploymentCase {
     pub(crate) cancel_policy: String,
     pub(crate) parent_trigger_persisted: bool,
     pub(crate) child_materialized: bool,
-    pub(crate) child_owned_by_target_deployment: bool,
+    pub(crate) child_owned_by_target_principal: bool,
     pub(crate) caused_by_parent_request_id_matches: bool,
     pub(crate) caused_by_parent_tool_call_id_matches: bool,
     pub(crate) caused_by_trigger_kind: String,
-    pub(crate) cross_deployment_routing_fired: bool,
-    pub(crate) single_deployment_fallback: bool,
+    pub(crate) cross_principal_routing_fired: bool,
+    pub(crate) same_principal_fallback: bool,
     pub(crate) unclaimed_deadline_set: bool,
 }
 
@@ -214,8 +233,8 @@ pub(crate) struct LeanCancelPropagationCase {
     pub(crate) name: String,
     pub(crate) route: String,
     pub(crate) action: String,
-    pub(crate) parent_deployment: String,
-    pub(crate) child_deployment: String,
+    pub(crate) parent_principal: String,
+    pub(crate) child_principal: String,
     pub(crate) parent_request_id: String,
     pub(crate) parent_tool_call_id: String,
     pub(crate) child_request_id: String,
@@ -224,7 +243,7 @@ pub(crate) struct LeanCancelPropagationCase {
     pub(crate) cancel_intent_written_on_bridge: bool,
     pub(crate) bridge_cancel_replicates_to_host: bool,
     pub(crate) host_interrupts_child: bool,
-    pub(crate) child_terminal_replicates_to_coordinator: bool,
+    pub(crate) child_interrupt_intent_replicates_to_coordinator: bool,
     pub(crate) cancel_ack_returns_to_coordinator: bool,
     pub(crate) no_third_party_rows: bool,
 }
@@ -301,6 +320,10 @@ pub(crate) struct LeanTranscriptCase {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanResponseTransitionCase {
+    // Runtime action arguments must never be reconstructed from expected output.
+    pub(crate) input_error_reason: Option<String>,
+    pub(crate) token_delta: Option<usize>,
+    pub(crate) materialize_sequence: Option<usize>,
     pub(crate) name: String,
     pub(crate) group: String,
     pub(crate) action: String,
@@ -360,9 +383,11 @@ pub(crate) struct LeanCompactionReducerCase {
     pub(crate) post_message_count: usize,
     pub(crate) preserves_pairs: bool,
     pub(crate) preserves_order: bool,
-    pub(crate) gate_open: bool,
+    pub(crate) gate_open: Option<bool>,
+    pub(crate) response_status: String,
     pub(crate) safe_to_reduce: bool,
     pub(crate) reducer_is_identity: bool,
+    pub(crate) reducer_is_idempotent: bool,
     pub(crate) split_index: usize,
     pub(crate) safe_boundary: usize,
     pub(crate) retained_count: usize,

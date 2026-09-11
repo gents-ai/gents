@@ -10,7 +10,7 @@ pub(super) async fn session_request_create_mutation(
     behavior_id: &str,
     content: &str,
     execution_origin: ExecutionOrigin,
-    metadata: &str,
+    input: RequestInput,
     request_id: &str,
     created_at: &str,
     retry_key: Option<&str>,
@@ -46,7 +46,7 @@ pub(super) async fn session_request_create_mutation(
             parent_request_doc_id: parent.doc_id.clone(),
             ..Default::default()
         }),
-        metadata: Some(metadata.to_string()),
+        input,
         retry_key: retry_key.map(ToOwned::to_owned),
         ..RequestSpec::new(identity, admission)
     };

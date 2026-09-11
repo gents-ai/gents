@@ -1,6 +1,8 @@
 //! Generated-case structs for the Lean `SelfConfig` model
 //! (`proofs/Proofs/SelfConfig/`): per-target field tables and patch-merge
-//! witness cases consumed by `tests/conformance/self_config.rs`.
+//! witness cases consumed by `tests/conformance/self_config.rs`. The tables
+//! describe the canonical configuration collections (`ConfigDocuments`), with
+//! the nested `Tools.self_config` group carried as one field value.
 
 use serde::Deserialize;
 
@@ -32,7 +34,6 @@ pub(crate) struct LeanSelfConfigPatchEntry {
 pub(crate) struct LeanSelfConfigCase {
     pub(crate) name: String,
     pub(crate) collection: String,
-    #[allow(dead_code)]
     pub(crate) category: String,
     pub(crate) guarded: bool,
     pub(crate) validates: bool,

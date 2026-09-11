@@ -17,8 +17,10 @@ description = "The gent's owned completion loop, carved to compile for wasm32-wa
 # no flags must stay green.
 [features]
 native = ["rig-core/reqwest", "rig-core/rustls"]
+typescript = ["dep:ts-rs"]
 
 [dependencies]
+ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow = { workspace = true }
 async-stream = "0.3"
 async-trait = "0.1"

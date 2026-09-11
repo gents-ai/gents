@@ -1,8 +1,8 @@
 mod binding;
-mod conversation;
 mod request;
+mod session;
 
-pub use conversation::rename_conversation;
+pub use session::rename_session;
 // Re-export the shared interrupt helper from `gents` so the desktop
 // client and the runtime share a single GraphQL implementation. Keeping this
 // behind the `chat::` module path preserves the existing public surface.

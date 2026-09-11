@@ -268,3 +268,28 @@ async fn seed_mcp_service(
     }
     Ok(())
 }
+
+#[test]
+fn mcp_probe_rejects_service_and_all_together() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let stderr = run_cli_failure_stderr(
+        tempdir.path(),
+        &["mcp", "probe", "--all", "some-service", "--timeout", "1s"],
+    )?;
+    assert!(
+        stderr.contains("provide either <service> or --all, not both"),
+        "service + --all failure should name the mutual exclusion:\n{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn mcp_probe_rejects_missing_target() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let stderr = run_cli_failure_stderr(tempdir.path(), &["mcp", "probe"])?;
+    assert!(
+        stderr.contains("provide a service id or --all"),
+        "missing-target failure should ask for a service id or --all:\n{stderr}"
+    );
+    Ok(())
+}

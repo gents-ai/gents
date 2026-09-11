@@ -185,7 +185,7 @@ async function runSample(browserInstance, sampleIndex) {
         .locator('[data-testid="fleet-detail-name-peer-bombadil-local"]')
         .click();
       await page
-        .locator('[data-testid^="conversation-"]')
+        .locator('[data-testid^="session-session-"]')
         .first()
         .waitFor({ state: "visible" });
     }),
@@ -193,7 +193,7 @@ async function runSample(browserInstance, sampleIndex) {
 
   scenarios.push(
     await measureScenario(page, cdp, "open_cached_short_session", async () => {
-      await page.locator('[data-testid="conversation-session-intro"]').click();
+      await page.locator('[data-testid="session-session-intro"]').click();
       await page
         .locator('[data-testid="transcript-panel"]')
         .getByText("I am your desktop UI test agent", { exact: false })
@@ -204,7 +204,7 @@ async function runSample(browserInstance, sampleIndex) {
   await openMobileNavigation(page);
   scenarios.push(
     await measureScenario(page, cdp, "open_large_local_transcript_tip", async () => {
-      await page.locator('[data-testid="conversation-session-large"]').click();
+      await page.locator('[data-testid="session-session-large"]').click();
       await page.getByText("stream-start", { exact: false }).last().waitFor();
     }),
   );
@@ -263,13 +263,13 @@ async function runSample(browserInstance, sampleIndex) {
       async () => {
         for (let index = 0; index < fixture.repeatedNavigationCount; index += 1) {
           await openMobileNavigation(page);
-          await page.locator('[data-testid="conversation-session-intro"]').click();
+          await page.locator('[data-testid="session-session-intro"]').click();
           await page
             .locator('[data-testid="transcript-panel"]')
             .getByText("I am your desktop UI test agent", { exact: false })
             .waitFor();
           await openMobileNavigation(page);
-          await page.locator('[data-testid="conversation-session-large"]').click();
+          await page.locator('[data-testid="session-session-large"]').click();
           await page.getByText("stream-start", { exact: false }).last().waitFor();
           navigationHeapSamples.push((await browserMetrics(page, cdp)).jsHeapUsedBytes);
         }
@@ -356,8 +356,8 @@ async function browserMetrics(page, cdp) {
 
 async function domSnapshot(page) {
   return page.evaluate(() => ({
-    conversationRows: document.querySelectorAll(
-      '.conversation-list button[data-testid^="conversation-"]',
+    sessionRows: document.querySelectorAll(
+      '.session-list button[data-testid^="session-session-"]',
     ).length,
     transcriptMessageCards: document.querySelectorAll(
       '[data-testid="transcript-panel"] .message-card',
@@ -590,7 +590,7 @@ async function openMobileNavigation(page) {
   const navigation = page.locator('[data-testid="mobile-chat-navigation"]');
   if (await navigation.isVisible()) await navigation.click();
   await page
-    .locator('[data-testid="conversation-session-large"]')
+    .locator('[data-testid="session-session-large"]')
     .waitFor({ state: "visible" });
 }
 

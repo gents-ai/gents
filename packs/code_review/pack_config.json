@@ -1,0 +1,523 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "review-recon",
+      "display_name": "Review reconnaissance",
+      "description": "Partitions a repository review into a closed set of areas.",
+      "context_id": "review-recon-context",
+      "inference_profile_id": "review-recon-profile"
+    },
+    {
+      "behavior_id": "review-scan",
+      "display_name": "Review area scanner",
+      "description": "Inspects one repository area and records findings.",
+      "context_id": "review-scan-context",
+      "inference_profile_id": "review-scan-profile"
+    },
+    {
+      "behavior_id": "review-verify",
+      "display_name": "Adversarial review verification",
+      "description": "Refutes or confirms every candidate against freshly read code.",
+      "context_id": "review-verify-context",
+      "inference_profile_id": "review-verify-profile"
+    },
+    {
+      "behavior_id": "review-triage",
+      "display_name": "Review triage",
+      "description": "Ranks verified findings and writes the final report.",
+      "context_id": "review-triage-context",
+      "inference_profile_id": "review-profile"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "review-recon-context",
+      "system_prompt": "./agent_behaviors/review_recon/system_prompt.md",
+      "tools_id": "review-recon-tools",
+      "compaction_id": "review-compaction"
+    },
+    {
+      "context_id": "review-scan-context",
+      "system_prompt": "./agent_behaviors/review_scan/system_prompt.md",
+      "tools_id": "review-scan-tools",
+      "compaction_id": "review-compaction"
+    },
+    {
+      "context_id": "review-verify-context",
+      "system_prompt": "./agent_behaviors/review_verify/system_prompt.md",
+      "tools_id": "review-verify-tools",
+      "compaction_id": "review-compaction"
+    },
+    {
+      "context_id": "review-triage-context",
+      "system_prompt": "./agent_behaviors/review_triage/system_prompt.md",
+      "tools_id": "review-triage-tools",
+      "compaction_id": "review-compaction"
+    }
+  ],
+  "compactions": [
+    {
+      "compaction_id": "review-compaction",
+      "threshold": 0.85
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "review-recon-tools",
+      "display_name": "Recon: dispatch immutable review lenses",
+      "built_ins": {"enable_goal_tools": true},
+      "datastore": {"datastore_tool_surface_ids": ["review-recon-writes"]}
+    },
+    {
+      "tools_id": "review-scan-tools",
+      "display_name": "Scan: inspect immutable evidence and write results",
+      "built_ins": {"enable_goal_tools": true},
+      "datastore": {"datastore_tool_surface_ids": ["review-scan-writes"]}
+    },
+    {
+      "tools_id": "review-verify-tools",
+      "display_name": "Verify: inspect repository, read candidates, and write verdicts",
+      "host": {
+        "files": {"mode": "ReadOnly"},
+        "bash": {
+          "mode": "Unrestricted",
+          "execution_mode": "artifact_write",
+          "network_mode": "disabled",
+          "background_enabled": true
+        }
+      },
+      "built_ins": {"enable_goal_tools": true, "enable_context_budget": true},
+      "datastore": {"datastore_tool_surface_ids": ["review-verify-writes"]}
+    },
+    {
+      "tools_id": "review-triage-tools",
+      "display_name": "Triage: read findings and write the merge report",
+      "built_ins": {"enable_goal_tools": true, "enable_context_budget": true},
+      "datastore": {"datastore_tool_surface_ids": ["review-triage-writes"]}
+    }
+  ],
+  "datastore_tool_surfaces": [
+    {
+      "surface_id": "review-recon-writes",
+      "display_name": "Review area writes",
+      "entries": [{
+        "tool_name": "write_review_area",
+        "collection": "CodeReviewArea",
+        "description": "Create one member of the closed review-area set.",
+        "output_obligation": {"scope": "trigger", "minimum_writes": 1, "expected_count_field": "expected_total"},
+        "fields": [
+          {"name": "run_id", "required": false, "fill": "correlation"},
+          {"name": "area_id", "required": true},
+          {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+          {"name": "evidence_id", "required": false, "fill": {"source_field": "evidence_id"}},
+          {"name": "lens", "required": true},
+          {"name": "path", "required": true},
+          {"name": "instructions", "required": true},
+          {"name": "baseline", "required": true},
+          {"name": "expected_total", "required": true}
+        ]
+      }]
+    },
+    {
+      "surface_id": "review-scan-writes",
+      "display_name": "Immutable review evidence reads and finding writes",
+      "entries": [
+        {
+          "kind": "query",
+          "tool_name": "read_review_evidence_manifest",
+          "collection": "CodeReviewEvidenceManifest",
+          "description": "Read the exact immutable manifest for this review run before reading evidence pages.",
+          "fields": [
+            "evidence_id",
+            "format_version",
+            "page_count",
+            "evidence_chunk_count",
+            "evidence_byte_count",
+            "evidence_sha256"
+          ],
+          "filter_fields": [
+            {
+              "name": "evidence_id",
+              "required": false,
+              "fill": {"source_field": "evidence_id"}
+            }
+          ]
+        },
+        {
+          "kind": "query",
+          "tool_name": "read_review_evidence_page",
+          "collection": "CodeReviewEvidencePage",
+          "description": "Read one exact immutable host-evidence page for this review run.",
+          "fields": [
+            "page_key",
+            "evidence_id",
+            "page_index",
+            "page_count",
+            "evidence_chunk_count",
+            "evidence_byte_count",
+            "evidence_sha256",
+            "evidence_chunk_0",
+            "evidence_chunk_1",
+            "evidence_chunk_2",
+            "evidence_chunk_3",
+            "evidence_chunk_4",
+            "evidence_chunk_5",
+            "evidence_chunk_6",
+            "evidence_chunk_7",
+            "evidence_chunk_8",
+            "evidence_chunk_9",
+            "evidence_chunk_10",
+            "evidence_chunk_11",
+            "evidence_chunk_12",
+            "evidence_chunk_13",
+            "evidence_chunk_14",
+            "evidence_chunk_15"
+          ],
+          "filter_fields": [
+            {
+              "name": "evidence_id",
+              "required": false,
+              "fill": {"source_field": "evidence_id"}
+            },
+            {
+              "name": "page_index",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_candidate_finding",
+          "collection": "CodeReviewCandidateFinding",
+          "description": "Record one evidenced Critical, Major, or Cleanup candidate for adversarial verification.",
+          "fields": [
+            {"name": "run_id", "required": false, "fill": "correlation"},
+            {"name": "area_id", "required": false, "fill": {"source_field": "area_id"}},
+            {"name": "finding_id", "required": true},
+            {"name": "severity", "required": true},
+            {"name": "title", "required": true},
+            {"name": "path", "required": true},
+            {"name": "line", "required": false},
+            {"name": "evidence", "required": true},
+            {"name": "detail", "required": true},
+            {"name": "confidence", "required": true}
+          ]
+        },
+        {
+          "tool_name": "write_scan_result",
+          "collection": "CodeReviewScanResult",
+          "description": "Close this lens after every evidence page was read and candidate writes are durable.",
+          "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+          "fields": [
+            {"name": "run_id", "required": false, "fill": "correlation"},
+            {"name": "area_id", "required": false, "fill": {"source_field": "area_id"}},
+            {"name": "summary", "required": true},
+            {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}}
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "review-verify-writes",
+      "display_name": "Verification reads and decision writes",
+      "entries": [
+        {
+          "kind": "query",
+          "tool_name": "read_candidate_finding",
+          "collection": "CodeReviewCandidateFinding",
+          "description": "Load every candidate finding for this run. run_id is filled by the runtime.",
+          "fields": [
+            "finding_id",
+            "area_id",
+            "severity",
+            "confidence",
+            "path",
+            "line",
+            "title",
+            "detail",
+            "evidence"
+          ],
+          "filter_fields": [
+            {"name": "run_id", "required": false, "fill": "correlation"}
+          ]
+        },
+        {
+          "tool_name": "write_finding_verdict",
+          "collection": "CodeReviewFindingVerdict",
+          "description": "Persist one confirmed or refuted decision for a candidate finding.",
+          "fields": [
+            {"name": "run_id", "required": false, "fill": "correlation"},
+            {"name": "finding_id", "required": true},
+            {"name": "area_id", "required": true},
+            {"name": "severity", "required": true},
+            {"name": "confidence", "required": true},
+            {"name": "path", "required": true},
+            {"name": "line", "required": false},
+            {"name": "title", "required": true},
+            {"name": "detail", "required": true},
+            {"name": "verdict", "required": true},
+            {"name": "evidence", "required": true},
+            {"name": "verification", "required": true}
+          ]
+        },
+        {
+          "tool_name": "write_finding",
+          "collection": "CodeReviewFinding",
+          "description": "Promote one confirmed verdict into the operator-facing CodeReviewFinding collection. Call only for verdict=confirmed.",
+          "fields": [
+            {"name": "run_id", "required": false, "fill": "correlation"},
+            {"name": "finding_id", "required": true},
+            {"name": "area_id", "required": true},
+            {"name": "severity", "required": true},
+            {"name": "confidence", "required": true},
+            {"name": "path", "required": true},
+            {"name": "line", "required": false},
+            {"name": "title", "required": true},
+            {"name": "detail", "required": true},
+            {"name": "verdict", "required": true},
+            {"name": "evidence", "required": true},
+            {"name": "verification", "required": true}
+          ]
+        },
+        {
+          "tool_name": "write_verification_summary",
+          "collection": "CodeReviewVerificationSummary",
+          "description": "Close the verification ledger and trigger final triage.",
+          "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+          "fields": [
+            {"name": "run_id", "required": false, "fill": "correlation"},
+            {"name": "candidate_count", "required": true},
+            {"name": "confirmed_count", "required": true},
+            {"name": "refuted_count", "required": true},
+            {"name": "summary", "required": true}
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "review-triage-writes",
+      "display_name": "Triage reads and report writes",
+      "entries": [
+        {
+          "kind": "query",
+          "tool_name": "read_finding",
+          "collection": "CodeReviewFinding",
+          "description": "Load every operator-facing CodeReviewFinding for this run. run_id is filled by the runtime.",
+          "fields": ["finding_id", "area_id", "severity", "confidence", "path", "line", "title", "detail", "verdict", "evidence", "verification"],
+          "filter_fields": [
+            {"name": "run_id", "required": false, "fill": "correlation"}
+          ]
+        },
+        {
+          "tool_name": "write_triage_report",
+          "collection": "CodeReviewTriageReport",
+          "description": "Create the single count-balanced final report for this correlated review run; run_id is filled by the runtime.",
+          "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+          "fields": [
+            {"name": "run_id", "required": false, "fill": "correlation"},
+            {"name": "high_priority_count", "required": true},
+            {"name": "confirmed_count", "required": true},
+            {"name": "refuted_count", "required": true},
+            {"name": "summary", "required": true}
+          ]
+        }
+      ]
+    }
+  ],
+  "inference_backends": [
+    {
+      "backend_id": "review-backend",
+      "name": "Code review backend",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "${GENTS_REVIEW_ENDPOINT:-http://127.0.0.1:8080/v1}",
+      "auth": {"kind": "unauthenticated"},
+      "max_concurrent": 8
+    }
+  ],
+  "inference_sampling": [
+    {"sampling_id": "review-sampling", "temperature": 1.0, "top_p": 0.95}
+  ],
+  "inference_execution": [
+    {"execution_id": "review-execution", "max_turns": 1000}
+  ],
+  "inference_profiles": [
+    {
+      "profile_id": "review-recon-profile",
+      "display_name": "Review recon profile",
+      "backend_id": "review-backend",
+      "model_name": "${GENTS_REVIEW_MODEL}",
+      "reasoning_effort": "high",
+      "sampling_id": "review-sampling",
+      "execution_id": "review-execution"
+    },
+    {
+      "profile_id": "review-scan-profile",
+      "display_name": "Review scan profile",
+      "backend_id": "review-backend",
+      "model_name": "${GENTS_REVIEW_MODEL}",
+      "reasoning_effort": "high",
+      "sampling_id": "review-sampling",
+      "execution_id": "review-execution"
+    },
+    {
+      "profile_id": "review-verify-profile",
+      "display_name": "Review verify profile",
+      "backend_id": "review-backend",
+      "model_name": "${GENTS_REVIEW_MODEL}",
+      "reasoning_effort": "high",
+      "sampling_id": "review-sampling",
+      "execution_id": "review-execution"
+    },
+    {
+      "profile_id": "review-profile",
+      "display_name": "Review triage profile",
+      "backend_id": "review-backend",
+      "model_name": "${GENTS_REVIEW_MODEL}",
+      "reasoning_effort": "high",
+      "sampling_id": "review-sampling",
+      "execution_id": "review-execution"
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "review-recon-task",
+      "display_name": "Partition repository review",
+      "behavior_id": "review-recon",
+      "prompt_template": "./tasks/review_recon_task/prompt.md",
+      "goal_objective_template": "Dispatch all four host-evidenced review lenses for run {{ event.correlation }}, persist the complete area ledger, then complete this Goal.",
+      "goal_token_budget": 250000
+    },
+    {
+      "task_id": "review-scan-task",
+      "display_name": "Scan one review area",
+      "behavior_id": "review-scan",
+      "prompt_template": "./tasks/review_scan_task/prompt.md",
+      "goal_objective_template": "Finish the {{ doc.lens }} review for area {{ doc.area_id }} in run {{ event.correlation }}. Persist at most three supported candidates, or none when no defects are supported, and the mandatory scan-result sentinel for this exact area; then complete this Goal.",
+      "goal_token_budget": 500000
+    },
+    {
+      "task_id": "review-verify-task",
+      "display_name": "Verify completed review candidates",
+      "behavior_id": "review-verify",
+      "prompt_template": "./tasks/review_verify_task/prompt.md",
+      "goal_objective_template": "Close verification for run {{ group.correlation_value }} across its {{ group.count }} completed scans. Persist one supported verdict per candidate, promote only confirmed findings, and publish the balanced verification summary, including zero candidates; then complete this Goal.",
+      "goal_token_budget": 1000000
+    },
+    {
+      "task_id": "review-triage-task",
+      "display_name": "Write the merge report",
+      "behavior_id": "review-triage",
+      "prompt_template": "./tasks/review_triage_task/prompt.md",
+      "goal_objective_template": "Publish the final triage report for run {{ event.correlation }} matching its closed verification ledger ({{ doc.candidate_count }} candidates, {{ doc.confirmed_count }} confirmed, {{ doc.refuted_count }} refuted), then complete this Goal.",
+      "goal_token_budget": 150000
+    }
+  ],
+  "graphs": [
+    {"graph_id": "code-review"}
+  ],
+  "graph_intents": [
+    {
+      "graph_id": "code-review",
+      "nodes": [
+        {"node_id": "recon", "capability_id": "review-recon", "capability_revision": "v1"},
+        {"node_id": "scan", "capability_id": "review-scan", "capability_revision": "v1"},
+        {"node_id": "verify", "capability_id": "review-verify", "capability_revision": "v1"},
+        {"node_id": "triage", "capability_id": "review-triage", "capability_revision": "v1"}
+      ],
+      "edges": [
+        {
+          "from": {"node_id": "recon", "port": "areas"},
+          "to": {"node_id": "scan", "port": "area"},
+          "concurrency": "parallel"
+        },
+        {
+          "from": {"node_id": "scan", "port": "scan_results"},
+          "to": {"node_id": "verify", "port": "scan_results"},
+          "delivery": {"expected_count": {"source_field": "expected_total"}},
+          "concurrency": "serial"
+        },
+        {
+          "from": {"node_id": "verify", "port": "summary"},
+          "to": {"node_id": "triage", "port": "summary"},
+          "concurrency": "serial"
+        }
+      ],
+      "entries": [
+        {
+          "name": "review",
+          "collection": "CodeReviewJob",
+          "schema": "CodeReviewJob/v1",
+          "input_contract": "review-input/v1",
+          "to": {"node_id": "recon", "port": "job"}
+        }
+      ],
+      "results": [
+        {
+          "name": "findings",
+          "from": {"node_id": "verify", "port": "findings"},
+          "cardinality": {"kind": "at_most", "count": 128},
+          "terminal": true
+        },
+        {
+          "name": "report",
+          "from": {"node_id": "triage", "port": "report"},
+          "cardinality": {"kind": "exactly", "count": 1},
+          "terminal": true
+        }
+      ],
+      "limits": {
+        "max_nodes": 8,
+        "max_edges": 16,
+        "max_depth": 8,
+        "max_fan_out": 16,
+        "max_total_invocations": 128,
+        "max_runtime_secs": 7200
+      }
+    }
+  ],
+  "graph_capabilities": [
+    {
+      "capability_id": "review-recon",
+      "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+      "revision": "v1",
+      "task_id": "review-recon-task",
+      "input_ports": [{"name": "job", "collection": "CodeReviewJob", "schema": "CodeReviewJob/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
+      "output_ports": [{"name": "areas", "collection": "CodeReviewArea", "schema": "CodeReviewArea/v1", "correlation_field": "run_id", "cardinality": "one"}],
+      "workspace_authority": "readOnly"
+    },
+    {
+      "capability_id": "review-scan",
+      "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+      "revision": "v1",
+      "task_id": "review-scan-task",
+      "input_ports": [{"name": "area", "collection": "CodeReviewArea", "schema": "CodeReviewArea/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
+      "output_ports": [
+        {"name": "scan_results", "collection": "CodeReviewScanResult", "schema": "CodeReviewScanResult/v1", "correlation_field": "run_id", "cardinality": "one"},
+        {"name": "candidates", "collection": "CodeReviewCandidateFinding", "schema": "CodeReviewCandidateFinding/v1", "correlation_field": "run_id", "cardinality": "many"}
+      ],
+      "workspace_authority": "readOnly"
+    },
+    {
+      "capability_id": "review-verify",
+      "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+      "revision": "v1",
+      "task_id": "review-verify-task",
+      "input_ports": [{"name": "scan_results", "collection": "CodeReviewScanResult", "schema": "CodeReviewScanResult/v1", "correlation_field": "run_id", "cardinality": "many", "required": true}],
+      "output_ports": [
+        {"name": "summary", "collection": "CodeReviewVerificationSummary", "schema": "CodeReviewVerificationSummary/v1", "correlation_field": "run_id", "cardinality": "one"},
+        {"name": "verdicts", "collection": "CodeReviewFindingVerdict", "schema": "CodeReviewFindingVerdict/v1", "correlation_field": "run_id", "cardinality": "many"},
+        {"name": "findings", "collection": "CodeReviewFinding", "schema": "CodeReviewFinding/v1", "correlation_field": "run_id", "cardinality": "many"}
+      ],
+      "workspace_authority": "readOnly"
+    },
+    {
+      "capability_id": "review-triage",
+      "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+      "revision": "v1",
+      "task_id": "review-triage-task",
+      "input_ports": [{"name": "summary", "collection": "CodeReviewVerificationSummary", "schema": "CodeReviewVerificationSummary/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
+      "output_ports": [{"name": "report", "collection": "CodeReviewTriageReport", "schema": "CodeReviewTriageReport/v1", "correlation_field": "run_id", "cardinality": "one"}]
+    }
+  ]
+}

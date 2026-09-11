@@ -941,10 +941,6 @@ mod tests {
             "0x02f8688221058001843b9aca0082520894833589fcd6edb6e08f4c7c32d4f71b54bda029138080c001a0f10f51a937121ba378f768d70fdc9a3a77e0def314e26abb2c132877bccaf02ba00d0e6e7d04c4403336985015cd981799f0a7aab7cc60bf81b5b795f1e7748348"
         );
         assert!(raw.starts_with("0x02"), "{raw}");
-        assert_eq!(
-            raw_transaction_hash(&raw).unwrap(),
-            raw_transaction_hash(&raw).unwrap()
-        );
     }
 
     #[test]
@@ -1019,6 +1015,167 @@ mod tests {
             .filter(|body| body["method"] == "eth_sendRawTransaction")
             .count();
         assert_eq!(sends, 1);
+    }
+
+    #[tokio::test]
+    async fn submitted_unknown_outcome_never_mints_a_new_nonce_or_bytes() {
+        let (_temp, node) = node().await;
+        let mut script = submission_script("0x1");
+        *script.last_mut().unwrap() = ok(Value::Null);
+        let transport = Scripted::new(script);
+        let first_calls = Arc::clone(&transport.calls);
+        let client = EthRpcClient::new("http://127.0.0.1:1", 8453, &[], transport).unwrap();
+        let first = submit_transaction(
+            &node,
+            &client,
+            &ANVIL0,
+            request("unknown-1"),
+            &NonceGate::default(),
+            SubmitOptions {
+                receipt_attempts: 1,
+                receipt_interval: Duration::ZERO,
+            },
+        )
+        .await
+        .expect("unknown-outcome submission");
+        assert_eq!(first.status, SubmitStatus::SubmittedUnknown);
+        assert_eq!(first.receipt, None, "no receipt was ever observed");
+
+        // The durable row stays in submitted_unknown with the signed bytes.
+        let row = load_submission(&node, "did:key:zAlice:8453:unknown-1")
+            .await
+            .expect("load")
+            .expect("durable submission row");
+        assert_eq!(row.status, STATUS_SUBMITTED_UNKNOWN);
+        assert_eq!(row.tx_hash, first.tx_hash);
+
+        let original_raw = row.raw_transaction.clone();
+        // Recover the unknown result by rebroadcasting the journaled bytes.
+        let transport = Scripted::new(vec![
+            ok(json!("0x2105")), // eth_chainId (fresh client)
+            ok(Value::Null),     // receipt poll: not yet mined
+            ok(json!({})),       // rebroadcast accepted (hash recomputed from the raw tx)
+            ok(json!({"status": "0x1"})),
+        ]);
+        let recovery_calls = Arc::clone(&transport.calls);
+        let client = EthRpcClient::new("http://127.0.0.1:1", 8453, &[], transport).unwrap();
+        let second = submit_transaction(
+            &node,
+            &client,
+            &ANVIL0,
+            request("unknown-1"),
+            &NonceGate::default(),
+            SubmitOptions {
+                receipt_attempts: 1,
+                receipt_interval: Duration::ZERO,
+            },
+        )
+        .await
+        .expect("recovered submission");
+        assert_eq!(second.tx_hash, first.tx_hash, "same bytes recovered");
+        assert_eq!(second.status, SubmitStatus::ConfirmedSuccess);
+
+        // Recovery journaled one broadcast per submission attempt, and the
+        // final nonce on the row is the one from the FIRST submission.
+        let row = load_submission(&node, "did:key:zAlice:8453:unknown-1")
+            .await
+            .expect("load")
+            .expect("durable submission row");
+        assert_eq!(row.status, STATUS_CONFIRMED_SUCCESS);
+        assert_eq!(row.nonce, 0, "recovery reuses the journaled nonce");
+        assert_eq!(row.raw_transaction, original_raw);
+        for calls in [&first_calls, &recovery_calls] {
+            let calls = calls.lock().unwrap();
+            let sends: Vec<_> = calls
+                .iter()
+                .filter(|call| call["method"] == "eth_sendRawTransaction")
+                .collect();
+            assert_eq!(sends.len(), 1);
+            assert_eq!(sends[0]["params"][0].as_str(), Some(original_raw.as_str()));
+        }
+        assert!(recovery_calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|call| call["method"] != "eth_getTransactionCount"));
+    }
+
+    #[tokio::test]
+    async fn reused_idempotency_key_for_a_different_request_is_rejected() {
+        // Negative owner case for `verify_existing`: the second submission
+        // under one key must be rejected on the request hash BEFORE any
+        // signing, nonce selection, or broadcast, and the durable row must
+        // still belong to the first request.
+        let (_temp, node) = node().await;
+        let transport = Scripted::new(submission_script("0x1"));
+        let calls = Arc::clone(&transport.calls);
+        let client = EthRpcClient::new("http://127.0.0.1:1", 8453, &[], transport).unwrap();
+        let first = submit_transaction(
+            &node,
+            &client,
+            &ANVIL0,
+            request("conflict-1"),
+            &NonceGate::default(),
+            SubmitOptions {
+                receipt_attempts: 1,
+                receipt_interval: Duration::ZERO,
+            },
+        )
+        .await
+        .expect("first submission");
+        assert_eq!(first.status, SubmitStatus::ConfirmedSuccess);
+
+        let before_calls = calls.lock().unwrap().len();
+        let before = load_submission(&node, "did:key:zAlice:8453:conflict-1")
+            .await
+            .unwrap()
+            .unwrap();
+        // Same key, different `to` address -> different request hash.
+        let mut conflicting = request("conflict-1");
+        conflicting.to = Some("0x0000000000000000000000000000000000000001".to_string());
+        let error = submit_transaction(
+            &node,
+            &client,
+            &ANVIL0,
+            conflicting,
+            &NonceGate::default(),
+            SubmitOptions {
+                receipt_attempts: 1,
+                receipt_interval: Duration::ZERO,
+            },
+        )
+        .await
+        .expect_err("conflicting reuse must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("already used for a different Ethereum request"),
+            "{message:#}"
+        );
+
+        // The rejection happened at the identity check: no extra nonce probe
+        // or send was issued for the conflicting request, and the durable row
+        // is untouched.
+        let sends = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|body| body["method"] == "eth_sendRawTransaction")
+            .count();
+        assert_eq!(sends, 1);
+        assert_eq!(calls.lock().unwrap().len(), before_calls);
+        let row = load_submission(&node, "did:key:zAlice:8453:conflict-1")
+            .await
+            .expect("load")
+            .expect("durable submission row");
+        assert_eq!(row.status, STATUS_CONFIRMED_SUCCESS);
+        assert_eq!(row.request_hash, before.request_hash);
+        assert_eq!(row.raw_transaction, before.raw_transaction);
+        assert_eq!(
+            row.from_address,
+            address_from_secret(&ANVIL0)
+                .expect("from")
+                .to_ascii_lowercase()
+        );
     }
 
     #[tokio::test]

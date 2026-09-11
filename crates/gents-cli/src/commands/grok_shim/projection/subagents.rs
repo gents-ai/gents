@@ -123,6 +123,8 @@ struct ChildRequestRow {
     #[serde(default, rename = "_docID")]
     doc_id: Option<String>,
     request_id: String,
+    agent_did: String,
+    requester_did: Option<String>,
     session_id: String,
     #[serde(default)]
     behavior_id: Option<String>,
@@ -145,14 +147,18 @@ struct ChildRequestRow {
     #[serde(default)]
     caused_by_parent_tool_call_doc_id: Option<String>,
     #[serde(default)]
-    metadata: Option<String>,
+    input: Option<gents_protocol::request_input::RequestInput>,
 }
 
 /// Latest `AgentResponse` row for a child request; the durable source of
 /// token usage and error details (request lifecycle owns terminality).
 #[derive(Clone, Debug, Deserialize)]
 struct ChildResponseRow {
+    request_doc_id: String,
     request_id: String,
+    agent_did: String,
+    requester_did: Option<String>,
+    session_id: String,
     #[serde(default)]
     token_count: Option<i64>,
     #[serde(default)]
@@ -166,6 +172,9 @@ struct SpawnToolRow {
     #[serde(default, rename = "_docID")]
     doc_id: Option<String>,
     request_id: String,
+    agent_did: String,
+    requester_did: Option<String>,
+    session_id: String,
     #[serde(default)]
     request_doc_id: Option<String>,
     tool_call_id: String,
@@ -184,7 +193,11 @@ struct SpawnToolRow {
 /// the progress/finished tool counts, tool names, and error count.
 #[derive(Clone, Debug, Deserialize)]
 struct ChildToolRow {
+    request_doc_id: String,
     request_id: String,
+    agent_did: String,
+    requester_did: Option<String>,
+    session_id: String,
     #[serde(default)]
     tool_name: Option<String>,
     #[serde(default)]
@@ -194,6 +207,8 @@ struct ChildToolRow {
 const CHILD_REQUEST_FIELDS: &str = r#"
     _docID
     request_id
+    agent_did
+    requester_did
     session_id
     behavior_id
     content
@@ -205,11 +220,15 @@ const CHILD_REQUEST_FIELDS: &str = r#"
     caused_by_parent_request_doc_id
     caused_by_parent_tool_call_id
     caused_by_parent_tool_call_doc_id
-    metadata
+    input
 "#;
 
 const CHILD_RESPONSE_FIELDS: &str = r#"
+    request_doc_id
     request_id
+    agent_did
+    requester_did
+    session_id
     token_count
     error_message
 "#;
@@ -217,6 +236,9 @@ const CHILD_RESPONSE_FIELDS: &str = r#"
 const SPAWN_TOOL_FIELDS: &str = r#"
     _docID
     request_id
+    agent_did
+    requester_did
+    session_id
     request_doc_id
     tool_call_id
     child_request_id
@@ -225,7 +247,11 @@ const SPAWN_TOOL_FIELDS: &str = r#"
 "#;
 
 const CHILD_TOOL_FIELDS: &str = r#"
+    request_doc_id
     request_id
+    agent_did
+    requester_did
+    session_id
     tool_name
     lifecycle_state
 "#;
@@ -352,29 +378,36 @@ impl SubagentUpdate {
 /// is read-only and every payload is a fresh notification value.
 pub(super) async fn project_subagents(
     node: &EmbeddedNode,
-    parent_request_id: &str,
-    parent_session_id: &str,
+    parent: &gents_protocol::row::AgentRequestRow,
+    parent_prompt_id: Option<&str>,
     context_window_tokens: u64,
 ) -> Result<SubagentProjection> {
-    let response = node.execute(&child_requests_query(parent_request_id)).await;
+    let parent_doc_id = parent
+        .doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .context("subagent projection requires physical parent request")?;
+    let parent_request_id = parent.request_id.as_str();
+    let parent_session_id = parent
+        .session_id
+        .as_deref()
+        .context("parent session missing")?;
+    let parent_agent_did = parent
+        .agent_did
+        .as_deref()
+        .context("parent principal missing")?;
+    let parent_scope = gents::session::session_scope_filter(
+        parent_agent_did,
+        parent_session_id,
+        parent.requester_did.as_deref(),
+    );
+    let response = node.execute(&child_requests_query(parent_doc_id)).await;
     ensure_no_errors(&response, "grok shim subagent child request query")?;
-    let parent_rows =
-        decode_rows::<TimelineRequestRow>(&response, "parent", "parent AgentRequest provenance");
-    let [parent] = parent_rows.as_slice() else {
-        tracing::debug!(
-            parent_request_id,
-            rows = parent_rows.len(),
-            "grok shim cannot uniquely corroborate the subagent parent document"
-        );
-        return Ok(SubagentProjection {
-            updates: Vec::new(),
-            chronology: Vec::new(),
-        });
-    };
+    let parent_timeline = TimelineRequestRow::from(parent.clone());
     // Durable child chronology: `created_at`, then the child request id,
     // computed after decoding so equal-timestamp rows and any query
     // iteration order never decide the projected wire order.
-    let candidate_children = decode_child_rows(&response);
+    let candidate_children = decode_child_rows(&response)?;
 
     if candidate_children.is_empty() {
         return Ok(SubagentProjection {
@@ -383,9 +416,21 @@ pub(super) async fn project_subagents(
         });
     }
 
-    let spawn_response = node.execute(&spawn_tools_query(parent_request_id)).await;
+    let spawn_response = node
+        .execute(&spawn_tools_query(parent_doc_id, &parent_scope))
+        .await;
     ensure_no_errors(&spawn_response, "grok shim subagent spawn tool query")?;
-    let mut spawn_tools = decode_spawn_rows(&spawn_response);
+    let mut spawn_tools = decode_spawn_rows(&spawn_response)?;
+    for tool in &spawn_tools {
+        anyhow::ensure!(
+            tool.agent_did == parent_agent_did
+                && tool.requester_did == parent.requester_did
+                && tool.session_id == parent_session_id
+                && tool.request_doc_id.as_deref() == Some(parent_doc_id)
+                && tool.request_id == parent_request_id,
+            "spawn tool query crossed parent physical scope"
+        );
+    }
     // Spawn rows sort by their durable transcript chronology
     // (`message_sequence`, then the stable tool call id) — the same
     // sequence space and tie-break the tool family uses — so a
@@ -421,7 +466,7 @@ pub(super) async fn project_subagents(
             let Some(timeline_child) = child_timeline_row(child) else {
                 return false;
             };
-            child_bridge_is_corroborated(parent, &timeline_child, &timeline_tools)
+            child_bridge_is_corroborated(&parent_timeline, &timeline_child, &timeline_tools)
         })
         .collect::<Vec<_>>();
     sort_child_rows(&mut children);
@@ -433,25 +478,43 @@ pub(super) async fn project_subagents(
         });
     }
 
-    let child_request_ids = children.iter().map(|child| child.request_id.as_str());
-
-    let response_response = node
-        .execute(&child_responses_query(child_request_ids.clone()))
-        .await;
+    let response_response = node.execute(&child_responses_query(&children)).await;
     ensure_no_errors(&response_response, "grok shim subagent response query")?;
-    let child_responses = decode_response_rows(&response_response);
+    let child_responses = decode_response_rows(&response_response)?;
 
-    let tools_response = node.execute(&child_tools_query(child_request_ids)).await;
+    let tools_response = node.execute(&child_tools_query(&children)).await;
     ensure_no_errors(&tools_response, "grok shim subagent child tool query")?;
-    let child_tools = decode_child_tool_rows(&tools_response);
+    let child_tools = decode_child_tool_rows(&tools_response)?;
+    for row in &child_responses {
+        anyhow::ensure!(
+            children.iter().any(|child| child.doc_id.as_deref()
+                == Some(row.request_doc_id.as_str())
+                && child.request_id == row.request_id
+                && child.agent_did == row.agent_did
+                && child.requester_did == row.requester_did
+                && child.session_id == row.session_id),
+            "child response query crossed physical scope"
+        );
+    }
+    for row in &child_tools {
+        anyhow::ensure!(
+            children.iter().any(|child| child.doc_id.as_deref()
+                == Some(row.request_doc_id.as_str())
+                && child.request_id == row.request_id
+                && child.agent_did == row.agent_did
+                && child.requester_did == row.requester_did
+                && child.session_id == row.session_id),
+            "child tool query crossed physical scope"
+        );
+    }
 
     let (updates, chronology) = project_child_rows(
         &children,
         &spawn_tools,
         &child_responses,
         &child_tools,
-        parent_request_id,
-        parent_session_id,
+        parent,
+        parent_prompt_id,
         context_window_tokens,
     );
     Ok(SubagentProjection {
@@ -527,10 +590,15 @@ fn project_child_rows(
     spawn_tools: &[SpawnToolRow],
     child_responses: &[ChildResponseRow],
     child_tools: &[ChildToolRow],
-    parent_request_id: &str,
-    parent_session_id: &str,
+    parent: &gents_protocol::row::AgentRequestRow,
+    parent_prompt_id: Option<&str>,
     context_window_tokens: u64,
 ) -> (Vec<SubagentUpdate>, Vec<Option<i64>>) {
+    let parent_request_id = parent.request_id.as_str();
+    let parent_session_id = parent
+        .session_id
+        .as_deref()
+        .expect("verified parent session");
     let mut updates = Vec::new();
     let mut chronology = Vec::new();
     for child in children {
@@ -542,6 +610,8 @@ fn project_child_rows(
             .as_deref()
             .and_then(nonempty)
             != Some(parent_request_id)
+            || child.caused_by_parent_request_doc_id.as_deref() != parent.doc_id.as_deref()
+            || parent.doc_id.as_deref().is_none_or(|id| id.is_empty())
         {
             continue;
         }
@@ -569,12 +639,22 @@ fn project_child_rows(
                     .is_some_and(|child_request_id| child_request_id == child.request_id)
         });
         let spawn_sequence = spawn_tool.and_then(|tool| tool.message_sequence);
-        let child_response = child_responses
-            .iter()
-            .find(|response| response.request_id == child.request_id);
+        let child_response = child_responses.iter().find(|response| {
+            response.request_id == child.request_id
+                && Some(response.request_doc_id.as_str()) == child.doc_id.as_deref()
+                && response.agent_did == child.agent_did
+                && response.session_id == child.session_id
+                && response.requester_did == child.requester_did
+        });
         let child_tools = child_tools
             .iter()
-            .filter(|tool| tool.request_id == child.request_id)
+            .filter(|tool| {
+                tool.request_id == child.request_id
+                    && Some(tool.request_doc_id.as_str()) == child.doc_id.as_deref()
+                    && tool.agent_did == child.agent_did
+                    && tool.session_id == child.session_id
+                    && tool.requester_did == child.requester_did
+            })
             .collect::<Vec<_>>();
 
         let subagent_id = subagent_id_for(child);
@@ -589,7 +669,7 @@ fn project_child_rows(
         updates.push(SubagentUpdate::Spawned(SubagentSpawnedUpdate {
             subagent_id: subagent_id.clone(),
             parent_session_id: parent_session_id.to_string(),
-            parent_prompt_id: parent_prompt_id(child),
+            parent_prompt_id: parent_prompt_id.map(ToOwned::to_owned),
             child_session_id: child.session_id.clone(),
             subagent_type: subagent_type.clone(),
             description: description.clone(),
@@ -760,18 +840,6 @@ fn subagent_id_for(child: &ChildRequestRow) -> String {
     child.session_id.clone()
 }
 
-/// `parentPromptId` comes from the spawn tool call's recorded metadata or the
-/// child request metadata, when either carries the prompt id.
-fn parent_prompt_id(child: &ChildRequestRow) -> Option<String> {
-    let metadata = child.metadata.as_deref().and_then(nonempty)?;
-    let value: Value = serde_json::from_str(metadata).ok()?;
-    value
-        .get("promptId")
-        .and_then(Value::as_str)
-        .and_then(nonempty)
-        .map(ToOwned::to_owned)
-}
-
 /// Short description for the spawned update. The spawn tool's recorded name
 /// argument wins; otherwise the child request content is truncated to the
 /// pager's short-description scale.
@@ -867,115 +935,118 @@ pub(super) fn subagent_cancel_not_found_result(subagent_id: &str) -> Value {
 // Queries and decoding
 // ---------------------------------------------------------------------------
 
-fn child_requests_query(parent_request_id: &str) -> String {
+fn child_requests_query(parent_doc_id: &str) -> String {
     format!(
-        r#"{{
-            parent: AgentRequest(
-                filter: {{ request_id: {{ _eq: "{parent_request_id}" }} }},
-                limit: 2
-            ) {{ {CHILD_REQUEST_FIELDS} }}
-            children: AgentRequest(
-                filter: {{
-                    caused_by_parent_request_id: {{ _eq: "{parent_request_id}" }}
-                }},
-                order: {{ created_at: ASC }}
-            ) {{ {CHILD_REQUEST_FIELDS} }}
-        }}"#,
-        parent_request_id = escape_graphql_string(parent_request_id),
+        r#"{{ children: AgentRequest(filter: {{caused_by_parent_request_doc_id: {{_eq: "{}"}}}},
+        order: {{created_at: ASC}}) {{ {CHILD_REQUEST_FIELDS} }} }}"#,
+        escape_graphql_string(parent_doc_id)
     )
 }
 
-fn spawn_tools_query(parent_request_id: &str) -> String {
+fn spawn_tools_query(parent_doc_id: &str, parent_scope: &str) -> String {
     format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    request_id: {{ _eq: "{parent_request_id}" }},
-                    child_request_id: {{ _ne: "" }}
-                }}
-            ) {{ {SPAWN_TOOL_FIELDS} }}
-        }}"#,
-        parent_request_id = escape_graphql_string(parent_request_id),
+        r#"{{ AgentToolCall(filter: {{{parent_scope}, request_doc_id: {{_eq: "{}"}},
+        child_request_id: {{_ne: ""}}}}) {{ {SPAWN_TOOL_FIELDS} }} }}"#,
+        escape_graphql_string(parent_doc_id)
     )
 }
 
-fn child_responses_query<'a>(request_ids: impl IntoIterator<Item = &'a str>) -> String {
-    let ids = graphql_string_list(request_ids);
-    format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ request_id: {{ _in: [{ids}] }} }},
-                order: {{ created_at: ASC }}
-            ) {{ {CHILD_RESPONSE_FIELDS} }}
-        }}"#
-    )
-}
-
-fn child_tools_query<'a>(request_ids: impl IntoIterator<Item = &'a str>) -> String {
-    let ids = graphql_string_list(request_ids);
-    format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ request_id: {{ _in: [{ids}] }} }}
-            ) {{ {CHILD_TOOL_FIELDS} }}
-        }}"#
-    )
-}
-
-fn graphql_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
-    values
-        .into_iter()
-        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+fn child_result_filter(children: &[ChildRequestRow]) -> String {
+    let scopes = children
+        .iter()
+        .map(|child| {
+            format!(
+                r#"{{{}, request_doc_id: {{_eq: "{}"}}}}"#,
+                gents::session::session_scope_filter(
+                    &child.agent_did,
+                    &child.session_id,
+                    child.requester_did.as_deref()
+                ),
+                escape_graphql_string(
+                    child
+                        .doc_id
+                        .as_deref()
+                        .expect("verified child physical identity")
+                )
+            )
+        })
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(",");
+    format!("_or: [{scopes}]")
 }
 
-fn decode_child_rows(response: &defra_node::QueryResponse) -> Vec<ChildRequestRow> {
+fn child_responses_query(children: &[ChildRequestRow]) -> String {
+    format!(
+        "{{ AgentResponse(filter: {{{}}}) {{ {CHILD_RESPONSE_FIELDS} }} }}",
+        child_result_filter(children)
+    )
+}
+
+fn child_tools_query(children: &[ChildRequestRow]) -> String {
+    format!(
+        "{{ AgentToolCall(filter: {{{}}}) {{ {CHILD_TOOL_FIELDS} }} }}",
+        child_result_filter(children)
+    )
+}
+
+fn decode_child_rows(response: &defra_node::QueryResponse) -> Result<Vec<ChildRequestRow>> {
     decode_rows(response, "children", "child AgentRequest")
 }
 
-fn decode_spawn_rows(response: &defra_node::QueryResponse) -> Vec<SpawnToolRow> {
+fn decode_spawn_rows(response: &defra_node::QueryResponse) -> Result<Vec<SpawnToolRow>> {
     decode_rows(response, "AgentToolCall", "spawn AgentToolCall")
 }
 
-fn decode_response_rows(response: &defra_node::QueryResponse) -> Vec<ChildResponseRow> {
-    decode_rows(response, "AgentResponse", "child AgentResponse")
+fn decode_response_rows(response: &defra_node::QueryResponse) -> Result<Vec<ChildResponseRow>> {
+    let rows: Vec<ChildResponseRow> =
+        decode_rows(response, "AgentResponse", "child AgentResponse")?;
+    let mut identities = std::collections::HashSet::new();
+    for row in &rows {
+        anyhow::ensure!(
+            identities.insert((
+                &row.agent_did,
+                &row.session_id,
+                &row.requester_did,
+                &row.request_doc_id
+            )),
+            "ambiguous child response physical request scope"
+        );
+    }
+    Ok(rows)
 }
 
-fn decode_child_tool_rows(response: &defra_node::QueryResponse) -> Vec<ChildToolRow> {
+fn decode_child_tool_rows(response: &defra_node::QueryResponse) -> Result<Vec<ChildToolRow>> {
     decode_rows(response, "AgentToolCall", "child AgentToolCall")
 }
 
 fn decode_rows<T: DeserializeOwned>(
     response: &defra_node::QueryResponse,
-    collection: &str,
+    field: &str,
     label: &str,
-) -> Vec<T> {
+) -> Result<Vec<T>> {
     response
         .data
         .as_ref()
-        .and_then(|data| data.get(collection))
+        .and_then(|data| data.get(field))
         .and_then(Value::as_array)
+        .with_context(|| format!("{label} query returned no rows array"))?
+        .iter()
         .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|row| match serde_json::from_value::<T>(row) {
-            Ok(row) => Some(row),
-            Err(error) => {
-                tracing::debug!(%error, %label, "grok shim skipped an undecodable row");
-                None
-            }
-        })
+        .map(|row| serde_json::from_value(row).with_context(|| format!("decoding {label}")))
         .collect()
 }
 
 fn child_timeline_row(child: &ChildRequestRow) -> Option<TimelineRequestRow> {
     nonempty(&child.request_id)?;
+    child.doc_id.as_deref().and_then(nonempty)?;
+    nonempty(&child.agent_did)?;
     Some(TimelineRequestRow {
         doc_id: child.doc_id.clone(),
         request_id: child.request_id.clone(),
         session_id: Some(child.session_id.clone()),
-        metadata: child.metadata.clone(),
+        agent_did: Some(child.agent_did.clone()),
+        requester_did: child.requester_did.clone(),
+        input: child.input.clone().unwrap_or_default(),
         caused_by_parent_request_id: child.caused_by_parent_request_id.clone(),
         caused_by_parent_request_doc_id: child.caused_by_parent_request_doc_id.clone(),
         caused_by_parent_tool_call_id: child.caused_by_parent_tool_call_id.clone(),
@@ -992,6 +1063,7 @@ fn spawn_timeline_row(spawn: &SpawnToolRow) -> TimelineToolCallRow {
     TimelineToolCallRow {
         doc_id: spawn.doc_id.clone(),
         request_id: Some(spawn.request_id.clone()),
+        session_id: spawn.session_id.clone(),
         request_doc_id: spawn.request_doc_id.clone(),
         message_sequence: spawn.message_sequence,
         tool_call_id: spawn.tool_call_id.clone(),
@@ -1004,10 +1076,17 @@ fn spawn_timeline_row(spawn: &SpawnToolRow) -> TimelineToolCallRow {
 mod tests {
     use super::*;
 
+    fn parent_fixture() -> gents_protocol::row::AgentRequestRow {
+        serde_json::from_value(json!({"_docID":"doc-parent-request", "request_id":"parent-request", "session_id":"parent-session", "agent_did":"parent-owner"})).unwrap()
+    }
+
     fn child_row(request_id: &str, lifecycle_state: Option<&str>) -> ChildRequestRow {
         ChildRequestRow {
             doc_id: Some(format!("doc-{request_id}")),
             request_id: request_id.to_string(),
+            agent_did: "child-owner".into(),
+            requester_did: Some("parent-owner".into()),
+            input: Default::default(),
             session_id: format!("session-{request_id}"),
             behavior_id: Some("explore".to_string()),
             content: "List the top-level directories of this repository and summarize each \
@@ -1021,13 +1100,16 @@ mod tests {
             caused_by_parent_request_doc_id: Some("doc-parent-request".to_string()),
             caused_by_parent_tool_call_id: None,
             caused_by_parent_tool_call_doc_id: None,
-            metadata: None,
         }
     }
 
     fn response_row(request_id: &str, token_count: Option<i64>) -> ChildResponseRow {
         ChildResponseRow {
             request_id: request_id.to_string(),
+            request_doc_id: format!("doc-{request_id}"),
+            agent_did: "child-owner".into(),
+            requester_did: Some("parent-owner".into()),
+            session_id: format!("session-{request_id}"),
             token_count,
             error_message: None,
         }
@@ -1188,15 +1270,8 @@ mod tests {
     #[test]
     fn running_child_projects_spawned_then_progress_without_finished() {
         let children = vec![child_row("child-1", Some("processing"))];
-        let (updates, _chronology) = project_child_rows(
-            &children,
-            &[],
-            &[],
-            &[],
-            "parent-request",
-            "parent-session",
-            262_144,
-        );
+        let (updates, _chronology) =
+            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].session_update_kind(), "subagent_spawned");
         assert_eq!(updates[1].session_update_kind(), "subagent_progress");
@@ -1216,8 +1291,8 @@ mod tests {
             &[],
             &responses,
             &[],
-            "parent-request",
-            "parent-session",
+            &parent_fixture(),
+            None,
             262_144,
         );
         assert_eq!(updates.len(), 2);
@@ -1239,15 +1314,8 @@ mod tests {
     #[test]
     fn interrupted_child_projects_cancelled_finish() {
         let child = child_row("child-1", Some("interrupted"));
-        let (updates, _chronology) = project_child_rows(
-            &[child],
-            &[],
-            &[],
-            &[],
-            "parent-request",
-            "parent-session",
-            262_144,
-        );
+        let (updates, _chronology) =
+            project_child_rows(&[child], &[], &[], &[], &parent_fixture(), None, 262_144);
         let Some(SubagentUpdate::Finished(finished)) = updates
             .iter()
             .find(|update| update.session_update_kind() == "subagent_finished")
@@ -1261,7 +1329,7 @@ mod tests {
     fn response_interrupted_marker_waits_for_request_terminalization() {
         let children = vec![child_row("child-1", Some("processing"))];
         let response: ChildResponseRow = serde_json::from_value(json!({
-            "request_id": "child-1", "interrupted_at": "2026-08-31T22:46:46Z"
+            "request_id": "child-1", "request_doc_id":"doc-child-1", "agent_did":"child-owner", "requester_did":"parent-owner", "session_id":"session-child-1", "interrupted_at": "2026-08-31T22:46:46Z"
         }))
         .unwrap();
         let (updates, _chronology) = project_child_rows(
@@ -1269,8 +1337,8 @@ mod tests {
             &[],
             &[response],
             &[],
-            "parent-request",
-            "parent-session",
+            &parent_fixture(),
+            None,
             262_144,
         );
         assert_eq!(updates.len(), 2);
@@ -1284,15 +1352,8 @@ mod tests {
         // never latched (a lost/cleared marker must not resurrect an
         // interrupted child as still-running progress).
         let children = vec![child_row("child-1", Some("interrupted"))];
-        let (updates, _chronology) = project_child_rows(
-            &children,
-            &[],
-            &[],
-            &[],
-            "parent-request",
-            "parent-session",
-            262_144,
-        );
+        let (updates, _chronology) =
+            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
         assert_eq!(updates.len(), 2, "spawned then finished, no progress");
         assert_eq!(updates[0].session_update_kind(), "subagent_spawned");
         let SubagentUpdate::Finished(finished) = &updates[1] else {
@@ -1305,15 +1366,8 @@ mod tests {
     fn error_child_projects_failed_finish_with_reason() {
         let mut child = child_row("child-1", Some("failed"));
         child.failure_reason = Some("provider error".to_string());
-        let (updates, _chronology) = project_child_rows(
-            &[child],
-            &[],
-            &[],
-            &[],
-            "parent-request",
-            "parent-session",
-            262_144,
-        );
+        let (updates, _chronology) =
+            project_child_rows(&[child], &[], &[], &[], &parent_fixture(), None, 262_144);
         let Some(SubagentUpdate::Finished(finished)) = updates
             .iter()
             .find(|update| update.session_update_kind() == "subagent_finished")
@@ -1334,15 +1388,8 @@ mod tests {
             // lifecycle alone decides terminality — `interrupted` is
             // terminal and cancels even when the marker is absent.
             let child = child_row("child-1", Some(lifecycle_state));
-            let (updates, _chronology) = project_child_rows(
-                &[child],
-                &[],
-                &[],
-                &[],
-                "parent-request",
-                "parent-session",
-                262_144,
-            );
+            let (updates, _chronology) =
+                project_child_rows(&[child], &[], &[], &[], &parent_fixture(), None, 262_144);
             match updates
                 .iter()
                 .find(|update| update.session_update_kind() == "subagent_finished")
@@ -1372,15 +1419,8 @@ mod tests {
         // Still-active states project progress only.
         for active_state in ["pending", "claimed", "processing", "inputRequired"] {
             let children = vec![child_row("child-1", Some(active_state))];
-            let (updates, _chronology) = project_child_rows(
-                &children,
-                &[],
-                &[],
-                &[],
-                "parent-request",
-                "parent-session",
-                262_144,
-            );
+            let (updates, _chronology) =
+                project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
             assert_eq!(updates.len(), 2, "{active_state} spawns then progresses");
             assert_eq!(updates[0].session_update_kind(), "subagent_spawned");
             assert_eq!(updates[1].session_update_kind(), "subagent_progress");
@@ -1391,15 +1431,8 @@ mod tests {
     fn rows_for_other_parents_are_ignored() {
         let mut child = child_row("child-1", Some("completed"));
         child.caused_by_parent_request_id = Some("other-parent".to_string());
-        let (updates, _chronology) = project_child_rows(
-            &[child],
-            &[],
-            &[],
-            &[],
-            "parent-request",
-            "parent-session",
-            262_144,
-        );
+        let (updates, _chronology) =
+            project_child_rows(&[child], &[], &[], &[], &parent_fixture(), None, 262_144);
         assert!(updates.is_empty());
     }
 
@@ -1412,6 +1445,9 @@ mod tests {
         let spawn_tools = vec![SpawnToolRow {
             doc_id: Some("doc-call-1".to_string()),
             request_id: "parent-request".to_string(),
+            agent_did: "parent-owner".into(),
+            requester_did: Some("parent-owner".into()),
+            session_id: "parent-session".into(),
             request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: "call-9".to_string(),
             child_request_id: Some("child-1".to_string()),
@@ -1423,8 +1459,8 @@ mod tests {
             &spawn_tools,
             &[],
             &[],
-            "parent-request",
-            "parent-session",
+            &parent_fixture(),
+            None,
             262_144,
         );
         let SubagentUpdate::Spawned(spawned) = &updates[0] else {
@@ -1441,15 +1477,8 @@ mod tests {
     #[test]
     fn child_session_id_is_the_subagent_id_without_a_spawn_tool_row() {
         let children = vec![child_row("child-1", Some("processing"))];
-        let (updates, _chronology) = project_child_rows(
-            &children,
-            &[],
-            &[],
-            &[],
-            "parent-request",
-            "parent-session",
-            262_144,
-        );
+        let (updates, _chronology) =
+            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
         let SubagentUpdate::Spawned(spawned) = &updates[0] else {
             panic!("first update should be spawned");
         };
@@ -1458,37 +1487,49 @@ mod tests {
     }
 
     #[test]
-    fn parent_prompt_id_is_read_from_child_metadata() {
-        let mut child = child_row("child-1", Some("processing"));
-        child.metadata = Some(r#"{"promptId":"prompt-42"}"#.to_string());
-        let (updates, _chronology) = project_child_rows(
-            &[child],
+    fn parent_prompt_correlation_requires_the_selected_physical_parent() {
+        let child = child_row("child-1", Some("processing"));
+        let parent = parent_fixture();
+        let (updates, _) = project_child_rows(
+            &[child.clone()],
             &[],
             &[],
             &[],
-            "parent-request",
-            "parent-session",
+            &parent,
+            Some("prompt-42"),
             262_144,
         );
         let SubagentUpdate::Spawned(spawned) = &updates[0] else {
             panic!("first update should be spawned");
         };
         assert_eq!(spawned.parent_prompt_id.as_deref(), Some("prompt-42"));
+        let (updates, _) =
+            project_child_rows(&[child.clone()], &[], &[], &[], &parent, None, 262_144);
+        let SubagentUpdate::Spawned(spawned) = &updates[0] else {
+            panic!("first update should be spawned");
+        };
+        assert_eq!(spawned.parent_prompt_id, None);
+        let mut foreign_parent = parent;
+        foreign_parent.doc_id = Some("different-physical-parent".into());
+        assert!(project_child_rows(
+            &[child],
+            &[],
+            &[],
+            &[],
+            &foreign_parent,
+            Some("foreign-prompt"),
+            262_144
+        )
+        .0
+        .is_empty());
     }
 
     #[test]
     fn child_behavior_id_maps_to_subagent_type_with_default() {
         let mut untyped = child_row("child-1", Some("processing"));
         untyped.behavior_id = None;
-        let (updates, _chronology) = project_child_rows(
-            &[untyped],
-            &[],
-            &[],
-            &[],
-            "parent-request",
-            "parent-session",
-            262_144,
-        );
+        let (updates, _chronology) =
+            project_child_rows(&[untyped], &[], &[], &[], &parent_fixture(), None, 262_144);
         let SubagentUpdate::Spawned(spawned) = &updates[0] else {
             panic!("first update should be spawned");
         };
@@ -1518,15 +1559,8 @@ mod tests {
     #[test]
     fn zero_context_window_falls_back_to_catalog_default() {
         let children = vec![child_row("child-1", Some("processing"))];
-        let (updates, _chronology) = project_child_rows(
-            &children,
-            &[],
-            &[],
-            &[],
-            "parent-request",
-            "parent-session",
-            0,
-        );
+        let (updates, _chronology) =
+            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 0);
         let SubagentUpdate::Progress(progress) = &updates[1] else {
             panic!("second update should be progress");
         };
@@ -1556,13 +1590,20 @@ mod tests {
         );
         assert!(query.contains(r#"caused_by_parent_request_id"#));
 
-        let responses = child_responses_query(["req-a", "req-b"]);
-        assert!(responses.contains(r#""req-a", "req-b""#));
+        let responses =
+            child_responses_query(&[child_row("req-a", None), child_row("req-b", None)]);
+        assert!(
+            responses.contains("doc-req-a")
+                && responses.contains("doc-req-b")
+                && responses.contains("request_doc_id")
+        );
 
         // Quotes and backslashes in list members are escaped too: the raw
         // member text never reaches the query verbatim.
         let hostile = r#"req"a\b"#;
-        let escaped_list = child_responses_query([hostile]);
+        let mut hostile_child = child_row("hostile", None);
+        hostile_child.doc_id = Some(hostile.into());
+        let escaped_list = child_responses_query(&[hostile_child]);
         assert!(
             escaped_list.contains(r#""req\"a\\b""#),
             "escaped member missing: {escaped_list}"
@@ -1572,26 +1613,29 @@ mod tests {
             "raw member must not appear unescaped: {escaped_list}"
         );
 
-        let tools = spawn_tools_query(r#"parent-'quoted"-id"#);
+        let tools = spawn_tools_query(
+            r#"parent-'quoted"-id"#,
+            &gents::session::session_scope_filter("owner", "session", None),
+        );
         assert!(
             !tools.contains(r#""parent-'quoted"-id""#),
             "raw value must not appear unescaped: {tools}"
         );
-        assert!(
-            tools.contains(r#"child_request_id: { _ne: "" }"#),
-            "{tools}"
-        );
+        assert!(tools.contains(r#"child_request_id: {_ne: ""}"#), "{tools}");
     }
 
     #[test]
     fn child_query_is_scoped_to_the_parent_request_and_orders_by_creation() {
         let query = child_requests_query("parent-request");
         assert!(
-            query.contains(r#"caused_by_parent_request_id: { _eq: "parent-request" }"#),
+            query.contains(r#"caused_by_parent_request_doc_id: {_eq: "parent-request"}"#),
             "{query}"
         );
-        assert!(query.contains("order: { created_at: ASC }"), "{query}");
-        assert!(query.contains("parent: AgentRequest("), "{query}");
+        assert!(query.contains("order: {created_at: ASC}"), "{query}");
+        assert!(
+            !query.contains("parent: AgentRequest("),
+            "parent is supplied as actual row: {query}"
+        );
         assert!(query.contains("children: AgentRequest("), "{query}");
         assert!(query.contains("_docID"), "{query}");
         assert!(query.contains("caused_by_parent_request_doc_id"), "{query}");
@@ -1644,15 +1688,8 @@ mod tests {
     #[test]
     fn blank_child_rows_do_not_project_a_finished_update() {
         let children = vec![child_row("child-1", None)];
-        let (updates, _chronology) = project_child_rows(
-            &children,
-            &[],
-            &[],
-            &[],
-            "parent-request",
-            "parent-session",
-            262_144,
-        );
+        let (updates, _chronology) =
+            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[1].session_update_kind(), "subagent_progress");
     }
@@ -1663,22 +1700,38 @@ mod tests {
         let child_tools = vec![
             ChildToolRow {
                 request_id: "child-1".to_string(),
+                request_doc_id: "doc-child-1".into(),
+                agent_did: "child-owner".into(),
+                requester_did: Some("parent-owner".into()),
+                session_id: "session-child-1".into(),
                 tool_name: Some("read_file".to_string()),
                 lifecycle_state: Some("completed".to_string()),
             },
             ChildToolRow {
                 request_id: "child-1".to_string(),
+                request_doc_id: "doc-child-1".into(),
+                agent_did: "child-owner".into(),
+                requester_did: Some("parent-owner".into()),
+                session_id: "session-child-1".into(),
                 tool_name: Some("read_file".to_string()),
                 lifecycle_state: Some("completed".to_string()),
             },
             ChildToolRow {
                 request_id: "child-1".to_string(),
+                request_doc_id: "doc-child-1".into(),
+                agent_did: "child-owner".into(),
+                requester_did: Some("parent-owner".into()),
+                session_id: "session-child-1".into(),
                 tool_name: Some("bash".to_string()),
                 lifecycle_state: Some("failed".to_string()),
             },
             // Belongs to a different child request: must not be counted.
             ChildToolRow {
                 request_id: "child-2".to_string(),
+                request_doc_id: "doc-child-2".into(),
+                agent_did: "child-owner".into(),
+                requester_did: Some("parent-owner".into()),
+                session_id: "session-child-2".into(),
                 tool_name: Some("grep".to_string()),
                 lifecycle_state: Some("failed".to_string()),
             },
@@ -1688,8 +1741,8 @@ mod tests {
             &[],
             &[],
             &child_tools,
-            "parent-request",
-            "parent-session",
+            &parent_fixture(),
+            None,
             262_144,
         );
         assert_eq!(updates.len(), 2);
@@ -1708,8 +1761,8 @@ mod tests {
             &[],
             &[],
             &child_tools,
-            "parent-request",
-            "parent-session",
+            &parent_fixture(),
+            None,
             262_144,
         );
         let SubagentUpdate::Finished(finished) = &updates[1] else {
@@ -1719,11 +1772,37 @@ mod tests {
     }
 
     #[test]
+    fn colliding_child_result_labels_cannot_replace_physical_scope() {
+        let child = child_row("child-1", Some("processing"));
+        let valid = response_row("child-1", Some(12));
+        let mut foreign = valid.clone();
+        foreign.request_doc_id = "foreign-physical".into();
+        let mut wrong_requester = valid.clone();
+        wrong_requester.requester_did = None;
+        let (updates, _) = project_child_rows(
+            &[child],
+            &[],
+            &[foreign, wrong_requester, valid],
+            &[],
+            &parent_fixture(),
+            None,
+            262144,
+        );
+        let SubagentUpdate::Progress(progress) = &updates[1] else {
+            panic!("progress expected")
+        };
+        assert_eq!(progress.tokens_used, 12);
+    }
+
+    #[test]
     fn child_tool_query_is_scoped_to_child_request_ids() {
-        let query = child_tools_query(["child-1", "child-2"]);
+        let query = child_tools_query(&[child_row("child-1", None), child_row("child-2", None)]);
         assert!(query.contains("AgentToolCall("), "{query}");
         assert!(
-            query.contains(r#"request_id: { _in: ["child-1", "child-2"] }"#),
+            query.contains("request_doc_id")
+                && query.contains("doc-child-1")
+                && query.contains("doc-child-2")
+                && query.contains("requester_did"),
             "{query}"
         );
         assert!(query.contains("tool_name"), "{query}");
@@ -1820,6 +1899,9 @@ mod tests {
         let spawn = |tool_call_id: &str, sequence: Option<i64>, child: &str| SpawnToolRow {
             doc_id: Some(format!("doc-{tool_call_id}")),
             request_id: "parent-request".to_string(),
+            agent_did: "parent-owner".into(),
+            requester_did: Some("parent-owner".into()),
+            session_id: "parent-session".into(),
             request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: tool_call_id.to_string(),
             child_request_id: Some(child.to_string()),
@@ -1871,6 +1953,9 @@ mod tests {
         let spawn_a = SpawnToolRow {
             doc_id: Some("doc-call-a".to_string()),
             request_id: "parent-request".to_string(),
+            agent_did: "parent-owner".into(),
+            requester_did: Some("parent-owner".into()),
+            session_id: "parent-session".into(),
             request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: "call-a".to_string(),
             child_request_id: Some("child-a".to_string()),
@@ -1880,6 +1965,9 @@ mod tests {
         let spawn_z = SpawnToolRow {
             doc_id: Some("doc-call-z".to_string()),
             request_id: "parent-request".to_string(),
+            agent_did: "parent-owner".into(),
+            requester_did: Some("parent-owner".into()),
+            session_id: "parent-session".into(),
             request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: "call-z".to_string(),
             child_request_id: Some("child-z".to_string()),
@@ -1899,8 +1987,8 @@ mod tests {
             &spawn_tools,
             &[],
             &[],
-            "parent-request",
-            "parent-session",
+            &parent_fixture(),
+            None,
             262_144,
         );
         assert_eq!(updates.len(), 4);
@@ -1952,13 +2040,13 @@ mod tests {
         // document id, exactly as runtime admission persists them.
         let seed_parent = format!(
             r#"mutation {{
-                parent: create_AgentRequest(input: {{
+                create_AgentRequest(input: {{
                     request_id: "{escaped_parent}"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     session_id: "{escaped_session}"
+                    behavior_id: "test-parent"
                     content: "parent work"
-                    status: "completed"
                     lifecycle_state: "completed"
                     backend_id: ""
                     execution_origin: "interactive"
@@ -1971,17 +2059,16 @@ mod tests {
         );
         let response = node.execute(&seed_parent).await;
         assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
-        let parent_doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data.pointer("/parent/0/_docID"))
-            .and_then(Value::as_str)
-            .expect("parent document id");
-        let escaped_parent_doc = escape_graphql_string(parent_doc_id);
+        let parent_doc_id = gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data": response.data}),
+            "AgentRequest",
+        )
+        .expect("parent document id");
+        let escaped_parent_doc = escape_graphql_string(&parent_doc_id);
 
         let seed_tool = format!(
             r#"mutation {{
-                bridge: create_AgentToolCall(input: {{
+                create_AgentToolCall(input: {{
                     tool_call_key: "{escaped_session}:call-child"
                     request_id: "{escaped_parent}"
                     request_doc_id: "{escaped_parent_doc}"
@@ -2009,16 +2096,12 @@ mod tests {
             "bridge seed failed: {:?}",
             response.errors
         );
-        let tool_doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data.pointer("/bridge/0/_docID"))
-            .and_then(Value::as_str)
-            .expect("bridge document id");
-        let escaped_tool_doc = escape_graphql_string(tool_doc_id);
-        let control_metadata = escape_graphql_string(
-            r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"wake:1","queued_after_request_id":"parent-req-embedded-interrupt"},"background_completion_wake_version":1}"#,
-        );
+        let tool_doc_id = gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data": response.data}),
+            "AgentToolCall",
+        )
+        .expect("bridge document id");
+        let escaped_tool_doc = escape_graphql_string(&tool_doc_id);
 
         // Only the first child has the runtime's full logical+physical
         // provenance. The forged logical-only sibling must not project.
@@ -2035,7 +2118,6 @@ mod tests {
                     caused_by_parent_tool_call_id: "call-child"
                     caused_by_parent_tool_call_doc_id: "{escaped_tool_doc}"
                     content: "child work"
-                    status: "processing"
                     lifecycle_state: "interrupted"
                     backend_id: ""
                     execution_origin: "interactive"
@@ -2051,7 +2133,6 @@ mod tests {
                     session_id: "forged-child-session"
                     caused_by_parent_request_id: "{escaped_parent}"
                     content: "forged child"
-                    status: "processing"
                     lifecycle_state: "processing"
                     backend_id: ""
                     execution_origin: "interactive"
@@ -2068,7 +2149,7 @@ mod tests {
                     caused_by_parent_request_doc_id: "{escaped_parent_doc}"
                     content: "Review the new background completion results"
                     lifecycle_state: "processing"
-                    metadata: "{control_metadata}"
+                    input: {{ queue: {{ source: "background_completion", policy: "coalesce", key: "wake:1", queued_after_request_id: "{escaped_parent}", background_completion_wake_version: 1 }} }}
                     created_at: "2026-08-31T22:46:47Z"
                 }}) {{ _docID }}
             }}"#
@@ -2082,20 +2163,24 @@ mod tests {
 
         // This is a valid timeline control link, not a malformed child. It
         // must still be absent from the narrower subagent UI projection.
-        let candidates = node.execute(&child_requests_query(parent_request_id)).await;
-        let parents = decode_rows::<TimelineRequestRow>(&candidates, "parent", "parent");
+        let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({
+            "_docID": parent_doc_id, "request_id": parent_request_id,
+            "agent_did": "did:test:grok-shim", "requester_did": "did:test:grok-shim", "session_id": session_id
+        })).unwrap();
+        let candidates = node.execute(&child_requests_query(&parent_doc_id)).await;
         let control = decode_child_rows(&candidates)
+            .unwrap()
             .into_iter()
             .find(|child| child.request_id == "valid-background-control")
             .unwrap();
         assert!(child_bridge_is_corroborated(
-            &parents[0],
+            &TimelineRequestRow::from(parent.clone()),
             &child_timeline_row(&control).unwrap(),
             &[]
         ));
 
         // The actual production query/decoder path, not hand-built rows.
-        let projection = project_subagents(&node, parent_request_id, session_id, 262_144)
+        let projection = project_subagents(&node, &parent, None, 262_144)
             .await
             .expect("subagent projection");
         let kinds: Vec<&str> = projection

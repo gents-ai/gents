@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-config-components-apply"
+description = "Enables the desktop_config_components_apply command without any pre-configured scope."
+commands.allow = ["desktop_config_components_apply"]
+
+[[permission]]
+identifier = "deny-desktop-config-components-apply"
+description = "Denies the desktop_config_components_apply command without any pre-configured scope."
+commands.deny = ["desktop_config_components_apply"]

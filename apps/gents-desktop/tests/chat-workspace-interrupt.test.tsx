@@ -14,7 +14,6 @@ const mockedInterrupt = vi.fn();
 const api = {
   previewInterruptCascade: mockedPreview,
   interruptRequest: mockedInterrupt,
-  listToolCallHolds: vi.fn().mockResolvedValue([]),
 } as unknown as DesktopApiAdapter;
 
 const baseDeployment: DeploymentView = {
@@ -51,7 +50,7 @@ const baseProps = {
     animated: true,
   },
   selectedDeployment: baseDeployment,
-  selectedConversationTitle: "t",
+  selectedSessionSummaryTitle: "t",
   selectedBehaviorId: "default",
   selectedSessionId: "s1",
   session: streamingSession,
@@ -63,7 +62,7 @@ const baseProps = {
   interruptVisible: true,
   sending: false,
   turnState: "streaming",
-  onRenameConversationTitle: vi.fn(),
+  onRenameSessionTitle: vi.fn(),
   onDraftChange: vi.fn(),
   onSend: vi.fn(),
   onInterruptAccepted: vi.fn(),

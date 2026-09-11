@@ -50,7 +50,7 @@ export function SkillConfigPanel({
           return {
             id: skill.skillId,
             title,
-            meta: skill.scope ?? "behavior",
+            meta: "skill",
           };
         })}
         selectedId={selectedSkillId}
@@ -104,7 +104,6 @@ export function SkillConfigEditor({
 }: SkillConfigEditorProps) {
   const [skillId, setSkillId] = useState("");
   const [name, setName] = useState("");
-  const [scope, setScope] = useState("behavior");
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
   const [toolRefs, setToolRefs] = useState("");
@@ -118,7 +117,6 @@ export function SkillConfigEditor({
     const base = skillFormValues(skill);
     setSkillId(base.skillId);
     setName(base.name);
-    setScope(base.scope);
     setDescription(base.description);
     setInstructions(base.instructions);
     setToolRefs(base.toolRefs);
@@ -130,7 +128,7 @@ export function SkillConfigEditor({
   }, [skill?.skillId]);
 
   const dirty = isDirty(
-    { skillId, name, scope, description, instructions, toolRefs, displayName, enabled },
+    { skillId, name, description, instructions, toolRefs, displayName, enabled },
     skillFormValues(skill),
   );
 
@@ -139,15 +137,16 @@ export function SkillConfigEditor({
     const nextId = skillId.trim();
     try {
       await onSaveSkillConfig({
-        skillId: nextId,
-        agentDid,
-        scope,
-        name,
-        description: optionalString(description),
-        instructions,
-        toolRefs: linesToArray(toolRefs),
-        displayName: optionalString(displayName),
-        enabled,
+        document: {
+          skill_id: nextId,
+          agent_did: agentDid,
+          name: name.trim() ? name : null,
+          description: optionalString(description),
+          instructions,
+          tool_refs: linesToArray(toolRefs),
+          display_name: optionalString(displayName),
+          enabled,
+        },
       });
       onSaved(nextId);
       setSaveError(null);
@@ -215,17 +214,6 @@ export function SkillConfigEditor({
         </label>
       </div>
       <div className="grid-2">
-        <label className="field">
-          <span>Scope</span>
-          <select
-            data-testid="skill-scope"
-            onChange={(event) => setScope(event.currentTarget.value)}
-            value={scope}
-          >
-            <option value="behavior">behavior (opt-in per behavior)</option>
-            <option value="principal">principal (all behaviors)</option>
-          </select>
-        </label>
         <label className="checkbox">
           <input
             checked={enabled}
@@ -313,7 +301,6 @@ function skillFormValues(skill: SkillView | null) {
   return {
     skillId: skill?.skillId ?? "",
     name: skill?.name ?? skill?.skillId ?? "",
-    scope: skill?.scope ?? "behavior",
     description: skill?.description ?? "",
     instructions: skill?.instructions ?? "",
     toolRefs: (skill?.toolRefs ?? []).join("\n"),

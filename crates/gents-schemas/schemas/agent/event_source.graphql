@@ -1,0 +1,16 @@
+# Shared event selection for task triggers and callback bindings. Group state
+# belongs to the delivery engine, independently for each typed consumer.
+type EventSource @branchable @index(fields: ["agent_did", "event_source_id"], unique: true) {
+    event_source_id: String
+    agent_did: String @index
+    display_name: String
+    source_collection: String @index
+    event_kind: String
+    filter: String
+    correlation_field: String
+    group: JSON
+    workspace_authority: String
+    created_at: DateTime @index(direction: DESC)
+    updated_at: DateTime @index(direction: DESC)
+    tags: [String!]
+}

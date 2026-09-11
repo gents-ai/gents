@@ -12,8 +12,8 @@ mod request;
 mod title;
 
 use super::runtime::StartupBarrier;
-use crate::compaction::{ProviderReductionEngine, ReductionOptions};
-use crate::config::AgentBehavior;
+use crate::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
+use crate::config::ResolvedBehavior;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::prompt::LayeredPromptBuilder;
@@ -118,20 +118,20 @@ pub(crate) async fn verify_request_at_claim_boundary(
 
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
-    behavior: Arc<AgentBehavior>,
+    behavior: Arc<ResolvedBehavior>,
     model: Arc<M>,
     preamble: String,
     loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
     prompt_builder: LayeredPromptBuilder,
     stream_writer: DefraStreamWriter,
-    compactor: ProviderReductionEngine<M>,
+    compactor: Arc<dyn ReductionEngine>,
     compaction_options: ReductionOptions,
     hook_failure_policy: FailurePolicy,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
-    approval_required_tools: Arc<Vec<String>>,
+    remote_tools: Option<crate::document_config::RemoteTools>,
     output_obligations: Arc<Vec<(String, crate::document_config::WriteToolOutputObligation)>>,
     startup_barrier: Arc<StartupBarrier>,
     runtime_status: crate::runtime_status::RuntimeStatusHandle,
@@ -149,7 +149,7 @@ enum HandleRequestOutcome {
 impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
-        behavior: Arc<AgentBehavior>,
+        behavior: Arc<ResolvedBehavior>,
         model: Arc<M>,
         preamble: String,
         loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
@@ -164,7 +164,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         runtime_status: crate::runtime_status::RuntimeStatusHandle,
         slot_generation: u64,
         request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
-    ) -> Self {
+    ) -> Result<Self> {
         let stream_writer = DefraStreamWriter::new(
             node.clone(),
             behavior.agent_did(),
@@ -177,13 +177,13 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             crate::rendered_request::CaptureScopeKind::Compaction,
         );
         compaction_config.max_turns = 0;
-        let compactor = ProviderReductionEngine::new(model.clone(), compaction_config);
-        let compaction_options = ReductionOptions {
-            mode: behavior.compaction_strategy.reduction_mode(),
-            ..Default::default()
-        };
+        let compactor = Arc::new(ProviderReductionEngine::new(
+            model.clone(),
+            compaction_config,
+        ));
+        let compaction_options = crate::compaction::reduction_options_for_behavior(&behavior)?;
 
-        Self {
+        Ok(Self {
             node,
             behavior,
             model,
@@ -197,14 +197,19 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             rendered_request_capture_factory,
             background_tool_registry,
             background_execution_registry,
-            approval_required_tools: Arc::new(Vec::new()),
+            remote_tools: None,
             output_obligations: Arc::new(Vec::new()),
             startup_barrier,
             runtime_status,
             slot_generation,
             operator_tool_root: None,
             request_admission,
-        }
+        })
+    }
+
+    pub(super) fn with_compactor(mut self, compactor: Arc<dyn ReductionEngine>) -> Self {
+        self.compactor = compactor;
+        self
     }
 
     pub(super) fn with_operator_tool_root(mut self, root: Option<PathBuf>) -> Self {
@@ -234,8 +239,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         }
     }
 
-    pub(super) fn with_approval_required_tools(mut self, tools: Vec<String>) -> Self {
-        self.approval_required_tools = Arc::new(tools);
+    pub(super) fn with_remote_tools(
+        mut self,
+        tools: Option<crate::document_config::RemoteTools>,
+    ) -> Self {
+        self.remote_tools = tools;
         self
     }
 
@@ -356,6 +364,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             self.behavior.backend_id.clone().unwrap_or_default(),
         );
         lifecycle.set_execution_lease_duration(self.behavior.stream_liveness_timeout);
+        lifecycle.set_configured_max_total_tokens(self.behavior.max_total_tokens);
 
         let claim_result = lifecycle
             .claim_with_identity()
@@ -445,36 +454,30 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
         }
 
-        if let Some(requested_behavior_id) = request
-            .behavior_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|behavior_id| !behavior_id.is_empty())
-        {
-            if requested_behavior_id != self.behavior.behavior_id {
-                let error = anyhow::anyhow!(
-                    "request targets behavior {} but runtime is serving behavior {}",
-                    requested_behavior_id,
-                    self.behavior.behavior_id
-                );
-                record_current_request_outcome("rejected_behavior_mismatch");
-                record_current_failure_class(&error);
-                tracing::warn!(
-                    behavior_id = %self.behavior.behavior_id,
-                    request_id = %request.request_id,
-                    session_id = %request.session_id,
-                    requested_behavior_id = %requested_behavior_id,
-                    "rejecting request for unroutable behavior"
-                );
-                finalize_request_failure(
-                    &mut lifecycle,
-                    &self.stream_writer,
-                    &error.to_string(),
-                    &request.request_id,
-                )
-                .await;
-                return;
-            }
+        let requested_behavior_id = request.behavior_id.as_str();
+        if requested_behavior_id != self.behavior.behavior_id {
+            let error = anyhow::anyhow!(
+                "request targets behavior {} but runtime is serving behavior {}",
+                requested_behavior_id,
+                self.behavior.behavior_id
+            );
+            record_current_request_outcome("rejected_behavior_mismatch");
+            record_current_failure_class(&error);
+            tracing::warn!(
+                behavior_id = %self.behavior.behavior_id,
+                request_id = %request.request_id,
+                session_id = %request.session_id,
+                requested_behavior_id = %requested_behavior_id,
+                "rejecting request for unroutable behavior"
+            );
+            finalize_request_failure(
+                &mut lifecycle,
+                &self.stream_writer,
+                &error.to_string(),
+                &request.request_id,
+            )
+            .await;
+            return;
         }
 
         match crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request).await {
@@ -687,6 +690,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     &self.node,
                     &request.session_id,
                     &request.agent_did,
+                    request.requester_did.as_deref(),
                     "automated wake-up drained because active request was interrupted",
                 )
                 .await

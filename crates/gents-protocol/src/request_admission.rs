@@ -46,7 +46,7 @@ impl TryFrom<&str> for AgentRequestAdmissionKind {
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeInternalSourceKind {
     LocalChild,
-    CrossDeploymentChild,
+    CrossPrincipalChild,
     LocalControl,
     AutomatedTrigger,
 }
@@ -55,7 +55,7 @@ impl RuntimeInternalSourceKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::LocalChild => "local-child",
-            Self::CrossDeploymentChild => "cross-deployment-child",
+            Self::CrossPrincipalChild => "cross-principal-child",
             Self::LocalControl => "local-control",
             Self::AutomatedTrigger => "automated-trigger",
         }
@@ -68,7 +68,7 @@ impl TryFrom<&str> for RuntimeInternalSourceKind {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "local-child" => Ok(Self::LocalChild),
-            "cross-deployment-child" => Ok(Self::CrossDeploymentChild),
+            "cross-principal-child" => Ok(Self::CrossPrincipalChild),
             "local-control" => Ok(Self::LocalControl),
             "automated-trigger" => Ok(Self::AutomatedTrigger),
             _ => Err("unknown runtime-internal source kind"),
@@ -101,7 +101,7 @@ pub struct AgentRequestAdmissionObservation {
     pub target_policy_allows: bool,
     pub bridge_author_binding_current: bool,
     pub bridge_author_authorization_fresh: bool,
-    pub target_cross_deployment_policy_allows: bool,
+    pub target_cross_principal_policy_allows: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,11 +155,11 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
                             && observation.source_tool_call_binding_current
                             && observation.target_policy_allows
                     }
-                    RuntimeInternalSourceKind::CrossDeploymentChild => {
+                    RuntimeInternalSourceKind::CrossPrincipalChild => {
                         observation.source_tool_call_binding_current
                             && observation.bridge_author_binding_current
                             && observation.bridge_author_authorization_fresh
-                            && observation.target_cross_deployment_policy_allows
+                            && observation.target_cross_principal_policy_allows
                     }
                     RuntimeInternalSourceKind::LocalControl => {
                         observation.source_document_binding_current
@@ -193,20 +193,14 @@ pub struct AgentRequestSigningFields<'a> {
     pub request_id: &'a str,
     pub agent_did: &'a str,
     pub requester_did: Option<&'a str>,
-    pub behavior_id: Option<&'a str>,
+    pub behavior_id: &'a str,
     pub session_id: &'a str,
     pub retry_parent_request: Option<&'a str>,
     pub retry_parent_request_doc_id: Option<&'a str>,
     pub retry_root_request: Option<&'a str>,
     pub retry_key: Option<&'a str>,
     pub content: &'a str,
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
-    pub top_k: Option<i64>,
-    pub seed: Option<i64>,
-    pub max_tokens: Option<i64>,
-    pub max_total_tokens: Option<i64>,
-    pub metadata: Option<&'a str>,
+    pub input: &'a crate::request_input::RequestInput,
     pub execution_origin: Option<&'a str>,
     pub caused_by_trigger_id: Option<&'a str>,
     pub caused_by_trigger_doc_id: Option<&'a str>,
@@ -224,8 +218,9 @@ pub struct AgentRequestSigningFields<'a> {
     pub caused_by_parent_tool_call_id: Option<&'a str>,
     pub caused_by_parent_tool_call_doc_id: Option<&'a str>,
     pub workspace_id: Option<&'a str>,
+    /// Principal scope copied from the verified workspace/source, not a host identity.
+    pub workspace_owner_agent_did: Option<&'a str>,
     pub workspace_authority: Option<&'a str>,
-    pub workspace_owner_deployment_id: Option<&'a str>,
     pub workspace_seal_hash: Option<&'a str>,
 }
 
@@ -237,9 +232,10 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
     ] {
         require_identifier(name, value)?;
     }
+    // Behavior selection is required even for new sessions.
+    require_identifier("behavior_id", request.behavior_id)?;
     for (name, value) in [
         ("requester_did", request.requester_did),
-        ("behavior_id", request.behavior_id),
         ("retry_parent_request", request.retry_parent_request),
         (
             "retry_parent_request_doc_id",
@@ -268,8 +264,8 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
         ),
         ("workspace_id", request.workspace_id),
         (
-            "workspace_owner_deployment_id",
-            request.workspace_owner_deployment_id,
+            "workspace_owner_agent_did",
+            request.workspace_owner_agent_did,
         ),
     ] {
         require_optional_identifier(name, value)?;
@@ -285,13 +281,12 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
             &["manual", "event", "schedule", "subagent", "goal"],
         )?;
     }
-    if let Some(authority) = request.workspace_authority {
-        require_enum(
-            "workspace_authority",
-            authority,
-            &["readOnly", "readWrite", "integrate"],
-        )?;
-    }
+    validate_workspace_reference(
+        request.workspace_id,
+        request.workspace_owner_agent_did,
+        request.workspace_authority,
+        request.workspace_seal_hash,
+    )?;
     parse_utc_seconds("created_at", request.created_at)?;
     if let Some(valid_until) = request.valid_until {
         parse_utc_seconds("valid_until", valid_until)?;
@@ -368,7 +363,7 @@ impl AgentRequestAdmissionRecord {
         )
     }
 
-    pub fn runtime_cross_deployment_child(
+    pub fn runtime_cross_principal_child(
         target_did: impl Into<String>,
         source_request_id: impl Into<String>,
         bridge_author_did: impl Into<String>,
@@ -376,7 +371,7 @@ impl AgentRequestAdmissionRecord {
         Self::runtime_internal(
             target_did,
             source_request_id,
-            RuntimeInternalSourceKind::CrossDeploymentChild,
+            RuntimeInternalSourceKind::CrossPrincipalChild,
             Some(bridge_author_did.into()),
         )
     }
@@ -529,7 +524,7 @@ impl AgentRequestAdmissionRecord {
                             self.runtime_bridge_author_did.as_deref()
                         ),
                         (
-                            Some(RuntimeInternalSourceKind::CrossDeploymentChild),
+                            Some(RuntimeInternalSourceKind::CrossPrincipalChild),
                             Some(_)
                         ) | (Some(RuntimeInternalSourceKind::LocalChild), None)
                             | (Some(RuntimeInternalSourceKind::LocalControl), None)
@@ -578,20 +573,16 @@ impl AgentRequestAdmissionRecord {
         push_text(&mut fields, request.request_id);
         push_text(&mut fields, request.agent_did);
         push_option(&mut fields, request.requester_did);
-        push_option(&mut fields, request.behavior_id);
+        push_text(&mut fields, request.behavior_id);
         push_text(&mut fields, request.session_id);
         push_option(&mut fields, request.retry_parent_request);
         push_option(&mut fields, request.retry_parent_request_doc_id);
         push_option(&mut fields, request.retry_root_request);
         push_option(&mut fields, request.retry_key);
         push_text(&mut fields, request.content);
-        push_f64(&mut fields, request.temperature);
-        push_f64(&mut fields, request.top_p);
-        push_i64(&mut fields, request.top_k);
-        push_i64(&mut fields, request.seed);
-        push_i64(&mut fields, request.max_tokens);
-        push_i64(&mut fields, request.max_total_tokens);
-        push_option(&mut fields, request.metadata);
+        // Typed invocation input, encoded by the canonical framing below; the
+        // removed per-request sampling/metadata/deployment scalars are gone.
+        push_request_input(&mut fields, request.input);
         push_option(&mut fields, request.execution_origin);
         push_option(&mut fields, request.caused_by_trigger_id);
         push_option(&mut fields, request.caused_by_trigger_doc_id);
@@ -609,8 +600,8 @@ impl AgentRequestAdmissionRecord {
         push_option(&mut fields, request.caused_by_parent_tool_call_id);
         push_option(&mut fields, request.caused_by_parent_tool_call_doc_id);
         push_option(&mut fields, request.workspace_id);
+        push_option(&mut fields, request.workspace_owner_agent_did);
         push_option(&mut fields, request.workspace_authority);
-        push_option(&mut fields, request.workspace_owner_deployment_id);
         push_option(&mut fields, request.workspace_seal_hash);
         push_text(&mut fields, self.kind.as_str());
         push_text(&mut fields, &self.signer_did);
@@ -631,6 +622,29 @@ impl AgentRequestAdmissionRecord {
         );
         push_option(&mut fields, self.runtime_bridge_author_did.as_deref());
         serialize_fields(&fields)
+    }
+}
+
+/// Structural validation only. Admission authenticates the source; workspace
+/// owners still validate ACP, principal grants, lifecycle, placement and seal.
+pub fn validate_workspace_reference(
+    workspace_id: Option<&str>,
+    owner_agent_did: Option<&str>,
+    authority: Option<&str>,
+    seal_hash: Option<&str>,
+) -> anyhow::Result<()> {
+    require_optional_identifier("workspace_id", workspace_id)?;
+    require_optional_identifier("workspace_owner_agent_did", owner_agent_did)?;
+    match (workspace_id, owner_agent_did, authority) {
+        (None, None, None) if seal_hash.is_none() => Ok(()),
+        (Some(_), Some(_), Some(authority)) => require_enum(
+            "workspace_authority",
+            authority,
+            &["readOnly", "readWrite", "integrate"],
+        ),
+        _ => {
+            anyhow::bail!("workspace reference requires id, owner principal and authority together")
+        }
     }
 }
 
@@ -674,14 +688,88 @@ fn push_u64(fields: &mut Vec<Vec<u8>>, value: Option<u64>) {
     );
 }
 
-fn push_f64(fields: &mut Vec<Vec<u8>>, value: Option<f64>) {
-    push_option(
-        fields,
-        value
-            .as_ref()
-            .map(|value| format!("{:016x}", value.to_bits()))
-            .as_deref(),
-    );
+/// Title provenance wire names shared by the canonical session title owner.
+fn title_source_wire_name(source: crate::session::SessionTitleSource) -> &'static str {
+    match source {
+        crate::session::SessionTitleSource::Placeholder => "placeholder",
+        crate::session::SessionTitleSource::Generated => "generated",
+        crate::session::SessionTitleSource::Task => "task",
+        crate::session::SessionTitleSource::User => "user",
+    }
+}
+
+/// Queue enum wire names matching the canonical queue owners.
+fn queue_source_wire_name(source: crate::request_input::QueueSource) -> &'static str {
+    match source {
+        crate::request_input::QueueSource::User => "user",
+        crate::request_input::QueueSource::BackgroundCompletion => "background_completion",
+        crate::request_input::QueueSource::Steering => "steering",
+        crate::request_input::QueueSource::Goal => "goal",
+    }
+}
+
+fn queue_policy_wire_name(policy: crate::request_input::QueuePolicy) -> &'static str {
+    match policy {
+        crate::request_input::QueuePolicy::Append => "append",
+        crate::request_input::QueuePolicy::Coalesce => "coalesce",
+    }
+}
+
+/// Canonical typed-input framing, mirroring the Lean
+/// `Enrollment.requestInputFields` byte contract: explicit option tags,
+/// collection lengths, and the fixed field order of RequestInput and
+/// RequestQueue. This is the one canonical input encoder for signing and
+/// verification; callers must never substitute unescaped JSON or metadata.
+fn push_input_option(fields: &mut Vec<Vec<u8>>, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            push_text(fields, "some");
+            push_text(fields, value);
+        }
+        None => push_text(fields, "none"),
+    }
+}
+
+fn push_request_input(fields: &mut Vec<Vec<u8>>, input: &crate::request_input::RequestInput) {
+    push_text(fields, &input.selected_skill_ids.len().to_string());
+    for skill_id in &input.selected_skill_ids {
+        push_text(fields, skill_id);
+    }
+    push_input_option(fields, input.cwd.as_deref());
+    match &input.initial_title {
+        Some(title) => {
+            push_text(fields, "some");
+            push_text(fields, &title.text);
+            push_text(fields, title_source_wire_name(title.source));
+        }
+        None => push_text(fields, "none"),
+    }
+    match &input.queue {
+        Some(queue) => {
+            push_text(fields, "some");
+            push_text(fields, queue_source_wire_name(queue.source));
+            push_text(fields, queue_policy_wire_name(queue.policy));
+            push_input_option(fields, queue.key.as_deref());
+            push_input_option(fields, queue.queued_after_request_id.as_deref());
+            push_input_option(fields, queue.interrupted_request_id.as_deref());
+            push_input_option(
+                fields,
+                queue
+                    .background_completion_wake_version
+                    .map(|version| version.to_string())
+                    .as_deref(),
+            );
+        }
+        None => push_text(fields, "none"),
+    }
+    match &input.goal_continuation {
+        Some(goal) => {
+            push_text(fields, "some");
+            push_text(fields, &goal.sequence.to_string());
+            push_text(fields, if goal.wrapup { "true" } else { "false" });
+        }
+        None => push_text(fields, "none"),
+    }
 }
 
 fn serialize_fields(fields: &[Vec<u8>]) -> Vec<u8> {
@@ -707,21 +795,14 @@ pub struct AgentRequestCreate {
     pub request_id: String,
     pub agent_did: String,
     pub requester_did: String,
-    pub behavior_id: Option<String>,
+    pub behavior_id: String,
     pub session_id: String,
     pub retry_parent_request: Option<String>,
     pub retry_parent_request_doc_id: Option<String>,
     pub retry_root_request: Option<String>,
     pub retry_key: Option<String>,
     pub content: String,
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
-    pub top_k: Option<i64>,
-    pub seed: Option<i64>,
-    pub max_tokens: Option<i64>,
-    pub max_total_tokens: Option<i64>,
-    pub metadata: Option<String>,
-    pub backend_id: Option<String>,
+    pub input: crate::request_input::RequestInput,
     pub execution_origin: String,
     pub caused_by_trigger_id: Option<String>,
     pub caused_by_trigger_doc_id: Option<String>,
@@ -739,8 +820,10 @@ pub struct AgentRequestCreate {
     pub caused_by_parent_tool_call_id: Option<String>,
     pub caused_by_parent_tool_call_doc_id: Option<String>,
     pub workspace_id: Option<String>,
+    /// Signed principal scope; present exactly when workspace_id is present.
+    /// Issuance validates this against the existing workspace or authenticated source.
+    pub workspace_owner_agent_did: Option<String>,
     pub workspace_authority: Option<String>,
-    pub workspace_owner_deployment_id: Option<String>,
     pub workspace_seal_hash: Option<String>,
     pub initial_lifecycle_state: RequestLifecycleState,
     pub admission: AgentRequestAdmissionRecord,
@@ -769,20 +852,13 @@ impl AgentRequestCreate {
             request_id,
             agent_did: agent_did.into(),
             requester_did: requester_did.into(),
-            behavior_id: Some(behavior_id.into()),
+            behavior_id: behavior_id.into(),
             session_id: session_id.into(),
             retry_parent_request: None,
             retry_parent_request_doc_id: None,
             retry_key: None,
             content: content.into(),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
-            max_total_tokens: None,
-            metadata: None,
-            backend_id: None,
+            input: crate::request_input::RequestInput::default(),
             execution_origin: execution_origin.into(),
             caused_by_trigger_id: None,
             caused_by_trigger_doc_id: None,
@@ -800,8 +876,8 @@ impl AgentRequestCreate {
             caused_by_parent_tool_call_id: None,
             caused_by_parent_tool_call_doc_id: None,
             workspace_id: None,
+            workspace_owner_agent_did: None,
             workspace_authority: None,
-            workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
             initial_lifecycle_state: RequestLifecycleState::Pending,
             admission,
@@ -813,20 +889,14 @@ impl AgentRequestCreate {
             request_id: &self.request_id,
             agent_did: &self.agent_did,
             requester_did: Some(&self.requester_did),
-            behavior_id: self.behavior_id.as_deref(),
+            behavior_id: &self.behavior_id,
             session_id: &self.session_id,
             retry_parent_request: self.retry_parent_request.as_deref(),
             retry_parent_request_doc_id: self.retry_parent_request_doc_id.as_deref(),
             retry_root_request: self.retry_root_request.as_deref(),
             retry_key: self.retry_key.as_deref(),
             content: &self.content,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            top_k: self.top_k,
-            seed: self.seed,
-            max_tokens: self.max_tokens,
-            max_total_tokens: self.max_total_tokens,
-            metadata: self.metadata.as_deref(),
+            input: &self.input,
             execution_origin: Some(&self.execution_origin),
             caused_by_trigger_id: self.caused_by_trigger_id.as_deref(),
             caused_by_trigger_doc_id: self.caused_by_trigger_doc_id.as_deref(),
@@ -844,8 +914,8 @@ impl AgentRequestCreate {
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id.as_deref(),
             caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id.as_deref(),
             workspace_id: self.workspace_id.as_deref(),
+            workspace_owner_agent_did: self.workspace_owner_agent_did.as_deref(),
             workspace_authority: self.workspace_authority.as_deref(),
-            workspace_owner_deployment_id: self.workspace_owner_deployment_id.as_deref(),
             workspace_seal_hash: self.workspace_seal_hash.as_deref(),
         }
     }
@@ -877,7 +947,7 @@ impl AgentRequestCreate {
         text(&mut fields, "request_id", &self.request_id);
         text(&mut fields, "agent_did", &self.agent_did);
         text(&mut fields, "requester_did", &self.requester_did);
-        optional_text(&mut fields, "behavior_id", self.behavior_id.as_deref());
+        text(&mut fields, "behavior_id", &self.behavior_id);
         text(&mut fields, "session_id", &self.session_id);
         optional_text(
             &mut fields,
@@ -896,14 +966,13 @@ impl AgentRequestCreate {
         );
         optional_text(&mut fields, "retry_key", self.retry_key.as_deref());
         text(&mut fields, "content", &self.content);
-        optional_scalar(&mut fields, "temperature", self.temperature);
-        optional_scalar(&mut fields, "top_p", self.top_p);
-        optional_scalar(&mut fields, "top_k", self.top_k);
-        optional_scalar(&mut fields, "seed", self.seed);
-        optional_scalar(&mut fields, "max_tokens", self.max_tokens);
-        optional_scalar(&mut fields, "max_total_tokens", self.max_total_tokens);
-        optional_text(&mut fields, "metadata", self.metadata.as_deref());
-        optional_text(&mut fields, "backend_id", self.backend_id.as_deref());
+        if self.input != crate::request_input::RequestInput::default() {
+            let input = serde_json::to_value(&self.input)
+                .map_err(|_| "AgentRequest input serialization failed")?;
+            let input = crate::graphql::graphql_input_literal(&input)
+                .map_err(|_| "AgentRequest input is not a GraphQL value")?;
+            fields.push(format!("input: {input}"));
+        }
         text(&mut fields, "execution_origin", &self.execution_origin);
         optional_text(
             &mut fields,
@@ -963,13 +1032,13 @@ impl AgentRequestCreate {
         optional_text(&mut fields, "workspace_id", self.workspace_id.as_deref());
         optional_text(
             &mut fields,
-            "workspace_authority",
-            self.workspace_authority.as_deref(),
+            "workspace_owner_agent_did",
+            self.workspace_owner_agent_did.as_deref(),
         );
         optional_text(
             &mut fields,
-            "workspace_owner_deployment_id",
-            self.workspace_owner_deployment_id.as_deref(),
+            "workspace_authority",
+            self.workspace_authority.as_deref(),
         );
         optional_text(
             &mut fields,
@@ -1109,8 +1178,9 @@ mod tests {
         changed!("requester_did", |v: &mut AgentRequestCreate| v
             .requester_did
             .push('x'));
-        changed!("behavior_id", |v: &mut AgentRequestCreate| v.behavior_id =
-            None);
+        changed!("behavior_id", |v: &mut AgentRequestCreate| v
+            .behavior_id
+            .push('x'));
         changed!("session_id", |v: &mut AgentRequestCreate| v
             .session_id
             .push('x'));
@@ -1127,18 +1197,35 @@ mod tests {
         changed!("retry_key", |v: &mut AgentRequestCreate| v.retry_key =
             Some("retry-key".into()));
         changed!("content", |v: &mut AgentRequestCreate| v.content.push('!'));
-        changed!("temperature", |v: &mut AgentRequestCreate| v.temperature =
-            Some(0.0));
-        changed!("top_p", |v: &mut AgentRequestCreate| v.top_p = Some(0.9));
-        changed!("top_k", |v: &mut AgentRequestCreate| v.top_k = Some(40));
-        changed!("seed", |v: &mut AgentRequestCreate| v.seed = Some(7));
-        changed!("max_tokens", |v: &mut AgentRequestCreate| v.max_tokens =
-            Some(512));
-        changed!("max_total_tokens", |v: &mut AgentRequestCreate| v
-            .max_total_tokens =
-            Some(4096));
-        changed!("metadata", |v: &mut AgentRequestCreate| v.metadata =
-            Some("{}".into()));
+        changed!("input.skills", |v: &mut AgentRequestCreate| v
+            .input
+            .selected_skill_ids =
+            vec!["review".into()]);
+        changed!("input.cwd", |v: &mut AgentRequestCreate| v.input.cwd =
+            Some("/workspace".into()));
+        changed!("input.title", |v: &mut AgentRequestCreate| v
+            .input
+            .initial_title =
+            Some(crate::session::SessionTitle {
+                text: "Review".into(),
+                source: crate::session::SessionTitleSource::Task,
+            }));
+        changed!("input.queue", |v: &mut AgentRequestCreate| v.input.queue =
+            Some(crate::request_input::RequestQueue {
+                source: crate::request_input::QueueSource::Goal,
+                policy: crate::request_input::QueuePolicy::Coalesce,
+                key: Some("goal:one".into()),
+                queued_after_request_id: Some("parent".into()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            }));
+        changed!("input.goal_false", |v: &mut AgentRequestCreate| v
+            .input
+            .goal_continuation =
+            Some(crate::request_input::GoalContinuationInput {
+                sequence: 1,
+                wrapup: false,
+            }));
         changed!("execution_origin", |v: &mut AgentRequestCreate| v
             .execution_origin =
             "trigger".into());
@@ -1193,14 +1280,12 @@ mod tests {
         changed!("workspace_id", |v: &mut AgentRequestCreate| v
             .workspace_id =
             Some("workspace".into()));
+        changed!("workspace_owner_agent_did", |v: &mut AgentRequestCreate| {
+            v.workspace_owner_agent_did = Some("did:other-owner".into())
+        });
         changed!("workspace_authority", |v: &mut AgentRequestCreate| v
             .workspace_authority =
             Some("authority".into()));
-        changed!(
-            "workspace_owner_deployment_id",
-            |v: &mut AgentRequestCreate| v.workspace_owner_deployment_id =
-                Some("deployment".into())
-        );
         changed!("workspace_seal_hash", |v: &mut AgentRequestCreate| v
             .workspace_seal_hash =
             Some("seal".into()));
@@ -1252,11 +1337,105 @@ mod tests {
     }
 
     #[test]
-    fn claim_backend_is_not_requester_signed() {
-        let base = local_create();
-        let mut runtime_owned = base.clone();
-        runtime_owned.backend_id = Some("backend-a".into());
-        assert_eq!(runtime_owned.signing_payload(), base.signing_payload());
+    fn typed_input_signing_distinguishes_subfields_and_skill_boundaries() {
+        use crate::request_input::{GoalContinuationInput, QueuePolicy, QueueSource, RequestQueue};
+        let mut base = local_create();
+        base.input.selected_skill_ids = vec!["a|b".into(), "c".into()];
+        base.input.cwd = Some("/workspace".into());
+        base.input.initial_title = Some(crate::session::SessionTitle {
+            text: "Review".into(),
+            source: crate::session::SessionTitleSource::Task,
+        });
+        base.input.goal_continuation = Some(GoalContinuationInput {
+            sequence: 1,
+            wrapup: false,
+        });
+        base.input.queue = Some(RequestQueue {
+            source: QueueSource::Goal,
+            policy: QueuePolicy::Coalesce,
+            key: Some("goal:one".into()),
+            queued_after_request_id: Some("parent".into()),
+            interrupted_request_id: Some("interrupted".into()),
+            background_completion_wake_version: Some(1),
+        });
+        let expected = base.signing_payload();
+        let mut variants = Vec::new();
+        macro_rules! changed {
+            ($body:expr) => {{
+                let mut v = base.clone();
+                $body(&mut v);
+                variants.push(v);
+            }};
+        }
+        changed!(|v: &mut AgentRequestCreate| v.input.selected_skill_ids =
+            vec!["a".into(), "b|c".into()]);
+        changed!(|v: &mut AgentRequestCreate| v.input.selected_skill_ids.reverse());
+        changed!(|v: &mut AgentRequestCreate| v.input.cwd = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .initial_title
+            .as_mut()
+            .unwrap()
+            .text
+            .push('!'));
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.initial_title.as_mut().unwrap().source =
+                crate::session::SessionTitleSource::User
+        );
+        changed!(|v: &mut AgentRequestCreate| v.input.goal_continuation = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .goal_continuation
+            .as_mut()
+            .unwrap()
+            .sequence = 2);
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.goal_continuation.as_mut().unwrap().wrapup = true
+        );
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().source =
+                QueueSource::BackgroundCompletion
+        );
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().policy =
+                QueuePolicy::Append
+        );
+        changed!(|v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().key = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .queue
+            .as_mut()
+            .unwrap()
+            .queued_after_request_id = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .queue
+            .as_mut()
+            .unwrap()
+            .interrupted_request_id = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .queue
+            .as_mut()
+            .unwrap()
+            .background_completion_wake_version = None);
+        for variant in variants {
+            assert_ne!(
+                variant.signing_payload(),
+                expected,
+                "typed input semantic was not signed: {:?}",
+                variant.input
+            );
+        }
+        let mut one_skill = local_create();
+        one_skill.input.selected_skill_ids = vec!["a,b".into()];
+        let mut two_skills = one_skill.clone();
+        two_skills.input.selected_skill_ids = vec!["a".into(), "b".into()];
+        assert_ne!(
+            one_skill.signing_payload(),
+            two_skills.signing_payload(),
+            "skill list boundaries must be signed, not delimiter-joined"
+        );
     }
 
     #[test]
@@ -1272,6 +1451,14 @@ mod tests {
         })
         .is_err());
 
+        for behavior in ["", " ", " default", "default "] {
+            let mut value = local_create();
+            value.behavior_id = behavior.into();
+            assert!(
+                value.graphql_input_fields().is_err(),
+                "explicit canonical behavior required"
+            );
+        }
         for hostile in [" request-1", "request-1 "] {
             let mut value = local_create();
             value.request_id = hostile.into();
@@ -1319,7 +1506,7 @@ mod tests {
         internal.runtime_source_request_id = None;
         assert!(internal.validate_branch_fields().is_err());
 
-        let mut cross = AgentRequestAdmissionRecord::runtime_cross_deployment_child(
+        let mut cross = AgentRequestAdmissionRecord::runtime_cross_principal_child(
             "did:key:agent",
             "source",
             "did:key:bridge",
@@ -1334,10 +1521,10 @@ mod tests {
 
         let mut local = AgentRequestAdmissionRecord::runtime_local_child("did:key:agent", "source");
         local.signature = vec![1; 64];
-        local.runtime_source_kind = Some(RuntimeInternalSourceKind::CrossDeploymentChild);
+        local.runtime_source_kind = Some(RuntimeInternalSourceKind::CrossPrincipalChild);
         assert!(
             local.validate_branch_fields().is_err(),
-            "local evidence cannot switch to cross-deployment without a bridge author"
+            "local evidence cannot switch to cross-principal without a bridge author"
         );
     }
 
@@ -1403,6 +1590,8 @@ mod tests {
     fn workspace_authority_accepts_every_mode_modeled_by_the_runtime() {
         for authority in ["readOnly", "readWrite", "integrate"] {
             let mut request = local_create();
+            request.workspace_id = Some("workspace".into());
+            request.workspace_owner_agent_did = Some("did:owner".into());
             request.workspace_authority = Some(authority.to_string());
             assert!(
                 validate_signing_fields(&request.signing_fields()).is_ok(),

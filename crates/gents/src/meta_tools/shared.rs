@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as _};
+use anyhow::anyhow;
 use defra_node::EmbeddedNode;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::graphql::escape_graphql_string;
 use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
 use crate::mcp_pool::resolve_mcp_url;
 use crate::mcp_pool::McpPool;
@@ -19,6 +18,7 @@ pub struct MetaToolContext {
     pub local_subnet: Option<String>,
     pub agent_did: String,
     pub allowed_mcp_service_ids: Vec<String>,
+    pub remote_tools: crate::document_config::RemoteTools,
 }
 
 impl MetaToolContext {
@@ -26,12 +26,65 @@ impl MetaToolContext {
         mcp_service_allowed(&self.allowed_mcp_service_ids, service_id)
     }
 
+    pub(super) fn service_selection(
+        &self,
+        service_id: &str,
+    ) -> Option<&crate::document_config::RemoteServiceTools> {
+        let mut matches = self
+            .remote_tools
+            .services
+            .iter()
+            .filter(|service| service.mcp_service_id == service_id);
+        let service = matches.next()?;
+        (matches.next().is_none()
+            && self.is_mcp_service_allowed(service_id)
+            && service
+                .background_tool_names
+                .iter()
+                .all(|name| service.tool_names.contains(name)))
+        .then_some(service)
+    }
+
+    pub(super) fn is_tool_allowed(&self, service_id: &str, tool_name: &str) -> bool {
+        self.service_selection(service_id)
+            .is_some_and(|service| service.tool_names.iter().any(|name| name == tool_name))
+    }
+
+    pub(super) async fn list_tools(
+        &self,
+        service_id: &str,
+        service: &ResolvedMcpService,
+    ) -> anyhow::Result<rmcp::model::ListToolsResult> {
+        let selection = self
+            .service_selection(service_id)
+            .ok_or_else(|| anyhow!("MCP service is not selected"))?;
+        let connect = timeout(selection.connect_timeout_secs, 15)?;
+        let discovery = timeout(selection.discovery_timeout_secs, 30)?;
+        tokio::time::timeout(
+            discovery,
+            self.mcp_pool.list_tools_with_limits(
+                service_id,
+                &service.endpoint,
+                service.outbound_agent_did(self),
+                connect,
+                discovery,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "MCP discovery on '{service_id}' timed out after {}s",
+                discovery.as_secs()
+            )
+        })?
+    }
+
     pub(super) fn blocked_service_error(
         &self,
         service_id: &str,
         tool_name: &str,
     ) -> Option<StructuredToolError> {
-        (!self.is_mcp_service_allowed(service_id)).then(|| {
+        (!self.is_tool_allowed(service_id, tool_name)).then(|| {
             StructuredToolError::tool_not_allowed(
                 service_id,
                 tool_name,
@@ -227,7 +280,7 @@ impl StructuredToolError {
             failure_class: "tool_not_allowed",
             path: "/service_id".to_string(),
             message: format!(
-                "service '{service_id}' is not allowed for this behavior; allowed services: {}",
+                "tool '{requested_tool_name}' on service '{service_id}' is not selected for this behavior; allowed services: {}",
                 allowed_mcp_service_ids.join(", ")
             ),
             retryable: false,
@@ -254,21 +307,6 @@ impl StructuredToolError {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct RegistryServiceEntry {
-    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    hostname: String,
-    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    tailscale_ip: String,
-    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    lan_ip: String,
-    mcp_port: Option<u16>,
-    #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
-    mcp_path: String,
-    #[serde(default, deserialize_with = "crate::registry::null_as_default")]
-    send_agent_did: bool,
-}
-
 pub(super) struct ResolvedMcpService {
     pub(super) endpoint: String,
     pub(super) send_agent_did: bool,
@@ -276,85 +314,52 @@ pub(super) struct ResolvedMcpService {
 
 impl ResolvedMcpService {
     pub(super) fn outbound_agent_did<'a>(&self, ctx: &'a MetaToolContext) -> Option<&'a str> {
-        self.send_agent_did
-            .then_some(ctx.agent_did.as_str())
-            .filter(|agent_did| !agent_did.trim().is_empty())
+        self.send_agent_did.then_some(ctx.agent_did.as_str())
     }
-}
-
-pub(super) fn lookup_service_query(service_id: &str) -> String {
-    let sid = escape_graphql_string(service_id);
-    format!(
-        r#"{{
-  ToolServiceRegistry(
-    filter: {{
-      service_id: {{ _eq: "{sid}" }},
-      status: {{ _eq: "online" }}
-    }},
-    order: {{ updated_at: DESC }},
-    limit: 1
-  ) {{
-    service_id
-    display_name
-    description
-    hostname
-    tailscale_ip
-    lan_ip
-    mcp_port
-    mcp_path
-    send_agent_did
-  }}
-}}"#
-    )
 }
 
 pub(super) async fn lookup_service(
     ctx: &MetaToolContext,
     service_id: &str,
 ) -> anyhow::Result<ResolvedMcpService> {
-    let resp = ctx.node.execute(&lookup_service_query(service_id)).await;
-    if resp.has_errors() {
-        anyhow::bail!("lookup_service({service_id}): {:?}", resp.errors);
-    }
+    let entry = crate::registry::configured_mcp_services(&ctx.node, &ctx.agent_did)
+        .await?
+        .into_iter()
+        .find(|service| service.service_id == service_id && service.enabled)
+        .ok_or_else(|| {
+            anyhow!("service '{service_id}' is not configured or enabled for this principal")
+        })?;
+    resolve_service(&entry, &ctx.local_hostname, ctx.local_subnet.as_deref())
+}
 
-    let entry = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("ToolServiceRegistry"))
-        .cloned()
-        .map(serde_json::from_value::<Vec<RegistryServiceEntry>>)
-        .transpose()
-        .context("parsing ToolServiceRegistry response")?
-        .and_then(|mut entries| entries.drain(..).next())
-        .ok_or_else(|| anyhow!("service '{service_id}' not found or offline"))?;
-
-    let mcp_port = entry
+pub(super) fn resolve_service(
+    entry: &crate::document_config::ToolServiceRegistry,
+    hostname: &str,
+    subnet: Option<&str>,
+) -> anyhow::Result<ResolvedMcpService> {
+    let port = entry
         .mcp_port
-        .filter(|port| *port != 0)
-        .ok_or_else(|| anyhow!("service '{service_id}' is missing mcp_port in the registry"))?;
-
-    if entry.hostname.is_empty() && entry.tailscale_ip.is_empty() && entry.lan_ip.is_empty() {
-        return Err(anyhow!(
-            "service '{service_id}' is missing hostname/tailscale_ip/lan_ip in the registry"
-        ));
-    }
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port > 0)
+        .ok_or_else(|| anyhow!("service '{}' has no valid MCP port", entry.service_id))?;
+    let host = entry.hostname.as_deref().unwrap_or_default();
+    let tailscale = entry.tailscale_ip.as_deref().unwrap_or_default();
+    let lan = entry.lan_ip.as_deref().unwrap_or_default();
     anyhow::ensure!(
-        !entry.mcp_path.trim().is_empty(),
-        "service '{service_id}' is missing mcp_path in the registry"
+        !host.is_empty() || !tailscale.is_empty() || !lan.is_empty(),
+        "service '{}' has no MCP address",
+        entry.service_id
     );
-
-    let endpoint = resolve_mcp_url(
-        &entry.hostname,
-        &entry.tailscale_ip,
-        &entry.lan_ip,
-        mcp_port,
-        &entry.mcp_path,
-        &ctx.local_hostname,
-        ctx.local_subnet.as_deref(),
-    );
-
     Ok(ResolvedMcpService {
-        endpoint,
+        endpoint: resolve_mcp_url(
+            host,
+            tailscale,
+            lan,
+            port,
+            entry.mcp_path.as_deref().unwrap_or_default(),
+            hostname,
+            subnet,
+        ),
         send_agent_did: entry.send_agent_did,
     })
 }
@@ -433,31 +438,8 @@ pub(super) async fn enforce_health_gate(
     Ok(health)
 }
 
-#[cfg(test)]
-mod registry_parsing_tests {
-    use super::RegistryServiceEntry;
-    use serde_json::json;
-
-    #[test]
-    fn tolerates_null_address_fields() {
-        let raw = json!({
-            "service_id": "observability-mcp",
-            "hostname": null,
-            "tailscale_ip": null,
-            "lan_ip": null,
-            "mcp_port": 9201,
-            "mcp_path": null,
-            "send_agent_did": null,
-        });
-
-        let entry: RegistryServiceEntry =
-            serde_json::from_value(raw).expect("null address fields must parse");
-
-        assert_eq!(entry.hostname, "");
-        assert_eq!(entry.tailscale_ip, "");
-        assert_eq!(entry.lan_ip, "");
-        assert_eq!(entry.mcp_port, Some(9201));
-        assert!(entry.mcp_path.is_empty() || entry.mcp_path == "/mcp");
-        assert!(!entry.send_agent_did);
-    }
+pub(super) fn timeout(value: Option<i64>, default: u64) -> anyhow::Result<std::time::Duration> {
+    let seconds = value.map(u64::try_from).transpose()?.unwrap_or(default);
+    anyhow::ensure!(seconds > 0, "MCP timeout must be positive");
+    Ok(std::time::Duration::from_secs(seconds))
 }

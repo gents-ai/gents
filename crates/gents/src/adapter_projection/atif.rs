@@ -212,7 +212,6 @@ pub(super) fn build_atif_trajectory(
             | RunTimelineEvent::ProviderContextReduction(_)
             | RunTimelineEvent::Message(_)
             | RunTimelineEvent::ToolCall(_)
-            | RunTimelineEvent::ToolApproval(_)
             | RunTimelineEvent::GoalTransition(_)
             | RunTimelineEvent::Response(_) => {}
         }
@@ -287,23 +286,9 @@ pub(super) fn build_atif_trajectory(
             .or_else(|| Some(timeline.request_id.clone())),
         trajectory_id: Some(timeline.request_id.clone()),
         agent: AtifAgent {
-            name: timeline
-                .session
-                .as_ref()
-                .and_then(|session| session.agent_name.clone())
-                .or_else(|| {
-                    timeline
-                        .conversation
-                        .as_ref()
-                        .and_then(|conversation| conversation.agent_name.clone())
-                })
-                .or_else(|| timeline.behavior_id.clone())
-                .unwrap_or_else(|| "gents".to_string()),
+            name: timeline.behavior_id.clone().unwrap_or_else(|| "gents".to_string()),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            model_name: super::adapter_projection_metadata_string(
-                timeline.request.metadata.as_deref(),
-                "model_name",
-            ),
+            model_name: root_observed_model(timeline),
             extra: optional_extra([
                 ("runtime", string_value("gents")),
                 ("agent_did", optional_string_value(timeline.agent_did.as_deref())),
@@ -925,6 +910,28 @@ fn optional_nonnegative_integer_schema() -> Value {
     })
 }
 
+/// A trajectory has a single model label only when its root captures agree.
+pub fn root_observed_model(timeline: &RunTimeline) -> Option<String> {
+    let root_doc_id = timeline.request_doc_id.as_deref()?;
+    let mut observed = timeline.events.iter().filter_map(|event| match event {
+        RunTimelineEvent::RenderedRequest(capture)
+            if capture.request_doc_id.as_deref() == Some(root_doc_id)
+                && capture.request_id.as_deref() == Some(timeline.request_id.as_str()) =>
+        {
+            Some(capture)
+        }
+        _ => None,
+    });
+    let first = observed
+        .next()?
+        .model_name
+        .as_deref()
+        .filter(|name| !name.is_empty())?;
+    observed
+        .all(|capture| capture.model_name.as_deref() == Some(first))
+        .then(|| first.to_string())
+}
+
 /// Root InferenceCall membership for ATIF counts and token totals.
 /// Prefers the physical `request_doc_id` edge when present so ATIF, rehydrate,
 /// and durable persistence attribute the same rows.
@@ -984,7 +991,6 @@ mod tests {
                 behavior_id: Some("terminal-bench".to_string()),
                 session_id: Some("session-atif".to_string()),
                 content: Some("Fix the project.".to_string()),
-                seed: Some(7),
                 max_total_tokens: Some(10_000),
                 lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: Some("d4f".to_string()),
@@ -1062,6 +1068,60 @@ mod tests {
             ],
             ..RunTimelineRows::default()
         })
+    }
+
+    #[test]
+    fn trajectory_model_uses_unambiguous_physical_root_capture_observations() {
+        use crate::run_timeline::TimelineRenderedRequestRow;
+        let capture = |doc: &str, model: Option<&str>| TimelineRenderedRequestRow {
+            request_id: Some("root".to_string()),
+            request_doc_id: Some(doc.to_string()),
+            model_name: model.map(str::to_string),
+            ..Default::default()
+        };
+        let project = |captures| {
+            let timeline = build_run_timeline(RunTimelineRows {
+                request: TimelineRequestRow {
+                    request_id: "root".to_string(),
+                    doc_id: Some("root-doc".to_string()),
+                    ..Default::default()
+                },
+                rendered_requests: captures,
+                ..Default::default()
+            });
+            build_atif_trajectory(&timeline, &ProjectionContext::default())
+                .agent
+                .model_name
+        };
+        assert_eq!(
+            project(vec![
+                capture("root-doc", Some("model-a")),
+                capture("foreign-doc", Some("model-b"))
+            ]),
+            Some("model-a".to_string())
+        );
+        assert_eq!(
+            project(vec![
+                capture("root-doc", Some("model-a")),
+                capture("root-doc", Some("model-a"))
+            ]),
+            Some("model-a".to_string())
+        );
+        assert_eq!(
+            project(vec![
+                capture("root-doc", Some("model-a")),
+                capture("root-doc", Some("model-b"))
+            ]),
+            None
+        );
+        assert_eq!(
+            project(vec![
+                capture("root-doc", Some("model-a")),
+                capture("root-doc", None)
+            ]),
+            None
+        );
+        assert_eq!(project(vec![capture("foreign-doc", Some("model-a"))]), None);
     }
 
     #[test]

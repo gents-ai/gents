@@ -24,17 +24,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{FileTools, HostTools, Tools};
 use gents::graphql::escape_graphql_string;
-use gents::{
-    load_agent_behavior, upsert_agent_behavior, upsert_tool_selection, DocumentRuntimeOptions,
-    Gents, ToolCeiling, ToolSelectionDocument,
-};
+use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
 use serde::Deserialize;
 
 use gents::AgentIdentity;
 
 use crate::steward_loop_live::{bind_d4f_backend, wait_for_request_terminal};
-use crate::support::fixtures::test_identity;
+use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::test_db;
 
@@ -97,28 +95,27 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
 
     let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
 
-    upsert_tool_selection(
+    configure_behavior_tools(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "edit-live-tools".to_string(),
+        &agent_did,
+        &behavior_id,
+        None,
+        Tools {
+            tools_id: "edit-live-tools".to_string(),
             agent_did: agent_did.clone(),
-            enable_file_tools: Some(true),
-            file_tools_mode: Some("ReadWrite".to_string()),
-            file_tool_root: Some(workspace.path().display().to_string()),
-            enable_bash: Some(false),
+            host: Some(HostTools {
+                root: Some(workspace.path().display().to_string()),
+                files: Some(FileTools {
+                    mode: FileToolMode::ReadWrite,
+                    timeout_secs: None,
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        Vec::new(),
     )
-    .await
-    .unwrap();
-    let mut behavior = load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
-    behavior.tool_selection_id = Some("edit-live-tools".to_string());
-    upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .expect("bind tool selection");
+    .await;
 
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),

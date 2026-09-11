@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
 use anyhow::{anyhow, Context as _};
@@ -20,9 +18,9 @@ pub(crate) const CALL_TOOL_NAME: &str = "call_tool";
 
 #[derive(Debug, Deserialize)]
 pub struct CallToolArgs {
-    service_id: String,
-    tool_name: String,
-    arguments: serde_json::Value,
+    pub(super) service_id: String,
+    pub(super) tool_name: String,
+    pub(super) arguments: serde_json::Value,
 }
 
 #[derive(Clone)]
@@ -114,12 +112,16 @@ impl Tool for CallToolTool {
             .context("call_tool")?;
         let outbound_agent_did = service.outbound_agent_did(&self.ctx);
 
-        let timeout_secs = if matches!(health.as_ref().map(|h| h.status), Some(HealthStatus::Stale))
-        {
-            120
-        } else {
-            300
-        };
+        let selection = self
+            .ctx
+            .service_selection(&args.service_id)
+            .ok_or_else(|| anyhow!("MCP service is not selected"))?;
+        let mut call_timeout = super::shared::timeout(selection.timeout_secs, 300)?;
+        if matches!(health.as_ref().map(|h| h.status), Some(HealthStatus::Stale)) {
+            call_timeout =
+                call_timeout.min(super::shared::timeout(selection.stale_timeout_secs, 120)?);
+        }
+        let connect_timeout = super::shared::timeout(selection.connect_timeout_secs, 15)?;
 
         if let Some(error) = self
             .preflight_arguments(
@@ -135,13 +137,14 @@ impl Tool for CallToolTool {
         }
 
         let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            self.ctx.mcp_pool.call_tool_with_agent_did(
+            call_timeout,
+            self.ctx.mcp_pool.call_tool_with_connect_timeout(
                 &args.service_id,
                 &service.endpoint,
                 &args.tool_name,
                 arguments,
                 outbound_agent_did,
+                connect_timeout,
             ),
         )
         .await
@@ -149,7 +152,7 @@ impl Tool for CallToolTool {
             anyhow!(
                 "service '{}' timed out after {}s",
                 args.service_id,
-                timeout_secs
+                call_timeout.as_secs()
             )
         })?
         .context("MCP call_tool")?;
@@ -197,37 +200,26 @@ impl CallToolTool {
         arguments: &Map<String, Value>,
         agent_did: Option<&str>,
     ) -> Option<StructuredToolError> {
-        let list_result = match tokio::time::timeout(
-            Duration::from_secs(30),
-            self.ctx
-                .mcp_pool
-                .list_tools_with_agent_did(service_id, endpoint, agent_did),
-        )
-        .await
-        {
-            Ok(Ok(result)) => result,
-            Ok(Err(error)) => {
-                tracing::warn!(
+        let service = super::shared::ResolvedMcpService {
+            endpoint: endpoint.to_string(),
+            send_agent_did: agent_did.is_some(),
+        };
+        let list_result = match self.ctx.list_tools(service_id, &service).await {
+            Ok(result) => result,
+            Err(error) => {
+                return Some(StructuredToolError::service_unavailable(
                     service_id,
                     tool_name,
-                    error = %error,
-                    "skipping MCP argument preflight after list_tools failure"
-                );
-                return None;
-            }
-            Err(_) => {
-                tracing::warn!(
-                    service_id,
-                    tool_name,
-                    "skipping MCP argument preflight after list_tools timeout"
-                );
-                return None;
+                    format!("MCP catalog unavailable: {error:#}"),
+                    true,
+                ))
             }
         };
 
         let available_tools = list_result
             .tools
             .iter()
+            .filter(|tool| self.ctx.is_tool_allowed(service_id, tool.name.as_ref()))
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         let Some(tool) = list_result.tools.iter().find(|tool| tool.name == tool_name) else {
@@ -494,6 +486,7 @@ mod tests {
             local_subnet: None,
             agent_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["x-data".to_string()],
+            remote_tools: super::super::tests::remote_selection(&["x-data"], &["search_posts"]),
         });
 
         let error = tool

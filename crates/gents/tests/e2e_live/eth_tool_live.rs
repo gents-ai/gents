@@ -19,15 +19,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{IntegrationTools, Tools};
 use gents::graphql::escape_graphql_string;
-use gents::{
-    load_agent_behavior, upsert_agent_behavior, upsert_tool_selection, AgentIdentity,
-    DocumentRuntimeOptions, Gents, ToolCeiling, ToolSelectionDocument,
-};
+use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde::Deserialize;
 
 use crate::steward_loop_live::{wait_for_assistant_answer, wait_for_request_terminal};
-use crate::support::fixtures::test_identity;
+use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::test_db;
 
@@ -120,39 +118,40 @@ pub(crate) async fn bind_glm_backend(
     let bootstrap = gents::ensure_agent_principal(node, &agent_did)
         .await
         .expect("ensure principal");
-    let behavior_id = bootstrap.default_behavior.behavior_id.clone();
+    let behavior_id = bootstrap
+        .default_behavior_id
+        .clone()
+        .expect("principal has a default behavior");
 
     let backend_id = escape_graphql_string(BACKEND_ID);
+    let escaped_agent_did = escape_graphql_string(&agent_did);
     let endpoint = escape_graphql_string(&live_endpoint());
     let model = escape_graphql_string(&live_model());
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }},
+                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }}, backend_id: {{ _eq: "{backend_id}" }} }},
                 add: {{
+                    agent_did: "{escaped_agent_did}",
                     backend_id: "{backend_id}",
                     name: "{backend_id}",
                     provider_kind: "OpenAiCompatible",
+                    openai_wire_api: "chat_completions",
                     endpoint: "{endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
+                    auth: {{ kind: "unauthenticated" }},
                     max_concurrent: 4,
                     max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{model}"],
-                    probe_status: "healthy"
+                    enabled: true
                 }},
                 update: {{
                     name: "{backend_id}",
                     provider_kind: "OpenAiCompatible",
+                    openai_wire_api: "chat_completions",
                     endpoint: "{endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
+                    auth: {{ kind: "unauthenticated" }},
                     max_concurrent: 4,
                     max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{model}"],
-                    probe_status: "healthy"
+                    enabled: true
                 }}
             ) {{ _docID }}
         }}"#
@@ -164,20 +163,29 @@ pub(crate) async fn bind_glm_backend(
         response.errors
     );
 
-    let mut behavior = load_agent_behavior(node, &behavior_id)
+    let profile_id = gents::default_inference_profile_id_for_behavior(&behavior_id);
+    let mut profile = gents::load_inference_profile(node, &agent_did, &profile_id)
         .await
-        .expect("load default behavior")
-        .expect("default behavior document exists after bootstrap");
-    behavior.backend_id = Some(BACKEND_ID.to_string());
-    behavior.model_name = Some(live_model());
-    behavior.inference_profile_id = Some(gents::default_inference_profile_id_for_behavior(
+        .expect("load default inference profile")
+        .expect("default inference profile exists after bootstrap");
+    profile.backend_id = BACKEND_ID.to_string();
+    profile.model_name = model;
+    gents::upsert_inference_profile(node, &profile)
+        .await
+        .expect("point default inference profile at glm");
+    configure_behavior_tools(
+        node,
+        &agent_did,
         &behavior_id,
-    ));
-    behavior.enabled = true;
-    behavior.system_prompt = Some(system_prompt.to_string());
-    upsert_agent_behavior(node, &behavior)
-        .await
-        .expect("point default behavior at glm");
+        Some(system_prompt.to_string()),
+        Tools {
+            tools_id: format!("{behavior_id}:bootstrap-tools"),
+            agent_did: agent_did.clone(),
+            ..Default::default()
+        },
+        Vec::new(),
+    )
+    .await;
     (agent_did, behavior_id)
 }
 
@@ -298,28 +306,23 @@ async fn eth_tool_live_model_queries_base_sepolia() {
     .await;
     create_eth_tool(db.node.as_ref(), &agent_did).await;
 
-    upsert_tool_selection(
+    configure_behavior_tools(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "eth-live-tools".to_string(),
+        &agent_did,
+        &behavior_id,
+        None,
+        Tools {
+            tools_id: "eth-live-tools".to_string(),
             agent_did: agent_did.clone(),
-            enable_file_tools: Some(false),
-            enable_bash: Some(false),
-            eth_tool_ids: Some(vec![TOOL_ID.to_string()]),
+            integrations: Some(IntegrationTools {
+                eth_tool_ids: Some(vec![TOOL_ID.to_string()]),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        Vec::new(),
     )
-    .await
-    .expect("upsert eth tool selection");
-
-    let mut behavior = load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
-    behavior.tool_selection_id = Some("eth-live-tools".to_string());
-    upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .expect("bind eth tool selection");
+    .await;
 
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),

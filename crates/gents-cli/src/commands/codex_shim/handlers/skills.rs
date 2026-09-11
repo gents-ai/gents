@@ -17,7 +17,7 @@ fn skill_doc_path(skill_id: &str) -> gents_codex_protocol::AbsolutePathBuf {
 pub(super) async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::SkillMetadata>> {
     let query = format!(
         r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{did}" }} }}) {{
-            skill_id name description scope enabled
+            skill_id name description enabled
         }} }}"#,
         did = escape_graphql_string(&state.agent_did),
     );
@@ -50,10 +50,6 @@ pub(super) async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::
             .unwrap_or_default()
             .to_string();
         let enabled = row.get("enabled").and_then(Value::as_bool).unwrap_or(false);
-        let scope = match row.get("scope").and_then(Value::as_str) {
-            Some("principal") => codex::SkillScope::System,
-            _ => codex::SkillScope::User,
-        };
         skills.push(codex::SkillMetadata {
             name,
             description,
@@ -61,7 +57,9 @@ pub(super) async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::
             interface: None,
             dependencies: None,
             path: skill_doc_path(skill_id),
-            scope,
+            // Gents skills are principal-owned documents. Preserve Codex's
+            // wire vocabulary by projecting that ownership as system scope.
+            scope: codex::SkillScope::System,
             enabled,
         });
     }

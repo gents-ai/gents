@@ -9,7 +9,7 @@ use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
 use crate::backend_provider::BackendProviderKind;
-use crate::config::{AgentBehavior, ReasoningEffort, SamplingConfig};
+use crate::config::{ReasoningEffort, ResolvedBehavior};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
@@ -24,7 +24,7 @@ fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u6
 pub(crate) fn build_admitted_model<C>(
     client: C,
     admission: AdmissionRegistry,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
 ) -> <AdmittedCompletionClient<C> as CompletionClient>::CompletionModel
 where
     C: CompletionClient,
@@ -46,7 +46,7 @@ where
 /// makes capture the default for all of them instead of a privilege of the
 /// inference path (#840).
 pub(crate) fn loop_config(
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     preamble: String,
     tool_count: usize,
     capture_scope: CaptureScopeKind,
@@ -85,7 +85,7 @@ pub(crate) fn loop_config(
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
         context_window: behavior.context_window,
-        compaction_threshold: behavior.compaction_threshold,
+        compaction_threshold: behavior.compaction_threshold(),
         retry_policy: CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns: behavior.max_turns,
@@ -94,22 +94,18 @@ pub(crate) fn loop_config(
 }
 
 pub(crate) fn loop_config_for_request(
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     preamble: String,
     request: &AgentRequest,
     aggregate_token_budget: Option<AggregateTokenBudget>,
     tool_count: usize,
 ) -> anyhow::Result<LoopConfig> {
     let mut config = loop_config(behavior, preamble, tool_count, CaptureScopeKind::Inference);
-    let sampling = sampling_for_request(behavior.sampling, request);
-    sampling.validate_for_provider(behavior.backend_provider_kind, behavior.openai_wire_api)?;
-    config.temperature = sampling.temperature;
-    config.max_tokens = effective_max_tokens(behavior.max_output_tokens, sampling.max_tokens);
+    behavior
+        .sampling
+        .validate_for_provider(behavior.backend_provider_kind, behavior.openai_wire_api)?;
     config.aggregate_token_budget = aggregate_token_budget;
-    let request_additional_params = merge_optional_params(
-        sampling.additional_params(),
-        request_additional_params(behavior, request),
-    );
+    let request_additional_params = request_additional_params(behavior, request);
     if let Some(additional_params) = request_additional_params {
         config.additional_params =
             merge_optional_params(config.additional_params.take(), Some(additional_params));
@@ -120,17 +116,15 @@ pub(crate) fn loop_config_for_request(
     Ok(config)
 }
 
-/// Parse `AgentRequest.max_total_tokens` into a positive ledger limit.
+/// Decode the execution owner's pinned request limit. Zero is a valid
+/// exhausted durable state; configured limits are validated positive before claim.
 pub(crate) fn parse_aggregate_token_limit(
     max_total_tokens: Option<i64>,
 ) -> anyhow::Result<Option<u64>> {
     max_total_tokens
         .map(|limit| {
             let limit = u64::try_from(limit)
-                .map_err(|_| anyhow::anyhow!("max_total_tokens must be a positive integer"))?;
-            if limit == 0 {
-                anyhow::bail!("max_total_tokens must be a positive integer");
-            }
+                .map_err(|_| anyhow::anyhow!("pinned max_total_tokens must not be negative"))?;
             Ok(limit)
         })
         .transpose()
@@ -174,9 +168,10 @@ async fn load_prior_charged_tokens(
     node: &EmbeddedNode,
     request_doc_id: &str,
 ) -> anyhow::Result<u64> {
-    if request_doc_id.trim().is_empty() {
-        return Ok(0);
-    }
+    anyhow::ensure!(
+        !request_doc_id.trim().is_empty(),
+        "budget rehydration requires the physical request document ID"
+    );
     let query = format!(
         r#"{{
             InferenceCall(
@@ -229,27 +224,6 @@ fn parse_request_deadline(value: Option<&str>) -> Option<DateTime<Utc>> {
     value
         .and_then(|value| DateTime::parse_from_rfc3339(value.trim()).ok())
         .map(|value| value.with_timezone(&Utc))
-}
-
-pub(crate) fn sampling_for_request(
-    defaults: SamplingConfig,
-    request: &AgentRequest,
-) -> SamplingConfig {
-    SamplingConfig {
-        temperature: request.temperature.or(defaults.temperature),
-        top_p: request.top_p.or(defaults.top_p),
-        top_k: request.top_k.or(defaults.top_k),
-        seed: request.seed.or(defaults.seed),
-        min_p: defaults.min_p,
-        frequency_penalty: defaults.frequency_penalty,
-        presence_penalty: defaults.presence_penalty,
-        repetition_penalty: defaults.repetition_penalty,
-        reasoning_effort: defaults.reasoning_effort,
-        max_tokens: request
-            .max_tokens
-            .and_then(|value| u64::try_from(value).ok())
-            .or(defaults.max_tokens),
-    }
 }
 
 // Moved to gents-loop (G-1): compaction's per-turn summary request also
@@ -331,7 +305,7 @@ fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::V
 }
 
 fn request_additional_params(
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     request: &AgentRequest,
 ) -> Option<serde_json::Value> {
     match behavior.backend_provider_kind {
@@ -356,3 +330,81 @@ fn normalize_cache_scope(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests;
+
+/// Optional summary provider, built by the same client/admission factory as
+/// ordinary inference. The enclosing request later supplies deadline and ledger.
+pub(crate) async fn build_compaction_engine(
+    node: std::sync::Arc<EmbeddedNode>,
+    behavior: &ResolvedBehavior,
+    admission: AdmissionRegistry,
+    build_timeout: std::time::Duration,
+) -> anyhow::Result<Option<std::sync::Arc<dyn crate::compaction::ReductionEngine>>> {
+    let Some(inference) = &behavior.compaction_inference else {
+        anyhow::ensure!(
+            matches!(
+                behavior.compaction_strategy().reduction_mode(),
+                crate::compaction::ReductionMode::StripOnly
+            ) || behavior
+                .compaction
+                .as_ref()
+                .and_then(|config| config.inference_profile_id.as_ref())
+                .is_none(),
+            "selected compaction inference profile was not resolved"
+        );
+        return Ok(None);
+    };
+    if matches!(
+        behavior.compaction_strategy().reduction_mode(),
+        crate::compaction::ReductionMode::StripOnly
+    ) {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        inference.backend.agent_did == behavior.agent_did()
+            && inference.profile.agent_did == behavior.agent_did(),
+        "summary inference must belong to the invoking principal"
+    );
+    anyhow::ensure!(
+        inference.profile.backend_id == inference.backend.backend_id,
+        "summary profile/backend reference mismatch"
+    );
+    inference.backend.validate()?;
+    // This is the existing resolved runtime view, not another authored config.
+    let mut summary = behavior.clone();
+    let backend = inference.backend.backend_fields();
+    summary.backend_id = backend.backend_id;
+    summary.backend_provider_kind = backend.backend_provider_kind;
+    summary.openai_wire_api = backend.openai_wire_api;
+    summary.backend_endpoint = backend.backend_endpoint;
+    summary.backend_auth = backend.backend_auth;
+    summary.model_name = inference.profile.model_name.clone();
+    summary.context_window = inference.context_window()?;
+    summary.max_output_tokens = inference.max_output_tokens()?;
+    summary.sampling = inference.sampling_config()?;
+    summary.max_turns = 0;
+    summary.compaction_inference = None;
+    let api_key = match &summary.backend_auth {
+        crate::document_config::BackendAuth::PrincipalOAuth => "no-key".to_owned(),
+        _ => summary.completion_client_api_key()?,
+    };
+    let client =
+        crate::llm::backend_client::build_backend_client(node, &summary, &api_key, build_timeout)
+            .await?;
+    let source_counter = std::sync::Arc::new(crate::provider_input::ProviderInputCounter::new(
+        behavior.backend_provider_kind,
+        behavior.openai_wire_api,
+        behavior.model_name.clone(),
+    ));
+    let config = loop_config(&summary, String::new(), 0, CaptureScopeKind::Compaction);
+    let backend_id = inference.backend.backend_id.clone();
+    let engine = crate::llm::backend_client::with_backend_client!(client, |client| {
+        let model = std::sync::Arc::new(build_admitted_model(client, admission, &summary));
+        std::sync::Arc::new(
+            crate::compaction::ProviderReductionEngine::new(model, config)
+                .with_source_input_counter(source_counter)
+                .with_backend_id(backend_id)
+                .with_summary_output_limit(inference.max_output_tokens()?),
+        ) as std::sync::Arc<dyn crate::compaction::ReductionEngine>
+    });
+    Ok(Some(engine))
+}

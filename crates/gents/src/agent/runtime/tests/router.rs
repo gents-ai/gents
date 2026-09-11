@@ -345,45 +345,11 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     let mut watcher = ScriptedWatcher { rx: watcher_rx };
     let mut active_snapshot = active_rx.borrow().clone();
 
-    watcher_tx
-        .send(Ok(AgentRequest {
-            doc_id: "doc-router".to_string(),
-            request_id: "req-router".to_string(),
-            agent_did: agent_did.to_string(),
-            requester_did: None,
-            behavior_id: None,
-            session_id: "session-router".to_string(),
-            content: "hello".to_string(),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
-            max_total_tokens: None,
-            metadata: None,
-            execution_origin: None,
-            created_at: "2026-04-09T00:00:00Z".to_string(),
-            deadline: None,
-            execution_generation: None,
-            execution_lease_expires_at: None,
-            execution_progress_seq: 0,
-            subagent_depth: 0,
-            caused_by_parent_request_id: None,
-            caused_by_parent_request_doc_id: None,
-            caused_by_parent_tool_call_id: None,
-            caused_by_parent_tool_call_doc_id: None,
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_source_doc_id: None,
-            caused_by_correlation: None,
-            caused_by_trigger_context: None,
-            workspace_id: None,
-            workspace_authority: None,
-            workspace_owner_deployment_id: None,
-            workspace_seal_hash: None,
-        }))
-        .await
-        .unwrap();
+    let mut routed_request = request(Some("code"), "session-router");
+    routed_request.doc_id = "doc-router".to_string();
+    routed_request.request_id = "req-router".to_string();
+    routed_request.agent_did = agent_did.to_string();
+    watcher_tx.send(Ok(routed_request)).await.unwrap();
     let admission_gate = RuntimeAdmissionGate::closed();
     admission_gate.open().await;
     let mut admission_rx = admission_gate.subscribe();

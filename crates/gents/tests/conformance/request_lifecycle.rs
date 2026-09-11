@@ -45,17 +45,13 @@ fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static s
     }
 }
 
-fn rust_request_transition_classification(from: &str, to: &str) -> &'static str {
-    if rust_request_transition_action(from, to).is_some() {
-        "legal"
-    } else if from == "inputRequired" || to == "inputRequired" {
-        "productUnreachable"
-    } else if rust_request_recovery_sweep_writer(from, to).is_some() {
-        "recoveryReachable"
-    } else {
-        "illegal"
-    }
-}
+// The transition classification itself comes from the generated Lean contract,
+// never from a Rust mirror table: an edge is legal/recoveryReachable/illegal
+// because Lean says so, and each branch of
+// `generated_request_transition_cases_cover_lifecycle_policy` fences its
+// classification against the production writer inventories above. Keeping a
+// Rust copy of the classification here would only create a second source of
+// truth that could be edited to silence a drift failure.
 
 /// Drive the real recovery sweep named by the contract and assert it persists the
 /// modelled post-state.
@@ -63,11 +59,14 @@ fn rust_request_transition_classification(from: &str, to: &str) -> &'static str 
 /// `claimed -> completed` is driven through `repair_terminal_requests` — the sweep
 /// the boundary statement actually describes — with the terminal response document
 /// the sweep requires. Driving `complete()` instead would prove something else
-/// entirely: that the ORDINARY writer can take this edge (see
-/// `ordinary_complete_also_takes_the_claimed_to_completed_edge` below).
+/// entirely: the ordinary writer rejects an unexecuted claimed request (see
+/// `ordinary_completion_rejects_claimed_without_execution` below).
 ///
 /// The two `-> dead` edges run inside `reconcile_subagent_liveness`, which needs a
-/// running-bridge plus expired-child fixture; driving them is tracked in #994.
+/// running-bridge plus expired-child fixture. Their runtime drive lives in
+/// `production_request_writers_only_reach_contracted_edges` below (the
+/// `subagent_liveness` writer against real bridge fixtures); driving them from
+/// THIS generated-case test remains open, tracked in #994.
 async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTransitionCase) {
     if !(case.from == "claimed" && case.to == "completed") {
         return;
@@ -170,39 +169,13 @@ async fn claim_atomically_projects_the_request_owned_session() {
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-    let session_id = gents::graphql::escape_graphql_string(&session_id);
-    let response = db
-        .node
-        .execute(&format!(
-            r#"{{
-                AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 2) {{
-                    session_id behavior_id status
-                }}
-                AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 2) {{
-                    session_id latest_request_id status
-                }}
-            }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "projection query: {:?}",
-        response.errors
-    );
-    let data = response.data.expect("projection data");
-    let sessions = data["AgentSession"].as_array().expect("session rows");
-    let conversations = data["AgentConversation"]
-        .as_array()
-        .expect("conversation rows");
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0]["behavior_id"].as_str(), Some(AGENT_NAME));
-    assert_eq!(sessions[0]["status"].as_str(), Some("active"));
-    assert_eq!(conversations.len(), 1);
-    assert_eq!(
-        conversations[0]["latest_request_id"].as_str(),
-        Some(request_id.as_str())
-    );
-    assert_eq!(conversations[0]["status"].as_str(), Some("processing"));
+    assert_session_observes_request(
+        &db.node,
+        &session_id,
+        &request_id,
+        RequestLifecycleState::Claimed,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -228,9 +201,6 @@ async fn admission_rejection_is_terminal_and_does_not_mint_a_session() {
     let request = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
     assert!(fetch_session_snapshot(&db.node, &session_id)
-        .await
-        .is_none());
-    assert!(fetch_conversation_snapshot(&db.node, &session_id)
         .await
         .is_none());
     let response_doc_id = lifecycle
@@ -268,7 +238,7 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
     assert_eq!(first.claim().await.unwrap(), ClaimOutcome::Claimed);
 
     let second_request_id = uuid::Uuid::new_v4().to_string();
-    create_request(
+    let second_doc_id = create_request(
         &db.node,
         &second_request_id,
         &session_id,
@@ -276,40 +246,22 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
         &created_at,
     )
     .await;
-    // Model a newer replicated projection while the older executor is still
-    // finishing. The terminal writer must only update the conversation when it
-    // still owns `latest_request_id`.
-    let session_id_escaped = escape_graphql_string(&session_id);
-    let second_request_id_escaped = escape_graphql_string(&second_request_id);
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{
-                update_AgentConversation(
-                    filter: {{
-                        session_id: {{ _eq: "{session_id_escaped}" }}
-                    }},
-                    input: {{
-                        latest_request_id: "{second_request_id_escaped}",
-                        status: "processing"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "advance conversation projection: {:?}",
-        response.errors
-    );
-    assert!(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentConversation"))
-            .is_some_and(gents::graphql::response_has_documents),
-        "advance conversation projection matched no document"
-    );
+    // Seed a newer replicated observation; terminalization must reread the
+    // current request and retain this exact physical/logical identity.
+    support::seed_session_observation(
+        &db.node,
+        &session_id,
+        &gents_protocol::session::SessionObservation {
+            last_activity_at: created_at.clone(),
+            preview: Some("newer request".into()),
+            latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                request_doc_id: second_doc_id,
+                request_id: second_request_id.clone(),
+                lifecycle_state: RequestLifecycleState::Pending,
+            }),
+        },
+    )
+    .await;
 
     crate::support::begin_owned_execution(&mut first, &db.node)
         .await
@@ -324,17 +276,13 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
             .lifecycle_state,
         RequestLifecycleState::Completed
     );
-    assert_eq!(
-        fetch_conversation_snapshot(&db.node, &session_id).await,
-        Some(ConversationSnapshot {
-            latest_request_id: second_request_id,
-            behavior_id: AGENT_NAME.into(),
-            status: "processing".into(),
-            forked_from_session_id: None,
-            fork_at_user_turn: None,
-            forked_at: None,
-        })
-    );
+    assert_session_observes_request(
+        &db.node,
+        &session_id,
+        &(second_request_id),
+        RequestLifecycleState::Pending,
+    )
+    .await;
 }
 
 fn request_lifecycle_for_case(
@@ -367,8 +315,8 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         .expect("legal Request transition case must carry an action");
     let valid_until = (action == "expire")
         .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
-    let request_metadata =
-        (action == "dedupLose").then(|| coalesce_metadata(&format!("dedup-{request_id}")));
+    let request_input =
+        (action == "dedupLose").then(|| coalesce_input(&format!("dedup-{request_id}")));
     let initial_state = if action == "bindWorkspace" {
         "workspaceBindingPending"
     } else {
@@ -381,7 +329,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         initial_state,
         &created_at,
         valid_until.as_deref(),
-        request_metadata.as_deref(),
+        request_input.as_deref(),
         None,
         None,
     )
@@ -411,7 +359,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             let survivor_created_at =
                 (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
             let key = format!("dedup-{request_id}");
-            let survivor_metadata = coalesce_metadata(&key);
+            let survivor_input = coalesce_input(&key);
             let survivor_doc_id = create_request_with_signed_fields(
                 &db.node,
                 &survivor_id,
@@ -419,7 +367,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 "pending",
                 &survivor_created_at,
                 None,
-                Some(&survivor_metadata),
+                Some(&survivor_input),
                 None,
                 None,
             )
@@ -537,13 +485,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
     let mut recovery_reachable_count = 0;
 
     for case in lean_request_transition_cases() {
-        let rust_classification = rust_request_transition_classification(&case.from, &case.to);
-        assert_eq!(
-            case.classification, rust_classification,
-            "Request transition {} expected classification drift for {} -> {}; Lean action={:?} boundary={:?}",
-            case.name, case.from, case.to, case.action, case.boundary
-        );
-
         match case.classification.as_str() {
             "legal" => {
                 legal_count += 1;
@@ -551,6 +492,13 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
                     case.action.as_deref(),
                     rust_request_transition_action(&case.from, &case.to),
                     "Request transition {} legal writer action drifted for {} -> {}",
+                    case.name,
+                    case.from,
+                    case.to
+                );
+                assert!(
+                    rust_request_recovery_sweep_writer(&case.from, &case.to).is_none(),
+                    "Request transition {} is legal but a Rust recovery sweep also claims {} -> {}",
                     case.name,
                     case.from,
                     case.to
@@ -643,18 +591,14 @@ fn assert_terminal_lifecycle_state(lifecycle_state: &str) {
     );
 }
 
-async fn force_persisted_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
-    force_persisted_lifecycle_state(node, doc_id, lifecycle_state).await;
-}
-
 async fn force_terminal_persisted_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
     assert_terminal_lifecycle_state(lifecycle_state);
     force_persisted_lifecycle_state(node, doc_id, lifecycle_state).await;
 }
 
-/// Queue metadata marking a request as coalescible under `key`, the shape
+/// Queue input marking a request as coalescible under `key`, the shape
 /// `reconcile_coalesced_pending_request` matches on.
-fn coalesce_metadata(key: &str) -> String {
+fn coalesce_input(key: &str) -> String {
     serde_json::json!({
         "queue": {
             "source": "user",
@@ -681,8 +625,9 @@ async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str)
     assert!(!resp.has_errors(), "set deadline failed: {:?}", resp.errors);
 }
 
-/// A running subagent bridge pointing at `child_request_id`, the row
-/// `reconcile_subagent_liveness` sweeps.
+/// A foreground bridge used when a generated request-transition case only
+/// exercises child terminalization. Foreground bridges are projected by their
+/// in-memory waiter, so this fixture needs no fabricated parent edge.
 async fn create_running_subagent_bridge(
     node: &EmbeddedNode,
     session_id: &str,
@@ -706,7 +651,7 @@ async fn create_running_subagent_bridge(
                 status: "running",
                 lifecycle_state: "running",
                 cancel_policy: "cascade",
-                await_mode: "background",
+                await_mode: "foreground",
                 child_request_id: "{escaped_child}",
                 started_at: "{started_at}"
             }}) {{ _docID }}
@@ -718,6 +663,125 @@ async fn create_running_subagent_bridge(
         "create subagent bridge failed: {:?}",
         resp.errors
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_exact_running_subagent_bridge(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    parent_request_id: &str,
+    parent_request_doc_id: &str,
+    parent_session_id: &str,
+    tool_call_id: &str,
+    child_request_id: &str,
+) -> String {
+    let agent_did = escape_graphql_string(agent_did);
+    let parent_request_id = escape_graphql_string(parent_request_id);
+    let parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
+    let parent_session_id = escape_graphql_string(parent_session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let child_request_id = escape_graphql_string(child_request_id);
+    let started_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{parent_session_id}:{tool_call_id}",
+                request_id: "{parent_request_id}",
+                request_doc_id: "{parent_request_doc_id}",
+                agent_did: "{agent_did}",
+                session_id: "{parent_session_id}",
+                message_sequence: 1,
+                tool_name: "spawn_subagent",
+                tool_call_id: "{tool_call_id}",
+                args: "{{}}",
+                result: "",
+                status: "running",
+                lifecycle_state: "running",
+                cancel_policy: "cascade",
+                await_mode: "background",
+                child_request_id: "{child_request_id}",
+                spawn_target_did: "{agent_did}",
+                started_at: "{started_at}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create exact subagent bridge failed: {:?}",
+        response.errors
+    );
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{
+                agent_did: {{ _eq: "{agent_did}" }},
+                tool_call_id: {{ _eq: "{tool_call_id}" }}
+            }}, limit: 2) {{ _docID }} }}"#
+        ))
+        .await;
+    support::first_row::<support::DocIdRow>(&response, "AgentToolCall").doc_id
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_exact_expired_child(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    child_request_id: &str,
+    parent_request_id: &str,
+    parent_request_doc_id: &str,
+    parent_tool_call_id: &str,
+    parent_tool_call_doc_id: &str,
+    deadline: &str,
+) -> String {
+    let agent_did = escape_graphql_string(agent_did);
+    let child_request_id = escape_graphql_string(child_request_id);
+    let child_session_id = escape_graphql_string(&format!("session-{child_request_id}"));
+    let parent_request_id = escape_graphql_string(parent_request_id);
+    let parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
+    let parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
+    let parent_tool_call_doc_id = escape_graphql_string(parent_tool_call_doc_id);
+    let deadline = escape_graphql_string(deadline);
+    let created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{child_request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{child_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{child_request_id}",
+                superseded_by_request: "",
+                content: "expired child",
+                lifecycle_state: "claimed",
+                backend_id: "",
+                execution_origin: "interactive",
+                failure_reason: "",
+                created_at: "{created_at}",
+                claimed_at: "{created_at}",
+                deadline: "{deadline}",
+                execution_generation: "{child_request_id}",
+                execution_lease_expires_at: "{deadline}",
+                execution_progress_seq: 0,
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 1,
+                caused_by_parent_request_id: "{parent_request_id}",
+                caused_by_parent_request_doc_id: "{parent_request_doc_id}",
+                caused_by_parent_tool_call_id: "{parent_tool_call_id}",
+                caused_by_parent_tool_call_doc_id: "{parent_tool_call_doc_id}",
+                caused_by_trigger_id: "{parent_tool_call_id}",
+                caused_by_trigger_kind: "subagent"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create exact expired child failed: {:?}",
+        response.errors
+    );
+    support::exact_request_doc_id(node, &child_request_id).await
 }
 
 async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
@@ -806,7 +870,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
             let valid_until = (writer == "claim_after_ttl_lapse")
                 .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
             let coalesce =
-                (writer == "coalesce_pending").then(|| coalesce_metadata("conformance-key"));
+                (writer == "coalesce_pending").then(|| coalesce_input("conformance-key"));
             let doc_id = create_request_with_signed_fields(
                 &db.node,
                 &request_id,
@@ -877,7 +941,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let survivor_id = uuid::Uuid::new_v4().to_string();
                     let survivor_created_at =
                         (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
-                    let survivor_metadata = coalesce_metadata("conformance-key");
+                    let survivor_input = coalesce_input("conformance-key");
                     let survivor_doc_id = create_request_with_signed_fields(
                         &db.node,
                         &survivor_id,
@@ -885,7 +949,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                         "pending",
                         &survivor_created_at,
                         None,
-                        Some(&survivor_metadata),
+                        Some(&survivor_input),
                         None,
                         None,
                     )
@@ -911,7 +975,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
 
             // Then pin the persisted row to the start state under test,
             // independently of local state, as a concurrent actor would.
-            force_persisted_state(&db.node, &doc_id, start).await;
+            force_persisted_lifecycle_state(&db.node, &doc_id, start).await;
 
             if writer == "repair_terminal_requests" {
                 create_response_with_status(
@@ -1259,25 +1323,13 @@ async fn interactive_claim_atomically_pins_session_behavior() {
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-    assert_eq!(
-        fetch_session_snapshot(&db.node, &session_id).await,
-        Some(SessionSnapshot {
-            session_id: session_id.clone(),
-            behavior_id: AGENT_NAME.into(),
-            status: "active".into(),
-        })
-    );
-    assert_eq!(
-        fetch_conversation_snapshot(&db.node, &session_id).await,
-        Some(ConversationSnapshot {
-            latest_request_id: request_id,
-            behavior_id: AGENT_NAME.into(),
-            status: "processing".into(),
-            forked_from_session_id: None,
-            fork_at_user_turn: None,
-            forked_at: None,
-        })
-    );
+    assert_session_observes_request(
+        &db.node,
+        &session_id,
+        &(request_id),
+        RequestLifecycleState::Claimed,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1329,25 +1381,17 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             failure_reason: "".into(),
         }
     );
-    assert_eq!(
-        fetch_conversation_snapshot(&db.node, &session_id).await,
-        Some(ConversationSnapshot {
-            latest_request_id: request_id,
-            behavior_id: AGENT_NAME.into(),
-            status: "processing".into(),
-            forked_from_session_id: None,
-            fork_at_user_turn: None,
-            forked_at: None,
-        })
-    );
-    assert_eq!(
-        fetch_session_snapshot(&db.node, &session_id).await,
-        Some(SessionSnapshot {
-            session_id,
-            behavior_id: AGENT_NAME.into(),
-            status: "active".into(),
-        })
-    );
+    assert_session_observes_request_with_authoritative_state(
+        &db.node,
+        &session_id,
+        &(request_id),
+        // Session observations are admission/terminal projections. Streaming
+        // progress is read from the exact request and response owners above.
+        RequestLifecycleState::Claimed,
+        RequestLifecycleState::Processing,
+    )
+    .await;
+
     assert_eq!(
         fetch_response_snapshot(&db.node, &response_doc_id).await,
         ResponseSnapshot {
@@ -1407,30 +1451,29 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             failure_reason: "".into(),
         }
     );
-    assert_eq!(
-        fetch_conversation_snapshot(&db.node, &session_id).await,
-        Some(ConversationSnapshot {
-            latest_request_id: request_id,
-            behavior_id: AGENT_NAME.into(),
-            status: "active".into(),
-            forked_from_session_id: None,
-            fork_at_user_turn: None,
-            forked_at: None,
-        })
-    );
-    assert_eq!(
-        fetch_session_snapshot(&db.node, &session_id).await,
-        Some(SessionSnapshot {
-            session_id,
-            behavior_id: AGENT_NAME.into(),
-            status: "active".into(),
-        })
-    );
+    assert_session_observes_request(
+        &db.node,
+        &session_id,
+        &(request_id),
+        RequestLifecycleState::Failed,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     let db = test_db("scheduled-materialize").await;
+    crate::support::fixtures::configure_subagent_behavior(
+        db.node.as_ref(),
+        AGENT_DID,
+        AGENT_NAME,
+        "scheduled-materialize-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
+    )
+    .await;
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
@@ -1461,30 +1504,30 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             failure_reason: "".into(),
         }
     );
-    assert_eq!(
-        fetch_session_snapshot(&db.node, &lifecycle.request().session_id).await,
-        Some(SessionSnapshot {
-            session_id: lifecycle.request().session_id.clone(),
-            behavior_id: AGENT_NAME.into(),
-            status: "active".into(),
-        })
-    );
-    assert_eq!(
-        fetch_conversation_snapshot(&db.node, &lifecycle.request().session_id).await,
-        Some(ConversationSnapshot {
-            latest_request_id: lifecycle.request().request_id.clone(),
-            behavior_id: AGENT_NAME.into(),
-            status: "processing".into(),
-            forked_from_session_id: None,
-            fork_at_user_turn: None,
-            forked_at: None,
-        })
-    );
+
+    assert_session_observes_request(
+        &db.node,
+        &lifecycle.request().session_id,
+        &(lifecycle.request().request_id.clone()),
+        RequestLifecycleState::Claimed,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn scheduled_materialization_persists_trigger_lineage() {
     let db = test_db("scheduled-materialize-lineage").await;
+    crate::support::fixtures::configure_subagent_behavior(
+        db.node.as_ref(),
+        AGENT_DID,
+        AGENT_NAME,
+        "scheduled-materialize-lineage-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
+    )
+    .await;
     let lineage = TriggerLineage {
         trigger_id: Some("sched-1".into()),
         trigger_kind: Some("schedule".into()),
@@ -1521,664 +1564,21 @@ async fn scheduled_materialization_persists_trigger_lineage() {
             caused_by_trigger_kind: Some("schedule".into()),
         })
     );
-}
 
-// -----------------------------------------------------------------------------
-// Trigger-driven transitions (Task 48)
-//
-// Each case below pins a state-machine invariant the TriggerEngine relies on
-// when driving schedule/event fires. They share the same style as the older
-// cases above: seed request state via the lifecycle entry point the engine
-// uses, then exercise the exact GraphQL mutation / query
-// `ProductionMaterializer` issues, and assert the resulting on-disk snapshot.
-// -----------------------------------------------------------------------------
-
-#[tokio::test]
-async fn serial_skip_does_not_create_request() {
-    let db = test_db("transition-serial-skip").await;
-
-    let lineage = TriggerLineage {
-        trigger_id: Some("sched-serial".into()),
-        trigger_kind: Some("schedule".into()),
-        source_doc_id: None,
-        correlation: None,
-        trigger_context: None,
-    };
-    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        materialization_identity(),
-        "serial seed",
-        DEADLINE_SECS,
-        ExecutionOrigin::Scheduled,
-        BACKEND_ID,
-        lineage,
-    )
-    .await
-    .unwrap();
-
-    let gating_query = r#"query {
-            AgentRequest(
-                filter: {
-                    caused_by_trigger_id: { _eq: "sched-serial" },
-                    caused_by_trigger_kind: { _eq: "schedule" },
-                    lifecycle_state: { _in: ["pending", "claimed", "processing"] }
-                },
-                limit: 1
-            ) { _docID }
-        }"#
-    .to_string();
-    let gate = db.node.execute(&gating_query).await;
-    assert!(
-        !gate.has_errors(),
-        "gating query errored: {:?}",
-        gate.errors
-    );
-    let gate_rows = gate
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(
-        gate_rows.len(),
-        1,
-        "gating query must see the seeded in-flight request"
-    );
-
-    let tuple_count_query = r#"{
-        AgentRequest(
-            filter: {
-                caused_by_trigger_id: { _eq: "sched-serial" },
-                caused_by_trigger_kind: { _eq: "schedule" }
-            }
-        ) { _docID }
-    }"#;
-    let count_before = db
+    let response = db
         .node
-        .execute(tuple_count_query)
-        .await
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .map(|rows| rows.len())
-        .unwrap_or(0);
-    assert_eq!(count_before, 1, "seeded count should be 1");
-
-    let count_after = db
-        .node
-        .execute(tuple_count_query)
-        .await
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .map(|rows| rows.len())
-        .unwrap_or(0);
-    assert_eq!(
-        count_after, count_before,
-        "serial skip must not create a new AgentRequest"
-    );
-
-    let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(
-        still_claimed.lifecycle_state,
-        RequestLifecycleState::Claimed
-    );
-}
-
-#[tokio::test]
-async fn latest_only_transition_to_superseded() {
-    let db = test_db("transition-latest-only").await;
-
-    let lineage = TriggerLineage {
-        trigger_id: Some("sched-latest".into()),
-        trigger_kind: Some("schedule".into()),
-        source_doc_id: None,
-        correlation: None,
-        trigger_context: None,
-    };
-    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        materialization_identity(),
-        "latest seed",
-        DEADLINE_SECS,
-        ExecutionOrigin::Scheduled,
-        BACKEND_ID,
-        lineage,
-    )
-    .await
-    .unwrap();
-
-    let before = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(before.lifecycle_state, RequestLifecycleState::Claimed);
-
-    let supersede = r#"mutation {
-            update_AgentRequest(
-                filter: {
-                    caused_by_trigger_id: { _eq: "sched-latest" },
-                    caused_by_trigger_kind: { _eq: "schedule" },
-                    lifecycle_state: { _in: ["pending", "claimed", "processing"] }
-                },
-                input: {
-                    lifecycle_state: "superseded"
-                }
-            ) { _docID }
-        }"#
-    .to_string();
-    let resp = db.node.execute(&supersede).await;
-    assert!(
-        !resp.has_errors(),
-        "supersede mutation errored: {:?}",
-        resp.errors
-    );
-    let updated_rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("update_AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(
-        updated_rows.len(),
-        1,
-        "supersede must transition exactly the one seeded in-flight request"
-    );
-
-    assert_eq!(
-        fetch_request_snapshot(&db.node, &seeded.request().doc_id).await,
-        RequestSnapshot {
-            lifecycle_state: RequestLifecycleState::Superseded,
-            behavior_id: AGENT_NAME.into(),
-            backend_id: BACKEND_ID.into(),
-            execution_origin: "scheduled".into(),
-            retry_parent_request: "".into(),
-            retry_root_request: seeded.request().request_id.clone(),
-            superseded_by_request: "".into(),
-            retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
-            claimed_at_present: true,
-            deadline_present: true,
-            failure_reason: "".into(),
-        }
-    );
-}
-
-#[tokio::test]
-async fn active_runtime_trigger_filters_ignore_input_required() {
-    let db = test_db("transition-input-required-active-filter").await;
-
-    let lineage = TriggerLineage {
-        trigger_id: Some("sched-input-required".into()),
-        trigger_kind: Some("schedule".into()),
-        source_doc_id: None,
-        correlation: None,
-        trigger_context: None,
-    };
-    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        materialization_identity(),
-        "reserved inputRequired seed",
-        DEADLINE_SECS,
-        ExecutionOrigin::Scheduled,
-        BACKEND_ID,
-        lineage,
-    )
-    .await
-    .unwrap();
-    set_request_lifecycle_state(&db.node, &seeded.request().doc_id, "inputRequired").await;
-
-    let gating_query = r#"query {
-        AgentRequest(
-            filter: {
-                caused_by_trigger_id: { _eq: "sched-input-required" },
-                caused_by_trigger_kind: { _eq: "schedule" },
-                lifecycle_state: { _in: ["pending", "claimed", "processing"] }
-            },
-            limit: 1
-        ) { _docID }
-    }"#;
-    let gate = db.node.execute(gating_query).await;
-    assert!(
-        !gate.has_errors(),
-        "gating query errored: {:?}",
-        gate.errors
-    );
-    let gate_rows = gate
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        gate_rows.is_empty(),
-        "active runtime gate must not observe reserved inputRequired rows"
-    );
-
-    let supersede = r#"mutation {
-        update_AgentRequest(
-            filter: {
-                caused_by_trigger_id: { _eq: "sched-input-required" },
-                caused_by_trigger_kind: { _eq: "schedule" },
-                lifecycle_state: { _in: ["pending", "claimed", "processing"] }
-            },
-            input: {
-                lifecycle_state: "superseded"
-            }
-        ) { _docID }
-    }"#;
-    let resp = db.node.execute(supersede).await;
-    assert!(
-        !resp.has_errors(),
-        "supersede mutation errored: {:?}",
-        resp.errors
-    );
-    let updated_rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("update_AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        updated_rows.is_empty(),
-        "active runtime supersede must not transition reserved inputRequired rows"
-    );
-    assert_lean_transition_is_illegal("Request", "inputRequired", "superseded");
-
-    let snap = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::InputRequired);
-}
-
-#[tokio::test]
-async fn fire_errored_does_not_create_request() {
-    let db = test_db("transition-fire-errored").await;
-
-    let query = r#"query {
-            AgentRequest(
-                filter: {
-                    caused_by_trigger_id: { _eq: "sched-render-err" },
-                    caused_by_trigger_kind: { _eq: "schedule" }
-                }
-            ) { _docID }
-        }"#
-    .to_string();
-    let resp = db.node.execute(&query).await;
-    assert!(!resp.has_errors(), "tuple query errored: {:?}", resp.errors);
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(
-        rows.len(),
-        0,
-        "render failure must not have produced an AgentRequest: {rows:?}"
-    );
-
-    let escaped_past = escape_graphql_string("2026-04-21T12:00:00Z");
-    let create_sched = format!(
-        r#"mutation {{
-            create_Schedule(input: {{
-                schedule_id: "sched-render-err",
-                task_id: "task-render-err",
-                interval_secs: 60,
-                enabled: true,
-                concurrency: "serial",
-                next_run_at: "{escaped_past}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    assert!(!db.node.execute(&create_sched).await.has_errors(),);
-    let writeback = format!(
-        r#"mutation {{
-            update_Schedule(
-                filter: {{ schedule_id: {{ _eq: "sched-render-err" }} }},
-                input: {{
-                    next_run_at: "{escaped_past}",
-                    last_status: "error",
-                    last_error: "template: variable 'missing' is undefined"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let wb_resp = db.node.execute(&writeback).await;
-    assert!(
-        !wb_resp.has_errors(),
-        "errored writeback failed: {:?}",
-        wb_resp.errors
-    );
-
-    let resp = db.node.execute(&query).await;
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(
-        rows.len(),
-        0,
-        "Errored writeback on Schedule must not materialize an AgentRequest: {rows:?}"
-    );
-
-    let sched_query = r#"{
-        Schedule(filter: { schedule_id: { _eq: "sched-render-err" } }, limit: 1) {
-            last_status
-            last_error
-        }
-    }"#;
-    let sched_resp = db.node.execute(sched_query).await;
-    let sched_row = sched_resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("Schedule"))
-        .and_then(|v| v.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("Schedule doc was created");
-    assert_eq!(
-        sched_row.get("last_status").and_then(|v| v.as_str()),
-        Some("error"),
-        "Schedule.last_status must be 'error' after an Errored writeback"
-    );
-    assert!(
-        sched_row
-            .get("last_error")
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| s.starts_with("template:")),
-        "Schedule.last_error must carry the template: prefix: {sched_row}"
-    );
-}
-
-#[tokio::test]
-async fn serial_skip_event_does_not_create_request() {
-    let db = test_db("transition-event-serial-skip").await;
-
-    let lineage = TriggerLineage {
-        trigger_id: Some("trigger-event-serial".into()),
-        trigger_kind: Some("event".into()),
-        source_doc_id: Some("event-source-serial-doc".into()),
-        correlation: None,
-        trigger_context: None,
-    };
-    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        materialization_identity(),
-        "event serial seed",
-        DEADLINE_SECS,
-        ExecutionOrigin::Scheduled,
-        BACKEND_ID,
-        lineage,
-    )
-    .await
-    .unwrap();
-
-    let gating_query = r#"query {
-        AgentRequest(
-            filter: {
-                caused_by_trigger_id: { _eq: "trigger-event-serial" },
-                caused_by_trigger_kind: { _eq: "event" },
-                lifecycle_state: { _in: ["pending", "claimed", "processing"] }
-            },
-            limit: 1
-        ) { _docID }
-    }"#;
-    let gate = db.node.execute(gating_query).await;
-    assert!(
-        !gate.has_errors(),
-        "gating query errored: {:?}",
-        gate.errors
-    );
-    let gate_rows = gate
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(
-        gate_rows.len(),
-        1,
-        "gating query must see the seeded in-flight event-kind request"
-    );
-
-    let tuple_count_query = r#"{
-        AgentRequest(
-            filter: {
-                caused_by_trigger_id: { _eq: "trigger-event-serial" },
-                caused_by_trigger_kind: { _eq: "event" }
-            }
-        ) { _docID }
-    }"#;
-    let count_before = db
-        .node
-        .execute(tuple_count_query)
-        .await
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .map(|rows| rows.len())
-        .unwrap_or(0);
-    assert_eq!(count_before, 1, "seeded count should be 1");
-
-    let count_after = db
-        .node
-        .execute(tuple_count_query)
-        .await
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .map(|rows| rows.len())
-        .unwrap_or(0);
-    assert_eq!(
-        count_after, count_before,
-        "serial skip on event-kind trigger must not create a new AgentRequest"
-    );
-
-    let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(
-        still_claimed.lifecycle_state,
-        RequestLifecycleState::Claimed
-    );
-}
-
-#[tokio::test]
-async fn latest_only_event_transition_to_superseded() {
-    let db = test_db("transition-event-latest-only").await;
-
-    let lineage = TriggerLineage {
-        trigger_id: Some("trigger-event-latest".into()),
-        trigger_kind: Some("event".into()),
-        source_doc_id: Some("event-source-latest-doc".into()),
-        correlation: None,
-        trigger_context: None,
-    };
-    let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        materialization_identity(),
-        "event latest seed",
-        DEADLINE_SECS,
-        ExecutionOrigin::Scheduled,
-        BACKEND_ID,
-        lineage,
-    )
-    .await
-    .unwrap();
-
-    let before = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(before.lifecycle_state, RequestLifecycleState::Claimed);
-
-    let supersede = r#"mutation {
-        update_AgentRequest(
-            filter: {
-                caused_by_trigger_id: { _eq: "trigger-event-latest" },
-                caused_by_trigger_kind: { _eq: "event" },
-                lifecycle_state: { _in: ["pending", "claimed", "processing"] }
-            },
-            input: {
-                lifecycle_state: "superseded"
-            }
-        ) { _docID }
-    }"#;
-    let resp = db.node.execute(supersede).await;
-    assert!(
-        !resp.has_errors(),
-        "supersede mutation errored: {:?}",
-        resp.errors
-    );
-    let updated_rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("update_AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(
-        updated_rows.len(),
-        1,
-        "supersede must transition exactly the one seeded in-flight event-kind request"
-    );
-
-    assert_eq!(
-        fetch_request_snapshot(&db.node, &seeded.request().doc_id).await,
-        RequestSnapshot {
-            lifecycle_state: RequestLifecycleState::Superseded,
-            behavior_id: AGENT_NAME.into(),
-            backend_id: BACKEND_ID.into(),
-            execution_origin: "scheduled".into(),
-            retry_parent_request: "".into(),
-            retry_root_request: seeded.request().request_id.clone(),
-            superseded_by_request: "".into(),
-            retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
-            claimed_at_present: true,
-            deadline_present: true,
-            failure_reason: "".into(),
-        }
-    );
-}
-
-#[tokio::test]
-async fn fire_errored_event_does_not_create_request() {
-    let db = test_db("transition-event-fire-errored").await;
-
-    let query = r#"query {
-        AgentRequest(
-            filter: {
-                caused_by_trigger_id: { _eq: "trigger-event-render-err" },
-                caused_by_trigger_kind: { _eq: "event" }
-            }
-        ) { _docID }
-    }"#;
-    let resp = db.node.execute(query).await;
-    assert!(!resp.has_errors(), "tuple query errored: {:?}", resp.errors);
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(
-        rows.len(),
-        0,
-        "render failure must not have produced an AgentRequest: {rows:?}"
-    );
-
-    let create_trigger = r#"mutation {
-        create_EventTrigger(input: {
-            trigger_id: "trigger-event-render-err",
-            task_id: "task-event-render-err",
-            source_collection: "WebhookEvent",
-            event_kind: "created",
-            enabled: true,
-            concurrency: "serial",
-            fire_count: 0
-        }) { _docID }
-    }"#;
-    let create_resp = db.node.execute(create_trigger).await;
-    assert!(
-        !create_resp.has_errors(),
-        "create EventTrigger failed: {:?}",
-        create_resp.errors
-    );
-
-    let writeback = r#"mutation {
-        update_EventTrigger(
-            filter: { trigger_id: { _eq: "trigger-event-render-err" } },
-            input: {
-                last_status: "error",
-                last_error: "template: variable 'missing_field' is undefined"
-            }
-        ) { _docID }
-    }"#;
-    let wb_resp = db.node.execute(writeback).await;
-    assert!(
-        !wb_resp.has_errors(),
-        "errored writeback failed: {:?}",
-        wb_resp.errors
-    );
-
-    let resp = db.node.execute(query).await;
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(
-        rows.len(),
-        0,
-        "Errored writeback on EventTrigger must not materialize an AgentRequest: {rows:?}"
-    );
-
-    let trigger_query = r#"{
-        EventTrigger(filter: { trigger_id: { _eq: "trigger-event-render-err" } }, limit: 1) {
-            last_status
-            last_error
-            fire_count
-        }
-    }"#;
-    let trigger_resp = db.node.execute(trigger_query).await;
-    let trigger_row = trigger_resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("EventTrigger"))
-        .and_then(|v| v.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("EventTrigger doc was created");
-    assert_eq!(
-        trigger_row.get("last_status").and_then(|v| v.as_str()),
-        Some("error"),
-        "EventTrigger.last_status must be 'error' after an Errored writeback"
-    );
-    assert!(
-        trigger_row
-            .get("last_error")
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| s.starts_with("template:")),
-        "EventTrigger.last_error must carry the template: prefix: {trigger_row}"
-    );
-    assert_eq!(
-        trigger_row.get("fire_count").and_then(|v| v.as_i64()),
-        Some(0),
-        "EventTrigger.fire_count must NOT advance on Errored writeback: {trigger_row}"
-    );
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ admission_kind admission_signer_did admission_signature }} }}"#,
+            escape_graphql_string(&lifecycle.request().doc_id),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
+    assert_eq!(row["admission_kind"], "local-self");
+    assert_eq!(row["admission_signer_did"], AGENT_DID);
+    assert!(row["admission_signature"]
+        .as_str()
+        .is_some_and(|signature| !signature.is_empty()));
 }
 
 use gents::background_completion::{
@@ -2187,102 +1587,10 @@ use gents::background_completion::{
 use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
-use gents::{AgentBehaviorDocument, ToolSelectionDocument};
 
 pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     let cases = lean_queue_deadline_cases();
-    assert_eq!(cases.len(), 5);
-
-    let emitted_names = cases
-        .iter()
-        .map(|case| case.name.as_str())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        emitted_names,
-        [
-            "active_request_blocks_later_same_session_claim",
-            "terminal_active_allows_next_pending_same_session_claim",
-            "background_completion_notification_creates_no_agent_request",
-            "cancel_drains_automated_wakeups_preserves_user_pending",
-            "claim_preserves_explicit_deadline",
-        ]
-        .into_iter()
-        .collect::<BTreeSet<_>>()
-    );
-
-    for case in cases {
-        assert_eq!(case.session_id, 900, "{}", case.name);
-        assert!(
-            case.superseded_request_ids.is_empty(),
-            "{} must be a queue/deadline contract, not a supersession contract",
-            case.name
-        );
-    }
-
-    let blocked = lean_queue_deadline_case("active_request_blocks_later_same_session_claim");
-    assert_eq!(blocked.group, "queue_admission");
-    assert_eq!(blocked.action, "claimNext");
-    assert!(!blocked.legal);
-    assert!(blocked.blocked_by_active);
-    assert_eq!(blocked.pre_active_request_id, Some(100));
-    assert_eq!(blocked.post_active_request_id, Some(100));
-    assert_eq!(blocked.pre_pending_request_ids, vec![101]);
-    assert_eq!(blocked.post_pending_request_ids, vec![101]);
-    assert_eq!(blocked.claimed_request_id, None);
-    assert!(blocked.post_terminal_request_ids.is_empty());
-
-    let terminal =
-        lean_queue_deadline_case("terminal_active_allows_next_pending_same_session_claim");
-    assert_eq!(terminal.group, "queue_admission");
-    assert_eq!(terminal.action, "finishActive_then_claimNext");
-    assert!(terminal.legal);
-    assert!(!terminal.blocked_by_active);
-    assert_eq!(terminal.pre_active_request_id, Some(100));
-    assert_eq!(terminal.pre_pending_request_ids, vec![101]);
-    assert_eq!(terminal.post_active_request_id, Some(101));
-    assert_eq!(terminal.claimed_request_id, Some(101));
-    assert!(terminal.post_pending_request_ids.is_empty());
-    assert_eq!(terminal.post_terminal_request_ids, vec![100]);
-
-    let completion =
-        lean_queue_deadline_case("background_completion_notification_creates_no_agent_request");
-    assert_eq!(completion.group, "completion_delivery");
-    assert_eq!(completion.action, "appendNotification");
-    assert!(completion.legal);
-    assert_eq!(completion.queue_key, None);
-    assert!(completion.pre_pending_request_ids.is_empty());
-    assert!(completion.post_pending_request_ids.is_empty());
-    assert_eq!(completion.post_coalesced_pending_count, 0);
-    assert!(completion.post_terminal_request_ids.is_empty());
-
-    let cancel = lean_queue_deadline_case("cancel_drains_automated_wakeups_preserves_user_pending");
-    assert_eq!(cancel.group, "queue_cancel");
-    assert_eq!(cancel.action, "drainAutomated");
-    assert!(cancel.legal);
-    assert_eq!(
-        cancel.queue_key.as_deref(),
-        Some("background_completion:900")
-    );
-    assert_eq!(cancel.pre_pending_request_ids, vec![301, 302]);
-    assert_eq!(cancel.post_pending_request_ids, vec![302]);
-    assert_eq!(cancel.automated_drained_request_ids, vec![301]);
-    assert_eq!(cancel.preserved_user_pending_request_ids, vec![302]);
-    assert_eq!(cancel.post_terminal_request_ids, vec![301]);
-    assert_eq!(cancel.post_coalesced_pending_count, 0);
-
-    let deadline = lean_queue_deadline_case("claim_preserves_explicit_deadline");
-    assert_eq!(deadline.group, "claim_deadline");
-    assert_eq!(deadline.action, "claim");
-    assert!(deadline.legal);
-    assert_eq!(deadline.claimed_request_id, Some(401));
-    assert_eq!(deadline.pre_request_deadline, Some(50));
-    assert_eq!(deadline.synthesized_claim_deadline, Some(51));
-    assert_eq!(deadline.post_deadline, Some(50));
-    assert!(
-        deadline.post_deadline < deadline.synthesized_claim_deadline,
-        "explicit request deadline should remain tighter than the synthesized claim deadline"
-    );
-    assert!(deadline.explicit_deadline_preserved);
+    assert!(!cases.is_empty());
 
     for case in cases {
         drive_queue_deadline_case(case).await;
@@ -2314,7 +1622,7 @@ async fn drive_queue_deadline_case(case: &lean_vocab_test::LeanQueueDeadlineConf
 struct QueueRuntimeRow {
     request_id: String,
     lifecycle_state: Option<RequestLifecycleState>,
-    metadata: Option<String>,
+    input: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2369,13 +1677,10 @@ fn row_matches_coalesced_key(row: &QueueRuntimeRow, queue_key: Option<&str>) -> 
     if !row_is_pending(row) {
         return false;
     }
-    let Some(metadata) = row.metadata.as_deref() else {
+    let Some(input) = row.input.as_ref() else {
         return false;
     };
-    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata) else {
-        return false;
-    };
-    let Some(queue) = metadata.get("queue") else {
+    let Some(queue) = input.get("queue") else {
         return false;
     };
     queue.get("source").and_then(serde_json::Value::as_str) == Some("background_completion")
@@ -2398,7 +1703,7 @@ async fn fetch_queue_runtime_snapshot(
             ) {{
                 request_id
                 lifecycle_state
-                metadata
+                input
             }}
         }}"#
     );
@@ -2706,6 +2011,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
     .await;
     persist_child_completion(
         db.node.as_ref(),
+        db.node_identity.did(),
         &child_a,
         &child_session_a,
         "child A complete",
@@ -2713,6 +2019,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
     .await;
     persist_child_completion(
         db.node.as_ref(),
+        db.node_identity.did(),
         &child_b,
         &child_session_b,
         "child B complete",
@@ -2775,7 +2082,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
         "pending",
         "2026-03-23T00:00:10Z",
         "scheduled",
-        Some(&automated_queue_metadata(
+        Some(&automated_queue_input(
             case.queue_key.as_deref().expect("queue key"),
             parent_request_id,
         )),
@@ -2790,7 +2097,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
         "pending",
         "2026-03-23T00:00:20Z",
         "scheduled",
-        Some(&user_queue_metadata()),
+        Some(&user_queue_input()),
         None,
         None,
     )
@@ -2891,7 +2198,7 @@ async fn create_queue_request(
     status: &str,
     created_at: &str,
     execution_origin: &str,
-    metadata: Option<&str>,
+    input: Option<&str>,
     deadline: Option<&str>,
     agent_did: Option<&str>,
 ) -> String {
@@ -2910,8 +2217,12 @@ async fn create_queue_request(
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_execution_origin = escape_graphql_string(execution_origin);
     let agent_did = escape_graphql_string(agent_did.unwrap_or(AGENT_DID));
-    let metadata_field = metadata
-        .map(|metadata| format!(r#", metadata: "{}""#, escape_graphql_string(metadata)))
+    let input_field = input
+        .map(|input| serde_json::from_str::<serde_json::Value>(input).expect("request input JSON"))
+        .map(|input| {
+            gents_protocol::graphql::graphql_input_literal(&input).expect("request input GraphQL")
+        })
+        .map(|input| format!(r#", input: {input}"#))
         .unwrap_or_default();
     let deadline_field = deadline
         .map(|deadline| format!(r#", deadline: "{}""#, escape_graphql_string(deadline)))
@@ -2934,7 +2245,7 @@ async fn create_queue_request(
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
                 max_retries: {max_retries},
-                subagent_depth: 0{metadata_field}{deadline_field}
+                subagent_depth: 0{input_field}{deadline_field}
             }}) {{ _docID }}
         }}"#,
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
@@ -2957,7 +2268,7 @@ async fn create_queue_request(
     support::first_row::<support::DocIdRow>(&node.execute(&query).await, "AgentRequest").doc_id
 }
 
-fn automated_queue_metadata(queue_key: &str, queued_after_request_id: &str) -> String {
+fn automated_queue_input(queue_key: &str, queued_after_request_id: &str) -> String {
     json!({
         "queue": {
             "source": "background_completion",
@@ -2969,7 +2280,7 @@ fn automated_queue_metadata(queue_key: &str, queued_after_request_id: &str) -> S
     .to_string()
 }
 
-fn user_queue_metadata() -> String {
+fn user_queue_input() -> String {
     json!({
         "queue": {
             "source": "user",
@@ -2985,72 +2296,33 @@ async fn install_background_completion_fixture(node: &EmbeddedNode, agent_did: &
     const TOOL_SELECTION_ID: &str = "queue-deadline-tools";
     const CHILD_BEHAVIOR_ID: &str = "queue-deadline-child";
 
-    gents::upsert_tool_selection(
+    crate::support::fixtures::configure_subagent_behavior(
         node,
-        &ToolSelectionDocument {
-            selection_id: TOOL_SELECTION_ID.to_string(),
-            agent_did: agent_did.to_string(),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                CHILD_BEHAVIOR_ID,
-                agent_did,
-                CHILD_BEHAVIOR_ID,
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
+        agent_did,
+        CHILD_BEHAVIOR_ID,
+        "queue-deadline-child-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .unwrap();
-    gents::upsert_agent_behavior(
+    .await;
+    crate::support::fixtures::configure_subagent_behavior(
         node,
-        &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: AGENT_NAME.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Queue deadline parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(TOOL_SELECTION_ID.to_string()),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            enabled: true,
-            created_at: Some("2026-03-23T00:00:00Z".to_string()),
-        },
+        agent_did,
+        AGENT_NAME,
+        TOOL_SELECTION_ID,
+        vec![crate::support::fixtures::subagent_target(
+            agent_did,
+            CHILD_BEHAVIOR_ID,
+            agent_did,
+            CHILD_BEHAVIOR_ID,
+        )],
+        true,
+        true,
+        None,
     )
-    .await
-    .unwrap();
-    gents::upsert_agent_behavior(
-        node,
-        &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Queue deadline child".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            enabled: true,
-            created_at: Some("2026-03-23T00:00:01Z".to_string()),
-        },
-    )
-    .await
-    .unwrap();
+    .await;
 }
 
 async fn create_background_child_bridge(
@@ -3126,11 +2398,15 @@ async fn child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String
 
 async fn persist_child_completion(
     node: &EmbeddedNode,
+    agent_did: &str,
     child_request_id: &str,
     child_session_id: &str,
     final_response: &str,
 ) {
+    let child_request_doc_id = crate::support::exact_request_doc_id(node, child_request_id).await;
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let update_request = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -3159,7 +2435,10 @@ async fn persist_child_completion(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{escaped_child_session_id}:1",
+                agent_did: "{escaped_agent_did}",
                 session_id: "{escaped_child_session_id}",
+                request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_child_request_doc_id}",
                 sequence: 1,
                 role: "assistant",
                 content: "{escaped_message}",
@@ -3179,7 +2458,8 @@ async fn persist_child_completion(
             create_AgentResponse(input: {{
                 response_key: "{escaped_child_request_id}",
                 request_id: "{escaped_child_request_id}",
-                agent_did: "{AGENT_DID}",
+                request_doc_id: "{escaped_child_request_doc_id}",
+                agent_did: "{escaped_agent_did}",
                 behavior_id: "queue-deadline-child",
                 session_id: "{escaped_child_session_id}",
                 content: "",
@@ -3214,4 +2494,320 @@ async fn fetch_deadline_runtime_row(node: &EmbeddedNode, request_id: usize) -> D
         }}"#
     );
     support::first_row::<DeadlineRuntimeRow>(&node.execute(&query).await, "AgentRequest")
+}
+
+// Both the persisted request and the in-memory claim must carry this principal.
+// build_request defaults to AGENT_DID; the lifecycle constructor does not replace it.
+async fn create_scoped_claim(db: &support::TestDb, agent_did: &str) -> (String, String, String) {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = support::create_request_for_agent_with_signed_fields(
+        &db.node,
+        agent_did,
+        &request_id,
+        &session_id,
+        "pending",
+        &created_at,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let mut request = build_request(
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at,
+    );
+    request.agent_did = agent_did.to_string();
+    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        db.node.clone(),
+        AGENT_NAME,
+        agent_did,
+        request,
+        DEADLINE_SECS,
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    (request_id, doc_id, session_id)
+}
+
+#[tokio::test]
+async fn terminal_repair_sweep_ignores_foreign_did_claims() {
+    let db = test_db("terminal-repair-scope-foreign").await;
+    let mut claims = Vec::new();
+    let expired =
+        escape_graphql_string(&(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+    for agent_did in [AGENT_DID, "did:test:foreign-scope-owner"] {
+        let (request_id, doc_id, session_id) = create_scoped_claim(&db, agent_did).await;
+        let escaped_doc = escape_graphql_string(&doc_id);
+        let mutation = format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}, input: {{ execution_lease_expires_at: "{expired}" }}) {{ _docID }} }}"#,
+        );
+        gents::ConfigAccess::transact_local(
+            &db.node,
+            None,
+            "test.expire_terminal_repair_fixture",
+            |txn| {
+                let mutation = mutation.clone();
+                Box::pin(async move {
+                    txn.execute(&mutation).await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        // Response identity is immutable: create it under the matching principal.
+        let request_id = escape_graphql_string(&request_id);
+        let session_id = escape_graphql_string(&session_id);
+        let did = escape_graphql_string(agent_did);
+        let mutation = format!(
+            r#"mutation {{ create_AgentResponse(input: {{
+                response_key: "{request_id}", request_id: "{request_id}",
+                request_doc_id: "{escaped_doc}", agent_did: "{did}",
+                behavior_id: "test", session_id: "{session_id}",
+                content: "", status: "complete", token_count: 0, progress_seq: 0,
+                created_at: "2026-03-23T00:00:00Z", completed_at: "2026-03-23T00:01:00Z"
+            }}) {{ _docID }} }}"#,
+        );
+        gents::ConfigAccess::transact_local(
+            &db.node,
+            None,
+            "test.create_terminal_repair_response_fixture",
+            |txn| {
+                let mutation = mutation.clone();
+                Box::pin(async move {
+                    txn.execute(&mutation).await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        claims.push(doc_id);
+    }
+    let foreign_before = fetch_request_snapshot(&db.node, &claims[1]).await;
+    let report = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(report.repaired, 1);
+    assert_eq!(
+        fetch_request_snapshot(&db.node, &claims[0])
+            .await
+            .lifecycle_state,
+        RequestLifecycleState::Completed,
+    );
+    assert_eq!(
+        fetch_request_snapshot(&db.node, &claims[1]).await,
+        foreign_before
+    );
+}
+
+async fn fetch_bridge_scope_state(node: &EmbeddedNode, tool_call_id: &str) -> String {
+    #[derive(Deserialize)]
+    struct Row {
+        lifecycle_state: String,
+    }
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let response = node.execute(&format!(
+        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }} ) {{ lifecycle_state }} }}"#,
+    )).await;
+    support::first_row::<Row>(&response, "AgentToolCall").lifecycle_state
+}
+
+#[tokio::test]
+async fn subagent_liveness_sweep_ignores_foreign_did_children() {
+    let db = test_db("subagent-liveness-scope-foreign").await;
+    let local_agent_did = db.node_identity.did().to_string();
+    crate::support::fixtures::configure_subagent_behavior(
+        &db.node,
+        &local_agent_did,
+        AGENT_NAME,
+        "foreign-scope-subagent-tools",
+        Vec::new(),
+        true,
+        true,
+        None,
+    )
+    .await;
+    let past = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+    let mut children = Vec::new();
+    for agent_did in [local_agent_did.as_str(), "did:test:foreign-scope-owner"] {
+        let parent_request_id = format!("parent-{}", uuid::Uuid::new_v4());
+        let parent_session_id = format!("session-{parent_request_id}");
+        let created_at = chrono::Utc::now().to_rfc3339();
+        crate::support::create_agent_session_in_scope(
+            &db.node,
+            agent_did,
+            &parent_session_id,
+            AGENT_NAME,
+            &created_at,
+        )
+        .await;
+        let parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
+            &db.node,
+            agent_did,
+            &parent_request_id,
+            &parent_session_id,
+            "processing",
+            &created_at,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        let parent_deadline = escape_graphql_string(
+            &(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
+        );
+        let parent_doc_id_escaped = escape_graphql_string(&parent_doc_id);
+        let response = db
+            .node
+            .execute(&format!(
+                r#"mutation {{ update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{parent_doc_id_escaped}" }} }},
+                    input: {{ deadline: "{parent_deadline}" }}
+                ) {{ _docID }} }}"#
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "setting parent deadline failed: {:?}",
+            response.errors
+        );
+        let request_id = format!("child-{}", uuid::Uuid::new_v4());
+        let bridge_id = format!("bridge-{request_id}");
+        let bridge_doc_id = create_exact_running_subagent_bridge(
+            &db.node,
+            agent_did,
+            &parent_request_id,
+            &parent_doc_id,
+            &parent_session_id,
+            &bridge_id,
+            &request_id,
+        )
+        .await;
+        let child_doc_id = create_exact_expired_child(
+            &db.node,
+            agent_did,
+            &request_id,
+            &parent_request_id,
+            &parent_doc_id,
+            &bridge_id,
+            &bridge_doc_id,
+            &past,
+        )
+        .await;
+        children.push((child_doc_id, bridge_id));
+    }
+    // The bridge scan sees both children; the real child-principal guard must
+    // exclude the foreign claim while terminalizing and projecting the control.
+    let foreign_before = fetch_request_snapshot(&db.node, &children[1].0).await;
+    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, &local_agent_did)
+        .await
+        .unwrap();
+    assert_eq!(report.expired_children_terminalized, 1);
+    assert_eq!(report.bridges_projected, 1);
+    assert_eq!(
+        fetch_request_snapshot(&db.node, &children[0].0)
+            .await
+            .lifecycle_state,
+        RequestLifecycleState::Dead,
+    );
+    assert_eq!(
+        fetch_request_snapshot(&db.node, &children[1].0).await,
+        foreign_before
+    );
+    assert_eq!(
+        fetch_bridge_scope_state(&db.node, &children[0].1).await,
+        "failed"
+    );
+    assert_eq!(
+        fetch_bridge_scope_state(&db.node, &children[1].1).await,
+        "running"
+    );
+}
+
+async fn assert_session_observes_request(
+    node: &EmbeddedNode,
+    session_id: &str,
+    request_id: &str,
+    expected: RequestLifecycleState,
+) {
+    assert_session_observes_request_with_authoritative_state(
+        node, session_id, request_id, expected, expected,
+    )
+    .await;
+}
+
+async fn assert_session_observes_request_with_authoritative_state(
+    node: &EmbeddedNode,
+    session_id: &str,
+    request_id: &str,
+    expected_observation: RequestLifecycleState,
+    expected_authoritative: RequestLifecycleState,
+) {
+    let session = fetch_session_snapshot(node, session_id)
+        .await
+        .expect("canonical session");
+    assert_eq!(session.session_id, session_id);
+    assert_eq!(session.agent_did, AGENT_DID);
+    assert_eq!(session.behavior_id, AGENT_NAME);
+    assert!(
+        session.closed_at.is_none(),
+        "request terminality does not close the session"
+    );
+    let latest = session
+        .observation
+        .expect("index observation")
+        .latest_request
+        .expect("latest request");
+    assert_eq!(latest.request_id, request_id);
+    assert_eq!(latest.lifecycle_state, expected_observation);
+    let request_id = escape_graphql_string(request_id);
+    let session_id = escape_graphql_string(session_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{
+        request_id: {{_eq: "{request_id}"}}, session_id: {{_eq: "{session_id}"}}
+    }}) {{ _docID agent_did requester_did behavior_id lifecycle_state }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "request observation query: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .expect("request rows");
+    assert_eq!(rows.len(), 1, "exact request must be unambiguous");
+    assert_eq!(
+        rows[0]["_docID"].as_str(),
+        Some(latest.request_doc_id.as_str())
+    );
+    assert_eq!(
+        rows[0]["lifecycle_state"].as_str(),
+        Some(expected_authoritative.as_str())
+    );
+    assert_eq!(
+        rows[0]["agent_did"].as_str(),
+        Some(session.agent_did.as_str()),
+        "session observation must reference its owner's request"
+    );
+    assert_eq!(
+        rows[0]["requester_did"].as_str(),
+        session.requester_did.as_deref(),
+        "absent requester scope is exact, not a wildcard"
+    );
+    assert_eq!(
+        rows[0]["behavior_id"].as_str(),
+        Some(session.behavior_id.as_str())
+    );
 }

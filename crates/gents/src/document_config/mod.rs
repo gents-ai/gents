@@ -1,12 +1,22 @@
 mod behavior;
+mod callback;
 mod chain_key_binding;
+pub use chain_key_binding::preserve_chain_key_binding_update_fields;
+mod compaction;
+mod context;
 mod datastore_tool_surface;
 mod eth_tool;
 mod event_trigger;
 mod graph_definition;
-mod graph_run;
-mod graphql_fields;
+mod inference_backend;
+mod inference_execution;
 mod inference_profile;
+mod inference_sampling;
+mod installation;
+mod installation_validation;
+mod projection_acp;
+pub use projection_acp::parse_projection_resource_map;
+mod pack_config;
 mod principal;
 mod references;
 mod schedule;
@@ -15,33 +25,47 @@ mod skill;
 mod subagent_target;
 mod surface_tool;
 mod task;
-mod tool_selection;
+mod task_validation;
+mod tools;
+mod trigger;
+mod write_tool;
 
-pub(crate) use chain_key_binding::load_chain_key_binding;
 pub use principal::{load_agent_principal, upsert_agent_principal, AgentPrincipal};
-pub(crate) use principal::{load_agent_principal_by_doc_id, load_agent_principal_record};
 
+pub use callback::{
+    BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,
+    CallbackModule,
+};
+pub use compaction::CompactionConfig;
+pub use context::AgentContext;
+pub use graph_definition::{GraphDefinition, GraphDefinitionObservation};
+pub use installation::{
+    ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,
+};
+pub use pack_config::PackConfig;
 pub use references::ConfigReferences;
 
-use behavior::create_default_behavior;
 #[allow(unused_imports)]
-pub(crate) use behavior::{
-    list_agent_behavior_records, load_agent_behavior_by_doc_id, load_agent_behavior_record,
-};
+pub(crate) use behavior::{list_agent_behavior_records, load_agent_behavior_record};
 pub use behavior::{
     list_agent_behaviors, load_agent_behavior, upsert_agent_behavior, AgentBehavior,
 };
 
+pub use inference_backend::{
+    AdvertisedModel, BackendAuth, BackendModelCatalog, InferenceBackend,
+    InferenceBackendObservation,
+};
+pub use inference_execution::{InferenceExecution, InferenceRetryPolicy};
+pub use inference_sampling::InferenceSampling;
+
+#[allow(unused_imports)]
+pub(crate) use inference_profile::load_inference_profile_record;
 pub use inference_profile::{
     default_inference_profile_id_for_behavior, list_inference_profile_records,
     load_inference_profile, upsert_inference_profile, InferenceProfile,
 };
-#[allow(unused_imports)]
-pub(crate) use inference_profile::{
-    load_inference_profile_by_doc_id, load_inference_profile_record,
-    upsert_inference_profile_mutation,
-};
 
+pub(crate) use serde_helpers::deserialize_default_on_null;
 pub use serde_helpers::deserialize_dual_shape;
 #[allow(unused_imports)]
 pub(crate) use surface_tool::{
@@ -51,20 +75,17 @@ pub(crate) use surface_tool::{
 pub use surface_tool::{
     merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
 };
-pub use tool_selection::default_tool_selection_id_for_behavior;
-pub use tool_selection::{
-    is_reserved_builtin_tool_name, load_tool_selection, upsert_tool_selection,
-    wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
-    OutputObligationDecision, ToolSelectionDocument, WriteToolDecl, WriteToolField,
+pub use tools::{
+    BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools, IntegrationTools,
+    LspTools, RemoteServiceTools, RemoteToolStyle, RemoteTools, SelfConfigTools, SubagentTools,
+    Tools,
+};
+pub use write_tool::{
+    is_reserved_builtin_tool_name, OutputObligationDecision, WriteToolDecl, WriteToolField,
     WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
-#[allow(unused_imports)]
-pub(crate) use tool_selection::{
-    list_all_tool_selection_records, list_tool_selection_records, load_tool_selection_by_doc_id,
-    load_tool_selection_record, validate_write_tool_declarations,
-};
 
-pub use subagent_target::{subagent_target_entry, SubagentTarget};
+pub use subagent_target::SubagentTargetDocument;
 
 pub use chain_key_binding::{
     chain_key_binding_by_id_query, create_chain_key_binding_mutation,
@@ -72,142 +93,114 @@ pub use chain_key_binding::{
     list_chain_key_bindings_query, load_chain_key_binding_by_doc_id, upsert_chain_key_binding,
     upsert_chain_key_binding_mutation, ChainKeyBindingDocument,
 };
-pub(crate) use datastore_tool_surface::{
-    list_datastore_tool_surface_records, load_datastore_tool_surface_by_doc_id,
-};
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
 pub use eth_tool::{eth_tool_by_id_query, list_eth_tools, EthToolDocument};
-pub(crate) use eth_tool::{list_eth_tool_records, load_eth_tool, load_eth_tool_by_doc_id};
-#[allow(unused_imports)]
-pub(crate) use skill::{list_skill_records, load_skill_by_doc_id, SkillDocument};
+pub use skill::SkillDocument;
 
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{
-    list_event_trigger_records, load_event_trigger_by_doc_id, update_event_trigger_runtime_fields,
-    EventTrigger, EventTriggerRuntimeUpdate,
+    load_trigger_next_run_at, update_trigger_runtime_fields, TriggerRuntimeUpdate,
 };
-pub(crate) use graph_definition::{
-    list_graph_definition_records, load_graph_definition_by_doc_id, GraphDefinition,
-};
-pub(crate) use graph_run::{list_graph_run_pin_records, load_graph_run_pin_by_doc_id, GraphRunPin};
+pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
+pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
 #[allow(unused_imports)]
-pub(crate) use schedule::{
-    list_schedule_records, load_schedule_by_doc_id, load_schedule_next_run_at,
-    update_schedule_runtime_fields, Schedule, ScheduleRuntimeUpdate,
-};
-#[allow(unused_imports)]
-pub(crate) use task::{list_task_records, load_task_by_doc_id, Task};
+pub use task::{Task, TaskHook, TaskHookPhase};
+pub use trigger::{ConcurrencyMode, Trigger, TriggerObservation, TriggerSource};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PrincipalBootstrap {
-    pub principal: AgentPrincipal,
-    pub default_behavior: AgentBehavior,
-    pub default_inference_profile: InferenceProfile,
-    pub created_principal: bool,
-    pub created_default_behavior: bool,
-    pub created_default_inference_profile: bool,
-}
 
 pub fn default_behavior_id_for_agent(agent_did: &str) -> String {
     format!("{agent_did}:default")
 }
 
+/// Ensure the runtime's principal exists without inventing executable configuration.
+/// Packs or explicit configuration select behaviors, contexts and inference.
 pub async fn ensure_agent_principal(
     node: &EmbeddedNode,
     agent_did: &str,
-) -> Result<PrincipalBootstrap> {
-    let existing_principal = load_agent_principal(node, agent_did).await?;
-    let created_principal = existing_principal.is_none();
-    let default_behavior_id = match existing_principal.as_ref() {
-        Some(principal) => {
-            serde_helpers::normalize_optional_string(principal.default_behavior_id.as_deref())
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| anyhow!("AgentPrincipal {agent_did} has no default_behavior_id"))?
-        }
-        None => default_behavior_id_for_agent(agent_did),
-    };
-
-    let (default_behavior, created_default_behavior) = match load_agent_behavior(
-        node,
-        &default_behavior_id,
-    )
-    .await?
-    {
-        Some(behavior) => {
-            if behavior.agent_did != agent_did {
-                return Err(anyhow!(
-                    "AgentBehavior {default_behavior_id} belongs to {} not {agent_did}",
-                    behavior.agent_did
-                ));
-            }
-            (behavior, false)
-        }
-        None => {
-            if existing_principal.is_some() {
-                return Err(anyhow!(
-                    "AgentPrincipal {agent_did} references missing default behavior {default_behavior_id}"
-                ));
-            }
-
-            let profile =
-                inference_profile::create_default_inference_profile(node, &default_behavior_id)
-                    .await?;
-            create_default_behavior(node, agent_did, &default_behavior_id, &profile.profile_id)
-                .await?;
-            let behavior = load_agent_behavior(node, &default_behavior_id)
-                .await?
-                .ok_or_else(|| {
-                    anyhow!("default behavior {default_behavior_id} was not persisted")
-                })?;
-            (behavior, true)
-        }
-    };
-
-    let default_inference_profile_id =
-        serde_helpers::normalize_optional_string(default_behavior.inference_profile_id.as_deref())
-            .ok_or_else(|| {
-                anyhow!("AgentBehavior {default_behavior_id} has no inference_profile_id")
-            })?;
-    let default_inference_profile = load_inference_profile(node, default_inference_profile_id)
-        .await?
-        .ok_or_else(|| {
-            anyhow!(
-                "AgentBehavior {default_behavior_id} references missing inference profile {default_inference_profile_id}"
+) -> Result<AgentPrincipal> {
+    use crate::collection::Collection;
+    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    anyhow::ensure!(
+        !agent_did.trim().is_empty(),
+        "principal DID must not be blank"
+    );
+    let owner = agent_did.to_owned();
+    ConfigAccess::transact_local(node, None, "ensure_agent_principal", move |txn| {
+        let owner = owner.clone();
+        Box::pin(async move {
+            if let Some((_, value)) = crate::config_client::read_desired_state_record_in_txn(
+                txn,
+                Collection::AgentPrincipal,
+                &owner,
+                &owner,
             )
-        })?;
-    let created_default_inference_profile = created_default_behavior;
-
-    match existing_principal {
-        Some(_) => {}
-        None => {
-            let fallback_display_name = serde_helpers::default_display_name_for_did(agent_did);
-            upsert_agent_principal(
-                node,
-                agent_did,
-                Some(fallback_display_name.as_str()),
-                Some(&default_behavior_id),
-                true,
-            )
-            .await?;
-        }
-    }
-
-    let principal = load_agent_principal(node, agent_did)
-        .await?
-        .ok_or_else(|| anyhow!("AgentPrincipal {agent_did} was not persisted"))?;
-
-    Ok(PrincipalBootstrap {
-        principal,
-        default_behavior,
-        default_inference_profile,
-        created_principal,
-        created_default_behavior,
-        created_default_inference_profile,
+            .await?
+            {
+                return Ok(serde_json::from_value(value)?);
+            }
+            let principal = AgentPrincipal {
+                agent_did: owner.clone(),
+                display_name: Some(serde_helpers::default_display_name_for_did(&owner)),
+                default_behavior_id: None,
+                enabled: true,
+                created_at: Some(chrono::Utc::now().to_rfc3339()),
+                created_by: Some(owner),
+                tags: Vec::new(),
+            };
+            let value = serde_json::to_value(&principal)?;
+            let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                collection: Collection::AgentPrincipal,
+                add: value.clone(),
+                update: value,
+            }])?;
+            crate::config_client::apply_desired_state_plan(txn, &plan).await?;
+            Ok(principal)
+        })
     })
+    .await
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod config_model_tests;
+
+#[cfg(test)]
+mod principal_bootstrap_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bootstrap_is_idempotent_and_does_not_invent_executable_configuration() -> Result<()> {
+        let node = EmbeddedNode::builder().build().await?;
+        crate::ensure_runtime_schemas(&node).await?;
+        let principal = ensure_agent_principal(&node, "did:key:bootstrap").await?;
+        assert_eq!(principal.default_behavior_id, None);
+        assert_eq!(
+            ensure_agent_principal(&node, "did:key:bootstrap").await?,
+            principal
+        );
+        let response = node.execute("{ AgentPrincipal { _docID } AgentBehavior { _docID } AgentContext { _docID } InferenceProfile { _docID } InferenceBackend { _docID } }").await;
+        anyhow::ensure!(
+            !response.has_errors(),
+            "bootstrap inspection failed: {:?}",
+            response.errors
+        );
+        let data = response.data.as_ref().unwrap();
+        assert_eq!(data["AgentPrincipal"].as_array().unwrap().len(), 1);
+        for collection in [
+            "AgentBehavior",
+            "AgentContext",
+            "InferenceProfile",
+            "InferenceBackend",
+        ] {
+            assert!(
+                data[collection].as_array().unwrap().is_empty(),
+                "unexpected {collection}"
+            );
+        }
+        Ok(())
+    }
+}

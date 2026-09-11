@@ -171,7 +171,7 @@ async fn create_runtime_request_inner(
     execution_origin: &str,
     content: &str,
 ) -> String {
-    upsert_generated_conversation(node, agent_did, behavior_id, session_id).await;
+    ensure_generated_session(node, agent_did, behavior_id, session_id).await;
 
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -203,54 +203,27 @@ async fn create_runtime_request_inner(
     lookup_request_doc_id(node, request_id).await
 }
 
-async fn upsert_generated_conversation(
+async fn ensure_generated_session(
     node: &EmbeddedNode,
     agent_did: &str,
     behavior_id: &str,
     session_id: &str,
 ) {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentConversation(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                add: {{
-                    session_id: "{escaped_session_id}",
-                    agent_name: "{escaped_behavior_id}",
-                    agent_did: "{escaped_agent_did}",
-                    behavior_id: "{escaped_behavior_id}",
-                    title: "generated-title",
-                    title_source: "generated",
-                    preview_text: "",
-                    status: "active",
-                    created_at: "{now}",
-                    updated_at: "{now}",
-                    latest_request_id: ""
-                }},
-                update: {{
-                    agent_name: "{escaped_behavior_id}",
-                    agent_did: "{escaped_agent_did}",
-                    behavior_id: "{escaped_behavior_id}",
-                    title: "generated-title",
-                    title_source: "generated",
-                    preview_text: "",
-                    status: "active",
-                    updated_at: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response =
-        execute_mutation_with_transaction_retry(node, &mutation, "upsert_generated_conversation")
-            .await;
-    assert!(
-        !response.has_errors(),
-        "upsert generated conversation failed: {:?}",
-        response.errors
-    );
+    if super::snapshots::fetch_session_snapshot(node, session_id)
+        .await
+        .is_some()
+    {
+        return;
+    }
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut session = super::session_document(session_id, behavior_id, &now);
+    session.agent_did = agent_did.to_owned();
+    session.requester_did = Some(agent_did.to_owned());
+    session.title = Some(gents_protocol::session::SessionTitle {
+        text: "generated-title".into(),
+        source: gents_protocol::session::SessionTitleSource::Generated,
+    });
+    super::create_session_document(node, &session).await;
 }
 
 async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> String {

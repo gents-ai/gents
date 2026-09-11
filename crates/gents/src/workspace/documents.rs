@@ -31,7 +31,7 @@ pub struct IsolatedWorkspaceDoc {
     pub branch: String,
     pub creation_policy: String,
     pub adapter: String,
-    pub owner_deployment_id: String,
+    pub owner_agent_did: String,
     pub writer_principal: String,
     pub integrator_principal: String,
     #[serde(default, deserialize_with = "deserialize_null_string")]
@@ -59,7 +59,7 @@ impl IsolatedWorkspaceDoc {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspacePlacementDoc {
     pub workspace_id: String,
-    pub deployment_id: String,
+    pub owner_agent_did: String,
     pub host_path: String,
     pub repository_placement_id: String,
     pub adapter: String,
@@ -91,7 +91,7 @@ pub struct WorkspaceBindingDoc {
     pub request_id: String,
     pub request_doc_id: String,
     pub authority: String,
-    pub deployment_id: String,
+    pub owner_agent_did: String,
     pub seal_hash: Option<String>,
     pub lifecycle_state: String,
 }
@@ -203,7 +203,7 @@ pub(crate) fn new_isolated_workspace(
     identity: &LogicalWorkspaceIdentity,
     creation_policy: CreationPolicy,
     adapter: WorkspaceAdapterKind,
-    owner_deployment_id: &str,
+    owner_agent_did: &str,
     writer_principal: &str,
     integrator_principal: &str,
     caused_by_invocation_id: &str,
@@ -221,7 +221,7 @@ pub(crate) fn new_isolated_workspace(
         branch: identity.branch.clone(),
         creation_policy: creation_policy.as_str().to_string(),
         adapter: adapter.as_str().to_string(),
-        owner_deployment_id: owner_deployment_id.to_string(),
+        owner_agent_did: owner_agent_did.to_string(),
         writer_principal: writer_principal.to_string(),
         integrator_principal: integrator_principal.to_string(),
         instruction_manifest,
@@ -245,46 +245,9 @@ pub fn workspace_placement_upsert_mutation(
     doc: &WorkspacePlacementDoc,
     updated_at: &str,
 ) -> String {
-    let dirty_base = if doc.dirty_base { "true" } else { "false" };
-    let updated_at = escape_graphql_string(updated_at);
     format!(
-        r#"mutation {{
-            upsert_WorkspacePlacement(
-                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }} }},
-                add: {{
-                    workspace_id: "{workspace_id}",
-                    deployment_id: "{deployment_id}",
-                    host_path: "{host_path}",
-                    repository_placement_id: "{repository_placement_id}",
-                    adapter: "{adapter}",
-                    adapter_version: "{adapter_version}",
-                    dirty_base: {dirty_base},
-                    dirty_base_summary: "{dirty_base_summary}",
-                    provisioning_state: "{provisioning_state}",
-                    observed_tree_hash: "{observed_tree_hash}",
-                    updated_at: "{updated_at}"
-                }},
-                update: {{
-                    host_path: "{host_path}",
-                    adapter: "{adapter}",
-                    adapter_version: "{adapter_version}",
-                    dirty_base: {dirty_base},
-                    dirty_base_summary: "{dirty_base_summary}",
-                    provisioning_state: "{provisioning_state}",
-                    observed_tree_hash: "{observed_tree_hash}",
-                    updated_at: "{updated_at}"
-                }}
-            ) {{ _docID }}
-        }}"#,
-        workspace_id = escape_graphql_string(&doc.workspace_id),
-        deployment_id = escape_graphql_string(&doc.deployment_id),
-        host_path = escape_graphql_string(&doc.host_path),
-        repository_placement_id = escape_graphql_string(&doc.repository_placement_id),
-        adapter = escape_graphql_string(&doc.adapter),
-        adapter_version = escape_graphql_string(&doc.adapter_version),
-        dirty_base_summary = escape_graphql_string(&doc.dirty_base_summary),
-        provisioning_state = escape_graphql_string(&doc.provisioning_state),
-        observed_tree_hash = escape_graphql_string(&doc.observed_tree_hash),
+        "mutation {{ {} }}",
+        workspace_placement_upsert_field("upsert_WorkspacePlacement", doc, updated_at)
     )
 }
 
@@ -300,16 +263,15 @@ pub fn repository_placement_upsert_mutation(
     Ok(format!(
         r#"mutation {{
             upsert_RepositoryPlacement(
-                filter: {{ repository_id: {{ _eq: "{repository_id}" }} }},
+                filter: {{ repository_id: {{ _eq: "{repository_id}" }}, agent_did: {{ _eq: "{owner_agent_did}" }} }},
                 add: {{
                     repository_id: "{repository_id}",
-                    deployment_id: "{deployment_id}",
+                    agent_did: "{owner_agent_did}",
                     host_path: "{host_path}",
                     enabled: {enabled},
                     updated_at: "{updated_at}"
                 }},
                 update: {{
-                    deployment_id: "{deployment_id}",
                     host_path: "{host_path}",
                     enabled: {enabled},
                     updated_at: "{updated_at}"
@@ -317,40 +279,16 @@ pub fn repository_placement_upsert_mutation(
             ) {{ _docID }}
         }}"#,
         repository_id = escape_graphql_string(&placement.repository_id),
-        deployment_id = escape_graphql_string(&placement.deployment_id),
+        owner_agent_did = escape_graphql_string(&placement.owner_agent_did),
         host_path = escape_graphql_string(host_path),
         updated_at = escape_graphql_string(updated_at),
     ))
 }
 
 pub fn workspace_binding_upsert_mutation(doc: &WorkspaceBindingDoc) -> String {
-    let seal_hash = graphql_nullable_string(doc.seal_hash.as_deref());
     format!(
-        r#"mutation {{
-            upsert_WorkspaceBinding(
-                filter: {{ binding_id: {{ _eq: "{binding_id}" }} }},
-                add: {{
-                    binding_id: "{binding_id}",
-                    workspace_id: "{workspace_id}",
-                    request_id: "{request_id}",
-                    request_doc_id: "{request_doc_id}",
-                    authority: "{authority}",
-                    deployment_id: "{deployment_id}",
-                    seal_hash: {seal_hash},
-                    lifecycle_state: "{lifecycle_state}"
-                }},
-                update: {{
-                    lifecycle_state: "{lifecycle_state}"
-                }}
-            ) {{ _docID }}
-        }}"#,
-        binding_id = escape_graphql_string(&doc.binding_id),
-        workspace_id = escape_graphql_string(&doc.workspace_id),
-        request_id = escape_graphql_string(&doc.request_id),
-        request_doc_id = escape_graphql_string(&doc.request_doc_id),
-        authority = escape_graphql_string(&doc.authority),
-        deployment_id = escape_graphql_string(&doc.deployment_id),
-        lifecycle_state = escape_graphql_string(&doc.lifecycle_state),
+        "mutation {{ {} }}",
+        workspace_binding_upsert_field("upsert_WorkspaceBinding", doc)
     )
 }
 
@@ -398,7 +336,7 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
     };
     format!(
         r#"{alias}: upsert_IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }} }},
+                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }}, owner_agent_did: {{ _eq: "{owner_agent_did}" }} }},
                 add: {{
                     workspace_id: "{workspace_id}",
                     work_unit_id: "{work_unit_id}",
@@ -408,7 +346,7 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
                     path_capability: "{path_capability}",
                     creation_policy: "{creation_policy}",
                     adapter: "{adapter}",
-                    owner_deployment_id: "{owner_deployment_id}",
+                    owner_agent_did: "{owner_agent_did}",
                     writer_principal: "{writer_principal}",
                     integrator_principal: "{integrator_principal}",
                     instruction_manifest: "{instruction_manifest}",
@@ -430,7 +368,7 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
         path_capability = escape_graphql_string(&doc.path_capability.canonical_json()),
         creation_policy = escape_graphql_string(&doc.creation_policy),
         adapter = escape_graphql_string(&doc.adapter),
-        owner_deployment_id = escape_graphql_string(&doc.owner_deployment_id),
+        owner_agent_did = escape_graphql_string(&doc.owner_agent_did),
         writer_principal = escape_graphql_string(&doc.writer_principal),
         integrator_principal = escape_graphql_string(&doc.integrator_principal),
         instruction_manifest = escape_graphql_string(&doc.instruction_manifest),
@@ -449,10 +387,10 @@ fn workspace_placement_upsert_field(
     let updated_at = escape_graphql_string(updated_at);
     format!(
         r#"{alias}: upsert_WorkspacePlacement(
-                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }} }},
+                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }}, owner_agent_did: {{ _eq: "{owner_agent_did}" }} }},
                 add: {{
                     workspace_id: "{workspace_id}",
-                    deployment_id: "{deployment_id}",
+                    owner_agent_did: "{owner_agent_did}",
                     host_path: "{host_path}",
                     repository_placement_id: "{repository_placement_id}",
                     adapter: "{adapter}",
@@ -475,7 +413,7 @@ fn workspace_placement_upsert_field(
                 }}
             ) {{ _docID }}"#,
         workspace_id = escape_graphql_string(&doc.workspace_id),
-        deployment_id = escape_graphql_string(&doc.deployment_id),
+        owner_agent_did = escape_graphql_string(&doc.owner_agent_did),
         host_path = escape_graphql_string(&doc.host_path),
         repository_placement_id = escape_graphql_string(&doc.repository_placement_id),
         adapter = escape_graphql_string(&doc.adapter),
@@ -490,14 +428,14 @@ fn workspace_binding_upsert_field(alias: &str, doc: &WorkspaceBindingDoc) -> Str
     let seal_hash = graphql_nullable_string(doc.seal_hash.as_deref());
     format!(
         r#"{alias}: upsert_WorkspaceBinding(
-                filter: {{ binding_id: {{ _eq: "{binding_id}" }} }},
+                filter: {{ binding_id: {{ _eq: "{binding_id}" }}, owner_agent_did: {{ _eq: "{owner_agent_did}" }} }},
                 add: {{
                     binding_id: "{binding_id}",
                     workspace_id: "{workspace_id}",
                     request_id: "{request_id}",
                     request_doc_id: "{request_doc_id}",
                     authority: "{authority}",
-                    deployment_id: "{deployment_id}",
+                    owner_agent_did: "{owner_agent_did}",
                     seal_hash: {seal_hash},
                     lifecycle_state: "{lifecycle_state}"
                 }},
@@ -510,7 +448,7 @@ fn workspace_binding_upsert_field(alias: &str, doc: &WorkspaceBindingDoc) -> Str
         request_id = escape_graphql_string(&doc.request_id),
         request_doc_id = escape_graphql_string(&doc.request_doc_id),
         authority = escape_graphql_string(&doc.authority),
-        deployment_id = escape_graphql_string(&doc.deployment_id),
+        owner_agent_did = escape_graphql_string(&doc.owner_agent_did),
         lifecycle_state = escape_graphql_string(&doc.lifecycle_state),
     )
 }
@@ -631,8 +569,7 @@ pub fn workspace_cleanup_docs_mutation(
 }
 
 // DefraDB stores this immutable tagged value in a String field. Missing/null
-// current-version values are invalid; only the source-version lens supplies
-// explicit compatibility for legacy documents.
+// values are invalid.
 mod capability_string {
     use super::super::WorkspacePathCapability;
     use serde::{Deserialize, Deserializer, Serializer};

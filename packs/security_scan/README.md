@@ -6,6 +6,12 @@ in scope, and it borrows deepsec's economics: a free mechanical regex
 pre-scan decides *what* gets investigated, and paid model stages decide
 *how deep*.
 
+Runtime configuration is authored once in `pack_config.json`. The distribution
+`manifest.json` points to that canonical bundle and lists it with the schema and
+prompt sidecars needed to install the pack; there are no per-collection JSON
+document fragments. AgentContext, Tools, Task, EventSource, and Trigger
+documents in that bundle define all four stages.
+
 ```text
 [runner kickoff: ported scan engine runs, output embedded in the single seed doc]
 

@@ -1,6 +1,6 @@
 use crate::types::{
     BehaviorView, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
-    DesktopRuntimeSnapshot, InferenceBackendView, SkillView, ToolSelectionView,
+    DesktopRuntimeSnapshot, InferenceBackendView, SkillView,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,7 +138,7 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
     }
 
     if !grants.session_read {
-        deployment.conversations.clear();
+        deployment.sessions.clear();
         for environment in &mut deployment.behavior_environments {
             environment.session_count = 0;
             environment.active_session_count = 0;
@@ -167,11 +167,19 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         .into_iter()
         .map(project_backend_for_fleet)
         .collect();
-    deployment.tool_selections = deployment
-        .tool_selections
-        .into_iter()
-        .map(project_tool_selection_for_fleet)
-        .collect();
+    deployment.principal_config = None;
+    deployment.behavior_configs.clear();
+    deployment.subagent_targets.clear();
+    deployment.datastore_tool_surfaces.clear();
+    deployment.chain_key_bindings.clear();
+    deployment.schedules.clear();
+    deployment.event_sources.clear();
+    deployment.triggers.clear();
+    deployment.tools.clear();
+    deployment.contexts.clear();
+    deployment.compactions.clear();
+    deployment.inference_sampling.clear();
+    deployment.inference_execution.clear();
     for environment in &mut deployment.behavior_environments {
         // Keep coarse capability labels: chat clients need an honest account
         // of the behavior's authority. Referenced profile labels and host paths
@@ -182,8 +190,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
 
     if !grants.fleet_read {
         deployment.tasks.clear();
-        deployment.schedules.clear();
-        deployment.event_triggers.clear();
     } else {
         for task in &mut deployment.tasks {
             task.prompt_template = None;
@@ -198,11 +204,9 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
 }
 
 fn project_behavior_for_chat(mut behavior: BehaviorView) -> BehaviorView {
-    behavior.system_prompt = None;
-    behavior.backend_id = None;
+    behavior.description = None;
+    behavior.context_id = None;
     behavior.inference_profile_id = None;
-    behavior.compaction_strategy = None;
-    behavior.compaction_threshold = None;
     behavior
 }
 
@@ -217,17 +221,10 @@ fn project_backend_for_fleet(mut backend: InferenceBackendView) -> InferenceBack
     backend.endpoint = None;
     backend.api_key_configured = false;
     backend.api_key_env_var = None;
+    backend.auth_kind = None;
+    backend.connect_timeout_secs = None;
+    backend.discovery_timeout_secs = None;
     backend
-}
-
-fn project_tool_selection_for_fleet(mut selection: ToolSelectionView) -> ToolSelectionView {
-    selection.file_tool_root = None;
-    selection.command_execution_policy = None;
-    selection.command_allowed_argv_prefixes.clear();
-    selection.command_forbidden_argv_prefixes.clear();
-    selection.write_tools.clear();
-    selection.defra_query_collections.clear();
-    selection
 }
 
 #[cfg(test)]
@@ -235,9 +232,9 @@ mod tests {
     use super::*;
     use crate::types::{
         AgentPrincipalView, BehaviorEnvironmentView, BehaviorView, ClientRouteStatusView,
-        ConversationSummary, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
-        DesktopRuntimeSnapshot, EnrollmentRequestView, MailboxItemView, P2PHealthView,
-        PairingCollectionStatusView, SavedPeerView, SkillView, SyncHealthView,
+        DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot,
+        EnrollmentRequestView, MailboxItemView, P2PHealthView, PairingCollectionStatusView,
+        SavedPeerView, SessionSummary, SkillView, SyncHealthView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
@@ -354,17 +351,14 @@ mod tests {
                     behaviors: vec![BehaviorView {
                         behavior_id: "default".into(),
                         display_name: "Default".into(),
-                        system_prompt: Some("SECRET PROMPT".into()),
-                        backend_id: Some("openai".into()),
-                        model_name: Some("gpt".into()),
-                        tool_selection_id: None,
-                        inference_profile_id: None,
-                        compaction_strategy: None,
-                        compaction_threshold: None,
+                        agent_did: "did:test:agent".into(),
+                        description: Some("PRIVATE CONFIG DESCRIPTION".into()),
+                        context_id: Some("context".into()),
+                        inference_profile_id: Some("profile".into()),
                         enabled: true,
                         is_default: true,
-                        skill_refs: vec!["skill_a".into()],
-                        skill_excludes: vec![],
+                        tags: vec![],
+                        created_at: None,
                     }],
                     behavior_environments: vec![BehaviorEnvironmentView {
                         behavior_id: "default".into(),
@@ -382,13 +376,26 @@ mod tests {
                         active_session_count: 0,
                     }],
                     inference_backends: vec![],
-                    inference_profiles: vec![],
-                    tool_selections: vec![],
+                    inference_profiles: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","profile_id":"profile","backend_id":"backend","model_name":"gpt"})).unwrap()],
+                    inference_sampling: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","sampling_id":"sampling","temperature":1})).unwrap()],
+                    inference_execution: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","execution_id":"execution","max_turns":1000})).unwrap()],
+                    contexts: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","context_id":"context","system_prompt":"SECRET PROMPT","tools_id":"tools","skill_ids":["skill_a"]})).unwrap()],
+                    compactions: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","compaction_id":"compaction"})).unwrap()],
+                    tools: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","tools_id":"tools","host":{"root":"/secret/tools"}})).unwrap()],
+                    principal_config: Some(serde_json::from_value(serde_json::json!({
+                        "agent_did":"did:test:agent","tags":["private-principal"]
+                    })).unwrap()),
+                    behavior_configs: vec![serde_json::from_value(serde_json::json!({
+                        "agent_did":"did:test:agent","behavior_id":"behavior",
+                        "inference_profile_id":"profile","tags":["private-behavior"]
+                    })).unwrap()],
+                    subagent_targets: vec![],
+                    datastore_tool_surfaces: vec![],
+                    chain_key_bindings: vec![],
                     tool_service_registries: vec![],
                     skills: vec![SkillView {
                         skill_id: "skill_a".into(),
                         agent_did: None,
-                        scope: Some("behavior".into()),
                         name: Some("Skill A".into()),
                         description: Some("desc".into()),
                         instructions: Some("DO SECRET THINGS".into()),
@@ -399,8 +406,11 @@ mod tests {
                     }],
                     tasks: vec![],
                     schedules: vec![],
-                    event_triggers: vec![],
-                    conversations: vec![ConversationSummary {
+                    event_sources: vec![],
+                    triggers: vec![],
+                    sessions: vec![SessionSummary {
+                        agent_did: "did:test:agent".into(), requester_did: None,
+                        latest_request_doc_id: None, closed_at: None, tags: vec![], provenance: None,
                         session_id: "sess_1".into(),
                         title: Some("Chat".into()),
                         preview_text: Some("hi".into()),
@@ -447,7 +457,30 @@ mod tests {
     }
 
     #[test]
-    fn core_only_strips_paths_peers_conversations_and_authored_content() {
+    fn config_documents_are_lossless_only_with_config_grant() {
+        let full = project_client_snapshot(sample_snapshot(), SnapshotGrants::all());
+        let deployment = &full.client.as_ref().unwrap().deployments[0];
+        assert_eq!(
+            deployment.principal_config.as_ref().unwrap().tags,
+            ["private-principal"]
+        );
+        assert_eq!(deployment.behavior_configs[0].tags, ["private-behavior"]);
+        for grants in [
+            SnapshotGrants::core_only(),
+            SnapshotGrants::chat_package(),
+            SnapshotGrants::fleet_package(),
+        ] {
+            let limited = project_client_snapshot(sample_snapshot(), grants);
+            let serialized = serde_json::to_string(&limited).unwrap();
+            assert!(!serialized.contains("private-principal"));
+            assert!(!serialized.contains("private-behavior"));
+            assert!(!serialized.contains("SECRET PROMPT"));
+            assert!(!serialized.contains("/secret/tools"));
+        }
+    }
+
+    #[test]
+    fn core_only_strips_paths_peers_sessions_and_authored_content() {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::core_only());
         assert!(projected.bootstrap.desktop_home.is_empty());
         assert!(projected.bootstrap.default_agent_home.is_empty());
@@ -455,7 +488,7 @@ mod tests {
         let client = projected.client.expect("client");
         assert!(client.listen_addresses.is_empty());
         let dep = &client.deployments[0];
-        assert!(dep.conversations.is_empty());
+        assert!(dep.sessions.is_empty());
         assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.behavior_environments[0].session_count, 0);
         assert!(dep.behavior_environments[0].workspace_root.is_none());
@@ -466,9 +499,22 @@ mod tests {
         assert!(dep.pairing.is_empty());
         assert_eq!(dep.routes.len(), 2);
         assert!(dep.routes.iter().all(|route| route.address.is_none()));
-        assert!(dep.behaviors[0].system_prompt.is_none());
-        assert_eq!(dep.behaviors[0].model_name.as_deref(), Some("gpt"));
-        assert_eq!(dep.behaviors[0].skill_refs, vec!["skill_a".to_string()]);
+        assert!(dep.contexts.is_empty());
+        assert!(dep.tools.is_empty());
+        assert!(dep.compactions.is_empty());
+        assert!(dep.inference_profiles.is_empty());
+        assert!(dep.inference_sampling.is_empty());
+        assert!(dep.inference_execution.is_empty());
+        assert!(dep.behaviors[0].context_id.is_none());
+        assert!(dep.behaviors[0].inference_profile_id.is_none());
+        assert_eq!(
+            dep.behavior_environments[0].model_name.as_deref(),
+            Some("gpt")
+        );
+        assert_eq!(
+            dep.behavior_environments[0].skill_names,
+            vec!["Skill A".to_string()]
+        );
         assert!(dep.skills[0].instructions.is_none());
         assert_eq!(dep.skills[0].skill_id, "skill_a");
         assert_eq!(
@@ -478,13 +524,13 @@ mod tests {
     }
 
     #[test]
-    fn session_read_keeps_conversations_and_chat_projections() {
+    fn session_read_keeps_sessions_and_chat_projections() {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::chat_package());
         let client = projected.client.as_ref().unwrap();
         let dep = &client.deployments[0];
         assert_eq!(dep.routes.len(), 2);
         assert!(dep.routes.iter().all(|route| route.live_match));
-        assert_eq!(dep.conversations.len(), 1);
+        assert_eq!(dep.sessions.len(), 1);
         assert!(dep.pairing.is_empty());
         assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.behavior_environments[0].session_count, 1);
@@ -492,10 +538,23 @@ mod tests {
         assert!(dep.behavior_environments[0]
             .inference_profile_name
             .is_none());
-        assert!(dep.behaviors[0].system_prompt.is_none());
-        assert_eq!(dep.behaviors[0].model_name.as_deref(), Some("gpt"));
+        assert!(dep.contexts.is_empty());
+        assert!(dep.tools.is_empty());
+        assert!(dep.compactions.is_empty());
+        assert!(dep.inference_profiles.is_empty());
+        assert!(dep.inference_sampling.is_empty());
+        assert!(dep.inference_execution.is_empty());
+        assert!(dep.behaviors[0].context_id.is_none());
+        assert!(dep.behaviors[0].inference_profile_id.is_none());
+        assert_eq!(
+            dep.behavior_environments[0].model_name.as_deref(),
+            Some("gpt")
+        );
         assert!(dep.skills[0].instructions.is_none());
-        assert_eq!(dep.behaviors[0].skill_refs, vec!["skill_a".to_string()]);
+        assert_eq!(
+            dep.behavior_environments[0].skill_names,
+            vec!["Skill A".to_string()]
+        );
     }
 
     #[test]
@@ -503,7 +562,7 @@ mod tests {
         let projected =
             project_client_snapshot(sample_snapshot(), SnapshotGrants::mailbox_package());
         let dep = &projected.client.as_ref().unwrap().deployments[0];
-        assert!(dep.conversations.is_empty());
+        assert!(dep.sessions.is_empty());
         assert_eq!(dep.mailbox_items.len(), 1);
         assert_eq!(dep.mailbox_items[0].item_id, "mailbox-1");
     }
@@ -519,7 +578,7 @@ mod tests {
         assert_eq!(dep.addr, "/ip4/127.0.0.1/tcp/1");
         assert_eq!(dep.pairing.len(), 1);
         assert_eq!(dep.pairing[0].pairing_retry_count, 2);
-        assert!(dep.conversations.is_empty());
+        assert!(dep.sessions.is_empty());
         assert_eq!(dep.behavior_environments[0].session_count, 0);
         assert!(dep.behavior_environments[0].workspace_root.is_none());
     }
@@ -529,7 +588,7 @@ mod tests {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::all());
         assert_eq!(projected.bootstrap.desktop_home, "/secret/desktop");
         assert_eq!(
-            projected.client.as_ref().unwrap().deployments[0].behaviors[0]
+            projected.client.as_ref().unwrap().deployments[0].contexts[0]
                 .system_prompt
                 .as_deref(),
             Some("SECRET PROMPT")

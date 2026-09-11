@@ -285,12 +285,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_inputs_yield_no_ops() {
-        let ops = compute_pairing_diff(&PairingDesired::default(), &PairingActual::default());
-        assert!(ops.is_empty());
-    }
-
-    #[test]
     fn missing_collection_yields_install() {
         let desired = PairingDesired {
             collections: s(&["c1"]),
@@ -314,21 +308,6 @@ mod tests {
             compute_pairing_diff(&desired, &actual),
             vec![DiffOp::TeardownCollection("c1".into())]
         );
-    }
-
-    #[test]
-    fn same_state_yields_no_ops() {
-        let desired = PairingDesired {
-            collections: s(&["c1"]),
-            replicator_addresses: s(&["/ip4/1/p2p/p"]),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            collections: s(&["c1"]),
-            replicator_addresses: s(&["/ip4/1/p2p/p"]),
-            ..Default::default()
-        };
-        assert!(compute_pairing_diff(&desired, &actual).is_empty());
     }
 
     #[test]

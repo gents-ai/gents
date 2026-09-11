@@ -1,19 +1,23 @@
 import Proofs.Compaction.ProviderView
 
 /-!
-# The compacted-prefix index correspondence
+# The conditional global-view compacted-prefix index correspondence
+
+This is a row-level global-sanitizer proof model. Applying these results to
+production requires the per-turn/unique-id alignment premise; content and
+repeated call occurrences remain outside this model.
 
 Defect 3 of #993: `messages_compacted` was measured against
-`strip(sanitize(strip H))` but applied to `strip H`. Whenever `sanitize` removed
+`strip(sanitizeGlobal(strip H))` but applied to `strip H`. Whenever `sanitizeGlobal` removed
 anything at or before the boundary the two indexings diverged — either
 summarized messages survived verbatim alongside their own summary, or messages
 that were never summarized were silently dropped from the provider view.
 
 Measuring and dropping in one space is only correct if that space is stable
-under the transcript growing. `providerView_append` is that obligation: the
+under the transcript growing. `providerViewGlobal_append` is that obligation: the
 provider view of a longer history begins with the provider view of the shorter
-one, so a count recorded against `providerView H` still names the same rows in
-`providerView (H ++ new)`.
+one, so a count recorded against `providerViewGlobal H` still names the same rows in
+`providerViewGlobal (H ++ new)`.
 
 The hypothesis is exactly "the suffix contributes no tool result for a call
 announced in the prefix", with two checkable sufficient conditions below. The
@@ -24,7 +28,7 @@ ordinary row — before anything else.
 namespace Compaction
 
 open Transcript (MessageRow MessageKind ToolResultKey)
-open PromptAssembly (sanitize dropOrphanedFrom filterCallsBy resolvedIn callsIn
+open PromptAssembly (sanitizeGlobal dropOrphanedFrom filterCallsBy resolvedIn callsIn
                      UniqueCallIds ProviderValid ActiveBlockValid ActiveBlockValidFrom)
 
 /-- The pending-call set `dropOrphanedFrom` threads: an assistant announcement
@@ -189,11 +193,11 @@ begins with the provider view of the shorter one, provided the suffix
 contributes no tool result for a call announced in the prefix.
 
 The tail is existential on purpose: its identity is irrelevant to the
-correspondence, which only needs `providerView a` to be a prefix. -/
-theorem providerView_append (a b : List MessageRow)
+correspondence, which only needs `providerViewGlobal a` to be a prefix. -/
+theorem providerViewGlobal_append (a b : List MessageRow)
     (hclean : Disjoint (resolvedIn (dropOrphanedFrom (pendingAfter ∅ (strip a)) (strip b)))
       (callsIn a)) :
-    ∃ tail, providerView (a ++ b) = providerView a ++ tail := by
+    ∃ tail, providerViewGlobal (a ++ b) = providerViewGlobal a ++ tail := by
   have hDA : callsIn (dropOrphanedFrom ∅ (strip a)) = callsIn a := by
     rw [PromptAssembly.callsIn_dropOrphanedFrom, callsIn_strip]
   have hdisj : Disjoint (resolvedIn (dropOrphanedFrom (pendingAfter ∅ (strip a)) (strip b)))
@@ -203,7 +207,7 @@ theorem providerView_append (a b : List MessageRow)
       (resolvedIn (dropOrphanedFrom (pendingAfter ∅ (strip a)) (strip b)) ∪
         resolvedIn (dropOrphanedFrom ∅ (strip a)))
       (dropOrphanedFrom (pendingAfter ∅ (strip a)) (strip b)), ?_⟩
-  unfold providerView PromptAssembly.sanitize PromptAssembly.dropUnpairedCalls
+  unfold providerViewGlobal PromptAssembly.sanitizeGlobal PromptAssembly.dropUnpairedCalls
     PromptAssembly.dropOrphanedResults
   rw [strip_append, dropOrphanedFrom_append, resolvedIn_append, filterCallsBy_append,
     Finset.union_comm, PromptAssembly.filterCallsBy_irrelevant _ _ _ hdisj]
@@ -213,10 +217,10 @@ theorem resolvedIn_dropOrphaned_subset (l : List MessageRow) :
   simpa using PromptAssembly.resolvedIn_dropOrphanedFrom_subset l ∅
 
 /-- Sufficient condition 1: the prefix ends at a turn boundary. -/
-theorem providerView_append_of_turn_boundary (a b : List MessageRow)
+theorem providerViewGlobal_append_of_turn_boundary (a b : List MessageRow)
     (huniq : UniqueCallIds (a ++ b)) (hb : pendingAfter ∅ a = ∅) :
-    ∃ tail, providerView (a ++ b) = providerView a ++ tail := by
-  refine providerView_append a b ?_
+    ∃ tail, providerViewGlobal (a ++ b) = providerViewGlobal a ++ tail := by
+  refine providerViewGlobal_append a b ?_
   rw [pendingAfter_strip, hb]
   have hsub : resolvedIn (dropOrphanedFrom ∅ (strip b)) ⊆ callsIn b := by
     rw [← callsIn_strip b]
@@ -226,11 +230,11 @@ theorem providerView_append_of_turn_boundary (a b : List MessageRow)
 /-- Sufficient condition 2, the one production satisfies: the suffix opens with
 an ordinary row, because a new request appends its user prompt before anything
 else. No result in the suffix can then attach to a call in the prefix. -/
-theorem providerView_append_of_ordinary_start (a : List MessageRow) (row : MessageRow)
+theorem providerViewGlobal_append_of_ordinary_start (a : List MessageRow) (row : MessageRow)
     (rest : List MessageRow) (huniq : UniqueCallIds (a ++ row :: rest))
     (hrow : row.kind = .ordinary) :
-    ∃ tail, providerView (a ++ row :: rest) = providerView a ++ tail := by
-  refine providerView_append a (row :: rest) ?_
+    ∃ tail, providerViewGlobal (a ++ row :: rest) = providerViewGlobal a ++ tail := by
+  refine providerViewGlobal_append a (row :: rest) ?_
   rw [strip_cons,
     PromptAssembly.dropOrphanedFrom_cons_ordinary (stripRow row) (strip rest) _
       (strip_kind_ordinary row hrow),
@@ -270,7 +274,7 @@ theorem activeBlockValidFrom_append (a : List MessageRow) :
 /-- Dropping at a pending-empty index of a provider view leaves a provider view.
 
 This is what makes dropping the compacted prefix *after* sanitization sound in
-`agent/daemon/request.rs`, and (via `sanitize_drop_noop`) what makes the
+`agent/daemon/request.rs`, and (via `sanitizeGlobal_drop_noop`) what makes the
 re-narrowing that follows it free rather than corrective: the writer's boundary is
 always `pairSafeBoundary`, so the drop lands where nothing is pending. -/
 theorem drop_preserves_providerValid (msgs : List MessageRow) (n : Nat)
@@ -314,13 +318,13 @@ runtime writes that call is provably free — the writer's boundary is always
 because counts written before that splitter existed carry no version marker and
 can land mid-turn, and because `UniqueCallIds` is a *checked* precondition
 rather than a structural guarantee (see `reused_call_id_breaks_prefix_stability`). -/
-theorem sanitize_drop_noop {msgs : List MessageRow} {n : Nat}
+theorem sanitizeGlobal_drop_noop {msgs : List MessageRow} {n : Nat}
     (huniq : UniqueCallIds msgs)
-    (hboundary : pendingAfter ∅ ((providerView msgs).take n) = ∅) :
-    sanitize ((providerView msgs).drop n) = (providerView msgs).drop n :=
-  PromptAssembly.sanitize_fixpoint
-    (drop_preserves_providerValid _ n (providerView_sound huniq) hboundary)
-    (nonemptyAnnouncements_drop n _ (providerView_nonempty_announcements msgs))
+    (hboundary : pendingAfter ∅ ((providerViewGlobal msgs).take n) = ∅) :
+    sanitizeGlobal ((providerViewGlobal msgs).drop n) = (providerViewGlobal msgs).drop n :=
+  PromptAssembly.sanitizeGlobal_fixpoint
+    (drop_preserves_providerValid _ n (providerViewGlobal_sound huniq) hboundary)
+    (nonemptyAnnouncements_drop n _ (providerViewGlobal_nonempty_announcements msgs))
 
 /-- Reusing a tool-call id across turns breaks prefix stability **under global
 resolution**, and therefore breaks the compacted-prefix correspondence.
@@ -333,7 +337,7 @@ no longer names the rows it was measured against.
 `UniqueCallIds` rules this out, and it is a real hypothesis rather than a
 structural fact: production call ids come from the provider.
 
-**This is a property of the coarser `providerView`, not of the runtime.**
+**This is a property of the coarser `providerViewGlobal`, not of the runtime.**
 Production scopes resolution to the active turn, and
 `reused_call_id_is_prefix_stable_per_turn` below shows the same witness is
 stable there. `compaction::has_unique_call_ids` is retained as defence in depth
@@ -342,7 +346,7 @@ rather than as the only thing standing between the runtime and this hazard. See
 theorem reused_call_id_breaks_prefix_stability :
     ∃ a b : List MessageRow,
       pendingAfter ∅ a = ∅ ∧
-        (providerView (a ++ b)).take (providerView a).length ≠ providerView a := by
+        (providerViewGlobal (a ++ b)).take (providerViewGlobal a).length ≠ providerViewGlobal a := by
   refine ⟨[⟨0, 0, 0, .assistant, .assistantToolCalls {1}⟩, ⟨1, 0, 1, .user, .ordinary⟩],
           [⟨2, 0, 2, .assistant, .assistantToolCalls {1}⟩,
            ⟨3, 0, 3, .user, .toolResult 1 ⟨0, 0, 0⟩⟩], ?_, ?_⟩
@@ -367,13 +371,13 @@ theorem reused_call_id_is_prefix_stable_per_turn :
   · decide
 
 /-- **The correspondence the production fix rests on.** The count the compaction
-writer records against `providerView H` names exactly the rows the next
-request's reader drops from `providerView (H ++ new)`. -/
+writer records against `providerViewGlobal H` names exactly the rows the next
+request's reader drops from `providerViewGlobal (H ++ new)`. -/
 theorem compacted_prefix_correspondence
     {H new dropped old recent tail : List MessageRow}
-    (hstable : providerView (H ++ new) = providerView H ++ tail)
-    (hsplit : providerView H = dropped ++ old ++ recent) :
-    (providerView (H ++ new)).drop (dropped.length + old.length) = recent ++ tail := by
+    (hstable : providerViewGlobal (H ++ new) = providerViewGlobal H ++ tail)
+    (hsplit : providerViewGlobal H = dropped ++ old ++ recent) :
+    (providerViewGlobal (H ++ new)).drop (dropped.length + old.length) = recent ++ tail := by
   rw [hstable, hsplit]
   have hregroup : dropped ++ old ++ recent ++ tail = (dropped ++ old) ++ (recent ++ tail) := by
     simp [List.append_assoc]
@@ -382,7 +386,7 @@ theorem compacted_prefix_correspondence
 
 /-! ## Persisted canonical cursors
 
-`messages_compacted` is counted in `providerView`, so it is not itself a
+`messages_compacted` is counted in `providerViewGlobal`, so it is not itself a
 canonical `AgentMessage.sequence` cursor: sanitization may remove durable rows.
 An optimized reader may skip the canonical prefix only when the writer also
 persists a cursor whose raw split projects to exactly the same provider split.
@@ -393,16 +397,16 @@ raw rows on either side separately produces exactly the prefix/suffix split of
 the complete provider view.  Production establishes this at compaction time
 and stores the last canonical sequence in the `CompactionEntry`. -/
 def CursorDenotes (msgs : List MessageRow) (cursor compacted : Nat) : Prop :=
-  providerView msgs =
-      providerView (msgs.take cursor) ++ providerView (msgs.drop cursor) ∧
-    (providerView (msgs.take cursor)).length = compacted
+  providerViewGlobal msgs =
+      providerViewGlobal (msgs.take cursor) ++ providerViewGlobal (msgs.drop cursor) ∧
+    (providerViewGlobal (msgs.take cursor)).length = compacted
 
 /-- Loading only the raw suffix selected by a sound cursor is observationally
 equivalent to the legacy full-load, provider-project, then drop path. -/
 theorem cursor_projects_active_suffix
     {msgs : List MessageRow} {cursor compacted : Nat}
     (hcursor : CursorDenotes msgs cursor compacted) :
-    providerView (msgs.drop cursor) = (providerView msgs).drop compacted := by
+    providerViewGlobal (msgs.drop cursor) = (providerViewGlobal msgs).drop compacted := by
   rcases hcursor with ⟨hsplit, hlength⟩
   rw [hsplit, ← hlength]
   simp
@@ -452,7 +456,7 @@ theorem sequence_cursor_projects_active_suffix
     {cursor : Transcript.Sequence}
     (hcursor : CursorDenotes msgs rawCursor compacted)
     (hboundary : SequenceCursorBoundary msgs rawCursor cursor) :
-    providerView (afterSequence cursor msgs) = (providerView msgs).drop compacted := by
+    providerViewGlobal (afterSequence cursor msgs) = (providerViewGlobal msgs).drop compacted := by
   rw [afterSequence_eq_drop_of_boundary hboundary]
   exact cursor_projects_active_suffix hcursor
 

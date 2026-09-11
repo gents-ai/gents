@@ -35,6 +35,7 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_millis(200)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(&home_dir, &["status"])?;
@@ -61,7 +62,8 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
         output
             .get("runnable_behavior_count")
             .and_then(Value::as_i64),
-        Some(1)
+        Some(1),
+        "status: {output}"
     );
     assert_eq!(
         output.get("graphql").and_then(Value::as_str),
@@ -162,16 +164,14 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         Some(p2p::sync::DEFAULT_MAX_PENDING_DAGS as u64)
     );
 
-    let metrics = reqwest::Client::new()
+    let response = reqwest::Client::new()
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()
         .await
-        .context("GET /metrics")?
-        .error_for_status()
-        .context("/metrics status")?
-        .text()
-        .await
-        .context("/metrics body")?;
+        .context("GET /metrics")?;
+    let status = response.status();
+    let metrics = response.text().await.context("/metrics body")?;
+    anyhow::ensure!(status.is_success(), "/metrics returned {status}: {metrics}");
     assert!(
         metrics.contains("gents_p2p_enabled 1"),
         "metrics missing p2p_enabled: {metrics}"
@@ -299,16 +299,14 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
         "status: {output}"
     );
 
-    let metrics = reqwest::Client::new()
+    let response = reqwest::Client::new()
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()
         .await
-        .context("GET /metrics")?
-        .error_for_status()
-        .context("/metrics status")?
-        .text()
-        .await
-        .context("/metrics body")?;
+        .context("GET /metrics")?;
+    let status = response.status();
+    let metrics = response.text().await.context("/metrics body")?;
+    anyhow::ensure!(status.is_success(), "/metrics returned {status}: {metrics}");
     for needle in [
         "gents_p2p_admission_max_pending_dags 17",
         "gents_p2p_admission_max_concurrent_push_tasks 3",

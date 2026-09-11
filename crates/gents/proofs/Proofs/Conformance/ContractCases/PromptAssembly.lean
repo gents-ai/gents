@@ -8,14 +8,14 @@ Witness rows for the provider-input sanitizer, the assembled layer order, and
 tool-argument repair.
 
 **Every expected value in this file is computed by running the Lean model**, not
-written by hand. `expected` is literally `Provider.sanitizeForProvider input`;
+written by hand. `expected` is literally `Provider.sanitizeForProviderGlobal input`;
 `expectedTwice` is the model applied twice; `splits` are the model applied to
 each suffix. That is what makes the Rust fence mechanical rather than social: a
 change to either the model or the Rust sanitizer breaks the equality, and no
 human transcription sits in between.
 
 Provider-validity of each expected output is *not* emitted as data, because it
-is a theorem — `Provider.sanitizeForProvider_sound`. If production reproduces
+is a theorem — `Provider.sanitizeForProviderGlobal_sound`. If production reproduces
 the emitted output exactly, it inherits that validity. This is why the Rust
 fence needs no hand-rolled pairing oracle.
 -/
@@ -250,13 +250,13 @@ private def witnessTranscripts : List (String × List ProviderRow) :=
 /-- Every witness row is `Coherent` — its announced call set is exactly the
 `call` items in its content. This is what licenses `announcedIds` to read the
 emitted call ids off the content, and it is the hypothesis
-`Provider.sanitizeForProvider_sound` and `_idempotent` need. Checked by
+`Provider.sanitizeForProviderGlobal_sound` and `_idempotent` need. Checked by
 `decide`, so a witness that drifts out of coherence fails the build. -/
 theorem witnessesAreCoherent :
     ∀ witness ∈ witnessTranscripts, PromptAssembly.Provider.AllCoherent witness.2 := by
   decide
 
-/-- The *other* premise of `Provider.sanitizeForProvider_sound` and
+/-- The *other* premise of `Provider.sanitizeForProviderGlobal_sound` and
 `_idempotent`. Without this the contract's claim — that production reproducing
 an emitted output thereby inherits provider-validity — does not actually follow,
 because the theorem would be quantified over inputs the witnesses need not
@@ -274,25 +274,25 @@ theorem witnessOutputsAreProviderValid :
     ∀ witness ∈ witnessTranscripts,
       PromptAssembly.ProviderValid
         (PromptAssembly.Provider.project
-          (PromptAssembly.Provider.sanitizeForProvider witness.2)) := by
+          (PromptAssembly.Provider.sanitizeForProviderGlobal witness.2)) := by
   intro witness hwitness
-  exact PromptAssembly.Provider.sanitizeForProvider_sound
+  exact PromptAssembly.Provider.sanitizeForProviderGlobal_sound
     (witnessesHaveUniqueCallIds witness hwitness)
     (witnessesAreCoherent witness hwitness)
 
 private def splitCases (rows : List ProviderRow) : List PromptAssemblySplitCase :=
   (List.range (rows.length + 1)).map fun index =>
     { index := index
-    , expected := rowCases (PromptAssembly.Provider.sanitizeForProvider (rows.drop index)) }
+    , expected := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal (rows.drop index)) }
 
 private def sanitizeCase (witness : String × List ProviderRow) :
     PromptAssemblySanitizeCase :=
   let rows := witness.2
-  let once := PromptAssembly.Provider.sanitizeForProvider rows
+  let once := PromptAssembly.Provider.sanitizeForProviderGlobal rows
   { name := witness.1
   , input := rowCases rows
   , expected := rowCases once
-  , expectedTwice := rowCases (PromptAssembly.Provider.sanitizeForProvider once)
+  , expectedTwice := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal once)
   , splits := splitCases rows }
 
 def promptAssemblySanitizeCases : List PromptAssemblySanitizeCase :=
@@ -300,15 +300,14 @@ def promptAssemblySanitizeCases : List PromptAssemblySanitizeCase :=
 
 /-! ## Layer order
 
-Emitted from `PromptAssembly.Template.assembleWithContext`, whose
-`assembleWithContext_tail` theorem fixes the tail as `contextPreamble, prompt`. -/
+Emitted from `PromptAssembly.assemble`, whose
+existing layer-order theorems put the task prompt last. -/
 
 private def slotName : PromptAssembly.Slot → String
-  | .preamble => "preamble"
+  | .preamble _ => "preamble"
   | .summaryReminder => "summaryReminder"
   | .skillReminder index => s!"skillReminder:{index}"
   | .conversation index => s!"conversation:{index}"
-  | .contextPreamble => "contextPreamble"
   | .prompt => "prompt"
 
 private def layerShapes : List (String × Nat × Nat × Nat) :=
@@ -326,7 +325,7 @@ def promptAssemblyLayerCases : List PromptAssemblyLayerCase :=
     , summaryCount := shape.2.2.1
     , conversationLen := shape.2.2.2
     , slots :=
-        (PromptAssembly.Template.assembleWithContext
+        (PromptAssembly.assemble
           shape.2.1 shape.2.2.1 shape.2.2.2).map slotName }
 
 /-! ## Tool-argument repair

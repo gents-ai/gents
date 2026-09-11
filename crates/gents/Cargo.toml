@@ -16,6 +16,7 @@ default = [
     "defra-node/wasmtime-runtime",
 ]
 agent-memory = []
+typescript = ["dep:ts-rs", "gents-loop/typescript"]
 # Gates the e2e_live test binary out of default builds: every test in it is
 # live-inference-gated, so default runs paid a ~160MB link to execute nothing.
 live-e2e = []
@@ -29,6 +30,7 @@ path = "tests/e2e_live.rs"
 required-features = ["live-e2e"]
 
 [dependencies]
+ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow.workspace = true
 async-stream = "0.3"
 async-trait = "0.1"

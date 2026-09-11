@@ -2,7 +2,7 @@ Review run {{ event.correlation }}, lens `{{ doc.lens }}` (`{{ doc.area_id }}`).
 
 {{ doc.instructions }}
 
-Load `read_review_evidence_manifest` with no arguments, then `read_review_evidence_page` for each `page_index` from `0` through `page_count - 1`. Evidence identity is runtime-bound to `{{ doc.evidence_id }}`. Each read must return one untruncated row with matching identity and manifest metadata (format version `1`). Read chunks `evidence_chunk_0` through `evidence_chunk_15` in page order, ignoring trailing empty padding. Review progressively; incomplete or inconsistent evidence is a blocker, not a completed scan.
+Load `read_review_evidence_manifest` with no arguments and check its `format_version` is `1`, then `read_review_evidence_page` for each `page_index` from `0` through `page_count - 1`. Evidence identity is runtime-bound to `{{ doc.evidence_id }}`. Each read must return one untruncated row. Check each page's identity, index, counts, and hash against the manifest; pages do not carry a separate format version. Read chunks `evidence_chunk_0` through `evidence_chunk_15` in page order, ignoring trailing empty padding. Review progressively; incomplete or inconsistent evidence is a blocker, not a completed scan.
 
 Use `write_candidate_finding` for at most three distinct actionable defects. Include an exact changed `path:line`, a supporting excerpt, the concrete impact, and confidence of at least 80. Set `finding_id` to `{{ doc.area_id }}:<finding-slug>`. Severity: Critical for security/data loss, Major for incorrect behavior or liveness, Cleanup for concrete duplication or unnecessary complexity.
 

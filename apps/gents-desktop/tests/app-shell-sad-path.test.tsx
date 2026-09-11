@@ -139,11 +139,11 @@ describe("App shell command sad paths", () => {
   });
 
   it("surfaces rejected backend saves and keeps the editor usable", async () => {
-    const saveBackendConfig = vi.fn(async () => {
+    const patchConfigComponents = vi.fn(async () => {
       throw new Error("backend save rejected");
     });
     const driver = renderTauriAppDriverWithBridge(
-      makeBridge({ saveBackendConfig }),
+      makeBridge({ patchConfigComponents }),
       deployment.peerId,
     );
 
@@ -160,7 +160,7 @@ describe("App shell command sad paths", () => {
           "backend save rejected",
         );
       });
-      expect(saveBackendConfig).toHaveBeenCalledTimes(1);
+      expect(patchConfigComponents).toHaveBeenCalledTimes(1);
       expect(screen.getByTestId("backend-save")).toBeEnabled();
       expect(screen.getByTestId("backend-name")).toHaveValue("Backend A Edited");
     } finally {

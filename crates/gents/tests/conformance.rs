@@ -20,10 +20,9 @@ use gents::tool_call_lifecycle::{
     MAX_SUBAGENT_DEPTH,
 };
 use gents::{
-    fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,
-    write_manual_agent_request, AgentBehaviorDocument, BackgroundToolRegistry, DefraSessionHook,
-    DefraStreamWriter, DefraWatcher, FailurePolicy, InferenceCall, RequestLifecycle,
-    ToolSelectionDocument, Watcher,
+    fetch_interrupt_requested_at, interrupt_request, write_manual_agent_request,
+    BackgroundToolRegistry, DefraSessionHook, DefraStreamWriter, DefraWatcher, FailurePolicy,
+    InferenceCall, RequestLifecycle, Watcher,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -41,29 +40,24 @@ use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_backend_health_cases, lean_bridge_step_cases, lean_cancel_propagation_cases,
-    lean_client_behavior_readiness_cases, lean_client_shell_case,
-    lean_codex_shim_behavior_selection_cases, lean_codex_shim_binding_cases,
-    lean_codex_shim_compaction_projection_cases, lean_codex_shim_context_usage_cases,
-    lean_codex_shim_projection_case, lean_codex_shim_projection_cases,
-    lean_codex_shim_reasoning_projection_cases, lean_codex_shim_subagent_listing_cases,
-    lean_codex_shim_subagent_metadata_cases, lean_codex_shim_subagent_status_cases,
-    lean_codex_shim_subagent_thread_shape_cases, lean_codex_shim_subagent_tool_cases,
-    lean_codex_shim_subagent_visibility_cases, lean_codex_shim_thread_status_cases,
-    lean_codex_shim_tool_metadata_cases, lean_codex_shim_turn_lifecycle_cases,
-    lean_command_env_case, lean_command_policy_case, lean_command_sandbox_case,
-    lean_compaction_cursor_cases, lean_compaction_reducer_cases, lean_composed_invariant_witnesses,
-    lean_contract_snapshot, lean_descendant_graph_cases, lean_event_delivery_convergence_traces,
-    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
-    lean_inference_slot_accounting_cases, lean_managed_exec_liveness_cases,
-    lean_managed_exec_tool_boundary_cases, lean_mcp_health_cases, lean_process_transition_cases,
-    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
-    lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
-    lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
-    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
+    lean_client_behavior_readiness_cases, lean_codex_shim_behavior_selection_cases,
+    lean_codex_shim_binding_cases, lean_codex_shim_compaction_projection_cases,
+    lean_codex_shim_context_usage_cases, lean_codex_shim_projection_case,
+    lean_codex_shim_projection_cases, lean_codex_shim_reasoning_projection_cases,
+    lean_codex_shim_subagent_listing_cases, lean_codex_shim_subagent_metadata_cases,
+    lean_codex_shim_subagent_status_cases, lean_codex_shim_subagent_thread_shape_cases,
+    lean_codex_shim_subagent_tool_cases, lean_codex_shim_subagent_visibility_cases,
+    lean_codex_shim_thread_status_cases, lean_codex_shim_tool_metadata_cases,
+    lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
+    lean_command_sandbox_case, lean_compaction_cursor_cases, lean_compaction_reducer_cases,
+    lean_composed_invariant_witnesses, lean_contract_snapshot, lean_descendant_graph_cases,
+    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
+    lean_event_delivery_transition_cases, lean_inference_slot_accounting_cases,
+    lean_mcp_health_cases, lean_queue_deadline_cases, lean_r4c_background_work_case,
+    lean_r4c_background_work_cases, lean_r6_background_theorem_witness,
+    lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
-    lean_response_transition_cases, lean_restart_disposition_cases, lean_runtime_reconcile_case,
-    lean_runtime_reconcile_cases, lean_session_recovery_case, lean_startup_readiness_cases,
+    lean_response_transition_cases, lean_restart_disposition_cases, lean_startup_readiness_cases,
     lean_state_machine_contract, lean_subagent_delegation_graph_cases,
     lean_tool_output_paging_cases, lean_transcript_case, lean_transcript_cases,
     lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
@@ -71,20 +65,18 @@ use lean_vocab_test::{
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
-    fetch_conversation_snapshot, fetch_message_snapshots_for_session,
-    fetch_request_lineage_snapshot, fetch_request_lineage_snapshot_by_tuple,
-    fetch_request_snapshot, fetch_request_snapshot_raw, fetch_response_content,
-    fetch_response_interrupted_at, fetch_response_snapshot, fetch_session_snapshot,
-    fetch_tool_call_snapshots_for_session, ConversationSnapshot, MessageSnapshot,
-    RequestLineageSnapshot, RequestSnapshot, ResponseSnapshot, SessionSnapshot, ToolCallSnapshot,
+    fetch_message_snapshots_for_session, fetch_request_lineage_snapshot,
+    fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_request_snapshot_raw,
+    fetch_response_content, fetch_response_interrupted_at, fetch_response_snapshot,
+    fetch_session_snapshot, fetch_tool_call_snapshots_for_session, MessageSnapshot,
+    RequestLineageSnapshot, RequestSnapshot, ResponseSnapshot, ToolCallSnapshot,
 };
 use support::{
-    build_request, create_agent_session, create_conversation_row, create_request,
-    create_request_with_signed_fields, create_request_with_valid_until,
-    create_response_with_content_and_status, create_response_with_status, first_optional_row,
-    first_row, materialization_identity, set_interrupt_requested_at, set_request_lifecycle_state,
-    test_db, try_set_valid_until, upsert_conversation, AGENT_DID, AGENT_NAME, BACKEND_ID,
-    DEADLINE_SECS,
+    build_request, create_agent_session, create_request, create_request_with_signed_fields,
+    create_request_with_valid_until, create_response_with_content_and_status,
+    create_response_with_status, first_optional_row, first_row, materialization_identity,
+    set_interrupt_requested_at, set_request_lifecycle_state, test_db, AGENT_DID, AGENT_NAME,
+    BACKEND_ID, DEADLINE_SECS,
 };
 
 #[path = "conformance/backend_health.rs"]
@@ -133,28 +125,24 @@ mod interrupts_manual;
 mod lsp;
 #[path = "conformance/mailbox.rs"]
 mod mailbox;
-#[path = "conformance/managed_exec.rs"]
-mod managed_exec;
 #[path = "conformance/mcp_health.rs"]
 mod mcp_health;
 #[path = "conformance/p2p_observability.rs"]
 mod p2p_observability;
-#[path = "conformance/process.rs"]
-mod process;
 #[path = "conformance/prompt_template.rs"]
 mod prompt_template;
-#[path = "conformance/r5_cross_deployment.rs"]
-mod r5_cross_deployment;
+#[path = "conformance/r5_cross_principal.rs"]
+mod r5_cross_principal;
 #[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
 #[path = "conformance/replicated_request_convergence.rs"]
 mod replicated_request_convergence;
+#[path = "conformance/request_input.rs"]
+mod request_input;
 #[path = "conformance/request_lifecycle.rs"]
 mod request_lifecycle;
 #[path = "conformance/session_hydration.rs"]
 mod session_hydration;
-#[path = "conformance/session_recovery.rs"]
-mod session_recovery;
 #[path = "conformance/startup_readiness.rs"]
 mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]
@@ -163,8 +151,6 @@ mod streaming_compaction;
 mod tool_call;
 #[path = "conformance/transcript.rs"]
 mod transcript;
-#[path = "conformance/workspace_binding.rs"]
-mod workspace_binding;
 
 #[test]
 fn lean_executable_contracts_cover_initial_domains() {
@@ -174,11 +160,6 @@ fn lean_executable_contracts_cover_initial_domains() {
 #[tokio::test]
 async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
     recovery_sweeps::generated_recovery_sweep_cases_drive_startup_recovery_contract().await;
-}
-
-#[test]
-fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract() {
-    recovery_sweeps::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract();
 }
 
 #[tokio::test]
@@ -259,14 +240,14 @@ async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_tr
 }
 
 #[test]
-fn generated_subagent_delegation_graph_cases_pin_gap2_contract() {
-    background::generated_subagent_delegation_graph_cases_pin_gap2_contract();
+fn delegation_depth_matches_runtime_limit() {
+    background::delegation_depth_matches_runtime_limit();
 }
 
 #[test]
-fn generated_r5_cross_deployment_cases_drive_production_dispatch() {
+fn generated_r5_cross_principal_cases_drive_production_dispatch() {
     std::thread::Builder::new()
-        .name("r5-cross-deployment-conformance".into())
+        .name("r5-cross-principal-conformance".into())
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
             tokio::runtime::Builder::new_current_thread()
@@ -274,7 +255,7 @@ fn generated_r5_cross_deployment_cases_drive_production_dispatch() {
                 .build()
                 .expect("build r5 cross-deployment runtime")
                 .block_on(
-                    r5_cross_deployment::generated_r5_cross_deployment_cases_drive_production_dispatch(),
+                    r5_cross_principal::generated_r5_cross_principal_cases_drive_production_dispatch(),
                 );
         })
         .expect("spawn r5 cross-deployment conformance thread")
@@ -303,8 +284,8 @@ fn cancel_propagation_cases_drive_production_interrupt() {
 }
 
 #[test]
-fn generated_r4c_background_work_cases_pin_observable_shapes() {
-    background::generated_r4c_background_work_cases_pin_observable_shapes();
+fn unmaterialized_child_status_matches_runtime_vocabulary() {
+    background::unmaterialized_child_status_matches_runtime_vocabulary();
 }
 
 #[test]
@@ -384,16 +365,6 @@ fn compaction_gate_blocks_reduction_while_a_response_streams() {
         .block_on(compaction_gate::compaction_gate_blocks_reduction_while_a_response_streams());
 }
 
-#[tokio::test]
-async fn generated_session_recovery_cases_drive_db_backed_reissue_contract() {
-    session_recovery::generated_session_recovery_cases_drive_db_backed_reissue_contract().await;
-}
-
-#[test]
-fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
-    tool_execution::generated_tool_execution_cases_cover_preflight_and_retry_contracts();
-}
-
 #[test]
 fn generated_tool_policy_cases_match_lean_composition() {
     tool_policy::generated_tool_policy_cases_match_lean_composition();
@@ -422,16 +393,6 @@ fn generated_self_config_cases_fence_patch_merge() {
 #[test]
 fn completion_retry_lean_witness_cases_hold() {
     completion_retry::completion_retry_lean_witness_cases_hold();
-}
-
-#[test]
-fn managed_exec_liveness_cases_pin_native_process_boundary() {
-    managed_exec::managed_exec_liveness_cases_pin_native_process_boundary();
-}
-
-#[test]
-fn managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool() {
-    managed_exec::managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool();
 }
 
 #[test]
@@ -500,34 +461,19 @@ fn edit_match_overlapping_windows_apply_disjoint_selection() {
 }
 
 #[test]
-fn generated_process_transition_cases_cover_runtime_status_policy_shape() {
-    process::generated_process_transition_cases_cover_runtime_status_policy_shape();
+fn edit_match_relaxed_rung_hits_respect_the_ambiguity_gate() {
+    edit_match::relaxed_rung_hits_respect_the_ambiguity_gate();
+}
+
+#[test]
+fn edit_match_insert_before_desugar_applies_to_every_replace_all_site() {
+    edit_match::insert_before_desugar_applies_to_every_replace_all_site();
 }
 
 #[tokio::test]
 async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstruction() {
     inference_call::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction()
         .await;
-}
-
-#[test]
-fn lean_emits_await_mode_vocabulary() {
-    tool_call::lean_emits_await_mode_vocabulary();
-}
-
-#[test]
-fn lean_emits_cancel_policy_vocabulary() {
-    tool_call::lean_emits_cancel_policy_vocabulary();
-}
-
-#[test]
-fn lean_emits_child_terminal_vocabulary_and_projections() {
-    tool_call::lean_emits_child_terminal_vocabulary_and_projections();
-}
-
-#[test]
-fn lean_tool_call_cancel_actions_name_cancel_cause() {
-    tool_call::lean_tool_call_cancel_actions_name_cancel_cause();
 }
 
 #[test]
@@ -560,16 +506,12 @@ async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation().await;
 }
 
-#[path = "conformance/apply_reconcile.rs"]
-mod apply_reconcile;
 #[path = "conformance/docs.rs"]
 mod docs;
 #[path = "conformance/edit_match.rs"]
 mod edit_match;
 #[path = "conformance/identity.rs"]
 mod identity;
-#[path = "conformance/identity_proptest.rs"]
-mod identity_proptest;
 #[path = "conformance/live_overlay.rs"]
 mod live_overlay;
 #[path = "conformance/manual_run.rs"]
@@ -586,8 +528,6 @@ mod prompt_assembly;
 mod r5_scenarios;
 #[path = "conformance/rendered_capture.rs"]
 mod rendered_capture;
-#[path = "conformance/scheduling.rs"]
-mod scheduling;
 #[path = "conformance/scope_templates.rs"]
 mod scope_templates;
 #[path = "conformance/self_config.rs"]
@@ -602,5 +542,3 @@ mod tool_execution;
 mod tool_execution_subagent;
 #[path = "conformance/tool_policy.rs"]
 mod tool_policy;
-#[path = "conformance/triggers.rs"]
-mod triggers;

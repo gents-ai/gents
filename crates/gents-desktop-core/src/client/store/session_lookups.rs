@@ -81,17 +81,27 @@ impl ClientStore {
     }
 
     pub fn latest_request_id_for_session(&self, session_id: &str) -> Option<String> {
-        self.conversations
+        if let Some(latest) = self
+            .sessions
             .iter()
             .find(|row| row.session_id == session_id)
-            .and_then(|row| clean_string(row.latest_request_id.as_deref()))
-            .or_else(|| {
-                self.requests_by_session_id
-                    .get(session_id)
-                    .and_then(|indexes| indexes.last())
-                    .copied()
-                    .map(|index| self.requests[index].request_id.clone())
-            })
+            .and_then(|row| row.observation.as_ref())
+            .and_then(|observation| observation.latest_request.as_ref())
+        {
+            return self
+                .requests
+                .iter()
+                .find(|request| {
+                    request.request_id == latest.request_id
+                        && request.doc_id.as_deref() == Some(latest.request_doc_id.as_str())
+                })
+                .map(|request| request.request_id.clone());
+        }
+        self.requests_by_session_id
+            .get(session_id)
+            .and_then(|indexes| indexes.last())
+            .copied()
+            .map(|index| self.requests[index].request_id.clone())
     }
 
     pub fn latest_request_id_for_session_for_agent(
@@ -99,23 +109,31 @@ impl ClientStore {
         session_id: &str,
         agent_did: &str,
     ) -> Option<String> {
-        self.conversations
+        if let Some(latest) = self
+            .sessions
             .iter()
-            .find(|row| row.session_id == session_id && row.agent_did.as_deref() == Some(agent_did))
-            .and_then(|row| clean_string(row.latest_request_id.as_deref()))
-            .or_else(|| {
-                self.requests_by_session_id
-                    .get(session_id)
-                    .and_then(|indexes| {
-                        indexes.iter().rev().find(|index| {
-                            row_agent_matches(
-                                self.requests[**index].agent_did.as_deref(),
-                                agent_did,
-                            )
-                        })
-                    })
-                    .map(|index| self.requests[*index].request_id.clone())
+            .find(|row| row.session_id == session_id && row.agent_did == agent_did)
+            .and_then(|row| row.observation.as_ref())
+            .and_then(|observation| observation.latest_request.as_ref())
+        {
+            return self
+                .requests
+                .iter()
+                .find(|request| {
+                    request.request_id == latest.request_id
+                        && request.doc_id.as_deref() == Some(latest.request_doc_id.as_str())
+                        && row_agent_matches(request.agent_did.as_deref(), agent_did)
+                })
+                .map(|request| request.request_id.clone());
+        }
+        self.requests_by_session_id
+            .get(session_id)
+            .and_then(|indexes| {
+                indexes.iter().rev().find(|index| {
+                    row_agent_matches(self.requests[**index].agent_did.as_deref(), agent_did)
+                })
             })
+            .map(|index| self.requests[*index].request_id.clone())
     }
 
     pub fn latest_runtime(&self, agent_did: &str) -> Option<&AgentRuntimeRow> {
@@ -185,7 +203,6 @@ impl ClientStore {
             + self.behaviors.len()
             + self.runtimes.len()
             + self.behavior_readiness.len()
-            + self.conversations.len()
             + self.requests.len()
             + self.mailbox_items.len()
             + self.responses.len()
@@ -197,9 +214,10 @@ impl ClientStore {
             + self.compaction_entries.len()
             + self.tasks.len()
             + self.schedules.len()
-            + self.event_triggers.len()
+            + self.triggers.len()
+            + self.trigger_observations.len()
             + self.skills.len()
-            + self.tool_selections.len()
+            + self.tools.len()
             + self.inference_backends.len()
             + self.inference_profiles.len()
             + self.tool_service_registries.len()

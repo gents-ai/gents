@@ -17,7 +17,6 @@ def boolJson (b : Bool) : String := if b then "true" else "false"
 def surfaceViewJson (v : SurfaceView) : String :=
   "{"
     ++ "\"file_rank\":" ++ toString v.fileRank ++ ","
-    ++ "\"meta\":" ++ boolJson v.meta ++ ","
     ++ "\"goal_tools\":" ++ boolJson v.goalTools ++ ","
     ++ "\"goal_create\":" ++ boolJson v.goalCreate ++ ","
     ++ "\"defra_query\":" ++ boolJson v.defraQuery ++ ","
@@ -28,7 +27,7 @@ def surfaceViewJson (v : SurfaceView) : String :=
     ++ "\"spawn\":" ++ boolJson v.spawn ++ ","
     ++ "\"steering\":" ++ boolJson v.steering ++ ","
     ++ "\"background\":" ++ boolJson v.background ++ ","
-    ++ "\"cross_deployment\":" ++ boolJson v.crossDeployment ++ ","
+    ++ "\"cross_principal\":" ++ boolJson v.crossPrincipal ++ ","
     ++ "\"skills\":" ++ boolJson v.skills ++ ","
     ++ "\"lsp\":" ++ boolJson v.lsp ++ ","
     ++ "\"bash_mode\":" ++ toString v.bashMode ++ ","
@@ -87,17 +86,14 @@ def toolPolicyCasesJson : String :=
 
 structure GoalCapabilityResolutionCase where
   name : String
-  meta : Bool
   explicitGoalTools : Option Bool
   explicitGoalCreate : Option Bool
 
 def goalCapabilityResolutionCases : List GoalCapabilityResolutionCase :=
-  [ ⟨"missing_goal_tools_is_off_with_meta_on", true, none, none⟩
-  , ⟨"missing_goal_tools_is_off_with_meta_off", false, none, none⟩
-  , ⟨"explicit_goal_on_meta_off", false, some true, none⟩
-  , ⟨"explicit_goal_off_meta_on", true, some false, none⟩
-  , ⟨"creation_unset_stays_off", true, some true, none⟩
-  , ⟨"creation_explicit_on", false, some true, some true⟩ ]
+  [ ⟨"missing_goal_tools_is_off", none, none⟩
+  , ⟨"explicit_goal_on", some true, none⟩
+  , ⟨"explicit_goal_off", some false, none⟩
+  , ⟨"creation_explicit_on", some true, some true⟩ ]
 
 def optionalBoolJson : Option Bool → String
   | none => "null"
@@ -106,7 +102,6 @@ def optionalBoolJson : Option Bool → String
 def goalCapabilityResolutionCaseJson (c : GoalCapabilityResolutionCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
-    ++ "\"meta\":" ++ boolJson c.meta ++ ","
     ++ "\"explicit_goal_tools\":" ++ optionalBoolJson c.explicitGoalTools ++ ","
     ++ "\"explicit_goal_create\":" ++ optionalBoolJson c.explicitGoalCreate ++ ","
     ++ "\"expected_goal_tools\":"

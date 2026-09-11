@@ -54,6 +54,9 @@ def cases : List Case :=
   , {name := "unfinished_budget_wrapup", rows := [r], edges := [],
       goal := some {active with status := .budgetLimited, wrapupRequested := true},
       expected := .outstanding, physicalCount := 1}
+  , {name := "pinned_root_has_authenticated_parent",
+      rows := [{r with terminal := some .completed}, c], edges := [⟨20,10,true⟩],
+      resultSatisfied := true, expected := .invalid, physicalCount := 1}
   , {name := "successful_tip_missing_result", rows := [r,c], edges := [e], goal := some done,
       expected := .failed 20, physicalCount := 2}
   ]

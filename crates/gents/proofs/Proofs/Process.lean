@@ -50,7 +50,6 @@ instance : DecidablePred acceptsWork := fun s =>
 
 structure StartupContext where
   hasStuckRequests : Bool
-  activeRequestCount : Nat
   deriving DecidableEq, Repr
 
 inductive Transition : ProcessState → ProcessState → Prop where

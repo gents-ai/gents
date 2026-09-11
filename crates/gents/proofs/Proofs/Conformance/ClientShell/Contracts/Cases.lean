@@ -46,9 +46,7 @@ def sessionObs
   }
 
 def storeWith (sessions : List SessionObservation) : LocalStore :=
-  { deployments := [(contractPeer, contractAgent), (contractPeer + 1, alternateAgent)]
-  , sessions := sessions
-  }
+  { sessions := sessions }
 
 def emptyStore : LocalStore :=
   storeWith []
@@ -214,8 +212,7 @@ def clientShellCaseFromStep
     (transport : TransportHealth)
     (ctx : SubmitContext)
     (frontendLocal frontendExpected : ShellState)
-    (frontendStore : LocalStore)
-    (conversationPresent : Bool := true) : ClientShellContractCase :=
+    (frontendStore : LocalStore) : ClientShellContractCase :=
   let post := step pre input store transport ctx
   let chat := projectChat frontendExpected frontendStore ctx
   let obs := selectedObservation frontendLocal frontendStore
@@ -266,13 +263,6 @@ def clientShellCaseFromStep
   , frontendSessionLatestRequestId := obs.bind (·.latestObservedRequest)
   , frontendSessionTurnState := turnStateOptionName (obs.bind (·.latestTurn))
   , frontendSessionPendingRequestId := pendingRequestForFrontend obs
-  , frontendConversationPresent := conversationPresent && obs.isSome
-  , frontendConversationSessionId :=
-      if conversationPresent then obs.map (·.sessionId) else none
-  , frontendConversationLatestRequestId :=
-      if conversationPresent then obs.bind (·.latestObservedRequest) else none
-  , frontendConversationTurnState :=
-      if conversationPresent then turnStateOptionName (obs.bind (·.latestTurn)) else none
   , frontendLocalWorkflowKind :=
       match frontendLocal.workflow with
       | .idle           => "ready"
@@ -312,10 +302,10 @@ def clientShellCases : List ClientShellContractCase :=
   let switchedStaleLocal :=
     { staleBeforeSwitch with selection := { staleBeforeSwitch.selection with session := some sid2 } }
   [ let pre := selectedShell (some sid1)
-    let input := ShellInput.user .requestNewConversation
+    let input := ShellInput.user .requestNewSession
     let post := step pre input storeNewCompleted .healthy ctxReady
     clientShellCaseFromStep
-      "new_conversation_is_ephemeral"
+      "new_session_composer_clears_selection"
       "request_owned_session_creation"
       pre input storeNewCompleted .healthy ctxReady post post emptyStore
   , let pre := selectedShell none (.submitting contractAgent none)
@@ -408,12 +398,6 @@ def clientShellCases : List ClientShellContractCase :=
       "terminal_follow_up_allowed"
       "terminal_follow_up_allowance"
       pre input storeNewCompleted .healthy ctxReady pre pre storeNewCompleted
-  , let pre := selectedShell (some sid1)
-    let input := ShellInput.user .startSubmit
-    clientShellCaseFromStep
-      "terminal_follow_up_session_snapshot_without_summary"
-      "terminal_follow_up_allowance"
-      pre input storeNewCompleted .healthy ctxReady pre pre storeNewCompleted false
   ]
 
 end Conformance.ClientShellContracts

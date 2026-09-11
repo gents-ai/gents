@@ -8,8 +8,14 @@ async fn legacy_fixture(name: &str) -> (TestDb, AgentRequest, String) {
     parent.caused_by_parent_request_doc_id = None;
     parent.caused_by_parent_tool_call_id = None;
     parent.caused_by_parent_tool_call_doc_id = None;
-    parent.doc_id =
-        insert_raw_queue_request(&db.node, db.agent_did(), &parent.request_id, name, "{}").await;
+    parent.doc_id = insert_raw_queue_request(
+        &db.node,
+        db.agent_did(),
+        &parent.request_id,
+        name,
+        &RequestInput::default(),
+    )
+    .await;
     let content = serde_json::to_string(&crate::llm::message::Message::User {
         content: vec![crate::llm::message::UserContent::Text(
             crate::llm::message::Text {
@@ -39,13 +45,14 @@ async fn legacy_fixture(name: &str) -> (TestDb, AgentRequest, String) {
     (db, parent, doc)
 }
 
-fn repair_hints(parent: &AgentRequest) -> QueueHints {
-    QueueHints {
+fn repair_hints(parent: &AgentRequest) -> RequestQueue {
+    RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{}", parent.session_id)),
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
+        background_completion_wake_version: None,
     }
 }
 

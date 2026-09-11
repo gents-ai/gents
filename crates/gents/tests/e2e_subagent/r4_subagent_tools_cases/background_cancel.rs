@@ -124,25 +124,26 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let request_id = fixture.request_id.clone();
-    upsert_agent_behavior(
+    bind_behavior_backend(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
+        "did:test:r5-remote-child",
+        CHILD_BEHAVIOR_ID,
+        "r4-remote-child-backend",
+        "http://127.0.0.1:1/v1",
+        "test-model",
+    )
+    .await;
+    gents::upsert_agent_behavior(
+        db.node.as_ref(),
+        &gents::AgentBehaviorDocument {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: "did:test:r5-remote-child".to_string(),
             display_name: Some("R5 remote child".to_string()),
             description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
+            context_id: None,
+            inference_profile_id: format!("{CHILD_BEHAVIOR_ID}-inference"),
             enabled: true,
+            tags: Vec::new(),
             created_at: Some("2026-05-14T00:00:00Z".to_string()),
         },
     )
@@ -214,26 +215,22 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     let session_id = fixture.session_id.clone();
     let agent_did = fixture.agent_did.clone();
 
-    upsert_tool_selection(
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "r4-parent-tools".to_string(),
-            agent_did: agent_did.clone(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                CHILD_BEHAVIOR_ID,
-                REMOTE_DID,
-                CHILD_BEHAVIOR_ID,
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            subagent_allow_cross_deployment: Some(true),
-            ..Default::default()
-        },
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        "r4-parent-tools",
+        vec![subagent_target(
+            &agent_did,
+            CHILD_BEHAVIOR_ID,
+            REMOTE_DID,
+            CHILD_BEHAVIOR_ID,
+        )],
+        true,
+        true,
+        Some(true),
     )
-    .await
-    .unwrap();
+    .await;
 
     let args = json!({
         "name": CHILD_BEHAVIOR_ID,
@@ -346,15 +343,26 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
         .await
         .unwrap()
         .expect("cascade dispatch");
-    let CascadeDispatch::Local(intent) = dispatch else {
+    let CascadeDispatch::Local { intent, child } = dispatch else {
         panic!("local child should use local cascade dispatch");
     };
     assert_eq!(intent.child_request_id, child_request_id);
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-local-cancel").await;
     assert_eq!(tool.cancel_cause.as_deref(), Some("interrupted"));
-    interrupt_request(db.node.as_ref(), &intent.child_request_id)
-        .await
-        .unwrap();
+    gents::interrupt_request_by_doc_id(
+        db.node.as_ref(),
+        child
+            .doc_id
+            .as_deref()
+            .expect("verified physical cascade child"),
+        child
+            .agent_did
+            .as_deref()
+            .expect("verified local child principal"),
+        child.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
 
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-local-cancel").await;
     assert!(

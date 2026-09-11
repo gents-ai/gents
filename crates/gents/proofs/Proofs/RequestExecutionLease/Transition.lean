@@ -33,7 +33,7 @@ def step? {Generation : Type} [DecidableEq Generation]
   | .claim generation deadline =>
       match pre.lease with
       | .vacant =>
-          if pre.request = .pending ∧ pre.response = .absent ∧
+          if pre.request = .pending ∧ pre.response = none ∧
               fresh pre generation ∧ pre.now < deadline then
             some
               { pre with
@@ -47,8 +47,8 @@ def step? {Generation : Type} [DecidableEq Generation]
       match pre.lease with
       | .active owner deadline =>
           if owner = generation ∧ pre.now ≤ deadline ∧
-              pre.request = .claimed ∧ pre.response = .absent then
-            some { pre with request := .processing, response := .streaming }
+              pre.request = .claimed ∧ pre.response = none then
+            some { pre with request := .processing, response := some .streaming }
           else
             none
       | _ => none
@@ -56,7 +56,7 @@ def step? {Generation : Type} [DecidableEq Generation]
       match pre.lease with
       | .active owner deadline =>
           if owner = generation ∧ pre.now ≤ deadline ∧ deadline < newDeadline ∧
-              pre.request = .processing ∧ pre.response = .streaming then
+              pre.request = .processing ∧ pre.response = some .streaming then
             some
               { pre with
                 lease := .active owner newDeadline

@@ -6,12 +6,11 @@
 //! hand-tuned ("custom") selections, not enough to fully MINT one. Root (a
 //! filesystem dimension, not a permission) and `display_name` are excluded
 //! on principle. Also deliberately excluded, though they DO vary across
-//! init's packages: `command_execution_policy`, `backgroundable_tool_names`,
+//! init's packages: execution policy, background tool settings,
 //! `enable_meta_tools`, and `enable_defra_query`. A materializer that mints
-//! a `ToolSelectionDocument` from a preset name must source those
-//! init-parity extras from `init.rs`'s package profiles separately —
-//! `PresetFields` alone under-provisions a `write` selection (missing exec
-//! policy + backgroundable bash). Conversely, a hand-tuned change to one of
+//! a canonical `Tools` document from a preset name must source those
+//! init-parity extras from the package profile separately. `PresetFields`
+//! alone under-provisions a write configuration. Conversely, a hand-tuned change to one of
 //! the excluded fields keeps its preset badge: the classifier is a
 //! permissions label, not a byte-identity check over the whole document.
 //!
@@ -32,7 +31,7 @@ pub fn builtin_preset_names() -> &'static [&'static str] {
     &[PRESET_READONLY, PRESET_WRITE]
 }
 
-/// The discriminating permission fields of a `ToolSelectionDocument` —
+/// The discriminating permission fields of a canonical `Tools` document —
 /// everything a preset determines. Root is deliberately absent (a
 /// dimension, not a permission).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -85,69 +84,78 @@ pub fn preset_name(fields: &PresetFields) -> Option<&'static str> {
         .find(|name| preset_fields(name).as_ref() == Some(fields))
 }
 
+/// Classify canonical tools after the common datastore surface resolver has
+/// expanded selected declarations. Callers keep document loading and scope checks.
+pub fn classify_tools(
+    tools: &crate::document_config::Tools,
+    merged: &crate::document_config::MergedSurfaceTools,
+) -> anyhow::Result<Option<&'static str>> {
+    use crate::tool_surface::{BashMode, FileToolMode};
+    let host = tools.host.as_ref();
+    let files = host
+        .and_then(|h| h.files.as_ref())
+        .map(|f| f.mode)
+        .unwrap_or_default();
+    let bash = host.and_then(|h| h.bash.as_ref());
+    let mode = bash.map(|b| b.mode).unwrap_or_default();
+    let prefixes = |values: Option<&Vec<Vec<String>>>| -> anyhow::Result<Vec<String>> {
+        values
+            .into_iter()
+            .flatten()
+            .map(|v| serde_json::to_string(v).map_err(Into::into))
+            .collect()
+    };
+    Ok(preset_name(&PresetFields {
+        enable_file_tools: files != FileToolMode::Off,
+        file_tools_mode: format!("{files:?}"),
+        enable_bash: mode != BashMode::Off,
+        bash_mode: format!("{mode:?}"),
+        command_allowed_argv_prefixes: prefixes(
+            bash.and_then(|b| b.allowed_argv_prefixes.as_ref()),
+        )?,
+        command_forbidden_argv_prefixes: prefixes(
+            bash.and_then(|b| b.forbidden_argv_prefixes.as_ref()),
+        )?,
+        read_only_command_allowlist: bash
+            .and_then(|b| b.read_only_commands.clone())
+            .unwrap_or_default(),
+        enable_self_config: tools
+            .self_config
+            .as_ref()
+            .and_then(|c| c.enable_self_config)
+            .unwrap_or(false),
+        write_tools: merged
+            .write_tools
+            .iter()
+            .map(|tool| tool.tool_name.clone())
+            .collect(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn readonly_mirrors_init_readonly_package() {
-        let fields = preset_fields(PRESET_READONLY).expect("readonly preset should exist");
-        assert_eq!(
-            fields,
-            PresetFields {
-                enable_file_tools: true,
-                file_tools_mode: "ReadOnly".to_string(),
-                enable_bash: true,
-                bash_mode: "ReadOnly".to_string(),
-                command_allowed_argv_prefixes: Vec::new(),
-                command_forbidden_argv_prefixes: Vec::new(),
-                read_only_command_allowlist: Vec::new(),
-                enable_self_config: false,
-                write_tools: Vec::new(),
+    fn canonical_classifier_includes_expanded_datastore_writes() {
+        let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+            "agent_did":"owner", "tools_id":"tools", "host":{
+                "files":{"mode":"ReadWrite"}, "bash":{"mode":"Unrestricted"}
             }
-        );
-    }
-
-    #[test]
-    fn write_mirrors_init_write_package() {
-        let fields = preset_fields(PRESET_WRITE).expect("write preset should exist");
-        assert_eq!(
-            fields,
-            PresetFields {
-                enable_file_tools: true,
-                file_tools_mode: "ReadWrite".to_string(),
-                enable_bash: true,
-                bash_mode: "Unrestricted".to_string(),
-                command_allowed_argv_prefixes: Vec::new(),
-                command_forbidden_argv_prefixes: Vec::new(),
-                read_only_command_allowlist: Vec::new(),
-                enable_self_config: false,
-                write_tools: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn unknown_name_returns_none() {
-        assert_eq!(preset_fields("bogus"), None);
-        assert_eq!(preset_fields(""), None);
-    }
-
-    #[test]
-    fn round_trips_through_preset_name() {
-        for name in builtin_preset_names() {
-            let fields = preset_fields(name).expect("builtin preset must resolve");
-            assert_eq!(preset_name(&fields), Some(*name));
-        }
-    }
-
-    #[test]
-    fn one_extra_argv_prefix_classifies_as_custom() {
-        let mut fields = preset_fields(PRESET_READONLY).expect("readonly preset should exist");
-        fields
-            .command_allowed_argv_prefixes
-            .push("git status".to_string());
-        assert_eq!(preset_name(&fields), None);
+        }))
+        .unwrap();
+        let mut merged = crate::document_config::MergedSurfaceTools::default();
+        assert_eq!(classify_tools(&tools, &merged).unwrap(), Some(PRESET_WRITE));
+        merged
+            .write_tools
+            .push(crate::document_config::WriteToolDecl {
+                tool_name: "record_finding".into(),
+                collection: "Finding".into(),
+                description: "Record a finding".into(),
+                fields: vec![],
+                output_obligation: None,
+            });
+        assert_eq!(classify_tools(&tools, &merged).unwrap(), None);
     }
 
     #[test]

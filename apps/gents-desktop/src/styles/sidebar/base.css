@@ -17,7 +17,7 @@
     min-width: 0;
   }
 
-  .conversation-section {
+  .session-section {
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -88,7 +88,7 @@
   }
 
   @media (max-width: 760px) {
-    .workspace.mobile-chat-pane-conversation .sidebar {
+    .workspace.mobile-chat-pane-session .sidebar {
       display: none;
     }
 

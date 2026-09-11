@@ -143,7 +143,7 @@ struct SpawnArgs {
     #[serde(default)]
     workspace_authority: Option<String>,
     #[serde(default)]
-    workspace_owner_deployment_id: Option<String>,
+    workspace_owner_agent_did: Option<String>,
     #[serde(default)]
     workspace_seal_hash: Option<String>,
 }
@@ -323,7 +323,7 @@ impl SubagentSource {
                     subagent_depth
                     workspace_id
                     workspace_authority
-                    workspace_owner_deployment_id
+                    workspace_owner_agent_did
                     workspace_seal_hash
                 }}
             }}"#
@@ -649,6 +649,7 @@ impl SubagentSource {
             }
             let allow_cross_deployment = match load_behavior_allow_cross_deployment(
                 &self.node,
+                &local_did,
                 &spawn_args.behavior_id,
             )
             .await
@@ -792,13 +793,14 @@ impl SubagentSource {
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
         let child_agent_did = row_spawn_target_did.to_string();
         let parent_workspace = ParentWorkspaceStamp::from_fields(
+            &parent_authoring_did,
             parent.as_ref().and_then(|row| row.workspace_id.as_deref()),
             parent
                 .as_ref()
-                .and_then(|row| row.workspace_authority.as_deref()),
+                .and_then(|row| row.workspace_owner_agent_did.as_deref()),
             parent
                 .as_ref()
-                .and_then(|row| row.workspace_owner_deployment_id.as_deref()),
+                .and_then(|row| row.workspace_authority.as_deref()),
             parent
                 .as_ref()
                 .and_then(|row| row.workspace_seal_hash.as_deref()),
@@ -810,8 +812,8 @@ impl SubagentSource {
             spawn_args.workspace.as_ref(),
             complete_lineage_from_bridge(
                 spawn_args.workspace_id.as_deref(),
+                spawn_args.workspace_owner_agent_did.as_deref(),
                 spawn_args.workspace_authority.as_deref(),
-                spawn_args.workspace_owner_deployment_id.as_deref(),
                 spawn_args.workspace_seal_hash.as_deref(),
             ),
             &child_agent_did,
@@ -975,6 +977,7 @@ impl SubagentSource {
             goal_objective_template: None,
             goal_token_budget: None,
             output_schema_ref: None,
+            hooks: Vec::new(),
         };
         let event_vars = serde_json::json!({
             "fired_at": fired_at,

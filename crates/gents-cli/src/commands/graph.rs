@@ -7,8 +7,8 @@ use std::{io, io::IsTerminal as _, io::Write as _};
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::graph_package::{
-    bundled_graph_id, default_bundled_graph_package_install_bindings,
-    install_bundled_graph_package, load_bundled_graph_package, GraphPackageInstallBindings,
+    default_bundled_graph_package_install_bindings, install_bundled_graph_package,
+    load_bundled_graph_package, load_installed_package_plan, GraphPackageInstallBindings,
 };
 use gents::graph_pipeline::{
     activate_graph_revision_with_access, load_active_graph_plan_with_access,
@@ -50,7 +50,6 @@ pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
 }
 
 pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<()> {
-    let package = load_bundled_graph_package(&args.package)?;
     let (access, owner_did) = access_and_actor(&args.scope).await?;
     let bindings = if let Some(path) = args.bindings.as_deref() {
         let bindings: GraphPackageInstallBindings = serde_json::from_slice(
@@ -58,10 +57,10 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
                 .with_context(|| format!("reading graph package bindings {}", path.display()))?,
         )
         .with_context(|| format!("parsing graph package bindings {}", path.display()))?;
-        if bindings.owner_did != owner_did {
+        if bindings.agent_did != owner_did {
             anyhow::bail!(
                 "binding owner {} does not match selected package owner {}",
-                bindings.owner_did,
+                bindings.agent_did,
                 owner_did
             );
         }
@@ -69,6 +68,7 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
     } else {
         default_bundled_graph_package_install_bindings(&access, &args.package, &owner_did).await?
     };
+    let package = load_bundled_graph_package(&args.package, &bindings)?;
     let receipt =
         install_bundled_graph_package(&access, &owner_did, &args.package, &bindings).await?;
     let previous = load_active_graph_plan_with_access(&access, &owner_did, &receipt.graph_id)
@@ -99,7 +99,6 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
                 "Installed and activated {} {}",
                 receipt.package_name, receipt.package_version
             )?;
-            writeln!(out, "Backend: inherited from your default behavior")?;
             for dependency in &package.manifest.external_dependencies {
                 writeln!(out, "Requires: {}", dependency.service_id)?;
                 writeln!(out, "  {}", dependency.description)?;
@@ -326,13 +325,12 @@ fn code_review_evidence(repo: &Path, base: &str, head: &str) -> Result<CodeRevie
 
 async fn run(args: GraphRunArgs) -> Result<()> {
     let (access, actor) = access_and_actor(&args.scope).await?;
-    let ConfigAccess::Graphql(endpoint) = &access else {
+    let ConfigAccess::Graphql(_) = &access else {
         anyhow::bail!(
             "graph run requires the local Gents server to be running so workspace and request recovery remain active"
         );
     };
-    let graph_id = bundled_graph_id(&args.package, &actor)?;
-    let plan = load_active_graph_plan_with_access(&access, &actor, &graph_id)
+    let plan = load_installed_package_plan(&access, &args.package, &actor)
         .await?
         .with_context(|| {
             format!(
@@ -340,6 +338,7 @@ async fn run(args: GraphRunArgs) -> Result<()> {
                 args.package
             )
         })?;
+    let graph_id = plan.graph_id.clone();
     let active_package = plan
         .package
         .as_ref()
@@ -350,8 +349,8 @@ async fn run(args: GraphRunArgs) -> Result<()> {
             args.package
         );
     }
-    let bundled_package = load_bundled_graph_package(&args.package)?;
-    if active_package.package_digest != bundled_package.package_digest {
+    let bundled_package = gents::pack::resolve_pack(&args.package)?;
+    if active_package.package_digest != bundled_package.digest {
         anyhow::bail!(
             "installed graph package {:?} does not match this gents binary; run `gents pack install {}` before starting a run",
             args.package,
@@ -361,30 +360,6 @@ async fn run(args: GraphRunArgs) -> Result<()> {
     let digest = plan.digest.clone();
     let (entry, input) = match args.package.as_str() {
         "code_review" => {
-            let endpoint_url =
-                url::Url::parse(endpoint).context("parsing graph GraphQL endpoint")?;
-            let local_endpoint = endpoint_url.host_str().is_some_and(|host| {
-                host.eq_ignore_ascii_case("localhost")
-                    || host
-                        .parse::<std::net::IpAddr>()
-                        .is_ok_and(|address| address.is_loopback())
-            });
-            if !local_endpoint {
-                anyhow::bail!(
-                    "the local-repository quickstart requires a loopback GraphQL endpoint; remote repository placement is not inferred from a client path"
-                );
-            }
-            let deployments = active_package
-                .roles
-                .values()
-                .map(|role| role.deployment_id.as_str())
-                .collect::<std::collections::BTreeSet<_>>();
-            if deployments.len() != 1 {
-                anyhow::bail!(
-                    "the local code-review quickstart requires all roles on one deployment"
-                );
-            }
-            let deployment_id = deployments.into_iter().next().expect("one deployment");
             let (repository_path, base_ref, head_ref) =
                 resolve_repository(&args.repo, &args.base, &args.head)?;
             let evidence = code_review_evidence(&repository_path, &base_ref, &head_ref)?;
@@ -392,7 +367,6 @@ async fn run(args: GraphRunArgs) -> Result<()> {
                 &access,
                 &repository_path,
                 &head_ref,
-                deployment_id,
                 &actor,
             )
             .await?;
@@ -404,7 +378,7 @@ async fn run(args: GraphRunArgs) -> Result<()> {
                 "head_ref": head_ref,
                 "workspace_id": workspace.workspace.workspace_id,
                 "workspace_authority": "readOnly",
-                "workspace_owner_deployment_id": workspace.workspace.owner_deployment_id,
+                "workspace_owner_agent_did": workspace.workspace.owner_agent_did,
                 "lens_count": "4",
                 "lens_min": "4",
                 "lens_max": "4",
@@ -663,18 +637,8 @@ fn print_progress_text(
         writeln!(out, "  Waiting for the entry request")?;
     }
     for request in &view.requests {
-        let session = request.session_id.as_deref().and_then(|session_id| {
-            activity
-                .sessions
-                .iter()
-                .find(|session| session.session_id == session_id)
-        });
         let session_id = request.session_id.as_deref().unwrap_or("pending");
-        let status = request
-            .lifecycle_state
-            .as_deref()
-            .or_else(|| session.and_then(|session| session.status.as_deref()))
-            .unwrap_or("unknown");
+        let status = request.lifecycle_state.as_deref().unwrap_or("unknown");
         let node = request.node_id.as_deref().unwrap_or("unknown");
         let calls = activity
             .inference_calls
@@ -892,7 +856,10 @@ async fn cancel(args: GraphCancelArgs) -> Result<()> {
 
 async fn toggle(args: GraphToggleArgs, enabled: bool) -> Result<()> {
     let (access, actor) = access_and_actor(&args.scope).await?;
-    let graph_id = bundled_graph_id(&args.package, &actor)?;
+    let graph_id = load_installed_package_plan(&access, &args.package, &actor)
+        .await?
+        .context("package graph is not installed")?
+        .graph_id;
     set_graph_enabled_with_access(&access, &actor, &graph_id, enabled).await?;
     print_json(&json!({ "graph_id": graph_id, "enabled": enabled }))
 }

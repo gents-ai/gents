@@ -480,7 +480,7 @@ pub(crate) async fn run_command(
         // polled first and resolves the call to `ToolOutcome::Cancelled`.
         ManagedExecOutcome::Cancelled { .. } => return Ok("command was cancelled".to_string()),
         ManagedExecOutcome::SpawnFailed { error } => {
-            return Err(anyhow!("spawning managed command failed: {error}").into())
+            return Err(anyhow!("spawning managed command failed: {error}").into());
         }
     };
     let stdout_raw = String::from_utf8_lossy(&stdout_bytes).into_owned();
@@ -624,13 +624,6 @@ fn validate_command_policy_inner(
     Ok(())
 }
 
-pub(crate) fn parse_argv_prefixes(values: &[String]) -> Result<Vec<Vec<String>>> {
-    values
-        .iter()
-        .map(|value| parse_argv_prefix(value))
-        .collect::<Result<Vec<_>>>()
-}
-
 pub(crate) fn build_shell_env() -> HashMap<String, String> {
     build_shell_env_from_vars(std::env::vars())
 }
@@ -721,31 +714,6 @@ fn validate_read_only_command_inner(
     }
 
     Ok(())
-}
-
-fn parse_argv_prefix(value: &str) -> Result<Vec<String>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        bail!("argv prefix cannot be empty");
-    }
-
-    if trimmed.starts_with('[') {
-        let prefix = serde_json::from_str::<Vec<String>>(trimmed)
-            .with_context(|| format!("parsing argv prefix JSON {trimmed}"))?;
-        if prefix.is_empty() || prefix.iter().any(|token| token.trim().is_empty()) {
-            bail!("argv prefix must contain non-empty tokens");
-        }
-        return Ok(prefix);
-    }
-
-    let prefix = trimmed
-        .split_ascii_whitespace()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if prefix.is_empty() {
-        bail!("argv prefix cannot be empty");
-    }
-    Ok(prefix)
 }
 
 fn first_matching_prefix<'a>(
@@ -861,7 +829,9 @@ pub(crate) fn select_sandbox_for_policy(
             if cfg!(target_os = "macos") {
                 bail!("macOS sandbox-exec is required for workspace_write bash but was not found")
             } else {
-                bail!("workspace_write bash requires macOS seatbelt sandbox enforcement on this build")
+                bail!(
+                    "workspace_write bash requires macOS seatbelt sandbox enforcement on this build"
+                )
             }
         }
     }

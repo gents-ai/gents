@@ -70,17 +70,26 @@ fn output_port<'a>(capability: &'a StageCapability, name: &str) -> Option<&'a Po
         .find(|port| port.name == name)
 }
 
-fn delivery_sort_key(delivery: &DeliveryMode) -> (u8, u32, String, u64) {
+fn delivery_sort_key(delivery: &DeliveryMode) -> (u8, i64, String, Option<i64>, Option<i64>) {
     match delivery {
-        DeliveryMode::PerDocument => (0, 0, String::new(), 0),
-        DeliveryMode::PerGroup {
-            expected: GroupCount::Static { count },
-            timeout_secs,
-        } => (1, *count, String::new(), timeout_secs.unwrap_or_default()),
-        DeliveryMode::PerGroup {
-            expected: GroupCount::SourceField { field },
-            timeout_secs,
-        } => (2, 0, field.clone(), timeout_secs.unwrap_or_default()),
+        None => (0, 0, String::new(), None, None),
+        Some(group) => match &group.expected_count {
+            Some(GroupCount::Fixed(count)) => (
+                1,
+                *count,
+                String::new(),
+                group.timeout_secs,
+                group.min_count,
+            ),
+            Some(GroupCount::SourceField { source_field }) => (
+                2,
+                0,
+                source_field.clone(),
+                group.timeout_secs,
+                group.min_count,
+            ),
+            None => (3, 0, String::new(), group.timeout_secs, group.min_count),
+        },
     }
 }
 
@@ -200,7 +209,7 @@ fn validate_capability_ports(
 
 /// Compile an untrusted intent without performing I/O.
 ///
-/// Capabilities must come from the caller-visible, operator-approved catalog.
+/// Capabilities must come from the caller-visible configured catalog.
 /// Empty `allowed_callers` lists deny access. Every diagnostic is stable-sorted
 /// so a model can repair a proposal deterministically.
 pub fn compile_graph(
@@ -312,7 +321,7 @@ pub fn compile_graph(
         resolved.insert(node.node_id.as_str(), *capability);
     }
 
-    // EventTrigger routes by physical collection, not producer node. Reusing
+    // Event-source triggers route by physical collection, not producer node. Reusing
     // one output collection for two graph nodes would make `from.node_id`
     // decorative, so v1 rejects that ambiguity instead of approximating it.
     let mut output_collections = BTreeMap::new();
@@ -413,8 +422,8 @@ pub fn compile_graph(
                 );
             }
             let cardinality_valid = match &edge.delivery {
-                DeliveryMode::PerDocument => source_port.cardinality == target_port.cardinality,
-                DeliveryMode::PerGroup { .. } => {
+                None => source_port.cardinality == target_port.cardinality,
+                Some(_) => {
                     source_port.cardinality == PortCardinality::One
                         && target_port.cardinality == PortCardinality::Many
                 }
@@ -428,13 +437,17 @@ pub fn compile_graph(
                 );
             }
         }
-        if let DeliveryMode::PerGroup {
-            expected,
-            timeout_secs,
-        } = &edge.delivery
-        {
-            match expected {
-                GroupCount::Static { count } if *count < 2 || *count > policy.max_group_size => {
+        if let Some(group) = &edge.delivery {
+            match &group.expected_count {
+                None => diagnostic(
+                    &mut diagnostics,
+                    DiagnosticCode::InvalidGroupSize,
+                    format!("{path}/delivery/expected_count"),
+                    "graph groups require an expected count",
+                ),
+                Some(GroupCount::Fixed(count))
+                    if *count < 2 || *count > i64::from(policy.max_group_size) =>
+                {
                     diagnostic(
                         &mut diagnostics,
                         DiagnosticCode::InvalidGroupSize,
@@ -445,7 +458,9 @@ pub fn compile_graph(
                         ),
                     );
                 }
-                GroupCount::SourceField { field } if validate_graphql_name(field).is_err() => {
+                Some(GroupCount::SourceField { source_field })
+                    if validate_graphql_name(source_field).is_err() =>
+                {
                     diagnostic(
                         &mut diagnostics,
                         DiagnosticCode::InvalidGroupCountField,
@@ -455,9 +470,9 @@ pub fn compile_graph(
                 }
                 _ => {}
             }
-            if timeout_secs
-                .is_some_and(|seconds| seconds == 0 || seconds > policy.max_group_timeout_secs)
-            {
+            if group.timeout_secs.is_some_and(|seconds| {
+                seconds <= 0 || seconds as u64 > policy.max_group_timeout_secs
+            }) {
                 diagnostic(
                     &mut diagnostics,
                     DiagnosticCode::InvalidGroupTimeout,
@@ -466,6 +481,19 @@ pub fn compile_graph(
                         "group timeout must be in 1..={} seconds when present",
                         policy.max_group_timeout_secs
                     ),
+                );
+            }
+        }
+        if let Some(group) = &edge.delivery {
+            if group.min_count.is_some_and(|min| {
+                min <= 0
+                    || matches!(group.expected_count, Some(GroupCount::Fixed(count)) if min > count)
+            }) {
+                diagnostic(
+                    &mut diagnostics,
+                    DiagnosticCode::InvalidGroupSize,
+                    format!("{path}/delivery/min_count"),
+                    "minimum count must be positive and not exceed the expected count",
                 );
             }
         }

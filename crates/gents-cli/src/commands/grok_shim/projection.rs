@@ -33,9 +33,8 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::{load_agent_behavior, load_inference_profile};
 use serde_json::{json, Map, Value};
 
 mod child_output;
@@ -81,7 +80,7 @@ pub(super) fn nonempty(value: &str) -> Option<&str> {
 /// context-window fields).
 #[derive(Debug, Clone)]
 pub(crate) struct BoundModelContext {
-    /// Grok `modelId` the pager addresses: the bound behavior's `model_name`
+    /// Grok `modelId` the pager addresses: the bound profile's `model_name`
     /// exactly. The backend id stays internal and is never projected.
     pub(crate) model_id: String,
     /// Human display name; falls back to the raw model id when the catalog
@@ -649,10 +648,23 @@ impl ProjectionEngine {
     /// after a failed send is idempotent; older requests cannot replace it.
     pub(crate) async fn project_request_updates(
         &self,
-        session_id: &str,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         cursor: &mut RequestCursor,
+        parent_prompt_id: Option<&str>,
     ) -> Result<ProjectionBatch> {
+        let session_id = request
+            .session_id
+            .as_deref()
+            .context("projection request session missing")?;
+        let request_id = request.request_id.as_str();
+        anyhow::ensure!(
+            request.doc_id.as_deref().is_some_and(|id| !id.is_empty())
+                && request
+                    .agent_did
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty()),
+            "projection requires actual scoped physical request"
+        );
         // Each family projects independently (one bounded query set per
         // leaf), then the novel events merge into one chronology below.
         let mut merged: Vec<MergedEvent> = Vec::new();
@@ -667,12 +679,12 @@ impl ProjectionEngine {
             &self.node,
             &mut cursor.history_observation,
             message_sequence_high_water,
-            request_id,
+            request,
             self.bound.effective_context_window(),
         )
         .await?;
         cursor.observe_timestamps(&messages);
-        if let Some(sample) = context::load(&self.node, session_id, request_id).await? {
+        if let Some(sample) = context::load(&self.node, request).await? {
             self.sequencer.observe_context(session_id, sample);
         }
 
@@ -892,13 +904,7 @@ impl ProjectionEngine {
             }
         }
         // 4. Tools (lifecycle of the request's tool calls).
-        let tools = tools::project_tools(
-            &self.node,
-            request_id,
-            session_id,
-            &self.background_executions,
-        )
-        .await?;
+        let tools = tools::project_tools(&self.node, request, &self.background_executions).await?;
         for (index, update) in tools.updates.iter().enumerate() {
             let chronology = tools.chronology.get(index).copied().flatten();
             match update {
@@ -1011,8 +1017,8 @@ impl ProjectionEngine {
         // 2. Subagents (runtime child requests).
         let subagents = subagents::project_subagents(
             self.node.as_ref(),
-            request_id,
-            session_id,
+            request,
+            parent_prompt_id,
             self.bound.effective_context_window(),
         )
         .await?;
@@ -2433,6 +2439,9 @@ fn suffix_prefix_overlap(previous: &str, current: &str) -> usize {
 /// candidates on the next poll instead of dropping or duplicating them.
 #[derive(Debug, Default)]
 pub(crate) struct RequestCursor {
+    /// Actual immutable request identity selected by a signed receipt or
+    /// scoped history/bridge read. Logical labels never rebind this cursor.
+    pub(crate) request: Option<gents_protocol::row::AgentRequestRow>,
     /// Validated, request-local response history cache. Observation advances
     /// independently of outbound delivery; the per-rail live cursors below
     /// remain the send-success anchors into this retained chain.
@@ -2803,81 +2812,20 @@ fn hash_value<H: Hasher>(hasher: &mut H, value: &Value) {
     }
 }
 
-/// Resolve the bound model/context configuration for the shim from the bound
-/// behavior's `AgentBehavior` and `InferenceProfile` documents.
-///
-/// `AgentBehavior` selects `model_name` and `backend_id`; `InferenceProfile`
-/// owns the context window. `AgentSession` has no model or context-window
-/// fields and is never consulted here. Failures are surfaced as errors instead
-/// of being papered over with a synthetic catalog entry.
+/// Project the exact principal's behavior → profile → backend selection.
+/// Model identity is the provider model name; backend identity stays internal.
 pub(crate) async fn resolve_bound_model_context(
     node: &EmbeddedNode,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<BoundModelContext> {
-    let behavior = load_agent_behavior(node, behavior_id)
-        .await
-        .with_context(|| format!("loading AgentBehavior {behavior_id:?} for the Grok shim"))?
-        .ok_or_else(|| {
-            anyhow!(
-                "Grok shim is bound to behavior {behavior_id:?}, but no AgentBehavior document \
-                 with that behavior_id exists"
-            )
-        })?;
-    let model_name = behavior
-        .model_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            anyhow!(
-                "Grok shim is bound to behavior {behavior_id:?}, but that behavior has no \
-                 model_name set, so no Grok modelId can be projected"
-            )
-        })?;
-    // The backend selection is still validated (a bound behavior without a
-    // backend cannot serve) but stays internal: it is a Gents routing
-    // detail and never leaks into the wire-facing model identity.
-    behavior
-        .backend_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow!(
-                "Grok shim is bound to behavior {behavior_id:?}, but that behavior has no \
-                 backend_id set, so no Grok modelId can be projected"
-            )
-        })?;
-    let context_window = match behavior.inference_profile_id.as_deref().map(str::trim) {
-        Some(profile_id) if !profile_id.is_empty() => {
-            let profile = load_inference_profile(node, profile_id)
-                .await
-                .with_context(|| {
-                    format!("loading InferenceProfile {profile_id:?} for the Grok shim")
-                })?
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Grok shim is bound to behavior {behavior_id:?}, which references \
-                         inference_profile_id {profile_id:?}, but no InferenceProfile document \
-                         with that id exists"
-                    )
-                })?;
-            profile
-                .context_window
-                .and_then(|value| u64::try_from(value.max(0)).ok())
-                .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS)
-        }
-        _ => DEFAULT_CONTEXT_WINDOW_TOKENS,
-    };
-
-    // The pager addresses models by their `modelId` — the bound behavior's
-    // `model_name` exactly. The `backend_id` stays internal: it is a Gents
-    // routing detail and never leaks into the wire-facing model identity.
+    use crate::commands::inference_binding::{load_bound_context_window, load_bound_profile};
+    let profile = load_bound_profile(node, agent_did, behavior_id).await?;
+    let context_window = load_bound_context_window(node, agent_did, behavior_id).await?;
     Ok(BoundModelContext::new(
-        model_name.clone(),
-        model_name,
-        context_window,
+        profile.model_name.clone(),
+        profile.model_name,
+        u64::try_from(context_window).context("invalid bound context window")?,
     ))
 }
 
@@ -3543,99 +3491,66 @@ mod tests {
         assert_eq!(bound.total_context_tokens, 262_144);
     }
 
+    async fn seed_bound_inference(node: &EmbeddedNode, window: Option<i64>) {
+        use gents::config_client::{
+            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        use gents::Collection;
+        let owner = "did:grok-binding-test";
+        gents::ensure_agent_principal(node, owner).await.unwrap();
+        let plan = DesiredStateApplyPlan::new([
+            (Collection::AgentBehavior, json!({"agent_did":owner,"behavior_id":"port-live","inference_profile_id":"profile"})),
+            (Collection::InferenceProfile, json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"GLM-5.3-NVFP4","context_window":window})),
+            (Collection::InferenceBackend, json!({"agent_did":owner,"backend_id":"backend","name":"Workstation","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})),
+        ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect()).unwrap();
+        ConfigAccess::transact_local(node, None, "grok.binding.fixture", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn resolve_bound_model_context_projects_the_production_style_catalog() {
-        // The production-style bound context: a workstation backend whose
-        // behavior selects `GLM-5.3-NVFP4`, pinned to the pack profile with
-        // a 262144-token context window. The pager addresses the model by
-        // its `model_name` exactly — the backend id never leaks into the
-        // wire-facing `modelId`.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
-                // The staging `TempDir` guard stays in scope (`dir`) for the
-                // test's lifetime, so the node's storage directory is
-                // deleted when the test ends — never abandoned with
-                // `keep()` or leaked with `mem::forget`.
-                .data_path(dir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        let dir = tempfile::tempdir().unwrap();
+        let node = EmbeddedNode::builder()
+            .data_path(dir.path().join("node"))
+            .build()
             .await
-            .expect("runtime schemas");
-
-        let seed = r#"mutation {
-            create_InferenceBackend(input: {
-                backend_id: "grok-port-backend-ws1",
-                name: "workstation-1",
-                endpoint: "http://127.0.0.1:8000/v1",
-                max_concurrent: 16,
-                max_queue_depth: 64,
-                enabled: true
-            }) { _docID }
-            create_InferenceProfile(input: {
-                profile_id: "grok-port-profile",
-                display_name: "Grok TUI port profile",
-                context_window: 262144
-            }) { _docID }
-            create_AgentBehavior(input: {
-                behavior_id: "port-live",
-                agent_did: "did:key:zGrokTuiPortAgentPlaceholder00000000000000000000000",
-                display_name: "Live GLM probes through the Grok wire",
-                backend_id: "grok-port-backend-ws1",
-                model_name: "GLM-5.3-NVFP4",
-                inference_profile_id: "grok-port-profile",
-                enabled: true
-            }) { _docID }
-        }"#
-        .to_string();
-        let response = node.execute(&seed).await;
-        assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
-
-        let bound = resolve_bound_model_context(node.as_ref(), "port-live")
+            .unwrap();
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        seed_bound_inference(&node, Some(262_144)).await;
+        let bound = resolve_bound_model_context(&node, "did:grok-binding-test", "port-live")
             .await
-            .expect("bound model context");
+            .unwrap();
         assert_eq!(bound.model_id, "GLM-5.3-NVFP4");
         assert_eq!(bound.model_name, "GLM-5.3-NVFP4");
         assert_eq!(bound.total_context_tokens, 262_144);
         assert_eq!(bound.effective_context_window(), 262_144);
+        assert!(
+            resolve_bound_model_context(&node, "did:foreign", "port-live")
+                .await
+                .is_err()
+        );
+        node.shutdown().await;
     }
 
     #[tokio::test]
-    async fn resolve_bound_model_context_without_profile_uses_runtime_default() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
-                .data_path(dir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+    async fn resolve_bound_model_context_uses_default_only_for_missing_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = EmbeddedNode::builder()
+            .data_path(dir.path().join("node"))
+            .build()
             .await
-            .expect("runtime schemas");
-
-        let seed = r#"mutation {
-            create_AgentBehavior(input: {
-                behavior_id: "no-profile"
-                agent_did: "did:key:zGrokNoProfilePlaceholder000000000000000000000000"
-                display_name: "Grok behavior without an inference profile"
-                backend_id: "local-backend"
-                model_name: "local-model"
-                enabled: true
-            }) { _docID }
-        }"#;
-        let response = node.execute(seed).await;
-        assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
-
-        let bound = resolve_bound_model_context(node.as_ref(), "no-profile")
+            .unwrap();
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        seed_bound_inference(&node, None).await;
+        let bound = resolve_bound_model_context(&node, "did:grok-binding-test", "port-live")
             .await
-            .expect("bound model context");
-        assert_eq!(bound.model_id, "local-model");
+            .unwrap();
+        assert_eq!(bound.model_id, "GLM-5.3-NVFP4");
         assert_eq!(
             bound.total_context_tokens,
             gents::DEFAULT_CONTEXT_WINDOW as u64
@@ -3644,6 +3559,12 @@ mod tests {
             bound.effective_context_window(),
             gents::DEFAULT_CONTEXT_WINDOW as u64
         );
+        assert!(
+            resolve_bound_model_context(&node, "did:grok-binding-test", "missing")
+                .await
+                .is_err()
+        );
+        node.shutdown().await;
     }
 
     /// One durable assistant row carrying both a reasoning thought and body
@@ -3671,6 +3592,8 @@ mod tests {
             .expect("runtime schemas");
 
         let request_id = "req-chunk-retry";
+        let request = seed_projection_request(&node, "s-chunk", request_id).await;
+        let request_doc = gents::graphql::escape_graphql_string(request.doc_id.as_deref().unwrap());
         let message = serde_json::to_string(&gents_protocol::message::Message::Assistant {
             id: None,
             content: vec![
@@ -3683,14 +3606,22 @@ mod tests {
         .expect("serialize assistant message");
         let escaped_message = gents::graphql::escape_graphql_string(&message);
         let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let message_key =
+            gents::graphql::escape_graphql_string(&gents::session::sequence_message_key(
+                request.agent_did.as_deref().unwrap(),
+                request.session_id.as_deref().unwrap(),
+                request.requester_did.as_deref(),
+                1,
+            ));
         let seed = format!(
             r#"mutation {{
                 create_AgentMessage(input: {{
-                    message_key: "{escaped_request}:1"
+                    message_key: "{message_key}"
                     session_id: "s-chunk"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     request_id: "{escaped_request}"
+                    request_doc_id: "{request_doc}"
                     sequence: 1
                     role: "assistant"
                     content: "{escaped_message}"
@@ -3712,7 +3643,7 @@ mod tests {
 
         // First poll: both chunks of the row are novel.
         let first = engine
-            .project_request_updates("s-chunk", request_id, &mut cursor)
+            .project_request_updates(&request, &mut cursor, None)
             .await
             .expect("first poll");
         assert_eq!(first.len(), 2, "thought plus text both stream");
@@ -3731,7 +3662,7 @@ mod tests {
         // identity stays unseen and must be re-emitted by the next poll.
         cursor.record(first[0].advance.clone());
         let second = engine
-            .project_request_updates("s-chunk", request_id, &mut cursor)
+            .project_request_updates(&request, &mut cursor, None)
             .await
             .expect("second poll");
         assert_eq!(
@@ -3747,7 +3678,7 @@ mod tests {
         // After the retry's send succeeds, a third poll emits nothing.
         cursor.record(second[0].advance.clone());
         let third = engine
-            .project_request_updates("s-chunk", request_id, &mut cursor)
+            .project_request_updates(&request, &mut cursor, None)
             .await
             .expect("third poll");
         assert!(third.is_empty(), "every chunk is now delivered");
@@ -3781,6 +3712,21 @@ mod tests {
             ),
         );
         (dir, Arc::new(engine))
+    }
+
+    async fn seed_projection_request(
+        node: &EmbeddedNode,
+        session: &str,
+        request_id: &str,
+    ) -> gents_protocol::row::AgentRequestRow {
+        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{}", session_id: "{}", agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", behavior_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(request_id), gents::graphql::escape_graphql_string(session))).await;
+        ensure_no_errors(&result, "seed projection request").unwrap();
+        let doc = gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data":result.data}),
+            "AgentRequest",
+        )
+        .unwrap();
+        serde_json::from_value(json!({"_docID":doc,"request_id":request_id,"agent_did":"did:test:grok-shim","requester_did":"did:test:grok-shim","session_id":session})).unwrap()
     }
 
     /// Seed one durable `AgentToolCall` row with an explicit stable id and
@@ -3817,7 +3763,7 @@ mod tests {
             .unwrap_or_else(|| r#"child_request_id: """#.to_string());
         let mutation = format!(
             r#"mutation {{
-                tool: create_AgentToolCall(input: {{
+                create_AgentToolCall(input: {{
                     tool_call_key: "{escaped_session}:{escaped_id}"
                     request_id: "{escaped_request}"
                     {request_doc_field}
@@ -3839,13 +3785,11 @@ mod tests {
             "seed tool call failed: {:?}",
             response.errors
         );
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.pointer("/tool/0/_docID"))
-            .and_then(Value::as_str)
-            .expect("seeded tool call document id")
-            .to_string()
+        gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data":response.data}),
+            "AgentToolCall",
+        )
+        .unwrap()
     }
 
     /// Seed one runtime child `AgentRequest` row linked to the parent
@@ -3870,6 +3814,8 @@ mod tests {
                 create_AgentRequest(input: {{
                     request_id: "{escaped_child}"
                     agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    behavior_id: "test-child"
                     session_id: "s-chron-child"
                     caused_by_parent_request_id: "{escaped_parent}"
                     caused_by_parent_request_doc_id: "{escaped_parent_doc}"
@@ -3933,6 +3879,11 @@ mod tests {
         let doc = response.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
             .as_str()
             .unwrap();
+        let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({
+            "_docID": doc, "request_id":"context-owner", "session_id":"context-session",
+            "agent_did":"did:test:grok-shim", "requester_did":"did:test:requester"
+        }))
+        .unwrap();
         let accounting = gents_protocol::rendered_request::ContextAccounting {
             accounting_version: 1,
             turn_index: 0,
@@ -3966,21 +3917,21 @@ mod tests {
         ensure_no_errors(&response, "context call fixture").unwrap();
         let mut cursor = RequestCursor::new();
         engine
-            .project_request_updates("context-session", "context-owner", &mut cursor)
+            .project_request_updates(&request, &mut cursor, None)
             .await
             .unwrap();
         assert_eq!(
             engine.sequencer.session_total_tokens("context-session"),
             975
         );
-        assert!(
-            context::load(&engine.node, "foreign-session", "context-owner")
-                .await
-                .unwrap()
-                .is_none()
-        );
+        let mut foreign = request.clone();
+        foreign.session_id = Some("foreign-session".into());
+        assert!(context::load(&engine.node, &foreign)
+            .await
+            .unwrap()
+            .is_none());
         engine
-            .project_request_updates("context-session", "context-owner", &mut cursor)
+            .project_request_updates(&request, &mut cursor, None)
             .await
             .unwrap();
         assert_eq!(
@@ -3995,36 +3946,9 @@ mod tests {
         let session_id = "s-chron";
         let request_id = "req-chron";
 
-        let seed_parent = format!(
-            r#"mutation {{
-                parent: create_AgentRequest(input: {{
-                    request_id: "{request_id}"
-                    agent_did: "did:test:grok-shim"
-                    session_id: "{session_id}"
-                    content: "parent work"
-                    lifecycle_state: "processing"
-                    backend_id: ""
-                    execution_origin: "interactive"
-                    failure_reason: ""
-                    created_at: "2026-08-31T22:46:44Z"
-                    retry_count: 0
-                    max_retries: 3
-                }}) {{ _docID }}
-            }}"#
-        );
-        let response = engine.node.execute(&seed_parent).await;
-        assert!(
-            !response.has_errors(),
-            "seed parent failed: {:?}",
-            response.errors
-        );
-        let parent_doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data.pointer("/parent/0/_docID"))
-            .and_then(Value::as_str)
-            .expect("seeded parent document id")
-            .to_string();
+        let request = seed_projection_request(&engine.node, session_id, request_id).await;
+        let parent_doc_id = request.doc_id.clone().unwrap();
+        let escaped_parent_doc = gents::graphql::escape_graphql_string(&parent_doc_id);
 
         // The assistant turn's durable message: reasoning before text.
         let message = serde_json::to_string(&gents_protocol::message::Message::Assistant {
@@ -4039,14 +3963,22 @@ mod tests {
         .expect("serialize assistant message");
         let escaped_message = gents::graphql::escape_graphql_string(&message);
         let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let message_key =
+            gents::graphql::escape_graphql_string(&gents::session::sequence_message_key(
+                request.agent_did.as_deref().unwrap(),
+                request.session_id.as_deref().unwrap(),
+                request.requester_did.as_deref(),
+                3,
+            ));
         let seed_message = format!(
             r#"mutation {{
                 create_AgentMessage(input: {{
-                    message_key: "{escaped_request}:3"
+                    message_key: "{message_key}"
                     session_id: "{session_id}"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     request_id: "{escaped_request}"
+                    request_doc_id: "{escaped_parent_doc}"
                     sequence: 3
                     role: "assistant"
                     content: "{escaped_message}"
@@ -4103,8 +4035,9 @@ mod tests {
         .await;
 
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(request.clone());
         let first = engine
-            .project_request_updates(session_id, request_id, &mut cursor)
+            .project_request_updates(&request, &mut cursor, None)
             .await
             .expect("first poll");
         let kinds: Vec<String> = first.iter().map(update_kind).collect();
@@ -4151,7 +4084,7 @@ mod tests {
             cursor.record(advance);
         }
         let second = engine
-            .project_request_updates(session_id, request_id, &mut cursor)
+            .project_request_updates(&request, &mut cursor, None)
             .await
             .expect("second poll");
         let retry_kinds: Vec<String> = second.iter().map(update_kind).collect();
@@ -4184,7 +4117,7 @@ mod tests {
             cursor.record(advance);
         }
         let third = engine
-            .project_request_updates(session_id, request_id, &mut cursor)
+            .project_request_updates(&request, &mut cursor, None)
             .await
             .expect("third poll");
         assert!(third.is_empty(), "every event is now delivered");
@@ -4207,14 +4140,16 @@ mod tests {
     /// the turn.
     async fn seed_response_row(
         engine: &ProjectionEngine,
-        session_id: &str,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         content: &str,
         reasoning: &str,
         progress_seq: i64,
         reasoning_progress_seq: i64,
         materialized_message_sequence: Option<i64>,
     ) {
+        let session_id = request.session_id.as_deref().unwrap();
+        let request_id = request.request_id.as_str();
+        let request_doc = gents::graphql::escape_graphql_string(request.doc_id.as_deref().unwrap());
         let escaped_session = gents::graphql::escape_graphql_string(session_id);
         let escaped_request = gents::graphql::escape_graphql_string(request_id);
         let escaped_content = gents::graphql::escape_graphql_string(content);
@@ -4227,6 +4162,7 @@ mod tests {
                 create_AgentResponse(input: {{
                     response_key: "{escaped_request}"
                     request_id: "{escaped_request}"
+                    request_doc_id: "{request_doc}"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     session_id: "{escaped_session}"
@@ -4253,19 +4189,21 @@ mod tests {
     /// the exact shape of the runtime's streaming flush mutation.
     async fn update_response_tail(
         engine: &ProjectionEngine,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         content: &str,
         reasoning: &str,
         progress_seq: i64,
         reasoning_progress_seq: i64,
     ) {
+        let request_id = request.request_id.as_str();
+        let request_doc = gents::graphql::escape_graphql_string(request.doc_id.as_deref().unwrap());
         let escaped_request = gents::graphql::escape_graphql_string(request_id);
         let escaped_content = gents::graphql::escape_graphql_string(content);
         let escaped_reasoning = gents::graphql::escape_graphql_string(reasoning);
         let mutation = format!(
             r#"mutation {{
                 update_AgentResponse(
-                    filter: {{ request_id: {{ _eq: "{escaped_request}" }} }},
+                    filter: {{ request_id: {{ _eq: "{escaped_request}" }}, request_doc_id: {{_eq: "{request_doc}"}} }},
                     input: {{
                         content: "{escaped_content}"
                         reasoning: "{escaped_reasoning}"
@@ -4287,8 +4225,7 @@ mod tests {
     /// envelope shape the runtime persists.
     async fn seed_assistant_text_row(
         engine: &ProjectionEngine,
-        session_id: &str,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         sequence: i64,
         text: &str,
     ) {
@@ -4298,16 +4235,27 @@ mod tests {
         })
         .expect("serialize assistant message");
         let escaped_message = gents::graphql::escape_graphql_string(&message);
+        let session_id = request.session_id.as_deref().unwrap();
+        let request_id = request.request_id.as_str();
+        let request_doc = gents::graphql::escape_graphql_string(request.doc_id.as_deref().unwrap());
         let escaped_session = gents::graphql::escape_graphql_string(session_id);
         let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let message_key =
+            gents::graphql::escape_graphql_string(&gents::session::sequence_message_key(
+                request.agent_did.as_deref().unwrap(),
+                request.session_id.as_deref().unwrap(),
+                request.requester_did.as_deref(),
+                sequence.try_into().unwrap(),
+            ));
         let mutation = format!(
             r#"mutation {{
                 create_AgentMessage(input: {{
-                    message_key: "{escaped_request}:{sequence}"
+                    message_key: "{message_key}"
                     session_id: "{escaped_session}"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     request_id: "{escaped_request}"
+                    request_doc_id: "{request_doc}"
                     sequence: {sequence}
                     role: "assistant"
                     content: "{escaped_message}"
@@ -4327,7 +4275,7 @@ mod tests {
     /// intermediate row), keeping the same `message_key` and sequence.
     async fn grow_assistant_text_row(
         engine: &ProjectionEngine,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         sequence: i64,
         text: &str,
     ) {
@@ -4337,11 +4285,18 @@ mod tests {
         })
         .expect("serialize assistant message");
         let escaped_message = gents::graphql::escape_graphql_string(&message);
-        let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let request_doc = gents::graphql::escape_graphql_string(request.doc_id.as_deref().unwrap());
+        let message_key =
+            gents::graphql::escape_graphql_string(&gents::session::sequence_message_key(
+                request.agent_did.as_deref().unwrap(),
+                request.session_id.as_deref().unwrap(),
+                request.requester_did.as_deref(),
+                sequence.try_into().unwrap(),
+            ));
         let mutation = format!(
             r#"mutation {{
                 update_AgentMessage(
-                    filter: {{ message_key: {{ _eq: "{escaped_request}:{sequence}" }} }},
+                    filter: {{ message_key: {{ _eq: "{message_key}" }}, request_doc_id: {{_eq: "{request_doc}"}} }},
                     input: {{ content: "{escaped_message}" }}
                 ) {{ _docID }}
             }}"#
@@ -4361,8 +4316,14 @@ mod tests {
         request_id: &str,
         cursor: &mut RequestCursor,
     ) -> Vec<NovelProjectionEvent> {
+        let request = cursor
+            .request
+            .clone()
+            .expect("fixture must retain its created request receipt");
+        assert_eq!(request.session_id.as_deref(), Some(session_id));
+        assert_eq!(request.request_id, request_id);
         let batch = engine
-            .project_request_updates(session_id, request_id, cursor)
+            .project_request_updates(&request, cursor, None)
             .await
             .expect("poll");
         for event in &batch.events {
@@ -4406,9 +4367,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-live";
         let request_id = "req-live";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "Hel", "", 1, 0, None).await;
+        seed_response_row(&engine, &fixture_request, "Hel", "", 1, 0, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
@@ -4416,7 +4379,7 @@ mod tests {
             "the first live tail observation streams the whole snapshot"
         );
 
-        update_response_tail(&engine, request_id, "Hello", "", 2, 0).await;
+        update_response_tail(&engine, &fixture_request, "Hello", "", 2, 0).await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
@@ -4434,10 +4397,12 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-one-stream";
         let request_id = "req-one-stream";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "", "thinking", 0, 1, None).await;
-        update_response_tail(&engine, request_id, "answer", "thinking", 1, 1).await;
+        seed_response_row(&engine, &fixture_request, "", "thinking", 0, 1, None).await;
+        update_response_tail(&engine, &fixture_request, "answer", "thinking", 1, 1).await;
         let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         let keys: Vec<_> = events
             .iter()
@@ -4460,10 +4425,12 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-reset";
         let request_id = "req-reset";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
         // Poll 1 sees the live prefix "He" and delivers it.
-        seed_response_row(&engine, session_id, request_id, "He", "", 1, 0, None).await;
+        seed_response_row(&engine, &fixture_request, "He", "", 1, 0, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
@@ -4475,9 +4442,9 @@ mod tests {
         // live. The materialization pointer binds the row to the live
         // segment whose prefix was delivered, so the durable pass must emit
         // only "llo".
-        seed_assistant_text_row(&engine, session_id, request_id, 5, "Hello").await;
-        update_response_tail(&engine, request_id, "", "", 1, 0).await;
-        update_materialized_sequence(&engine, request_id, 5).await;
+        seed_assistant_text_row(&engine, &fixture_request, 5, "Hello").await;
+        update_response_tail(&engine, &fixture_request, "", "", 1, 0).await;
+        update_materialized_sequence(&engine, &fixture_request, 5).await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
@@ -4496,9 +4463,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-full";
         let request_id = "req-full";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "Hello", "", 1, 0, None).await;
+        seed_response_row(&engine, &fixture_request, "Hello", "", 1, 0, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
@@ -4507,9 +4476,9 @@ mod tests {
 
         // Materialization: the tail cleared and the final row carries the
         // same text, bound by materialized_message_sequence.
-        seed_assistant_text_row(&engine, session_id, request_id, 5, "Hello").await;
-        update_response_tail(&engine, request_id, "", "", 1, 0).await;
-        update_materialized_sequence(&engine, request_id, 5).await;
+        seed_assistant_text_row(&engine, &fixture_request, 5, "Hello").await;
+        update_response_tail(&engine, &fixture_request, "", "", 1, 0).await;
+        update_materialized_sequence(&engine, &fixture_request, 5).await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             second.is_empty(),
@@ -4520,7 +4489,11 @@ mod tests {
     #[tokio::test]
     async fn durable_wakeup_notification_projects_once_without_internal_inputs() {
         let (_dir, engine) = embedded_engine().await;
+        let fixture_request = seed_projection_request(&engine.node, "s-wakeup", "r-wakeup").await;
+        let request_doc =
+            gents::graphql::escape_graphql_string(fixture_request.doc_id.as_deref().unwrap());
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
         for (sequence, key, text) in [
             (1, "wake-context", "private context"),
             (
@@ -4543,7 +4516,7 @@ mod tests {
                 .node
                 .execute(&format!(
                     r#"mutation {{ create_AgentMessage(input: {{
-                    message_key: "{}", session_id: "s-wakeup", request_id: "r-wakeup",
+                    message_key: "{}", session_id: "s-wakeup", request_id: "r-wakeup", request_doc_id: "{request_doc}",
                     agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim",
                     sequence: {sequence}, role: "user", content: "{}"
                 }}) {{ _docID }} }}"#,
@@ -4554,7 +4527,7 @@ mod tests {
             assert!(!response.has_errors(), "{:?}", response.errors);
         }
         let unsent = engine
-            .project_request_updates("s-wakeup", "r-wakeup", &mut cursor)
+            .project_request_updates(&fixture_request, &mut cursor, None)
             .await
             .unwrap();
         assert_eq!(unsent.len(), 1);
@@ -4575,12 +4548,14 @@ mod tests {
     #[tokio::test]
     async fn failed_tool_terminal_retries_after_content_refinement_delivery() {
         let (_dir, engine) = embedded_engine().await;
+        let request = seed_projection_request(&engine.node, "s-failed", "r-failed").await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(request.clone());
         let doc = seed_tool_call_row(
             &engine,
             "s-failed",
             "r-failed",
-            None,
+            request.doc_id.as_deref(),
             "failed-call",
             "bash",
             2,
@@ -4597,7 +4572,7 @@ mod tests {
             gents::graphql::escape_graphql_string(&doc))).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let batch = engine
-            .project_request_updates("s-failed", "r-failed", &mut cursor)
+            .project_request_updates(&request, &mut cursor, None)
             .await
             .unwrap();
         let updates: Vec<_> = batch
@@ -4633,12 +4608,13 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-live-materialize-order";
         let request_id = "req-live-materialize-order";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
         seed_response_row(
             &engine,
-            session_id,
-            request_id,
+            &fixture_request,
             "DUPLICATION_SENTIN",
             "",
             1,
@@ -4652,28 +4628,29 @@ mod tests {
             vec![("agent_message_chunk".into(), "DUPLICATION_SENTIN".into())]
         );
 
-        update_response_tail(&engine, request_id, "DUPLICATION_SENTINEL_9472", "", 2, 0).await;
+        update_response_tail(
+            &engine,
+            &fixture_request,
+            "DUPLICATION_SENTINEL_9472",
+            "",
+            2,
+            0,
+        )
+        .await;
         let growth = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&growth),
             vec![("agent_message_chunk".into(), "EL_9472".into())]
         );
 
-        seed_assistant_text_row(
-            &engine,
-            session_id,
-            request_id,
-            5,
-            "DUPLICATION_SENTINEL_9472",
-        )
-        .await;
+        seed_assistant_text_row(&engine, &fixture_request, 5, "DUPLICATION_SENTINEL_9472").await;
         let open_row = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             chunk_texts(&open_row).is_empty(),
             "a durable row appearing while its fully sent tail is still open must not replay"
         );
-        update_materialized_sequence(&engine, request_id, 5).await;
-        update_response_tail(&engine, request_id, "", "", 2, 0).await;
+        update_materialized_sequence(&engine, &fixture_request, 5).await;
+        update_response_tail(&engine, &fixture_request, "", "", 2, 0).await;
 
         let materialized = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
@@ -4689,16 +4666,18 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-grow";
         let request_id = "req-grow";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_assistant_text_row(&engine, session_id, request_id, 2, "Hel").await;
+        seed_assistant_text_row(&engine, &fixture_request, 2, "Hel").await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "Hel".into())]
         );
 
-        grow_assistant_text_row(&engine, request_id, 2, "Hello").await;
+        grow_assistant_text_row(&engine, &fixture_request, 2, "Hello").await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
@@ -4719,16 +4698,18 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-durable-utf8";
         let request_id = "req-durable-utf8";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_assistant_text_row(&engine, session_id, request_id, 2, "a").await;
+        seed_assistant_text_row(&engine, &fixture_request, 2, "a").await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "a".into())]
         );
 
-        grow_assistant_text_row(&engine, request_id, 2, "日x").await;
+        grow_assistant_text_row(&engine, &fixture_request, 2, "日x").await;
         let replacement = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&replacement),
@@ -4744,10 +4725,12 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-seg";
         let request_id = "req-seg";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
         // Old segment: "Hello" delivered live.
-        seed_response_row(&engine, session_id, request_id, "Hello", "", 1, 0, None).await;
+        seed_response_row(&engine, &fixture_request, "Hello", "", 1, 0, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
@@ -4756,11 +4739,11 @@ mod tests {
 
         // Reset, then a new segment "Hello world" — its prefix collides with
         // the old segment but it is a *different* logical segment.
-        update_response_tail(&engine, request_id, "", "", 1, 0).await;
+        update_response_tail(&engine, &fixture_request, "", "", 1, 0).await;
         let reset = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(reset.is_empty(), "the reset itself emits nothing");
 
-        update_response_tail(&engine, request_id, "Hello world", "", 3, 0).await;
+        update_response_tail(&engine, &fixture_request, "Hello world", "", 3, 0).await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
@@ -4777,11 +4760,13 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-missed-reset";
         let request_id = "req-missed-reset";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "A", "", 1, 0, None).await;
-        update_response_tail(&engine, request_id, "", "", 1, 0).await;
-        update_response_tail(&engine, request_id, "B", "", 2, 0).await;
+        seed_response_row(&engine, &fixture_request, "A", "", 1, 0, None).await;
+        update_response_tail(&engine, &fixture_request, "", "", 1, 0).await;
+        update_response_tail(&engine, &fixture_request, "B", "", 2, 0).await;
 
         let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
@@ -4817,11 +4802,13 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-identical-reset";
         let request_id = "req-identical-reset";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "same", "", 1, 0, None).await;
-        update_response_tail(&engine, request_id, "", "", 1, 0).await;
-        update_response_tail(&engine, request_id, "same", "", 2, 0).await;
+        seed_response_row(&engine, &fixture_request, "same", "", 1, 0, None).await;
+        update_response_tail(&engine, &fixture_request, "", "", 1, 0).await;
+        update_response_tail(&engine, &fixture_request, "same", "", 2, 0).await;
 
         let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
@@ -4842,14 +4829,16 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session = "s-open-repeat";
         let request = "req-open-repeat";
-        seed_response_row(&engine, session, request, "same", "", 1, 0, None).await;
-        update_response_tail(&engine, request, "", "", 1, 0).await;
-        update_response_tail(&engine, request, "same", "", 2, 0).await;
-        update_response_tail(&engine, request, "", "", 2, 0).await;
-        update_response_tail(&engine, request, "open", "", 3, 0).await;
-        seed_assistant_text_row(&engine, session, request, 3, "same").await;
-        seed_assistant_text_row(&engine, session, request, 6, "same").await;
+        let fixture_request = seed_projection_request(&engine.node, session, request).await;
+        seed_response_row(&engine, &fixture_request, "same", "", 1, 0, None).await;
+        update_response_tail(&engine, &fixture_request, "", "", 1, 0).await;
+        update_response_tail(&engine, &fixture_request, "same", "", 2, 0).await;
+        update_response_tail(&engine, &fixture_request, "", "", 2, 0).await;
+        update_response_tail(&engine, &fixture_request, "open", "", 3, 0).await;
+        seed_assistant_text_row(&engine, &fixture_request, 3, "same").await;
+        seed_assistant_text_row(&engine, &fixture_request, 6, "same").await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
         let events = deliver(&engine, session, request, &mut cursor).await;
         assert_eq!(
             chunk_texts(&events),
@@ -4869,24 +4858,26 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-history-order";
         let request_id = "req-history-order";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "first", "", 1, 0, None).await;
-        update_response_tail(&engine, request_id, "", "", 1, 0).await;
-        update_response_tail(&engine, request_id, "second", "", 2, 0).await;
-        seed_assistant_text_row(&engine, session_id, request_id, 3, "first").await;
+        seed_response_row(&engine, &fixture_request, "first", "", 1, 0, None).await;
+        update_response_tail(&engine, &fixture_request, "", "", 1, 0).await;
+        update_response_tail(&engine, &fixture_request, "second", "", 2, 0).await;
+        seed_assistant_text_row(&engine, &fixture_request, 3, "first").await;
         seed_tool_call_row(
             &engine,
             session_id,
             request_id,
-            None,
+            fixture_request.doc_id.as_deref(),
             "call-middle",
             "bash",
             4,
             None,
         )
         .await;
-        seed_assistant_text_row(&engine, session_id, request_id, 6, "second").await;
+        seed_assistant_text_row(&engine, &fixture_request, 6, "second").await;
 
         let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         let ordered: Vec<_> = events
@@ -4914,10 +4905,12 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-open-row";
         let request_id = "req-open-row";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "hello", "", 1, 0, None).await;
-        seed_assistant_text_row(&engine, session_id, request_id, 3, "hello").await;
+        seed_response_row(&engine, &fixture_request, "hello", "", 1, 0, None).await;
+        seed_assistant_text_row(&engine, &fixture_request, 3, "hello").await;
         let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&events),
@@ -4988,9 +4981,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-reason";
         let request_id = "req-reason";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "", "thinking", 0, 1, None).await;
+        seed_response_row(&engine, &fixture_request, "", "thinking", 0, 1, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
@@ -5006,7 +5001,7 @@ mod tests {
 
         // Genuine later identical rewrite: same bytes, advanced seq. The
         // rewrite stands on the wire already; no new bytes exist to emit.
-        update_response_tail(&engine, request_id, "", "thinking", 0, 2).await;
+        update_response_tail(&engine, &fixture_request, "", "thinking", 0, 2).await;
         let rewrite = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             rewrite.is_empty(),
@@ -5015,7 +5010,7 @@ mod tests {
 
         // A rewrite to *different* bytes does stream: the divergence closes
         // the segment and the new observation streams in full.
-        update_response_tail(&engine, request_id, "", "revised", 0, 3).await;
+        update_response_tail(&engine, &fixture_request, "", "revised", 0, 3).await;
         let diverged = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&diverged),
@@ -5032,12 +5027,14 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-roll";
         let request_id = "req-roll";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
         // A full first window with a distinct head that the runtime will
         // trim when 16 new bytes arrive.
         let head = format!("{}{}", "x".repeat(16), "y".repeat(64 * 1024 - 16));
-        seed_response_row(&engine, session_id, request_id, "", &head, 0, 1, None).await;
+        seed_response_row(&engine, &fixture_request, "", &head, 0, 1, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first).len(),
@@ -5048,7 +5045,7 @@ mod tests {
         // The runtime appended past the bound: the preview dropped its head
         // but keeps continuity — the suffix past the overlap is the new text.
         let rolled = format!("{}{}", "y".repeat(64 * 1024 - 16), "z".repeat(16));
-        update_response_tail(&engine, request_id, "", &rolled, 0, 2).await;
+        update_response_tail(&engine, &fixture_request, "", &rolled, 0, 2).await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
@@ -5103,25 +5100,17 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-reason-gap";
         let request_id = "req-reason-gap";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
         let first_window = "a".repeat(MAX_LIVE_REASONING_WINDOW_BYTES);
         let latest_window = "z".repeat(MAX_LIVE_REASONING_WINDOW_BYTES);
 
-        seed_response_row(
-            &engine,
-            session_id,
-            request_id,
-            "",
-            &first_window,
-            0,
-            1,
-            None,
-        )
-        .await;
+        seed_response_row(&engine, &fixture_request, "", &first_window, 0, 1, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(chunk_texts(&first)[0].1, first_window);
 
-        update_response_tail(&engine, request_id, "", &latest_window, 0, 2).await;
+        update_response_tail(&engine, &fixture_request, "", &latest_window, 0, 2).await;
         let deferred = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             chunk_texts(&deferred).is_empty(),
@@ -5130,8 +5119,8 @@ mod tests {
 
         let missing_suffix = format!("{}{}", "middle", latest_window);
         let full_reasoning = format!("{}{}", first_window, missing_suffix);
-        seed_assistant_thought_row(&engine, session_id, request_id, 5, &full_reasoning).await;
-        update_materialized_sequence(&engine, request_id, 5).await;
+        seed_assistant_thought_row(&engine, &fixture_request, 5, &full_reasoning).await;
+        update_materialized_sequence(&engine, &fixture_request, 5).await;
         let recovered = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&recovered),
@@ -5146,16 +5135,18 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-utf8";
         let request_id = "req-utf8";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "日", "", 1, 0, None).await;
+        seed_response_row(&engine, &fixture_request, "日", "", 1, 0, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "日".into())]
         );
 
-        update_response_tail(&engine, request_id, "日本語テキスト", "", 2, 0).await;
+        update_response_tail(&engine, &fixture_request, "日本語テキスト", "", 2, 0).await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
@@ -5164,7 +5155,7 @@ mod tests {
         );
 
         // A 4-byte emoji append at the boundary.
-        update_response_tail(&engine, request_id, "日本語テキスト🚀", "", 3, 0).await;
+        update_response_tail(&engine, &fixture_request, "日本語テキスト🚀", "", 3, 0).await;
         let third = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&third),
@@ -5179,16 +5170,18 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-ws";
         let request_id = "req-ws";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "one", "", 1, 0, None).await;
+        seed_response_row(&engine, &fixture_request, "one", "", 1, 0, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "one".into())]
         );
 
-        update_response_tail(&engine, request_id, "one\ntwo", "", 2, 0).await;
+        update_response_tail(&engine, &fixture_request, "one\ntwo", "", 2, 0).await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
@@ -5205,12 +5198,14 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-fail";
         let request_id = "req-fail";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "Hel", "", 1, 0, None).await;
+        seed_response_row(&engine, &fixture_request, "Hel", "", 1, 0, None).await;
         // Poll but record nothing (every send failed).
         let first = engine
-            .project_request_updates(session_id, request_id, &mut cursor)
+            .project_request_updates(&fixture_request, &mut cursor, None)
             .await
             .expect("poll");
         assert_eq!(
@@ -5218,12 +5213,12 @@ mod tests {
             vec![("agent_message_chunk".into(), "Hel".into())]
         );
 
-        update_response_tail(&engine, request_id, "Hello", "", 2, 0).await;
+        update_response_tail(&engine, &fixture_request, "Hello", "", 2, 0).await;
         // Second poll: the cursor never advanced, so the complete validated
         // history after its anchor is replayed in order: the exact failed
         // "Hel" event followed by the newly observed "lo" suffix.
         let second = engine
-            .project_request_updates(session_id, request_id, &mut cursor)
+            .project_request_updates(&fixture_request, &mut cursor, None)
             .await
             .expect("poll");
         assert_eq!(
@@ -5255,12 +5250,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-order";
         let request_id = "req-order";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(
-            &engine, session_id, request_id, "answer", "thought", 1, 1, None,
-        )
-        .await;
+        seed_response_row(&engine, &fixture_request, "answer", "thought", 1, 1, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
@@ -5272,7 +5266,15 @@ mod tests {
         );
 
         // Independent growth of each stream emits independent suffixes.
-        update_response_tail(&engine, request_id, "answered", "thought through", 2, 2).await;
+        update_response_tail(
+            &engine,
+            &fixture_request,
+            "answered",
+            "thought through",
+            2,
+            2,
+        )
+        .await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
@@ -5291,26 +5293,25 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-tool";
         let request_id = "req-tool";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
         // The assistant row exists at sequence 3 (the live segment's
         // position) and a tool call at sequence 4.
-        seed_assistant_text_row(&engine, session_id, request_id, 3, "").await;
+        seed_assistant_text_row(&engine, &fixture_request, 3, "").await;
         seed_tool_call_row(
-            &engine, session_id, request_id, None, "call-x", "bash", 4, None,
-        )
-        .await;
-        seed_response_row(
             &engine,
             session_id,
             request_id,
-            "running a tool",
-            "",
-            1,
-            0,
+            fixture_request.doc_id.as_deref(),
+            "call-x",
+            "bash",
+            4,
             None,
         )
         .await;
+        seed_response_row(&engine, &fixture_request, "running a tool", "", 1, 0, None).await;
 
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         let kinds: Vec<String> = first.iter().map(update_kind).collect();
@@ -5334,11 +5335,13 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-durable-retry";
         let request_id = "req-durable-retry";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
-        seed_assistant_text_row(&engine, session_id, request_id, 3, "durable").await;
+        cursor.request = Some(fixture_request.clone());
+        seed_assistant_text_row(&engine, &fixture_request, 3, "durable").await;
 
         let abandoned = engine
-            .project_request_updates(session_id, request_id, &mut cursor)
+            .project_request_updates(&fixture_request, &mut cursor, None)
             .await
             .expect("first projection");
         assert_eq!(
@@ -5348,7 +5351,7 @@ mod tests {
         assert_eq!(cursor.message_sequence_high_water, None);
 
         let retry = engine
-            .project_request_updates(session_id, request_id, &mut cursor)
+            .project_request_updates(&fixture_request, &mut cursor, None)
             .await
             .expect("retry projection");
         assert_eq!(
@@ -5372,9 +5375,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-thought";
         let request_id = "req-thought";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
         let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
 
-        seed_response_row(&engine, session_id, request_id, "", "thinking", 0, 1, None).await;
+        seed_response_row(&engine, &fixture_request, "", "thinking", 0, 1, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
@@ -5384,9 +5389,9 @@ mod tests {
         // Materialization: the reasoning tail cleared and the durable row
         // carries the same thought text, bound by
         // materialized_message_sequence.
-        seed_assistant_thought_row(&engine, session_id, request_id, 5, "thinking").await;
-        update_response_tail(&engine, request_id, "", "", 0, 1).await;
-        update_materialized_sequence(&engine, request_id, 5).await;
+        seed_assistant_thought_row(&engine, &fixture_request, 5, "thinking").await;
+        update_response_tail(&engine, &fixture_request, "", "", 0, 1).await;
+        update_materialized_sequence(&engine, &fixture_request, 5).await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             second.iter().all(|event| !matches!(
@@ -5400,14 +5405,16 @@ mod tests {
     /// Stamp `materialized_message_sequence` on the request's response row.
     async fn update_materialized_sequence(
         engine: &ProjectionEngine,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         sequence: i64,
     ) {
+        let request_id = request.request_id.as_str();
+        let request_doc = gents::graphql::escape_graphql_string(request.doc_id.as_deref().unwrap());
         let escaped_request = gents::graphql::escape_graphql_string(request_id);
         let mutation = format!(
             r#"mutation {{
                 update_AgentResponse(
-                    filter: {{ request_id: {{ _eq: "{escaped_request}" }} }},
+                    filter: {{ request_id: {{ _eq: "{escaped_request}" }}, request_doc_id: {{_eq: "{request_doc}"}} }},
                     input: {{ materialized_message_sequence: {sequence} }}
                 ) {{ _docID }}
             }}"#
@@ -5423,8 +5430,7 @@ mod tests {
     /// One assistant `AgentMessage` row with a single reasoning block.
     async fn seed_assistant_thought_row(
         engine: &ProjectionEngine,
-        session_id: &str,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         sequence: i64,
         text: &str,
     ) {
@@ -5436,16 +5442,27 @@ mod tests {
         })
         .expect("serialize assistant message");
         let escaped_message = gents::graphql::escape_graphql_string(&message);
+        let session_id = request.session_id.as_deref().unwrap();
+        let request_id = request.request_id.as_str();
+        let request_doc = gents::graphql::escape_graphql_string(request.doc_id.as_deref().unwrap());
         let escaped_session = gents::graphql::escape_graphql_string(session_id);
         let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let message_key =
+            gents::graphql::escape_graphql_string(&gents::session::sequence_message_key(
+                request.agent_did.as_deref().unwrap(),
+                request.session_id.as_deref().unwrap(),
+                request.requester_did.as_deref(),
+                sequence.try_into().unwrap(),
+            ));
         let mutation = format!(
             r#"mutation {{
                 create_AgentMessage(input: {{
-                    message_key: "{escaped_request}:{sequence}"
+                    message_key: "{message_key}"
                     session_id: "{escaped_session}"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     request_id: "{escaped_request}"
+                    request_doc_id: "{request_doc}"
                     sequence: {sequence}
                     role: "assistant"
                     content: "{escaped_message}"

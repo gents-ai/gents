@@ -452,9 +452,7 @@ fn retryable_for_failure_class(failure_class: ToolFailureClass) -> Option<bool> 
         | ToolFailureClass::External
         | ToolFailureClass::ArgumentInvalid => Some(true),
         ToolFailureClass::Transport => Some(true),
-        ToolFailureClass::ToolReturnedError
-        | ToolFailureClass::PolicyDenied
-        | ToolFailureClass::ApprovalDenied => Some(false),
+        ToolFailureClass::ToolReturnedError | ToolFailureClass::PolicyDenied => Some(false),
     }
 }
 

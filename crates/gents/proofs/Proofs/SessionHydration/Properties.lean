@@ -79,15 +79,4 @@ theorem applyStep_idempotent (cat : Catalog) (st : State) (r : Request) :
   · have hafter := pending_reaches_terminal cat st r hterminal
     exact terminal_request_is_noop cat (applyStep cat st r) r hafter
 
-/-- Hydration is not a scope/template transition and cannot flap pairing. -/
-theorem pairing_noninterference (cat : Catalog) (st : State) (r : Request) :
-    (applyStep cat st r).pairingState = st.pairingState := by
-  unfold applyStep
-  by_cases hterminal : terminalFor st r.key
-  · rw [if_pos hterminal]
-  · rw [if_neg hterminal]
-    by_cases hadmits : admits cat r
-    · rw [if_pos hadmits]
-    · rw [if_neg hadmits]
-
 end SessionHydration

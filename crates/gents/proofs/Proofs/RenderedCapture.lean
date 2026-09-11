@@ -597,10 +597,9 @@ theorem providerRequests_iff_sent (sc : Scenario) :
   cases h : sendPermitted sc <;> simp [providerRequests, finalStage, h, postStage] <;>
     cases h_outcome : (outcome sc).durable <;> simp
 
-/-- **The emitted rows are the relational model.** Every scenario's computed
-`(finalStore, finalStage)` is reachable from its `assembled` start by legal
-steps, so a Rust implementation that reproduces the rows inherits P1–P3 rather
-than merely agreeing with a spreadsheet. -/
+/-- Every scenario's computed endpoints have a legal model trace. These
+proof-backed scenarios exercise P1–P3; matching finite endpoint observations
+does not establish production transition ordering or universal refinement. -/
 theorem trace_realizes (sc : Scenario) : Trace (initialMachine sc) (finalMachine sc) := by
   cases h_prior : sc.priorBinding with
   | none =>

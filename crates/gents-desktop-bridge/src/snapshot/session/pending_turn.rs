@@ -45,27 +45,6 @@ pub(super) fn project_retry_eligibility(request: Option<&AgentRequestRow>) -> Re
     }
 }
 
-fn selected_skill_ids_from_metadata(metadata: Option<&str>) -> Vec<String> {
-    let Some(metadata) = metadata.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Vec::new();
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) else {
-        return Vec::new();
-    };
-
-    value
-        .get("selected_skill_ids")
-        .and_then(|value| value.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 pub(super) fn build_pending_turn(
     store: &ClientStore,
     transcript_store: &ClientStore,
@@ -76,9 +55,10 @@ pub(super) fn build_pending_turn(
     let request = store.requests.iter().find(|row| {
         row.request_id == request_id
             && row.session_id.as_deref() == Some(session_id)
-            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
+            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did))
     })?;
-    if !gents::lifecycle::request_content_owns_user_projection(request.metadata.as_deref()) {
+    let request_input = request.input.clone().unwrap_or_default();
+    if !gents::lifecycle::request_content_owns_user_projection(&request_input) {
         return None;
     }
 
@@ -143,7 +123,7 @@ pub(super) fn build_pending_turn(
     Some(PendingTurnView {
         request_id: request.request_id.clone(),
         content: content.to_string(),
-        selected_skill_ids: selected_skill_ids_from_metadata(request.metadata.as_deref()),
+        selected_skill_ids: request_input.selected_skill_ids,
         lifecycle_state,
         created_at: normalize_optional(request.created_at.as_deref()),
     })

@@ -5,10 +5,10 @@ import type { BehaviorDeleteRequest as GeneratedBehaviorDeleteRequest } from "..
 import type { BehaviorSaveRequest as GeneratedBehaviorSaveRequest } from "../generated/BehaviorSaveRequest.js";
 import type { ChatSendRequest as GeneratedChatSendRequest } from "../generated/ChatSendRequest.js";
 import type { MailboxItemRequest as GeneratedMailboxItemRequest } from "../generated/MailboxItemRequest.js";
-import type { ConversationRenameRequest as GeneratedConversationRenameRequest } from "../generated/ConversationRenameRequest.js";
+import type { SessionRenameRequest as GeneratedSessionRenameRequest } from "../generated/SessionRenameRequest.js";
 import type { DesktopInitRequest as GeneratedDesktopInitRequest } from "../generated/DesktopInitRequest.js";
-import type { EventTriggerDeleteRequest as GeneratedEventTriggerDeleteRequest } from "../generated/EventTriggerDeleteRequest.js";
-import type { EventTriggerSaveRequest as GeneratedEventTriggerSaveRequest } from "../generated/EventTriggerSaveRequest.js";
+import type { TriggerDeleteRequest as GeneratedTriggerDeleteRequest } from "../generated/TriggerDeleteRequest.js";
+import type { TriggerSaveRequest as GeneratedTriggerSaveRequest } from "../generated/TriggerSaveRequest.js";
 import type { InferenceProfileDeleteRequest as GeneratedInferenceProfileDeleteRequest } from "../generated/InferenceProfileDeleteRequest.js";
 import type { InferenceProfileSaveRequest as GeneratedInferenceProfileSaveRequest } from "../generated/InferenceProfileSaveRequest.js";
 import type { InferenceProbeRequest as GeneratedInferenceProbeRequest } from "../generated/InferenceProbeRequest.js";
@@ -23,8 +23,8 @@ import type { SkillSaveRequest as GeneratedSkillSaveRequest } from "../generated
 import type { TaskDeleteRequest as GeneratedTaskDeleteRequest } from "../generated/TaskDeleteRequest.js";
 import type { TaskRunRequest as GeneratedTaskRunRequest } from "../generated/TaskRunRequest.js";
 import type { TaskSaveRequest as GeneratedTaskSaveRequest } from "../generated/TaskSaveRequest.js";
-import type { ToolSelectionDeleteRequest as GeneratedToolSelectionDeleteRequest } from "../generated/ToolSelectionDeleteRequest.js";
-import type { ToolSelectionSaveRequest as GeneratedToolSelectionSaveRequest } from "../generated/ToolSelectionSaveRequest.js";
+import type { ToolsDeleteRequest as GeneratedToolsDeleteRequest } from "../generated/ToolsDeleteRequest.js";
+import type { ToolsSaveRequest as GeneratedToolsSaveRequest } from "../generated/ToolsSaveRequest.js";
 import type { ToolServiceDeleteRequest as GeneratedToolServiceDeleteRequest } from "../generated/ToolServiceDeleteRequest.js";
 import type { ToolServiceSaveRequest as GeneratedToolServiceSaveRequest } from "../generated/ToolServiceSaveRequest.js";
 import type { ToolServiceTestRequest as GeneratedToolServiceTestRequest } from "../generated/ToolServiceTestRequest.js";
@@ -44,13 +44,10 @@ export type BehaviorDeleteRequest =
 export type BehaviorSaveRequest = RequestInput<GeneratedBehaviorSaveRequest>;
 export type ChatSendRequest = RequestInput<GeneratedChatSendRequest>;
 export type MailboxItemRequest = RequestInput<GeneratedMailboxItemRequest>;
-export type ConversationRenameRequest =
-  RequestInput<GeneratedConversationRenameRequest>;
+export type SessionRenameRequest = RequestInput<GeneratedSessionRenameRequest>;
 export type DesktopInitRequest = RequestInput<GeneratedDesktopInitRequest>;
-export type EventTriggerDeleteRequest =
-  RequestInput<GeneratedEventTriggerDeleteRequest>;
-export type EventTriggerSaveRequest =
-  RequestInput<GeneratedEventTriggerSaveRequest>;
+export type TriggerDeleteRequest = RequestInput<GeneratedTriggerDeleteRequest>;
+export type TriggerSaveRequest = RequestInput<GeneratedTriggerSaveRequest>;
 export type InferenceProfileDeleteRequest =
   RequestInput<GeneratedInferenceProfileDeleteRequest>;
 export type InferenceProfileSaveRequest =
@@ -71,10 +68,8 @@ export type SkillSaveRequest = RequestInput<GeneratedSkillSaveRequest>;
 export type TaskDeleteRequest = RequestInput<GeneratedTaskDeleteRequest>;
 export type TaskRunRequest = RequestInput<GeneratedTaskRunRequest>;
 export type TaskSaveRequest = RequestInput<GeneratedTaskSaveRequest>;
-export type ToolSelectionDeleteRequest =
-  RequestInput<GeneratedToolSelectionDeleteRequest>;
-export type ToolSelectionSaveRequest =
-  RequestInput<GeneratedToolSelectionSaveRequest>;
+export type ToolsDeleteRequest = RequestInput<GeneratedToolsDeleteRequest>;
+export type ToolsSaveRequest = RequestInput<GeneratedToolsSaveRequest>;
 export type ToolServiceDeleteRequest =
   RequestInput<GeneratedToolServiceDeleteRequest>;
 export type ToolServiceSaveRequest =
@@ -91,3 +86,8 @@ export type { GrokLoginRequest } from "../generated/GrokLoginRequest.js";
 export type { GrokLoginUrl } from "../generated/GrokLoginUrl.js";
 export type { CodexLoginUrl } from "../generated/CodexLoginUrl.js";
 export type { InferenceProbeResult } from "../generated/InferenceProbeResult.js";
+export type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
+export type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
+export type { ConfigComponentPatch } from "../generated/ConfigComponentPatch.js";
+export type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest.js";
+export type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteRequest.js";

@@ -1,44 +1,6 @@
-use crate::cascade::{
-    build_cascade_preview, CascadeClassification, CascadeWalkRequest, CascadeWalkRow,
-};
+use crate::cascade::{build_cascade_preview, CascadeClassification, CascadeWalkRequest};
 use crate::types::DesktopPreviewInterruptCascadeRequest;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-
-#[test]
-fn cascade_request_default_shape() {
-    let req = CascadeWalkRequest {
-        root_request_id: "req_root".into(),
-        agent_did: None,
-        include_terminal: false,
-    };
-    assert_eq!(req.root_request_id, "req_root");
-}
-
-#[test]
-fn cascade_classification_variant_names() {
-    let v = CascadeClassification::WillInterrupt;
-    assert!(matches!(v, CascadeClassification::WillInterrupt));
-    let _ = CascadeClassification::WillDetach;
-    let _ = CascadeClassification::AlreadyTerminal;
-    let _ = CascadeClassification::UnknownPolicy;
-}
-
-#[test]
-fn cascade_row_carries_lineage() {
-    let row = CascadeWalkRow {
-        request_id: "req_b91".into(),
-        session_id: Some("sess_1".into()),
-        behavior_id: Some("amy-general".into()),
-        lifecycle_state: Some(RequestLifecycleState::Processing),
-        parent_request_id: Some("req_root".into()),
-        parent_tool_call_id: Some("tc_42".into()),
-        tool_name: Some("summarize".into()),
-        await_mode: Some("background".into()),
-        cancel_policy: Some("cascade".into()),
-        classification: CascadeClassification::WillInterrupt,
-    };
-    assert_eq!(row.parent_request_id.as_deref(), Some("req_root"));
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn walk_returns_classified_descendants_for_five_child_fixture() {
@@ -49,42 +11,22 @@ async fn walk_returns_classified_descendants_for_five_child_fixture() {
         include_terminal: true,
     };
     let result = crate::cascade::walk(&core, &req).await.expect("walk ok");
-    let kinds: Vec<_> = result.rows.iter().map(|r| r.classification).collect();
+    let mut classified: Vec<_> = result
+        .rows
+        .iter()
+        .map(|row| (row.request_id.as_str(), row.classification))
+        .collect();
+    classified.sort_by_key(|(id, _)| *id);
     assert_eq!(
-        kinds
-            .iter()
-            .filter(|c| **c == CascadeClassification::WillInterrupt)
-            .count(),
-        3,
-        "expected 3 WillInterrupt, got: {:?}",
-        kinds
-    );
-    assert_eq!(
-        kinds
-            .iter()
-            .filter(|c| **c == CascadeClassification::WillDetach)
-            .count(),
-        1,
-        "expected 1 WillDetach, got: {:?}",
-        kinds
-    );
-    assert_eq!(
-        kinds
-            .iter()
-            .filter(|c| **c == CascadeClassification::UnknownPolicy)
-            .count(),
-        1,
-        "expected 1 UnknownPolicy, got: {:?}",
-        kinds
-    );
-    assert_eq!(
-        kinds
-            .iter()
-            .filter(|c| **c == CascadeClassification::AlreadyTerminal)
-            .count(),
-        1,
-        "expected 1 AlreadyTerminal, got: {:?}",
-        kinds
+        classified,
+        [
+            ("req_a17_old", CascadeClassification::AlreadyTerminal),
+            ("req_b91", CascadeClassification::WillInterrupt),
+            ("req_b92", CascadeClassification::WillInterrupt),
+            ("req_b93", CascadeClassification::WillDetach),
+            ("req_c01", CascadeClassification::WillInterrupt),
+            ("req_c02", CascadeClassification::UnknownPolicy),
+        ]
     );
     assert_eq!(
         result.root_state,
@@ -109,10 +51,28 @@ async fn preview_returns_four_classified_groups_and_a_signature() {
 
     assert_eq!(preview.root_request_id, "req_root");
     assert_eq!(preview.root_state.as_deref(), Some("processing"));
-    assert_eq!(preview.will_interrupt.len(), 3);
-    assert_eq!(preview.will_detach.len(), 1);
-    assert_eq!(preview.already_terminal.len(), 1);
-    assert_eq!(preview.unknown_policy.len(), 1);
+    for (group, expected) in [
+        (
+            &preview.will_interrupt,
+            &["req_b91", "req_b92", "req_c01"][..],
+        ),
+        (&preview.will_detach, &["req_b93"][..]),
+        (&preview.already_terminal, &["req_a17_old"][..]),
+        (&preview.unknown_policy, &["req_c02"][..]),
+    ] {
+        let mut ids: Vec<_> = group.iter().map(|row| row.request_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, expected);
+        for row in group {
+            assert_eq!(row.parent_request_id.as_deref(), Some("req_root"));
+            assert!(row.parent_tool_call_id.is_some());
+            assert!(row.tool_name.is_some());
+        }
+    }
+    assert_eq!(
+        preview.already_terminal[0].lifecycle_state.as_deref(),
+        Some("completed")
+    );
     assert_eq!(preview.preview_signature.len(), 64);
 }
 

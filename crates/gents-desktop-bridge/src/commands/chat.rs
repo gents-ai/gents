@@ -3,7 +3,7 @@ use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use uuid::Uuid;
 
 use super::super::types::{
-    turn_state_label, ChatSendRequest, ChatSendResult, ConversationRenameRequest,
+    turn_state_label, ChatSendRequest, ChatSendResult, SessionRenameRequest,
 };
 
 pub async fn send_chat_message(
@@ -67,10 +67,7 @@ pub async fn send_chat_message(
     })
 }
 
-pub async fn rename_conversation(
-    core: &ClientCore,
-    request: ConversationRenameRequest,
-) -> Result<()> {
+pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {
     let agent_did = request.agent_did.trim().to_string();
     if agent_did.is_empty() {
         bail!("agent_did is required");
@@ -83,7 +80,6 @@ pub async fn rename_conversation(
     if title.is_empty() {
         bail!("title is required");
     }
-    core.rename_conversation(&agent_did, &session_id, &title)
-        .await?;
+    core.rename_session(&agent_did, &session_id, &title).await?;
     Ok(())
 }

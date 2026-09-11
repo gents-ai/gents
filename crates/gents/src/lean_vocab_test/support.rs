@@ -24,15 +24,22 @@ pub(crate) struct LeanContractVocabulary<'a> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LeanContractSnapshot {
     pub(crate) generated_by: String,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
-    #[serde(default)]
+    /// Bridge-owner child-terminal failure projections
+    /// (`Conformance.ChildFailureProjections`).
+    pub(crate) child_failure_projections: Vec<LeanChildFailureProjection>,
+    /// Multi-resource pairing reconciliation samples
+    /// (`Conformance.PairingReconcileCases`).
+    pub(crate) pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
+    // The generator emits every top-level key unconditionally, so no field may
+    // serde-default away its absence: a missing required fixture must fail
+    // decoding instead of silently decoding to empty coverage.
     pub(crate) graph_pipeline_validation_cases: Vec<LeanGraphPipelineValidationCase>,
-    #[serde(default)]
     pub(crate) graph_pipeline_revision_gate_cases: Vec<LeanGraphPipelineRevisionGateCase>,
-    #[serde(default)]
     pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
     pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_head_cases: Vec<serde_json::Value>,
@@ -45,7 +52,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
-    pub(crate) workspace_capability_migration_cases: Vec<serde_json::Value>,
     pub(crate) graph_invocation_publication_cases: Vec<serde_json::Value>,
     pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
@@ -56,37 +62,35 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) inference_registry_cases: Vec<serde_json::Value>,
     pub(crate) trigger_dispatch_case_count: usize,
     pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
-    pub(crate) trigger_group_case_count: usize,
-    pub(crate) trigger_group_cases: Vec<LeanTriggerGroupCase>,
-    #[serde(default)]
+    pub(crate) event_group_case_count: usize,
+    pub(crate) event_group_cases: Vec<LeanEventGroupCase>,
+    pub(crate) event_group_clock_case_count: usize,
+    pub(crate) event_group_clock_cases: Vec<serde_json::Value>,
+    pub(crate) event_group_capture_case_count: usize,
+    pub(crate) event_group_capture_cases: Vec<serde_json::Value>,
+    pub(crate) callback_transition_case_count: usize,
+    pub(crate) callback_transition_cases: Vec<serde_json::Value>,
+    pub(crate) session_document_cases: LeanSessionDocumentCases,
+    pub(crate) request_input_cases: Vec<serde_json::Value>,
+    pub(crate) background_wake_row_cases: Vec<serde_json::Value>,
+    pub(crate) configuration_scope_cases: serde_json::Value,
+    pub(crate) discovery_scope_cases: Vec<serde_json::Value>,
+    pub(crate) budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub(crate) goal_decision_cases: Vec<LeanGoalDecisionCase>,
-    #[serde(default)]
     pub(crate) goal_transition_cases: Vec<LeanGoalTransitionCase>,
-    #[serde(default)]
     pub(crate) goal_create_cases: Vec<LeanGoalCreateCase>,
-    #[serde(default)]
     pub(crate) task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
-    #[serde(default)]
     pub(crate) task_goal_recovery_cases: Vec<LeanTaskGoalRecoveryCase>,
-    #[serde(default)]
     pub(crate) goal_submission_cases: Vec<LeanGoalSubmissionCase>,
-    #[serde(default)]
     pub(crate) goal_continuation_materialization_cases:
         Vec<LeanGoalContinuationMaterializationCase>,
-    #[serde(default)]
     pub(crate) session_hydration_decision_cases: Vec<LeanSessionHydrationDecisionCase>,
-    #[serde(default)]
     pub(crate) session_hydration_progress_cases: Vec<LeanSessionHydrationProgressCase>,
-    #[serde(default)]
     pub(crate) session_hydration_durable_cases: Vec<LeanSessionHydrationDurableCase>,
-    #[serde(default)]
     pub(crate) enrollment_cases: Vec<LeanEnrollmentCase>,
     pub(crate) enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
-    #[serde(default)]
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
-    #[serde(default)]
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
-    #[serde(default)]
     pub(crate) agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub(crate) frontend_client_shell_case_count: usize,
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
@@ -95,19 +99,13 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) client_behavior_readiness_cases: Vec<LeanClientBehaviorReadinessCase>,
-    #[serde(default)]
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
-    #[serde(default)]
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
-    #[serde(default)]
     pub(crate) goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
-    #[serde(default)]
     pub(crate) lsp_action_cases: Vec<LeanLspActionCase>,
-    #[serde(default)]
     pub(crate) self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
-    #[serde(default)]
     pub(crate) self_config_cases: Vec<LeanSelfConfigCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
@@ -126,7 +124,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
-    #[serde(default)]
     pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub(crate) backend_health_cases: Vec<LeanBackendHealthCase>,
@@ -143,98 +140,56 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) pending_user_turn_cases: Vec<LeanPendingUserTurnCase>,
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
-    #[serde(default)]
-    pub(crate) recovery_equivalence_cases: Vec<LeanRecoveryEquivalenceCase>,
-    #[serde(default)]
+    // `recovery_equivalence_cases` was deleted from the generated contract:
+    // the synthetic recovery-equivalence fixtures are gone and the actual
+    // recovery sweep (`recovery_sweep_cases`) is the remaining owner.
     pub(crate) restart_disposition_cases: Vec<LeanRestartDispositionCase>,
-    #[serde(default)]
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
-    #[serde(default)]
     pub(crate) tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
-    #[serde(default)]
     pub(crate) bridge_step_cases: Vec<LeanBridgeStepCase>,
-    #[serde(default)]
     pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
-    #[serde(default)]
     pub(crate) codex_shim_subagent_tool_cases: Vec<LeanCodexShimSubagentToolCase>,
-    #[serde(default)]
     pub(crate) codex_shim_subagent_status_cases: Vec<LeanCodexShimSubagentStatusCase>,
-    #[serde(default)]
     pub(crate) codex_shim_subagent_visibility_cases: Vec<LeanCodexShimSubagentVisibilityCase>,
-    #[serde(default)]
     pub(crate) codex_shim_subagent_metadata_cases: Vec<LeanCodexShimSubagentMetadataCase>,
-    #[serde(default)]
     pub(crate) codex_shim_subagent_listing_cases: Vec<LeanCodexShimSubagentListingCase>,
-    #[serde(default)]
     pub(crate) codex_shim_subagent_thread_shape_cases: Vec<LeanCodexShimSubagentThreadShapeCase>,
-    #[serde(default)]
     pub(crate) codex_shim_reasoning_projection_cases: Vec<LeanCodexShimReasoningProjectionCase>,
-    #[serde(default)]
     pub(crate) codex_shim_thread_status_cases: Vec<LeanCodexShimThreadStatusCase>,
-    #[serde(default)]
     pub(crate) codex_shim_behavior_selection_cases: Vec<LeanCodexShimBehaviorSelectionCase>,
-    #[serde(default)]
     pub(crate) codex_shim_tool_metadata_cases: Vec<LeanCodexShimToolMetadataCase>,
-    #[serde(default)]
     pub(crate) codex_shim_context_usage_cases: Vec<LeanCodexShimContextUsageCase>,
-    #[serde(default)]
     pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
-    #[serde(default)]
     pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
-    #[serde(default)]
     pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
-    #[serde(default)]
     pub(crate) descendant_graph_cases: Vec<LeanDescendantGraphCase>,
-    #[serde(default)]
-    pub(crate) r5_cross_deployment_cases: Vec<LeanR5CrossDeploymentCase>,
-    #[serde(default)]
+    pub(crate) r5_cross_principal_cases: Vec<LeanR5CrossPrincipalCase>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
-    #[serde(default)]
     pub(crate) cancel_propagation_cases: Vec<LeanCancelPropagationCase>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
-    #[serde(default)]
     pub(crate) subagent_delegation_graph_cases: Vec<LeanSubagentDelegationGraphCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) streaming_response_cases: Vec<LeanResponseTransitionCase>,
-    #[serde(default)]
     pub(crate) streaming_response_interrupt_flow_cases: Vec<LeanResponseInterruptFlowCase>,
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
-    #[serde(default)]
     pub(crate) compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
-    #[serde(default)]
     pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
-    #[serde(default)]
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
-    #[serde(default)]
     pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
-    #[serde(default)]
     pub(crate) prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
-    #[serde(default)]
     pub(crate) prompt_assembly_turn_budget_cases: Vec<LeanPromptAssemblyTurnBudgetCase>,
-    #[serde(default)]
     pub(crate) prompt_assembly_retention_cases: Vec<LeanPromptAssemblyRetentionCase>,
-    #[serde(default)]
     pub(crate) prompt_assembly_claude_map_cases: Vec<LeanPromptAssemblyClaudeMapCase>,
-    #[serde(default)]
     pub(crate) prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
-    #[serde(default)]
     pub(crate) prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
-    #[serde(default)]
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
-    #[serde(default)]
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
-    #[serde(default)]
     pub(crate) rolling_compaction_cases: Vec<LeanRollingCompactionCase>,
-    #[serde(default)]
     pub(crate) reduction_engine_cases: Vec<LeanReductionEngineCase>,
-    #[serde(default)]
     pub(crate) rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
-    #[serde(default)]
     pub(crate) capture_scope_cases: Vec<LeanCaptureScopeCase>,
-    #[serde(default)]
     pub(crate) capture_order_cases: Vec<LeanCaptureOrderCase>,
-    #[serde(default)]
     pub(crate) aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
@@ -243,20 +198,47 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) identity_structural_cases: Vec<LeanIdentityStructuralCase>,
     pub(crate) identity_permission_cases: Vec<LeanIdentityPermissionCase>,
     pub(crate) identity_contracts: Vec<LeanIdentityContract>,
-    #[serde(default)]
     pub(crate) workspace_cases: Vec<LeanWorkspaceCase>,
-    #[serde(default)]
     pub(crate) workspace_binding_cases: Vec<LeanWorkspaceBindingCase>,
-    #[serde(default)]
     pub(crate) callback_cases: Vec<LeanCallbackCase>,
-    #[serde(default)]
     pub(crate) event_delivery_transition_case_count: usize,
-    #[serde(default)]
     pub(crate) event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
-    #[serde(default)]
     pub(crate) event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
-    #[serde(default)]
     pub(crate) event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+}
+
+/// One bridge-owner child-terminal failure projection
+/// (`Conformance.ChildFailureProjections`): the managed-tool state the
+/// background bridge owner projects for one child terminal observation. The
+/// mapping is executed by the bridge owner (`Proofs.Background.Bridge`);
+/// consumers must compare it against production, not restate a second table.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanChildFailureProjection {
+    pub(crate) child_state: String,
+    pub(crate) tool_state: String,
+}
+
+/// One observed collection state of the pairing transport owner
+/// (`Conformance.PairingReconcileCases`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanPairingReconcileSnapshot {
+    pub(crate) connected: bool,
+    pub(crate) desired_collections: Vec<String>,
+    pub(crate) actual_collections: Vec<String>,
+    pub(crate) converged: bool,
+}
+
+/// One multi-resource pairing reconciliation sample
+/// (`Conformance.PairingReconcileCases`): a transport-owner operation
+/// (`dial`, `reconcileInstall`, `dialFailed`) and the observed resource state
+/// before and after. Convergence depends on all desired resources, not an
+/// independent phase machine.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanPairingReconcileCase {
+    pub(crate) name: String,
+    pub(crate) action: String,
+    pub(crate) before: LeanPairingReconcileSnapshot,
+    pub(crate) after: LeanPairingReconcileSnapshot,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -310,9 +292,7 @@ pub(crate) struct LeanStateMachineContract {
     pub(crate) legal_transitions: Vec<LeanTransitionPair>,
     pub(crate) illegal_transitions: Vec<LeanTransitionPair>,
     /// Named transition rows emitted by `Conformance.Contracts.NamedTransition`.
-    /// Defaults to empty so existing call sites (Bucket 0/Bucket 1) don't need
-    /// to deserialize this field on machines that don't emit any.
-    #[serde(default)]
+    /// The generator emits this key for every machine (empty when unused).
     pub(crate) named_transitions: Vec<LeanNamedTransition>,
 }
 
@@ -331,7 +311,7 @@ pub(crate) struct LeanWorkspaceBindingRef {
     pub(crate) workspace_id: String,
     pub(crate) request_id: String,
     pub(crate) authority: String,
-    pub(crate) deployment_id: String,
+    pub(crate) agent_did: String,
     pub(crate) seal_hash: Option<String>,
     pub(crate) state: String,
 }
@@ -342,7 +322,7 @@ pub(crate) struct LeanWorkspaceBindingCase {
     pub(crate) workspace_id: String,
     pub(crate) workspace_state: String,
     pub(crate) workspace_seal_hash: Option<String>,
-    pub(crate) owner_deployment_id: String,
+    pub(crate) owner_agent_did: String,
     pub(crate) creation_policy: String,
     pub(crate) existing: Vec<LeanWorkspaceBindingRef>,
     pub(crate) candidate: LeanWorkspaceBindingRef,
@@ -353,9 +333,10 @@ pub(crate) struct LeanWorkspaceBindingCase {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanCallbackCase {
+    pub(crate) journal_prefix_legal: bool,
     pub(crate) name: String,
     pub(crate) invocation_id: String,
-    pub(crate) owner_deployment_id: String,
+    pub(crate) owner_agent_did: String,
     pub(crate) state: String,
     pub(crate) journal: Vec<String>,
     pub(crate) result_emitted: bool,
@@ -367,9 +348,7 @@ pub(crate) struct LeanNamedTransition {
     pub(crate) name: String,
     pub(crate) from: String,
     pub(crate) to: String,
-    #[serde(default)]
     pub(crate) requires_native: bool,
-    #[serde(default)]
     pub(crate) requires_child: bool,
 }
 
@@ -380,9 +359,7 @@ pub(crate) struct LeanCoverageEntry {
     pub(crate) consumer: String,
     pub(crate) accepted_boundary: String,
     pub(crate) accepted_follow_up: String,
-    #[serde(default)]
     pub(crate) feature: String,
-    #[serde(default)]
     pub(crate) surfaces: Vec<LeanSurface>,
 }
 
@@ -776,7 +753,7 @@ pub(crate) struct LeanAgentRequestAdmissionCase {
     pub(crate) target_policy_allows: bool,
     pub(crate) bridge_author_binding_current: bool,
     pub(crate) bridge_author_authorization_fresh: bool,
-    pub(crate) target_cross_deployment_policy_allows: bool,
+    pub(crate) target_cross_principal_policy_allows: bool,
     pub(crate) expected_admitted: bool,
     pub(crate) expected_disposition: String,
 }
@@ -820,6 +797,8 @@ mod request_execution_lease;
 mod rolling_compaction;
 #[path = "self_config.rs"]
 mod self_config;
+#[path = "session_documents.rs"]
+mod session_documents;
 #[path = "slot_persistence_health.rs"]
 mod slot_persistence_health;
 #[path = "tool_policy.rs"]
@@ -841,6 +820,7 @@ pub(crate) use rendered_capture::*;
 pub(crate) use request_execution_lease::*;
 pub(crate) use rolling_compaction::*;
 pub(crate) use self_config::*;
+pub(crate) use session_documents::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use tool_policy::*;
 pub(crate) use triggers_runtime_apply::*;
@@ -1054,6 +1034,10 @@ pub(crate) fn lean_managed_exec_tool_boundary_cases() -> &'static [LeanManagedEx
     &lean_contract_snapshot().managed_exec_tool_boundary_cases
 }
 
+pub(crate) fn lean_pairing_reconcile_cases() -> &'static [LeanPairingReconcileCase] {
+    &lean_contract_snapshot().pairing_reconcile_cases
+}
+
 pub(crate) fn lean_pairing_reconcile_shutdown_boundary_cases(
 ) -> &'static [LeanPairingReconcileShutdownBoundaryCase] {
     &lean_contract_snapshot().pairing_reconcile_shutdown_boundary_cases
@@ -1075,18 +1059,6 @@ pub(crate) fn lean_managed_exec_liveness_cases() -> &'static [LeanManagedExecLiv
 
 pub(crate) fn lean_tool_preflight_cases() -> &'static [LeanToolPreflightCase] {
     &lean_contract_snapshot().tool_preflight_cases
-}
-
-pub(crate) fn lean_tool_preflight_case(name: &str) -> &'static LeanToolPreflightCase {
-    lean_contract_snapshot()
-        .tool_preflight_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean tool preflight case {name:?} was not emitted"))
-}
-
-pub(crate) fn lean_tool_retry_cases() -> &'static [LeanToolRetryCase] {
-    &lean_contract_snapshot().tool_retry_cases
 }
 
 pub(crate) fn lean_completion_retry_cases() -> &'static [LeanCompletionRetryCase] {
@@ -1115,10 +1087,6 @@ pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweep
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
-}
-
-pub(crate) fn lean_recovery_equivalence_cases() -> &'static [LeanRecoveryEquivalenceCase] {
-    &lean_contract_snapshot().recovery_equivalence_cases
 }
 
 pub(crate) fn lean_restart_disposition_cases() -> &'static [LeanRestartDispositionCase] {
@@ -1239,8 +1207,8 @@ pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6Backgroun
         .unwrap_or_else(|| panic!("Lean R6 backgrounding case {name:?} was not emitted"))
 }
 
-pub(crate) fn lean_r5_cross_deployment_cases() -> &'static [LeanR5CrossDeploymentCase] {
-    &lean_contract_snapshot().r5_cross_deployment_cases
+pub(crate) fn lean_r5_cross_principal_cases() -> &'static [LeanR5CrossPrincipalCase] {
+    &lean_contract_snapshot().r5_cross_principal_cases
 }
 
 pub(crate) fn lean_composed_invariant_witnesses() -> &'static [LeanComposedInvariantWitness] {
@@ -1276,6 +1244,10 @@ pub(crate) fn lean_composed_invariant_witness_by_scenario(
 
 pub(crate) fn lean_cancel_propagation_cases() -> &'static [LeanCancelPropagationCase] {
     &lean_contract_snapshot().cancel_propagation_cases
+}
+
+pub(crate) fn lean_child_failure_projections() -> &'static [LeanChildFailureProjection] {
+    &lean_contract_snapshot().child_failure_projections
 }
 
 pub(crate) fn lean_r6_background_theorem_witnesses() -> &'static [LeanBackgroundTheoremWitness] {
@@ -1593,12 +1565,12 @@ pub(crate) fn lean_trigger_dispatch_case_count() -> usize {
     lean_contract_snapshot().trigger_dispatch_case_count
 }
 
-pub(crate) fn lean_trigger_group_cases() -> &'static [LeanTriggerGroupCase] {
-    &lean_contract_snapshot().trigger_group_cases
+pub(crate) fn lean_event_group_cases() -> &'static [LeanEventGroupCase] {
+    &lean_contract_snapshot().event_group_cases
 }
 
-pub(crate) fn lean_trigger_group_case_count() -> usize {
-    lean_contract_snapshot().trigger_group_case_count
+pub(crate) fn lean_event_group_case_count() -> usize {
+    lean_contract_snapshot().event_group_case_count
 }
 
 pub(crate) fn assert_lean_contract_vocabulary_matches(spec: LeanContractVocabulary<'_>) {
@@ -2043,4 +2015,8 @@ impl LeanVocabularyParseError<'_> {
             ),
         }
     }
+}
+
+pub(crate) fn lean_budget_rehydration_cases() -> &'static [LeanBudgetRehydrationCase] {
+    &lean_contract_snapshot().budget_rehydration_cases
 }

@@ -1,168 +1,113 @@
 use anyhow::{Context, Result};
-use gents_protocol::graphql::{
-    extract_mutation_doc_id, graphql_rows_from_response, optional_bool_field, optional_f64_field,
-    optional_i64_field, optional_i64_list_field, optional_string_field,
-};
 
+use crate::collection::Collection;
 use crate::document_config::InferenceProfile;
-use crate::graphql::escape_graphql_string;
 
-use super::{mint_recreate_identity_timestamp, ConfigAccess, ConfigApplyTxn};
+use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
-/// Upsert a possibly sparse profile after validating the effective stored
-/// document in the same transaction as the mutation.
+/// Replace a complete inference profile through the common configuration writer.
+/// Sampling and execution settings are references, never a second set of profile
+/// fields. Explicit sparse patches remain owned by the patch API.
 pub async fn write_inference_profile_document(
     access: &ConfigAccess,
     profile: &InferenceProfile,
 ) -> Result<String> {
+    profile.validate()?;
     access
         .transact("config.inference_profile.write", |txn| {
-            Box::pin(async move { write_inference_profile_in_txn(txn, profile).await })
+            Box::pin(async move {
+                let value = serde_json::to_value(profile)?;
+                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                    collection: Collection::InferenceProfile,
+                    add: value.clone(),
+                    update: value,
+                }])?;
+                super::apply_desired_state_plan(txn, &plan).await?;
+                super::desired_state::read_record(
+                    txn,
+                    Collection::InferenceProfile,
+                    &profile.agent_did,
+                    &profile.profile_id,
+                )
+                .await?
+                .map(|(doc_id, _)| doc_id)
+                .context("replaced InferenceProfile missing")
+            })
         })
         .await
-}
-
-async fn write_inference_profile_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    patch: &InferenceProfile,
-) -> Result<String> {
-    effective_inference_profile(txn, patch).await?.validate()?;
-    let mutation = sparse_inference_profile_mutation(patch);
-    let response = txn.execute(&mutation).await?;
-    extract_mutation_doc_id(&response, "InferenceProfile")
-}
-
-pub(crate) async fn effective_inference_profile(
-    txn: &ConfigApplyTxn<'_>,
-    patch: &InferenceProfile,
-) -> Result<InferenceProfile> {
-    let profile_id = escape_graphql_string(&patch.profile_id);
-    let query = format!(
-        r#"{{
-            InferenceProfile(
-                filter: {{ profile_id: {{ _eq: "{profile_id}" }} }},
-                limit: 1
-            ) {{
-                profile_id display_name context_window max_output_tokens max_turns temperature
-                top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty
-                reasoning_effort stream_batch_ms stream_liveness_timeout_secs
-                deadline_duration_secs retry_max_transport retry_backoff_ms retry_max_resample
-                retry_allow_repair retry_interactive_max
-            }}
-        }}"#
-    );
-    let response = txn.execute(&query).await?;
-    let existing = graphql_rows_from_response(&response, "InferenceProfile")
-        .into_iter()
-        .next()
-        .map(serde_json::from_value)
-        .transpose()
-        .context("decoding existing InferenceProfile")?;
-    super::common::merge_sparse_document(existing, patch, &[], &[])
-}
-
-fn sparse_inference_profile_mutation(profile: &InferenceProfile) -> String {
-    let profile_id = escape_graphql_string(&profile.profile_id);
-    let fields = vec![
-        optional_string_field("display_name", profile.display_name.as_deref()),
-        optional_i64_field("context_window", profile.context_window),
-        optional_i64_field("max_output_tokens", profile.max_output_tokens),
-        optional_i64_field("max_turns", profile.max_turns),
-        optional_f64_field("temperature", profile.temperature),
-        optional_f64_field("top_p", profile.top_p),
-        optional_i64_field("top_k", profile.top_k),
-        optional_i64_field("seed", profile.seed),
-        optional_f64_field("min_p", profile.min_p),
-        optional_f64_field("frequency_penalty", profile.frequency_penalty),
-        optional_f64_field("presence_penalty", profile.presence_penalty),
-        optional_f64_field("repetition_penalty", profile.repetition_penalty),
-        optional_string_field("reasoning_effort", profile.reasoning_effort.as_deref()),
-        optional_i64_field("stream_batch_ms", profile.stream_batch_ms),
-        optional_i64_field(
-            "stream_liveness_timeout_secs",
-            profile.stream_liveness_timeout_secs,
-        ),
-        optional_i64_field("deadline_duration_secs", profile.deadline_duration_secs),
-        optional_i64_field("retry_max_transport", profile.retry_max_transport),
-        optional_i64_list_field("retry_backoff_ms", profile.retry_backoff_ms.as_deref()),
-        optional_i64_field("retry_max_resample", profile.retry_max_resample),
-        optional_bool_field("retry_allow_repair", profile.retry_allow_repair),
-        optional_i64_field("retry_interactive_max", profile.retry_interactive_max),
-    ];
-    let update_fields = fields
-        .iter()
-        .flatten()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(",\n                    ");
-    let mut add_fields = vec![format!(r#"profile_id: "{profile_id}""#)];
-    add_fields.extend(fields.into_iter().flatten());
-    add_fields.push(format!(
-        r#"updated_at: "{}""#,
-        escape_graphql_string(&mint_recreate_identity_timestamp())
-    ));
-    let add_fields = add_fields.join(",\n                    ");
-    format!(
-        r#"mutation {{
-            upsert_InferenceProfile(
-                filter: {{ profile_id: {{ _eq: "{profile_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ensure_runtime_schemas, load_inference_profile};
-    use defra_node::{EmbeddedNode, StorageBackend};
+    use defra_node::EmbeddedNode;
+    use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn sparse_deadline_change_validates_preserved_liveness_timeout() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .data_path(dir.path().join("data"))
-                .with_storage_backend(StorageBackend::Regolith)
-                .build()
-                .await?,
+    async fn replacement_preserves_other_owner_and_clears_optional_selection() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node);
+        for owner in ["did:key:owner", "did:key:other"] {
+            let backend = json!({"agent_did":owner,"backend_id":"local","name":"Local",
+                "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
+                "auth":{"kind":"unauthenticated"}});
+            let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                collection: Collection::InferenceBackend,
+                add: backend.clone(),
+                update: backend,
+            }])?;
+            access
+                .transact("test.profile.seed", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move {
+                        super::super::apply_desired_state_plan(txn, plan)
+                            .await
+                            .map(|_| ())
+                    })
+                })
+                .await?;
+        }
+        let mut initial: InferenceProfile = serde_json::from_value(json!({
+            "agent_did":"did:key:owner","profile_id":"same","backend_id":"local",
+            "model_name":"exact-model","reasoning_effort":"high","max_output_tokens":1234,"tags":["old"]
+        }))?;
+        let first_id = write_inference_profile_document(&access, &initial).await?;
+        let mut foreign = initial.clone();
+        foreign.agent_did = "did:key:other".to_owned();
+        assert_ne!(
+            write_inference_profile_document(&access, &foreign).await?,
+            first_id
         );
-        ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node.clone());
-
-        let initial = InferenceProfile {
-            profile_id: "profile".to_string(),
-            stream_liveness_timeout_secs: Some(4_000),
-            deadline_duration_secs: Some(5_000),
-            ..Default::default()
-        };
-        write_inference_profile_document(&access, &initial).await?;
-
-        let patch = InferenceProfile {
-            profile_id: initial.profile_id.clone(),
-            deadline_duration_secs: Some(3_600),
-            ..Default::default()
-        };
-        let error = write_inference_profile_document(&access, &patch)
-            .await
-            .expect_err("preserved liveness timeout must be checked against the new deadline")
-            .to_string();
-        assert!(
-            error.contains("must be less than deadline_duration_secs"),
-            "{error}"
+        initial.reasoning_effort = None;
+        initial.max_output_tokens = None;
+        initial.tags.clear();
+        assert_eq!(
+            write_inference_profile_document(&access, &initial).await?,
+            first_id
         );
-
-        let stored = load_inference_profile(&node, &initial.profile_id)
-            .await?
-            .expect("stored profile");
-        assert_eq!(stored.deadline_duration_secs, Some(5_000));
+        access
+            .transact("test.profile.read", |txn| {
+                let initial = &initial;
+                let foreign = &foreign;
+                Box::pin(async move {
+                    for expected in [initial, foreign] {
+                        let value = super::super::read_desired_state_document_in_txn(
+                            txn,
+                            Collection::InferenceProfile,
+                            &expected.agent_did,
+                            &expected.profile_id,
+                        )
+                        .await?
+                        .unwrap();
+                        let actual: InferenceProfile = serde_json::from_value(value)?;
+                        assert_eq!(&actual, expected);
+                    }
+                    Ok(())
+                })
+            })
+            .await?;
         Ok(())
     }
 }

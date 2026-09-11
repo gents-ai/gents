@@ -46,7 +46,7 @@ async fn runtime_seal_case(unowned: bool) {
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let repository = RepositoryPlacementRef {
         repository_id: "repo-1".into(),
-        deployment_id: "deploy-1".into(),
+        owner_agent_did: created.workspace.owner_agent_did.clone(),
         host_path: fx.repo.clone(),
         enabled: true,
     };
@@ -70,7 +70,7 @@ async fn runtime_seal_case(unowned: bool) {
     );
     create.workspace_id = Some(created.workspace.workspace_id.clone());
     create.workspace_authority = Some("readWrite".into());
-    create.workspace_owner_deployment_id = Some("deploy-1".into());
+    create.workspace_owner_agent_did = Some(created.workspace.owner_agent_did.clone());
     crate::request_admission::sign_agent_request_create(&identity, &mut create)
         .await
         .unwrap();
@@ -89,19 +89,12 @@ async fn runtime_seal_case(unowned: bool) {
     let lineage = WorkspaceLineage {
         workspace_id: request.workspace_id.clone(),
         workspace_authority: request.workspace_authority.clone(),
-        workspace_owner_deployment_id: request.workspace_owner_deployment_id.clone(),
+        workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
         workspace_seal_hash: None,
     };
-    materialize_workspace_binding(
-        &node,
-        &request.request_id,
-        &request.doc_id,
-        did,
-        &lineage,
-        Some("deploy-1"),
-    )
-    .await
-    .unwrap();
+    materialize_workspace_binding(&node, &request.request_id, &request.doc_id, did, &lineage)
+        .await
+        .unwrap();
     let mut owner =
         RequestLifecycle::new_with_agent_did(node.clone(), "general", did, request, 120);
     owner.claim().await.unwrap();

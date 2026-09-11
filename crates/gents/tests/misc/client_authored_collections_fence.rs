@@ -22,7 +22,7 @@
 //! - The `machine` `ScopeTemplate`'s `PerCollection` rules
 //!   (`crates/gents/src/agent/p2p_reconcile/templates.rs`): the collections
 //!   replicated per-pairing to client devices. Collections the template
-//!   lists but leaves unfiltered (`AgentBehavior`, `ToolSelection`, ...) are
+//!   lists but leaves unfiltered (`AgentBehavior`, `Tools`, ...) are
 //!   deliberately shared config pushed identically to every peer, not part
 //!   of the client-authored plane, and excluded.
 //! - Enrollment protocol collections use their own exact owner-scoped direct

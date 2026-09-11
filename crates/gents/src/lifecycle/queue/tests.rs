@@ -28,7 +28,8 @@ struct QueueRow {
     session_id: String,
     behavior_id: String,
     content: String,
-    metadata: Option<String>,
+    #[serde(default)]
+    input: Option<RequestInput>,
     #[serde(default)]
     lifecycle_state: Option<RequestLifecycleState>,
     execution_origin: String,
@@ -41,13 +42,21 @@ struct QueueRow {
     caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
-fn hints(source: QueueSource, policy: QueuePolicy) -> QueueHints {
-    QueueHints {
+fn hints(source: QueueSource, policy: QueuePolicy) -> RequestQueue {
+    RequestQueue {
         source,
         policy,
         key: Some("session:sess-1".to_string()),
         queued_after_request_id: Some("req-1".to_string()),
         interrupted_request_id: None,
+        background_completion_wake_version: None,
+    }
+}
+
+fn wake_queue_input(queue: RequestQueue) -> RequestInput {
+    RequestInput {
+        queue: Some(queue),
+        ..Default::default()
     }
 }
 
@@ -57,16 +66,11 @@ fn parent_request(agent_did: &str, session_id: &str) -> AgentRequest {
         request_id: "parent-request".to_string(),
         agent_did: agent_did.to_string(),
         requester_did: None,
-        behavior_id: Some(TEST_BEHAVIOR_ID.to_string()),
+        behavior_id: TEST_BEHAVIOR_ID.to_string(),
         session_id: session_id.to_string(),
         content: "parent".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
+        input: gents_protocol::request_input::RequestInput::default(),
         execution_origin: Some("interactive".to_string()),
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         deadline: None,
@@ -84,8 +88,8 @@ fn parent_request(agent_did: &str, session_id: &str) -> AgentRequest {
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         workspace_id: None,
+        workspace_owner_agent_did: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
         workspace_seal_hash: None,
     }
 }
@@ -125,6 +129,7 @@ async fn test_db(name: &str) -> TestDb {
     crate::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
+    crate::test_support::install_test_behavior(&node, identity.did(), TEST_BEHAVIOR_ID).await;
     TestDb {
         node,
         identity,
@@ -145,7 +150,7 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
                 session_id
                 behavior_id
                 content
-                metadata
+                input
                 lifecycle_state
                 execution_origin
                 superseded_by_request
@@ -177,12 +182,15 @@ async fn insert_raw_queue_request(
     agent_did: &str,
     request_id: &str,
     session_id: &str,
-    metadata: &str,
+    input: &RequestInput,
 ) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_metadata = escape_graphql_string(metadata);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let input_literal = gents_protocol::graphql::graphql_input_literal(
+        &serde_json::to_value(input).expect("canonical input serializes"),
+    )
+    .expect("canonical input is a GraphQL literal");
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation = format!(
         r#"mutation {{
@@ -195,7 +203,7 @@ async fn insert_raw_queue_request(
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "raw duplicate",
-                metadata: "{escaped_metadata}",
+                input: {input_literal},
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "scheduled",
@@ -222,13 +230,13 @@ async fn insert_raw_queue_request(
 #[tokio::test]
 async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     let db = test_db("ambiguous-request-doc-lookup").await;
-    let metadata = queue_metadata_json(&hints(QueueSource::User, QueuePolicy::Append));
+    let input = wake_queue_input(hints(QueueSource::User, QueuePolicy::Append));
     insert_raw_queue_request(
         &db.node,
         db.agent_did(),
         "duplicate-logical-id",
         "session-a",
-        &metadata,
+        &input,
     )
     .await;
     insert_raw_queue_request(
@@ -236,7 +244,7 @@ async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
         db.agent_did(),
         "duplicate-logical-id",
         "session-b",
-        &metadata,
+        &input,
     )
     .await;
 
@@ -246,10 +254,26 @@ async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     assert!(error.to_string().contains("ambiguous across 2 documents"));
 }
 
+/// Replace the admission signature field (owned and pinned by the protocol
+/// crate's canonical encoder tests) with a placeholder so the runtime pin
+/// stays stable while still asserting the exact field set.
+fn normalize_pin_fields(fields: &str) -> String {
+    let start = fields
+        .find("admission_signature: \"")
+        .expect("admission signature field present");
+    let rest = &fields[start + "admission_signature: \"".len()..];
+    let end = rest.find('"').expect("signature value closes");
+    let mut normalized = String::with_capacity(fields.len());
+    normalized.push_str(&fields[..start + "admission_signature: \"".len()]);
+    normalized.push_str("<SIGNATURE>");
+    normalized.push_str(&rest[end..]);
+    normalized
+}
+
 mod background_completion;
 mod background_goal_repair;
 mod coalescing;
-mod metadata;
+mod input;
 
 /// Pin signed GraphQL fields through the production preparation functions.
 /// Fixed timestamps and a deterministic signing identity keep these wire
@@ -284,7 +308,14 @@ mod pin_tests {
             "behavior-1",
             "steering content",
             ExecutionOrigin::Interactive,
-            r#"{"queue":{"source":"steering"}}"#,
+            wake_queue_input(RequestQueue {
+                source: QueueSource::Steering,
+                policy: QueuePolicy::Append,
+                key: None,
+                queued_after_request_id: None,
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            }),
             "req-session-mutation-1",
             "2030-01-01T00:00:00Z",
             Some("retry-key-session-1"),
@@ -297,9 +328,10 @@ mod pin_tests {
             .and_then(|rest| rest.strip_suffix(" }) { _docID } }"))
             .expect("mutation wraps create_AgentRequest input fields");
 
+        let normalized = normalize_pin_fields(&fields);
         assert_eq!(
-            fields,
-            "request_id: \"req-session-mutation-1\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-pin-parent\", retry_root_request: \"req-session-mutation-1\", retry_key: \"retry-key-session-1\", content: \"steering content\", metadata: \"{\\\"queue\\\":{\\\"source\\\":\\\"steering\\\"}}\", execution_origin: \"interactive\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, subagent_depth: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"5Tvz6LV31BdgtSqE22FqJHXnatDd6BkkvuVtKmEGJPai2Md5ooHQWKb4UZ4vc2q7oyh2cXh3UhkeqjFp9oqsUgjh\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
+            normalized,
+            "request_id: \"req-session-mutation-1\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-pin-parent\", retry_root_request: \"req-session-mutation-1\", retry_key: \"retry-key-session-1\", content: \"steering content\", input: { queue: { policy: \"append\", source: \"steering\" } }, execution_origin: \"interactive\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, subagent_depth: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 
@@ -311,14 +343,14 @@ mod pin_tests {
 
         let mut parent = pin_parent_request();
         parent.workspace_id = Some("ws-goal-1".to_string());
+        parent.workspace_owner_agent_did = Some("did:key:workspace-owner".to_string());
         parent.workspace_authority = Some("readWrite".to_string());
-        parent.workspace_owner_deployment_id = Some("dep-goal-1".to_string());
         parent.workspace_seal_hash = Some("seal-goal-1".to_string());
 
         let goal_id = "goal-1";
         let continuation_sequence: i64 = 3;
         let content = "continue the goal";
-        let behavior_id = parent.behavior_id.clone().unwrap();
+        let behavior_id = parent.behavior_id.clone();
 
         let mut create = prepare_goal_continuation(
             &parent,
@@ -339,8 +371,8 @@ mod pin_tests {
 
         let fields = create.graphql_input_fields().expect("graphql_input_fields");
         assert_eq!(
-            fields,
-            "request_id: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"general\", session_id: \"sess-pin-parent\", retry_root_request: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", retry_key: \"goal-continuation:355ac0cefea9f3d0afab06ffb90fd1ec\", content: \"continue the goal\", metadata: \"{\\\"goal\\\":{\\\"continuation_sequence\\\":3,\\\"goal_id\\\":\\\"goal-1\\\",\\\"parent_request_id\\\":\\\"pin-parent-request\\\",\\\"wrapup\\\":false},\\\"queue\\\":{\\\"key\\\":\\\"goal:355ac0cefea9f3d0afab06ffb90fd1ec\\\",\\\"policy\\\":\\\"coalesce\\\",\\\"queued_after_request_id\\\":\\\"pin-parent-request\\\",\\\"source\\\":\\\"goal\\\"}}\", execution_origin: \"scheduled\", caused_by_trigger_id: \"goal-1\", caused_by_trigger_kind: \"goal\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, subagent_depth: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", workspace_id: \"ws-goal-1\", workspace_authority: \"readWrite\", workspace_owner_deployment_id: \"dep-goal-1\", workspace_seal_hash: \"seal-goal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"2eoh9K96ztMwPRNFSEiQuJAqNSxY92o9UamCjFePL3YFFpmKmAUnvT5ccGjq49RpmxskKT215bnirUwsXz9SHgUP\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
+            normalize_pin_fields(&fields),
+            "request_id: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"general\", session_id: \"sess-pin-parent\", retry_root_request: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", retry_key: \"goal-continuation:355ac0cefea9f3d0afab06ffb90fd1ec\", content: \"continue the goal\", input: { goal_continuation: { sequence: 3, wrapup: false }, queue: { key: \"goal:355ac0cefea9f3d0afab06ffb90fd1ec\", policy: \"coalesce\", queued_after_request_id: \"pin-parent-request\", source: \"goal\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"goal-1\", caused_by_trigger_kind: \"goal\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, subagent_depth: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", workspace_id: \"ws-goal-1\", workspace_owner_agent_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-goal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 }

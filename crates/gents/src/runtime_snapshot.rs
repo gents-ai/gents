@@ -5,12 +5,13 @@ use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 use tokio::sync::mpsc;
-#[cfg(test)]
-use tokio::sync::watch;
 
 use crate::admission::BackendAdmissionConfig;
-use crate::config::AgentBehavior;
-use crate::identity::AgentPrincipal;
+use crate::config::ResolvedBehavior;
+pub use crate::document_config::ConcurrencyMode;
+pub use crate::document_config::ScheduleCadence;
+use crate::document_config::TaskHook;
+use crate::identity::RuntimePrincipal;
 use crate::schedule_cron::{next_cron_run_after, CronMissedRunPolicy};
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
@@ -89,6 +90,9 @@ pub struct ResolvedTask {
     pub goal_token_budget: Option<i64>,
     #[allow(dead_code)]
     pub output_schema_ref: Option<String>,
+    /// Hooks are explicitly configured host commands carried by Task; no
+    /// second persisted model and no TaskRun lifecycle state here.
+    pub hooks: Vec<TaskHook>,
 }
 
 impl ResolvedTask {
@@ -103,6 +107,8 @@ impl ResolvedTask {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedSchedule {
+    /// Physical id of the Trigger document whose Schedule source points at
+    /// this schedule; empty when no enabled trigger references it.
     pub trigger_doc_id: String,
     pub schedule_id: String,
     #[allow(dead_code)]
@@ -114,88 +120,19 @@ pub struct ResolvedSchedule {
     pub concurrency: ConcurrencyMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScheduleCadence {
-    Interval {
-        interval_secs: i64,
-    },
-    Cron {
-        expression: String,
-        timezone: String,
-        missed_run_policy: CronMissedRunPolicy,
-    },
-}
-
-impl ScheduleCadence {
-    pub(crate) fn seed_next_run_at(&self, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
-        match self {
-            Self::Interval { .. } => Ok(now),
-            Self::Cron {
-                expression,
-                timezone,
-                ..
-            } => next_cron_run_after(expression, timezone, now),
-        }
-    }
-
-    pub(crate) fn advance_next_run_at(
-        &self,
-        parsed_next_run_at: DateTime<Utc>,
-        now: DateTime<Utc>,
-    ) -> Result<DateTime<Utc>> {
-        match self {
-            Self::Interval { interval_secs } => {
-                Ok(parsed_next_run_at + ChronoDuration::seconds(*interval_secs))
-            }
-            Self::Cron {
-                expression,
-                timezone,
-                missed_run_policy,
-            } => match missed_run_policy {
-                CronMissedRunPolicy::LatestOnly => next_cron_run_after(expression, timezone, now),
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ConcurrencyMode {
-    Parallel,
-    Serial,
-    LatestOnly,
-}
-
 pub const MAX_EVENT_TRIGGER_GROUP_DOCS: usize = 256;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Runtime delivery mode derived from the presence of `EventSource.group`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EventTriggerFireMode {
     PerDocument,
     PerGroup,
 }
 
-impl EventTriggerFireMode {
-    pub(crate) fn parse(value: Option<&str>) -> Option<Self> {
-        match value.map(str::trim).filter(|value| !value.is_empty()) {
-            None | Some("per_document") => Some(Self::PerDocument),
-            Some("per_group") => Some(Self::PerGroup),
-            Some(_) => None,
-        }
-    }
-}
-
-impl ConcurrencyMode {
-    pub(crate) fn parse(s: &str) -> Option<Self> {
-        match s {
-            "parallel" => Some(Self::Parallel),
-            "serial" => Some(Self::Serial),
-            "latest_only" => Some(Self::LatestOnly),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ResolvedEventTrigger {
+    /// Physical id of the Trigger document carrying this event source.
     pub trigger_doc_id: String,
     pub trigger_id: String,
     #[allow(dead_code)]
@@ -216,12 +153,63 @@ pub struct ResolvedEventTrigger {
     pub workspace_authority: Option<String>,
 }
 
+/// Resolved automation projection installed on the runtime snapshot in one
+/// step via [`ResolvedRuntimeSnapshot::with_automation`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResolvedAutomation {
+    pub(crate) tasks: HashMap<String, ResolvedTask>,
+    pub(crate) schedules: HashMap<String, ResolvedSchedule>,
+    pub(crate) unavailable_schedules: HashSet<String>,
+    pub(crate) event_triggers: HashMap<String, ResolvedEventTrigger>,
+    pub(crate) unavailable_event_triggers: HashSet<String>,
+}
+
+/// Seeds the first `next_run_at` cursor for a canonical cadence: interval
+/// schedules are immediately due; cron schedules align to the next match.
+pub(crate) fn seed_schedule_next_run_at(
+    cadence: &ScheduleCadence,
+    now: DateTime<Utc>,
+) -> Result<DateTime<Utc>> {
+    match cadence {
+        ScheduleCadence::Interval { .. } => Ok(now),
+        ScheduleCadence::Cron {
+            expression,
+            timezone,
+            ..
+        } => next_cron_run_after(expression, timezone, now),
+    }
+}
+
+/// Advances a parsed `next_run_at` cursor after a fire attempt: interval
+/// schedules add their interval; cron schedules (latest_only) jump to the
+/// next match after `now`.
+pub(crate) fn advance_schedule_next_run_at(
+    cadence: &ScheduleCadence,
+    parsed_next_run_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<DateTime<Utc>> {
+    match cadence {
+        ScheduleCadence::Interval { interval_secs } => {
+            Ok(parsed_next_run_at + ChronoDuration::seconds(*interval_secs))
+        }
+        ScheduleCadence::Cron {
+            expression,
+            timezone,
+            missed_run_policy,
+        } => match missed_run_policy {
+            None | Some(CronMissedRunPolicy::LatestOnly) => {
+                next_cron_run_after(expression, timezone, now)
+            }
+        },
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedRuntimeSnapshot {
-    pub(crate) principal: Option<Arc<AgentPrincipal>>,
+    pub(crate) principal: Option<Arc<RuntimePrincipal>>,
     pub(crate) local_did: String,
     pub(crate) default_behavior_id: String,
-    pub(crate) behaviors: HashMap<String, Arc<AgentBehavior>>,
+    pub(crate) behaviors: HashMap<String, Arc<ResolvedBehavior>>,
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub(crate) unavailable_behaviors: HashMap<String, UnavailableBehavior>,
@@ -282,7 +270,7 @@ impl ResolvedRuntimeSnapshot {
     #[allow(dead_code)]
     pub(crate) fn from_parts(
         default_behavior_id: String,
-        behaviors: Vec<Arc<AgentBehavior>>,
+        behaviors: Vec<Arc<ResolvedBehavior>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
         unavailable_behaviors: HashMap<String, UnavailableBehavior>,
     ) -> Self {
@@ -297,7 +285,7 @@ impl ResolvedRuntimeSnapshot {
 
     pub(crate) fn from_parts_with_admission_configs(
         default_behavior_id: String,
-        behaviors: Vec<Arc<AgentBehavior>>,
+        behaviors: Vec<Arc<ResolvedBehavior>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
         backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
         unavailable_behaviors: HashMap<String, UnavailableBehavior>,
@@ -321,7 +309,7 @@ impl ResolvedRuntimeSnapshot {
         }
     }
 
-    pub(crate) fn with_principal(mut self, principal: Arc<AgentPrincipal>) -> Self {
+    pub(crate) fn with_principal(mut self, principal: Arc<RuntimePrincipal>) -> Self {
         self.principal = Some(principal);
         self
     }
@@ -331,28 +319,14 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
-    pub(crate) fn with_schedules(
-        mut self,
-        active_schedules: HashMap<String, ResolvedSchedule>,
-        unavailable_schedules: HashSet<String>,
-    ) -> Self {
-        self.active_schedules = active_schedules;
-        self.unavailable_schedules = unavailable_schedules;
-        self
-    }
-
-    pub(crate) fn with_event_triggers(
-        mut self,
-        active_event_triggers: HashMap<String, ResolvedEventTrigger>,
-        unavailable_event_triggers: HashSet<String>,
-    ) -> Self {
-        self.active_event_triggers = active_event_triggers;
-        self.unavailable_event_triggers = unavailable_event_triggers;
-        self
-    }
-
-    pub(crate) fn with_tasks(mut self, tasks: HashMap<String, ResolvedTask>) -> Self {
-        self.active_tasks = tasks;
+    /// Single canonical automation setter: installs resolved tasks, schedules
+    /// and event triggers with their unavailability sets.
+    pub(crate) fn with_automation(mut self, automation: ResolvedAutomation) -> Self {
+        self.active_tasks = automation.tasks;
+        self.active_schedules = automation.schedules;
+        self.unavailable_schedules = automation.unavailable_schedules;
+        self.active_event_triggers = automation.event_triggers;
+        self.unavailable_event_triggers = automation.unavailable_event_triggers;
         self
     }
 
@@ -431,10 +405,10 @@ impl ResolvedRuntimeSnapshot {
 #[derive(Clone, Debug)]
 pub struct ActiveRuntimeSnapshot {
     pub generation: u64,
-    pub principal: Option<Arc<AgentPrincipal>>,
+    pub principal: Option<Arc<RuntimePrincipal>>,
     pub local_did: String,
     pub default_behavior_id: String,
-    pub behaviors: HashMap<String, Arc<AgentBehavior>>,
+    pub behaviors: HashMap<String, Arc<ResolvedBehavior>>,
     pub tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub unavailable_behaviors: HashMap<String, UnavailableBehavior>,
@@ -456,7 +430,7 @@ pub(crate) struct BehaviorExecutorStatus {
 }
 
 impl ActiveRuntimeSnapshot {
-    pub(crate) fn behavior(&self, behavior_id: &str) -> Option<&Arc<AgentBehavior>> {
+    pub(crate) fn behavior(&self, behavior_id: &str) -> Option<&Arc<ResolvedBehavior>> {
         self.behaviors.get(behavior_id)
     }
 
@@ -474,13 +448,6 @@ impl ActiveRuntimeSnapshot {
 
     pub(crate) fn tool_surface(&self, behavior_id: &str) -> Option<&Arc<ToolSurface>> {
         self.tool_surfaces.get(behavior_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn unavailable_diagnostic(&self, behavior_id: &str) -> Option<&str> {
-        self.unavailable_behaviors
-            .get(behavior_id)
-            .map(|unavailable| unavailable.diagnostic.as_str())
     }
 
     pub(crate) fn unavailable_public_message(&self, behavior_id: &str) -> Option<&'static str> {
@@ -546,25 +513,11 @@ impl ActiveRuntimeSnapshot {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn refresh_active_snapshot(
-    active_snapshot: &mut Arc<ActiveRuntimeSnapshot>,
-    active_snapshot_rx: &mut watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-) -> bool {
-    match active_snapshot_rx.has_changed() {
-        Ok(true) => {
-            *active_snapshot = active_snapshot_rx.borrow_and_update().clone();
-            true
-        }
-        Ok(false) | Err(_) => false,
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn configuration_fingerprint(
     default_behavior_id: &str,
     local_did: &str,
-    behaviors: &HashMap<String, Arc<AgentBehavior>>,
+    behaviors: &HashMap<String, Arc<ResolvedBehavior>>,
     tool_surfaces: &HashMap<String, Arc<ToolSurface>>,
     backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
     unavailable_behaviors: &HashMap<String, UnavailableBehavior>,

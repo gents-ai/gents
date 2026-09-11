@@ -144,29 +144,19 @@ async fn load_agent_scoped_snapshot_excludes_other_agents() {
         .expect("schemas");
 
     let mutation = r#"mutation {
-        alpha: create_AgentConversation(input: {
+        alpha: create_AgentSession(input: {
             session_id: "alpha-1",
             agent_did: "did:alpha",
             behavior_id: "default",
-            title: "alpha",
-            title_source: "user",
-            preview_text: "",
-            status: "active",
-            created_at: "2026-05-07T00:00:00Z",
-            updated_at: "2026-05-07T00:00:00Z",
-            latest_request_id: ""
+            title: { text: "alpha", source: "user" },
+            created_at: "2026-05-07T00:00:00Z"
         }) { _docID }
-        beta: create_AgentConversation(input: {
+        beta: create_AgentSession(input: {
             session_id: "beta-1",
             agent_did: "did:beta",
             behavior_id: "default",
-            title: "beta",
-            title_source: "user",
-            preview_text: "",
-            status: "active",
-            created_at: "2026-05-07T00:00:00Z",
-            updated_at: "2026-05-07T00:00:00Z",
-            latest_request_id: ""
+            title: { text: "beta", source: "user" },
+            created_at: "2026-05-07T00:00:00Z"
         }) { _docID }
     }"#;
     let response = node.execute(mutation).await;
@@ -198,13 +188,18 @@ async fn load_agent_scoped_snapshot_excludes_other_agents() {
         .expect("load_agent_scoped_snapshot");
 
     let dids: Vec<&str> = store
-        .conversations
+        .sessions
         .iter()
-        .filter_map(|c| c.agent_did.as_deref())
+        .map(|session| session.agent_did.as_str())
         .collect();
+    assert_eq!(
+        dids.len(),
+        1,
+        "the owning session must survive the scope filter"
+    );
     assert!(
         dids.iter().all(|d| *d == "did:alpha"),
-        "expected only did:alpha conversations; got {dids:?}"
+        "expected only did:alpha sessions; got {dids:?}"
     );
     assert_eq!(store.goals.len(), 1);
     assert_eq!(store.goals[0].session_id, "alpha-goal-only");

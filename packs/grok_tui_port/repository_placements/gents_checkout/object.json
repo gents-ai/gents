@@ -1,5 +1,0 @@
-{
-  "repository_id": "gents-checkout",
-  "host_path": "${GENTS_GROK_PORT_GENTS_ROOT:-.}",
-  "enabled": true
-}

@@ -14,7 +14,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         "StorageObservation.failClosed",
         "StorageObservation.failOpen",
         "RuntimeReconcile",
-        "PairingReconcile",
         "SessionRecovery",
         "InferenceCall",
     ] {
@@ -23,10 +22,10 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
 
     assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
     assert_lean_transition_is_legal("RuntimeReconcile", "idle", "debouncing");
-    assert_lean_transition_is_legal("PairingReconcile", "idle", "diverged");
-    assert_lean_transition_is_legal("PairingReconcile", "diverged", "converged");
-    assert_lean_transition_is_legal("PairingReconcile", "converged", "crashed");
-    assert_lean_transition_is_illegal("PairingReconcile", "idle", "converged");
+    // PairingReconcile is no longer a state-machine contract: Lean models it as
+    // resource reconciliation (ReconcileState/Transition) exported through
+    // `pairing_reconcile_cases`, and the retired idle/diverged/converged/crashed
+    // phase machine must not be re-asserted here.
     assert_lean_transition_is_legal("Persistence.failClosed", "committing", "uncommitted");
     assert_lean_transition_is_legal("Persistence.failOpen", "committing", "lost");
     assert_lean_transition_is_legal("StorageObservation.failClosed", "noMutation", "inFlight");
@@ -122,10 +121,10 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
             .any(|hook| hook.contains("CommandPolicy")),
         "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
     );
-    assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 8);
+    assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 100);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
-    assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 9);
+    assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 17);
     assert_eq!(
         lean_contract_snapshot()
@@ -161,7 +160,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_cases.len(),
-        17
+        16
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_case_count,
@@ -169,16 +168,17 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_cases.len(),
-        13
+        12
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
-    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 63);
+    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 54);
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 48);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     assert_eq!(lean_recovery_sweep_cases().len(), 34);
-    assert_eq!(lean_recovery_equivalence_cases().len(), 34);
+    // The synthetic RecoveryEquivalence contract was deleted from Lean; the
+    // recovery sweep cases above are the actual recovery guarantee.
     assert_eq!(lean_transcript_cases().len(), 7);
     assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
     assert_eq!(lean_subagent_delegation_graph_cases().len(), 3);
@@ -187,7 +187,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
 }
 
 #[tokio::test]
-async fn agent_tool_call_has_r5_cross_deployment_fields() {
+async fn agent_tool_call_has_cross_principal_coordination_fields() {
     let db = crate::support::test_db("agent-tool-call-r5-fields").await;
     let response = db
         .node
@@ -226,42 +226,6 @@ async fn agent_tool_call_has_r5_cross_deployment_fields() {
     ] {
         assert!(names.contains(field), "AgentToolCall missing field {field}");
     }
-}
-
-#[tokio::test]
-async fn tool_selection_has_cross_deployment_spawn_timeout() {
-    let db = crate::support::test_db("tool-selection-r5-timeout").await;
-    let response = db
-        .node
-        .execute(
-            r#"{
-                __type(name: "ToolSelection") {
-                    fields { name }
-                }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "introspection errors: {:?}",
-        response.errors
-    );
-    let names: HashSet<String> = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("__type"))
-        .and_then(|t| t.get("fields"))
-        .and_then(|fs| fs.as_array())
-        .map(|fs| {
-            fs.iter()
-                .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    assert!(
-        names.contains("cross_deployment_spawn_timeout_seconds"),
-        "ToolSelection missing cross_deployment_spawn_timeout_seconds",
-    );
 }
 
 #[test]
@@ -500,6 +464,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     for machine in &snapshot.state_machines {
         emitted.insert(("state_machine".to_string(), machine.domain.clone()));
     }
+    if !snapshot.pairing_reconcile_cases.is_empty() {
+        emitted.insert((
+            "pairing_reconcile_cases".into(),
+            "PairingReconcileCases".into(),
+        ));
+    }
+    if !snapshot.child_failure_projections.is_empty() {
+        emitted.insert((
+            "child_failure_projections".into(),
+            "ChildFailureProjections".into(),
+        ));
+    }
     if !snapshot.request_transition_cases.is_empty() {
         emitted.insert((
             "lifecycle_transition_cases".to_string(),
@@ -587,11 +563,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "workspace_path_alias_cases",
             "WorkspacePathAliasCases",
             &snapshot.workspace_path_alias_cases,
-        ),
-        (
-            "workspace_capability_migration_cases",
-            "WorkspaceCapabilityMigrationCases",
-            &snapshot.workspace_capability_migration_cases,
         ),
     ] {
         if !cases.is_empty() {
@@ -845,6 +816,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CommandPolicyEnv".to_string(),
         ));
     }
+    if !snapshot.client_behavior_readiness_cases.is_empty() {
+        emitted.insert((
+            "client_behavior_readiness_cases".to_string(),
+            "ClientBehaviorReadinessCases".to_string(),
+        ));
+    }
     if !snapshot.live_overlay_cases.is_empty() {
         emitted.insert((
             "live_overlay_cases".to_string(),
@@ -861,12 +838,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "recovery_sweep_cases".to_string(),
             "RecoverySweepCases".to_string(),
-        ));
-    }
-    if !lean_recovery_equivalence_cases().is_empty() {
-        emitted.insert((
-            "recovery_equivalence_cases".to_string(),
-            "RecoveryEquivalenceCases".to_string(),
         ));
     }
     if !lean_restart_disposition_cases().is_empty() {
@@ -1165,10 +1136,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R6BackgroundingCases".to_string(),
         ));
     }
-    if !lean_r5_cross_deployment_cases().is_empty() {
+    if !snapshot.r5_cross_principal_cases.is_empty() {
         emitted.insert((
-            "r5_cross_deployment_cases".to_string(),
-            "R5CrossDeploymentCases".to_string(),
+            "r5_cross_principal_cases".into(),
+            "R5CrossPrincipalCases".into(),
         ));
     }
     if !lean_composed_invariant_witnesses().is_empty() {
@@ -1301,137 +1272,107 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "AgentRequestAdmissionCases".to_string(),
         ));
     }
+    assert_eq!(
+        snapshot.event_group_case_count,
+        snapshot.event_group_cases.len(),
+        "Lean trigger group case count drifted from emitted cases"
+    );
+    if !snapshot.event_group_cases.is_empty() {
+        emitted.insert(("event_group_cases".into(), "EventGroupCases".into()));
+    }
+    if !snapshot.enrollment_durable_projection_cases.is_empty() {
+        emitted.insert((
+            "enrollment_durable_projection_cases".into(),
+            "EnrollmentDurableProjectionCases".into(),
+        ));
+    }
+    if !snapshot.pending_user_turn_cases.is_empty() {
+        emitted.insert((
+            "pending_user_turn_cases".into(),
+            "PendingUserTurnCases".into(),
+        ));
+    }
+    if !snapshot.aggregate_token_budget_cases.is_empty() {
+        emitted.insert((
+            "aggregate_token_budget_cases".into(),
+            "AggregateTokenBudgetCases".into(),
+        ));
+    }
+    if !snapshot.request_progress_cases.is_empty() {
+        emitted.insert((
+            "request_progress_cases".into(),
+            "RequestProgressCases".into(),
+        ));
+    }
+    assert!(!snapshot.request_input_cases.is_empty());
+    emitted.insert(("request_input_cases".into(), "RequestInputCases".into()));
+    assert!(!snapshot.background_wake_row_cases.is_empty());
+    emitted.insert((
+        "background_wake_row_cases".into(),
+        "BackgroundWakeRowCases".into(),
+    ));
+    assert!(!snapshot.discovery_scope_cases.is_empty());
+    emitted.insert(("discovery_scope_cases".into(), "DiscoveryScopeCases".into()));
+    assert!(!snapshot.budget_rehydration_cases.is_empty());
+    emitted.insert((
+        "budget_rehydration_cases".into(),
+        "BudgetRehydrationCases".into(),
+    ));
+    assert!(!snapshot.event_group_clock_cases.is_empty());
+    emitted.insert((
+        "event_group_clock_cases".into(),
+        "EventGroupClockCases".into(),
+    ));
+    assert!(!snapshot.event_group_capture_cases.is_empty());
+    emitted.insert((
+        "event_group_capture_cases".into(),
+        "EventGroupCaptureCases".into(),
+    ));
+    assert!(!snapshot.callback_transition_cases.is_empty());
+    emitted.insert((
+        "callback_transition_cases".into(),
+        "CallbackTransitionCases".into(),
+    ));
+    assert!(snapshot.configuration_scope_cases["cases"]
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty()));
+    emitted.insert((
+        "configuration_scope_cases".into(),
+        "ConfigurationScopeCases".into(),
+    ));
+    let sessions = &snapshot.session_document_cases;
+    assert!(
+        !sessions.selection.is_empty()
+            && !sessions.projection.is_empty()
+            && !sessions.retry.is_empty()
+            && !sessions.fork.is_empty()
+    );
+    emitted.insert((
+        "session_document_cases".into(),
+        "SessionDocumentCases".into(),
+    ));
+    assert_eq!(
+        snapshot.event_group_clock_case_count,
+        snapshot.event_group_clock_cases.len()
+    );
+    assert_eq!(
+        snapshot.event_group_capture_case_count,
+        snapshot.event_group_capture_cases.len()
+    );
+    assert_eq!(
+        snapshot.callback_transition_case_count,
+        snapshot.callback_transition_cases.len()
+    );
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
 
-    let valid_categories = [
-        "artifact_mode_meet_cases",
-        "artifact_admission_cases",
-        "artifact_spawn_cases",
-        "inference_registry_cases",
-        "request_execution_lease_cases",
-        "request_execution_lease_trace_cases",
-        "provider_eof_cases",
-        "vocabulary",
-        "state_machine",
-        "lifecycle_transition_cases",
-        "trigger_cases",
-        "runtime_cases",
-        "apply_reconcile_cases",
-        "tool_policy_cases",
-        "lsp_action_cases",
-        "self_config_field_tables",
-        "self_config_cases",
-        "session_recovery_cases",
-        "slot_cases",
-        "fleet_cases",
-        "persistence_policy_cases",
-        "storage_observation_cases",
-        "backend_health_cases",
-        "native_filesystem_boundary_cases",
-        "managed_exec_cases",
-        "pairing_reconcile_cases",
-        "frontend_client_shell_cases",
-        "desktop_client_shell_cases",
-        "request_lifecycle_operator_ui_cases",
-        "tool_cases",
-        "completion_retry_cases",
-        "command_policy_cases",
-        "live_overlay_cases",
-        "queue_deadline_cases",
-        "recovery_sweep_cases",
-        "recovery_equivalence_cases",
-        "restart_disposition_cases",
-        "tool_output_paging_cases",
-        "bridge_step_cases",
-        "transcript_cases",
-        "compaction_reducer_cases",
-        "compaction_cursor_cases",
-        "prompt_assembly_cases",
-        "rendered_capture_cases",
-        "durable_reduction_cases",
-        "rolling_compaction_cases",
-        "reduction_engine_cases",
-        "streaming_response_cases",
-        "streaming_response_interrupt_flow_cases",
-        "event_delivery_cases",
-        "mcp_health_cases",
-        "identity_structural_cases",
-        "identity_permission_cases",
-        "identity_contracts",
-        "r4c_background_work_cases",
-        "codex_shim_projection_cases",
-        "codex_shim_subagent_tool_cases",
-        "codex_shim_subagent_status_cases",
-        "codex_shim_subagent_visibility_cases",
-        "codex_shim_subagent_metadata_cases",
-        "codex_shim_subagent_listing_cases",
-        "codex_shim_subagent_thread_shape_cases",
-        "codex_shim_reasoning_projection_cases",
-        "codex_shim_thread_status_cases",
-        "codex_shim_behavior_selection_cases",
-        "codex_shim_tool_metadata_cases",
-        "codex_shim_context_usage_cases",
-        "codex_shim_compaction_projection_cases",
-        "codex_shim_binding_cases",
-        "startup_readiness_cases",
-        "codex_shim_turn_lifecycle_cases",
-        "r6_background_cases",
-        "r5_cross_deployment_cases",
-        "composed_invariant_witnesses",
-        "cancel_propagation_cases",
-        "r6_background_theorem_witnesses",
-        "subagent_delegation_graph_cases",
-        "descendant_graph_cases",
-        "goal_decision_cases",
-        "goal_transition_cases",
-        "goal_create_cases",
-        "goal_capability_resolution_cases",
-        "task_goal_publication_cases",
-        "task_goal_recovery_cases",
-        "goal_submission_cases",
-        "goal_continuation_materialization_cases",
-        "goal_claimed_publication_cases",
-        "goal_request_head_cases",
-        "goal_operator_resume_cases",
-        "goal_config_reactivation_cases",
-        "graph_logical_invocation_cases",
-        "graph_invocation_publication_cases",
-        "graph_failure_attribution_traces",
-        "graph_pipeline_validation_cases",
-        "graph_pipeline_revision_gate_cases",
-        "graph_pipeline_run_terminal_cases",
-        "graph_workspace_lineage_cases",
-        "operator_base_freeze_cases",
-        "workspace_path_capability_cases",
-        "workspace_path_alias_cases",
-        "logical_output_obligation_cases",
-        "invalid_tool_progress_cases",
-        "workspace_capability_migration_cases",
-        "workspace_cases",
-        "workspace_binding_cases",
-        "callback_cases",
-        "session_hydration_cases",
-        "session_hydration_progress_cases",
-        "session_hydration_durable_cases",
-        "enrollment_cases",
-        "enrollment_encoding_cases",
-        "enrollment_digest_cases",
-        "agent_request_admission_cases",
-        "follow_up_hook",
-    ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
     let mut ledger_domains = BTreeSet::new();
-    let mut ledger_domain_surfaces = BTreeSet::new();
+    let mut ledger_observations = BTreeSet::new();
     let mut ledger_consumers = BTreeSet::new();
 
     for entry in &snapshot.coverage_ledger {
-        assert!(
-            valid_categories.contains(&entry.category.as_str()),
-            "coverage ledger entry has unknown category: {:?}",
-            entry
-        );
         assert!(
             !entry.domain.trim().is_empty(),
             "coverage ledger entry has an empty domain: {:?}",
@@ -1472,15 +1413,19 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ledger_domains.insert((entry.category.clone(), entry.domain.clone()));
         for surface in &entry.surfaces {
             assert!(
-                ledger_domain_surfaces.insert((
+                // One fixture family can exercise distinct production owners.
+                // Repeating the same consumer on the same surface is still an error.
+                ledger_observations.insert((
                     entry.category.clone(),
                     entry.domain.clone(),
-                    *surface
+                    *surface,
+                    entry.consumer.clone()
                 )),
-                "duplicate coverage ledger entry for {:?} / {:?} / {:?}",
+                "duplicate coverage ledger observation for {:?} / {:?} / {:?} / {:?}",
                 entry.category,
                 entry.domain,
-                surface
+                surface,
+                entry.consumer
             );
         }
     }

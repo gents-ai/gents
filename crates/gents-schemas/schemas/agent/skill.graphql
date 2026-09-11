@@ -1,7 +1,6 @@
-type Skill @branchable {
-    skill_id: String @index(unique: true)
+type Skill @branchable @index(fields: ["agent_did", "skill_id"], unique: true) {
+    skill_id: String @index
     agent_did: String @index
-    scope: String @index
     name: String @index
     description: String
     instructions: String
@@ -11,4 +10,5 @@ type Skill @branchable {
     enabled: Boolean @index
     created_at: String
     updated_at: DateTime @index(direction: DESC)
+    tags: [String]
 }

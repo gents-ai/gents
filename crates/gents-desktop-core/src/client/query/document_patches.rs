@@ -54,14 +54,6 @@ pub async fn fetch_doc_patch(
             )
             .await?;
         }
-        AGENT_CONVERSATION_NAME => {
-            rows.conversations = load_rows(
-                node,
-                AGENT_CONVERSATION_NAME,
-                &format!("query {{ {AGENT_CONVERSATION_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_CONVERSATION_FIELDS} }} }}"),
-            )
-            .await?;
-        }
         AGENT_REQUEST_NAME => {
             rows.requests = load_rows(
                 node,
@@ -150,11 +142,17 @@ pub async fn fetch_doc_patch(
             )
             .await?;
         }
-        EVENT_TRIGGER_NAME => {
-            rows.event_triggers = load_rows(
+        TRIGGER_NAME => {
+            rows.triggers = load_rows(
                 node,
-                EVENT_TRIGGER_NAME,
-                &format!("query {{ {EVENT_TRIGGER_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {EVENT_TRIGGER_FIELDS} }} }}"),
+                TRIGGER_NAME,
+                &format!("query {{ {TRIGGER_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TRIGGER_FIELDS} }} }}"),
+            )
+            .await?;
+            rows.trigger_observations = load_rows(
+                node,
+                TRIGGER_NAME,
+                &format!("query {{ {TRIGGER_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TRIGGER_OBSERVATION_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -166,11 +164,11 @@ pub async fn fetch_doc_patch(
             )
             .await?;
         }
-        TOOL_SELECTION_NAME => {
-            rows.tool_selections = load_rows(
+        TOOLS_NAME => {
+            rows.tools = load_rows(
                 node,
-                TOOL_SELECTION_NAME,
-                &format!("query {{ {TOOL_SELECTION_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TOOL_SELECTION_FIELDS} }} }}"),
+                TOOLS_NAME,
+                &format!("query {{ {TOOLS_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TOOLS_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -210,7 +208,6 @@ pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
             | AGENT_BEHAVIOR_NAME
             | AGENT_RUNTIME_NAME
             | AGENT_BEHAVIOR_READINESS_NAME
-            | AGENT_CONVERSATION_NAME
             | AGENT_REQUEST_NAME
             | MAILBOX_ITEM_NAME
             | AGENT_RESPONSE_NAME
@@ -222,9 +219,9 @@ pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
             | COMPACTION_ENTRY_NAME
             | TASK_NAME
             | SCHEDULE_NAME
-            | EVENT_TRIGGER_NAME
+            | TRIGGER_NAME
             | SKILL_NAME
-            | TOOL_SELECTION_NAME
+            | TOOLS_NAME
             | INFERENCE_BACKEND_NAME
             | INFERENCE_PROFILE_NAME
             | TOOL_SERVICE_REGISTRY_NAME

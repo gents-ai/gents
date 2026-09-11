@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
-use gents::graphql::{escape_graphql_string, response_has_documents};
+use gents::config_client::ConfigAccess;
 use gents_codex_protocol as codex;
 
-use crate::commands::codex_shim::store::write_committed;
 use crate::commands::codex_shim::ShimState;
 
 use super::{load_codex_thread, CodexThreadRecord};
@@ -54,34 +53,36 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    let escaped_session_id = escape_graphql_string(thread_id);
-    let escaped_name = escape_graphql_string(name);
-    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
-    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentConversation(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
-                }},
-                input: {{
-                    title: "{escaped_name}",
-                    title_source: "user",
-                    updated_at: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = write_committed(&state.node, "codex.thread.set_name", &mutation).await?;
-    let updated = response
-        .pointer("/data/update_AgentConversation")
-        .is_some_and(response_has_documents);
-    if updated {
-        state.set_thread_name(thread_id, name).await;
-    }
-    Ok(updated)
+    ConfigAccess::transact_local(&state.node, None, "codex.thread.set_name", |txn| {
+        let now = now.clone();
+        Box::pin(async move {
+            let row = gents::session::load_agent_session_row_in_txn(
+                txn,
+                &state.agent_did,
+                thread_id,
+                Some(state.local_requester_did()),
+            )
+            .await?
+            .context("thread session vanished during rename")?;
+            anyhow::ensure!(
+                row.session.behavior_id == state.behavior_id.as_ref(),
+                "thread behavior changed during rename"
+            );
+            gents::session::apply_title_in_txn(
+                txn,
+                &state.agent_did,
+                Some(state.local_requester_did()),
+                thread_id,
+                (!name.is_empty()).then_some(name),
+                gents_protocol::session::SessionTitleSource::User,
+                &now,
+            )
+            .await
+        })
+    })
+    .await?;
+    state.set_thread_name(thread_id, name).await;
+    Ok(true)
 }
 
 pub(in crate::commands::codex_shim) async fn set_codex_thread_memory_mode(

@@ -7,17 +7,17 @@ import type {
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { ActiveChatWorkspace } from "../src/components/ChatWorkspace";
-import { ConversationLoadingStatus } from "../src/components/ConversationLoadingStatus";
+import { SessionLoadingStatus } from "../src/components/SessionLoadingStatus";
 
-describe("ConversationLoadingStatus", () => {
+describe("SessionLoadingStatus", () => {
   it("renders the projected layer and runs its matching recovery", () => {
     const onRetry = vi.fn(async () => {});
     render(
-      <ConversationLoadingStatus
+      <SessionLoadingStatus
         status={{
           layer: "sessionSync",
           phase: "failed",
-          title: "Conversation sync failed",
+          title: "Session sync failed",
           detail: "The secure transfer did not complete.",
           action: "retryHydration",
         }}
@@ -25,15 +25,15 @@ describe("ConversationLoadingStatus", () => {
       />,
     );
 
-    expect(screen.getByTestId("conversation-loading-status")).toHaveAttribute(
+    expect(screen.getByTestId("session-loading-status")).toHaveAttribute(
       "data-loading-layer",
       "sessionSync",
     );
-    expect(screen.getByTestId("conversation-loading-status")).toHaveAttribute(
+    expect(screen.getByTestId("session-loading-status")).toHaveAttribute(
       "role",
       "alert",
     );
-    fireEvent.click(screen.getByTestId("conversation-loading-retryHydration"));
+    fireEvent.click(screen.getByTestId("session-loading-retryHydration"));
     expect(onRetry).toHaveBeenCalledOnce();
   });
 });
@@ -58,13 +58,13 @@ const deployment = {
   behaviorEnvironments: [],
   inferenceBackends: [],
   inferenceProfiles: [],
-  toolSelections: [],
   toolServiceRegistries: [],
   skills: [],
   tasks: [],
   schedules: [],
-  eventTriggers: [],
-  conversations: [],
+  eventSources: [],
+  triggers: [],
+  sessions: [],
   mailboxItems: [],
 } as unknown as DeploymentView;
 
@@ -87,10 +87,10 @@ function workspace(
       activeRequestId={null}
       approxSerializedBytes={0}
       canSend
-      conversationLoadingStatus={{
+      sessionLoadingStatus={{
         layer: "sessionSync",
         phase: "loading",
-        title: "Syncing conversation history",
+        title: "Syncing session history",
         detail: "Fetching session history · 2 of 6",
         action: null,
       }}
@@ -98,12 +98,12 @@ function workspace(
       draft=""
       interruptVisible={false}
       onDraftChange={vi.fn()}
-      onRenameConversationTitle={vi.fn()}
+      onRenameSessionTitle={vi.fn()}
       onSend={vi.fn()}
       rowCount={1}
       runtimeHealth={null}
       selectedBehaviorId="default"
-      selectedConversationTitle="Other device"
+      selectedSessionSummaryTitle="Other device"
       selectedDeployment={deployment}
       selectedSessionId={selectedSessionId}
       sending={false}
@@ -129,13 +129,13 @@ describe("ChatWorkspace loading", () => {
     } as unknown as DesktopSessionSnapshot;
 
     render(workspace(session));
-    expect(screen.getByTestId("conversation-loading-status")).toHaveTextContent(
+    expect(screen.getByTestId("session-loading-status")).toHaveTextContent(
       "Fetching session history · 2 of 6",
     );
     expect(screen.getByText("hello from the other device")).toBeInTheDocument();
   });
 
-  it("never displays a stale conversation while the selected one loads", () => {
+  it("never displays a stale session while the selected one loads", () => {
     const stale = {
       sessionId: "session-old",
       agentDid: "did:test:agent",
@@ -144,14 +144,14 @@ describe("ChatWorkspace loading", () => {
           kind: "userMessage",
           itemKey: "old",
           requestId: "req-old",
-          content: "must not leak into the next conversation",
+          content: "must not leak into the next session",
         },
       ],
     } as unknown as DesktopSessionSnapshot;
 
     render(workspace(stale));
     expect(
-      screen.queryByText("must not leak into the next conversation"),
+      screen.queryByText("must not leak into the next session"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("transcript-loading")).toBeInTheDocument();
   });

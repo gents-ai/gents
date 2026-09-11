@@ -76,22 +76,12 @@ theorem transition_complete
         simp [step?, h_policy, h_well_formed, h_fresh, h_after, h_post]⟩
   | Transition.coalesce_pending_new (entry := entry) (key := key) h_well_formed h_fresh h_missing h_after h_post =>
       exact ⟨.coalescePending entry, by
-        rcases h_well_formed with ⟨h_source, h_policy, h_key⟩
-        have h_missing_source :
-            containsCoalescedQueueKey pre.pending QueueSource.backgroundCompletion key = false := by
-          simpa [h_source] using h_missing
-        have h_fresh_after : RequestIdFresh pre entry ∧ canAppendAfter pre.pending entry = true :=
-          ⟨h_fresh, h_after⟩
-        simp [step?, QueueEntry.coalesceWellFormed, h_source, h_policy, h_key, h_missing,
-          h_missing_source, h_fresh_after, h_post]⟩
+        have h_key := h_well_formed.2.2
+        simp [step?, h_key, h_well_formed, h_missing, h_fresh, h_after, h_post]⟩
   | Transition.coalesce_pending_existing (entry := entry) (key := key) h_well_formed h_contains h_post =>
       exact ⟨.coalescePending entry, by
-        rcases h_well_formed with ⟨h_source, h_policy, h_key⟩
-        have h_contains_source :
-            containsCoalescedQueueKey pre.pending QueueSource.backgroundCompletion key = true := by
-          simpa [h_source] using h_contains
-        simp [step?, QueueEntry.coalesceWellFormed, h_source, h_policy, h_key, h_contains,
-          h_contains_source, h_post]⟩
+        have h_key := h_well_formed.2.2
+        simp [step?, h_key, h_well_formed, h_contains, h_post]⟩
   | Transition.claim_next h_active h_pending h_post =>
       exact ⟨.claimNext, by simp [step?, h_active, h_pending, h_post]⟩
   | Transition.finish_active h_active h_post =>

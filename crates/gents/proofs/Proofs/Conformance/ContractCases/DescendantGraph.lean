@@ -43,7 +43,6 @@ def baseEdge : Edge :=
   , controlPrincipal := 10
   , childPrincipal := 11
   , behaviorId := 30
-  , deploymentId := 40
   , lineageId := 1000
   , awaitMode := .background
   , materialization := .local
@@ -105,9 +104,9 @@ def descendantGraphCases : List DescendantGraphCase :=
           parentToolCallId := 21 } with childRequestId := 6 } with
           directFromRoot := false } with controlPrincipal := 11 }
   , descendantCase "unmaterialized_remote_bridge"
-      { { { { { baseEdge with childRequestId := 7 } with childSessionId := none } with
-          materialization := .pending } with physicalCorroborated := false } with
-          deploymentId := 41 }
+      { baseEdge with
+          childRequestId := 7, childSessionId := none,
+          materialization := .pending, physicalCorroborated := false }
   , descendantCase "terminal_unmaterialized_remote_bridge"
       { { { { { baseEdge with childRequestId := 14 } with childSessionId := none } with
           materialization := .pending } with physicalCorroborated := false } with
@@ -115,8 +114,7 @@ def descendantGraphCases : List DescendantGraphCase :=
   , descendantCase "terminal_result_edge"
       { { baseEdge with childRequestId := 8 } with lifecycle := .completed }
   , descendantCase "replicated_remote_materialization"
-      { { { baseEdge with childRequestId := 9 } with
-          materialization := .replicated } with deploymentId := 42 }
+      { baseEdge with childRequestId := 9, materialization := .replicated }
   , descendantCase "unauthorized_principal"
       { { baseEdge with childRequestId := 10 } with ownerPrincipal := 99 }
   , descendantCase "unauthorized_session"

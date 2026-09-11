@@ -39,14 +39,15 @@ test.describe("desktop config workspace advanced flows", () => {
     await openConfig(page);
     await openConfigTab(page, "behavior");
 
-    await page.getByTestId("behavior-create-backend").click();
+    await openConfigTab(page, "backends");
+    await page.getByTestId("backend-new").click();
     await expect(page.getByTestId("config-tab-backends")).toHaveClass(/selected/);
     await expect(page.getByTestId("backend-id")).not.toHaveAttribute("readonly");
     await page.getByTestId("backend-id").fill("backend-created-from-behavior");
     await page.getByTestId("backend-name").fill("Created backend");
     await page.getByTestId("backend-endpoint").fill("http://localhost:11434/v1");
-    await page.getByTestId("backend-models").fill("llama3.2\nqwen2.5");
     await saveConfig(page, "backend-save");
+    await expect(page.getByTestId("backend-models")).toHaveAttribute("readonly");
 
     await openConfigTab(page, "behavior");
     await page.getByTestId("behavior-create-profile").click();
@@ -54,49 +55,60 @@ test.describe("desktop config workspace advanced flows", () => {
     await expect(page.getByTestId("profile-id")).not.toHaveAttribute("readonly");
     await page.getByTestId("profile-id").fill("profile-created-from-behavior");
     await page.getByTestId("profile-display-name").fill("Created profile");
+    await page.getByTestId("profile-backend-id").fill("backend-created-from-behavior");
+    await page.getByTestId("profile-model-name").fill("llama3.2");
     await saveConfig(page, "profile-save");
 
     await openConfigTab(page, "behavior");
-    await page.getByTestId("behavior-create-tool-selection").click();
-    await expect(page.getByTestId("config-tab-toolSelections")).toHaveClass(/selected/);
-    await expect(page.getByTestId("tool-selection-id")).not.toHaveAttribute("readonly");
-    await page.getByTestId("tool-selection-id").fill("tools-created-from-behavior");
-    await page.getByTestId("tool-selection-display-name").fill("Created tools");
-    await saveConfig(page, "tool-selection-save");
+    await page.getByTestId("behavior-create-tools").click();
+    await expect(page.getByTestId("config-tab-tools")).toHaveClass(/selected/);
+    await expect(page.getByTestId("tools-id")).not.toHaveAttribute("readonly");
+    await page.getByTestId("tools-id").fill("tools-created-from-behavior");
+    await page.getByTestId("tools-display-name").fill("Created tools");
+    await saveConfig(page, "tools-save");
   });
 
-  test("tool, schedule, and event-trigger editors preserve advanced controls", async ({
+  test("tool, schedule, and trigger editors preserve advanced controls", async ({
     page,
   }) => {
     await gotoHarness(page);
     await openConfig(page);
 
-    await openConfigTab(page, "toolSelections");
-    await page
-      .getByTestId("tool-command-execution-policy")
-      .selectOption("workspace_write");
-    await page.getByTestId("tool-command-network-mode").selectOption("enabled");
-    await page.getByTestId("tool-command-forbidden-argv-prefixes").fill("rm -rf\ncurl");
-    await page.getByTestId("tool-backgroundable-tool-names").fill("cargo test\nrg");
-    await page.getByTestId("tool-subagent-targets").fill("did:key:zDelegate:ops");
-    await page.getByTestId("tool-cross-deployment-spawn-timeout").fill("45");
-    await saveConfig(page, "tool-selection-save");
+    await openConfigTab(page, "tools");
+    await page.getByTestId("tools-root").fill("/tmp/gents-bombadil/workspace/ops");
+    await page.getByTestId("tools-files-mode").selectOption("ReadWrite");
+    await saveConfig(page, "tools-save");
 
-    await openConfigTab(page, "timerTriggers");
-    await page.getByTestId("schedule-concurrency").selectOption("latest_only");
-    await page.getByTestId("schedule-enabled").uncheck();
+    await openConfigTab(page, "schedules");
+    await page.getByTestId("schedule-new").click();
+    await page.getByTestId("schedule-id").fill("host-check-cron");
+    await page.getByTestId("schedule-cadence-kind").selectOption("cron");
+    await page.getByTestId("schedule-cron-expression").fill("0 */6 * * *");
     await saveConfig(page, "schedule-save");
+    await expect(page.getByTestId("config-schedule-host-check-cron")).toBeVisible();
 
-    await openConfigTab(page, "eventTriggers");
-    await page.getByTestId("event-trigger-new").click();
-    await page.getByTestId("event-trigger-id").fill("agent-request-created");
-    await page.getByTestId("event-trigger-source-collection").fill("AgentRequest");
-    await page.getByTestId("event-trigger-task-id").selectOption("host-check");
-    await page.getByTestId("event-trigger-concurrency").selectOption("parallel");
-    await page.getByTestId("event-trigger-filter").fill('{ "state": "Pending" }');
-    await saveConfig(page, "event-trigger-save");
+    await openConfigTab(page, "eventSources");
+    await page.getByTestId("event-source-new").click();
+    await page.getByTestId("event-source-id").fill("agent-request-created");
+    await page.getByTestId("event-source-source-collection").fill("AgentRequest");
+    await page.getByTestId("event-source-filter").fill('{ "state": "Pending" }');
+    await saveConfig(page, "event-source-save");
     await expect(
-      page.getByTestId("config-event-trigger-agent-request-created"),
+      page.getByTestId("config-event-source-agent-request-created"),
+    ).toBeVisible();
+
+    await openConfigTab(page, "triggers");
+    await page.getByTestId("trigger-new").click();
+    await page.getByTestId("trigger-id").fill("agent-request-created");
+    await page.getByTestId("trigger-task-id").selectOption("host-check");
+    await page.getByTestId("trigger-source-kind").selectOption("event");
+    await page
+      .getByTestId("trigger-source-event-source")
+      .selectOption("agent-request-created");
+    await page.getByTestId("trigger-concurrency").selectOption("latest_only");
+    await saveConfig(page, "trigger-save");
+    await expect(
+      page.getByTestId("config-trigger-agent-request-created"),
     ).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
   });
@@ -106,24 +118,13 @@ test.describe("desktop config workspace advanced flows", () => {
   }) => {
     await gotoHarness(page);
     await openConfig(page);
-    await openConfigTab(page, "toolSelections");
+    await openConfigTab(page, "tools");
 
-    await expect(page.getByTestId("tool-policy-version")).toHaveText("tool-policy/v1");
-    await expect(page.getByTestId("tool-write-tools")).toContainText("upsert_note");
-    await expect(page.getByTestId("tool-write-tools")).not.toContainText("tool_name");
-
-    await page
-      .getByTestId("tool-defra-query-collections")
-      .fill("AgentRequest\nAgentResponse\nAgentSession");
-    await saveConfig(page, "tool-selection-save");
+    await page.getByTestId("tools-target-documents").fill("[]");
 
     await openConfigTab(page, "behavior");
-    await openConfigTab(page, "toolSelections");
-    await expect(page.getByTestId("tool-defra-query-collections")).toHaveValue(
-      "AgentRequest\nAgentResponse\nAgentSession",
-    );
-    await expect(page.getByTestId("tool-policy-version")).toHaveText("tool-policy/v1");
-    await expect(page.getByTestId("tool-write-tools")).toContainText("upsert_note");
+    await openConfigTab(page, "tools");
+    await expect(page.getByTestId("tools-target-documents")).toHaveValue("[]");
     await expectNoPageHorizontalOverflow(page);
   });
 });

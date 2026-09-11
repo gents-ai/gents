@@ -581,11 +581,9 @@ pub(super) async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionH
         r#"mutation {{
             create_AgentSession(input: {{
                 session_id: "{session_id}",
-                agent_name: "general",
                 agent_did: "did:test:test",
                 behavior_id: "general",
-                started: "{now}",
-                status: "active"
+                created_at: "{now}"
             }}) {{ _docID }}
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
@@ -620,6 +618,7 @@ pub(super) async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionH
         &session_id,
         "general",
         "did:test:test",
+        None,
         FailurePolicy::default(),
     )
     .await

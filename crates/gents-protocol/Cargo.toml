@@ -14,12 +14,15 @@ description = "Shared schemas, client turn-observation protocol, and collection 
 [features]
 default = ["native"]
 native = ["dep:reqwest"]
+typescript = ["dep:ts-rs"]
 
 [dependencies]
+ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow = { workspace = true }
 bs58 = "0.5"
 chrono = { workspace = true }
 ciborium = "0.2"
+graphql-parser = "0.4"
 gents-schemas = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"], optional = true }
 serde = { workspace = true, features = ["derive"] }

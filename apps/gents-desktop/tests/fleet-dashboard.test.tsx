@@ -10,8 +10,7 @@ import type {
 import { deployment } from "./config-panel-wiring/fixtures";
 
 const inferenceProps = {
-  onSaveBackendConfig: vi.fn(async () => undefined),
-  onSaveBehaviorConfig: vi.fn(async () => undefined),
+  onPatchConfigComponents: vi.fn(async () => undefined),
   onProbeInferenceEndpoint: vi.fn(async () => ({ reachable: false, models: [] })),
   onCodexLogin: vi.fn(),
   onCancelCodexLogin: vi.fn(async () => undefined),

@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::super::*;
-use crate::graphql::escape_graphql_string;
 use crate::identity::KeyIdentity;
 
 pub(super) async fn test_node() -> Arc<EmbeddedNode> {
@@ -66,99 +65,39 @@ impl Tool for EchoTool {
     }
 }
 
-pub(super) async fn insert_inference_profile(node: &EmbeddedNode, profile_id: &str) {
-    let escaped_profile_id = escape_graphql_string(profile_id);
-    let mutation = format!(
-        r#"mutation {{
-            create_InferenceProfile(input: {{
-                profile_id: "{escaped_profile_id}",
-                display_name: "Balanced",
-                context_window: 32768,
-                max_output_tokens: 4096,
-                max_turns: 8,
-                temperature: 0.2,
-                top_p: 0.95,
-                top_k: 40,
-                min_p: 0.05,
-                frequency_penalty: 0.5,
-                presence_penalty: -0.25,
-                repetition_penalty: 1.1,
-                reasoning_effort: "max",
-                stream_batch_ms: 500,
-                stream_liveness_timeout_secs: 45,
-                deadline_duration_secs: 120
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "{:?}", resp.errors);
-}
-
-pub(super) async fn insert_backend(node: &EmbeddedNode, backend_id: &str, endpoint: &str) {
-    insert_backend_with_health(node, backend_id, endpoint, true, "healthy").await;
-}
-
-pub(super) async fn insert_backend_with_health(
+pub(super) async fn insert_backend(
     node: &EmbeddedNode,
+    agent_did: &str,
     backend_id: &str,
     endpoint: &str,
-    enabled: bool,
-    probe_status: &str,
 ) {
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let escaped_probe_status = escape_graphql_string(probe_status);
-    let mutation = format!(
-        r#"mutation {{
-            create_InferenceBackend(input: {{
-                backend_id: "{escaped_backend_id}",
-                name: "Balanced Backend",
-                provider_kind: "OpenAiCompatible",
-                endpoint: "{escaped_endpoint}",
-                max_concurrent: 2,
-                enabled: {enabled},
-                models: ["default"],
-                probe_status: "{escaped_probe_status}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "{:?}", resp.errors);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn update_default_behavior(
-    node: &EmbeddedNode,
-    behavior_id: &str,
-    inference_profile_id: &str,
-    system_prompt: &str,
-    backend_id: &str,
-    model_name: &str,
-    compaction_strategy: &str,
-    compaction_threshold: f64,
-) {
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let escaped_inference_profile_id = escape_graphql_string(inference_profile_id);
-    let escaped_system_prompt = escape_graphql_string(system_prompt);
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_model_name = escape_graphql_string(model_name);
-    let escaped_compaction_strategy = escape_graphql_string(compaction_strategy);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{escaped_behavior_id}" }} }},
-                input: {{
-                    inference_profile_id: "{escaped_inference_profile_id}",
-                    system_prompt: "{escaped_system_prompt}",
-                    backend_id: "{escaped_backend_id}",
-                    model_name: "{escaped_model_name}",
-                    compaction_strategy: "{escaped_compaction_strategy}",
-                    compaction_threshold: {compaction_threshold},
-                    enabled: true
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "{:?}", resp.errors);
+    crate::ensure_agent_principal(node, agent_did)
+        .await
+        .unwrap();
+    let value = serde_json::json!({
+        "agent_did": agent_did,
+        "backend_id": backend_id,
+        "name": "Balanced Backend",
+        "provider_kind": "OpenAiCompatible",
+        "endpoint": endpoint,
+        "auth": {"kind": "unauthenticated"},
+        "max_concurrent": 2
+    });
+    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
+        crate::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::InferenceBackend,
+            add: value.clone(),
+            update: value,
+        },
+    ])
+    .unwrap();
+    crate::config_client::ConfigAccess::transact_local(node, None, "test.insert_backend", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+    crate::backend_registry::set_backend_probe_status(node, agent_did, backend_id, "healthy")
+        .await
+        .unwrap();
 }
