@@ -298,22 +298,15 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
         "the shim must not listen before its bound behavior exists"
     );
 
-    let behaviors_dir = root.join("agent_behaviors");
-    let existing = fs::read_dir(&behaviors_dir)
-        .context("reading agent_behaviors dir after export")?
-        .next()
-        .ok_or_else(|| anyhow!("no agent-behavior subdirs after export"))??;
-    let late_dir = behaviors_dir.join(crate::support::document_handle(&LATE_BEHAVIOR));
-    fs::create_dir_all(&late_dir)?;
-    for entry in fs::read_dir(existing.path()).context("reading exported behavior dir")? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            fs::copy(entry.path(), late_dir.join(entry.file_name()))?;
-        }
-    }
-    let mut behavior = read_json_file(&late_dir.join("object.json"))?;
+    let config_path = root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let mut behavior = config["agent_behaviors"][0].clone();
     behavior["behavior_id"] = Value::String(LATE_BEHAVIOR.to_string());
-    write_json_file(&late_dir.join("object.json"), &behavior)?;
+    config["agent_behaviors"]
+        .as_array_mut()
+        .context("agent_behaviors is not an array")?
+        .push(behavior);
+    write_json_file(&config_path, &config)?;
 
     let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
     assert_eq!(

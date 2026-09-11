@@ -10,7 +10,7 @@ pub(crate) async fn dispatch(args: ChainQueryArgs) -> Result<()> {
     let principal = resolve_agent_did(args.access.home.as_deref(), None)?;
     let (access, _) =
         resolve_config_access(args.access.home.as_deref(), args.access.graphql.as_deref()).await?;
-    let doc = load_eth_tool(&access, &args.tool_id)
+    let doc = load_eth_tool(&access, &principal, &args.tool_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("EthTool {:?} not found", args.tool_id))?;
     if doc.agent_did != principal {
@@ -39,7 +39,12 @@ pub(crate) async fn dispatch(args: ChainQueryArgs) -> Result<()> {
         );
     }
     let params = parse_params(args.params.as_deref())?;
-    let client = HttpEthRpc::http(rpc_url, chain_id as u64, &methods)?;
+    let client = HttpEthRpc::http_with_timeout(
+        rpc_url,
+        chain_id as u64,
+        &methods,
+        HttpEthRpc::configured_timeout(doc.rpc_timeout_secs)?,
+    )?;
     let result = client
         .call(&args.method, params)
         .await
@@ -64,9 +69,23 @@ fn parse_params(raw: Option<&str>) -> Result<Value> {
     }
 }
 
-async fn load_eth_tool(access: &ConfigAccess, tool_id: &str) -> Result<Option<EthToolDocument>> {
-    decode_eth_tool_rows(&access.execute(&eth_tool_by_id_query(tool_id)).await?)
-        .map(|rows| rows.into_iter().next())
+async fn load_eth_tool(
+    access: &ConfigAccess,
+    agent_did: &str,
+    tool_id: &str,
+) -> Result<Option<EthToolDocument>> {
+    let mut rows = decode_eth_tool_rows(
+        &access
+            .execute(&eth_tool_by_id_query(agent_did, tool_id)?)
+            .await?,
+    )?;
+    anyhow::ensure!(rows.len() <= 1, "duplicate Ethereum tool within principal");
+    anyhow::ensure!(
+        rows.iter()
+            .all(|row| row.agent_did == agent_did && row.tool_id == tool_id),
+        "Ethereum lookup returned mismatched scoped identity"
+    );
+    Ok(rows.pop())
 }
 
 fn decode_eth_tool_rows(value: &Value) -> Result<Vec<EthToolDocument>> {
@@ -74,11 +93,20 @@ fn decode_eth_tool_rows(value: &Value) -> Result<Vec<EthToolDocument>> {
         .pointer("/data/EthTool")
         .or_else(|| value.get("EthTool"))
         .cloned()
-        .unwrap_or(Value::Array(Vec::new()));
+        .context("response missing EthTool rows")?;
     if rows.is_null() {
         return Ok(Vec::new());
     }
-    serde_json::from_value(rows).context("decoding EthTool rows")
+    let mut rows = rows
+        .as_array()
+        .context("EthTool rows must be an array")?
+        .clone();
+    for row in &mut rows {
+        row.as_object_mut()
+            .context("EthTool row must be an object")?
+            .remove("_docID");
+    }
+    serde_json::from_value(Value::Array(rows)).context("decoding EthTool rows")
 }
 
 #[cfg(test)]

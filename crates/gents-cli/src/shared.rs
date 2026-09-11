@@ -4,23 +4,12 @@ use serde_json::Value;
 
 use crate::desired_state;
 
-use crate::cli::args::BackendPresetArg;
 use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedBackendConfig {
     pub(crate) provider_kind: BackendProviderKind,
     pub(crate) openai_wire_api: Option<OpenAiWireApi>,
-    pub(crate) endpoint: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_key_env_var: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct DiscoveredBackendTarget {
-    pub(crate) backend_id: Option<String>,
-    pub(crate) preset: Option<BackendPresetArg>,
-    pub(crate) provider_kind: BackendProviderKind,
     pub(crate) endpoint: String,
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env_var: Option<String>,
@@ -38,7 +27,7 @@ pub(crate) struct InitSummary {
     pub(crate) max_concurrent: i64,
     pub(crate) max_queue_depth: i64,
     pub(crate) default_behavior_id: String,
-    pub(crate) tool_selection_id: String,
+    pub(crate) tools_id: String,
     pub(crate) wide_open_preset_id: String,
     pub(crate) inference_profile_id: String,
     pub(crate) tool_package: ToolPackageArg,
@@ -256,146 +245,71 @@ pub(crate) struct P2pSyncVersionsRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ConfigExportBundle {
     pub(crate) format: String,
     pub(crate) agent_did: String,
     pub(crate) exported_at: String,
     pub(crate) access_mode: String,
-    pub(crate) agent_principal: Option<Value>,
-    #[serde(default)]
-    pub(crate) agent_behaviors: Vec<Value>,
-    #[serde(default)]
-    pub(crate) skills: Vec<Value>,
-    #[serde(default)]
-    pub(crate) datastore_tool_surfaces: Vec<Value>,
-    #[serde(default)]
-    pub(crate) chain_key_bindings: Vec<Value>,
-    #[serde(default)]
-    pub(crate) eth_tools: Vec<Value>,
-    // WorkspaceRoot is registered (schema layer, #714-adjacent persona
-    // catalog work) but not yet part of the desired-state CRUD surface
-    // (CONFIG_APPLY_ORDER/DesiredStateManifest); this stays empty until a
-    // follow-up task wires the real live-query + apply/prune flow.
-    #[serde(default)]
-    pub(crate) workspace_roots: Vec<Value>,
-    #[serde(default)]
-    pub(crate) tool_selections: Vec<Value>,
-    #[serde(default)]
-    pub(crate) inference_backends: Vec<Value>,
-    #[serde(default)]
-    pub(crate) inference_profiles: Vec<Value>,
-    #[serde(default)]
-    pub(crate) tool_service_registries: Vec<Value>,
-    #[serde(default)]
-    pub(crate) projection_acp_bindings: Vec<Value>,
-    #[serde(default)]
-    pub(crate) tasks: Vec<Value>,
-    #[serde(default)]
-    pub(crate) schedules: Vec<Value>,
-    #[serde(default)]
-    pub(crate) event_triggers: Vec<Value>,
+    #[serde(flatten)]
+    pub(crate) config: gents::document_config::PackConfig,
 }
 
 impl ConfigExportBundle {
-    pub(crate) fn docs_for_collection(&self, collection: Collection) -> Option<&[Value]> {
-        match collection {
-            Collection::AgentPrincipal => None,
-            Collection::AgentBehavior => Some(&self.agent_behaviors),
-            Collection::Skill => Some(&self.skills),
-            Collection::DatastoreToolSurface => Some(&self.datastore_tool_surfaces),
-            Collection::ChainKeyBinding => Some(&self.chain_key_bindings),
-            Collection::EthTool => Some(&self.eth_tools),
-            Collection::WorkspaceRoot => Some(&self.workspace_roots),
-            Collection::ToolSelection => Some(&self.tool_selections),
-            Collection::InferenceBackend => Some(&self.inference_backends),
-            Collection::InferenceProfile => Some(&self.inference_profiles),
-            Collection::ToolServiceRegistry => Some(&self.tool_service_registries),
-            Collection::ProjectionAcpBinding => Some(&self.projection_acp_bindings),
-            Collection::Task => Some(&self.tasks),
-            Collection::Schedule => Some(&self.schedules),
-            Collection::EventTrigger => Some(&self.event_triggers),
+    pub(crate) fn docs_for_collection(&self, collection: Collection) -> anyhow::Result<Vec<Value>> {
+        let config = serde_json::to_value(&self.config)?;
+        match collection.dir_name() {
+            None => Ok(vec![config["agent_principal"].clone()]),
+            Some(key) => match config.get(key) {
+                None | Some(Value::Null) => Ok(Vec::new()),
+                Some(Value::Array(rows)) => Ok(rows.clone()),
+                Some(_) => anyhow::bail!("canonical configuration {key} is not a document array"),
+            },
         }
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct ConfigApplyCounts {
-    pub(crate) agent_principal: usize,
-    pub(crate) agent_behaviors: usize,
-    pub(crate) skills: usize,
-    pub(crate) datastore_tool_surfaces: usize,
-    pub(crate) chain_key_bindings: usize,
-    pub(crate) eth_tools: usize,
-    pub(crate) workspace_roots: usize,
-    pub(crate) tool_selections: usize,
-    pub(crate) inference_backends: usize,
-    pub(crate) inference_profiles: usize,
-    pub(crate) tool_service_registries: usize,
-    pub(crate) projection_acp_bindings: usize,
-    pub(crate) tasks: usize,
-    pub(crate) schedules: usize,
-    pub(crate) event_triggers: usize,
+/// Counts follow the canonical collection vocabulary; adding a config document
+/// cannot silently omit it from the apply report.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ConfigApplyCounts(std::collections::BTreeMap<Collection, usize>);
+
+impl Serialize for ConfigApplyCounts {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(Collection::ALL.len()))?;
+        for collection in Collection::ALL {
+            let key = collection.dir_name().unwrap_or("agent_principal");
+            map.serialize_entry(key, &self.get(collection))?;
+        }
+        map.end()
+    }
 }
 
 impl ConfigApplyCounts {
-    pub(crate) fn get(&self, collection: Collection) -> usize {
-        match collection {
-            Collection::AgentPrincipal => self.agent_principal,
-            Collection::AgentBehavior => self.agent_behaviors,
-            Collection::Skill => self.skills,
-            Collection::DatastoreToolSurface => self.datastore_tool_surfaces,
-            Collection::ChainKeyBinding => self.chain_key_bindings,
-            Collection::EthTool => self.eth_tools,
-            Collection::WorkspaceRoot => self.workspace_roots,
-            Collection::ToolSelection => self.tool_selections,
-            Collection::InferenceBackend => self.inference_backends,
-            Collection::InferenceProfile => self.inference_profiles,
-            Collection::ToolServiceRegistry => self.tool_service_registries,
-            Collection::ProjectionAcpBinding => self.projection_acp_bindings,
-            Collection::Task => self.tasks,
-            Collection::Schedule => self.schedules,
-            Collection::EventTrigger => self.event_triggers,
+    pub(crate) fn from_config(config: &gents::document_config::PackConfig) -> anyhow::Result<Self> {
+        let value = serde_json::to_value(config)?;
+        let mut counts = Self::default();
+        for collection in Collection::ALL {
+            let count = match collection.dir_name() {
+                Some(key) => value.get(key).and_then(Value::as_array).map_or(0, Vec::len),
+                None => 1,
+            };
+            counts.set(collection, count);
         }
+        Ok(counts)
+    }
+
+    pub(crate) fn get(&self, collection: Collection) -> usize {
+        self.0.get(&collection).copied().unwrap_or_default()
     }
 
     pub(crate) fn set(&mut self, collection: Collection, count: usize) {
-        match collection {
-            Collection::AgentPrincipal => self.agent_principal = count,
-            Collection::AgentBehavior => self.agent_behaviors = count,
-            Collection::Skill => self.skills = count,
-            Collection::DatastoreToolSurface => self.datastore_tool_surfaces = count,
-            Collection::ChainKeyBinding => self.chain_key_bindings = count,
-            Collection::EthTool => self.eth_tools = count,
-            Collection::WorkspaceRoot => self.workspace_roots = count,
-            Collection::ToolSelection => self.tool_selections = count,
-            Collection::InferenceBackend => self.inference_backends = count,
-            Collection::InferenceProfile => self.inference_profiles = count,
-            Collection::ToolServiceRegistry => self.tool_service_registries = count,
-            Collection::ProjectionAcpBinding => self.projection_acp_bindings = count,
-            Collection::Task => self.tasks = count,
-            Collection::Schedule => self.schedules = count,
-            Collection::EventTrigger => self.event_triggers = count,
-        }
+        self.0.insert(collection, count);
     }
 
     pub(crate) fn add(&mut self, collection: Collection, count: usize) {
-        match collection {
-            Collection::AgentPrincipal => self.agent_principal += count,
-            Collection::AgentBehavior => self.agent_behaviors += count,
-            Collection::Skill => self.skills += count,
-            Collection::DatastoreToolSurface => self.datastore_tool_surfaces += count,
-            Collection::ChainKeyBinding => self.chain_key_bindings += count,
-            Collection::EthTool => self.eth_tools += count,
-            Collection::WorkspaceRoot => self.workspace_roots += count,
-            Collection::ToolSelection => self.tool_selections += count,
-            Collection::InferenceBackend => self.inference_backends += count,
-            Collection::InferenceProfile => self.inference_profiles += count,
-            Collection::ToolServiceRegistry => self.tool_service_registries += count,
-            Collection::ProjectionAcpBinding => self.projection_acp_bindings += count,
-            Collection::Task => self.tasks += count,
-            Collection::Schedule => self.schedules += count,
-            Collection::EventTrigger => self.event_triggers += count,
-        }
+        *self.0.entry(collection).or_default() += count;
     }
 
     pub(crate) fn saturating_sub(&self, other: &Self) -> Self {

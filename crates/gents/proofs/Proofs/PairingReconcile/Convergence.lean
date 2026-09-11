@@ -247,14 +247,6 @@ theorem collections_change_forces_reinstall
     exact ⟨collections_change_distinct_identity hcs, by
       simp [eraseReplicatorsAtAddress]⟩
 
-theorem no_flap_on_converged_stable_desired
-    {pre post : ReconcileState}
-    (h : pre.converged)
-    (h_trans : Transition pre post)
-    (_h_desired_stable : post.desired = pre.desired) :
-    managedWiringUnchanged pre post :=
-  no_flap_on_converged_step h h_trans
-
 theorem dial_failure_is_nonconverging_fixpoint
     {s : ReconcileState} {desired : PairingDesired}
     (h_desired : s.desired = some desired)

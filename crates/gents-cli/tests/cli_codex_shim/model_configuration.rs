@@ -50,31 +50,34 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
             Duration::from_secs(30),
         ))
         .await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    let generation =
+        wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let create_extra_backend = format!(
         r#"mutation {{
             create_InferenceBackend(input: {{
+                agent_did: "{agent_did}",
                 backend_id: "{extra_backend_id}",
                 name: "Extra Backend",
                 provider_kind: "OpenAiCompatible",
+                openai_wire_api: "chat_completions",
                 endpoint: "{}",
+                auth: {{kind: "unauthenticated"}},
                 max_concurrent: 1,
                 max_queue_depth: 100,
-                enabled: true,
-                models: ["{extra_model_name}"],
-                probe_status: "healthy"
+                enabled: true
             }}) {{ _docID }}
             create_duplicate: create_InferenceBackend(input: {{
+                agent_did: "{agent_did}",
                 backend_id: "{duplicate_backend_id}",
                 name: "Duplicate Backend",
                 provider_kind: "OpenAiCompatible",
+                openai_wire_api: "chat_completions",
                 endpoint: "{}",
+                auth: {{kind: "unauthenticated"}},
                 max_concurrent: 1,
                 max_queue_depth: 100,
-                enabled: true,
-                models: ["{model_name}"],
-                probe_status: "healthy"
+                enabled: true
             }}) {{ _docID }}
         }}"#,
         escape_graphql_string(extra_endpoint.endpoint()),
@@ -82,6 +85,16 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     );
     serve
         .capturing(graphql_query(&graphql, &create_extra_backend))
+        .await?;
+    seed_backend_catalog(&graphql, &agent_did, &extra_backend_id, &extra_model_name).await?;
+    seed_backend_catalog(&graphql, &agent_did, &duplicate_backend_id, &model_name).await?;
+    serve
+        .capturing(wait_for_runtime_quiescence(
+            &graphql,
+            &agent_did,
+            generation + 1,
+            Duration::from_secs(2),
+        ))
         .await?;
 
     let (mut ws, _) = serve
@@ -218,16 +231,16 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
         .await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
-    let switch_behavior = format!(
+    let switch_profile = format!(
         r#"mutation {{
-            update_AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
+            update_InferenceProfile(
+                filter: {{ profile_id: {{ _eq: "{default_behavior_id}-profile" }} }},
                 input: {{ model_name: "{alt_model_name}" }}
             ) {{ _docID }}
         }}"#
     );
     serve
-        .capturing(graphql_query(&graphql, &switch_behavior))
+        .capturing(graphql_query(&graphql, &switch_profile))
         .await?;
 
     let (mut ws, _) = serve
@@ -323,26 +336,37 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
             Duration::from_secs(30),
         ))
         .await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
+    let generation =
+        wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let create_alt_backend = format!(
         r#"mutation {{
             create_InferenceBackend(input: {{
+                agent_did: "{agent_did}",
                 backend_id: "{alt_backend_id}",
                 name: "Alt Backend",
                 provider_kind: "OpenAiCompatible",
+                openai_wire_api: "chat_completions",
                 endpoint: "{}",
+                auth: {{kind: "unauthenticated"}},
                 max_concurrent: 1,
                 max_queue_depth: 100,
-                enabled: true,
-                models: ["{alt_model_name}"],
-                probe_status: "healthy"
+                enabled: true
             }}) {{ _docID }}
         }}"#,
         escape_graphql_string(alt_endpoint.endpoint())
     );
     serve
         .capturing(graphql_query(&graphql, &create_alt_backend))
+        .await?;
+    seed_backend_catalog(&graphql, &agent_did, &alt_backend_id, &alt_model_name).await?;
+    serve
+        .capturing(wait_for_runtime_quiescence(
+            &graphql,
+            &agent_did,
+            generation + 1,
+            Duration::from_secs(2),
+        ))
         .await?;
 
     let (mut ws, _) = serve
@@ -398,37 +422,36 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
                 AgentBehavior(
                     filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
                     limit: 1
-                ) {{ backend_id model_name inference_profile_id }}
+                ) {{ inference_profile_id }}
             }}"#
             ),
         ))
         .await?;
-    let stored_backend = resp
-        .pointer("/data/AgentBehavior/0/backend_id")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .unwrap_or_default();
-    assert_eq!(
-        stored_backend, alt_backend_id,
-        "AgentBehavior.backend_id should reflect ConfigValueWrite"
-    );
-    let stored_model = resp
-        .pointer("/data/AgentBehavior/0/model_name")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .unwrap_or_default();
-    assert_eq!(
-        stored_model, alt_model_name,
-        "AgentBehavior.model_name should reflect ConfigValueWrite"
-    );
     let stored_profile = resp
         .pointer("/data/AgentBehavior/0/inference_profile_id")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
         .unwrap_or_default();
-    assert_eq!(
+    assert_ne!(
         stored_profile, original_profile_id,
-        "AgentBehavior.inference_profile_id should remain unchanged by model selection"
+        "model selection must copy the profile instead of mutating the shared original"
+    );
+    let resp = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{agent_did}"}}, profile_id: {{_eq: "{}"}}}}, limit: 1) {{backend_id model_name}} }}"#,
+                escape_graphql_string(&stored_profile)
+            ),
+        ))
+        .await?;
+    assert_eq!(
+        resp["data"]["InferenceProfile"][0]["backend_id"],
+        alt_backend_id
+    );
+    assert_eq!(
+        resp["data"]["InferenceProfile"][0]["model_name"],
+        alt_model_name
     );
     Ok(())
 }
@@ -519,10 +542,9 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
     )
     .await?;
     let error = read_error_response(&mut ws, request_id(2)).await?;
-    assert!(
-        error.message.contains("model") && error.message.contains("not found"),
-        "expected error to mention missing model; got: {}",
-        error.message
+    assert_eq!(
+        error.message,
+        "no backend advertises model \"definitely-not-real\" in this principal's credential scope"
     );
 
     let resp = serve
@@ -533,29 +555,11 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
                 AgentBehavior(
                     filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
                     limit: 1
-                ) {{ backend_id model_name inference_profile_id }}
+                ) {{ inference_profile_id }}
             }}"#
             ),
         ))
         .await?;
-    let stored_backend = resp
-        .pointer("/data/AgentBehavior/0/backend_id")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .unwrap_or_default();
-    assert_eq!(
-        stored_backend, original_backend_id,
-        "behavior backend_id must remain unchanged after rejected write"
-    );
-    let stored_model = resp
-        .pointer("/data/AgentBehavior/0/model_name")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .unwrap_or_default();
-    assert_eq!(
-        stored_model, model_name,
-        "behavior model_name must remain unchanged after rejected write"
-    );
     let stored_profile = resp
         .pointer("/data/AgentBehavior/0/inference_profile_id")
         .and_then(|v| v.as_str())
@@ -564,6 +568,22 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
     assert_eq!(
         stored_profile, original_profile_id,
         "behavior inference_profile_id must remain unchanged after rejected write"
+    );
+    let profile = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{agent_did}"}}, profile_id: {{_eq: "{original_profile_id}"}}}}, limit: 1) {{backend_id model_name}} }}"#,
+            ),
+        ))
+        .await?;
+    assert_eq!(
+        profile["data"]["InferenceProfile"][0]["backend_id"],
+        original_backend_id
+    );
+    assert_eq!(
+        profile["data"]["InferenceProfile"][0]["model_name"],
+        model_name
     );
     Ok(())
 }

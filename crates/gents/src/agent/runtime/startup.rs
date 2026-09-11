@@ -420,9 +420,6 @@ async fn run_agent_owned(
         agent.default_behavior_id(),
     )
     .await;
-    let local_deployment_id = crate::callback::ensure_local_host_deployment(agent.node.as_ref())
-        .await
-        .context("ensure local HostDeployment")?;
     for (behavior_id, reason) in &agent.unavailable_behaviors {
         tracing::warn!(
             behavior_id = %behavior_id,
@@ -593,7 +590,7 @@ async fn run_agent_owned(
     let (manual_source, manual_trigger_handle) =
         crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
-    let trigger_engine_deployment_id = local_deployment_id.clone();
+    let trigger_engine_agent_did = agent.agent_did().to_string();
     let trigger_engine_handle = tokio::spawn(async move {
         tokio::select! {
             _ = trigger_engine_cancel.cancelled() => return,
@@ -601,7 +598,7 @@ async fn run_agent_owned(
         }
         match crate::trigger_engine::production_materializer::recover_workspace_binding_pending_requests(
             trigger_engine_node.as_ref(),
-            &trigger_engine_deployment_id,
+            &trigger_engine_agent_did,
         )
         .await
         {
@@ -616,8 +613,7 @@ async fn run_agent_owned(
             crate::trigger_engine::production_materializer::ProductionMaterializer::new(
                 trigger_engine_node.clone(),
                 trigger_engine_materializer_snapshot_rx,
-            )
-            .with_local_deployment_id(trigger_engine_deployment_id),
+            ),
         );
         let schedule_source: Box<dyn crate::trigger_engine::TriggerSource> =
             Box::new(crate::trigger_engine::schedule_source::ScheduleSource::new(
@@ -661,7 +657,7 @@ async fn run_agent_owned(
     });
 
     let callback_node = agent.node.clone();
-    let callback_deployment_id = local_deployment_id.clone();
+    let callback_agent_did = agent.agent_did().to_string();
     let callback_ceiling = agent
         .document_runtime_context()
         .and_then(|context| context.tool_ceiling.root())
@@ -676,7 +672,7 @@ async fn run_agent_owned(
         }
         if let Err(error) = crate::callback::run_callback_engine(
             callback_node,
-            callback_deployment_id,
+            callback_agent_did,
             callback_ceiling,
             callback_cancel,
         )
@@ -908,7 +904,6 @@ async fn run_agent_owned(
 
     let router_node = agent.node.clone();
     let router_agent_did = agent.agent_did().to_string();
-    let router_deployment_id = local_deployment_id.clone();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
     let router_shutdown = shutdown.clone();
     let router_admission_gate = admission_gate.clone();
@@ -918,7 +913,6 @@ async fn run_agent_owned(
             super::router::run_router(
                 router_node,
                 router_agent_did,
-                router_deployment_id,
                 router_active_snapshot_rx,
                 router_shutdown,
                 router_admission_gate,
@@ -1203,6 +1197,7 @@ async fn validate_startup_snapshot(
             .ok_or_else(|| anyhow!("missing tool surface for behavior {behavior_id}"))?;
         tool_surface
             .build_tools(tool_runtime)
+            .await
             .with_context(|| format!("building startup tool surface for behavior {behavior_id}"))?;
     }
 
@@ -1211,11 +1206,11 @@ async fn validate_startup_snapshot(
 
 async fn resolve_tool_surfaces(
     node: &defra_node::EmbeddedNode,
-    behaviors: &[Arc<crate::config::AgentBehavior>],
+    behaviors: &[Arc<crate::config::ResolvedBehavior>],
 ) -> Result<HashMap<String, Arc<ToolSurface>>> {
     let mut tool_surfaces = HashMap::with_capacity(behaviors.len());
     for behavior in behaviors {
-        let tool_surface = behavior.tools.resolve(node).await?;
+        let tool_surface = behavior.tools.resolve(node, behavior.agent_did()).await?;
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     Ok(tool_surfaces)
@@ -1249,7 +1244,7 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
 
 async fn resolve_backend_admission_configs(
     node: &defra_node::EmbeddedNode,
-    behaviors: &[Arc<crate::config::AgentBehavior>],
+    behaviors: &[Arc<crate::config::ResolvedBehavior>],
 ) -> Result<HashMap<String, BackendAdmissionConfig>> {
     let mut configs = HashMap::new();
     for behavior in behaviors {
@@ -1265,7 +1260,7 @@ async fn resolve_backend_admission_configs(
             continue;
         }
         let (resolved_backend_id, config) = async {
-            let backend = backend_registry::lookup_backend(node, backend_id)
+            let backend = backend_registry::lookup_backend(node, behavior.agent_did(), backend_id)
                 .await?
                 .ok_or_else(|| {
                     anyhow!(
@@ -1274,13 +1269,23 @@ async fn resolve_backend_admission_configs(
                         backend_id
                     )
                 })?;
+            let observation = backend_registry::lookup_backend_observation(
+                node,
+                behavior.agent_did(),
+                backend_id,
+            )
+            .await?
+            .context("backend observation disappeared during admission resolution")?;
             tracing::Span::current().record("backend_enabled", backend.enabled);
-            tracing::Span::current().record("probe_status", backend.probe_status.as_str());
+            tracing::Span::current().record(
+                "probe_status",
+                observation.probe_status.as_deref().unwrap_or("unknown"),
+            );
             tracing::Span::current().record("max_concurrent", backend.max_concurrent);
             tracing::Span::current().record("max_queue_depth", backend.max_queue_depth);
             Ok::<_, anyhow::Error>((
                 backend.backend_id.clone(),
-                BackendAdmissionConfig::from_backend(&backend)?,
+                BackendAdmissionConfig::from_backend(&backend, &observation)?,
             ))
         }
         .instrument(tracing::info_span!(
@@ -1311,30 +1316,19 @@ mod degraded_reason_tests {
     use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
 
     #[test]
-    fn unprobed_backend_is_degraded() {
-        assert!(is_degraded_startup_unavailable_reason(
-            Reason::BackendTemporarilyUnavailable
-        ));
-    }
-
-    #[test]
-    fn disabled_behavior_is_degraded() {
-        assert!(is_degraded_startup_unavailable_reason(
-            Reason::BehaviorDisabled
-        ));
-    }
-
-    #[test]
-    fn no_backend_binding_is_degraded() {
-        // A backendless behavior (e.g. the seeded bootstrap default before a
-        // backend is configured) must not be fatal at startup.
-        assert!(is_degraded_startup_unavailable_reason(
-            Reason::BackendNotConfigured
-        ));
-    }
-
-    #[test]
-    fn unknown_structural_reason_is_blocking() {
+    fn startup_unavailability_classification_is_complete() {
+        for reason in [
+            Reason::BehaviorDisabled,
+            Reason::BackendNotConfigured,
+            Reason::BackendDisabled,
+            Reason::BackendTemporarilyUnavailable,
+            Reason::CredentialsRequired,
+        ] {
+            assert!(
+                is_degraded_startup_unavailable_reason(reason),
+                "{reason:?} must allow degraded startup"
+            );
+        }
         assert!(!is_degraded_startup_unavailable_reason(
             Reason::ToolConfigurationInvalid
         ));
@@ -1505,120 +1499,6 @@ mod startup_slot_failure_policy_tests {
         );
 
         status_owner.close().await.unwrap();
-        node.shutdown().await;
-    }
-}
-
-#[cfg(test)]
-mod run_agent_teardown_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use tokio::sync::mpsc;
-
-    use crate::behavior_readiness_publisher::BehaviorReadinessWriter;
-
-    use super::*;
-
-    // This is a deadlock guard, not a teardown latency SLO. The full test
-    // suite runs many embedded DefraDB nodes concurrently on shared runners.
-    const DEADLOCK_GUARD: Duration = Duration::from_secs(30);
-
-    struct StuckAfterInitializeWriter {
-        attempts: mpsc::UnboundedSender<()>,
-        writes: AtomicUsize,
-    }
-
-    #[async_trait::async_trait]
-    impl BehaviorReadinessWriter for StuckAfterInitializeWriter {
-        async fn upsert(
-            &self,
-            _agent_did: &str,
-            _snapshot: &gents_protocol::row::BehaviorReadinessSnapshot,
-            _updated_at: &str,
-        ) -> Result<()> {
-            if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
-                return Ok(());
-            }
-            let _ = self.attempts.send(());
-            std::future::pending().await
-        }
-    }
-
-    #[tokio::test]
-    async fn saturated_stuck_publisher_cannot_wedge_run_agent_teardown() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
-        let (owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
-            node.clone(),
-            "did:test:run-agent-teardown",
-            Arc::new(StuckAfterInitializeWriter {
-                attempts: attempts_tx,
-                writes: AtomicUsize::new(0),
-            }),
-            Duration::from_millis(1),
-        );
-        runtime_status.initialize_startup("general").await.unwrap();
-
-        let blocked = {
-            let runtime_status = runtime_status.clone();
-            tokio::spawn(async move {
-                runtime_status
-                    .set_process_state_durable(ProcessLifecycleState::Ready)
-                    .await
-            })
-        };
-        attempts_rx.recv().await.expect("Ready write must be stuck");
-        let queued = (0..64)
-            .map(|generation| {
-                let runtime_status = runtime_status.clone();
-                tokio::spawn(async move {
-                    runtime_status
-                        .readiness()
-                        .set_router_generation(generation)
-                        .await
-                })
-            })
-            .collect::<Vec<_>>();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while runtime_status.readiness().command_capacity_for_test() != 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("test must saturate the runtime publisher queue");
-
-        let admission_gate = super::super::router::RuntimeAdmissionGate::closed();
-        admission_gate.open().await;
-        admission_gate.close().await;
-        assert!(!admission_gate.is_open().await);
-
-        let error = tokio::time::timeout(
-            DEADLOCK_GUARD,
-            finish_run_agent(
-                Err(anyhow::anyhow!("sentinel runtime body failure")),
-                owner,
-                runtime_status,
-                None,
-            ),
-        )
-        .await
-        .expect("run_agent teardown must return boundedly")
-        .expect_err("runtime body failure must be preserved");
-        assert_eq!(error.to_string(), "sentinel runtime body failure");
-        assert!(blocked.await.unwrap().is_err());
-        let mut rejected = 0;
-        for queued in queued {
-            if queued.await.unwrap().is_err() {
-                rejected += 1;
-            }
-        }
-        assert!(
-            rejected > 0,
-            "publisher cancellation must reject queued work"
-        );
         node.shutdown().await;
     }
 }

@@ -30,6 +30,10 @@ theorem fromContract_toContract (p : DedupePolicy) :
 
 end DedupePolicy
 
+/-- Delivery observations within one dedupe epoch. For monotone-once sources,
+the epoch is the source lifetime. For Watcher, it ends when cooldown entries
+expire or are evicted; those owner operations are outside this transition model.
+In particular, this model makes no lifetime at-most-once claim for Watcher. -/
 structure World where
   persistentSet     : List DocId
   subscriptionQueue : List DocId
@@ -96,6 +100,8 @@ inductive Trace : World → World → Prop where
   | step {w₁ w₂ w₃ : World} {a : Action} :
       Transition w₁ a w₂ → Trace w₂ w₃ → Trace w₁ w₃
 
+/-- Runtime source metadata. `dedupePolicy` describes the adapter; it does not
+add expiry transitions to the common, single-epoch model. -/
 structure SourceInstance where
   name            : String
   dedupePolicy    : DedupePolicy

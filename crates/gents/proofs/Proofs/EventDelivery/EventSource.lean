@@ -35,14 +35,17 @@ theorem E2_ready_trigger_independent_of_pending_trigger
     (w : World) (ready pending : DocId)
     (h_ready_queued : ready ∈ w.subscriptionQueue)
     (h_ready_unprocessed : ready ∉ w.processedSet)
-    (h_pending_persisted : pending ∈ w.persistentSet) :
+    (h_pending_persisted : pending ∈ w.persistentSet)
+    (h_pending_unprocessed : pending ∉ w.processedSet)
+    (h_distinct : pending ≠ ready) :
     let w' :=
       { w with handled := ready :: w.handled
              , processedSet := ready :: w.processedSet
              , subscriptionQueue := w.subscriptionQueue.erase ready }
-    Transition w (.handle ready) w' ∧ pending ∈ w'.persistentSet := by
+    Transition w (.handle ready) w' ∧ pending ∈ w'.persistentSet ∧
+      pending ∉ w'.processedSet := by
   constructor
   · exact Transition.handle w ready h_ready_queued h_ready_unprocessed
-  · exact h_pending_persisted
+  · exact ⟨h_pending_persisted, by simp [h_distinct, h_pending_unprocessed]⟩
 
 end EventDelivery.EventSource

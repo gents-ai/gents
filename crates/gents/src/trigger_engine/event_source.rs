@@ -23,8 +23,6 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
@@ -45,7 +43,6 @@ use super::{FireIntent, TriggerKind, TriggerSource};
 /// conservative limit is fine.
 const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
 const EVENT_SOURCE_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
-const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 const GROUP_STARTUP_PAGE_BUDGET: usize = 1;
 const GROUP_DUE_RECONCILE_BUDGET: usize = 16;
 const MAX_ACTIVE_GROUP_TIMERS: usize = 4096;
@@ -76,34 +73,17 @@ fn captured_source_field(doc: &serde_json::Value, field: &str) -> anyhow::Result
     Ok(Some(canonical))
 }
 
-pub(super) fn group_candidate_eligible(
-    actual_count: usize,
-    expected_count: Option<usize>,
-    minimum_count: usize,
-    timed_out: bool,
-    well_formed: bool,
-) -> bool {
-    well_formed
-        && actual_count > 0
-        && actual_count <= crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
-        && match expected_count {
-            Some(expected) => {
-                expected > 0
-                    && expected <= crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
-                    && actual_count <= expected
-                    && (actual_count == expected || (timed_out && minimum_count <= actual_count))
-            }
-            None => timed_out && minimum_count <= actual_count,
-        }
-}
+#[cfg(test)]
+pub(super) use super::event_delivery::group_candidate_eligible;
+use super::event_delivery::{self, Delivery, GroupOutcome, GROUP_RECOVERY_PAGE_SIZE};
 
 fn take_due_group_batch(
     mut due: Vec<GroupTrackingKey>,
     cursor: &mut usize,
 ) -> Vec<GroupTrackingKey> {
     due.sort_by(|left, right| {
-        left.trigger_id
-            .cmp(&right.trigger_id)
+        left.consumer_key
+            .cmp(&right.consumer_key)
             .then_with(|| left.correlation.cmp(&right.correlation))
     });
     if due.is_empty() {
@@ -126,7 +106,7 @@ mod due_group_batch_tests {
     fn due_group_batches_are_bounded_and_rotate_fairly() {
         let due = (0..(GROUP_DUE_RECONCILE_BUDGET + 3))
             .map(|index| GroupTrackingKey {
-                trigger_id: "trigger".to_string(),
+                consumer_key: "consumer-key".to_string(),
                 correlation: format!("run-{index:03}"),
             })
             .collect::<Vec<_>>();
@@ -145,7 +125,7 @@ mod due_group_batch_tests {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct GroupTrackingKey {
-    trigger_id: String,
+    consumer_key: String,
     correlation: String,
 }
 
@@ -155,37 +135,12 @@ struct SourceDocumentKey {
     source_doc_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct GroupTriggerScanFingerprint {
-    source_collection: String,
-    filter: Option<String>,
-    correlation_field: Option<String>,
-}
-
-impl From<&crate::runtime_snapshot::ResolvedEventTrigger> for GroupTriggerScanFingerprint {
-    fn from(trigger: &crate::runtime_snapshot::ResolvedEventTrigger) -> Self {
-        Self {
-            source_collection: trigger.source_collection.clone(),
-            filter: trigger.filter.clone(),
-            correlation_field: trigger.correlation_field.clone(),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct GroupTimer {
     first_seen: DateTime<Utc>,
     last_touched: Instant,
     dormant: bool,
     quiesced: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct DurableGroupStateRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    first_seen_at: String,
-    quiesced_at: Option<String>,
 }
 
 #[derive(Default)]
@@ -219,7 +174,7 @@ pub struct EventSource {
     group_due_cursor: usize,
     group_recovery_cursor: usize,
     group_page_cursors: HashMap<String, String>,
-    group_trigger_fingerprints: HashMap<String, GroupTriggerScanFingerprint>,
+    group_trigger_fingerprints: HashMap<String, String>,
     #[cfg(test)]
     group_recovery_page_queries: AtomicUsize,
     #[cfg(test)]
@@ -254,7 +209,7 @@ pub(crate) struct SourceSchemaCache {
 }
 
 impl SourceSchemaCache {
-    async fn fields_for(
+    pub(crate) async fn fields_for(
         &self,
         collection: &str,
         node: &EmbeddedNode,
@@ -454,7 +409,7 @@ impl EventSource {
         let changed_group_trigger_ids = group_triggers
             .iter()
             .filter_map(|trigger| {
-                let fingerprint = GroupTriggerScanFingerprint::from(trigger);
+                let fingerprint = Self::delivery(snapshot, trigger).ok()?.config_key();
                 (self.group_trigger_fingerprints.get(&trigger.trigger_id) != Some(&fingerprint))
                     .then(|| trigger.trigger_id.clone())
             })
@@ -463,8 +418,10 @@ impl EventSource {
             .lock()
             .expect("group_timers mutex poisoned")
             .retain(|key, _| {
-                active_group_trigger_ids.contains(key.trigger_id.as_str())
-                    && !changed_group_trigger_ids.contains(&key.trigger_id)
+                group_triggers.iter().any(|trigger| {
+                    Self::delivery(snapshot, trigger)
+                        .is_ok_and(|delivery| delivery.consumer_key() == key.consumer_key)
+                })
             });
         self.group_page_cursors.retain(|trigger_id, _| {
             active_group_trigger_ids.contains(trigger_id.as_str())
@@ -472,11 +429,10 @@ impl EventSource {
         });
         self.group_trigger_fingerprints = group_triggers
             .iter()
-            .map(|trigger| {
-                (
-                    trigger.trigger_id.clone(),
-                    GroupTriggerScanFingerprint::from(trigger),
-                )
+            .filter_map(|trigger| {
+                Self::delivery(snapshot, trigger)
+                    .ok()
+                    .map(|delivery| (trigger.trigger_id.clone(), delivery.config_key()))
             })
             .collect();
 
@@ -839,45 +795,14 @@ impl EventSource {
         source_doc_id: &str,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<bool> {
-        crate::graphql::validate_collection_identifier(&trigger.source_collection)?;
-        let user_filter = trigger
-            .filter
-            .as_deref()
-            .map(str::trim)
-            .filter(|f| !f.is_empty());
-        if let Some(filter) = user_filter {
-            crate::graphql::validate_graphql_filter_fragment(filter)?;
-        }
-        let filter_literal = match user_filter {
-            Some(f) => format!(
-                r#"{{ _docID: {{ _eq: "{id}" }}, _and: [ {user_filter} ] }}"#,
-                id = crate::graphql::escape_graphql_string(source_doc_id),
-                user_filter = f,
-            ),
-            None => format!(
-                r#"{{ _docID: {{ _eq: "{id}" }} }}"#,
-                id = crate::graphql::escape_graphql_string(source_doc_id),
-            ),
-        };
-        let query = format!(
-            r#"query {{
-                {collection}(filter: {filter_literal}, limit: 1) {{
-                    _docID
-                }}
-            }}"#,
-            collection = trigger.source_collection,
-            filter_literal = filter_literal,
-        );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!("filter probe errors: {:?}", response.errors);
-        }
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get(&trigger.source_collection))
-            .and_then(serde_json::Value::as_array);
-        Ok(rows.is_some_and(|rs| !rs.is_empty()))
+        Ok(event_delivery::probe_document(
+            &self.node,
+            &trigger.source_collection,
+            source_doc_id,
+            trigger.filter.as_deref(),
+        )
+        .await?
+        .is_some())
     }
 
     async fn fetch_source_doc(
@@ -929,115 +854,6 @@ impl EventSource {
         Ok(row.clone())
     }
 
-    fn trigger_filter_literal(
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-        correlation: Option<&str>,
-    ) -> anyhow::Result<String> {
-        let mut clauses = Vec::new();
-        if let Some(filter) = trigger
-            .filter
-            .as_deref()
-            .map(str::trim)
-            .filter(|filter| !filter.is_empty())
-        {
-            crate::graphql::validate_graphql_filter_fragment(filter)?;
-            clauses.push(filter.to_string());
-        }
-        if let Some(correlation) = correlation {
-            let field = trigger
-                .correlation_field
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("per_group trigger has no correlation_field"))?;
-            crate::graphql::validate_graphql_name(field)?;
-            clauses.push(format!(
-                r#"{{ {field}: {{ _eq: "{}" }} }}"#,
-                crate::graphql::escape_graphql_string(correlation)
-            ));
-        }
-        Ok(match clauses.as_slice() {
-            [] => "{}".to_string(),
-            [only] => only.clone(),
-            _ => format!("{{ _and: [ {} ] }}", clauses.join(", ")),
-        })
-    }
-
-    async fn fetch_group_docs(
-        &self,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-        correlation: &str,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
-        #[cfg(test)]
-        self.group_membership_queries
-            .fetch_add(1, Ordering::Relaxed);
-        crate::graphql::validate_collection_identifier(&trigger.source_collection)?;
-        let fields = self
-            .source_schema_cache
-            .fields_for(&trigger.source_collection, &self.node)
-            .await?;
-        let projection = fields.join("\n                    ");
-        let filter = Self::trigger_filter_literal(trigger, Some(correlation))?;
-        let limit = crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS + 1;
-        let query = format!(
-            r#"query {{
-                {collection}(
-                    filter: {filter},
-                    order: {{ _docID: ASC }},
-                    limit: {limit}
-                ) {{
-                    _docID
-                    {projection}
-                }}
-            }}"#,
-            collection = trigger.source_collection,
-        );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!("load event-trigger group failed: {:?}", response.errors);
-        }
-        Ok(response
-            .data
-            .as_ref()
-            .and_then(|data| data.get(&trigger.source_collection))
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default())
-    }
-
-    fn expected_group_count(
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-        docs: &[serde_json::Value],
-    ) -> anyhow::Result<Option<usize>> {
-        if let Some(expected) = trigger.expected_count {
-            return Ok(Some(expected));
-        }
-        let Some(field) = trigger.expected_count_field.as_deref() else {
-            return Ok(None);
-        };
-        let mut resolved = None;
-        for doc in docs {
-            let value = doc.get(field).ok_or_else(|| {
-                anyhow::anyhow!("group member is missing expected_count_field `{field}`")
-            })?;
-            let parsed = crate::graphql::canonical_positive_count(
-                value,
-                crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS,
-            )
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "expected_count_field `{field}` must be a canonical positive integer <= {}",
-                    crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
-                )
-            })?;
-            if resolved.is_some_and(|prior| prior != parsed) {
-                anyhow::bail!(
-                    "expected_count_field `{field}` is inconsistent across group members"
-                );
-            }
-            resolved = Some(parsed);
-        }
-        Ok(resolved)
-    }
-
     fn trigger_context_for_doc(
         snapshot: &ActiveRuntimeSnapshot,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
@@ -1078,206 +894,63 @@ impl EventSource {
         Ok(Some(encoded))
     }
 
+    fn delivery<'a>(
+        snapshot: &'a ActiveRuntimeSnapshot,
+        trigger: &'a crate::runtime_snapshot::ResolvedEventTrigger,
+    ) -> anyhow::Result<Delivery<'a>> {
+        let behavior = snapshot
+            .behavior(&trigger.task.behavior_id)
+            .ok_or_else(|| anyhow::anyhow!("group trigger behavior is unavailable"))?;
+        Ok(Delivery::Trigger {
+            agent_did: behavior.agent_did(),
+            trigger,
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn group_state_keys(
+        owner: &str,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
         correlation: &str,
     ) -> (String, String) {
-        let config_bytes = serde_json::to_vec(&GroupTriggerScanFingerprint::from(trigger))
-            .expect("group scan fingerprint is serializable");
-        let trigger_config_key = format!("{:x}", Sha256::digest(config_bytes));
-        let group_bytes = serde_json::to_vec(&(
-            trigger.trigger_id.as_str(),
-            trigger_config_key.as_str(),
-            correlation,
-        ))
-        .expect("group state identity is serializable");
-        let group_key = format!("{:x}", Sha256::digest(group_bytes));
-        (group_key, trigger_config_key)
-    }
-
-    async fn query_group_state(
-        &self,
-        group_key: &str,
-    ) -> anyhow::Result<Option<DurableGroupStateRow>> {
-        let group_key = crate::graphql::escape_graphql_string(group_key);
-        let query = format!(
-            r#"query {{
-                EventTriggerGroupState(
-                    filter: {{ group_key: {{ _eq: "{group_key}" }} }},
-                    limit: 1
-                ) {{ _docID first_seen_at quiesced_at }}
-            }}"#,
-        );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "EventTriggerGroupState lookup failed: {:?}",
-                response.errors
-            );
-        }
-        let Some(row) = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("EventTriggerGroupState"))
-            .and_then(serde_json::Value::as_array)
-            .and_then(|rows| rows.first())
-        else {
-            return Ok(None);
+        let delivery = Delivery::Trigger {
+            agent_did: owner,
+            trigger,
         };
-        serde_json::from_value(row.clone())
-            .map(Some)
-            .map_err(|error| anyhow::anyhow!("invalid durable group state: {error}"))
+        (delivery.group_key(correlation), delivery.config_key())
     }
 
-    fn parse_group_first_seen(row: &DurableGroupStateRow) -> anyhow::Result<DateTime<Utc>> {
-        DateTime::parse_from_rfc3339(&row.first_seen_at)
-            .map(|value| value.with_timezone(&Utc))
-            .map_err(|error| anyhow::anyhow!("invalid durable group first_seen_at: {error}"))
-    }
-
-    async fn load_or_create_group_first_seen(
-        &self,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-        correlation: &str,
-    ) -> anyhow::Result<DateTime<Utc>> {
-        let (group_key, trigger_config_key) = Self::group_state_keys(trigger, correlation);
-        if let Some(row) = self.query_group_state(&group_key).await? {
-            return Self::parse_group_first_seen(&row);
-        }
-
-        let now = Utc::now();
-        let mutation = format!(
-            r#"mutation {{
-                create_EventTriggerGroupState(input: {{
-                    group_key: "{group_key}"
-                    trigger_id: "{trigger_id}"
-                    correlation: "{correlation}"
-                    trigger_config_key: "{trigger_config_key}"
-                    first_seen_at: "{first_seen_at}"
-                }}) {{ _docID }}
-            }}"#,
-            group_key = crate::graphql::escape_graphql_string(&group_key),
-            trigger_id = crate::graphql::escape_graphql_string(&trigger.trigger_id),
-            correlation = crate::graphql::escape_graphql_string(correlation),
-            trigger_config_key = crate::graphql::escape_graphql_string(&trigger_config_key),
-            first_seen_at = crate::graphql::escape_graphql_string(
-                &now.to_rfc3339_opts(SecondsFormat::Millis, true)
-            ),
-        );
-        let response = crate::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "trigger.create_group_state",
-            &mutation,
-        )
-        .await;
-        if response.is_ok() {
-            return Ok(now);
-        }
-
-        // A concurrent reconciler may have won the unique-key create. Read
-        // the canonical row before treating the mutation error as fatal.
-        if let Some(row) = self.query_group_state(&group_key).await? {
-            return Self::parse_group_first_seen(&row);
-        }
-        Err(response.expect_err("failed response checked above"))
-    }
-
-    async fn persist_group_quiesced(
-        &self,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-        correlation: &str,
-        reason: &str,
-    ) -> anyhow::Result<()> {
-        let (group_key, _) = Self::group_state_keys(trigger, correlation);
-        self.load_or_create_group_first_seen(trigger, correlation)
-            .await?;
-        let Some(row) = self.query_group_state(&group_key).await? else {
-            anyhow::bail!("durable group state disappeared after creation");
-        };
-        if row.quiesced_at.is_some() {
-            return Ok(());
-        }
-        let mutation = format!(
-            r#"mutation {{
-                update_EventTriggerGroupState(docID: "{doc_id}", input: {{
-                    quiesced_at: "{quiesced_at}"
-                    quiesced_reason: "{reason}"
-                }}) {{ _docID }}
-            }}"#,
-            doc_id = crate::graphql::escape_graphql_string(&row.doc_id),
-            quiesced_at = crate::graphql::escape_graphql_string(
-                &Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-            ),
-            reason = crate::graphql::escape_graphql_string(reason),
-        );
-        crate::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "trigger.quiesce_group_state",
-            &mutation,
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn group_timeout_elapsed(
+    fn cache_group_clock(
         &self,
         key: &GroupTrackingKey,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-        timeout: Duration,
+        first_seen: DateTime<Utc>,
         reactivate: bool,
-    ) -> anyhow::Result<bool> {
-        let now_instant = Instant::now();
-        let cached = {
-            let mut timers = self
-                .group_timers
-                .lock()
-                .expect("group_timers mutex poisoned");
-            timers.get_mut(key).map(|timer| {
-                timer.last_touched = now_instant;
-                if reactivate {
-                    timer.dormant = false;
-                }
-                timer.first_seen
-            })
-        };
-        let first_seen = match cached {
-            Some(first_seen) => first_seen,
-            None => {
-                self.load_or_create_group_first_seen(trigger, &key.correlation)
-                    .await?
-            }
-        };
-        let timed_out = Utc::now()
-            .signed_duration_since(first_seen)
-            .to_std()
-            .is_ok_and(|elapsed| elapsed >= timeout);
-
+    ) {
         let mut timers = self
             .group_timers
             .lock()
             .expect("group_timers mutex poisoned");
-        if timers.contains_key(key) {
-            return Ok(timed_out);
-        }
-        let active_count = timers
+        if let Some(timer) = timers.get_mut(key) {
+            timer.last_touched = Instant::now();
+            if reactivate {
+                timer.dormant = false;
+            }
+        } else if timers
             .iter()
-            .filter(|(existing, timer)| existing.trigger_id == key.trigger_id && !timer.dormant)
-            .count();
-        if active_count < MAX_ACTIVE_GROUP_TIMERS {
+            .filter(|(existing, timer)| existing.consumer_key == key.consumer_key && !timer.dormant)
+            .count()
+            < MAX_ACTIVE_GROUP_TIMERS
+        {
             timers.insert(
                 key.clone(),
                 GroupTimer {
                     first_seen,
-                    last_touched: now_instant,
+                    last_touched: Instant::now(),
                     dormant: false,
                     quiesced: false,
                 },
             );
         }
-        // The cap bounds only the in-memory cache. Overflow groups use the
-        // durable clock on each fair rotating sweep, so capacity pressure
-        // cannot strand an otherwise eligible timeout fire.
-        Ok(timed_out)
     }
 
     fn mark_group_dormant(&self, key: &GroupTrackingKey) {
@@ -1291,65 +964,14 @@ impl EventSource {
         }
         let dormant_count = timers
             .iter()
-            .filter(|(existing, timer)| existing.trigger_id == key.trigger_id && timer.dormant)
+            .filter(|(existing, timer)| existing.consumer_key == key.consumer_key && timer.dormant)
             .count();
         if dormant_count > MAX_DORMANT_GROUP_TIMERS {
             if let Some(oldest) = timers
                 .iter()
-                .filter(|(existing, timer)| existing.trigger_id == key.trigger_id && timer.dormant)
-                .min_by_key(|(_, timer)| timer.last_touched)
-                .map(|(key, _)| key.clone())
-            {
-                timers.remove(&oldest);
-            }
-        }
-    }
-
-    async fn mark_group_quiesced(
-        &self,
-        key: &GroupTrackingKey,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-        reason: &str,
-    ) {
-        if let Err(error) = self
-            .persist_group_quiesced(trigger, &key.correlation, reason)
-            .await
-        {
-            tracing::warn!(
-                trigger_id = %trigger.trigger_id,
-                correlation = %key.correlation,
-                %error,
-                "event-trigger invalid group could not be durably quiesced; recovery will retry",
-            );
-            return;
-        }
-
-        let now = Instant::now();
-        let mut timers = self
-            .group_timers
-            .lock()
-            .expect("group_timers mutex poisoned");
-        timers
-            .entry(key.clone())
-            .and_modify(|timer| {
-                timer.dormant = true;
-                timer.quiesced = true;
-                timer.last_touched = now;
-            })
-            .or_insert(GroupTimer {
-                first_seen: Utc::now(),
-                last_touched: now,
-                dormant: true,
-                quiesced: true,
-            });
-        let dormant_count = timers
-            .iter()
-            .filter(|(existing, timer)| existing.trigger_id == key.trigger_id && timer.dormant)
-            .count();
-        if dormant_count > MAX_DORMANT_GROUP_TIMERS {
-            if let Some(oldest) = timers
-                .iter()
-                .filter(|(existing, timer)| existing.trigger_id == key.trigger_id && timer.dormant)
+                .filter(|(existing, timer)| {
+                    existing.consumer_key == key.consumer_key && timer.dormant
+                })
                 .min_by_key(|(_, timer)| timer.last_touched)
                 .map(|(key, _)| key.clone())
             {
@@ -1372,8 +994,15 @@ impl EventSource {
             );
             return None;
         }
+        let delivery = match Self::delivery(snapshot, trigger) {
+            Ok(delivery) => delivery,
+            Err(error) => {
+                tracing::warn!(%error,"event group owner unavailable");
+                return None;
+            }
+        };
         let key = GroupTrackingKey {
-            trigger_id: trigger.trigger_id.clone(),
+            consumer_key: delivery.consumer_key(),
             correlation: correlation.to_string(),
         };
         if self
@@ -1385,99 +1014,41 @@ impl EventSource {
         {
             return None;
         }
-        let docs = match self.fetch_group_docs(trigger, correlation).await {
-            Ok(docs) => docs,
-            Err(error) => {
-                tracing::warn!(
-                    trigger_id = %trigger.trigger_id,
-                    %correlation,
-                    %error,
-                    "event-trigger group membership query failed",
-                );
-                return None;
+        #[cfg(test)]
+        self.group_membership_queries
+            .fetch_add(1, Ordering::Relaxed);
+        let (docs, complete) = match event_delivery::evaluate_group(
+            &self.node,
+            &self.source_schema_cache,
+            delivery,
+            correlation,
+        )
+        .await
+        {
+            Ok(GroupOutcome::Ready {
+                first_seen,
+                docs,
+                complete,
+            }) => {
+                self.cache_group_clock(&key, first_seen, reactivate);
+                (docs, complete)
             }
-        };
-        if docs.is_empty() {
-            return None;
-        }
-        if docs.len() > crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS {
-            let reason = format!(
-                "document count {} exceeds hard cap {}",
-                docs.len(),
-                crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS
-            );
-            tracing::error!(
-                trigger_id = %trigger.trigger_id,
-                %correlation,
-                actual_count = docs.len(),
-                limit = crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS,
-                "event-trigger group exceeds the hard document cap; failing closed",
-            );
-            self.mark_group_quiesced(&key, trigger, &reason).await;
-            return None;
-        }
-        let expected = match Self::expected_group_count(trigger, &docs) {
-            Ok(expected) => expected,
-            Err(error) => {
-                let reason = format!("invalid expected cardinality: {error}");
-                tracing::error!(
-                    trigger_id = %trigger.trigger_id,
-                    %correlation,
-                    %error,
-                    "event-trigger group has invalid expected cardinality; failing closed",
-                );
-                self.mark_group_quiesced(&key, trigger, &reason).await;
-                return None;
-            }
-        };
-        if expected.is_some_and(|expected| docs.len() > expected) {
-            let reason = format!(
-                "document count {} exceeds expected count {}",
-                docs.len(),
-                expected.expect("guard establishes expected count")
-            );
-            tracing::error!(
-                trigger_id = %trigger.trigger_id,
-                %correlation,
-                actual_count = docs.len(),
-                expected_count = expected,
-                "event-trigger group is overfull; failing closed",
-            );
-            self.mark_group_quiesced(&key, trigger, &reason).await;
-            return None;
-        }
-        let complete = expected.is_some_and(|expected| docs.len() == expected);
-        let timed_out = if let Some(seconds) = trigger.group_timeout_secs {
-            match self
-                .group_timeout_elapsed(&key, trigger, Duration::from_secs(seconds), reactivate)
-                .await
-            {
-                Ok(timed_out) => timed_out,
-                Err(error) => {
-                    tracing::warn!(
-                        trigger_id = %trigger.trigger_id,
-                        %correlation,
-                        %error,
-                        "event-trigger durable group clock failed; failing closed",
-                    );
-                    return None;
+            Ok(GroupOutcome::Pending {
+                first_seen,
+                dormant,
+            }) => {
+                self.cache_group_clock(&key, first_seen, reactivate);
+                if dormant {
+                    self.mark_group_dormant(&key);
                 }
+                return None;
             }
-        } else {
-            false
+            Ok(GroupOutcome::Empty | GroupOutcome::Quiesced) => return None,
+            Err(error) => {
+                tracing::warn!(trigger_id=%trigger.trigger_id,%correlation,%error,"event group reconciliation failed");
+                return None;
+            }
         };
-        if !group_candidate_eligible(
-            docs.len(),
-            expected,
-            trigger.group_min_count,
-            timed_out,
-            true,
-        ) {
-            if !complete && timed_out && docs.len() < trigger.group_min_count {
-                self.mark_group_dormant(&key);
-            }
-            return None;
-        }
 
         let representative = docs
             .first()
@@ -1516,6 +1087,7 @@ impl EventSource {
             "docs": docs,
             "complete": complete,
         });
+        let owner_for_callback = Self::delivery(snapshot, &trigger).ok()?.owner().to_owned();
         let trigger_id_for_callback = trigger.trigger_id.clone();
         let source_doc_id_for_callback = source_doc_id.clone();
         let node_for_callback = self.node.clone();
@@ -1535,7 +1107,7 @@ impl EventSource {
             args_vars: None,
             durable_fire_key: crate::trigger_engine::durable_fire_key(
                 "event-group",
-                &[&trigger.trigger_id, correlation],
+                &[&delivery.group_key(correlation)],
             ),
             pre_materialized_request_id: None,
             on_result: Box::new(move |result| {
@@ -1550,6 +1122,7 @@ impl EventSource {
                 }
                 EventSource::spawn_runtime_field_write(
                     node_for_callback,
+                    owner_for_callback,
                     trigger_id_for_callback,
                     source_doc_id_for_callback,
                     result,
@@ -1573,6 +1146,16 @@ impl EventSource {
         else {
             return HashSet::new();
         };
+        let delivery = Delivery::Trigger { agent_did, trigger };
+        let keys = correlations
+            .iter()
+            .map(|correlation| {
+                (
+                    correlation.clone(),
+                    super::durable_fire_key("event-group", &[&delivery.group_key(correlation)]),
+                )
+            })
+            .collect::<HashMap<_, _>>();
         let correlations = correlations
             .iter()
             .map(|correlation| {
@@ -1586,11 +1169,10 @@ impl EventSource {
                     filter: {{
                         agent_did: {{ _eq: "{agent_did}" }},
                         caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
-                        caused_by_trigger_kind: {{ _eq: "event" }},
                         caused_by_correlation: {{ _in: [{correlations}] }}
                     }},
                     limit: {limit}
-                ) {{ caused_by_correlation }}
+                ) {{ caused_by_correlation request_id }}
             }}"#,
             agent_did = crate::graphql::escape_graphql_string(agent_did),
             trigger_id = crate::graphql::escape_graphql_string(&trigger.trigger_id),
@@ -1613,16 +1195,18 @@ impl EventSource {
             .into_iter()
             .flatten()
             .filter_map(|row| {
-                row.get("caused_by_correlation")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
+                let correlation = row.get("caused_by_correlation")?.as_str()?;
+                let key = keys.get(correlation)?;
+                let request_id = row.get("request_id")?.as_str()?;
+                event_delivery::request_matches_fire_key(agent_did, request_id, key)
+                    .then(|| correlation.to_owned())
             })
             .collect()
     }
 
     async fn quiesced_group_correlations(
         &self,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        delivery: Delivery<'_>,
         correlations: &[String],
     ) -> HashSet<String> {
         if correlations.is_empty() {
@@ -1631,7 +1215,7 @@ impl EventSource {
         let keys_to_correlations = correlations
             .iter()
             .map(|correlation| {
-                let (key, _) = Self::group_state_keys(trigger, correlation);
+                let key = delivery.group_key(correlation);
                 (key, correlation.clone())
             })
             .collect::<HashMap<_, _>>();
@@ -1642,17 +1226,18 @@ impl EventSource {
             .join(", ");
         let query = format!(
             r#"query {{
-                EventTriggerGroupState(
-                    filter: {{ group_key: {{ _in: [{keys}] }} }},
+                EventGroupState(
+                    filter: {{ agent_did: {{ _eq: "{owner}" }}, group_key: {{ _in: [{keys}] }} }},
                     limit: {limit}
                 ) {{ group_key quiesced_at }}
             }}"#,
+            owner = crate::graphql::escape_graphql_string(delivery.owner()),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
         let response = self.node.execute(&query).await;
         if response.has_errors() {
             tracing::warn!(
-                trigger_id = %trigger.trigger_id,
+                consumer = ?delivery.consumer(),
                 errors = ?response.errors,
                 "event-trigger durable quiescence prune failed; invalid groups may be rechecked",
             );
@@ -1661,7 +1246,7 @@ impl EventSource {
         response
             .data
             .as_ref()
-            .and_then(|data| data.get("EventTriggerGroupState"))
+            .and_then(|data| data.get("EventGroupState"))
             .and_then(serde_json::Value::as_array)
             .into_iter()
             .flatten()
@@ -1686,82 +1271,30 @@ impl EventSource {
         self.group_recovery_page_queries
             .fetch_add(1, Ordering::Relaxed);
         let started = Instant::now();
-        let Some(correlation_field) = trigger.correlation_field.as_deref() else {
-            return (Vec::new(), None, true);
-        };
-        if crate::graphql::validate_collection_identifier(&trigger.source_collection).is_err()
-            || crate::graphql::validate_graphql_name(correlation_field).is_err()
-        {
-            return (Vec::new(), None, true);
-        }
-        let base_filter = match Self::trigger_filter_literal(trigger, None) {
-            Ok(filter) => filter,
+        let delivery = match Self::delivery(snapshot, trigger) {
+            Ok(value) => value,
             Err(error) => {
-                tracing::warn!(trigger_id = %trigger.trigger_id, %error, "group recovery filter invalid");
+                tracing::warn!(%error,"group recovery owner unavailable");
                 return (Vec::new(), None, true);
             }
         };
-        let filter = cursor.map_or(base_filter.clone(), |cursor| {
-            let cursor_clause = format!(
-                r#"{{ _docID: {{ _gt: "{}" }} }}"#,
-                crate::graphql::escape_graphql_string(cursor)
-            );
-            if base_filter == "{}" {
-                cursor_clause
-            } else {
-                format!("{{ _and: [ {base_filter}, {cursor_clause} ] }}")
-            }
-        });
-        let query = format!(
-            r#"query {{
-                {collection}(
-                    filter: {filter},
-                    order: {{ _docID: ASC }},
-                    limit: {limit}
-                ) {{ _docID {correlation_field} }}
-            }}"#,
-            collection = trigger.source_collection,
-            limit = GROUP_RECOVERY_PAGE_SIZE,
-        );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            tracing::warn!(
-                trigger_id = %trigger.trigger_id,
-                errors = ?response.errors,
-                "event-trigger group recovery page failed",
-            );
-            return (Vec::new(), cursor.map(str::to_string), false);
-        }
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get(&trigger.source_collection))
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let row_count = rows.len();
-        let next_cursor = rows.last().and_then(|row| {
-            row.get("_docID")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        });
-        let mut correlations = rows
-            .iter()
-            .filter_map(|row| {
-                row.get(correlation_field)
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-            })
-            .filter(|correlation| seen_correlations.insert(correlation.clone()))
+        let (correlations, next_cursor, complete) =
+            match event_delivery::group_correlation_page(&self.node, delivery, cursor).await {
+                Ok(page) => page,
+                Err(error) => {
+                    tracing::warn!(%error,"event group recovery page failed");
+                    return (Vec::new(), cursor.map(str::to_owned), false);
+                }
+            };
+        let correlations = correlations
+            .into_iter()
+            .filter(|value| seen_correlations.insert(value.clone()))
             .collect::<Vec<_>>();
-        correlations.sort();
         let marked = self
             .marked_group_correlations(snapshot, trigger, &correlations)
             .await;
         let quiesced = self
-            .quiesced_group_correlations(trigger, &correlations)
+            .quiesced_group_correlations(delivery, &correlations)
             .await;
         let mut intents = Vec::new();
         for correlation in correlations
@@ -1772,7 +1305,7 @@ impl EventSource {
                 break;
             }
             let tracking_key = GroupTrackingKey {
-                trigger_id: trigger.trigger_id.clone(),
+                consumer_key: delivery.consumer_key(),
                 correlation: correlation.clone(),
             };
             if self
@@ -1793,7 +1326,7 @@ impl EventSource {
         }
         tracing::debug!(
             trigger_id = %trigger.trigger_id,
-            page_rows = row_count,
+            page_complete = complete,
             dirty_groups = correlations.len(),
             marker_pruned = marked.len(),
             quiesced_pruned = quiesced.len(),
@@ -1801,7 +1334,7 @@ impl EventSource {
             sweep_millis = started.elapsed().as_millis(),
             "event-trigger group recovery page reconciled",
         );
-        (intents, next_cursor, row_count < GROUP_RECOVERY_PAGE_SIZE)
+        (intents, next_cursor, complete)
     }
 
     async fn reconcile_due_and_rotating_groups(&mut self) -> Option<FireIntent> {
@@ -1816,7 +1349,10 @@ impl EventSource {
                 .iter()
                 .filter(|(_, timer)| !timer.dormant && !timer.quiesced)
                 .filter_map(|(key, timer)| {
-                    let trigger = snapshot.active_event_triggers().get(&key.trigger_id)?;
+                    let trigger = snapshot.active_event_triggers().values().find(|trigger| {
+                        Self::delivery(&snapshot, trigger)
+                            .is_ok_and(|delivery| delivery.consumer_key() == key.consumer_key)
+                    })?;
                     let timeout = Duration::from_secs(trigger.group_timeout_secs?);
                     now.signed_duration_since(timer.first_seen)
                         .to_std()
@@ -1831,7 +1367,10 @@ impl EventSource {
             if self.cancel.is_cancelled() {
                 return None;
             }
-            let Some(trigger) = snapshot.active_event_triggers().get(&key.trigger_id) else {
+            let Some(trigger) = snapshot.active_event_triggers().values().find(|trigger| {
+                Self::delivery(&snapshot, trigger)
+                    .is_ok_and(|delivery| delivery.consumer_key() == key.consumer_key)
+            }) else {
                 continue;
             };
             if let Some(intent) = self
@@ -1881,6 +1420,7 @@ impl EventSource {
 
     pub(super) fn spawn_runtime_field_write(
         node: Arc<EmbeddedNode>,
+        agent_did: String,
         trigger_id: String,
         source_doc_id: String,
         result: crate::trigger_engine::FireResult,
@@ -1903,15 +1443,17 @@ impl EventSource {
                     ("error", Some(error.clone()), None)
                 }
             };
-            let update = crate::document_config::EventTriggerRuntimeUpdate {
+            let update = crate::document_config::TriggerRuntimeUpdate {
+                next_run_at: None,
                 last_attempt_at: Some(now),
                 last_fired_source_doc_id: Some(source_doc_id),
                 last_status: Some(status.to_string()),
                 last_error: error_value,
                 fire_count_delta: fire_delta,
             };
-            if let Err(error) = crate::document_config::update_event_trigger_runtime_fields(
+            if let Err(error) = crate::document_config::update_trigger_runtime_fields(
                 &node,
+                &agent_did,
                 &trigger_id,
                 update,
             )
@@ -1926,7 +1468,7 @@ impl EventSource {
         });
     }
 
-    /// Build a `FireIntent` for every active `EventTrigger` whose
+    /// Build a `FireIntent` for every active event-source trigger whose
     /// `source_collection` matches `collection_name` AND `event_kind` matches
     /// `kind`. Each candidate's operator-authored filter is probed against
     /// `source_doc_id`; candidates that miss the filter or whose probe errors
@@ -2080,6 +1622,10 @@ impl EventSource {
                 "event source matched event to trigger; emitting fire intent",
             );
 
+            let Ok(delivery) = Self::delivery(snapshot, &trigger) else {
+                continue;
+            };
+            let owner_for_callback = delivery.owner().to_owned();
             let trigger_id_for_callback = trigger.trigger_id.clone();
             let source_doc_id_for_callback = source_doc_id.to_string();
             let node_for_callback = self.node.clone();
@@ -2103,6 +1649,7 @@ impl EventSource {
                 on_result: Box::new(move |result| {
                     EventSource::spawn_runtime_field_write(
                         node_for_callback,
+                        owner_for_callback,
                         trigger_id_for_callback,
                         source_doc_id_for_callback,
                         result,

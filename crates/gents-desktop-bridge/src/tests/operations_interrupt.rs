@@ -27,13 +27,14 @@ async fn latch_writes_interrupt_requested_at_when_absent() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn latch_is_noop_when_already_interrupted() {
     let (core, _tmp) = seed_standalone_fixture().await;
-    let _ = latch_root_interrupt(&core, "req_solo", None)
+    let first = latch_root_interrupt(&core, "req_solo", None)
         .await
         .expect("first latch");
     let second = latch_root_interrupt(&core, "req_solo", None)
         .await
         .expect("second latch");
     assert!(!second.was_first);
+    assert_eq!(second.interrupt_requested_at, first.interrupt_requested_at);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -111,7 +112,7 @@ async fn interrupt_request_no_cascade_returns_accepted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interrupt_request_returns_already_interrupted_for_second_call() {
     let (core, _tmp) = seed_standalone_fixture().await;
-    let _ = interrupt_request(
+    let first = interrupt_request(
         &core,
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
@@ -137,6 +138,7 @@ async fn interrupt_request_returns_already_interrupted_for_second_call() {
     .expect("second");
     assert!(second.accepted);
     assert!(second.already_interrupted);
+    assert_eq!(second.interrupt_requested_at, first.interrupt_requested_at);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -230,44 +232,55 @@ async fn interrupt_request_cascade_returns_accepted_when_signature_matches() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interrupt_request_cascade_latches_only_cascade_descendants() {
     let (core, _tmp) = seed_cascade_fixture().await;
-    let preview = build_cascade_preview(
-        &core,
-        &DesktopPreviewInterruptCascadeRequest {
-            request_id: "req_root".into(),
-            agent_did: Some("did:test:operator".into()),
-            include_terminal: Some(true),
-        },
-    )
-    .await
-    .unwrap();
+    let mut first_timestamp = None;
+    // Each pass uses a current preview; the first latch changes its signature.
+    for repeat in [false, true] {
+        let preview = build_cascade_preview(
+            &core,
+            &DesktopPreviewInterruptCascadeRequest {
+                request_id: "req_root".into(),
+                agent_did: Some("did:test:operator".into()),
+                include_terminal: Some(true),
+            },
+        )
+        .await
+        .unwrap();
 
-    let result = interrupt_request(
-        &core,
-        &DesktopInterruptRequest {
-            request_id: "req_root".into(),
-            agent_did: Some("did:test:operator".into()),
-            cause: "userCancelled".into(),
-            cascade: true,
-            expected_preview_signature: Some(preview.preview_signature.clone()),
-        },
-    )
-    .await
-    .expect("cascade interrupt ok");
+        let result = interrupt_request(
+            &core,
+            &DesktopInterruptRequest {
+                request_id: "req_root".into(),
+                agent_did: Some("did:test:operator".into()),
+                cause: "userCancelled".into(),
+                cascade: true,
+                expected_preview_signature: Some(preview.preview_signature.clone()),
+            },
+        )
+        .await
+        .expect("cascade interrupt ok");
 
-    assert!(result.accepted);
-    for request_id in ["req_root", "req_b91", "req_b92", "req_c01"] {
-        let row = fetch_request_row(&core, request_id).await;
-        assert!(
-            row.interrupt_requested_at.is_some(),
-            "{request_id} should be latched by cascade interrupt"
-        );
-    }
-    for request_id in ["req_b93", "req_c02", "req_a17_old"] {
-        let row = fetch_request_row(&core, request_id).await;
-        assert!(
-            row.interrupt_requested_at.is_none(),
-            "{request_id} should not be latched by cascade interrupt"
-        );
+        assert!(result.accepted);
+        assert_eq!(result.already_interrupted, repeat);
+        assert!(result.interrupt_requested_at.is_some());
+        if repeat {
+            assert_eq!(result.interrupt_requested_at, first_timestamp);
+        } else {
+            first_timestamp = result.interrupt_requested_at.clone();
+        }
+        for request_id in ["req_root", "req_b91", "req_b92", "req_c01"] {
+            let row = fetch_request_row(&core, request_id).await;
+            assert!(
+                row.interrupt_requested_at.is_some(),
+                "{request_id} should be latched by cascade interrupt"
+            );
+        }
+        for request_id in ["req_b93", "req_c02", "req_a17_old"] {
+            let row = fetch_request_row(&core, request_id).await;
+            assert!(
+                row.interrupt_requested_at.is_none(),
+                "{request_id} should not be latched by cascade interrupt"
+            );
+        }
     }
 }
 

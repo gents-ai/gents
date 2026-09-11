@@ -1,9 +1,12 @@
 import Proofs.Request
-import Proofs.Process
+import Proofs.Conformance.Contracts.Machines.Request
+import Proofs.Conformance.Contracts.Machines.Process
 import Proofs.Conformance.Boundaries
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases
+
+open Conformance.Contracts (requestStates requestActions requestSamples processStates processActions)
 
 inductive LifecycleTransitionClassification where
   | legal
@@ -43,72 +46,10 @@ def actionForPairFromSamples {σ α : Type}
         | none => none
   candidates.head?
 
-def requestTransitionStates : List RequestState :=
-  [ .workspaceBindingPending, .pending, .claimed, .processing, .inputRequired, .completed
-  , .failed, .superseded, .dead, .interrupted ]
-
-def requestTransitionActions : List (String × RequestContext.Action) :=
-  [ ("bindWorkspace", .bindWorkspace)
-  , ("claim", .claim)
-  , ("dedupLose", .dedupLose)
-  , ("admissionReject", .admissionReject)
-  , ("beginInference", .beginInference)
-  , ("advance", .advance)
-  , ("finish", .finish)
-  , ("fail", .fail)
-  , ("failBeforeStream", .failBeforeStream)
-  , ("expire", .expire)
-  , ("interruptBeforeClaim", .interruptBeforeClaim)
-  , ("interruptClaimed", .interruptClaimed)
-  , ("interruptProcessing", .interruptProcessing)
-  ]
-
-def requestTransitionContext
-    (state : RequestState)
-    (admission : AdmissionState)
-    (hasInterrupt : Bool := false)
-    (validUntil : Option Time := none)
-    (currentTime : Time := 0) : RequestContext :=
-  { state := state
-  , origin := .interactive
-  , backend := contractBackend
-  , admission := admission
-  , deadline := 10
-  , claimTime := 0
-  , currentTime := currentTime
-  , retryCount := 0
-  , maxRetries := 3
-  , progressSeq := 0
-  , messageSeq := 0
-  , isLatest := true
-  , persistence := .uncommitted
-  , interruptRequestedAt := if hasInterrupt then some currentTime else none
-  , validUntil := validUntil
-  }
-
-def requestTransitionSamples : List RequestContext :=
-  [ requestTransitionContext .workspaceBindingPending .released
-  , requestTransitionContext .pending .released
-  , requestTransitionContext .pending .released true
-  , requestTransitionContext .pending .released false (some 0) 1
-  , requestTransitionContext .claimed .waiting
-  , requestTransitionContext .claimed .acquired
-  , requestTransitionContext .claimed .waiting true
-  , requestTransitionContext .claimed .acquired true
-  , requestTransitionContext .processing .executing
-  , requestTransitionContext .processing .executing true
-  , requestTransitionContext .inputRequired .executing
-  , requestTransitionContext .completed .released
-  , requestTransitionContext .failed .released
-  , requestTransitionContext .superseded .released
-  , requestTransitionContext .dead .released
-  , requestTransitionContext .interrupted .released
-  ]
-
 def requestTransitionAction? (source target : String) : Option String :=
   actionForPairFromSamples
-    requestTransitionSamples
-    requestTransitionActions
+    requestSamples
+    requestActions
     RequestContext.step?
     (fun ctx => ctx.state.toDefraDB)
     source
@@ -163,25 +104,14 @@ def requestTransitionCase (source target : RequestState) : LifecycleTransitionCa
   }
 
 def requestTransitionCases : List LifecycleTransitionCase :=
-  requestTransitionStates.flatMap fun source =>
-    requestTransitionStates.map fun target =>
+  requestStates.flatMap fun source =>
+    requestStates.map fun target =>
       requestTransitionCase source target
-
-def processTransitionStates : List ProcessState :=
-  [ .uninitialized, .recovering, .ready, .shuttingDown, .shutdown ]
-
-def processTransitionActions : List (String × ProcessState.Action) :=
-  [ ("startupRecover", .startupRecover { hasStuckRequests := true, activeRequestCount := 1 })
-  , ("startupClean", .startupClean { hasStuckRequests := false, activeRequestCount := 0 })
-  , ("recoveryComplete", .recoveryComplete)
-  , ("beginShutdown", .beginShutdown)
-  , ("finishShutdown", .finishShutdown 0)
-  ]
 
 def processTransitionAction? (source target : String) : Option String :=
   actionForPairFromSamples
-    processTransitionStates
-    processTransitionActions
+    processStates
+    processActions
     ProcessState.step?
     ProcessState.toDefraDB
     source
@@ -208,8 +138,8 @@ def processTransitionCase (source target : ProcessState) : LifecycleTransitionCa
   }
 
 def processTransitionCases : List LifecycleTransitionCase :=
-  processTransitionStates.flatMap fun source =>
-    processTransitionStates.map fun target =>
+  processStates.flatMap fun source =>
+    processStates.map fun target =>
       processTransitionCase source target
 
 end Conformance.ContractCases

@@ -1,35 +1,22 @@
-//! Effective-config read assembly for `get_my_config` (#654).
-//!
-//! Reads the durable documents for behavior, tool selection, profile, backend,
-//! owned skills, and automation inside one identity-scoped transaction, so
-//! the projection is a consistent snapshot and DefraDB ACP governs visibility.
-//! Documents are the truth being reported; the running slot may still be on
-//! the previous generation (see [`super::core::EFFECT_TIMING_NOTE`]).
-//!
-//! `InferenceBackend.api_key` is never selected (`read_doc_in_txn` excludes
-//! it), so the secret cannot round-trip through this surface.
-
-use anyhow::Result;
-use serde_json::{json, Map, Value};
-
+//! Read the canonical config graph under the invoking principal's identity.
+use super::ops::{read_owned_doc, BehaviorAnchor, SelfConfigCore, EFFECT_TIMING_NOTE};
 use crate::config_client::patch::SelfConfigTarget;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
-
-use super::ops::{BehaviorAnchor, SelfConfigCore, EFFECT_TIMING_NOTE};
+use anyhow::{Context, Result};
+use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 impl SelfConfigCore {
-    /// Assemble the effective configuration projection.
     pub(crate) async fn read_effective_config(
         &self,
-        categories: &std::collections::BTreeSet<String>,
+        categories: &BTreeSet<String>,
         no_lockout: bool,
         dry_run: bool,
     ) -> Result<Value> {
-        let identity = self.identity()?;
         ConfigAccess::transact_local(
             self.node(),
-            Some(identity),
+            Some(self.identity()?),
             "self_config.read",
             move |txn| {
                 Box::pin(
@@ -43,192 +30,148 @@ impl SelfConfigCore {
     async fn read_in_txn(
         &self,
         txn: &ConfigApplyTxn<'_>,
-        categories: &std::collections::BTreeSet<String>,
+        categories: &BTreeSet<String>,
         no_lockout: bool,
         dry_run: bool,
     ) -> Result<Value> {
         let anchor = self.load_behavior_anchor(txn).await?;
-
-        let selection = match anchor.ref_id("tool_selection_id") {
-            Some(id) => doc_or_missing(txn, SelfConfigTarget::ToolSelection, &id).await?,
-            None => json!({ "unset": true }),
-        };
-        let profile = match anchor.ref_id("inference_profile_id") {
-            Some(id) => doc_or_missing(txn, SelfConfigTarget::InferenceProfile, &id).await?,
-            None => json!({ "unset": true }),
-        };
-        let backend = match anchor.ref_id("backend_id") {
-            Some(id) => doc_or_missing(txn, SelfConfigTarget::InferenceBackend, &id).await?,
-            None => json!({ "unset": true }),
-        };
-
-        let skills = self.owned_skills(txn).await?;
-        let (tasks, schedules, event_triggers) = self.owned_automation(txn).await?;
-
+        let mut documents = serde_json::Map::new();
+        for (target, field) in [
+            (SelfConfigTarget::Tools, "tools_id"),
+            (SelfConfigTarget::Compaction, "compaction_id"),
+            (SelfConfigTarget::InferenceBackend, "backend_id"),
+            (SelfConfigTarget::InferenceSampling, "sampling_id"),
+            (SelfConfigTarget::InferenceExecution, "execution_id"),
+            (SelfConfigTarget::InferenceRetryPolicy, "retry_policy_id"),
+        ] {
+            if let Some(id) = anchor.ref_id(field) {
+                if let Some((_, mut doc)) =
+                    read_owned_doc(txn, target, self.agent_did(), &id).await?
+                {
+                    if target == SelfConfigTarget::InferenceBackend
+                        && doc
+                            .get("auth")
+                            .and_then(|auth| auth.get("kind"))
+                            .and_then(Value::as_str)
+                            == Some("api_key")
+                    {
+                        doc.insert("auth".into(), json!({"kind":"api_key", "key":"[redacted]"}));
+                    }
+                    documents.insert(target.collection_name().into(), Value::Object(doc));
+                }
+            }
+        }
+        let mut skills = Vec::new();
+        if let Some(ids) = anchor.context.get("skill_ids").and_then(Value::as_array) {
+            for id in ids {
+                let id = id.as_str().context("skill ID must be a string")?;
+                if let Some((_, skill)) = crate::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Skill,
+                    self.agent_did(),
+                    id,
+                )
+                .await?
+                {
+                    skills.push(skill);
+                }
+            }
+        }
+        let mut automation = serde_json::Map::new();
+        let mut task_ids = BTreeSet::new();
+        let mut schedule_ids = BTreeSet::new();
+        let mut event_source_ids = BTreeSet::new();
+        for target in [
+            SelfConfigTarget::Task,
+            SelfConfigTarget::Trigger,
+            SelfConfigTarget::Schedule,
+            SelfConfigTarget::EventSource,
+        ] {
+            let (fields, _) = config_projection(target.collection(), None)?;
+            let owner = escape_graphql_string(self.agent_did());
+            let response = txn
+                .execute(&format!(
+                    "{{ {}(filter: {{agent_did: {{_eq: \"{owner}\"}}}}) {{ {} }} }}",
+                    target.collection_name(),
+                    fields.join(" "),
+                ))
+                .await?;
+            let rows = response
+                .get("data")
+                .and_then(|data| data.get(target.collection_name()))
+                .and_then(Value::as_array)
+                .context("configuration query missing rows")?;
+            let mut selected = Vec::new();
+            let mut identities = BTreeSet::new();
+            for row in rows {
+                let id = row
+                    .get(target.unique_field())
+                    .and_then(Value::as_str)
+                    .context("configuration ID missing")?;
+                anyhow::ensure!(
+                    identities.insert(id),
+                    "ambiguous scoped configuration identity"
+                );
+                let include = match target {
+                    SelfConfigTarget::Task => {
+                        let owned = row.get("behavior_id").and_then(Value::as_str)
+                            == Some(self.behavior_id());
+                        if owned {
+                            task_ids.insert(id.to_owned());
+                        }
+                        owned
+                    }
+                    SelfConfigTarget::Trigger => {
+                        let owned = row
+                            .get("task_id")
+                            .and_then(Value::as_str)
+                            .is_some_and(|id| task_ids.contains(id));
+                        if owned {
+                            if let Some(source) = row.get("source") {
+                                if let Some(id) = source.get("schedule_id").and_then(Value::as_str)
+                                {
+                                    schedule_ids.insert(id.to_owned());
+                                }
+                                if let Some(id) =
+                                    source.get("event_source_id").and_then(Value::as_str)
+                                {
+                                    event_source_ids.insert(id.to_owned());
+                                }
+                            }
+                        }
+                        owned
+                    }
+                    SelfConfigTarget::Schedule => schedule_ids.contains(id),
+                    SelfConfigTarget::EventSource => event_source_ids.contains(id),
+                    _ => unreachable!("automation target"),
+                };
+                if include {
+                    selected.push(row.clone());
+                }
+            }
+            automation.insert(target.collection_name().into(), Value::Array(selected));
+        }
         Ok(json!({
-            "agent_did": self.agent_did(),
-            "behavior_id": self.behavior_id(),
-            "behavior": Value::Object(anchor.doc.clone()),
-            "tool_selection": selection,
-            "inference_profile": profile,
-            "inference_backend": backend,
-            "skills": skills,
-            "automation": {
-                "tasks": tasks,
-                "schedules": schedules,
-                "event_triggers": event_triggers,
-            },
-            "self_config": {
-                "categories": categories,
-                "no_lockout": no_lockout,
-                "dry_run": dry_run,
-            },
+            "agent_did": self.agent_did(), "behavior_id": self.behavior_id(),
+            "behavior": anchor.doc, "context": anchor.context, "inference_profile": anchor.profile,
+            "documents": documents, "skills": skills, "automation": automation,
+            "self_config": {"categories": categories, "no_lockout": no_lockout, "dry_run": dry_run},
             "effect_timing": EFFECT_TIMING_NOTE,
         }))
     }
 
-    async fn owned_skills(&self, txn: &ConfigApplyTxn<'_>) -> Result<Value> {
-        let query = format!(
-            r#"{{
-                Skill(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ skill_id: ASC }}) {{
-                    skill_id
-                    name
-                    scope
-                    enabled
-                    description
-                }}
-            }}"#,
-            agent_did = escape_graphql_string(self.agent_did()),
-        );
-        let response = txn.execute(&query).await?;
-        Ok(response
-            .get("data")
-            .and_then(|data| data.get("Skill"))
-            .cloned()
-            .unwrap_or(Value::Array(Vec::new())))
-    }
-
-    /// Automation owned by this behavior: `Task.behavior_id == behavior_id`,
-    /// then schedules/triggers whose `task_id` is one of the owned tasks (the
-    /// canonical reachability rule — these collections carry no `agent_did`).
-    pub(crate) async fn owned_automation(
-        &self,
-        txn: &ConfigApplyTxn<'_>,
-    ) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
-        let tasks_query = format!(
-            r#"{{
-                Task(filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }}, order: {{ task_id: ASC }}) {{
-                    task_id
-                    name
-                    description
-                    behavior_id
-                    prompt_template
-                    goal_objective_template
-                    goal_token_budget
-                    enabled
-                    output_schema_ref
-                }}
-            }}"#,
-            behavior_id = escape_graphql_string(self.behavior_id()),
-        );
-        let response = txn.execute(&tasks_query).await?;
-        let tasks = rows(&response, "Task");
-        let task_ids: Vec<String> = tasks
-            .iter()
-            .filter_map(|task| task.get("task_id").and_then(Value::as_str))
-            .map(ToOwned::to_owned)
-            .collect();
-
-        let mut schedules = Vec::new();
-        let mut event_triggers = Vec::new();
-        for task_id in &task_ids {
-            let task_id = escape_graphql_string(task_id);
-            let schedule_query = format!(
-                r#"{{
-                    Schedule(filter: {{ task_id: {{ _eq: "{task_id}" }} }}, order: {{ schedule_id: ASC }}) {{
-                        schedule_id
-                        task_id
-                        interval_secs
-                        cron
-                        timezone
-                        missed_run_policy
-                        enabled
-                        concurrency
-                    }}
-                }}"#,
-            );
-            schedules.extend(rows(&txn.execute(&schedule_query).await?, "Schedule"));
-            let trigger_query = format!(
-                r#"{{
-                    EventTrigger(filter: {{ task_id: {{ _eq: "{task_id}" }} }}, order: {{ trigger_id: ASC }}) {{
-                        trigger_id
-                        task_id
-                        source_collection
-                        event_kind
-                        filter
-                        correlation_field
-                        fire_mode
-                        expected_count
-                        expected_count_field
-                        group_timeout_secs
-                        group_min_count
-                        workspace_authority
-                        enabled
-                        concurrency
-                    }}
-                }}"#,
-            );
-            event_triggers.extend(rows(&txn.execute(&trigger_query).await?, "EventTrigger"));
-        }
-
-        Ok((tasks, schedules, event_triggers))
-    }
-
-    /// Whether `task_id` belongs to this behavior (for schedule/trigger
-    /// linkage validation).
     pub(crate) async fn task_owned(
         &self,
         txn: &ConfigApplyTxn<'_>,
         _anchor: &BehaviorAnchor,
         task_id: &str,
     ) -> Result<bool> {
-        let Some((_, task)) =
-            crate::config_client::patch::read_doc_in_txn(txn, SelfConfigTarget::Task, task_id)
+        Ok(
+            read_owned_doc(txn, SelfConfigTarget::Task, self.agent_did(), task_id)
                 .await?
-        else {
-            return Ok(false);
-        };
-        Ok(task.get("behavior_id").and_then(Value::as_str) == Some(self.behavior_id()))
-    }
-}
-
-async fn doc_or_missing(
-    txn: &ConfigApplyTxn<'_>,
-    target: SelfConfigTarget,
-    unique_value: &str,
-) -> Result<Value> {
-    Ok(
-        match crate::config_client::patch::read_doc_in_txn(txn, target, unique_value).await? {
-            Some((_, doc)) => Value::Object(doc),
-            None => json!({ "missing_reference": unique_value }),
-        },
-    )
-}
-
-fn rows(response: &Value, collection: &str) -> Vec<Value> {
-    response
-        .get("data")
-        .and_then(|data| data.get(collection))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-}
-
-/// Convenience: a `Map` from optional rows.
-#[allow(dead_code)]
-pub(crate) fn object(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        _ => Map::new(),
+                .is_some_and(|(_, task)| {
+                    task.get("behavior_id").and_then(Value::as_str) == Some(self.behavior_id())
+                }),
+        )
     }
 }

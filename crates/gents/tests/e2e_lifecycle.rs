@@ -6,8 +6,6 @@ mod interrupt_observer;
 mod interruption_integration;
 #[path = "e2e_lifecycle/lifecycle_claim.rs"]
 mod lifecycle_claim;
-#[path = "e2e_lifecycle/lifecycle_queue.rs"]
-mod lifecycle_queue;
 #[path = "e2e_lifecycle/lifecycle_recovery.rs"]
 mod lifecycle_recovery;
 #[path = "e2e_lifecycle/lifecycle_terminal.rs"]

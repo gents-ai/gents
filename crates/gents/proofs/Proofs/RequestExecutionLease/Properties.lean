@@ -96,8 +96,8 @@ theorem terminalization_agrees_atomically
     (pre post : World Generation) (generation : Generation) (outcome : Outcome)
     (h : step? pre (.finalize generation outcome) = some post) :
     post.lease = .terminal generation outcome ∧
-      post.request = outcome.requestPhase ∧
-      post.response = outcome.responsePhase := by
+      post.request = outcome.requestState ∧
+      post.response = outcome.responseStatus := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
   | active owner deadline =>
@@ -139,7 +139,7 @@ theorem terminal_effects_at_most_once
       simp [step?, hlease] at h
       rcases h with ⟨_, rfl⟩
       simp [terminalEffectsBounded, terminalize, commitTerminalEffects]
-      cases pre.continuationRequired <;> cases pre.tokenChargeRequired <;> simp
+      cases pre.continuationRequired <;> cases pre.tokenChargeRequired <;> simp_all
   | recoverable owner => simp [step?, hlease] at h
   | terminal owner oldOutcome => simp [step?, hlease] at h
 
@@ -156,7 +156,7 @@ theorem terminal_effects_belong_to_matching_winner
   | active owner deadline =>
       simp [step?, hlease] at h
       rcases h with ⟨_, rfl⟩
-      simp [terminalize, commitTerminalEffects]
+      simp_all [terminalize, commitTerminalEffects]
   | recoverable owner => simp [step?, hlease] at h
   | terminal owner oldOutcome => simp [step?, hlease] at h
 
@@ -211,7 +211,7 @@ theorem recovery_failure_is_fresh_atomic_and_bounded
     fresh pre generation ∧
       post.lease = .terminal generation .failed ∧
       post.request = .failed ∧
-      post.response = .failed ∧
+      post.response = some .error ∧
       terminalEffectsBounded post := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
@@ -222,7 +222,7 @@ theorem recovery_failure_is_fresh_atomic_and_bounded
       rcases hguard with ⟨_, hfresh, _, _, _⟩
       refine ⟨hfresh, rfl, rfl, rfl, ?_⟩
       simp [terminalEffectsBounded, terminalize, commitTerminalEffects]
-      cases pre.continuationRequired <;> cases pre.tokenChargeRequired <;> simp
+      cases pre.continuationRequired <;> cases pre.tokenChargeRequired <;> simp_all
   | terminal owner outcome => simp [step?, hlease] at h
 
 theorem recovery_failure_rejects_second_winner
@@ -241,7 +241,7 @@ theorem revocation_is_fresh_atomic_and_observed
     (h : step? pre (.revoke expected deadline progress generation outcome) = some post) :
     pre.lease = .active expected deadline ∧ pre.progressSeq = progress ∧
       fresh pre generation ∧ post.lease = .terminal generation outcome ∧
-      post.request = outcome.requestPhase ∧ post.response = outcome.responsePhase := by
+      post.request = outcome.requestState ∧ post.response = outcome.responseStatus := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
   | active owner oldDeadline =>
@@ -281,7 +281,7 @@ theorem revocation_effects_are_bounded
       simp [step?, hlease] at h
       rcases h with ⟨_, rfl⟩
       simp [terminalEffectsBounded, terminalize, commitTerminalEffects]
-      cases pre.continuationRequired <;> cases pre.tokenChargeRequired <;> simp
+      cases pre.continuationRequired <;> cases pre.tokenChargeRequired <;> simp_all
   | recoverable owner => simp [step?, hlease] at h
   | terminal owner oldOutcome => simp [step?, hlease] at h
 

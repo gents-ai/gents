@@ -1,4 +1,5 @@
 import Proofs.Basic
+import Proofs.AgentSession
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 
@@ -10,6 +11,7 @@ inductive QueueSource where
   | user
   | backgroundCompletion
   | steering
+  | goal
   deriving DecidableEq, Repr
 
 namespace QueueSource
@@ -18,11 +20,13 @@ def toDefraDB : QueueSource → String
   | .user => "user"
   | .backgroundCompletion => "background_completion"
   | .steering => "steering"
+  | .goal => "goal"
 
 def fromDefraDB? : String → Option QueueSource
   | "user" => some .user
   | "background_completion" => some .backgroundCompletion
   | "steering" => some .steering
+  | "goal" => some .goal
   | _ => none
 
 theorem fromDefraDB_toDefraDB (source : QueueSource) :
@@ -33,12 +37,14 @@ def automatedWakeup : QueueSource → Prop
   | .user => False
   | .backgroundCompletion => True
   | .steering => False
+  | .goal => False
 
 instance (source : QueueSource) : Decidable source.automatedWakeup :=
   match source with
   | .user => isFalse (by intro h; exact h)
   | .backgroundCompletion => isTrue trivial
   | .steering => isFalse (by intro h; exact h)
+  | .goal => isFalse (by intro h; exact h)
 
 end QueueSource
 
@@ -83,7 +89,8 @@ instance (entry : QueueEntry) : Decidable entry.appendWellFormed := by
   infer_instance
 
 def coalesceWellFormed (entry : QueueEntry) (key : QueueKey) : Prop :=
-  entry.source = .backgroundCompletion ∧ entry.policy = .coalesce ∧ entry.queueKey = some key
+  (entry.source = .backgroundCompletion ∨ entry.source = .goal) ∧
+    entry.policy = .coalesce ∧ entry.queueKey = some key
 
 instance (entry : QueueEntry) (key : QueueKey) : Decidable (entry.coalesceWellFormed key) := by
   unfold QueueEntry.coalesceWellFormed
@@ -106,10 +113,13 @@ def matchesAutomatedWakeup
 end QueueEntry
 
 structure SessionQueueState where
-  sessionId : SessionId
+  scope : AgentSession.Scope
   active : Option RequestId
   pending : List QueueEntry
   terminal : Finset RequestId
+
+/-- Queue execution belongs to the same exact session identity as durable sessions. -/
+def SessionQueueState.sessionId (s : SessionQueueState) : SessionId := s.scope.session
 
 instance : Repr SessionQueueState where
   reprPrec s _ :=

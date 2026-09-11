@@ -209,6 +209,8 @@ pub(crate) struct LeanMcpHealthCase {
     pub(crate) threshold_k: usize,
     pub(crate) next_state: Option<String>,
     pub(crate) next_count: Option<usize>,
+    /// Lean `healthProjection` of the surviving state. The Rust owner of this
+    /// mapping is `gents_protocol::tool_service_health::ToolServiceHealthState::project`.
     pub(crate) rust_projection: Option<String>,
 }
 
@@ -227,5 +229,8 @@ pub(crate) struct LeanBackendHealthCase {
     pub(crate) threshold_k: usize,
     pub(crate) next_state: String,
     pub(crate) next_count: usize,
+    /// Lean `blocksRouting` of the next state. The Rust owner of the veto is
+    /// `gents::BackendHealthState::blocks_routing`; the admission merge
+    /// consumes the vetoed set at request admission time (#640).
     pub(crate) blocks_routing: bool,
 }

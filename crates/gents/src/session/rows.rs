@@ -26,19 +26,14 @@ pub(super) struct CompactionEntryRow {
     pub(super) created_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct SessionDocument {
-    pub(super) behavior_id: Option<String>,
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) started: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct ConversationDocument {
-    #[serde(default)]
-    pub(super) title: String,
-    #[serde(default)]
-    pub(super) title_source: Option<String>,
+/// Reader envelope for the single durable session document: the canonical
+/// `AgentSession` plus the physical `_docID` the owner uses to address the
+/// exact row in a patch transaction. This is not a second writable
+/// representation; writers patch through `AgentSession` fields only.
+#[derive(Debug, Clone)]
+pub struct SessionOwnerRow {
+    pub doc_id: String,
+    pub session: gents_protocol::session::AgentSession,
 }
 
 impl TryFrom<CompactionEntryRow> for CompactionEntry {
@@ -60,7 +55,7 @@ impl TryFrom<CompactionEntryRow> for CompactionEntry {
     }
 }
 
-pub(super) fn dedupe_paths(paths: &mut Vec<String>) {
+pub(crate) fn dedupe_paths(paths: &mut Vec<String>) {
     paths.sort();
     paths.dedup();
 }

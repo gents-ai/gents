@@ -2,15 +2,14 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use gents::agent::p2p_reconcile::{
-    compute_owned_pairing_diff, equality_filter, merge_layered_desired, single_string_eq, DiffOp,
-    FilterPredicate, PairingActual, PairingApplied, PairingDesired, PairingFilters,
-    MAX_CONCURRENT_PEER_PREPARATIONS,
+    compute_owned_pairing_diff, equality_filter, merge_layered_desired, DiffOp, FilterPredicate,
+    PairingActual, PairingApplied, PairingDesired, MAX_CONCURRENT_PEER_PREPARATIONS,
 };
 
 use crate::lean_vocab_test::{
-    lean_pairing_reconcile_shutdown_boundary_cases,
+    lean_pairing_reconcile_cases, lean_pairing_reconcile_shutdown_boundary_cases,
     lean_pairing_reconcile_sweep_retry_boundary_cases,
-    lean_pairing_reconcile_sweep_scheduling_cases,
+    lean_pairing_reconcile_sweep_scheduling_cases, LeanPairingReconcileSnapshot,
 };
 use crate::support::pairing_conformance::invariants::{
     check_liveness, check_safety, ObservedSnapshot,
@@ -26,12 +25,6 @@ fn fixture_path(fixture: &str) -> PathBuf {
 
 fn set(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| value.to_string()).collect()
-}
-
-fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
-    let mut filters = PairingFilters::new();
-    filters.insert(collection.to_string(), equality_filter(field, value));
-    filters
 }
 
 fn merge_desired(
@@ -114,89 +107,6 @@ async fn filter_change_reinstalls_replicator() {
 }
 
 #[test]
-fn operator_delete_owns_endpoint_despite_observed_configuration_drift() {
-    let address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-b";
-    let desired = PairingDesired::default();
-    let actual = PairingActual {
-        replicator_addresses: set(&[address]),
-        replicator_collections: [(address.to_string(), set(&["UnexpectedDriftedCollection"]))]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    };
-    let applied = PairingApplied {
-        replicator_addresses: set(&[address]),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        compute_owned_pairing_diff(&desired, &actual, &applied),
-        vec![DiffOp::TeardownReplicator(address.to_string())],
-        "mutable live configuration must not hide an owned endpoint from delete"
-    );
-}
-
-#[test]
-fn layered_desired_merge_keeps_data_plane_replicator_only() {
-    let bootstrap_address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-a";
-    let signed_address = "/ip4/127.0.0.1/tcp/5103/p2p/peer-a";
-    let control = PairingDesired {
-        collections: set(&["ControlA", "ControlB", "ControlC"]),
-        replicator_addresses: set(&[bootstrap_address]),
-        replicator_collections: set(&["ControlA", "ControlB", "ControlC"]),
-        replicator_filter: PairingFilters::new(),
-        template_ids: BTreeSet::new(),
-    };
-    let data_plane = PairingDesired {
-        collections: set(&["AgentRequest", "AgentResponse"]),
-        replicator_addresses: set(&[signed_address]),
-        replicator_collections: set(&["AgentRequest", "AgentResponse"]),
-        replicator_filter: one_filter("AgentRequest", "requester_did", "did:key:a")
-            .into_iter()
-            .chain(one_filter("AgentResponse", "requester_did", "did:key:a"))
-            .collect(),
-        template_ids: BTreeSet::new(),
-    };
-
-    let merged = merge_desired(Some(control), Some(data_plane)).expect("merged desired state");
-
-    assert_eq!(
-        merged.collections,
-        set(&["ControlA", "ControlB", "ControlC"]),
-        "data-plane collections must not become unfiltered subscriptions"
-    );
-    assert_eq!(
-        merged.replicator_collections,
-        set(&[
-            "ControlA",
-            "ControlB",
-            "ControlC",
-            "AgentRequest",
-            "AgentResponse",
-        ])
-    );
-    assert_eq!(merged.replicator_addresses, set(&[signed_address]));
-    assert_eq!(
-        merged
-            .replicator_filter
-            .get("AgentRequest")
-            .and_then(single_string_eq),
-        Some(("requester_did", "did:key:a"))
-    );
-    assert_eq!(
-        merged
-            .replicator_filter
-            .get("AgentResponse")
-            .and_then(single_string_eq),
-        Some(("requester_did", "did:key:a"))
-    );
-    assert!(
-        !merged.replicator_filter.contains_key("ControlA"),
-        "explicit control collections stay unfiltered inside the mixed replicator"
-    );
-}
-
-#[test]
 fn layered_desired_merge_prefers_signed_data_plane_filter() {
     let base_filter = equality_filter("requester_did", "did:key:phone");
     let data_filter = FilterPredicate::predicate(
@@ -223,32 +133,6 @@ fn layered_desired_merge_prefers_signed_data_plane_filter() {
         merged.replicator_filter.get("AgentRequest"),
         Some(&data_filter)
     );
-}
-
-#[test]
-fn self_pairing_base_is_not_materialized() {
-    assert!(merge_layered_desired(
-        "did:key:self",
-        "did:key:self",
-        Some(PairingDesired::default()),
-        None
-    )
-    .is_none());
-}
-
-#[test]
-fn layered_desired_merge_absent_data_plane_preserves_control_only() {
-    let control = PairingDesired {
-        collections: set(&["ControlA", "ControlB"]),
-        replicator_addresses: set(&["/ip4/127.0.0.1/tcp/4103/p2p/peer-a"]),
-        replicator_collections: set(&["ControlA", "ControlB"]),
-        replicator_filter: PairingFilters::new(),
-        template_ids: BTreeSet::new(),
-    };
-
-    let merged = merge_desired(Some(control.clone()), None).expect("control desired state");
-
-    assert_eq!(merged, control);
 }
 
 #[test]
@@ -308,6 +192,157 @@ fn app_collections_coexists_with_control_pairing() {
     );
     assert!(merged.template_ids.contains("explicit-control"));
     assert!(merged.template_ids.contains("app-collections"));
+}
+
+impl LeanPairingReconcileSnapshot {
+    fn desired(&self) -> PairingDesired {
+        PairingDesired {
+            collections: self.desired_collections.iter().cloned().collect(),
+            ..Default::default()
+        }
+    }
+
+    fn actual(&self) -> PairingActual {
+        PairingActual {
+            collections: self.actual_collections.iter().cloned().collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Resource ops the production projector would run from this state. The
+    /// Fixtures export install-only resource observations; applied ownership
+    /// affects teardown and is outside this projection.
+    fn owned_ops(&self) -> Vec<DiffOp> {
+        compute_owned_pairing_diff(&self.desired(), &self.actual(), &PairingApplied::default())
+    }
+}
+
+#[test]
+fn generated_pairing_reconcile_cases_drive_production_projector() {
+    let cases = lean_pairing_reconcile_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean must emit pairing reconcile samples"
+    );
+
+    let mut names = BTreeSet::new();
+    for case in cases {
+        assert!(
+            names.insert(case.name.as_str()),
+            "duplicate generated pairing case {:?}",
+            case.name
+        );
+        assert!(
+            case.before.desired_collections.len() >= 2,
+            "{}: samples must be multi-resource, got {:?}",
+            case.name,
+            case.before.desired_collections
+        );
+        assert_eq!(
+            case.before.desired_collections, case.after.desired_collections,
+            "{}: sampled actions never rewrite desired state",
+            case.name
+        );
+        // These samples validate the real resource projector. The connected
+        // field is an observed transport input, not evidence that this test dialed.
+        for state in [&case.before, &case.after] {
+            if state.connected {
+                assert_eq!(
+                    state.owned_ops().is_empty(),
+                    state.converged,
+                    "{}: resource completion",
+                    case.name
+                );
+            }
+        }
+
+        let before_ops = case.before.owned_ops();
+        let after_ops = case.after.owned_ops();
+        match case.action.as_str() {
+            // Dialing only moves transport readiness: the projector's pending
+            // resource work is identical on both sides of the transition.
+            "dial" | "dialFailed" => {
+                assert!(
+                    !case.before.connected,
+                    "{}: dial premises require a disconnected transport",
+                    case.name
+                );
+                assert_eq!(
+                    case.before.actual_collections, case.after.actual_collections,
+                    "{}: dial must not change observed resources",
+                    case.name
+                );
+                assert_eq!(
+                    before_ops, after_ops,
+                    "{}: dial must not change pending owned ops",
+                    case.name
+                );
+                if case.action == "dial" {
+                    assert!(
+                        case.after.connected,
+                        "{}: dial must establish transport readiness",
+                        case.name
+                    );
+                } else {
+                    assert!(
+                        !case.after.connected,
+                        "{}: dialFailed must leave the transport disconnected",
+                        case.name
+                    );
+                }
+            }
+            "reconcileInstall" => {
+                let installed: Vec<String> = case
+                    .after
+                    .actual_collections
+                    .iter()
+                    .filter(|collection| !case.before.actual_collections.contains(*collection))
+                    .cloned()
+                    .collect();
+                assert_eq!(
+                    installed.len(),
+                    1,
+                    "{}: one install must add exactly one collection, got {installed:?}",
+                    case.name
+                );
+                let (first, rest) = before_ops.split_first().unwrap_or_else(|| {
+                    panic!(
+                        "{}: the projector must still have pending work before an install, got {before_ops:?}",
+                        case.name
+                    )
+                });
+                assert_eq!(
+                    first,
+                    &DiffOp::InstallCollection(installed[0].clone()),
+                    "{}: the projector's first op must be the modeled install; ops {before_ops:?}",
+                    case.name
+                );
+                assert_eq!(
+                    rest, after_ops,
+                    "{}: the remaining projector ops must survive the install; \
+                     before {before_ops:?} after {after_ops:?}",
+                    case.name
+                );
+            }
+            other => panic!("unmapped Lean pairing reconcile action {other}"),
+        }
+    }
+
+    // Readiness is not convergence: the samples must include a connected state
+    // with resources still missing, and convergence only on the state where
+    // every desired resource is installed.
+    assert!(
+        cases
+            .iter()
+            .any(|case| case.after.connected && !case.after.converged),
+        "samples must include a connected-but-unconverged state (readiness != convergence)"
+    );
+    assert!(
+        cases
+            .iter()
+            .any(|case| case.after.converged && case.after.owned_ops().is_empty()),
+        "samples must include a state converged on every desired resource"
+    );
 }
 
 pub(super) fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {

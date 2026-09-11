@@ -1,5 +1,40 @@
 use super::*;
 
+async fn exact_request_binding(
+    graphql: &str,
+    request_id: &str,
+) -> Result<(String, String, Option<String>)> {
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{
+                _docID agent_did requester_did
+            }} }}"#,
+            escape_graphql_string(request_id),
+        ),
+    )
+    .await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .context("request binding query omitted rows")?;
+    anyhow::ensure!(rows.len() == 1, "request binding must resolve exactly once");
+    let row = &rows[0];
+    Ok((
+        row.get("_docID")
+            .and_then(Value::as_str)
+            .context("request binding missing physical ID")?
+            .to_string(),
+        row.get("agent_did")
+            .and_then(Value::as_str)
+            .context("request binding missing principal")?
+            .to_string(),
+        row.get("requester_did")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    ))
+}
+
 pub(super) async fn initialize_config_and_thread(
     ws: &mut ShimWebSocket,
     _home_dir: &std::path::Path,
@@ -83,14 +118,23 @@ pub(super) async fn seed_blank_materialized_completion(
     behavior_id: &str,
     session_id: &str,
 ) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let message_key = format!("{session_id}:blank-terminal");
     let blank_assistant = "\n\n\n";
+    let (request_doc_id, request_agent_did, requester_did) =
+        exact_request_binding(graphql, request_id).await?;
+    anyhow::ensure!(request_agent_did == agent_did);
+    anyhow::ensure!(requester_did.as_deref() == Some(agent_did));
+    let request_doc_id = request_doc_id.as_str();
     let mutation = format!(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{message_key}",
                 session_id: "{session_id}",
+                agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
+                request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
                 sequence: 2,
                 role: "assistant",
                 content: "{blank_assistant}",
@@ -101,7 +145,9 @@ pub(super) async fn seed_blank_materialized_completion(
                 add: {{
                     response_key: "{request_id}",
                     request_id: "{request_id}",
+                    request_doc_id: "{request_doc_id}",
                     agent_did: "{agent_did}",
+                    requester_did: "{agent_did}",
                     behavior_id: "{behavior_id}",
                     session_id: "{session_id}",
                     content: "",
@@ -127,7 +173,7 @@ pub(super) async fn seed_blank_materialized_completion(
                 }}
             ) {{ _docID }}
             update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }},
                 input: {{
                     lifecycle_state: "completed",
                     failure_reason: ""
@@ -139,6 +185,7 @@ pub(super) async fn seed_blank_materialized_completion(
         blank_assistant = escape_graphql_string(blank_assistant),
         now = escape_graphql_string(&now),
         request_id = escape_graphql_string(request_id),
+        request_doc_id = escape_graphql_string(request_doc_id),
         agent_did = escape_graphql_string(agent_did),
         behavior_id = escape_graphql_string(behavior_id),
     );
@@ -153,12 +200,21 @@ pub(super) async fn seed_running_background_tool(
     tool_call_key: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
+    let (request_doc_id, agent_did, requester_did) =
+        exact_request_binding(graphql, request_id).await?;
+    let requester_field = requester_did
+        .as_deref()
+        .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
+        .unwrap_or_default();
     let mutation = format!(
         r#"mutation {{
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
                 session_id: "{session_id}",
+                agent_did: "{agent_did}",
+                {requester_field}
                 message_sequence: 1,
                 tool_name: "bash",
                 tool_call_id: "codex-bg-interrupt",
@@ -172,7 +228,9 @@ pub(super) async fn seed_running_background_tool(
         }}"#,
         tool_call_key = escape_graphql_string(tool_call_key),
         request_id = escape_graphql_string(request_id),
+        request_doc_id = escape_graphql_string(&request_doc_id),
         session_id = escape_graphql_string(session_id),
+        agent_did = escape_graphql_string(&agent_did),
         now = escape_graphql_string(&now),
     );
     graphql_query(graphql, &mutation).await?;
@@ -182,6 +240,7 @@ pub(super) async fn seed_running_background_tool(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn seed_authorized_subagent_link(
     graphql: &str,
+    identity: &dyn gents::AgentIdentity,
     agent_did: &str,
     child_behavior_id: &str,
     parent_request_id: &str,
@@ -193,7 +252,14 @@ pub(super) async fn seed_authorized_subagent_link(
     child_backend_id: &str,
     child_model_name: &str,
 ) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let (parent_request_doc_id, parent_agent_did, parent_requester_did) =
+        exact_request_binding(graphql, parent_request_id).await?;
+    anyhow::ensure!(parent_agent_did == agent_did, "parent principal changed");
+    anyhow::ensure!(
+        parent_requester_did.as_deref() == Some(agent_did),
+        "parent requester changed"
+    );
     let args = serde_json::to_string(&json!({
         "name": "reviewer",
         "prompt": "Inspect the parent change"
@@ -202,52 +268,51 @@ pub(super) async fn seed_authorized_subagent_link(
         "child_request_id": child_request_id,
         "child_session_id": child_session_id
     }))?;
-    let mutation = format!(
+    let config_mutation = format!(
         r#"mutation {{
+            create_InferenceBackend(input: {{
+                backend_id: "{child_backend_id}",
+                agent_did: "{agent_did}",
+                name: "Child projection backend",
+                provider_kind: "OpenAiCompatible",
+                openai_wire_api: "chat_completions",
+                endpoint: "http://127.0.0.1:1/v1",
+                auth: {{kind: "unauthenticated"}},
+                enabled: true
+            }}) {{ _docID }}
+            create_InferenceProfile(input: {{
+                profile_id: "{child_profile_id}",
+                agent_did: "{agent_did}",
+                backend_id: "{child_backend_id}",
+                model_name: "{child_model_name}"
+            }}) {{ _docID }}
             create_AgentBehavior(input: {{
                 behavior_id: "{child_behavior_id}",
                 agent_did: "{agent_did}",
                 display_name: "reviewer",
-                system_prompt: "",
-                backend_id: "{child_backend_id}",
-                model_name: "{child_model_name}",
-                tool_selection_id: "",
-                inference_profile_id: "",
-                compaction_strategy: "StripThenSummarize",
-                compaction_threshold: 0.75,
-                enabled: false,
+                inference_profile_id: "{child_profile_id}",
+                enabled: true,
                 created_at: "{now}"
             }}) {{ _docID }}
-            create_AgentSession(input: {{
-                session_id: "{child_session_id}",
-                agent_name: "reviewer",
-                agent_did: "{agent_did}",
-                behavior_id: "{child_behavior_id}",
-                started: "{now}",
-                status: "active"
-            }}) {{ _docID }}
-            create_AgentRequest(input: {{
-                request_id: "{child_request_id}",
-                agent_did: "{agent_did}",
-                behavior_id: "{child_behavior_id}",
-                session_id: "{child_session_id}",
-                content: "Inspect the parent change",
-                metadata: "{{}}",
-                lifecycle_state: "processing",
-                execution_origin: "subagent",
-                failure_reason: "",
-                created_at: "{now}",
-                retry_count: 0,
-                max_retries: 3,
-                subagent_depth: 1,
-                caused_by_parent_request_id: "{parent_request_id}",
-                caused_by_parent_tool_call_id: "{tool_call_id}"
-            }}) {{ _docID }}
+        }}"#,
+        child_profile_id = escape_graphql_string(&format!("{child_behavior_id}:profile")),
+        agent_did = escape_graphql_string(agent_did),
+        child_behavior_id = escape_graphql_string(child_behavior_id),
+        child_backend_id = escape_graphql_string(child_backend_id),
+        child_model_name = escape_graphql_string(child_model_name),
+        now = escape_graphql_string(&now),
+    );
+    graphql_query(graphql, &config_mutation).await?;
+
+    let tool_mutation = format!(
+        r#"mutation {{
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 request_id: "{parent_request_id}",
+                request_doc_id: "{parent_request_doc_id}",
                 session_id: "{parent_session_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 message_sequence: 1,
                 tool_name: "spawn_subagent",
                 tool_call_id: "{tool_call_id}",
@@ -261,44 +326,104 @@ pub(super) async fn seed_authorized_subagent_link(
                 completed_at: "{now}"
             }}) {{ _docID }}
         }}"#,
-        child_session_id = escape_graphql_string(child_session_id),
         agent_did = escape_graphql_string(agent_did),
-        child_behavior_id = escape_graphql_string(child_behavior_id),
-        child_backend_id = escape_graphql_string(child_backend_id),
-        child_model_name = escape_graphql_string(child_model_name),
         now = escape_graphql_string(&now),
         child_request_id = escape_graphql_string(child_request_id),
         parent_request_id = escape_graphql_string(parent_request_id),
+        parent_request_doc_id = escape_graphql_string(&parent_request_doc_id),
         tool_call_id = escape_graphql_string(tool_call_id),
         tool_call_key = escape_graphql_string(tool_call_key),
         parent_session_id = escape_graphql_string(parent_session_id),
         args = escape_graphql_string(&args),
         result = escape_graphql_string(&result),
     );
-    graphql_query(graphql, &mutation).await?;
-    Ok(())
-}
+    let tool_response = graphql_query(graphql, &tool_mutation).await?;
+    let tool_call_doc_id = first_graphql_row(&tool_response, "add_AgentToolCall")?
+        .get("_docID")
+        .and_then(Value::as_str)
+        .context("spawn tool call missing physical ID")?;
 
-pub(super) async fn delete_agent_behavior(graphql: &str, behavior_id: &str) -> Result<()> {
-    let behavior_id = escape_graphql_string(behavior_id);
-    let response = graphql_query(
+    let admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_child(
+            agent_did,
+            parent_request_id,
+        );
+    let child = gents::build_signed_request(
+        gents::RequestSpec {
+            subagent: Some(gents::ParentLink {
+                depth: 1,
+                parent_request_id: parent_request_id.to_string(),
+                parent_request_doc_id: parent_request_doc_id.clone(),
+                parent_tool_call_id: Some(tool_call_id.to_string()),
+                parent_tool_call_doc_id: Some(tool_call_doc_id.to_string()),
+            }),
+            ..gents::RequestSpec::new(
+                gents::RequestIdentity {
+                    requester_did: None,
+                    request_id: child_request_id.to_string(),
+                    agent_did: agent_did.to_string(),
+                    behavior_id: child_behavior_id.to_string(),
+                    session_id: child_session_id.to_string(),
+                    content: "Inspect the parent change".to_string(),
+                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: now.clone(),
+                },
+                admission,
+            )
+        },
+        gents::RequestSigner::Identity(identity),
+    )
+    .await?;
+    let child_fields = child.graphql_input_fields().map_err(anyhow::Error::msg)?;
+    let child_response = graphql_query(
         graphql,
         &format!(
             r#"mutation {{
-                delete_AgentBehavior(filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }}) {{
-                    _docID
-                }}
-            }}"#
+                child: create_AgentRequest(input: {{ {child_fields} }}) {{ _docID }}
+                active: update_AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{}" }} }},
+                    input: {{ lifecycle_state: "processing" }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(child_request_id),
         ),
     )
     .await?;
-    anyhow::ensure!(
-        response
-            .pointer("/data/delete_AgentBehavior")
-            .and_then(Value::as_array)
-            .is_some_and(|rows| !rows.is_empty()),
-        "expected child AgentBehavior to be deleted: {response}"
-    );
+    let child_request_doc_id = first_graphql_row(&child_response, "child")?
+        .get("_docID")
+        .and_then(Value::as_str)
+        .context("child request missing physical ID")?;
+    let session = gents_protocol::session::AgentSession {
+        session_id: child_session_id.to_string(),
+        agent_did: agent_did.to_string(),
+        requester_did: Some(agent_did.to_string()),
+        behavior_id: child_behavior_id.to_string(),
+        created_at: now.clone(),
+        closed_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: Some(gents_protocol::session::SessionProvenance {
+            parent_request_doc_id: Some(parent_request_doc_id),
+            ..Default::default()
+        }),
+        observation: Some(gents_protocol::session::SessionObservation {
+            last_activity_at: now,
+            preview: Some("Inspect the parent change".to_string()),
+            latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                request_doc_id: child_request_doc_id.to_string(),
+                request_id: child_request_id.to_string(),
+                lifecycle_state:
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+            }),
+        }),
+    };
+    let session_input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session)?)?;
+    graphql_query(
+        graphql,
+        &format!("mutation {{ create_AgentSession(input: {session_input}) {{ _docID }} }}"),
+    )
+    .await?;
     Ok(())
 }
 
@@ -310,6 +435,9 @@ pub(super) async fn seed_unresolved_completed_subagent_tool(
     tool_call_key: &str,
 ) -> Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
+    let (parent_request_doc_id, _, requester_did) =
+        exact_request_binding(graphql, parent_request_id).await?;
+    anyhow::ensure!(requester_did.as_deref() == Some(agent_did));
     let completed_at_ms = chrono::DateTime::parse_from_rfc3339(&now)?.timestamp_millis();
     let missing_child_request_id = Uuid::new_v4().to_string();
     let args = serde_json::to_string(&json!({
@@ -324,8 +452,10 @@ pub(super) async fn seed_unresolved_completed_subagent_tool(
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 request_id: "{parent_request_id}",
+                request_doc_id: "{parent_request_doc_id}",
                 session_id: "{parent_session_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 message_sequence: 2,
                 tool_name: "spawn_subagent",
                 tool_call_id: "unresolved-spawn",
@@ -344,6 +474,7 @@ pub(super) async fn seed_unresolved_completed_subagent_tool(
         }}"#,
         tool_call_key = escape_graphql_string(tool_call_key),
         parent_request_id = escape_graphql_string(parent_request_id),
+        parent_request_doc_id = escape_graphql_string(&parent_request_doc_id),
         parent_session_id = escape_graphql_string(parent_session_id),
         agent_did = escape_graphql_string(agent_did),
         args = escape_graphql_string(&args),
@@ -366,12 +497,16 @@ pub(super) async fn seed_child_streaming_response(
 ) -> Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
     let created_at_ms = chrono::DateTime::parse_from_rfc3339(&now)?.timestamp_millis();
+    let (request_doc_id, _, requester_did) = exact_request_binding(graphql, request_id).await?;
+    anyhow::ensure!(requester_did.as_deref() == Some(agent_did));
     let mutation = format!(
         r#"mutation {{
             create_AgentResponse(input: {{
                 response_key: "{request_id}",
                 request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 behavior_id: "{behavior_id}",
                 session_id: "{session_id}",
                 content: "{content}",
@@ -386,6 +521,7 @@ pub(super) async fn seed_child_streaming_response(
             }}) {{ _docID }}
         }}"#,
         request_id = escape_graphql_string(request_id),
+        request_doc_id = escape_graphql_string(&request_doc_id),
         agent_did = escape_graphql_string(agent_did),
         behavior_id = escape_graphql_string(behavior_id),
         session_id = escape_graphql_string(session_id),
@@ -429,6 +565,8 @@ pub(super) async fn materialize_child_response_before_terminal(
 ) -> Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
     let materialized_at_ms = chrono::DateTime::parse_from_rfc3339(&now)?.timestamp_millis();
+    let (request_doc_id, _, requester_did) = exact_request_binding(graphql, request_id).await?;
+    anyhow::ensure!(requester_did.as_deref() == Some(agent_did));
     let message_key = format!("{session_id}:2");
     let content = r#"{"role":"assistant","id":null,"content":[{"text":"durable child answer"}]}"#;
     let mutation = format!(
@@ -437,7 +575,9 @@ pub(super) async fn materialize_child_response_before_terminal(
                 message_key: "{message_key}",
                 session_id: "{session_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
                 sequence: 2,
                 role: "assistant",
                 content: "{content}",
@@ -459,6 +599,7 @@ pub(super) async fn materialize_child_response_before_terminal(
         session_id = escape_graphql_string(session_id),
         agent_did = escape_graphql_string(agent_did),
         request_id = escape_graphql_string(request_id),
+        request_doc_id = escape_graphql_string(&request_doc_id),
         content = escape_graphql_string(content),
         reasoning = escape_graphql_string(reasoning),
         now = escape_graphql_string(&now),
@@ -532,14 +673,14 @@ pub(super) async fn seed_background_completion_wake(
     let wake_created_at = (chrono::DateTime::parse_from_rfc3339(&source_created_at)?
         + chrono::Duration::seconds(1))
     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let metadata = serde_json::to_string(&json!({
+    let input = serde_json::from_value(json!({
         "queue": {
             "source": "background_completion",
             "policy": "coalesce",
             "key": format!("background_completion:{session_id}"),
-            "queued_after_request_id": null
-        },
-        "background_completion_wake_version": 1
+            "queued_after_request_id": null,
+            "background_completion_wake_version": 1
+        }
     }))?;
     let mut source = gents_protocol::request_admission::AgentRequestCreate::base(
         &source_request_id,
@@ -601,7 +742,7 @@ pub(super) async fn seed_background_completion_wake(
         &wake_created_at,
         admission,
     );
-    wake.metadata = Some(metadata);
+    wake.input = input;
     wake.caused_by_parent_request_id = Some(source_request_id);
     wake.caused_by_parent_request_doc_id = Some(source_doc_id.to_string());
     gents::sign_agent_request_create(identity, &mut wake).await?;

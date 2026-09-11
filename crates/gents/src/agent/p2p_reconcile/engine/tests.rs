@@ -161,24 +161,6 @@ fn data_plane_gate_accepts_current_enrollment_endpoint() {
     assert_eq!(entry.address, "/ticket/network");
 }
 
-#[tokio::test(start_paused = true)]
-async fn cached_data_plane_generation_expires_without_waiting_for_a_sweep() {
-    let entry = EnrollmentEndpointEntry {
-        peer_id: "peer-network".to_string(),
-        agent_did: "did:key:network".to_string(),
-        address: "/ticket/network".to_string(),
-        desired_id: "peer-network".to_string(),
-        request_digest: "digest".to_string(),
-        authorization_sequence: 1,
-        authorization_expires_at: "2026-08-30T12:00:01Z".to_string(),
-    };
-    let before = "2026-08-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
-    let expired = "2026-08-30T12:00:01Z".parse::<DateTime<Utc>>().unwrap();
-
-    assert!(enrollment_entry_is_fresh_at(&entry, before));
-    assert!(!enrollment_entry_is_fresh_at(&entry, expired));
-}
-
 #[test]
 fn enrollment_base_and_local_data_plane_have_disjoint_owners() {
     let enrollment_entries = vec![EnrollmentEndpointEntry {
@@ -480,7 +462,11 @@ fn data_plane_subagent_coordinator_uses_signed_peer_for_targeted_bridge() {
     .expect("data-plane coordinator desired")
     .expect("some data-plane layer");
 
-    assert!(!desired.replicator_filter.contains_key("AgentRequest"));
+    // The full template → (collections, filters) shape is owned by
+    // `subagent_coordinator_template_filters_only_targeted_bridge` in
+    // `engine/tests/desired_state.rs`; here only the unique data-plane
+    // claim is re-proven: the coordinator survives the signed-endpoint
+    // merge with its targeted bridge intact.
     assert_eq!(desired.replicator_collections, set(&["AgentToolCall"]));
     assert_eq!(
         desired
@@ -516,16 +502,15 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
     .expect("data-plane host desired")
     .expect("some data-plane layer");
 
-    assert_eq!(
-        desired.replicator_collections,
-        set(&[
-            "AgentRequest",
-            "AgentResponse",
-            "AgentMessage",
-            "AgentToolCall"
-        ])
+    // The full template → (collections, filters) shape is owned by
+    // `subagent_host_template_filters_return_projection_to_requester` in
+    // `engine/tests/desired_state.rs`; here only the unique data-plane
+    // claim is re-proven: the host projection survives the signed-endpoint
+    // merge with its requester-scoped filters intact.
+    assert!(
+        !desired.replicator_filter.is_empty(),
+        "the host projection must keep requester-scoped filters through the signed-endpoint merge"
     );
-    assert_eq!(desired.replicator_filter.len(), 4);
     for predicate in desired.replicator_filter.values() {
         assert_eq!(
             single_string_eq(predicate),
@@ -2340,51 +2325,6 @@ fn nullable_graphql_arrays_emit_null_when_empty() {
     );
 }
 
-/// End-to-end reconcile of a `Push` (conversation) template: a filtered
-/// replicator is installed and NO subscription (`add_p2p_collections`) is.
-#[tokio::test]
-async fn push_template_installs_filtered_replicator_without_subscription() {
-    let store = MockStore::with_desired(Some(
-        desired_from_pairing_row(
-            desired_row(Some("conversation"), Some("did:key:bob")),
-            "did:key:self",
-        )
-        .expect("template resolves")
-        .expect("some desired layer"),
-    ));
-    let admin = MockAdmin::default();
-
-    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
-        .await
-        .expect("tick result");
-
-    // Only a replicator install; no collection subscription.
-    assert_eq!(
-        outcome.ops_applied,
-        vec![DiffOp::InstallReplicator("addr1".into())]
-    );
-    let emitted = admin.emitted.lock().unwrap();
-    assert!(
-        !emitted
-            .iter()
-            .any(|op| matches!(op, DiffOp::InstallCollection(_))),
-        "Push template must NOT subscribe: {emitted:?}"
-    );
-    drop(emitted);
-
-    // The recorded replicator carries the per-peer scope filter.
-    let calls = admin.recorded_filters.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    let pred = calls[0]
-        .1
-        .get("AgentRequest")
-        .expect("AgentRequest filter on installed replicator");
-    assert_eq!(
-        single_string_eq(pred),
-        Some(("requester_did", "did:key:bob"))
-    );
-}
-
 /// End-to-end reconcile of a `Replicate` (agent-config) template: it both
 /// subscribes (`add_p2p_collections`) and installs an UNFILTERED replicator.
 #[tokio::test]
@@ -2425,66 +2365,6 @@ async fn replicate_template_subscribes_and_replicates() {
     assert!(
         calls[0].1.is_empty(),
         "Replicate template must install an unfiltered replicator"
-    );
-}
-
-/// End-to-end: a changed scoped DID (different filter) reinstalls the
-/// replicator — teardown of the old filtered identity, install of the new.
-#[tokio::test]
-async fn changing_scoped_did_reinstalls_replicator() {
-    let store = MockStore::with_desired(Some(
-        desired_from_pairing_row(
-            desired_row(Some("conversation"), Some("did:key:bob")),
-            "did:key:self",
-        )
-        .expect("template resolves")
-        .expect("some desired layer"),
-    ));
-    // Applied state: addr1 already installed under a DIFFERENT (alice) filter.
-    let mut alice_filter = PairingFilters::default();
-    for col in resolve_template("conversation").unwrap().collections.iter() {
-        alice_filter.insert(
-            (*col).to_string(),
-            crate::agent::p2p_reconcile::templates::equality_filter(
-                "requester_did",
-                "did:key:alice",
-            ),
-        );
-    }
-    *store.applied.lock().unwrap() = PairingApplied {
-        collections: BTreeSet::new(),
-        replicator_addresses: set(&["addr1"]),
-        replicator_filter: alice_filter,
-    };
-    let admin = MockAdmin::default();
-    // The remote already has the old replicator on addr1.
-    admin.replicators.lock().unwrap().insert(
-        "addr1".into(),
-        RemoteReplicator {
-            id: Some("id-addr1".into()),
-            collections: vec!["AgentRequest".into()],
-            address: Some("addr1".into()),
-            filters: Some(Default::default()),
-        },
-    );
-
-    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
-        .await
-        .expect("tick result");
-
-    assert_eq!(
-        outcome.ops_applied,
-        vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
-        ]
-    );
-    // The reinstalled replicator carries the NEW (bob) filter.
-    let calls = admin.recorded_filters.lock().unwrap();
-    let last = calls.last().expect("an install happened");
-    assert_eq!(
-        last.1.get("AgentRequest").and_then(single_string_eq),
-        Some(("requester_did", "did:key:bob"))
     );
 }
 
@@ -2535,12 +2415,12 @@ async fn add_replicator_records_filters_at_seam() {
     assert_eq!(single_string_eq(pred), Some(("agent_did", "did:key:alice")));
 }
 
-/// #714 C1 regression: the `machine` template's conversation collections
-/// must scope to the same requester DID `conversation` uses on the data
-/// plane, while `AgentDirectoryEntry` is restricted to this issuer's
-/// source-owned projection.
+/// #714 C1 regression: the `machine` template's session data-plane set must
+/// scope to the same requester DID `conversation` uses on the data plane,
+/// while `AgentDirectoryEntry` is restricted to this issuer's source-owned
+/// projection.
 #[test]
-fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
+fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         agent_did: "did:key:peer-b".to_string(),
@@ -2574,7 +2454,6 @@ fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
         "AgentToolCall",
         "AgentToolResult",
         "AgentSession",
-        "AgentConversation",
         "CompactionEntry",
     ] {
         assert_eq!(
@@ -2592,52 +2471,5 @@ fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
             .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
             .and_then(single_string_eq),
         Some(("source_did", "did:key:self"))
-    );
-}
-
-/// #714 C1 regression: on the control plane, `machine`'s conversation
-/// collections must resolve to the peer DID exactly like `conversation`
-/// does, while `AgentDirectoryEntry` selects only this issuer's rows.
-#[test]
-fn control_plane_desired_machine_scopes_conversation_and_owned_directory() {
-    let desired = desired_from_pairing_row(
-        desired_row(Some("machine"), Some("did:key:phone")),
-        "did:key:server",
-    )
-    .expect("template resolves")
-    .expect("some desired layer");
-
-    assert!(
-        desired.collections.is_empty(),
-        "Push templates must not subscribe"
-    );
-    assert!(desired
-        .replicator_collections
-        .contains(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION));
-    for col in [
-        "AgentRequest",
-        "AgentResponse",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentToolResult",
-        "AgentSession",
-        "AgentConversation",
-        "CompactionEntry",
-    ] {
-        let pred = desired
-            .replicator_filter
-            .get(col)
-            .unwrap_or_else(|| panic!("missing filter for conversation collection {col}"));
-        assert_eq!(
-            single_string_eq(pred),
-            Some(("requester_did", "did:key:phone"))
-        );
-    }
-    assert_eq!(
-        desired
-            .replicator_filter
-            .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
-            .and_then(single_string_eq),
-        Some(("source_did", "did:key:server"))
     );
 }

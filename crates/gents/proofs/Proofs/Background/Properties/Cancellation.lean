@@ -12,8 +12,6 @@ theorem cascade_cancels_child
                        ¬ isTerminal t.state)
     (h_child_proc      : pre.child.request.state = .processing)
     (h_child_admission : pre.child.request.admission = .executing)
-    (h_child_no_fg     : ¬ ∃ t ∈ pre.child.tools, t.awaitMode = .foreground ∧
-                                                    ¬ isTerminal t.state)
     (h_linked          : pre.linked) :
     ∃ post, Trace pre post ∧ post.child.request.state = .interrupted := by
   obtain ⟨tCascade, h_in, h_id, h_pol, _h_live⟩ := h_cascade
@@ -22,12 +20,12 @@ theorem cascade_cancels_child
         interruptRequestedAt := some pre.child.request.currentTime }
   let midChild : ComposedState :=
     { pre.child with request := midChildReq }
-  let mid : BridgedState := { pre with child := midChild, secondLeg := .subagent midChild }
+  let mid : BridgedState := { pre with child := midChild }
   let postChildReq : RequestContext :=
     { midChildReq with state := .interrupted, admission := .released }
   let postChild : ComposedState :=
     { midChild with request := postChildReq }
-  let post : BridgedState := { mid with child := postChild, secondLeg := .subagent postChild }
+  let post : BridgedState := { mid with child := postChild }
   refine ⟨post, ?_, ?_⟩
   ·
     refine @Trace.step pre mid post ?_ (@Trace.step mid post post ?_ Trace.refl)

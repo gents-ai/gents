@@ -1,150 +1,119 @@
-use anyhow::{anyhow, Result};
+pub(super) use crate::commands::inference_binding::load_bound_context_window;
+use crate::commands::inference_binding::load_bound_profile;
+use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
-use gents::{
-    load_agent_behavior, load_agent_principal, load_inference_profile, AgentBehaviorDocument,
-    DEFAULT_CONTEXT_WINDOW,
-};
 
 pub(super) const MODEL_SELECTION_SEPARATOR: &str = "::";
 
-fn explicit_override(override_behavior_id: Option<&str>) -> Option<String> {
-    override_behavior_id
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-}
+#[cfg(test)]
+use crate::commands::inference_binding::explicit_behavior_override as explicit_override;
 
-/// Resolve the behavior the Codex shim binds to.
-///
-/// An explicit override always wins. Otherwise the exact principal document
-/// and its configured default behavior are required.
-pub(super) async fn resolve_bound_behavior_id(
-    node: &EmbeddedNode,
-    override_behavior_id: Option<&str>,
-    agent_did: &str,
-) -> Result<String> {
-    if let Some(value) = explicit_override(override_behavior_id) {
-        return Ok(value);
-    }
-    let principal = load_agent_principal(node, agent_did)
-        .await?
-        .ok_or_else(|| anyhow!("agent principal {agent_did:?} is not configured"))?;
-    principal
-        .default_behavior_id
-        .map(|id| id.trim().to_string())
-        .filter(|id| !id.is_empty())
-        .ok_or_else(|| anyhow!("agent principal {agent_did:?} has no default behavior binding"))
-}
+pub(super) use crate::commands::inference_binding::resolve_bound_behavior_id;
 
 pub(super) async fn load_bound_inference_profile_id(
     node: &EmbeddedNode,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<String> {
-    let behavior = load_agent_behavior(node, behavior_id)
+    Ok(load_bound_profile(node, agent_did, behavior_id)
         .await?
-        .ok_or_else(|| {
-            anyhow!(
-                "Codex shim is bound to behavior {behavior_id:?}, but no AgentBehavior \
-                 document with that behavior_id exists. Create or fix the behavior with \
-                 `gents config behavior set --behavior-id {behavior_id} ...`."
-            )
-        })?;
-    let profile_id = behavior.inference_profile_id.ok_or_else(|| {
-        anyhow!(
-            "Codex shim is bound to behavior {behavior_id:?}, but that behavior has no \
-             inference_profile_id set. Run \
-             `gents config behavior set --behavior-id {behavior_id} \
-             --inference-profile-id <profile>` to attach one."
-        )
-    })?;
-    if load_inference_profile(node, &profile_id).await?.is_none() {
-        return Err(anyhow!(
-            "Bound behavior {behavior_id:?} references inference_profile_id \
-             {profile_id:?}, but no InferenceProfile document with that id exists."
-        ));
-    }
-    Ok(profile_id)
-}
-
-pub(super) async fn load_bound_context_window(
-    node: &EmbeddedNode,
-    behavior_id: &str,
-) -> Result<i64> {
-    let profile_id = load_bound_inference_profile_id(node, behavior_id).await?;
-    let profile = load_inference_profile(node, &profile_id)
-        .await?
-        .ok_or_else(|| anyhow!("InferenceProfile {profile_id:?} disappeared while loading"))?;
-    let context_window = effective_context_window(profile.context_window);
-    i64::try_from(context_window)
-        .map_err(|_| anyhow!("context window {context_window} does not fit the Codex protocol"))
-}
-
-fn effective_context_window(configured: Option<i64>) -> usize {
-    configured
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(DEFAULT_CONTEXT_WINDOW)
+        .profile_id)
 }
 
 pub(super) async fn load_bound_model_selection_id(
     node: &EmbeddedNode,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<String> {
-    let behavior = load_agent_behavior(node, behavior_id)
-        .await?
-        .ok_or_else(|| {
-            anyhow!(
-                "Codex shim is bound to behavior {behavior_id:?}, but no AgentBehavior \
-                 document with that behavior_id exists."
-            )
-        })?;
-    model_selection_id_for_behavior(behavior_id, &behavior)
+    let profile = load_bound_profile(node, agent_did, behavior_id).await?;
+    Ok(model_selection_id(&profile.backend_id, &profile.model_name))
 }
 
 pub(super) async fn load_bound_model_selection_id_for_state(
     node: &EmbeddedNode,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<String> {
-    load_bound_model_selection_id(node, behavior_id).await
+    load_bound_model_selection_id(node, agent_did, behavior_id).await
 }
 
 pub(super) fn model_selection_id(backend_id: &str, model_name: &str) -> String {
     format!("{backend_id}{MODEL_SELECTION_SEPARATOR}{model_name}")
 }
 
-pub(super) fn parse_model_selection_id(value: &str) -> Option<(&str, &str)> {
-    let (backend_id, model_name) = value.split_once(MODEL_SELECTION_SEPARATOR)?;
-    let backend_id = backend_id.trim();
-    let model_name = model_name.trim();
-    (!backend_id.is_empty() && !model_name.is_empty()).then_some((backend_id, model_name))
-}
-
-fn model_selection_id_for_behavior(
-    behavior_id: &str,
-    behavior: &AgentBehaviorDocument,
-) -> Result<String> {
-    let model_name = behavior
-        .model_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .ok_or_else(|| {
-            anyhow!(
-                "Codex shim is bound to behavior {behavior_id:?}, but that behavior has no \
-                 model_name set."
-            )
-        })?;
-    Ok(behavior
-        .backend_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|backend| !backend.is_empty())
-        .map(|backend_id| model_selection_id(backend_id, model_name))
-        .unwrap_or_else(|| model_name.to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn same_labels_resolve_only_the_selected_principal_binding() {
+        use gents::config_client::{
+            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        use gents::{AgentIdentity, Collection};
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let node = EmbeddedNode::builder()
+            .data_path(dir.path().join("db"))
+            .build()
+            .await
+            .unwrap();
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let first =
+            gents::KeyIdentity::load_or_create(&dir.path().join("first.key"), None).unwrap();
+        let second =
+            gents::KeyIdentity::load_or_create(&dir.path().join("second.key"), None).unwrap();
+        for (identity, model, window) in [
+            (&first, "first-model", 32000),
+            (&second, "second-model", 64000),
+        ] {
+            let owner = identity.did();
+            gents::ensure_agent_principal(&node, owner).await.unwrap();
+            let plan = DesiredStateApplyPlan::new([
+                (Collection::AgentBehavior, json!({"agent_did":owner,"behavior_id":"same","inference_profile_id":"same-profile"})),
+                (Collection::InferenceProfile,json!({"agent_did":owner,"profile_id":"same-profile","backend_id":"same-backend","model_name":model,"context_window":window})),
+                (Collection::InferenceBackend,json!({"agent_did":owner,"backend_id":"same-backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+            ].into_iter().map(|(collection,value)|DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect()).unwrap();
+            ConfigAccess::transact_local(&node, None, "codex.binding.fixture", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            load_bound_model_selection_id(&node, first.did(), "same")
+                .await
+                .unwrap(),
+            "same-backend::first-model"
+        );
+        assert_eq!(
+            load_bound_model_selection_id(&node, second.did(), "same")
+                .await
+                .unwrap(),
+            "same-backend::second-model"
+        );
+        assert_eq!(
+            load_bound_context_window(&node, first.did(), "same")
+                .await
+                .unwrap(),
+            32000
+        );
+        assert_eq!(
+            load_bound_context_window(&node, second.did(), "same")
+                .await
+                .unwrap(),
+            64000
+        );
+        assert!(load_bound_model_selection_id(&node, "did:missing", "same")
+            .await
+            .is_err());
+        assert!(load_bound_model_selection_id(&node, first.did(), "missing")
+            .await
+            .is_err());
+        node.shutdown().await;
+    }
 
     #[test]
     fn explicit_override_uses_value() {
@@ -167,13 +136,5 @@ mod tests {
         assert_eq!(explicit_override(Some("")), None);
         assert_eq!(explicit_override(Some("   ")), None);
         assert_eq!(explicit_override(None), None);
-    }
-
-    #[test]
-    fn context_window_fallback_matches_runtime_loading() {
-        assert_eq!(effective_context_window(Some(32_768)), 32_768);
-        assert_eq!(effective_context_window(Some(0)), 0);
-        assert_eq!(effective_context_window(Some(-1)), DEFAULT_CONTEXT_WINDOW);
-        assert_eq!(effective_context_window(None), DEFAULT_CONTEXT_WINDOW);
     }
 }

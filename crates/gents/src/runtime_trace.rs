@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use opentelemetry::global;
-use serde_json::Value;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::watcher::AgentRequest;
@@ -26,19 +25,12 @@ pub(crate) struct RequestTraceAttrs {
 
 impl RequestTraceAttrs {
     pub(crate) fn from_request(request: &AgentRequest) -> Self {
-        let metadata = request
-            .metadata
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .and_then(|value| serde_json::from_str::<Value>(value).ok());
-
         Self {
             request_doc_id: request.doc_id.clone(),
             request_id: request.request_id.clone(),
             agent_did: request.agent_did.clone(),
             session_id: request.session_id.clone(),
-            requested_behavior_id: clean_optional(request.behavior_id.as_deref()),
+            requested_behavior_id: request.behavior_id.clone(),
             execution_origin: clean_optional(request.execution_origin.as_deref()),
             deadline_at: clean_optional(request.deadline.as_deref()),
             has_deadline: request
@@ -51,19 +43,11 @@ impl RequestTraceAttrs {
                 || request.caused_by_parent_tool_call_id.is_some(),
             parent_request_id: clean_optional(request.caused_by_parent_request_id.as_deref()),
             parent_tool_call_id: clean_optional(request.caused_by_parent_tool_call_id.as_deref()),
-            selected_skill_count: metadata
-                .as_ref()
-                .and_then(|value| value.get("selected_skill_ids"))
-                .and_then(Value::as_array)
-                .map_or(0, Vec::len),
-            workspace_cwd_set: metadata
-                .as_ref()
-                .and_then(|value| {
-                    value
-                        .pointer("/codex_shim/cwd")
-                        .or_else(|| value.get("workspace_cwd"))
-                })
-                .and_then(Value::as_str)
+            selected_skill_count: request.input.selected_skill_ids.len(),
+            workspace_cwd_set: request
+                .input
+                .cwd
+                .as_deref()
                 .is_some_and(|value| !value.trim().is_empty()),
         }
     }
@@ -107,23 +91,18 @@ fn clean_optional(value: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    fn request(metadata: Option<&str>) -> AgentRequest {
+    fn request(input: gents_protocol::request_input::RequestInput) -> AgentRequest {
         AgentRequest {
             doc_id: "doc-1".to_string(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),
             requester_did: None,
-            behavior_id: Some("behavior-a".to_string()),
+            behavior_id: "behavior-a".to_string(),
             session_id: "session-1".to_string(),
             content: "do not put this in telemetry".to_string(),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
             max_total_tokens: None,
-            metadata: metadata.map(ToOwned::to_owned),
-            execution_origin: Some("manual".to_string()),
+            input,
+            execution_origin: Some("interactive".to_string()),
             created_at: "2026-06-04T00:00:00Z".to_string(),
             deadline: Some("2026-06-04T00:05:00Z".to_string()),
             execution_generation: None,
@@ -140,21 +119,24 @@ mod tests {
             caused_by_correlation: None,
             caused_by_trigger_context: None,
             workspace_id: None,
+            workspace_owner_agent_did: None,
             workspace_authority: None,
-            workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
         }
     }
 
     #[test]
-    fn request_trace_attrs_summarize_metadata_without_payloads() {
-        let attrs = RequestTraceAttrs::from_request(&request(Some(
-            r#"{
-                "selected_skill_ids": ["rust", "ops"],
-                "codex_shim": { "cwd": "/workspace" },
-                "prompt": "do not capture me"
-            }"#,
-        )));
+    fn request_trace_attrs_summarize_input_without_payloads() {
+        let attrs = RequestTraceAttrs::from_request(&request(
+            gents_protocol::request_input::RequestInput {
+                selected_skill_ids: vec!["rust".into(), "ops".into()],
+                cwd: Some("/private/workspace".into()),
+                ..Default::default()
+            },
+        ));
+        let trace = format!("{attrs:?}");
+        assert!(!trace.contains("/private/workspace"));
+        assert!(!trace.contains("do not put this in telemetry"));
 
         assert_eq!(attrs.request_doc_id, "doc-1");
         assert_eq!(attrs.request_id, "req-1");
@@ -168,8 +150,8 @@ mod tests {
     }
 
     #[test]
-    fn request_trace_attrs_tolerate_missing_or_bad_metadata() {
-        let attrs = RequestTraceAttrs::from_request(&request(Some("not-json")));
+    fn request_trace_attrs_accept_empty_input() {
+        let attrs = RequestTraceAttrs::from_request(&request(Default::default()));
 
         assert_eq!(attrs.selected_skill_count, 0);
         assert!(!attrs.workspace_cwd_set);

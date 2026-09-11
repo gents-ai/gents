@@ -18,7 +18,7 @@
 @import "./styles/sidebar/behavior.css";
 @import "./styles/sidebar/peer-card.css";
 @import "./styles/sidebar/nav.css";
-@import "./styles/sidebar/conversations.css";
+@import "./styles/sidebar/sessions.css";
 @import "@source-inc/gents-desktop-chat/styles.css";
 @import "@source-inc/gents-desktop-fleet/styles.css";
 @import "@source-inc/gents-desktop-fleet/local-runtime.css";

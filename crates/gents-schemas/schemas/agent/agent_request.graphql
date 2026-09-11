@@ -1,3 +1,15 @@
+# Canonical request document. RequestInput (JSON) contains invocation facts.
+# Sampling and output limits belong to InferenceProfile, and the aggregate
+# budget belongs to the InferenceExecution runtime owner. The execution-owner
+# budget remains pinned on the physical request by the execution owner.
+#
+# Execution budget fields are runtime-owned: max_total_tokens is resolved from
+# InferenceExecution at claim and rehydrated from InferenceCall records;
+# deadline and lease fields stay excluded from requester signatures.
+#
+# The workspace owner resolves from IsolatedWorkspace.owner_agent_did.
+# Workspace-bound requests keep the signed
+# workspace_id / workspace_authority / workspace_seal_hash triple.
 type AgentRequest @branchable {
     request_id: String @index @immutable
     agent_did: String @index @immutable
@@ -23,13 +35,17 @@ type AgentRequest @branchable {
     superseded_by_request: String
     superseded_by_request_doc_id: String @index
     content: String @immutable
-    temperature: Float @immutable
-    top_p: Float @immutable
-    top_k: Int @immutable
-    seed: Int @immutable
-    max_tokens: Int @immutable
-    max_total_tokens: Int @immutable
-    metadata: String @immutable
+    # Execution-owner aggregate budget from InferenceExecution, not a caller
+    # override; consumed tokens rehydrate from InferenceCall records.
+    # First claim writes this pin; subsequent claims preserve it via the
+    # execution generation CAS. It cannot be immutable at document creation.
+    max_total_tokens: Int
+    # RequestInput invocation facts: selected_skill_ids, cwd, initial_title,
+    # queue (source/policy/keys) and goal_continuation. Canonical strict
+    # struct stored as JSON; encode empty nillable lists as null, decode
+    # through the canonical RequestInput/RequestQueue owners with unknown
+    # keys failing. Read the bare field name, never an object subselection.
+    input: JSON @immutable
     lifecycle_state: String @index
     backend_id: String @index
     execution_origin: String @immutable
@@ -55,15 +71,16 @@ type AgentRequest @branchable {
     deadline: String
     retry_count: Int @immutable
     max_retries: Int @immutable
-    interrupt_requested_at: String       # NEW: RFC3339; null until interrupt requested
-    valid_until: String @immutable                  # RFC3339; null = no TTL
+    interrupt_requested_at: String       # RFC3339; null until interrupt requested
+    valid_until: String @immutable      # RFC3339; null = no TTL
     subagent_depth: Int @immutable
     caused_by_parent_request_id: String @index @immutable
     caused_by_parent_request_doc_id: String @index @immutable
     caused_by_parent_tool_call_id: String @index @immutable
     caused_by_parent_tool_call_doc_id: String @index @immutable
     workspace_id: String @index @immutable
+    # Signed principal scope of workspace_id, not host/deployment identity.
+    workspace_owner_agent_did: String @index @immutable
     workspace_authority: String @immutable
-    workspace_owner_deployment_id: String @index @immutable
     workspace_seal_hash: String @immutable
 }

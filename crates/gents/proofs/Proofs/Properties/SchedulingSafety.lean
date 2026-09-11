@@ -9,9 +9,6 @@ theorem capacity_invariant_preserved
     SchedulerState.capacityInvariant post.scheduler := by
   intro bid
   cases h_trans with
-  | materialize_scheduled _ _ _ _ _ h_sched =>
-    rw [h_sched]
-    exact h_inv bid
   | accept_existing _ _ _ _ _ _ h_sched =>
     rw [h_sched]
     exact h_inv bid
@@ -43,39 +40,6 @@ theorem slot_accounting_preserved
   unfold FleetState.slotAccountingInvariant at h_inv ⊢
   intro bid
   cases h_trans with
-  | materialize_scheduled wid touched h_fresh h_ids h_ctx h_sched =>
-    let newCtx : RequestContext :=
-      { state := .claimed
-      , origin := .scheduled
-      , backend := touched
-      , admission := .waiting
-      , deadline := 0
-      , claimTime := 0
-      , currentTime := 0
-      , retryCount := 0
-      , maxRetries := 3
-      , progressSeq := 0
-      , messageSeq := 0
-      , isLatest := true
-      , persistence := .uncommitted
-      }
-    have h_post :
-        post =
-          { activeIds := insert wid pre.activeIds
-          , ctx := Function.update pre.ctx wid newCtx
-          , scheduler := pre.scheduler
-          } :=
-      FleetState.ext h_ids h_ctx h_sched
-    subst post
-    rw [h_inv bid]
-    rw [FleetState.slotCountFor_insert pre wid newCtx bid h_fresh]
-    have h_zero : FleetState.slotContribution newCtx bid = 0 := by
-      unfold FleetState.slotContribution
-      by_cases h_backend : touched = bid
-      · subst bid
-        simp [newCtx, AdmissionState.holdsSlot]
-      · simp [newCtx, h_backend, AdmissionState.holdsSlot]
-    rw [h_zero, zero_add]
   | accept_existing wid h_fresh _ h_wait h_ids h_ctx h_sched =>
     have h_post :
         post =

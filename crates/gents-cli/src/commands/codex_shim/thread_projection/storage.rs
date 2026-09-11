@@ -1,189 +1,153 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gents::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents::graphql::escape_graphql_string;
-use gents_protocol::graphql::{parse_turn_state_response, turn_state_query, GraphqlTurnState};
-use serde::Deserialize;
+use gents::session::{
+    decode_session_row, load_agent_session_row_in_txn, load_latest_request_in_txn,
+    session_scope_filter, AGENT_SESSION_FIELDS,
+};
+use gents_protocol::graphql::GraphqlTurnState;
+use gents_protocol::session::AgentSession;
 use serde_json::Value;
 
-use crate::commands::codex_shim::store::query_node_json;
 use crate::commands::codex_shim::ShimState;
 
-use super::ConversationRow;
-
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct SessionRow {
-    pub(super) session_id: String,
-    #[serde(default)]
-    pub(super) started: Option<String>,
+fn rows<'a>(response: &'a Value, collection: &str) -> Result<&'a Vec<Value>> {
+    response
+        .get("data")
+        .and_then(|data| data.get(collection))
+        .and_then(Value::as_array)
+        .with_context(|| format!("thread projection omitted {collection} rows"))
 }
 
 pub(super) async fn load_scoped_session(
     state: &ShimState,
     session_id: &str,
-) -> Result<Option<SessionRow>> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
-    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
-    let query = format!(
-        r#"{{
-            AgentSession(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
-                }},
-                limit: 1
-            ) {{
-                session_id
-                started
-            }}
-        }}"#
-    );
-    let response = query_node_json(&state.node, &query).await?;
-    response
-        .pointer("/data/AgentSession/0")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .context("decoding AgentSession row")
+) -> Result<Option<AgentSession>> {
+    Ok(load_thread_state(state, session_id)
+        .await?
+        .map(|(session, _)| session))
 }
 
-pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<SessionRow>> {
-    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
-    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
-    let query = format!(
-        r#"{{
-            AgentSession(
-                filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
-                }},
-                order: {{ started: DESC }}
-            ) {{
-                session_id
-                started
-            }}
-        }}"#
-    );
-    let response = query_node_json(&state.node, &query).await?;
-    response
-        .pointer("/data/AgentSession")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(serde_json::from_value)
-        .collect::<serde_json::Result<Vec<_>>>()
-        .context("decoding AgentSession rows")
-}
-
-pub(super) async fn list_scoped_request_session_ids(state: &ShimState) -> Result<Vec<String>> {
-    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
-    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
-                }},
-                order: {{ created_at: DESC }}
-            ) {{ session_id }}
-        }}"#
-    );
-    let response = query_node_json(&state.node, &query).await?;
-    let mut seen = std::collections::HashSet::new();
-    Ok(response
-        .pointer("/data/AgentRequest")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.get("session_id").and_then(Value::as_str))
-        .filter(|session_id| !session_id.trim().is_empty())
-        .filter(|session_id| seen.insert((*session_id).to_string()))
-        .map(ToOwned::to_owned)
-        .collect())
-}
-
-pub(super) async fn load_conversation(
+pub(super) async fn load_thread_state(
     state: &ShimState,
-    thread_id: &str,
-) -> Result<Option<ConversationRow>> {
-    let escaped_thread_id = escape_graphql_string(thread_id);
-    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
-    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
-    let query = format!(
-        r#"{{
-            AgentConversation(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_thread_id}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
-                }},
-                order: {{ updated_at: DESC }},
-                limit: 1
-            ) {{
-                title preview_text status created_at updated_at latest_request_id forked_from_session_id
-            }}
-        }}"#
-    );
-    let response = query_node_json(&state.node, &query).await?;
-    let conversation: Option<ConversationRow> = response
-        .pointer("/data/AgentConversation")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .context("decoding AgentConversation row")?;
-    let mut conversation = conversation;
-    let request_id = conversation
-        .as_ref()
-        .map(|row| row.latest_request_id.trim())
-        .filter(|request_id| !request_id.is_empty());
-    if let Some(request_id) = request_id {
-        let response = query_node_json(&state.node, &turn_state_query(request_id)).await?;
-        let turn = parse_turn_state_response(&response).context("decoding latest turn state")?;
-        if turn.request.is_some() {
-            conversation = attach_latest_request(conversation, Some(&turn));
-        }
-    }
-    Ok(conversation)
+    session_id: &str,
+) -> Result<Option<(AgentSession, Option<GraphqlTurnState>)>> {
+    ConfigAccess::transact_local(&state.node, None, "codex.thread.read", |txn| {
+        Box::pin(async move {
+            let Some(row) = load_agent_session_row_in_txn(
+                txn,
+                &state.agent_did,
+                session_id,
+                Some(state.local_requester_did()),
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            if row.session.behavior_id != state.behavior_id.as_ref() {
+                return Ok(None);
+            }
+            let head = load_head_in_txn(txn, state, session_id).await?;
+            Ok(Some((row.session, head)))
+        })
+    })
+    .await
 }
 
-fn attach_latest_request(
-    mut conversation: Option<ConversationRow>,
-    turn: Option<&GraphqlTurnState>,
-) -> Option<ConversationRow> {
-    let request = turn.and_then(|turn| turn.request.as_ref());
-    if conversation.is_none() && request.is_some() {
-        conversation = Some(ConversationRow::default());
-    }
-    if let Some(conversation) = conversation.as_mut() {
-        if conversation.latest_request_id.trim().is_empty() {
-            conversation.latest_request_id = request
-                .map(|row| row.request_id.trim())
-                .filter(|request_id| !request_id.is_empty())
-                .unwrap_or_default()
-                .to_string();
-        }
-        conversation.latest_request_projection = turn.and_then(GraphqlTurnState::projected_head);
-        conversation.latest_request_failure_reason = request
-            .and_then(|row| row.failure_reason.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-    }
-    conversation
+pub(super) async fn load_local_head(
+    state: &ShimState,
+    session_id: &str,
+) -> Result<Option<GraphqlTurnState>> {
+    ConfigAccess::transact_local(&state.node, None, "codex.thread.pending_head", |txn| {
+        Box::pin(async move { load_head_in_txn(txn, state, session_id).await })
+    })
+    .await
+}
+
+async fn load_head_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    state: &ShimState,
+    session_id: &str,
+) -> Result<Option<GraphqlTurnState>> {
+    let Some(head) = load_latest_request_in_txn(
+        txn,
+        &state.agent_did,
+        session_id,
+        Some(Some(state.local_requester_did())),
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        head.behavior_id == state.behavior_id.as_ref(),
+        "thread request head conflicts with bound session behavior"
+    );
+    let doc_id = escape_graphql_string(&head.observed.request_doc_id);
+    let scope = session_scope_filter(
+        &state.agent_did,
+        session_id,
+        Some(state.local_requester_did()),
+    );
+    let response = txn.execute(&format!(r#"{{
+        AgentRequest(filter:{{{scope},_docID:{{_eq:"{doc_id}"}}}}) {{
+            _docID request_id agent_did requester_did session_id behavior_id created_at lifecycle_state
+            retry_parent_request superseded_by_request failure_reason content input
+        }}
+        AgentResponse(filter:{{{scope},request_doc_id:{{_eq:"{doc_id}"}}}}) {{
+            response_key request_id status content error_message materialized_message_sequence materialized_at interrupted_at
+        }}
+    }}"#)).await?;
+    let requests = rows(&response, "AgentRequest")?;
+    let responses = rows(&response, "AgentResponse")?;
+    anyhow::ensure!(
+        requests.len() == 1 && responses.len() <= 1,
+        "thread head has missing or ambiguous physical request/response"
+    );
+    let request =
+        serde_json::from_value(requests[0].clone()).context("decode exact thread head")?;
+    Ok(Some(GraphqlTurnState {
+        request: Some(request),
+        response: responses
+            .first()
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?,
+    }))
+}
+
+pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<AgentSession>> {
+    let owner = escape_graphql_string(&state.agent_did);
+    let behavior = escape_graphql_string(&state.behavior_id);
+    ConfigAccess::transact_local(&state.node,None,"codex.thread.list",|txn| {
+        let query = format!(r#"{{AgentSession(filter:{{agent_did:{{_eq:"{owner}"}},requester_did:{{_eq:"{owner}"}},behavior_id:{{_eq:"{behavior}"}}}},order:{{created_at:DESC}}){{{AGENT_SESSION_FIELDS}}}}}"#);
+        Box::pin(async move {
+            let response = txn.execute(&query).await?;
+            let mut identities = std::collections::HashSet::new();
+            rows(&response,"AgentSession")?.iter().map(|row| {
+                let session = decode_session_row(row)?.session;
+                anyhow::ensure!(session.agent_did==state.agent_did.as_ref() && session.requester_did.as_deref()==Some(state.local_requester_did()) && session.behavior_id==state.behavior_id.as_ref(),"thread list crossed owner/requester/behavior scope");
+                anyhow::ensure!(identities.insert(session.session_id.clone()),"thread list has duplicate canonical session identity");
+                Ok(session)
+            }).collect()
+        })
+    }).await
 }
 
 pub(super) async fn derive_thread_cwd(state: &ShimState, thread_id: &str) -> Result<PathBuf> {
     if let Some(cwd) = state.thread_cwd_override(thread_id).await {
         return Ok(cwd);
     }
-    if let Some(cwd) = latest_request_metadata_cwd(state, thread_id).await? {
-        return Ok(cwd);
+    if let Some(head) = load_local_head(state, thread_id).await? {
+        if let Some(cwd) = head
+            .request
+            .and_then(|request| request.input)
+            .and_then(|input| input.cwd)
+        {
+            return Ok(absolute_cwd(&state.cwd, Path::new(&cwd)));
+        }
     }
     if let Some(cwd) = settings_json_cwd(&state.cwd, &state.thread_settings(thread_id).await) {
         return Ok(cwd);
@@ -191,60 +155,10 @@ pub(super) async fn derive_thread_cwd(state: &ShimState, thread_id: &str) -> Res
     Ok(state.cwd.clone())
 }
 
-async fn latest_request_metadata_cwd(
-    state: &ShimState,
-    thread_id: &str,
-) -> Result<Option<PathBuf>> {
-    let escaped_thread_id = escape_graphql_string(thread_id);
-    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
-    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_thread_id}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
-                }},
-                order: {{ created_at: DESC }},
-                limit: 10
-            ) {{
-                metadata
-            }}
-        }}"#
-    );
-    let response = query_node_json(&state.node, &query).await?;
-    let rows = response
-        .pointer("/data/AgentRequest")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    for row in rows {
-        let Some(metadata) = row.get("metadata").and_then(Value::as_str) else {
-            continue;
-        };
-        if let Some(cwd) = metadata_json_cwd(&state.cwd, metadata) {
-            return Ok(Some(cwd));
-        }
-    }
-    Ok(None)
-}
-
 fn settings_json_cwd(base_cwd: &Path, settings_json: &str) -> Option<PathBuf> {
-    json_path_cwd(base_cwd, settings_json, &["cwd"])
-}
-
-fn metadata_json_cwd(base_cwd: &Path, metadata: &str) -> Option<PathBuf> {
-    json_path_cwd(base_cwd, metadata, &["codex_shim", "cwd"])
-}
-
-fn json_path_cwd(base_cwd: &Path, raw: &str, path: &[&str]) -> Option<PathBuf> {
-    let parsed = serde_json::from_str::<Value>(raw).ok()?;
-    let mut value = &parsed;
-    for segment in path {
-        value = value.get(*segment)?;
-    }
-    value
+    serde_json::from_str::<Value>(settings_json)
+        .ok()?
+        .get("cwd")?
         .as_str()
         .map(str::trim)
         .filter(|cwd| !cwd.is_empty())
@@ -263,32 +177,17 @@ fn absolute_cwd(base_cwd: &Path, cwd: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn metadata_json_cwd_reads_codex_shim_cwd() {
-        let base_cwd = Path::new("/workspace");
+    fn settings_json_cwd_reads_thread_settings_cwd() {
+        let base = Path::new("/workspace");
         assert_eq!(
-            metadata_json_cwd(base_cwd, r#"{"codex_shim":{"cwd":"/repo"}}"#),
+            settings_json_cwd(base, r#"{"cwd":"/repo"}"#),
             Some(PathBuf::from("/repo"))
         );
         assert_eq!(
-            metadata_json_cwd(base_cwd, r#"{"codex_shim":{"cwd":"repo"}}"#),
+            settings_json_cwd(base, r#"{"cwd":"repo"}"#),
             Some(PathBuf::from("/workspace/repo"))
         );
-        assert_eq!(metadata_json_cwd(base_cwd, r#"{"cwd":"/wrong"}"#), None);
-    }
-
-    #[test]
-    fn settings_json_cwd_reads_thread_settings_cwd() {
-        let base_cwd = Path::new("/workspace");
-        assert_eq!(
-            settings_json_cwd(base_cwd, r#"{"cwd":"/repo-from-settings"}"#),
-            Some(PathBuf::from("/repo-from-settings"))
-        );
-        assert_eq!(
-            settings_json_cwd(base_cwd, r#"{"cwd":"repo-from-settings"}"#),
-            Some(PathBuf::from("/workspace/repo-from-settings"))
-        );
-        assert_eq!(settings_json_cwd(base_cwd, "{}"), None);
+        assert_eq!(settings_json_cwd(base, "{}"), None);
     }
 }

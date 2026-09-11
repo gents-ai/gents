@@ -1,29 +1,24 @@
-import Proofs.Background.Transition
+import Proofs.Background.State
 
 namespace Subagent
-namespace BridgedState
 
-def backgroundedLiveTools (s : BridgedState) : List ToolExecution.ToolCallContext :=
-  s.parent.tools.filter
-    (fun t => decide (t.awaitMode = .background) ∧ ¬ isTerminal t.state)
+/-- Existing background admission gate. A successful create consumes one slot.
+The caller supplies the count of live background rows observed by its owner;
+this contract does not assert atomicity between concurrent creators. -/
+def admitBackground (liveCount : Nat) : Option Nat :=
+  if liveCount < maxBackgroundedPerParent then some (liveCount + 1) else none
 
-def backgroundedLiveCount (s : BridgedState) : Nat :=
-  s.backgroundedLiveTools.length
+theorem admitted_background_count_bounded (before after : Nat)
+    (h : admitBackground before = some after) :
+    after = before + 1 ∧ after ≤ maxBackgroundedPerParent := by
+  unfold admitBackground at h
+  split at h
+  · cases h
+    exact ⟨rfl, by omega⟩
+  · contradiction
 
-def BackgroundedBudgetBounded (s : BridgedState) : Prop :=
-  s.backgroundedLiveCount ≤ maxBackgroundedPerParent
+theorem full_background_budget_rejected (liveCount : Nat)
+    (h : maxBackgroundedPerParent ≤ liveCount) : admitBackground liveCount = none := by
+  simp [admitBackground, Nat.not_lt.mpr h]
 
-inductive Reachable : BridgedState → Prop where
-  | intro {s : BridgedState}
-      (h_budget : BackgroundedBudgetBounded s) :
-      Reachable s
-
-theorem backgrounded_budget_bounded
-    (s : BridgedState)
-    (h_reach : Reachable s) :
-    s.backgroundedLiveCount ≤ maxBackgroundedPerParent := by
-  cases h_reach with
-  | intro h_budget => exact h_budget
-
-end BridgedState
 end Subagent

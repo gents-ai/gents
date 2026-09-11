@@ -5,12 +5,13 @@ import {
   createBackend,
   createBehavior,
   createConfigFlowIds,
-  createEventTrigger,
+  createEventSource,
   createInferenceProfile,
   createSchedule,
   createTask,
-  createToolSelection,
+  createTools,
   createToolService,
+  createTriggerDocument,
   waitForConfigFlowReady,
 } from "./tauri-driver-live/config-flow";
 import {
@@ -40,11 +41,12 @@ describeLive("Tauri app live bridge runner config flow", () => {
       await createBackend({ runner, driver, ids, inferenceUrl, modelName });
       await createInferenceProfile({ runner, driver, ids });
       await createToolService({ runner, driver, ids });
-      await createToolSelection({ runner, driver, ids, fileToolRoot });
+      await createTools({ runner, driver, ids, fileToolRoot });
       await createBehavior({ runner, driver, ids });
       await createTask({ runner, driver, ids });
       await createSchedule({ runner, driver, ids });
-      await createEventTrigger({ driver, ids });
+      await createEventSource({ runner, driver, ids });
+      await createTriggerDocument({ runner, driver, ids });
       await waitForConfigFlowReady(runner, ids);
 
       await driver.openConfigSection("tasks");

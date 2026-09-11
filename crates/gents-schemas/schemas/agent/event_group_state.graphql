@@ -1,0 +1,12 @@
+# One durable group clock per principal, typed consumer and membership configuration.
+type EventGroupState @branchable
+    @index(fields: ["agent_did", "group_key"], unique: true) {
+    group_key: String @immutable
+    agent_did: String @index @immutable
+    consumer: JSON @immutable
+    correlation: String @index @immutable
+    consumer_config_key: String @index @immutable
+    first_seen_at: DateTime @index @immutable
+    quiesced_at: DateTime @index
+    quiesced_reason: String
+}

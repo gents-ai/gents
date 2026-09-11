@@ -32,8 +32,8 @@ use super::super::subagent_projection::{
     SubagentProjectionUpdateFilter,
 };
 use super::super::thread_projection::{
-    latest_inference_usage_observation, latest_requests_token_usage, projected_thread_status,
-    session_token_usage, thread_token_usage,
+    latest_inference_usage_observation, projected_thread_status, submitted_token_usage,
+    thread_token_usage,
 };
 use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
@@ -256,7 +256,8 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             .await;
         }
 
-        let progress_query = gents_turn_progress_query(&current.request_id, &current.session_id);
+        let progress_query =
+            gents_turn_progress_query(&current.request_doc_id, &current.session_id);
         let response = tokio::select! {
             response = query_node_json(state.node.as_ref(), &progress_query) => response?,
             changed = cancel_rx.changed() => {
@@ -273,14 +274,32 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 continue;
             }
         };
-        let request_row = response
+        let requests = response
             .pointer("/data/AgentRequest")
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first());
-        let response_row = response
+            .context("live request query omitted rows")?;
+        let responses = response
             .pointer("/data/AgentResponse")
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first());
+            .context("live response query omitted rows")?;
+        anyhow::ensure!(
+            requests.len() == 1 && responses.len() <= 1,
+            "missing or ambiguous physical live request/response"
+        );
+        let request_row = requests.first();
+        let response_row = responses.first();
+        for row in requests.iter().chain(responses.iter()) {
+            anyhow::ensure!(
+                row.get("agent_did").and_then(Value::as_str) == Some(current.agent_did.as_str())
+                    && row.get("requester_did").and_then(Value::as_str)
+                        == current.requester_did.as_deref()
+                    && row.get("session_id").and_then(Value::as_str)
+                        == Some(current.session_id.as_str())
+                    && row.get("request_id").and_then(Value::as_str)
+                        == Some(current.request_id.as_str()),
+                "live projection crossed exact request scope"
+            );
+        }
         let tool_rows = response
             .pointer("/data/AgentToolCall")
             .and_then(Value::as_array)
@@ -334,14 +353,8 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
 
         if let Some(usage) = latest_inference_usage_observation(inference_call_rows) {
             if known_inference_usage_call_id.as_deref() != Some(&usage.call_id) {
-                send_thread_token_usage_update(
-                    outbound,
-                    state,
-                    projection,
-                    &current.session_id,
-                    usage.totals,
-                )
-                .await?;
+                send_thread_token_usage_update(outbound, state, projection, &current, usage.totals)
+                    .await?;
             }
             known_inference_usage_call_id = Some(usage.call_id);
         }
@@ -574,12 +587,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 {
                     if next_request.is_pending() {
                         if last_progress_at.elapsed() >= state.timeout {
-                            cancel_pending_steering_request(
-                                connection,
-                                state,
-                                &next_request.request_id,
-                            )
-                            .await;
+                            cancel_pending_steering_request(connection, state, &next_request).await;
                             anyhow::bail!(
                                 "timed out waiting for queued Codex steering request {} after {}s of inactivity\n{}",
                                 next_request.request_id,
@@ -610,16 +618,20 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     spawn_background_tool_watcher(
                         connection.clone(),
                         state.clone(),
-                        current.request_id.clone(),
+                        current.request_doc_id.clone(),
                         current.session_id.clone(),
                         projection.thread_id.to_string(),
                         projection.turn_id.to_string(),
                         projection.cwd.clone(),
                         std::mem::take(&mut running_background_tools),
                     );
-                    let next_input =
-                        steering_input_for_request(connection, state, &next_request.request_id)
-                            .await?;
+                    let next_input = steering_input_for_request(
+                        connection,
+                        state,
+                        &next_request.request_id,
+                        &next_request.request_doc_id,
+                    )
+                    .await?;
                     send_committed_user_message(
                         outbound,
                         state,
@@ -629,6 +641,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                         timestamp_millis(&next_request.created_at),
                     )
                     .await?;
+                    current.request_doc_id = next_request.request_doc_id;
                     current.request_id = next_request.request_id;
                     turn_request_ids.push(current.request_id.clone());
                     known_tool_calls.clear();
@@ -646,17 +659,10 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     continue;
                 }
             }
-            let last_usage = latest_requests_token_usage(state, &turn_request_ids)
-                .await
-                .unwrap_or_default();
-            send_thread_token_usage_update(
-                outbound,
-                state,
-                projection,
-                &current.session_id,
-                last_usage,
-            )
-            .await?;
+            let last_usage =
+                submitted_token_usage(state, &current, Some(&turn_request_ids)).await?;
+            send_thread_token_usage_update(outbound, state, projection, &current, last_usage)
+                .await?;
 
             projection
                 .finish_turn(outbound, turn_status, error_message)
@@ -666,13 +672,13 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 outbound,
                 state,
                 projection.thread_id,
-                projected_thread_status(client_head, ""),
+                projected_thread_status(client_head),
             )
             .await?;
             spawn_background_tool_watcher(
                 connection.clone(),
                 state.clone(),
-                current.request_id.clone(),
+                current.request_doc_id.clone(),
                 current.session_id.clone(),
                 projection.thread_id.to_string(),
                 projection.turn_id.to_string(),
@@ -1239,25 +1245,19 @@ async fn send_thread_token_usage_update(
     outbound: &super::super::Outbound,
     state: &ShimState,
     projection: &TurnProjection<'_>,
-    session_id: &str,
+    request: &SubmittedRequest,
     last_usage: super::super::thread_projection::TokenTotals,
 ) -> Result<()> {
-    let total_usage = session_token_usage(state, session_id)
-        .await
-        .unwrap_or_default();
+    let total_usage = submitted_token_usage(state, request, None).await?;
     let model_context_window = load_bound_context_window(
         state.node.as_ref(),
-        state.behavior_id.as_ref(),
+        &request.agent_did,
+        request
+            .behavior_id
+            .as_deref()
+            .context("committed request missing behavior")?,
     )
-    .await
-    .unwrap_or_else(|error| {
-        tracing::warn!(
-            %error,
-            behavior_id = %state.behavior_id,
-            "Codex shim could not load the effective context window; using the runtime default"
-        );
-        gents::DEFAULT_CONTEXT_WINDOW as i64
-    });
+    .await?;
     send_notification(
         outbound,
         state,
@@ -1316,7 +1316,7 @@ async fn finish_interrupted_turn(
     spawn_background_tool_watcher(
         connection.clone(),
         state.clone(),
-        submitted.request_id.clone(),
+        submitted.request_doc_id.clone(),
         submitted.session_id.clone(),
         projection.thread_id.to_string(),
         projection.turn_id.to_string(),
@@ -1329,13 +1329,20 @@ async fn finish_interrupted_turn(
 async fn cancel_pending_steering_request(
     connection: &ConnectionState,
     state: &ShimState,
-    request_id: &str,
+    request: &super::active::NextSteeringRequest,
 ) {
-    connection.take_steering_input(request_id).await;
-    if let Err(error) = gents::interrupt_request(state.node.as_ref(), request_id).await {
+    connection.take_steering_input(&request.request_id).await;
+    if let Err(error) = gents::interrupt_request_by_doc_id(
+        state.node.as_ref(),
+        &request.request_doc_id,
+        &state.agent_did,
+        Some(state.local_requester_did()),
+    )
+    .await
+    {
         tracing::warn!(
             %error,
-            request_id,
+            request_id=%request.request_id,
             "Codex shim failed to interrupt timed-out queued steering request"
         );
     }
@@ -1345,30 +1352,30 @@ async fn steering_input_for_request(
     connection: &ConnectionState,
     state: &ShimState,
     request_id: &str,
+    request_doc_id: &str,
 ) -> Result<Vec<codex::UserInput>> {
     if let Some(input) = connection.take_steering_input(request_id).await {
         return Ok(input);
     }
-
-    let request_id_escaped = gents::graphql::escape_graphql_string(request_id);
+    let physical = gents::graphql::escape_graphql_string(request_doc_id);
+    let owner = gents::graphql::escape_graphql_string(state.agent_did.as_ref());
+    let logical = gents::graphql::escape_graphql_string(request_id);
     let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id_escaped}" }} }},
-                limit: 1
-            ) {{
-                content
-            }}
-        }}"#
+        r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}, agent_did: {{_eq: "{owner}"}}, requester_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{logical}"}}}}, limit: 2) {{content}} }}"#
     );
     let response = query_node_json(state.node.as_ref(), &query).await?;
-    let content = response
+    let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("content"))
+        .context("steering request query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "steering physical request missing or ambiguous"
+    );
+    let content = rows[0]
+        .get("content")
         .and_then(Value::as_str)
-        .unwrap_or_default()
+        .context("steering request omitted content")?
         .to_string();
     Ok(vec![codex::UserInput::Text {
         text: content,

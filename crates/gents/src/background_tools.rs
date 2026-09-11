@@ -20,12 +20,13 @@ use crate::descendant_graph::{
     DescendantGraphAccess, DescendantQuery,
 };
 pub use crate::descendant_graph::{AWAITING_CHILD_MATERIALIZATION, PENDING_CHILD_AUTHORIZATION};
-use crate::document_config::SubagentTarget;
+use crate::document_config::SubagentTargetDocument;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::lifecycle::queue::{
-    drain_automated_wakeups, enqueue_steering_request_with_message, is_automated_wakeup,
-    QueueHints, QueuePolicy, QueueSource,
+    drain_automated_wakeups, enqueue_steering_request_with_message, row_is_automated_wakeup,
+    QueuePolicy, QueueSource, RequestQueue,
 };
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -278,24 +279,27 @@ pub(crate) struct ParentSubagentContext {
     pub behavior_id: String,
     pub subagent_depth: u32,
     pub request_deadline_at: DateTime<Utc>,
-    pub allowed_targets: Vec<SubagentTarget>,
+    pub allowed_targets: Vec<SubagentTargetDocument>,
     pub subagent_spawn_enabled: bool,
     pub subagent_background_enabled: bool,
     pub subagent_default_await_mode: AwaitMode,
-    /// When false (default), cross-deployment (remote-DID) subagent spawns are
-    /// rejected at runtime. Cross-deployment is deferred pending ACP.
+    /// When false (default), cross-principal (remote-DID) subagent spawns are
+    /// rejected at runtime. Cross-principal delegation requires explicit opt-in.
     pub subagent_allow_cross_deployment: bool,
     pub cross_deployment_spawn_timeout_seconds: Option<i64>,
     pub workspace_id: Option<String>,
     pub workspace_authority: Option<String>,
-    pub workspace_owner_deployment_id: Option<String>,
+    /// Signed workspace owner principal, copied exactly from the physical
+    /// parent request row (may be another principal's workspace; no
+    /// parent/executor actor fallback).
+    pub workspace_owner_agent_did: Option<String>,
     pub workspace_seal_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParentSubagentAuthorization {
     pub behavior_id: String,
-    pub allowed_targets: Vec<SubagentTarget>,
+    pub allowed_targets: Vec<SubagentTargetDocument>,
     pub spawn_enabled: bool,
     pub background_enabled: bool,
     pub allow_cross_deployment: bool,
@@ -303,8 +307,9 @@ pub(crate) struct ParentSubagentAuthorization {
 }
 
 impl ParentSubagentAuthorization {
-    /// Resolve a model-facing target `name` to its configured [`SubagentTarget`].
-    pub(crate) fn resolve_target(&self, name: &str) -> Option<&SubagentTarget> {
+    /// Resolve a model-facing target `name` to its configured
+    /// [`SubagentTargetDocument`].
+    pub(crate) fn resolve_target(&self, name: &str) -> Option<&SubagentTargetDocument> {
         self.allowed_targets
             .iter()
             .find(|target| target.name == name)
@@ -361,15 +366,14 @@ pub(crate) fn subagent_spawn_denial(
         });
     };
 
-    // Cross-deployment (remote-DID) subagent delegation is deferred behind a
-    // default-OFF flag (#377). When the resolved target is owned by a DID other
-    // than this node's local DID and the parent behavior has not opted in,
-    // refuse the spawn. This single gate covers the recovery path and the
-    // non-trusted receiver fallback (both call `subagent_spawn_denial`); the
-    // trusted-paired-peer receiver branch is gated separately in
-    // `subagent_source`.
-    let target_did = target.agent_did.trim();
-    let local_did = local_did.trim();
+    // Cross-principal (remote-DID) subagent delegation requires the parent
+    // behavior's explicit opt-in. When the resolved target's DESTINATION
+    // principal (`target_agent_did`) differs from this node's local DID and
+    // the parent behavior has not opted in, refuse the spawn. This single gate
+    // covers the recovery path and the non-trusted receiver fallback (both
+    // call `subagent_spawn_denial`); the trusted-paired-peer receiver branch is
+    // gated separately in `subagent_source`.
+    let target_did = target.target_agent_did.as_str();
     let target_is_remote = local_did.is_empty() || target_did != local_did;
     if target_is_remote && !authorization.allow_cross_deployment {
         return Some(SubagentAuthorizationDenial {
@@ -385,9 +389,15 @@ pub(crate) fn subagent_spawn_denial(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildEdge {
     pub parent_request_id: String,
+    pub parent_request_doc_id: String,
+    pub parent_agent_did: String,
+    pub parent_requester_did: Option<String>,
+    pub parent_tool_call_doc_id: String,
     pub parent_session_id: String,
     pub parent_tool_call_id: String,
     pub child_request_id: String,
+    pub child_request_doc_id: String,
+    pub child_requester_did: Option<String>,
     pub child_session_id: String,
     /// Owning principal of the child request/session. #664: used to scope
     /// queue drains/interrupts to the child's own DID so a foreign-DID replica
@@ -405,9 +415,15 @@ impl ChildEdge {
         }
         Some(Self {
             parent_request_id: edge.immediate_parent_request_id.clone(),
+            parent_request_doc_id: edge.immediate_parent_request_doc_id.clone(),
+            parent_agent_did: edge.immediate_parent_agent_did.clone(),
+            parent_requester_did: edge.immediate_parent_requester_did.clone(),
+            parent_tool_call_doc_id: edge.immediate_parent_tool_call_doc_id.clone(),
             parent_session_id: edge.immediate_parent_session_id.clone(),
             parent_tool_call_id: edge.immediate_parent_tool_call_id.clone(),
             child_request_id: edge.child_request_id.clone(),
+            child_request_doc_id: edge.child_request_doc_id.clone()?,
+            child_requester_did: edge.child_requester_did.clone(),
             child_session_id: edge.child_session_id.clone()?,
             child_agent_did: edge.principal_did.clone()?,
             behavior_id: edge.behavior_id.clone()?,
@@ -415,22 +431,6 @@ impl ChildEdge {
             lifecycle_state: edge.lifecycle_state.clone(),
         })
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentBehaviorToolSelectionRow {
-    tool_selection_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolSelectionTargetsRow {
-    subagent_targets: Option<Vec<String>>,
-    subagent_spawn_enabled: Option<bool>,
-    subagent_background_enabled: Option<bool>,
-    subagent_default_await_mode: Option<String>,
-    #[serde(default)]
-    subagent_allow_cross_deployment: Option<bool>,
-    cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
 pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: i64 = 60;
@@ -537,7 +537,6 @@ pub async fn handle_list_subagents(
                 name: edge.target,
                 principal_did: edge.principal_did,
                 behavior_id: edge.behavior_id,
-                deployment_id: edge.deployment_id,
                 await_mode: edge.await_mode,
                 cancel_policy: edge.cancel_policy,
                 status: edge.lifecycle_state,
@@ -1213,7 +1212,7 @@ pub(crate) async fn append_steering_request(
 ) -> Result<SteerSubagentResponse> {
     // Load the child request first so the steering message is stamped with the
     // child session's owning agent_did (the message belongs to the child agent's
-    // conversation slice, not the steering caller's).
+    // session slice, not the steering caller's).
     let mut child_request =
         crate::request_binding::load_agent_request(node, &edge.child_request_id)
             .await?
@@ -1238,12 +1237,16 @@ pub(crate) async fn append_steering_request(
         node,
         &child_request,
         message,
-        QueueHints {
-            source: QueueSource::Steering,
-            policy: QueuePolicy::Append,
-            key: None,
-            queued_after_request_id: None,
-            interrupted_request_id: interrupted_request_id.clone(),
+        RequestInput {
+            queue: Some(RequestQueue {
+                source: QueueSource::Steering,
+                policy: QueuePolicy::Append,
+                key: None,
+                queued_after_request_id: None,
+                interrupted_request_id: interrupted_request_id.clone(),
+                background_completion_wake_version: None,
+            }),
+            ..Default::default()
         },
     )
     .await?;
@@ -1257,68 +1260,38 @@ pub(crate) async fn append_steering_request(
     })
 }
 
-pub(crate) async fn active_session_request_id(
-    node: &EmbeddedNode,
-    session_id: &str,
-) -> Result<Option<String>> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    lifecycle_state: {{ _in: ["claimed", "processing"] }}
-                }},
-                order: [{{ created_at: ASC }}, {{ request_id: ASC }}],
-                limit: 1
-            ) {{
-                request_id
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query active request for session {session_id} failed: {:?}",
-            response.errors
-        );
-    }
-    Ok(
-        rows::<AgentRequestRow>(response.data.as_ref(), "AgentRequest")?
-            .into_iter()
-            .next()
-            .map(|row| row.request_id),
-    )
-}
-
 pub(crate) async fn drain_automated_wakeups_returning_ids(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    requester_did: Option<&str>,
     reason: &str,
 ) -> Result<Vec<String>> {
-    let request_ids = pending_automated_wakeup_request_ids(node, session_id).await?;
-    drain_automated_wakeups(node, session_id, agent_did, reason).await?;
+    let request_ids =
+        pending_automated_wakeup_request_ids(node, session_id, agent_did, requester_did).await?;
+    drain_automated_wakeups(node, session_id, agent_did, requester_did, reason).await?;
     Ok(request_ids)
 }
 
 pub(crate) async fn pending_automated_wakeup_request_ids(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
 ) -> Result<Vec<String>> {
-    let escaped_session_id = escape_graphql_string(session_id);
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    {scope},
                     lifecycle_state: {{ _eq: "pending" }}
                 }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
             ) {{
                 request_id
                 execution_origin
-                metadata
+                input
             }}
         }}"#
     );
@@ -1333,8 +1306,7 @@ pub(crate) async fn pending_automated_wakeup_request_ids(
     Ok(rows
         .into_iter()
         .filter(|row| {
-            row.execution_origin.as_deref() == Some("scheduled")
-                && is_automated_wakeup(row.metadata.as_deref())
+            row.execution_origin.as_deref() == Some("scheduled") && row_is_automated_wakeup(&row)
         })
         .filter_map(|row| non_empty_string(Some(&row.request_id)))
         .collect())
@@ -1460,13 +1432,14 @@ pub(crate) async fn load_parent_subagent_context(
             ) {{
                 _docID
                 request_id
+                agent_did
                 session_id
                 behavior_id
                 subagent_depth
                 deadline
                 workspace_id
                 workspace_authority
-                workspace_owner_deployment_id
+                workspace_owner_agent_did
                 workspace_seal_hash
             }}
         }}"#
@@ -1487,6 +1460,12 @@ pub(crate) async fn load_parent_subagent_context(
         row.request_id == parent_request_id && row.doc_id.as_deref() == Some(&request_doc_id),
         "parent AgentRequest binding changed while loading {parent_request_id}"
     );
+    let owner = row
+        .agent_did
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} has no agent_did"))?
+        .to_owned();
     let behavior_id = row
         .behavior_id
         .filter(|value| !value.trim().is_empty())
@@ -1507,7 +1486,7 @@ pub(crate) async fn load_parent_subagent_context(
         .transpose()
         .context("parent AgentRequest subagent_depth must fit in u32")?
         .unwrap_or_default();
-    let selection = load_subagent_tool_selection(node, &behavior_id).await?;
+    let selection = load_subagent_tool_selection(node, &owner, &behavior_id).await?;
 
     Ok(ParentSubagentContext {
         session_id,
@@ -1522,12 +1501,10 @@ pub(crate) async fn load_parent_subagent_context(
         subagent_default_await_mode: selection.default_await_mode,
         subagent_allow_cross_deployment: selection.allow_cross_deployment,
         cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
-        workspace_id: non_empty_string(row.workspace_id.as_deref()),
-        workspace_authority: non_empty_string(row.workspace_authority.as_deref()),
-        workspace_owner_deployment_id: non_empty_string(
-            row.workspace_owner_deployment_id.as_deref(),
-        ),
-        workspace_seal_hash: non_empty_string(row.workspace_seal_hash.as_deref()),
+        workspace_id: row.workspace_id,
+        workspace_authority: row.workspace_authority,
+        workspace_owner_agent_did: row.workspace_owner_agent_did,
+        workspace_seal_hash: row.workspace_seal_hash,
     })
 }
 
@@ -1544,7 +1521,9 @@ pub(crate) async fn load_parent_subagent_authorization(
                 filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
                 limit: 1
             ) {{
+                _docID
                 request_id
+                agent_did
                 behavior_id
             }}
         }}"#
@@ -1561,11 +1540,22 @@ pub(crate) async fn load_parent_subagent_authorization(
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
+    anyhow::ensure!(
+        row.request_id == parent_request_id
+            && row.doc_id.as_deref() == Some(request_doc_id.as_str()),
+        "parent AgentRequest binding changed while loading {parent_request_id}"
+    );
+    let owner = row
+        .agent_did
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} has no agent_did"))?
+        .to_owned();
     let behavior_id = row
         .behavior_id
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} has no behavior_id"))?;
-    let selection = load_subagent_tool_selection(node, &behavior_id).await?;
+    let selection = load_subagent_tool_selection(node, &owner, &behavior_id).await?;
 
     Ok(ParentSubagentAuthorization {
         behavior_id,
@@ -1577,17 +1567,22 @@ pub(crate) async fn load_parent_subagent_authorization(
     })
 }
 
-/// Load the `subagent_allow_cross_deployment` flag for a target behavior on
-/// THIS node. Used by the receiver-side trusted-paired-peer claim path (#377)
-/// to gate cross-deployment children on the TARGET behavior's opt-in: the
-/// trusted-peer branch bypasses `subagent_spawn_denial`, so it must consult the
-/// target behavior's flag directly before materializing a cross-deployment
-/// child. Returns false (deny) when the behavior or its selection is absent.
+/// Load the `subagent_allow_cross_deployment` flag for a target behavior under
+/// its owning principal. Used by the receiver-side trusted-paired-peer claim
+/// path (#377) to gate cross-principal children on the TARGET behavior's
+/// opt-in: the trusted-peer branch bypasses `subagent_spawn_denial`, so it must
+/// consult the target behavior's flag directly before materializing a
+/// cross-principal child. The owner DID is the claimer's verified local
+/// principal (it only claims spawns whose immutable spawn_target_did equals its
+/// DID); it is the target behavior's OWNER scope, not the delegation
+/// destination. Returns false (deny) when the behavior or its selection is
+/// absent under that owner.
 pub(crate) async fn load_behavior_allow_cross_deployment(
     node: &EmbeddedNode,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<bool> {
-    Ok(load_subagent_tool_selection(node, behavior_id)
+    Ok(load_subagent_tool_selection(node, agent_did, behavior_id)
         .await?
         .allow_cross_deployment)
 }
@@ -1608,12 +1603,12 @@ pub(crate) fn effective_context_cross_deployment_spawn_timeout_seconds(
         .unwrap_or(DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS)
 }
 
-/// Resolve a model-facing target `name` to its configured [`SubagentTarget`]
-/// within the parent context's allowed set.
+/// Resolve a model-facing target `name` to its configured
+/// [`SubagentTargetDocument`] within the parent context's allowed set.
 pub(crate) fn resolve_context_target<'a>(
     context: &'a ParentSubagentContext,
     name: &str,
-) -> Option<&'a SubagentTarget> {
+) -> Option<&'a SubagentTargetDocument> {
     context
         .allowed_targets
         .iter()
@@ -1633,8 +1628,9 @@ pub(crate) fn context_allowed_target_names(context: &ParentSubagentContext) -> V
         .collect()
 }
 
+#[derive(Default)]
 struct SubagentToolSelection {
-    allowed_targets: Vec<SubagentTarget>,
+    allowed_targets: Vec<SubagentTargetDocument>,
     spawn_enabled: bool,
     background_enabled: bool,
     default_await_mode: AwaitMode,
@@ -1642,141 +1638,179 @@ struct SubagentToolSelection {
     cross_deployment_spawn_timeout_seconds: Option<i64>,
 }
 
-/// Parse the `subagent_targets` `[String]` JSON entries into structured
-/// targets, deduping by `name` and dropping malformed/invalid entries.
-fn parse_subagent_targets(entries: Vec<String>) -> Vec<SubagentTarget> {
-    let mut seen = HashSet::new();
-    let mut targets = Vec::with_capacity(entries.len());
-    for entry in entries {
-        match SubagentTarget::parse(&entry) {
-            Ok(target) if target.is_structurally_valid() => {
-                if seen.insert(target.name.trim().to_string()) {
-                    targets.push(target);
-                }
-            }
-            Ok(_) => {
-                tracing::warn!(entry = %entry, "skipping structurally invalid subagent target");
-            }
-            Err(error) => {
-                tracing::warn!(entry = %entry, %error, "skipping malformed subagent target entry");
-            }
-        }
-    }
-    targets
-}
-
+/// Load the parent behavior's subagent selection under its owning principal:
+/// behavior -> context -> Tools -> `subagents.target_ids` ->
+/// SubagentTarget documents. Every document must be owned by `agent_did`;
+/// foreign and missing references fail closed. Duplicate model-facing names
+/// reject rather than silently aliasing one target.
 async fn load_subagent_tool_selection(
     node: &EmbeddedNode,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<SubagentToolSelection> {
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let behavior_query = format!(
-        r#"{{
-            AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{escaped_behavior_id}" }} }},
-                limit: 1
-            ) {{
-                tool_selection_id
-            }}
-        }}"#
-    );
-    let behavior_response = node.execute(&behavior_query).await;
-    if behavior_response.has_errors() {
-        anyhow::bail!(
-            "query AgentBehavior {behavior_id} for subagent targets failed: {:?}",
-            behavior_response.errors
-        );
-    }
-    let behavior: AgentBehaviorToolSelectionRow =
-        first_row(behavior_response.data.as_ref(), "AgentBehavior")
-            .ok_or_else(|| anyhow!("AgentBehavior {behavior_id} not found"))?;
-    let selection_id = match behavior
-        .tool_selection_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(selection_id) => selection_id,
-        None => {
-            return Ok(SubagentToolSelection {
-                allowed_targets: Vec::new(),
-                spawn_enabled: false,
-                background_enabled: false,
-                default_await_mode: AwaitMode::Foreground,
-                allow_cross_deployment: false,
-                cross_deployment_spawn_timeout_seconds: None,
-            });
-        }
-    };
+    use crate::collection::Collection;
+    use crate::config_client::{read_desired_state_document_in_txn as read, ConfigAccess};
+    use crate::document_config::{AgentBehavior, AgentContext, Tools};
+    let owner = agent_did.to_owned();
+    let behavior_id = behavior_id.to_owned();
+    ConfigAccess::transact_local(
+        node,
+        None,
+        "background_tools.subagent_selection",
+        move |txn| {
+            let owner = owner.clone();
+            let behavior_id = behavior_id.clone();
+            Box::pin(async move {
+                let behavior: AgentBehavior = serde_json::from_value(
+                    read(txn, Collection::AgentBehavior, &owner, &behavior_id)
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow!("AgentBehavior {behavior_id} not found for {owner}")
+                        })?,
+                )?;
+                let Some(context_id) = behavior.context_id else {
+                    return Ok(SubagentToolSelection::default());
+                };
+                let context: AgentContext = serde_json::from_value(
+                    read(txn, Collection::AgentContext, &owner, &context_id)
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow!("AgentContext {context_id} not found for {owner}")
+                        })?,
+                )?;
+                let Some(tools_id) = context.tools_id.as_deref() else {
+                    return Ok(SubagentToolSelection::default());
+                };
+                let tools: Tools = serde_json::from_value(
+                    read(txn, Collection::Tools, &owner, tools_id)
+                        .await?
+                        .ok_or_else(|| anyhow!("Tools {tools_id} not found for {owner}"))?,
+                )?;
+                let resolved = crate::tool_surface::SubagentToolConfig::from_document(&tools)?;
+                let group = tools.subagents.as_ref();
 
-    let escaped_selection_id = escape_graphql_string(selection_id);
-    let selection_query = format!(
-        r#"{{
-            ToolSelection(
-                filter: {{ selection_id: {{ _eq: "{escaped_selection_id}" }} }},
-                limit: 1
-            ) {{
-                subagent_targets
-                subagent_spawn_enabled
-                subagent_background_enabled
-                subagent_default_await_mode
-                subagent_allow_cross_deployment
-                cross_deployment_spawn_timeout_seconds
-            }}
-        }}"#
-    );
-    let selection_response = node.execute(&selection_query).await;
-    if selection_response.has_errors() {
-        anyhow::bail!(
-            "query ToolSelection {selection_id} for subagent targets failed: {:?}",
-            selection_response.errors
-        );
-    }
-    let Some(selection) =
-        first_row::<ToolSelectionTargetsRow>(selection_response.data.as_ref(), "ToolSelection")
-    else {
-        return Ok(SubagentToolSelection {
-            allowed_targets: Vec::new(),
-            spawn_enabled: false,
-            background_enabled: false,
-            default_await_mode: AwaitMode::Foreground,
-            allow_cross_deployment: false,
-            cross_deployment_spawn_timeout_seconds: None,
-        });
-    };
+                let mut seen = HashSet::new();
+                let mut allowed_targets = Vec::new();
+                if let Some(subagents) = group {
+                    for id in &subagents.target_ids {
+                        let target: SubagentTargetDocument = serde_json::from_value(
+                            read(txn, Collection::SubagentTarget, &owner, id)
+                                .await?
+                                .ok_or_else(|| {
+                                    anyhow!("SubagentTarget {id} not found for {owner}")
+                                })?,
+                        )?;
+                        anyhow::ensure!(
+                            !target.name.trim().is_empty()
+                                && !target.target_agent_did.trim().is_empty()
+                                && !target.behavior_id.trim().is_empty(),
+                            "SubagentTarget {id} is missing name, target_agent_did, or behavior_id"
+                        );
+                        anyhow::ensure!(
+                            seen.insert(target.name.clone()),
+                            "duplicate subagent target name {} under {owner}",
+                            target.name
+                        );
+                        allowed_targets.push(target);
+                    }
+                }
 
-    let background_enabled = selection.subagent_background_enabled.unwrap_or(false);
-    let default_await_mode = selection
-        .subagent_default_await_mode
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(AwaitMode::from_persisted)
-        .filter(|mode| background_enabled || *mode != AwaitMode::Background)
-        .unwrap_or(AwaitMode::Foreground);
-
-    Ok(SubagentToolSelection {
-        allowed_targets: parse_subagent_targets(selection.subagent_targets.unwrap_or_default()),
-        spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
-        background_enabled,
-        default_await_mode,
-        allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
-        cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
-    })
+                Ok(SubagentToolSelection {
+                    allowed_targets,
+                    spawn_enabled: resolved.spawn_enabled,
+                    background_enabled: resolved.background_enabled,
+                    default_await_mode: resolved.default_await_mode,
+                    allow_cross_deployment: resolved.allow_cross_deployment,
+                    cross_deployment_spawn_timeout_seconds: group
+                        .and_then(|group| group.cross_principal_spawn_timeout_secs),
+                })
+            })
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
 mod cross_deployment_timeout_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn parent_authorization_uses_scoped_canonical_targets_and_exact_workspace_owner() {
+        use crate::config_client::{
+            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        use crate::Collection;
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        for (owner, destination) in [
+            ("did:key:parent-a", "did:key:destination-a"),
+            ("did:key:parent-b", "did:key:destination-b"),
+        ] {
+            crate::test_support::install_test_behavior(&node, owner, "parent").await;
+            let documents = [
+                (Collection::Tools,json!({"agent_did":owner,"tools_id":"parent:tools","subagents":{"target_ids":["target"],"spawn_enabled":true,"background_enabled":true}})),
+                (Collection::SubagentTarget,json!({"agent_did":owner,"target_id":"target","name":"child","target_agent_did":destination,"behavior_id":"worker"})),
+            ].into_iter().map(|(collection,value)| DesiredStateApplyDocument{collection,add:value.clone(),update:value}).collect();
+            let plan = DesiredStateApplyPlan::new(documents).unwrap();
+            ConfigAccess::transact_local(&node, None, "test.subagent.targets", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
+        }
+        let response = node.execute(r#"mutation {create_AgentRequest(input:{
+            request_id:"parent-request",agent_did:"did:key:parent-a",behavior_id:"parent",session_id:"session",
+            deadline:"2027-01-01T00:00:00Z",workspace_id:"workspace",workspace_authority:"readOnly",
+            workspace_owner_agent_did:"did:key:workspace-owner",workspace_seal_hash:"seal"
+        }){_docID}}"#).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let authorization = load_parent_subagent_authorization(&node, "parent-request")
+            .await
+            .unwrap();
+        let target = authorization.resolve_target("child").unwrap();
+        assert_eq!(target.agent_did, "did:key:parent-a");
+        assert_eq!(target.target_agent_did, "did:key:destination-a");
+        assert!(authorization.resolve_target(" child").is_none());
+        assert!(subagent_spawn_denial(
+            &authorization,
+            "child",
+            AwaitMode::Foreground,
+            "spawn_subagent",
+            "did:key:parent-a"
+        )
+        .is_some());
+        let context = load_parent_subagent_context(&node, "parent-request")
+            .await
+            .unwrap();
+        assert_eq!(
+            context.workspace_owner_agent_did.as_deref(),
+            Some("did:key:workspace-owner")
+        );
+        assert_eq!(context.subagent_default_await_mode, AwaitMode::Foreground);
+        let corrupt=node.execute(r#"mutation {update_Tools(filter:{agent_did:{_eq:"did:key:parent-a"},tools_id:{_eq:"parent:tools"}},input:{subagents:{target_ids:["target"],spawn_enabled:true,background_enabled:false,default_await_mode:"background"}}){_docID}}"#).await;
+        assert!(!corrupt.has_errors(), "{:?}", corrupt.errors);
+        assert!(
+            load_parent_subagent_context(&node, "parent-request")
+                .await
+                .is_err(),
+            "invalid background mode must not silently become foreground"
+        );
+        node.shutdown().await;
+    }
+
     fn auth(timeout: Option<i64>) -> ParentSubagentAuthorization {
         ParentSubagentAuthorization {
             behavior_id: "parent".to_string(),
-            allowed_targets: vec![SubagentTarget {
-                name: "child".to_string(),
+            allowed_targets: vec![SubagentTargetDocument {
+                target_id: "child".to_string(),
                 agent_did: "did:key:zParent".to_string(),
+                target_agent_did: "did:key:zParent".to_string(),
                 behavior_id: "child".to_string(),
+                name: "child".to_string(),
                 description: None,
+                tags: Vec::new(),
             }],
             spawn_enabled: true,
             background_enabled: true,
@@ -1786,15 +1820,11 @@ mod cross_deployment_timeout_tests {
     }
 
     #[test]
-    fn override_takes_precedence() {
+    fn effective_timeout_resolves_override_then_default() {
         assert_eq!(
             effective_cross_deployment_spawn_timeout_seconds(&auth(Some(120))),
             120
         );
-    }
-
-    #[test]
-    fn default_when_none() {
         assert_eq!(
             effective_cross_deployment_spawn_timeout_seconds(&auth(None)),
             DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS
@@ -1804,11 +1834,14 @@ mod cross_deployment_timeout_tests {
     fn auth_with(target_did: &str, allow_cross_deployment: bool) -> ParentSubagentAuthorization {
         ParentSubagentAuthorization {
             behavior_id: "parent".to_string(),
-            allowed_targets: vec![SubagentTarget {
-                name: "child".to_string(),
-                agent_did: target_did.to_string(),
+            allowed_targets: vec![SubagentTargetDocument {
+                target_id: "child".to_string(),
+                agent_did: "did:key:zParent".to_string(),
+                target_agent_did: target_did.to_string(),
                 behavior_id: "child-behavior".to_string(),
+                name: "child".to_string(),
                 description: None,
+                tags: Vec::new(),
             }],
             spawn_enabled: true,
             background_enabled: true,
@@ -2015,13 +2048,32 @@ pub(crate) async fn load_child_final_response(
     child_edge: &ChildEdge,
 ) -> Result<Option<String>> {
     let child_request_id = &child_edge.child_request_id;
+    // Exact physical child binding first: a newer foreign AgentResponse or
+    // AgentMessage sharing the logical request ID / session must never win.
+    let Some(child) = crate::request_binding::load_agent_request(node, child_request_id).await?
+    else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        child.agent_did == child_edge.child_agent_did
+            && child.session_id == child_edge.child_session_id,
+        "child request scope differs from descendant edge"
+    );
+    let child_request_doc_id = child.doc_id;
+    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_child_agent_did = escape_graphql_string(&child_edge.child_agent_did);
+    let escaped_child_session_id = escape_graphql_string(&child_edge.child_session_id);
     let response_query = format!(
         r#"{{
             AgentResponse(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
+                filter: {{
+                    request_doc_id: {{ _eq: "{escaped_child_request_doc_id}" }},
+                    request_id: {{ _eq: "{escaped_child_request_id}" }},
+                    agent_did: {{ _eq: "{escaped_child_agent_did}" }},
+                    session_id: {{ _eq: "{escaped_child_session_id}" }}
+                }},
+                limit: 2
             ) {{
                 materialized_message_sequence
             }}
@@ -2034,24 +2086,29 @@ pub(crate) async fn load_child_final_response(
             response.errors
         );
     }
-    let Some(response_row) =
-        first_row::<AgentResponseFinalRow>(response.data.as_ref(), "AgentResponse")
-    else {
+    let mut responses = rows::<AgentResponseFinalRow>(response.data.as_ref(), "AgentResponse")?;
+    anyhow::ensure!(
+        responses.len() <= 1,
+        "ambiguous response for physical child {child_request_doc_id}"
+    );
+    let Some(response_row) = responses.pop() else {
         return Ok(None);
     };
     let Some(sequence) = response_row.materialized_message_sequence else {
         return Ok(None);
     };
 
-    let escaped_session_id = escape_graphql_string(&child_edge.child_session_id);
     let message_query = format!(
         r#"{{
             AgentMessage(
                 filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    session_id: {{ _eq: "{escaped_child_session_id}" }},
+                    request_doc_id: {{ _eq: "{escaped_child_request_doc_id}" }},
+                    agent_did: {{ _eq: "{escaped_child_agent_did}" }},
+                    request_id: {{ _eq: "{escaped_child_request_id}" }},
                     sequence: {{ _eq: {sequence} }}
                 }},
-                limit: 1
+                limit: 2
             ) {{
                 role
                 content
@@ -2065,9 +2122,12 @@ pub(crate) async fn load_child_final_response(
             message.errors
         );
     }
-    let Some(message_row) =
-        first_row::<AgentMessageContentRow>(message.data.as_ref(), "AgentMessage")
-    else {
+    let mut messages = rows::<AgentMessageContentRow>(message.data.as_ref(), "AgentMessage")?;
+    anyhow::ensure!(
+        messages.len() <= 1,
+        "ambiguous materialized message for physical child {child_request_doc_id}"
+    );
+    let Some(message_row) = messages.pop() else {
         return Ok(None);
     };
     if message_row.role != "assistant" {
@@ -2332,17 +2392,6 @@ where
     Ok(parsed)
 }
 
-fn dedupe_non_empty(values: Vec<String>) -> Vec<String> {
-    let mut deduped = Vec::with_capacity(values.len());
-    for value in values {
-        let value = value.trim();
-        if !value.is_empty() && !deduped.iter().any(|existing| existing == value) {
-            deduped.push(value.to_string());
-        }
-    }
-    deduped
-}
-
 fn non_empty_string(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -2353,7 +2402,7 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::message::{AssistantContent, Text};
+    use crate::llm::message::{AssistantContent, Reasoning, Text, ToolCall, ToolFunction};
 
     #[test]
     fn process_control_requester_absence_is_exact_not_empty_string() {
@@ -2408,6 +2457,44 @@ mod tests {
         );
     }
 
+    // This is the observed projection boundary shared by live bridge failure
+    // and recovery. Durable writes/notifications have separate owner tests.
+    #[test]
+    fn generated_child_failure_projections_match_bridge_owner() {
+        let cases = crate::lean_vocab_test::lean_child_failure_projections();
+        let observed_kinds = cases
+            .iter()
+            .map(|case| case.child_state.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let runtime_kinds = ChildTerminal::ALL_KIND
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(observed_kinds, runtime_kinds);
+        assert_eq!(
+            cases.len(),
+            observed_kinds.len(),
+            "duplicate child projection"
+        );
+        for case in cases {
+            let row = AgentRequestRow {
+                request_id: "projection-child".to_string(),
+                lifecycle_state: Some(
+                    RequestLifecycleState::parse(&case.child_state)
+                        .expect("Lean child lifecycle vocabulary"),
+                ),
+                ..Default::default()
+            };
+            let terminal = project_child_terminal(&row).expect("child failure projection");
+            assert_eq!(
+                terminal.projected_state().as_str(),
+                case.tool_state,
+                "child {} bridge projection",
+                case.child_state
+            );
+        }
+    }
+
     #[test]
     fn project_child_terminal_maps_child_states() {
         let row = |state, failure_reason| AgentRequestRow {
@@ -2445,38 +2532,24 @@ mod tests {
     }
 
     #[test]
-    fn render_assistant_message_text_uses_persisted_assistant_message() {
+    fn render_assistant_message_text_prefers_text_over_reasoning_and_tools() {
         let message = Message::Assistant {
             id: None,
-            content: vec![AssistantContent::Text(Text {
-                text: "child final answer".to_string(),
-            })],
+            content: vec![
+                AssistantContent::Reasoning(Reasoning::new("chain-of-thought trace")),
+                AssistantContent::ToolCall(ToolCall::new(
+                    "call-1".to_string(),
+                    ToolFunction::new("bash".to_string(), serde_json::json!({"command": "ls"})),
+                )),
+                AssistantContent::Text(Text {
+                    text: "final answer".to_string(),
+                }),
+            ],
         };
         let content = serde_json::to_string(&message).unwrap();
         assert_eq!(
             render_assistant_message_text(&content).unwrap(),
-            "child final answer"
-        );
-    }
-
-    #[test]
-    fn render_assistant_message_text_uses_plain_text_assistant_content() {
-        assert_eq!(
-            render_assistant_message_text("plain child final answer").unwrap(),
-            "plain child final answer"
-        );
-    }
-
-    #[test]
-    fn dedupe_non_empty_trims_and_preserves_order() {
-        assert_eq!(
-            dedupe_non_empty(vec![
-                " alpha ".to_string(),
-                "".to_string(),
-                "alpha".to_string(),
-                "beta".to_string(),
-            ]),
-            vec!["alpha".to_string(), "beta".to_string()]
+            "final answer"
         );
     }
 
@@ -2503,6 +2576,38 @@ mod tests {
         assert_eq!(slice.output, "tail");
         assert_eq!(slice.next_offset, 1000);
         assert_eq!(slice.total_bytes, 1000);
+        assert!(!slice.has_more);
+    }
+
+    #[test]
+    fn persisted_empty_stream_sentinel_decodes_to_empty_combined_output() {
+        let persisted = concat!(
+            "gents_exec: {\"ok\":true,\"status\":\"success\",",
+            "\"command\":\"true\",\"argv\":[\"true\"],",
+            "\"cwd\":\".\",\"exit_code\":0,\"timed_out\":false,\"duration_ms\":1,",
+            "\"timeout_ms\":10000,\"execution_mode\":\"read_only\",",
+            "\"network_mode\":\"inherit\",\"sandbox\":\"policy_read_only\",",
+            "\"stdout_truncation\":{\"returned_bytes\":0,\"total_bytes\":0,",
+            "\"max_bytes\":16000,\"truncated\":false},",
+            "\"stderr_truncation\":{\"returned_bytes\":0,\"total_bytes\":0,",
+            "\"max_bytes\":16000,\"truncated\":false}}\n",
+            "stdout:\n",
+            "(empty)\n",
+            "stderr:\n",
+            "(empty)"
+        );
+        let streams = persisted_tool_output_streams("bash", persisted);
+        assert_eq!(streams.stdout, "");
+        assert_eq!(streams.stderr, "");
+        assert_eq!(streams.exit_code, Some(0));
+
+        let combined = combine_output_streams(&streams.stdout, &streams.stderr);
+        assert_eq!(combined, "");
+        let slice = read_combined_output_slice(&combined, 0, 1024);
+        assert_eq!(slice.output, "");
+        assert_eq!(slice.first_available_offset, 0);
+        assert_eq!(slice.next_offset, 0);
+        assert_eq!(slice.total_bytes, 0);
         assert!(!slice.has_more);
     }
 

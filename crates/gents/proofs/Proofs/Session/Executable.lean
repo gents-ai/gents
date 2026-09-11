@@ -46,6 +46,29 @@ def step? (pre : SessionQueueState) : Action → Option SessionQueueState
       else
         none
 
+/-- Existing queue step behind its database selection boundary. A missing requester
+is an exact scope value, never a wildcard over requester-owned queues. -/
+def scopedStep? (target : AgentSession.Scope) (pre : SessionQueueState)
+    (action : Action) : Option SessionQueueState :=
+  if pre.scope = target then step? pre action else none
+
+theorem foreign_owner_cannot_drain (target : AgentSession.Scope)
+    (pre : SessionQueueState) (h : pre.scope.agent ≠ target.agent)
+    (source : QueueSource) (key : Option QueueKey) :
+    scopedStep? target pre (.drainAutomated source key) = none := by
+  have hs : pre.scope ≠ target := by intro he; exact h (congrArg AgentSession.Scope.agent he)
+  simp [scopedStep?, hs]
+
+theorem foreign_requester_cannot_drain (target : AgentSession.Scope)
+    (pre : SessionQueueState) (h : pre.scope.requester ≠ target.requester)
+    (source : QueueSource) (key : Option QueueKey) :
+    scopedStep? target pre (.drainAutomated source key) = none := by
+  have hs : pre.scope ≠ target := by intro he; exact h (congrArg AgentSession.Scope.requester he)
+  simp [scopedStep?, hs]
+
+theorem exact_scope_preserves_queue_step (pre : SessionQueueState) (action : Action) :
+    scopedStep? pre.scope pre action = step? pre action := by simp [scopedStep?]
+
 def replay? : SessionQueueState → List Action → Option SessionQueueState
   | s, [] => some s
   | s, action :: rest =>

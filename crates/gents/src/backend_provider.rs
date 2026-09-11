@@ -3,6 +3,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 
+use crate::document_config::AdvertisedModel;
+
 #[derive(Debug, thiserror::Error)]
 #[error("{provider} model discovery failed at {url}: {status} {body}")]
 pub struct ModelDiscoveryHttpError {
@@ -19,6 +21,7 @@ impl ModelDiscoveryHttpError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum BackendProviderKind {
     #[default]
     #[serde(rename = "OpenAiCompatible")]
@@ -145,6 +148,12 @@ struct OpenAiModelRecord {
     model: Option<String>,
     #[serde(rename = "modelId")]
     model_id: Option<String>,
+    /// Grok `/models-v2` catalog rows advertise a display name and context
+    /// window per model; the OpenAI-style catalogs observed by the existing
+    /// adapter do not, so these stay `None` elsewhere.
+    name: Option<String>,
+    #[serde(rename = "contextWindow")]
+    context_window: Option<i64>,
 }
 
 impl OpenAiModelRecord {
@@ -161,6 +170,37 @@ impl OpenAiModelRecord {
             .flatten()
             .find(|value| !value.trim().is_empty())
             .map(|value| value.trim().to_string())
+    }
+
+    /// Canonical advertised record for one catalog row. Capabilities stay
+    /// `None` (unknown) except where the provider's catalog shape — per the
+    /// existing adapter evidence — advertises them: only Grok `/models-v2`
+    /// rows carry `name` / `contextWindow`. No supported efforts, output
+    /// tokens, or model profiles are invented here.
+    fn into_advertised(self, kind: BackendProviderKind) -> Option<AdvertisedModel> {
+        let (name, context_window) = (
+            if kind == BackendProviderKind::XaiGrokOAuth {
+                self.name.clone()
+            } else {
+                None
+            },
+            if kind == BackendProviderKind::XaiGrokOAuth {
+                self.context_window
+            } else {
+                None
+            },
+        );
+        let model_name = self.identifier(kind)?;
+        let display_name = name
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty() && value != &model_name);
+        Some(AdvertisedModel {
+            model_name,
+            display_name,
+            context_window,
+            max_output_tokens: None,
+            reasoning_efforts: None,
+        })
     }
 }
 
@@ -180,6 +220,20 @@ impl ChatGptCodexModelRecord {
             .find(|value| !value.trim().is_empty())
             .map(|value| value.trim().to_string())
     }
+
+    /// The Codex `models` shape advertises identifiers only. `name` participates
+    /// in identifier fallback, so it is not promoted to a display name; all
+    /// capabilities stay unknown.
+    fn into_advertised(self) -> Option<AdvertisedModel> {
+        let model_name = self.identifier()?;
+        Some(AdvertisedModel {
+            model_name,
+            display_name: None,
+            context_window: None,
+            max_output_tokens: None,
+            reasoning_efforts: None,
+        })
+    }
 }
 
 pub async fn discover_models(
@@ -188,7 +242,7 @@ pub async fn discover_models(
     endpoint: &str,
     api_key: Option<&str>,
     oauth_credential: Option<&crate::oauth_credential::OAuthCredential>,
-) -> Result<Vec<String>> {
+) -> Result<Vec<AdvertisedModel>> {
     let endpoint = match kind {
         BackendProviderKind::ChatGptCodex => crate::chatgpt_codex::normalize_endpoint(endpoint),
         BackendProviderKind::XaiGrokOAuth => crate::xai_grok_oauth::normalize_endpoint(endpoint),
@@ -322,14 +376,16 @@ pub async fn discover_models(
         let openai_models = models
             .data
             .into_iter()
-            .filter_map(|model| model.identifier(kind));
+            .filter_map(|model| model.into_advertised(kind));
         let chatgpt_codex_models = models
             .models
             .into_iter()
-            .filter_map(ChatGptCodexModelRecord::identifier);
+            .filter_map(ChatGptCodexModelRecord::into_advertised);
         let mut models = Vec::new();
         for model in openai_models.chain(chatgpt_codex_models) {
-            if !models.contains(&model) {
+            if !models.iter().any(|advertised: &AdvertisedModel| {
+                advertised.model_name == model.model_name
+            }) {
                 models.push(model);
             }
         }
@@ -353,16 +409,39 @@ pub fn truncate_probe_body(body: &str) -> String {
     if body.len() <= LIMIT {
         return body.to_string();
     }
-    format!("{}...", &body[..LIMIT])
+    let mut end = LIMIT;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &body[..end])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_error_body_truncation_preserves_utf8_boundaries() {
+        assert_eq!(truncate_probe_body("short error"), "short error");
+        for character in ['é', '界', '🦀'] {
+            let prefix = "x".repeat(255);
+            let body = format!("{prefix}{character}backend error");
+            assert_eq!(truncate_probe_body(&body), format!("{prefix}..."));
+        }
+        assert_eq!(truncate_probe_body(&"x".repeat(256)), "x".repeat(256));
+    }
+
     use std::sync::{Arc, Mutex};
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
+
+    fn model_names(models: &[AdvertisedModel]) -> Vec<&str> {
+        models
+            .iter()
+            .map(|model| model.model_name.as_str())
+            .collect()
+    }
 
     #[tokio::test]
     async fn discover_models_reads_openai_models_and_sends_api_key() {
@@ -379,7 +458,7 @@ mod tests {
         .await
         .expect("model discovery should succeed");
 
-        assert_eq!(models, vec!["gpt-4.1-mini", "o3"]);
+        assert_eq!(model_names(&models), vec!["gpt-4.1-mini", "o3"]);
         let requests = requests.lock().expect("requests lock");
         let request = requests.first().expect("captured request");
         assert!(
@@ -409,7 +488,7 @@ mod tests {
         .await
         .expect("model discovery should accept the Codex-compatible models shape");
 
-        assert_eq!(models, vec!["codex-mini-latest"]);
+        assert_eq!(model_names(&models), vec!["codex-mini-latest"]);
     }
 
     #[tokio::test]
@@ -429,7 +508,10 @@ mod tests {
         .await
         .expect("model discovery should accept llama.cpp OpenAI-compatible models shape");
 
-        assert_eq!(models, vec!["google/gemma-4-12B-it-qat-q4_0-gguf"]);
+        assert_eq!(
+            model_names(&models),
+            vec!["google/gemma-4-12B-it-qat-q4_0-gguf"]
+        );
     }
 
     #[tokio::test]
@@ -449,7 +531,10 @@ mod tests {
         .await
         .expect("model discovery should accept common non-Codex models fields");
 
-        assert_eq!(models, vec!["from-id", "from-name", "from-model"]);
+        assert_eq!(
+            model_names(&models),
+            vec!["from-id", "from-name", "from-model"]
+        );
     }
 
     #[tokio::test]
@@ -487,7 +572,7 @@ mod tests {
         .await
         .expect("Grok OAuth model discovery should accept the /models-v2 shape");
 
-        assert_eq!(models, vec!["grok-4.5", "grok-build-0.1"]);
+        assert_eq!(model_names(&models), vec!["grok-4.5", "grok-build-0.1"]);
         let requests = requests.lock().expect("requests lock");
         assert!(
             requests[0].starts_with("GET /models-v2"),
@@ -526,7 +611,7 @@ mod tests {
         .await
         .expect("ChatGPT Codex model discovery should succeed");
 
-        assert_eq!(models, vec!["gpt-5.5"]);
+        assert_eq!(model_names(&models), vec!["gpt-5.5"]);
         let requests = requests.lock().expect("requests lock");
         let request = requests.first().expect("captured request");
         let version = crate::chatgpt_codex::chatgpt_codex_client_version();
@@ -593,7 +678,7 @@ mod tests {
         .expect("Claude subscription model discovery should read /v1/models");
 
         assert_eq!(
-            models,
+            model_names(&models),
             vec!["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"]
         );
         let requests = requests.lock().expect("requests lock");

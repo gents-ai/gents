@@ -2,6 +2,11 @@
 
 This pack proves the operator-visible path behind #1114 and #1116:
 
+Runtime configuration is authored once in `pack_config.json`. The distribution
+`manifest.json` points to that canonical bundle and lists it with the schema and
+prompt sidecars needed to install the pack; there are no per-collection JSON
+document fragments.
+
 ```text
 create BackgroundContinuationJob
               │

@@ -144,25 +144,6 @@ def StrictlyIncreasingMessages : List MessageRow → Prop
       (∀ other, other ∈ rest → row.sequence < other.sequence) ∧
         StrictlyIncreasingMessages rest
 
-def UniqueMessageSequences : List MessageRow → Prop
-  | [] => True
-  | row :: rest =>
-      (∀ other, other ∈ rest → row.sequence ≠ other.sequence) ∧
-        UniqueMessageSequences rest
-
-def UniqueToolCallIds : List ToolCallRow → Prop
-  | [] => True
-  | row :: rest =>
-      (∀ other, other ∈ rest → row.callId ≠ other.callId) ∧
-        UniqueToolCallIds rest
-
-def UniqueToolResultKeys : List MessageRow → Prop
-  | [] => True
-  | row :: rest =>
-      (∀ key, row.isToolResultFor key = true →
-        ∀ other, other ∈ rest → other.isToolResultFor key = false) ∧
-        UniqueToolResultKeys rest
-
 namespace TranscriptState
 
 def messageCount (s : TranscriptState) : Nat :=
@@ -181,21 +162,8 @@ def toolCallById? (s : TranscriptState) (callId : ToolExecution.ToolCallId) :
     Option ToolCallRow :=
   s.toolCalls.find? (fun row => row.callId = callId)
 
-def MessageSequencesUnique (s : TranscriptState) : Prop :=
-  UniqueMessageSequences s.messages
-
-def ToolCallIdsUnique (s : TranscriptState) : Prop :=
-  UniqueToolCallIds s.toolCalls
-
-def ToolResultKeysUnique (s : TranscriptState) : Prop :=
-  UniqueToolResultKeys s.messages
-
 def OrderedBySequence (s : TranscriptState) : Prop :=
   StrictlyIncreasingMessages s.messages
-
-def NextSeqAboveRows (s : TranscriptState) : Prop :=
-  (∀ row, row ∈ s.messages → row.sequence < s.nextSeq) ∧
-    (∀ call, call ∈ s.toolCalls → call.messageSequence < s.nextSeq)
 
 def ReservedByPersistedMessage (s : TranscriptState) (call : ToolCallRow) : Prop :=
   ∃ row, row ∈ s.messages ∧
@@ -229,18 +197,6 @@ def PairClosed (s : TranscriptState) : Prop :=
 
 def StrongDrain (s : TranscriptState) : Prop :=
   ∀ call, call ∈ s.toolCalls → call.state ≠ .running
-
-structure Coherent (s : TranscriptState) : Prop where
-  ordered : s.OrderedBySequence
-  messageSequencesUnique : s.MessageSequencesUnique
-  toolCallIdsUnique : s.ToolCallIdsUnique
-  toolResultKeysUnique : s.ToolResultKeysUnique
-  nextSeqAboveRows : s.NextSeqAboveRows
-  toolCallReservedByMessage : s.ToolCallReservedByMessage
-  pairClosed : s.PairClosed
-
-def RetainsPairs (_pre post : TranscriptState) : Prop :=
-  post.PairClosed ∧ post.OrderedBySequence
 
 def replaceToolCall
     (rows : List ToolCallRow)
@@ -303,6 +259,7 @@ def completeToolWithResult (s : TranscriptState)
     (callId : ToolExecution.ToolCallId)
     (messageId : MessageId)
     (key : ToolResultKey) : TranscriptState :=
+  if s.hasToolResultKey key then s else
   { s with
     nextSeq := s.nextSeq + 1
     messages := s.messages ++

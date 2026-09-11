@@ -115,13 +115,6 @@ theorem running_call_contributes_one
   have h_slot : call.holdsBackendSlot := running_call_holds_slot h_state
   simp [h_backend, h_slot]
 
-theorem running_call_holds_exactly_one_slot
-    {call : InferenceCall} {bid : BackendId}
-    (h_backend : call.backend = bid)
-    (h_state : call.state = .running) :
-    call.slotContribution bid = 1 :=
-  running_call_contributes_one h_backend h_state
-
 theorem terminal_call_contributes_zero
     {call : InferenceCall} {bid : BackendId}
     (h_terminal : isTerminal call.state) :

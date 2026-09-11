@@ -3,7 +3,7 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, AdmissionCallContext, CallKind};
-use crate::compaction::{self, ReductionEngine};
+use crate::compaction;
 use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
@@ -62,8 +62,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
-        let effective_sampling =
-            crate::completion_factory::sampling_for_request(self.behavior.sampling, &request);
+        let effective_sampling = self.behavior.sampling;
         effective_sampling.validate_for_provider(
             self.behavior.backend_provider_kind,
             self.behavior.openai_wire_api,
@@ -122,10 +121,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 capture_context,
             );
 
-            let selected_skill_ids = selected_skill_ids(request.metadata.as_deref());
+            let selected_skill_ids = &request.input.selected_skill_ids;
             let skill_reminders = self
                 .prompt_builder
-                .selected_skill_reminders(&selected_skill_ids);
+                .selected_skill_reminders(selected_skill_ids);
             let overlay = crate::workspace::resolve_request_workspace_overlay(
                 &self.node,
                 &request,
@@ -164,6 +163,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         session::load_prompt_compaction_state(
                             &self.node,
                             &request.session_id,
+                            &request.agent_did,
+                            request.requester_did.as_deref(),
                             background_cutoff,
                         )
                             .instrument(tracing::info_span!(
@@ -251,7 +252,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     let reduction_admission = compaction::ReductionAdmission::for_input(
                         complete_input_tokens,
                         self.behavior.context_window,
-                        self.behavior.compaction_threshold,
+                        self.behavior.compaction_threshold(),
                     );
                     let over_threshold = reduction_admission.is_some();
                     // Runtime counterpart of Lean `PromptView.safeToReduce`,
@@ -263,7 +264,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     // (`boundary.compaction.safe-to-reduce-session-scope`, #993).
                     let may_reduce = if over_threshold {
                         let live_response =
-                            session::session_has_live_response(&self.node, &request.session_id).await?;
+                            session::session_has_live_response(
+                                &self.node, &request.agent_did, &request.session_id,
+                                request.requester_did.as_deref(),
+                            ).await?;
                         let gate_open = if live_response {
                             compaction::safe_to_reduce(&history, &compaction::NoneKnown)
                         } else {
@@ -572,103 +576,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     }
 }
 
-fn selected_skill_ids(metadata: Option<&str>) -> Vec<String> {
-    let Some(metadata) = metadata else {
-        return Vec::new();
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) else {
-        return Vec::new();
-    };
-    value
-        .get("selected_skill_ids")
-        .and_then(|ids| ids.as_array())
-        .map(|ids| {
-            ids.iter()
-                .filter_map(|id| id.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
     format!("{error:#}").contains("stale compaction generation")
-}
-
-#[cfg(test)]
-mod budget_contract_tests {
-    use crate::lean_vocab_test::lean_prompt_assembly_budget_cases;
-
-    /// Drives the production compaction trigger and per-turn output clamp from
-    /// Lean-generated boundaries.
-    #[test]
-    fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
-        let cases = lean_prompt_assembly_budget_cases();
-        assert!(
-            !cases.is_empty(),
-            "Lean emitted no PromptAssembly budget cases"
-        );
-
-        for case in cases {
-            // Round-trip through the float the configuration surface actually
-            // carries, so the basis-point conversion is exercised rather than
-            // bypassed.
-            let threshold = case.threshold_basis_points as f64 / 10_000.0;
-            // Drive the production helper, not a formula duplicated here.
-            let configured =
-                crate::provider_input::budget::threshold_budget(case.context_window, threshold);
-            let effective = crate::provider_input::budget::effective_input_budget(
-                case.context_window,
-                threshold,
-            );
-            let input_tokens = case.prompt_tokens.saturating_add(case.request_tokens);
-            let effective_output = crate::provider_input::budget::effective_output_budget(
-                input_tokens,
-                case.context_window,
-                case.max_output_tokens,
-            );
-
-            assert_eq!(
-                configured, case.configured_threshold_budget,
-                "{}: configured threshold budget drifted from Lean",
-                case.name
-            );
-            assert_eq!(
-                effective, case.effective_input_budget,
-                "{}: effective input budget drifted from Lean",
-                case.name
-            );
-            assert_eq!(
-                effective_output, case.effective_output_tokens,
-                "{}: effective output budget drifted from Lean",
-                case.name
-            );
-            assert_eq!(
-                input_tokens.saturating_add(effective_output) <= case.context_window,
-                case.provider_safe,
-                "{}: provider-safety witness drifted from Lean",
-                case.name
-            );
-            assert_eq!(
-                crate::provider_input::budget::can_dispatch(
-                    input_tokens,
-                    case.context_window,
-                    case.max_output_tokens,
-                ),
-                case.can_dispatch,
-                "{}: provider dispatch legality drifted from Lean",
-                case.name
-            );
-            assert_eq!(
-                crate::compaction::ReductionAdmission::for_input(
-                    input_tokens,
-                    case.context_window,
-                    threshold,
-                )
-                .is_some(),
-                case.should_compact,
-                "{}: production compaction trigger drifted from Lean",
-                case.name
-            );
-        }
-    }
 }

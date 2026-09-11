@@ -21,7 +21,7 @@ def preWorkspace (c : WorkspaceCase) : IsolatedWorkspace :=
   , baseSha := "base"
   , branch := "main"
   , creationPolicy := .gitWorktreeDiff
-  , ownerDeploymentId := "dep-1"
+  , ownerAgentDid := "dep-1"
   , sealHash := c.sealHash
   , state := c.fromState }
 
@@ -74,7 +74,7 @@ structure BindingWitness where
   bindingId : String
   requestId : String
   authority : BindingAuthority
-  deploymentId : String
+  agentDid : String
   sealHash : Option String
   state : BindingState
   deriving Repr
@@ -85,7 +85,7 @@ def BindingWitness.toBinding (workspaceId : String) (b : BindingWitness) :
   , workspaceId := workspaceId
   , requestId := b.requestId
   , authority := b.authority
-  , deploymentId := b.deploymentId
+  , agentDid := b.agentDid
   , sealHash := b.sealHash
   , state := b.state }
 
@@ -94,7 +94,7 @@ structure WorkspaceBindingCase where
   workspaceId : String
   workspaceState : WorkspaceState
   workspaceSealHash : Option String
-  ownerDeploymentId : String
+  ownerAgentDid : String
   creationPolicy : CreationPolicy
   existing : List BindingWitness
   candidate : BindingWitness
@@ -110,7 +110,7 @@ def WorkspaceBindingCase.workspace (c : WorkspaceBindingCase) : IsolatedWorkspac
   , baseSha := "base"
   , branch := "main"
   , creationPolicy := c.creationPolicy
-  , ownerDeploymentId := c.ownerDeploymentId
+  , ownerAgentDid := c.ownerAgentDid
   , sealHash := c.workspaceSealHash
   , state := c.workspaceState }
 
@@ -123,7 +123,7 @@ def WorkspaceBindingCase.candidateBinding (c : WorkspaceBindingCase) : Workspace
 
 def candidateBindingLegal (w : IsolatedWorkspace) (b : WorkspaceBinding) : Bool :=
   decide (b.workspaceId = w.workspaceId) &&
-    decide (OwnerClaimable b.deploymentId w) &&
+    decide (OwnerClaimable b.agentDid w) &&
     decide (ReadWriteOk w b) &&
     decide (ReadOnlyOk w b) &&
     decide (IntegrateOk w b)
@@ -144,14 +144,14 @@ def caseBindingLegalCorrect (c : WorkspaceBindingCase) : Bool :=
 def mkWitness
     (id : String)
     (authority : BindingAuthority)
-    (deploymentId : String := "dep-1")
+    (agentDid : String := "dep-1")
     (state : BindingState := .active)
     (sealHash : Option String := none)
     (requestId : String := "req-1") : BindingWitness :=
   { bindingId := id
   , requestId := requestId
   , authority := authority
-  , deploymentId := deploymentId
+  , agentDid := agentDid
   , sealHash := sealHash
   , state := state }
 
@@ -162,7 +162,7 @@ def mkBindingCase
     (legal : Bool)
     (workspaceSealHash : Option String := none)
     (existing : List BindingWitness := [])
-    (ownerDeploymentId : String := "dep-1")
+    (ownerAgentDid : String := "dep-1")
     (creationPolicy : CreationPolicy := .gitWorktreeDiff)
     (gitMetadataWrite : Bool := false)
     (behaviorCommandMode : ExecutionMode := .unrestricted) :
@@ -171,7 +171,7 @@ def mkBindingCase
   , workspaceId := "ws-1"
   , workspaceState := workspaceState
   , workspaceSealHash := workspaceSealHash
-  , ownerDeploymentId := ownerDeploymentId
+  , ownerAgentDid := ownerAgentDid
   , creationPolicy := creationPolicy
   , existing := existing
   , candidate := candidate
@@ -197,8 +197,8 @@ def workspaceBindingCases : List WorkspaceBindingCase :=
   , mkBindingCase "integrate_mismatched_seal_hash_illegal" .sealed
       (mkWitness "b-1" .integrate (sealHash := some "other")) false
       (workspaceSealHash := some "seal-1")
-  , mkBindingCase "non_owner_deployment_cannot_claim" .ready
-      (mkWitness "b-1" .readWrite (deploymentId := "dep-other")) false
+  , mkBindingCase "non_owner_principal_cannot_claim" .ready
+      (mkWitness "b-1" .readWrite (agentDid := "dep-other")) false
   , mkBindingCase "git_worktree_diff_read_write_git_metadata_write_illegal" .ready
       (mkWitness "b-1" .readWrite) false
       (gitMetadataWrite := true)

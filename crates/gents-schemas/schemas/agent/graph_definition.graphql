@@ -1,9 +1,10 @@
-type GraphDefinition @branchable {
-    graph_id: String @index(unique: true) @immutable
-    owner_did: String @index @immutable
+type GraphDefinition @branchable @index(fields: ["agent_did", "graph_id"], unique: true) {
+    graph_id: String @immutable
+    agent_did: String @index @immutable
     enabled: Boolean
+    tags: [String!]
     active_revision_digest: String @index
     generation: Int
-    created_at: DateTime @index(direction: DESC) @immutable
-    updated_at: DateTime @index(direction: DESC)
+    created_at: String
+    updated_at: String
 }

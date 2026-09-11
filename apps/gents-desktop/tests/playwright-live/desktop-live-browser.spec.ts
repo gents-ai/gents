@@ -51,7 +51,7 @@ test.describe("desktop live browser smoke", () => {
       await expect(page.getByTestId("composer-input")).toBeVisible();
       const deployment = await firstDeployment(liveRunner);
       const previousRequestIds = new Set(
-        deployment.conversations
+        deployment.sessions
           .map((conversation) => conversation.latestRequestId)
           .filter((requestId): requestId is string => Boolean(requestId)),
       );
@@ -263,7 +263,7 @@ async function waitForSubmittedRequest(
         if (!deployment) {
           return false;
         }
-        const conversation = deployment.conversations.find(
+        const conversation = deployment.sessions.find(
           (candidate) =>
             candidate.latestRequestId &&
             !expected.previousRequestIds.has(candidate.latestRequestId),

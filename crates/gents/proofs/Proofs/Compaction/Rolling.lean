@@ -1,13 +1,13 @@
 import Proofs.Compaction.ReductionEngine
 
 /-!
-# Atomic rolling compaction
+# Rolling compaction plan checks
 
-An oversized provider-visible prefix is summarized through bounded in-memory
-steps. Intermediate checkpoints are inputs to later steps, not durable session
-cursors. A completed plan is valid only when every chunk is non-empty,
-pair-closed, provider-dispatchable, and the chunks cover the exact target
-prefix. Durable state changes once, after that final checkpoint exists.
+This model checks non-empty chunk counts, supplied pair/dispatch observations,
+and their total against the declared target. It also constructs the next step's
+input from a prior checkpoint. Counts alone do not establish exact source
+coverage, and these functions do not model chunk execution or durable atomicity.
+Exact prefix/suffix construction belongs to ReductionEngine.applyDecision.
 -/
 
 namespace Compaction.Rolling
@@ -48,25 +48,8 @@ instance (plan : Plan) : Decidable plan.Valid := by
   unfold Plan.Valid
   infer_instance
 
-/-- A failure at chunk N cannot expose any earlier in-memory checkpoint or
-advance the durable cursor. -/
-theorem chunk_failure_preserves_durable_state
-    (before : SessionState) :
-    commitSession before .cannotFit = before := by
-  exact (session_noop_does_not_commit before []).2
-
-/-- A successful roll delegates its one durable cursor transition to the
-shared exact-reduction owner. The cursor advances relative to the prior
-checkpoint; rolling compaction never replaces it with a local chunk count. -/
-theorem complete_commits_exact_target
-    (before : SessionState) (plan : Plan) (_valid : plan.Valid) :
-    (commitSession before
-      (.reduced (List.replicate plan.targetMessages 0) [] plan.checkpoint.payload)).cursor =
-      before.cursor + plan.targetMessages := by
-  simp [commitSession]
-
 /-- Every chunk in a valid completed roll is non-empty, pair-closed, and has
-strictly positive provider output capacity. -/
+a supplied affirmative dispatch observation. -/
 theorem complete_chunks_are_valid
     (plan : Plan) (valid : plan.Valid) (chunk : Chunk)
     (member : chunk ∈ plan.chunks) : chunk.Valid := by

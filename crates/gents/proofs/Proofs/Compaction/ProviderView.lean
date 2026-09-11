@@ -2,26 +2,20 @@ import Proofs.Compaction.Strip
 import Proofs.PromptAssembly.Properties
 
 /-!
-# The canonical provider view
+# Compaction row projections
 
-Issue #993 named `strip ∘ sanitize = sanitize ∘ strip` as unproven, and
-therefore named the obvious production fix — moving the compacted-prefix drop
-past sanitization — as unlicensed:
-
-> `strip` rewrites tool-result *content* while `sanitize` drops rows based on
-> call/result *pairing*, so stripping first can change which pairs sanitize
-> considers orphaned.
-
-It does not, and `strip_sanitize_commute` is why: both sanitize stages branch
-only on a row's `MessageKind` constructor and its call ids, and `strip` fixes
-both. That settles the question affirmatively and licenses `providerView` — the
-single reduction the compaction writer and the request reader both index.
+`providerViewTurn` composes strip with the per-turn row sanitizer. The retained
+`providerViewGlobal` is a unique-call-ID proof model used by older prefix and
+cursor lemmas. Their equality requires `UniqueCallIds`; do not implement the
+global algorithm from those lemmas. Neither row projection models assistant
+prose surviving an unresolved call: that content boundary is modeled separately
+in `PromptAssembly.Provider`, currently also under global-resolution assumptions.
 -/
 
 namespace Compaction
 
 open Transcript (MessageRow MessageKind ToolResultKey)
-open PromptAssembly (sanitize sanitizeTurn dropOrphanedFrom filterCallsBy resolvedIn callsIn
+open PromptAssembly (sanitizeGlobal sanitizeTurn dropOrphanedFrom filterCallsBy resolvedIn callsIn
                      withKind UniqueCallIds ProviderValid)
 
 theorem stripRow_withKind_assistant (row : MessageRow)
@@ -87,62 +81,59 @@ theorem strip_filterCallsBy (l : List MessageRow) :
             strip_cons, ih resolved]
 
 /-- The theorem #993 named as the blocker. Stripping first does *not* change
-which pairs sanitize considers orphaned. -/
+which pairs sanitizeGlobal considers orphaned. -/
 theorem strip_sanitize_commute (msgs : List MessageRow) :
-    strip (sanitize msgs) = sanitize (strip msgs) := by
+    strip (sanitizeGlobal msgs) = sanitizeGlobal (strip msgs) := by
   have hres : resolvedIn (dropOrphanedFrom ∅ (strip msgs))
       = resolvedIn (dropOrphanedFrom ∅ msgs) := by
     rw [← strip_dropOrphanedFrom, resolvedIn_strip]
-  unfold PromptAssembly.sanitize PromptAssembly.dropUnpairedCalls
+  unfold PromptAssembly.sanitizeGlobal PromptAssembly.dropUnpairedCalls
     PromptAssembly.dropOrphanedResults
   rw [strip_filterCallsBy, strip_dropOrphanedFrom, hres]
 
-/-- The single canonical narrowing from the durable transcript to the provider
-view. Both sides of compaction's prefix accounting index *this* list: the
-compaction writer records `messages_compacted` against it, and the request
-reader drops that many rows from it. Rust: `compaction::provider_view`. -/
-def providerView (msgs : List MessageRow) : List MessageRow := sanitize (strip msgs)
+/-- Global-resolution row projection retained for conditional prefix proofs.
+This is not the production sanitizer. -/
+def providerViewGlobal (msgs : List MessageRow) : List MessageRow := sanitizeGlobal (strip msgs)
 
-/-- The provider view production actually computes.
+/-- Per-turn narrowing of the row-only transcript abstraction.
 
 `drop_unpaired_tool_calls` scopes resolution to the active turn
 (`resolved_keys_per_turn`), so a later turn reusing a call id cannot resurrect
-an earlier unpaired announcement. `providerViewTurn_eq_providerView` shows this
-is the same list as `providerView` whenever `UniqueCallIds` holds — which is the
-hypothesis every theorem below already carries — so the accounting results
-transfer verbatim while the model now names what the runtime does. -/
+an earlier unpaired announcement. `providerViewTurn_eq_providerViewGlobal` shows this
+is the same list as `providerViewGlobal` when `UniqueCallIds` holds. Applying
+global accounting lemmas to this view must discharge that premise explicitly. -/
 def providerViewTurn (msgs : List MessageRow) : List MessageRow :=
   sanitizeTurn (strip msgs)
 
-theorem providerViewTurn_eq_providerView {msgs : List MessageRow}
-    (huniq : UniqueCallIds msgs) : providerViewTurn msgs = providerView msgs :=
-  PromptAssembly.sanitizeTurn_eq_sanitize (strip_preserves_uniqueCallIds huniq)
+theorem providerViewTurn_eq_providerViewGlobal {msgs : List MessageRow}
+    (huniq : UniqueCallIds msgs) : providerViewTurn msgs = providerViewGlobal msgs :=
+  PromptAssembly.sanitizeTurn_eq_sanitizeGlobal (strip_preserves_uniqueCallIds huniq)
 
-theorem providerView_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
-    ProviderValid (providerView msgs) :=
-  PromptAssembly.sanitize_sound (strip_preserves_uniqueCallIds huniq)
+theorem providerViewGlobal_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
+    ProviderValid (providerViewGlobal msgs) :=
+  PromptAssembly.sanitizeGlobal_sound (strip_preserves_uniqueCallIds huniq)
 
 theorem providerViewTurn_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
     ProviderValid (providerViewTurn msgs) := by
-  rw [providerViewTurn_eq_providerView huniq]
-  exact providerView_sound huniq
+  rw [providerViewTurn_eq_providerViewGlobal huniq]
+  exact providerViewGlobal_sound huniq
 
 /-- What lets `compact()` re-normalize its own input for free, so
 `messages_compacted` indexes the canonical space whoever the caller is. -/
-theorem providerView_idempotent {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
-    providerView (providerView msgs) = providerView msgs := by
-  unfold providerView
+theorem providerViewGlobal_idempotent {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
+    providerViewGlobal (providerViewGlobal msgs) = providerViewGlobal msgs := by
+  unfold providerViewGlobal
   rw [strip_sanitize_commute, strip_idempotent]
-  exact PromptAssembly.sanitize_idempotent (strip_preserves_uniqueCallIds huniq)
+  exact PromptAssembly.sanitizeGlobal_idempotent (strip_preserves_uniqueCallIds huniq)
 
-theorem providerView_nonempty_announcements (msgs : List MessageRow) :
-    PromptAssembly.NonemptyAnnouncements (providerView msgs) :=
+theorem providerViewGlobal_nonempty_announcements (msgs : List MessageRow) :
+    PromptAssembly.NonemptyAnnouncements (providerViewGlobal msgs) :=
   PromptAssembly.nonemptyAnnouncements_sanitize _
 
 /-- Stripping commutes with the whole reduction, not just its stages. -/
 theorem strip_providerView (msgs : List MessageRow) :
-    strip (providerView msgs) = providerView msgs := by
-  unfold providerView
+    strip (providerViewGlobal msgs) = providerViewGlobal msgs := by
+  unfold providerViewGlobal
   rw [strip_sanitize_commute, strip_idempotent]
 
 end Compaction

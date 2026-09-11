@@ -139,28 +139,38 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    );
+    )
+    .expect("construct daemon with valid execution configuration");
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     for _ in 0..8 {
         let request = create_routed_request(&node, &behavior, &agent_did).await;
         // This test counts request inference attempts exactly. A supplied title
         // prevents optional background title generation from sharing the same
         // deliberately nonterminal provider and inflating calls/captures.
-        let session_id = crate::graphql::escape_graphql_string(&request.session_id);
-        let behavior_id = crate::graphql::escape_graphql_string(&behavior.behavior_id);
-        let escaped_agent_did = crate::graphql::escape_graphql_string(&agent_did);
-        let requester =
-            crate::session::requester_did_create_field(request.requester_did.as_deref());
-        let seeded = node.execute(&format!(
-            r#"mutation {{ create_AgentConversation(input: {{
-                session_id: "{session_id}", agent_name: "{behavior_id}", agent_did: "{escaped_agent_did}",
-                behavior_id: "{behavior_id}", {requester} title: "lease regression", title_source: "task",
-                preview_text: "route this reply", status: "active",
-                created_at: "{}", updated_at: "{}"
-            }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&request.created_at),
-            crate::graphql::escape_graphql_string(&request.created_at),
-        )).await;
+        let session = gents_protocol::session::AgentSession {
+            session_id: request.session_id.clone(),
+            agent_did: agent_did.clone(),
+            requester_did: request.requester_did.clone(),
+            behavior_id: behavior.behavior_id.clone(),
+            created_at: request.created_at.clone(),
+            closed_at: None,
+            title: Some(gents_protocol::session::SessionTitle {
+                text: "lease regression".into(),
+                source: gents_protocol::session::SessionTitleSource::Task,
+            }),
+            tags: vec![],
+            provenance: None,
+            observation: None,
+        };
+        let input = gents_protocol::graphql::graphql_input_literal(
+            &serde_json::to_value(session).expect("canonical session fixture"),
+        )
+        .expect("render canonical session input");
+        let seeded = node
+            .execute(&format!(
+                "mutation {{ create_AgentSession(input: {input}) {{_docID}} }}"
+            ))
+            .await;
         assert!(!seeded.has_errors(), "{:?}", seeded.errors);
         let request_id = crate::graphql::escape_graphql_string(&request.request_id);
         let query = format!(

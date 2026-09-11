@@ -48,13 +48,13 @@ pub(super) async fn signed_invocation_fixture(
     let trigger_rows = execute(
         &node,
         &format!(
-            r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            r#"{{ Trigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(&trigger)
         ),
     )
     .await;
     root.caused_by_trigger_doc_id = Some(
-        trigger_rows["EventTrigger"][0]["_docID"]
+        trigger_rows["Trigger"][0]["_docID"]
             .as_str()
             .unwrap()
             .into(),
@@ -269,9 +269,19 @@ struct CaseRow {
 #[tokio::test]
 async fn generated_graph_logical_invocations_drive_persisted_run_projection() {
     let snapshot: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(snapshot.graph_logical_invocation_cases.len(), 15);
+    assert_eq!(snapshot.graph_logical_invocation_cases.len(), 16);
+    let mut replayed = 0;
     for case in snapshot.graph_logical_invocation_cases {
         assert_eq!(case.root, 10, "{}", case.name);
+        if case.name == "pinned_root_has_authenticated_parent" {
+            // Abstract rejection outside the production admission domain:
+            // roots require event/schedule authority, whereas authenticated
+            // parent edges require Goal/local-control authority. The ancestry
+            // owner also excludes its entry from the parent map. This row does
+            // not yet have a faithful runtime projection (CoverageLedger).
+            continue;
+        }
+        replayed += 1;
         let (node, run, goal, identity, _temp) =
             signed_invocation_fixture(case.max_invocations).await;
         let mut request_ids =
@@ -445,6 +455,7 @@ async fn generated_graph_logical_invocations_drive_persisted_run_projection() {
         assert_eq!(terminal.status, status, "{}", case.name);
         node.shutdown().await;
     }
+    assert_eq!(replayed, 15, "all representable invocation cases must run");
 }
 
 async fn publication_state(node: &defra_node::EmbeddedNode) -> serde_json::Value {
@@ -1032,8 +1043,8 @@ async fn malformed_reserved_graph_trigger_cannot_publish() {
 #[tokio::test]
 async fn bundled_package_root_binding_survives_task_metadata_changes() {
     use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-    use crate::graph_package::{install_bundled_graph_package, GraphPackageInstallBindings};
-    use std::collections::BTreeMap;
+    use crate::graph_package::GraphPackageInstallBindings;
+    use crate::test_support::install_test_graph_package;
     use std::sync::Arc;
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
@@ -1041,32 +1052,13 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
     crate::document_config::ensure_agent_principal(&node, identity.did())
         .await
         .unwrap();
-    for mutation in [
-        r#"mutation { create_HostDeployment(input: { deployment_id: "graph-test-host", display_name: "Graph test" }) { _docID } }"#,
-        r#"mutation { create_InferenceBackend(input: { backend_id: "graph-test-backend", name: "Graph test", provider_kind: "OpenAiCompatible", endpoint: "http://127.0.0.1:1/v1", max_concurrent: 4, enabled: true, models: ["test-model"] }) { _docID } }"#,
-        r#"mutation { create_InferenceProfile(input: { profile_id: "graph-test-profile", display_name: "Graph test", max_turns: 8 }) { _docID } }"#,
-    ] {
-        execute(&node, mutation).await;
-    }
-    let role = PackageRoleBinding {
-        principal_did: identity.did().into(),
-        deployment_id: "graph-test-host".into(),
-        backend_id: Some("graph-test-backend".into()),
-        profile_id: Some("graph-test-profile".into()),
-        model_name: Some("test-model".into()),
-    };
     let bindings = GraphPackageInstallBindings {
-        owner_did: identity.did().into(),
-        roles: BTreeMap::from([
-            ("coordinator".into(), role.clone()),
-            ("reviewer".into(), role),
-        ]),
+        agent_did: identity.did().into(),
     };
     let access = ConfigAccess::Local(node.clone());
-    let installed =
-        install_bundled_graph_package(&access, identity.did(), "code_review", &bindings)
-            .await
-            .unwrap();
+    let installed = install_test_graph_package(&access, identity.did(), "code_review", &bindings)
+        .await
+        .unwrap();
     activate_graph_revision(
         &node,
         None,
@@ -1084,16 +1076,18 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
     let route = execute(
         &node,
         &format!(
-            r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID task_id }} }}"#,
+            r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}) {{ _docID task_id }} }}"#,
+            crate::graphql::escape_graphql_string(identity.did()),
             crate::graphql::escape_graphql_string(&trigger)
         ),
     )
     .await;
-    let task_id = route["EventTrigger"][0]["task_id"].as_str().unwrap();
+    let task_id = route["Trigger"][0]["task_id"].as_str().unwrap();
     let task = execute(
         &node,
         &format!(
-            r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }} }}) {{ behavior_id }} }}"#,
+            r#"{{ Task(filter: {{ agent_did: {{ _eq: "{}" }}, task_id: {{ _eq: "{}" }} }}) {{ behavior_id }} }}"#,
+            crate::graphql::escape_graphql_string(identity.did()),
             crate::graphql::escape_graphql_string(task_id)
         ),
     )
@@ -1111,8 +1105,7 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
         AgentRequestAdmissionRecord::runtime_automated_trigger(identity.did(), &trigger),
     );
     request.caused_by_trigger_id = Some(trigger.clone());
-    request.caused_by_trigger_doc_id =
-        Some(route["EventTrigger"][0]["_docID"].as_str().unwrap().into());
+    request.caused_by_trigger_doc_id = Some(route["Trigger"][0]["_docID"].as_str().unwrap().into());
     request.caused_by_trigger_kind = Some("event".into());
     request.caused_by_correlation = Some(run.correlation.clone());
     request.caused_by_source_doc_id = Some(run.seed_doc_id.clone());
@@ -1133,7 +1126,7 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
     assert_eq!(admitted.requests.len(), 1);
     assert_eq!(admitted.requests[0].node_id.as_deref(), Some("recon"));
     assert!(admitted.failure_evidence.is_none());
-    execute(&node, &format!(r#"mutation {{ update_Task(filter: {{ task_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task_id))).await;
+    execute(&node, &format!(r#"mutation {{ update_Task(filter: {{ agent_did: {{ _eq: "{owner}" }}, task_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task_id), owner=crate::graphql::escape_graphql_string(identity.did()))).await;
     let disabled = load_graph_run_view(&node, identity.did(), &run.run_id)
         .await
         .unwrap();
@@ -1142,7 +1135,7 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
         disabled.failure_evidence.is_none(),
         "disable cannot erase a historical root's identity"
     );
-    execute(&node, &format!(r#"mutation {{ update_Task(filter: {{ task_id: {{ _eq: "{}" }} }}, input: {{ behavior_id: "unapproved-task-target" }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task_id))).await;
+    execute(&node, &format!(r#"mutation {{ update_Task(filter: {{ agent_did: {{ _eq: "{owner}" }}, task_id: {{ _eq: "{}" }} }}, input: {{ behavior_id: "unapproved-task-target" }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task_id), owner=crate::graphql::escape_graphql_string(identity.did()))).await;
     let changed = load_graph_run_view(&node, identity.did(), &run.run_id)
         .await
         .unwrap();
@@ -1230,9 +1223,16 @@ async fn generic_graph_foreign_roots_remain_ignored_after_reassignment_or_missin
             .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let foreign = KeyIdentity::load_or_create(dir.path().join("foreign.key"), None).unwrap();
-        let routes = execute(&node, &format!(r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID task_id }} }}"#, crate::graphql::escape_graphql_string(&trigger))).await;
+        let routes = execute(
+            &node,
+            &format!(
+                r#"{{ Trigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID task_id }} }}"#,
+                crate::graphql::escape_graphql_string(&trigger)
+            ),
+        )
+        .await;
         if missing_task {
-            let task = routes["EventTrigger"][0]["task_id"].as_str().unwrap();
+            let task = routes["Trigger"][0]["task_id"].as_str().unwrap();
             execute(&node, &format!(r#"mutation {{ delete_Task(filter: {{ task_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task))).await;
         } else {
             execute(&node, &format!(r#"mutation {{ update_AgentBehavior(filter: {{ behavior_id: {{ _eq: "test-behavior" }} }}, input: {{ agent_did: "{}" }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(foreign.did()))).await;
@@ -1250,7 +1250,7 @@ async fn generic_graph_foreign_roots_remain_ignored_after_reassignment_or_missin
         );
         request.caused_by_trigger_id = Some(trigger.clone());
         request.caused_by_trigger_doc_id =
-            Some(routes["EventTrigger"][0]["_docID"].as_str().unwrap().into());
+            Some(routes["Trigger"][0]["_docID"].as_str().unwrap().into());
         request.caused_by_trigger_kind = Some("event".into());
         request.caused_by_correlation = Some(run.correlation.clone());
         request.caused_by_source_doc_id = Some(run.seed_doc_id.clone());

@@ -1,13 +1,13 @@
-# Crash-safe host-executor invocation. Claimable only on owner_deployment_id.
-# Action journal is a JSON string (prefix Validated → ResultDocsWritten).
-type CallbackInvocation @branchable {
-    invocation_id: String @index(unique: true) @immutable
-    owner_deployment_id: String @index @immutable
-    binding_id: String @index @immutable
-    source_collection: String @index @immutable
-    source_doc_id: String @index @immutable
-    source_version: String @immutable
-    idempotency_key: String @index(unique: true) @immutable
+# Frozen source input and origin survive planner retries; journals own recovery.
+type CallbackInvocation @branchable
+    @index(fields: ["owner_agent_did", "invocation_id"], unique: true)
+    @index(fields: ["owner_agent_did", "idempotency_key"], unique: true) {
+    invocation_id: String @immutable
+    owner_agent_did: String @index @immutable
+    callback_id: String @index @immutable
+    origin: JSON @immutable
+    input: JSON @immutable
+    idempotency_key: String @immutable
     lifecycle_state: String @index
     attempts: Int
     action_plan: String

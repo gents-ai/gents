@@ -69,13 +69,15 @@ struct HistoricalGoalDocument {
 
 pub(super) async fn load_timeline_goal_versions_for_session(
     access: &ConfigAccess,
+    agent_did: &str,
     session_id: &str,
 ) -> Result<Vec<TimelineGoalVersionRow>> {
+    let escaped_owner = escape_graphql_string(agent_did);
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             Goal(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{ agent_did: {{ _eq: "{escaped_owner}" }}, session_id: {{ _eq: "{escaped_session_id}" }} }},
                 showDeleted: true
             ) {{ _docID }}
         }}"#
@@ -83,13 +85,15 @@ pub(super) async fn load_timeline_goal_versions_for_session(
     let docs = load_rows::<GoalDocumentRef>(access, "Goal", &query).await?;
     let mut versions = Vec::new();
     for doc in docs {
-        versions.extend(load_goal_document_versions(access, session_id, &doc.doc_id).await?);
+        versions
+            .extend(load_goal_document_versions(access, agent_did, session_id, &doc.doc_id).await?);
     }
     Ok(versions)
 }
 
 async fn load_goal_document_versions(
     access: &ConfigAccess,
+    expected_agent_did: &str,
     expected_session_id: &str,
     doc_id: &str,
 ) -> Result<Vec<TimelineGoalVersionRow>> {
@@ -207,6 +211,7 @@ async fn load_goal_document_versions(
                     doc_id
                 );
             }
+            anyhow::ensure!(snapshot.agent_did == expected_agent_did, "Goal commit {} belongs to a different owner", commit.cid);
             if snapshot.session_id != expected_session_id {
                 anyhow::bail!(
                     "Goal commit {} reconstructed session {}, expected {}",

@@ -83,7 +83,7 @@ inductive Outcome where
 
 def project (rows : List Attempt) (edges : List Edge) (root : Doc)
     (goal : Option GoalEvidence) (resultSatisfied : Bool) : Outcome :=
-  if ambiguous rows edges then .invalid
+  if !(parents edges root).isEmpty || ambiguous rows edges then .invalid
   else if (members rows edges root).any (fun a => a.terminal.isNone) then .outstanding
   else match tips rows edges root with
   | [tip] => match tip.terminal with
@@ -161,6 +161,12 @@ theorem pending_descendant_stays_outstanding :
 
 theorem physical_counts_do_not_collapse :
     (members [root, child] [edge] 10).length = 2 := by decide
+
+/-- A pinned entry cannot also be a descendant, even when its parent has no
+other pinned root. This is the production owner's incoming-parent exclusion. -/
+theorem pinned_root_with_parent_rejected :
+    project [⟨10, true, some .completed⟩, ⟨20, false, some .completed⟩]
+      [⟨20, 10, true⟩] 10 none true = .invalid := by decide
 
 theorem two_authenticated_roots_fail_closed :
     project [root, {root with doc := 30}, child] [edge, ⟨30,20,true⟩]

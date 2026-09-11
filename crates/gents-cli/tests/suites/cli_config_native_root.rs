@@ -1,145 +1,69 @@
 use crate::support::fs::write_json_file;
 
-use std::fs;
 use std::process::Command;
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tempfile::tempdir;
 
-fn gents() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_gents"))
-}
-
 fn run_validate(root: &std::path::Path) -> Result<Value> {
-    let output = gents()
+    let output = Command::new(env!("CARGO_BIN_EXE_gents"))
         .args(["config", "validate", "--root"])
         .arg(root)
         .output()?;
-    let stdout = String::from_utf8(output.stdout)?;
-    Ok(serde_json::from_str(&stdout)?)
+    Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-fn write_principal_with_behavior(root: &std::path::Path) -> Result<()> {
-    let agent_did = "did:key:example";
-    let default_behavior_id = "default";
-
+#[test]
+fn validate_accepts_minimal_canonical_config() -> Result<()> {
+    let tmp = tempdir()?;
     write_json_file(
-        &root.join("agent_principal.json"),
-        &serde_json::json!({
-            "agent_did": agent_did,
-            "default_behavior_id": default_behavior_id,
-            "enabled": true
-        }),
+        &tmp.path().join("pack_config.json"),
+        &json!({"agent_principal":{"agent_did":"did:key:example"}}),
     )?;
-
-    let dir = root
-        .join("agent_behaviors")
-        .join(crate::support::document_handle(&default_behavior_id));
-    fs::create_dir_all(&dir)?;
-    write_json_file(
-        &dir.join("object.json"),
-        &serde_json::json!({
-            "behavior_id": default_behavior_id,
-            "agent_did": agent_did,
-            "enabled": true
-        }),
-    )?;
-
+    assert_eq!(run_validate(tmp.path())?["ok"], true);
     Ok(())
 }
 
 #[test]
-fn validate_accepts_minimal_per_doc_root() -> Result<()> {
+fn validate_requires_pack_config() -> Result<()> {
     let tmp = tempdir()?;
-    write_principal_with_behavior(tmp.path())?;
     let report = run_validate(tmp.path())?;
-    assert_eq!(report.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(report["ok"], false);
+    assert!(report["errors"][0]
+        .as_str()
+        .is_some_and(|error| error.contains("pack_config.json")));
     Ok(())
 }
 
 #[test]
-fn validate_rejects_handle_mismatch() -> Result<()> {
+fn validate_rejects_missing_canonical_sidecar() -> Result<()> {
     let tmp = tempdir()?;
-    write_principal_with_behavior(tmp.path())?;
-    let dir = tmp.path().join("agent_behaviors").join("on-disk");
-    fs::create_dir_all(&dir)?;
     write_json_file(
-        &dir.join("object.json"),
-        &serde_json::json!({
-            "behavior_id": "inside-json",
-            "agent_did": "did:key:example",
-            "enabled": true,
+        &tmp.path().join("pack_config.json"),
+        &json!({
+            "agent_principal":{"agent_did":"did:key:example"},
+            "contexts":[{"context_id":"default-context","system_prompt":"./missing.md"}]
         }),
     )?;
     let report = run_validate(tmp.path())?;
-    assert_eq!(report.get("ok").and_then(Value::as_bool), Some(false));
-    let joined = report
-        .get("errors")
-        .and_then(Value::as_array)
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap_or("").to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        joined.contains("does not match behavior_id"),
-        "got: {joined}"
-    );
+    assert_eq!(report["ok"], false);
+    assert!(report["errors"][0]
+        .as_str()
+        .is_some_and(|error| error.contains("sidecar path does not resolve")));
     Ok(())
 }
 
 #[test]
-fn validate_rejects_missing_sidecar() -> Result<()> {
+fn validate_rejects_unknown_canonical_fields() -> Result<()> {
     let tmp = tempdir()?;
-    let agent_did = "did:key:example";
-    let default_behavior_id = "default";
     write_json_file(
-        &tmp.path().join("agent_principal.json"),
-        &serde_json::json!({
-            "agent_did": agent_did,
-            "default_behavior_id": default_behavior_id,
-            "enabled": true
+        &tmp.path().join("pack_config.json"),
+        &json!({
+            "agent_principal":{"agent_did":"did:key:example"},
+            "unknown_collection":[]
         }),
     )?;
-    let dir = tmp
-        .path()
-        .join("agent_behaviors")
-        .join(crate::support::document_handle(&default_behavior_id));
-    fs::create_dir_all(&dir)?;
-    write_json_file(
-        &dir.join("object.json"),
-        &serde_json::json!({
-            "behavior_id": default_behavior_id,
-            "agent_did": agent_did,
-            "system_prompt": "./system_prompt.md",
-            "enabled": true,
-        }),
-    )?;
-    let report = run_validate(tmp.path())?;
-    assert_eq!(report.get("ok").and_then(Value::as_bool), Some(false));
-    let joined = report
-        .get("errors")
-        .and_then(Value::as_array)
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap_or("").to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        joined.contains("sidecar path does not resolve"),
-        "got: {joined}"
-    );
-    Ok(())
-}
-
-#[test]
-fn validate_accepts_stray_readme_in_doc_dir() -> Result<()> {
-    let tmp = tempdir()?;
-    write_principal_with_behavior(tmp.path())?;
-    let dir = tmp.path().join("agent_behaviors").join("default");
-    fs::write(dir.join("README.md"), "notes")?;
-    let report = run_validate(tmp.path())?;
-    assert_eq!(report.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(run_validate(tmp.path())?["ok"], false);
     Ok(())
 }

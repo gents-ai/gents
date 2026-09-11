@@ -10,8 +10,8 @@ def processStateNames : List String :=
   processStates.map ProcessState.toDefraDB
 
 def processActions : List (String × ProcessState.Action) :=
-  [ ("startupRecover", .startupRecover { hasStuckRequests := true, activeRequestCount := 1 })
-  , ("startupClean", .startupClean { hasStuckRequests := false, activeRequestCount := 0 })
+  [ ("startupRecover", .startupRecover { hasStuckRequests := true })
+  , ("startupClean", .startupClean { hasStuckRequests := false })
   , ("recoveryComplete", .recoveryComplete)
   , ("beginShutdown", .beginShutdown)
   , ("finishShutdown", .finishShutdown 0)

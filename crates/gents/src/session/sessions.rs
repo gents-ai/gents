@@ -1,7 +1,6 @@
-#[cfg(test)]
-use super::query::load_session_document_optional;
-use super::retry::execute_query_timed;
+use super::query::{decode_session_row, session_scope_filter, validate_agent_session};
 use super::*;
+use anyhow::Context;
 
 #[cfg(test)]
 pub(crate) async fn create_session_with_id(
@@ -10,6 +9,7 @@ pub(crate) async fn create_session_with_id(
     agent_name: &str,
     agent_did: &str,
 ) -> Result<()> {
+    let _ = agent_name;
     create_session_with_behavior_id(node, session_id, agent_name, agent_did, agent_name).await
 }
 
@@ -21,6 +21,7 @@ pub(crate) async fn create_session_with_behavior_id(
     agent_did: &str,
     behavior_id: &str,
 ) -> Result<()> {
+    let _ = agent_name;
     create_session_with_behavior_id_and_requester_did(
         node,
         session_id,
@@ -42,65 +43,25 @@ async fn create_session_with_behavior_id_and_requester_did(
     behavior_id: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_name = escape_graphql_string(agent_name);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let requester_did_field = super::requester_did_create_field(requester_did);
-
-    let created = async {
-        let now = chrono::Utc::now().to_rfc3339();
-        let existing = load_session_document_optional(node, session_id).await?;
-        let created = existing.is_none();
-        let started = existing
-            .as_ref()
-            .map(|session| session.started.clone())
-            .unwrap_or_else(|| now.clone());
-        let resolved_behavior_id =
-            resolve_behavior_id(existing.as_ref(), behavior_id, "AgentSession")?;
-        let escaped_started = escape_graphql_string(&started);
-        let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
-
-        let mutation = format!(
-            r#"mutation {{
-                upsert_AgentSession(
-                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                    add: {{
-                        session_id: "{escaped_session_id}",
-                        agent_name: "{escaped_agent_name}",
-                        agent_did: "{escaped_agent_did}",
-                        {requester_did_field}
-                        behavior_id: "{escaped_behavior_id}",
-                        started: "{escaped_started}",
-                        status: "active"
-                    }},
-                    update: {{
-                        agent_name: "{escaped_agent_name}",
-                        behavior_id: "{escaped_behavior_id}",
-                        started: "{escaped_started}",
-                        status: "active"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        crate::config_client::ConfigAccess::write_local(node, "session.create", &mutation).await?;
-        Ok::<bool, anyhow::Error>(created)
-    }
-    .await?;
-
-    let log_message = if created {
-        "session created"
-    } else {
-        "session ensured"
-    };
-    tracing::info!(
-        session_id = %session_id,
-        agent = %agent_name,
-        behavior_id = %behavior_id,
-        created,
-        "{log_message}"
-    );
-    Ok(())
+    let _ = agent_name;
+    crate::config_client::ConfigAccess::transact_local(node, None, "session.create", move |txn| {
+        Box::pin(async move {
+            ensure_session_in_txn(
+                txn,
+                session_id,
+                agent_did,
+                behavior_id,
+                requester_did,
+                None,
+                None,
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .await?;
+            Ok::<bool, anyhow::Error>(true)
+        })
+    })
+    .await
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -124,82 +85,370 @@ pub(crate) async fn ensure_session_with_behavior_id_and_requester_did(
     .await
 }
 
-pub(crate) async fn max_sequence(node: &EmbeddedNode, session_id: &str) -> Result<u32> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                order: {{ sequence: DESC }},
-                limit: 1
-            ) {{ sequence }}
-        }}"#
+/// Create-or-preserve the single durable session document inside the caller's
+/// transaction. Scope is exact: agent, session label, requester (absence is
+/// its own scope, not a wildcard) and the behavior binding must agree with any
+/// existing document; duplicate rows under one label fail instead of being
+/// silently picked. An existing matching document is preserved untouched —
+/// creation time, title, tags, provenance and observation all stay.
+/// Does not reopen a closed session; the claim-time resume owner does that.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn ensure_session_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    session_id: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    requester_did: Option<&str>,
+    title: Option<gents_protocol::session::SessionTitle>,
+    provenance: Option<gents_protocol::session::SessionProvenance>,
+    now: &str,
+) -> Result<bool> {
+    anyhow::ensure!(
+        !session_id.trim().is_empty(),
+        "session_id must be non-empty"
     );
-
-    let resp = execute_query_timed(node, &query, "max_sequence").await?;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading max sequence for session_id={}: {:?}",
-            session_id,
-            resp.errors
+    anyhow::ensure!(!agent_did.trim().is_empty(), "agent_did must be non-empty");
+    anyhow::ensure!(
+        !behavior_id.trim().is_empty(),
+        "behavior_id must be non-empty"
+    );
+    if let Some(requester_did) = requester_did.map(str::trim) {
+        anyhow::ensure!(
+            !requester_did.is_empty(),
+            "requester_did must be non-empty when present"
         );
     }
+    chrono::DateTime::parse_from_rfc3339(now).context("invalid session created_at")?;
 
-    Ok(resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|message| message.get("sequence"))
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0) as u32)
+    let scope = session_scope_filter(agent_did, session_id, requester_did);
+    let query = format!(
+        r#"{{
+            AgentSession(filter: {{ {scope} }}) {{
+                {SESSION_SCOPE_FIELDS}
+            }}
+        }}"#
+    );
+    let response = txn.execute(&query).await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("AgentSession"))
+        .and_then(serde_json::Value::as_array)
+        .context("AgentSession query omitted rows")?
+        .clone();
+    let rows: Vec<serde_json::Value> = rows;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "session create found duplicate AgentSession rows for session_id={session_id}"
+    );
+
+    if let Some(row) = rows.first() {
+        let session = decode_session_row(row)?.session;
+        validate_agent_session(&session)?;
+        anyhow::ensure!(
+            session.session_id == session_id,
+            "AgentSession scope mismatch: existing session_id={} requested={session_id}",
+            session.session_id
+        );
+        anyhow::ensure!(
+            session.agent_did == agent_did,
+            "AgentSession scope mismatch: existing agent_did={} requested={agent_did}",
+            session.agent_did
+        );
+        match (&session.requester_did, requester_did) {
+            (Some(existing), Some(requested)) => anyhow::ensure!(
+                existing == requested,
+                "AgentSession requester scope mismatch: existing={existing} requested={requested}"
+            ),
+            (Some(existing), None) => anyhow::bail!(
+                "AgentSession requester scope mismatch: existing requester scope {existing} \
+                 does not match absent scope"
+            ),
+            (None, Some(requested)) => anyhow::bail!(
+                "AgentSession requester scope mismatch: existing absent scope does not match \
+                 requester {requested}"
+            ),
+            (None, None) => {}
+        }
+        anyhow::ensure!(
+            session.behavior_id == behavior_id,
+            "AgentSession behavior mismatch: existing={} requested={behavior_id}",
+            session.behavior_id
+        );
+        return Ok(false);
+    }
+
+    let created = txn.execute_with_variables(
+        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+        &serde_json::json!({"input": {
+            "session_id": session_id, "agent_did": agent_did,
+            "requester_did": requester_did, "behavior_id": behavior_id,
+            "created_at": now, "title": title, "provenance": provenance
+        }}),
+    ).await?;
+    let created = defra_node::QueryResponse::success(
+        created
+            .get("data")
+            .context("session create omitted data")?
+            .clone(),
+    );
+    if crate::graphql::single_mutation_document(&created, "create_AgentSession")?.is_none() {
+        // The create may have raced a concurrent publisher; revalidate scope
+        // through the same preserved-document contract so a colliding writer
+        // cannot silently win with a different binding.
+        let response = txn.execute(&query).await?;
+        let rows = response
+            .get("data")
+            .and_then(|data| data.get("AgentSession"))
+            .and_then(serde_json::Value::as_array)
+            .context("AgentSession query omitted rows")?
+            .clone();
+        if rows.len() == 1 {
+            let session = decode_session_row(&rows[0])?.session;
+            validate_agent_session(&session)?;
+            anyhow::ensure!(
+                session.session_id == session_id
+                    && session.agent_did == agent_did
+                    && session.behavior_id == behavior_id
+                    && session.requester_did.as_deref() == requester_did,
+                "AgentSession scope mismatch raced with a concurrent create"
+            );
+            return Ok(false);
+        }
+        anyhow::bail!("session create matched no document");
+    }
+    tracing::info!(
+        session_id = %session_id,
+        agent_did = %agent_did,
+        behavior_id = %behavior_id,
+        created = true,
+        "session created"
+    );
+    Ok(true)
 }
 
-pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let escaped_session_id = escape_graphql_string(session_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentSession(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                input: {{
-                    status: "completed",
-                    ended: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#,
+/// Claim-time resume owner for a reused session inside the caller's
+/// transaction. Reopening clears `closed_at` without resetting creation time,
+/// title, tags or provenance, and advances the observation activity
+/// monotonically (`max(now, old)`). Returns whether a closed session was
+/// actually reopened. Scope is exact, mirroring `ensure_session_in_txn`.
+pub(crate) async fn reopen_session_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    now: &str,
+) -> Result<bool> {
+    let Some(row) =
+        load_agent_session_row_in_txn(txn, agent_did, session_id, requester_did).await?
+    else {
+        anyhow::bail!("reopening session: no AgentSession for session_id={session_id}");
+    };
+    let session = &row.session;
+    anyhow::ensure!(
+        session.agent_did == agent_did,
+        "AgentSession scope mismatch: existing agent_did={} requested={}",
+        session.agent_did,
+        agent_did.trim()
     );
-    crate::config_client::ConfigAccess::write_local(node, "session.close", &mutation).await?;
+    // Exact requester scope: absent requester scope is its own scope, not a
+    // wildcard, and never widens to match a caller.
+    match (
+        session.requester_did.as_deref(),
+        requester_did.map(str::trim),
+    ) {
+        (Some(existing), Some(requested)) => anyhow::ensure!(
+            existing == requested,
+            "AgentSession requester scope mismatch: existing={existing} requested={requested}"
+        ),
+        (Some(existing), None) => anyhow::bail!(
+            "AgentSession requester scope mismatch: existing requester scope {existing} does \
+             not match absent scope"
+        ),
+        (None, Some(_)) => anyhow::bail!(
+            "AgentSession requester scope mismatch: existing absent scope does not match a \
+             requester"
+        ),
+        (None, None) => {}
+    }
+    let was_closed = session.closed_at.is_some();
+    patch_session_in_txn(
+        txn,
+        &row.doc_id,
+        serde_json::json!({
+            "closed_at": null,
+            "observation": touched_observation(&row, now),
+        }),
+    )
+    .await?;
+    Ok(was_closed)
+}
 
-    tracing::info!(session_id = %session_id, "session closed");
+/// Close the session through its existing owner: reread inside a transaction,
+/// set `closed_at`, advance activity, and preserve identity, creation time,
+/// title, provenance, tags and the current observation preview/latest request.
+pub async fn close_session(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    chrono::DateTime::parse_from_rfc3339(&now).context("invalid session closed_at")?;
+    crate::config_client::ConfigAccess::transact_local(node, None, "session.close", move |txn| {
+        let now = now.clone();
+        Box::pin(async move {
+            let Some(row) =
+                load_agent_session_row_in_txn(txn, agent_did, session_id, requester_did).await?
+            else {
+                anyhow::bail!("closing session: no AgentSession for session_id={session_id}");
+            };
+            if row.session.closed_at.is_some() {
+                return Ok::<(), anyhow::Error>(());
+            }
+            patch_session_in_txn(
+                txn,
+                &row.doc_id,
+                serde_json::json!({
+                    "closed_at": now,
+                    "observation": touched_observation(&row, &now),
+                }),
+            )
+            .await?;
+            tracing::info!(session_id = %session_id, "session closed");
+            Ok(())
+        })
+    })
+    .await
+}
+
+/// Bare scope/identity fields plus `_docID` for in-transaction reads.
+pub(super) const SESSION_SCOPE_FIELDS: &str = "session_id agent_did requester_did behavior_id \
+created_at closed_at title provenance observation tags _docID";
+
+pub async fn load_agent_session_row_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<super::rows::SessionOwnerRow>> {
+    let scope = session_scope_filter(agent_did, session_id, requester_did);
+    let query = format!(
+        r#"{{
+            AgentSession(filter: {{ {scope} }}) {{
+                {SESSION_SCOPE_FIELDS}
+            }}
+        }}"#
+    );
+    let response = txn.execute(&query).await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("AgentSession"))
+        .and_then(serde_json::Value::as_array)
+        .context("AgentSession query omitted rows")?
+        .clone();
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "duplicate AgentSession rows for session_id={session_id}"
+    );
+    rows.first().map(decode_session_row).transpose()
+}
+
+/// `max(now, old)` activity value; an absent observation falls back to the
+/// session's creation time, matching the Lean `touch` model.
+pub(super) fn touch_activity_value(row: &super::rows::SessionOwnerRow, now: &str) -> String {
+    let old = row
+        .session
+        .observation
+        .as_ref()
+        .map(|observation| observation.last_activity_at.clone())
+        .unwrap_or_else(|| row.session.created_at.clone());
+    match (
+        chrono::DateTime::parse_from_rfc3339(&old),
+        chrono::DateTime::parse_from_rfc3339(now),
+    ) {
+        (Ok(old_time), Ok(now_time)) if old_time > now_time => old,
+        _ => now.to_string(),
+    }
+}
+
+/// Preserve the observed request and preview while advancing only activity.
+pub(super) fn touched_observation(
+    row: &super::rows::SessionOwnerRow,
+    now: &str,
+) -> gents_protocol::session::SessionObservation {
+    gents_protocol::session::SessionObservation {
+        last_activity_at: touch_activity_value(row, now),
+        preview: row
+            .session
+            .observation
+            .as_ref()
+            .and_then(|v| v.preview.clone()),
+        latest_request: row
+            .session
+            .observation
+            .as_ref()
+            .and_then(|v| v.latest_request.clone()),
+    }
+}
+
+pub(super) async fn patch_session_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    doc_id: &str,
+    input: serde_json::Value,
+) -> Result<()> {
+    let doc_id = escape_graphql_string(doc_id);
+    let mutation = format!(
+        r#"mutation($input: AgentSessionMutationInputArg!) {{
+        update_AgentSession(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: $input) {{ _docID }}
+    }}"#
+    );
+    let response = txn
+        .execute_with_variables(&mutation, &serde_json::json!({"input": input}))
+        .await?;
+    anyhow::ensure!(
+        response
+            .get("data")
+            .and_then(|data| data.get("update_AgentSession"))
+            .is_some_and(crate::graphql::response_has_documents),
+        "session patch matched no document"
+    );
     Ok(())
 }
 
-#[cfg(test)]
-fn resolve_behavior_id(
-    existing: Option<&super::rows::SessionDocument>,
-    requested_behavior_id: &str,
-    collection_name: &str,
-) -> Result<String> {
-    let existing_behavior_id =
-        existing.and_then(|session| normalize_optional_string(session.behavior_id.as_deref()));
-    let requested_behavior_id = normalize_optional_string(Some(requested_behavior_id));
-
-    match (existing_behavior_id, requested_behavior_id) {
-        (Some(existing), Some(requested)) if existing != requested => anyhow::bail!(
-            "{collection_name} session behavior mismatch: existing={existing} requested={requested}"
-        ),
-        (Some(existing), _) => Ok(existing.to_string()),
-        (None, Some(requested)) => Ok(requested.to_string()),
-        (None, None) => Ok(String::new()),
-    }
+pub(crate) async fn max_sequence(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<u32> {
+    crate::config_client::ConfigAccess::transact_local(node, None, "session.max_sequence", |txn| {
+        Box::pin(
+            async move { max_sequence_in_txn(txn, session_id, agent_did, requester_did).await },
+        )
+    })
+    .await
 }
 
-#[cfg(test)]
-fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
+pub(super) async fn max_sequence_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<u32> {
+    let scope = session_scope_filter(agent_did, session_id, requester_did);
+    let response = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{sequence: DESC}}, limit: 1) {{ sequence }} }}"#)).await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(serde_json::Value::as_array)
+        .context("message sequence query omitted rows")?;
+    match rows.first() {
+        None => Ok(0),
+        Some(row) => u32::try_from(
+            row.get("sequence")
+                .and_then(serde_json::Value::as_u64)
+                .context("message sequence is invalid")?,
+        )
+        .context("message sequence exceeds u32"),
+    }
 }

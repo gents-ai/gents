@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type {
-  ConversationSummary,
+  SessionSummary,
   DeploymentView,
   MailboxItemView,
   SyncHealthView,
@@ -9,13 +9,13 @@ import type {
 import {
   BehaviorEnvironmentSection,
   ConnectedPeerSection,
-  ConversationListSection,
+  SessionListSection,
 } from "./sidebar-widgets";
 import { SyncHealthIndicator } from "./SyncHealthIndicator";
 
 export type SidebarProps = {
   deployments: DeploymentView[];
-  conversations: ConversationSummary[];
+  sessions: SessionSummary[];
   mailboxItems: MailboxItemView[];
   selectedAgentDid: string | null;
   selectedBehaviorId: string | null;
@@ -26,7 +26,7 @@ export type SidebarProps = {
   onSelectSession: (sessionId: string) => void;
   onOpenSession?: (sessionId: string) => void;
   onSelectAgent?: (agentDid: string) => void;
-  onStartNewConversation: (behaviorId: string) => void;
+  onStartNewSession: (behaviorId: string) => void;
   onOpenMailboxItem: (itemId: string) => void;
   onDismissMailboxItem: (itemId: string) => void;
   onRepairP2P?: () => Promise<unknown> | void;
@@ -36,7 +36,7 @@ export type SidebarProps = {
 
 export function Sidebar({
   deployments,
-  conversations,
+  sessions,
   mailboxItems,
   selectedAgentDid,
   selectedBehaviorId,
@@ -47,7 +47,7 @@ export function Sidebar({
   onSelectSession,
   onOpenSession,
   onSelectAgent,
-  onStartNewConversation,
+  onStartNewSession,
   onOpenMailboxItem,
   onDismissMailboxItem,
   onRepairP2P,
@@ -61,6 +61,10 @@ export function Sidebar({
     (deployment) => deployment.agentDid === selectedAgentDid,
   );
   const environments = selectedDeployment?.behaviorEnvironments ?? [];
+  const startSession = (behaviorId: string) => {
+    onStartNewSession(behaviorId);
+    setSection("sessions");
+  };
 
   useEffect(() => setSection("sessions"), [selectedAgentDid]);
 
@@ -108,8 +112,8 @@ export function Sidebar({
       </div>
 
       {section === "sessions" ? (
-        <ConversationListSection
-          conversations={conversations}
+        <SessionListSection
+          sessions={sessions}
           environments={environments}
           selectedAgentDid={selectedAgentDid}
           selectedSessionId={selectedSessionId}
@@ -174,10 +178,7 @@ export function Sidebar({
           selectedAgentDid={selectedAgentDid}
           selectedBehaviorId={selectedBehaviorId}
           onSelectBehavior={onSelectBehavior}
-          onStartNewConversation={(behaviorId) => {
-            onStartNewConversation(behaviorId);
-            setSection("sessions");
-          }}
+          onStartSession={startSession}
         />
       )}
     </aside>

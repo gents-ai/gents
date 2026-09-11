@@ -1,4 +1,4 @@
-//! Phase A conformance: baseline registration, idempotence, single-version DAG.
+//! Migration conformance: baseline registration, idempotence, single-version DAG.
 
 use std::collections::BTreeSet;
 
@@ -29,34 +29,8 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         )
         .collect::<Vec<_>>();
 
-    assert_eq!(actual.len(), expected.len());
-    let versioned_collections = gents_migration::DEFAULT_STEPS
-        .iter()
-        .filter_map(|step| match step {
-            MigrationStep::PatchVersioned { collection, .. } => Some(*collection),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    for ((actual_name, actual_sdl), (expected_name, expected_sdl)) in
-        actual.iter().zip(expected.iter())
-    {
-        assert_eq!(actual_name, expected_name);
-        if versioned_collections.contains(actual_name) {
-            assert_ne!(
-                actual_sdl, expected_sdl,
-                "changed schema must be frozen — unless the collection is in \
-                 CLIENT_AUTHORED_COLLECTIONS, which must instead fold the change into the \
-                 live SDL and re-pin the baseline (see registry.rs, #1123/#1125)"
-            );
-        } else {
-            assert_eq!(actual_sdl, expected_sdl, "baseline drift for {actual_name}");
-        }
-    }
-    assert!(gents_migration::DEFAULT_STEPS.iter().any(|step| matches!(
-        step,
-        MigrationStep::PatchVersioned { collection, .. }
-            if *collection == gents_protocol::schemas::INFERENCE_PROFILE_NAME
-    )));
+    assert_eq!(actual, expected, "baseline must use the canonical live SDL");
+    assert!(gents_migration::DEFAULT_STEPS.is_empty());
     // Client-authored plane (#1123/#1125): these collections must stay
     // fresh-apply compatible, so they evolve by baseline re-pin only. Any
     // DEFAULT_STEPS entry targeting one recreates the breakage:
@@ -77,11 +51,6 @@ fn default_baseline_matches_ordered_protocol_catalog() {
          baseline to the fresh-apply CID (see CLIENT_AUTHORED_COLLECTIONS in registry.rs, \
          #1123/#1125)"
     );
-    assert!(gents_migration::DEFAULT_STEPS.iter().any(|step| matches!(
-        step,
-        MigrationStep::PatchVersioned { collection, .. }
-            if *collection == gents_protocol::schemas::TOOL_SELECTION_NAME
-    )));
 }
 
 #[test]
@@ -189,61 +158,6 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
 }
 
 #[tokio::test]
-async fn inference_profile_migrations_preserve_existing_document() {
-    let node = fresh_node().await;
-    let baseline = gents_migration::DEFAULT_BASELINE
-        .iter()
-        .find(|entry| entry.name == gents_protocol::schemas::INFERENCE_PROFILE_NAME)
-        .expect("InferenceProfile baseline");
-    node.add_schema(baseline.sdl)
-        .await
-        .expect("register frozen profile baseline");
-
-    let create = r#"mutation {
-        create_InferenceProfile(input: {
-            profile_id: "existing-profile"
-            display_name: "Existing"
-        }) { profile_id display_name }
-    }"#;
-    let response = node.execute(create).await;
-    assert!(
-        !response.has_errors(),
-        "create profile: {:?}",
-        response.errors
-    );
-
-    ensure_migrations(node.as_ref())
-        .await
-        .expect("apply production migrations");
-
-    let response = node
-        .execute(
-            r#"{ InferenceProfile(filter: {profile_id: {_eq: "existing-profile"}}) {
-                profile_id display_name reasoning_effort seed
-            } }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query profile: {:?}",
-        response.errors
-    );
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceProfile"))
-        .and_then(serde_json::Value::as_array)
-        .expect("InferenceProfile rows");
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["profile_id"], "existing-profile");
-    assert_eq!(rows[0]["display_name"], "Existing");
-    assert!(rows[0]["reasoning_effort"].is_null());
-    assert!(rows[0]["seed"].is_null());
-
-    node.shutdown().await;
-}
-
-#[tokio::test]
 async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     // #1123: AgentRequest is a client-authored plane collection, deliberately
     // kept off the step chain so a fresh client store's genesis version
@@ -291,12 +205,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     let response = node
         .execute(
             r#"{ AgentRequest(filter: {request_id: {_eq: "existing-request"}}) {
-                request_id content seed max_total_tokens
-                background_completion_input_through_sequence
-                background_completion_notification_keys_json
-                workspace_id workspace_authority
-                workspace_owner_deployment_id workspace_seal_hash
-                caused_by_trigger_doc_id
+                request_id content
             } }"#,
         )
         .await;
@@ -314,15 +223,6 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["request_id"], "existing-request");
     assert_eq!(rows[0]["content"], "hello");
-    assert!(rows[0]["seed"].is_null());
-    assert!(rows[0]["max_total_tokens"].is_null());
-    assert!(rows[0]["background_completion_input_through_sequence"].is_null());
-    assert!(rows[0]["background_completion_notification_keys_json"].is_null());
-    assert!(rows[0]["workspace_id"].is_null());
-    assert!(rows[0]["workspace_authority"].is_null());
-    assert!(rows[0]["workspace_owner_deployment_id"].is_null());
-    assert!(rows[0]["workspace_seal_hash"].is_null());
-    assert!(rows[0]["caused_by_trigger_doc_id"].is_null());
 
     // The idempotence half of the test name: this store's AgentRequest was
     // first registered by raw add_schema (the client-like genesis path), not
@@ -349,153 +249,9 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
 }
 
 #[tokio::test]
-async fn tool_selection_migrations_preserve_existing_document() {
+async fn goal_creation_claim_baseline_enforces_uniqueness() {
     let node = fresh_node().await;
-    let baseline = gents_migration::DEFAULT_BASELINE
-        .iter()
-        .find(|entry| entry.name == gents_protocol::schemas::TOOL_SELECTION_NAME)
-        .expect("ToolSelection baseline");
-    node.add_schema(baseline.sdl)
-        .await
-        .expect("register frozen tool-selection baseline");
-
-    let create = r#"mutation {
-        create_ToolSelection(input: {
-            selection_id: "existing-selection"
-            agent_did: "did:key:existing"
-            display_name: "Existing"
-        }) { selection_id display_name }
-    }"#;
-    let response = node.execute(create).await;
-    assert!(
-        !response.has_errors(),
-        "create selection: {:?}",
-        response.errors
-    );
-
-    ensure_migrations(node.as_ref())
-        .await
-        .expect("apply production migrations");
-
-    let response = node
-        .execute(
-            r#"{ ToolSelection(filter: {selection_id: {_eq: "existing-selection"}}) {
-                selection_id display_name enable_lsp lsp_config
-                enable_goal_tools enable_goal_creation
-            } }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query selection: {:?}",
-        response.errors
-    );
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("ToolSelection"))
-        .and_then(serde_json::Value::as_array)
-        .expect("ToolSelection rows");
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["selection_id"], "existing-selection");
-    assert_eq!(rows[0]["display_name"], "Existing");
-    assert!(rows[0]["enable_lsp"].is_null());
-    assert!(rows[0]["lsp_config"].is_null());
-    assert!(rows[0]["enable_goal_tools"].is_null());
-    assert!(rows[0]["enable_goal_creation"].is_null());
-
-    node.shutdown().await;
-}
-
-#[tokio::test]
-async fn task_goal_declaration_migration_preserves_existing_document() {
-    let node = fresh_node().await;
-    let baseline = gents_migration::DEFAULT_BASELINE
-        .iter()
-        .find(|entry| entry.name == gents_protocol::schemas::TASK_NAME)
-        .expect("Task baseline");
-    node.add_schema(baseline.sdl)
-        .await
-        .expect("register frozen Task baseline");
-
-    let response = node
-        .execute(
-            r#"mutation { create_Task(input: {
-                task_id: "existing-task"
-                name: "Existing"
-                behavior_id: "default"
-                prompt_template: "Do work"
-            }) { task_id name } }"#,
-        )
-        .await;
-    assert!(!response.has_errors(), "seed Task: {:?}", response.errors);
-
-    ensure_migrations(node.as_ref())
-        .await
-        .expect("apply Task migration");
-    let response = node
-        .execute(
-            r#"{ Task(filter: {task_id: {_eq: "existing-task"}}) {
-                task_id name goal_objective_template goal_token_budget
-            } }"#,
-        )
-        .await;
-    assert!(!response.has_errors(), "query Task: {:?}", response.errors);
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("Task"))
-        .and_then(serde_json::Value::as_array)
-        .expect("Task rows");
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["task_id"], "existing-task");
-    assert_eq!(rows[0]["name"], "Existing");
-    assert!(rows[0]["goal_objective_template"].is_null());
-    assert!(rows[0]["goal_token_budget"].is_null());
-    node.shutdown().await;
-}
-
-#[tokio::test]
-async fn goal_creation_key_migration_preserves_rows_and_claim_enforces_uniqueness() {
-    let node = fresh_node().await;
-    let baseline = gents_migration::DEFAULT_BASELINE
-        .iter()
-        .find(|entry| entry.name == gents_protocol::schemas::GOAL_NAME)
-        .expect("Goal baseline");
-    node.add_schema(baseline.sdl)
-        .await
-        .expect("register frozen Goal baseline");
-    let response = node
-        .execute(
-            r#"mutation { create_Goal(input: {
-                goal_id: "existing-goal"
-                session_id: "existing-session"
-                agent_did: "did:key:existing"
-            }) { goal_id } }"#,
-        )
-        .await;
-    assert!(!response.has_errors(), "seed Goal: {:?}", response.errors);
-
-    ensure_migrations(node.as_ref())
-        .await
-        .expect("apply Goal migration");
-    let response = node
-        .execute(
-            r#"{ Goal(filter: {goal_id: {_eq: "existing-goal"}}) {
-                goal_id creation_key
-            } }"#,
-        )
-        .await;
-    assert!(!response.has_errors(), "query Goal: {:?}", response.errors);
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("Goal"))
-        .and_then(serde_json::Value::as_array)
-        .expect("Goal rows");
-    assert_eq!(rows.len(), 1);
-    assert!(rows[0]["creation_key"].is_null());
-
+    ensure_migrations(node.as_ref()).await.expect("baseline");
     let first = node
         .execute(
             r#"mutation { create_GoalCreationClaim(input: {
@@ -533,7 +289,7 @@ async fn goal_creation_key_migration_preserves_rows_and_claim_enforces_uniquenes
 #[tokio::test]
 async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
     // A store created before RenderedRequest existed: every other baseline
-    // collection registered at its frozen SDL, with live data in one of them.
+    // collection registered at its canonical SDL, with live data in one of them.
     let node = fresh_node().await;
     for entry in gents_migration::DEFAULT_BASELINE {
         if entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME {

@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
-  ToolServiceRegistryView,
+  ToolServiceRegistry,
   ToolServiceDeleteRequest,
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
@@ -46,7 +46,7 @@ export function ToolServiceConfigPanel({
   const selectedToolService = useMemo(
     () =>
       deployment.toolServiceRegistries.find(
-        (service) => service.serviceId === selectedToolServiceId,
+        (service) => service.service_id === selectedToolServiceId,
       ) ?? null,
     [deployment.toolServiceRegistries, selectedToolServiceId],
   );
@@ -56,11 +56,11 @@ export function ToolServiceConfigPanel({
       <ConfigDocumentList
         eyebrow="Tools"
         items={deployment.toolServiceRegistries.map((service) => ({
-          id: service.serviceId,
-          title: service.displayName ?? service.serviceId,
+          id: service.service_id,
+          title: service.display_name ?? service.service_id,
           meta: [
-            service.status ?? "service",
-            service.hostname ?? service.tailscaleIp ?? service.lanIp ?? null,
+            service.enabled === false ? "disabled" : "service",
+            service.hostname ?? service.tailscale_ip ?? service.lan_ip ?? null,
           ]
             .filter(Boolean)
             .join(" / "),
@@ -94,7 +94,7 @@ export function ToolServiceConfigPanel({
 
 export type ToolServiceConfigEditorProps = {
   agentDid: string;
-  toolService: ToolServiceRegistryView | null;
+  toolService: ToolServiceRegistry | null;
   savedStatus: string | null;
   saving: boolean;
   onSaved: (serviceId: string) => void;
@@ -125,7 +125,7 @@ export function ToolServiceConfigEditor({
       return;
     }
     try {
-      await onDeleteToolServiceConfig({ serviceId: toolService.serviceId, agentDid });
+      await onDeleteToolServiceConfig({ serviceId: toolService.service_id, agentDid });
       onDeleted();
     } catch {}
   }
@@ -137,7 +137,8 @@ export function ToolServiceConfigEditor({
   const [lanIp, setLanIp] = useState("");
   const [mcpPort, setMcpPort] = useState("");
   const [mcpPath, setMcpPath] = useState("");
-  const [status, setStatus] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [sendAgentDid, setSendAgentDid] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ToolServiceTestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
@@ -154,11 +155,12 @@ export function ToolServiceConfigEditor({
     setLanIp(b.lanIp);
     setMcpPort(b.mcpPort);
     setMcpPath(b.mcpPath);
-    setStatus(b.status);
+    setEnabled(b.enabled);
+    setSendAgentDid(b.sendAgentDid);
     setTestResult(null);
     setTestError(null);
     setSaveError(null);
-  }, [toolService?.serviceId]);
+  }, [toolService?.service_id]);
 
   const mcpPortValid = isOptionalInt(mcpPort, { min: 1, max: 65535 });
   const serviceAddressPresent = Boolean(
@@ -167,7 +169,7 @@ export function ToolServiceConfigEditor({
 
   function currentTestRequest(): ToolServiceTestRequest {
     return {
-      serviceId: serviceId.trim(),
+      serviceId: toolService?.service_id ?? serviceId.trim(),
       hostname: optionalString(hostname),
       tailscaleIp: optionalString(tailscaleIp),
       lanIp: optionalString(lanIp),
@@ -178,18 +180,23 @@ export function ToolServiceConfigEditor({
 
   async function submitToolService(event: FormEvent) {
     event.preventDefault();
-    const nextId = serviceId.trim();
+    const nextId = toolService?.service_id ?? serviceId.trim();
     try {
       await onSaveToolServiceConfig({
-        serviceId: nextId,
-        displayName,
-        description: optionalString(description),
-        hostname: optionalString(hostname),
-        tailscaleIp: optionalString(tailscaleIp),
-        lanIp: optionalString(lanIp),
-        mcpPort: parseOptionalInt(mcpPort),
-        mcpPath: optionalString(mcpPath),
-        status: optionalString(status),
+        document: {
+          ...toolService,
+          agent_did: agentDid,
+          service_id: nextId,
+          display_name: displayName || null,
+          description: optionalString(description),
+          hostname: optionalString(hostname),
+          tailscale_ip: optionalString(tailscaleIp),
+          lan_ip: optionalString(lanIp),
+          mcp_port: parseOptionalInt(mcpPort),
+          mcp_path: optionalString(mcpPath),
+          enabled,
+          send_agent_did: sendAgentDid,
+        },
       });
       onSaved(nextId);
       setSaveError(null);
@@ -225,7 +232,8 @@ export function ToolServiceConfigEditor({
             lanIp,
             mcpPort,
             mcpPath,
-            status,
+            enabled,
+            sendAgentDid,
           },
           toolServiceFormValues(toolService),
         )}
@@ -316,18 +324,23 @@ export function ToolServiceConfigEditor({
             value={mcpPath}
           />
         </label>
-        <label className="field">
-          <span>Status</span>
-          <select
-            data-testid="tool-service-status"
-            onChange={(event) => setStatus(event.currentTarget.value)}
-            value={status}
-          >
-            <option value="">Select status</option>
-            <option value="online">Online</option>
-            <option value="offline">Offline</option>
-            <option value="disabled">Disabled</option>
-          </select>
+        <label className="checkbox">
+          <input
+            data-testid="tool-service-enabled"
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => setEnabled(event.currentTarget.checked)}
+          />
+          <span>Enabled</span>
+        </label>
+        <label className="checkbox">
+          <input
+            data-testid="tool-service-send-agent-did"
+            type="checkbox"
+            checked={sendAgentDid}
+            onChange={(event) => setSendAgentDid(event.currentTarget.checked)}
+          />
+          <span>Send agent DID to the service</span>
         </label>
       </div>
       <div className="config-actions">
@@ -339,8 +352,7 @@ export function ToolServiceConfigEditor({
             !serviceId.trim() ||
             !serviceAddressPresent ||
             !mcpPort.trim() ||
-            !mcpPortValid ||
-            !mcpPath.trim()
+            !mcpPortValid
           }
           onClick={() => void testToolService()}
           type="button"
@@ -361,7 +373,7 @@ export function ToolServiceConfigEditor({
         <ConfirmDialog
           open={confirmingDelete}
           title="Delete tool service"
-          message={`Delete tool service "${toolService?.serviceId ?? ""}"? Selections still allowing it will block the delete.`}
+          message={`Delete tool service "${toolService?.service_id ?? ""}"? Selections still allowing it will block the delete.`}
           confirmLabel="Delete"
           danger
           onConfirm={() => {
@@ -377,8 +389,6 @@ export function ToolServiceConfigEditor({
             !serviceId.trim() ||
             !displayName.trim() ||
             !mcpPort.trim() ||
-            !mcpPath.trim() ||
-            !status ||
             !mcpPortValid
           }
           type="submit"
@@ -422,16 +432,17 @@ export function ToolServiceConfigEditor({
   );
 }
 
-function toolServiceFormValues(toolService: ToolServiceRegistryView | null) {
+function toolServiceFormValues(toolService: ToolServiceRegistry | null) {
   return {
-    serviceId: toolService?.serviceId ?? "",
-    displayName: toolService?.displayName ?? toolService?.serviceId ?? "",
+    serviceId: toolService?.service_id ?? "",
+    displayName: toolService?.display_name ?? toolService?.service_id ?? "",
     description: toolService?.description ?? "",
     hostname: toolService?.hostname ?? "",
-    tailscaleIp: toolService?.tailscaleIp ?? "",
-    lanIp: toolService?.lanIp ?? "",
-    mcpPort: toolService?.mcpPort != null ? String(toolService.mcpPort) : "",
-    mcpPath: toolService?.mcpPath ?? "",
-    status: toolService?.status ?? "",
+    tailscaleIp: toolService?.tailscale_ip ?? "",
+    lanIp: toolService?.lan_ip ?? "",
+    mcpPort: toolService?.mcp_port != null ? String(toolService.mcp_port) : "",
+    mcpPath: toolService?.mcp_path ?? "",
+    enabled: toolService?.enabled ?? true,
+    sendAgentDid: toolService?.send_agent_did ?? false,
   };
 }

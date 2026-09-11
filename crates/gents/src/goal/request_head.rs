@@ -38,37 +38,19 @@ pub(crate) fn verify_goal_continuation_edge(
             && child.caused_by_trigger_id.as_deref() == Some(goal_id),
         "continuation receipt has a different physical goal edge"
     );
-    let metadata: serde_json::Value = serde_json::from_str(
-        child
-            .metadata
-            .as_deref()
-            .context("continuation receipt lacks metadata")?,
-    )?;
-    anyhow::ensure!(
-        metadata
-            .pointer("/goal/goal_id")
-            .and_then(serde_json::Value::as_str)
-            == Some(goal_id)
-            && metadata
-                .pointer("/goal/parent_request_id")
-                .and_then(serde_json::Value::as_str)
-                == Some(parent_row.request_id.as_str()),
-        "continuation receipt has different goal metadata"
-    );
-    let sequence = metadata
-        .pointer("/goal/continuation_sequence")
-        .and_then(serde_json::Value::as_i64)
-        .context("continuation receipt lacks its original sequence")?;
+    let facts = child
+        .input
+        .as_ref()
+        .and_then(|input| input.goal_continuation.as_ref())
+        .context("continuation receipt lacks its original issuance facts")?;
+    let sequence = facts.sequence;
     let identity = goal_continuation_identity(goal_id, &parent_row.request_id, sequence)?;
     anyhow::ensure!(
         child.request_id == identity.request_id
             && child.retry_key.as_deref() == Some(identity.retry_key.as_str()),
         "continuation receipt has a different deterministic identity"
     );
-    let wrapup = metadata
-        .pointer("/goal/wrapup")
-        .and_then(serde_json::Value::as_bool)
-        .context("continuation receipt lacks its original wrapup policy")?;
+    let wrapup = facts.wrapup;
     Ok((sequence, wrapup))
 }
 
@@ -85,10 +67,7 @@ pub(super) fn verify_goal_continuation_receipt(
         child,
     )?;
     let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
-    let behavior = parent
-        .behavior_id
-        .clone()
-        .context("continuation predecessor has no behavior binding")?;
+    let behavior = parent.behavior_id.clone();
     let expected = prepare_goal_continuation(
         &parent,
         behavior,

@@ -3,36 +3,6 @@ import Proofs.Background.State
 
 namespace Subagent
 
-inductive SecondLeg where
-  | subagent (child : ComposedState)
-  | tool (ctx : ToolExecution.ToolCallContext)
-  deriving Repr
-
-namespace SecondLeg
-
-def kind : SecondLeg → BackgroundedKind
-  | .subagent _ => .Subagent
-  | .tool _ => .Tool
-
-def terminalOf : SecondLeg → ChildTerminal
-  | .subagent child =>
-      match child.request.state with
-      | .completed => .completed
-      | .failed => .failed
-      | .dead => .dead
-      | .interrupted => .interrupted
-      | .superseded => .superseded
-      | _ => .running
-  | .tool ctx =>
-      match ctx.state with
-      | .completed => .completed
-      | .failed => .failed
-      | .timedOut => .dead
-      | .cancelled => .interrupted
-      | _ => .running
-
-end SecondLeg
-
 namespace ChildTerminal
 
 def projectedToolState : ChildTerminal → ToolExecution.ToolCallState
@@ -50,17 +20,30 @@ end ChildTerminal
 structure BridgedState where
   parent       : ComposedState
   child        : ComposedState
-  secondLeg    : SecondLeg := .subagent child
   bridgeCallId : ToolExecution.ToolCallId
   deriving Repr
 
 namespace BridgedState
 
-def kind (s : BridgedState) : BackgroundedKind :=
-  s.secondLeg.kind
-
+/-- The child request is the sole execution-state owner for a subagent bridge.
+Native background tools retain their own ToolExecution/ManagedExec owners. -/
 def terminalOf (s : BridgedState) : ChildTerminal :=
-  s.secondLeg.terminalOf
+  match s.child.request.state with
+  | .completed => .completed
+  | .failed => .failed
+  | .dead => .dead
+  | .interrupted => .interrupted
+  | .superseded => .superseded
+  | _ => .running
+
+/-- Bridge observations follow the actual child, including after child steps. -/
+theorem terminalOf_completed (s : BridgedState)
+    (h : s.child.request.state = .completed) : s.terminalOf = .completed := by
+  simp [terminalOf, h]
+
+theorem terminalOf_interrupted (s : BridgedState)
+    (h : s.child.request.state = .interrupted) : s.terminalOf = .interrupted := by
+  simp [terminalOf, h]
 
 def parentLink (s : BridgedState) : Prop :=
   ∃ t ∈ s.parent.tools,

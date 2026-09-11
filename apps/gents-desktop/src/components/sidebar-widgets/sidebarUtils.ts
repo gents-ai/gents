@@ -1,11 +1,9 @@
-import type { ConversationSummary } from "@source-inc/gents-desktop-client";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
-export type ConversationLifecycleGroup = "attention" | "active" | "recent";
+export type SessionLifecycleGroup = "attention" | "active" | "recent";
 
-export function conversationLifecycleGroup(
-  conversation: ConversationSummary,
-): ConversationLifecycleGroup {
-  const state = (conversation.turnState ?? "").toLowerCase();
+export function sessionLifecycleGroup(session: SessionSummary): SessionLifecycleGroup {
+  const state = (session.turnState ?? "").toLowerCase();
   if (
     [
       "failed",
@@ -14,8 +12,6 @@ export function conversationLifecycleGroup(
       "dead",
       "inputrequired",
       "input_required",
-      "awaitingapproval",
-      "awaiting_approval",
     ].includes(state)
   ) {
     return "attention";
@@ -26,12 +22,10 @@ export function conversationLifecycleGroup(
   return "recent";
 }
 
-export function conversationStatusClass(conversation: ConversationSummary) {
-  const group = conversationLifecycleGroup(conversation);
+export function sessionStatusClass(session: SessionSummary) {
+  const group = sessionLifecycleGroup(session);
   if (group === "attention") {
-    return "conversation-status-dot conversation-status-dot-error";
+    return "session-status-dot session-status-dot-error";
   }
-  return group === "active"
-    ? "conversation-status-dot conversation-status-dot-running"
-    : null;
+  return group === "active" ? "session-status-dot session-status-dot-running" : null;
 }

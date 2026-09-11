@@ -97,7 +97,6 @@ export function BehaviorToolSurface({
             <>
               <p className="muted behavior-tool-surface-meta">
                 {[
-                  `policy: ${explanation.toolPolicySemantics}`,
                   `ceiling: ${explanation.ceilingSource}`,
                   explanation.mcpServicesOnline
                     ? "MCP services online"

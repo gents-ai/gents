@@ -6,4 +6,5 @@ type AgentPrincipal @branchable {
     created_at: String
     updated_at: DateTime @index(direction: DESC)
     created_by: String
+    tags: [String]
 }

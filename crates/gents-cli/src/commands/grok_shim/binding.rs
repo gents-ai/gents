@@ -74,8 +74,9 @@ impl BehaviorConnection {
         }
         let behavior = profile.unwrap_or(&self.inputs.behavior_id).to_owned();
         let escaped = gents::graphql::escape_graphql_string(&behavior);
+        let owner = gents::graphql::escape_graphql_string(&self.inputs.agent_did);
         let response = self.inputs.node.execute(&format!(
-            "{{AgentBehavior(filter:{{behavior_id:{{_eq:\"{escaped}\"}}}},limit:2){{agent_did enabled}}}}"
+            "{{AgentBehavior(filter:{{behavior_id:{{_eq:\"{escaped}\"}},agent_did:{{_eq:\"{owner}\"}}}},limit:2){{agent_did enabled}}}}"
         )).await;
         gents::graphql::ensure_no_errors(&response, "select Grok behavior")?;
         let rows = response
@@ -93,8 +94,12 @@ impl BehaviorConnection {
             self.bootstrap.clone()
         } else {
             let mut inputs = self.inputs.clone();
-            inputs.bound =
-                super::projection::resolve_bound_model_context(&inputs.node, &behavior).await?;
+            inputs.bound = super::projection::resolve_bound_model_context(
+                &inputs.node,
+                &inputs.agent_did,
+                &behavior,
+            )
+            .await?;
             inputs.behavior_id = behavior.clone();
             inputs.service(self.client_id, &self.registration)
         };

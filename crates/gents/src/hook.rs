@@ -288,7 +288,6 @@ struct SessionState {
     current_request_doc_id: Option<String>,
     current_requester_did: Option<String>,
     request_deadline_at: Option<DateTime<Utc>>,
-    approval_required_tools: Vec<String>,
     sequence: u32,
     transcript_turn: TranscriptTurnState,
     persisted_tool_result_keys: HashSet<String>,
@@ -476,6 +475,7 @@ pub struct DefraSessionHook {
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: BackgroundLiveOutputState,
     operator_tool_root: Option<PathBuf>,
+    remote_tools: Option<crate::document_config::RemoteTools>,
     goal_tools_enabled: bool,
     goal_creation_enabled: bool,
     output_obligation_gate: Option<crate::agent::output_obligation::OutputObligationGate>,
@@ -511,7 +511,6 @@ impl DefraSessionHook {
                 current_request_doc_id: None,
                 current_requester_did: None,
                 request_deadline_at: None,
-                approval_required_tools: Vec::new(),
                 sequence: 0,
                 transcript_turn: TranscriptTurnState::Idle,
                 persisted_tool_result_keys: HashSet::new(),
@@ -523,6 +522,7 @@ impl DefraSessionHook {
             background_executions,
             background_live_outputs,
             operator_tool_root: None,
+            remote_tools: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
             output_obligation_gate: None,
@@ -534,10 +534,11 @@ impl DefraSessionHook {
         session_id: &str,
         _agent_name: &str,
         agent_did: &str,
+        requester_did: Option<&str>,
         failure_policy: FailurePolicy,
     ) -> anyhow::Result<Self> {
-        session::require_session(&node, session_id).await?;
-        let max_seq = session::max_sequence(&node, session_id).await?;
+        session::require_session(&node, agent_did, session_id, requester_did).await?;
+        let max_seq = session::max_sequence(&node, session_id, agent_did, requester_did).await?;
         let background_executions = BackgroundExecutionRegistry::default();
         let background_live_outputs = background_executions.live_outputs.clone();
 
@@ -556,7 +557,6 @@ impl DefraSessionHook {
                 current_request_doc_id: None,
                 current_requester_did: None,
                 request_deadline_at: None,
-                approval_required_tools: Vec::new(),
                 sequence: max_seq,
                 transcript_turn: TranscriptTurnState::Idle,
                 persisted_tool_result_keys: HashSet::new(),
@@ -568,6 +568,7 @@ impl DefraSessionHook {
             background_executions,
             background_live_outputs,
             operator_tool_root: None,
+            remote_tools: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
             output_obligation_gate: None,
@@ -745,17 +746,12 @@ impl DefraSessionHook {
         self.state.lock().await.request_deadline_at = deadline_at;
     }
 
-    pub async fn set_approval_required_tools(&self, tools: Vec<String>) {
-        self.state.lock().await.approval_required_tools = tools;
-    }
-
-    pub(crate) async fn approval_required_for(&self, tool_name: &str) -> bool {
-        self.state
-            .lock()
-            .await
-            .approval_required_tools
-            .iter()
-            .any(|name| name == tool_name)
+    pub(crate) fn with_remote_tools(
+        mut self,
+        tools: Option<crate::document_config::RemoteTools>,
+    ) -> Self {
+        self.remote_tools = tools;
+        self
     }
 
     pub(crate) async fn foreground_live_output_writer(
@@ -998,10 +994,6 @@ impl DefraSessionHook {
                 tracing::debug!(
                     "leaving background subagent bridge running after parent deadline sweep"
                 );
-            } else if lifecycle.state()
-                == crate::tool_call_lifecycle::ToolCallState::AwaitingApproval
-            {
-                lifecycle.timeout_while_held().await?;
             } else {
                 // Foreground subagent bridges take the same deadline
                 // transition as native tools: `timedOut`, never a fabricated
@@ -1024,21 +1016,23 @@ impl DefraSessionHook {
 
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
-            if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::AwaitingApproval {
-                lifecycle
-                    .cancel_while_held(CancelCause::Interrupted)
-                    .await?;
-                continue;
-            }
             let dispatch = lifecycle
                 .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &self.agent_did)
                 .await?;
             if lifecycle.is_cancelled() {
                 if let Some(dispatch) = dispatch {
-                    if let CascadeDispatch::Local(intent) = dispatch {
-                        if let Err(error) = crate::interrupt::interrupt_request(
+                    if let CascadeDispatch::Local { intent, child } = dispatch {
+                        if let Err(error) = crate::interrupt::interrupt_request_by_doc_id(
                             &self.node,
-                            &intent.child_request_id,
+                            child
+                                .doc_id
+                                .as_deref()
+                                .expect("verified physical cascade child"),
+                            child
+                                .agent_did
+                                .as_deref()
+                                .expect("verified local child principal"),
+                            child.requester_did.as_deref(),
                         )
                         .await
                         {
@@ -1084,17 +1078,43 @@ impl DefraSessionHook {
     }
 
     pub async fn mark_current_response_materialized(&self, sequence: u32) -> anyhow::Result<()> {
-        let request_id = self.state.lock().await.current_request_id.clone();
-        let Some(request_id) = request_id.as_deref() else {
-            return Ok(());
+        let (request_id, request_doc_id, session_id, requester_did) = {
+            let state = self.state.lock().await;
+            (
+                state.current_request_id.clone(),
+                state.current_request_doc_id.clone(),
+                state.session_id.clone(),
+                state.current_requester_did.clone(),
+            )
         };
-        session::mark_response_materialized(&self.node, request_id, sequence).await
+        if request_id.is_none() {
+            return Ok(());
+        }
+        let request_doc_id = request_doc_id
+            .ok_or_else(|| anyhow::anyhow!("active response has no request document binding"))?;
+        let session_id =
+            session_id.ok_or_else(|| anyhow::anyhow!("active response has no session binding"))?;
+        session::mark_response_materialized(
+            &self.node,
+            &self.agent_did,
+            &session_id,
+            requester_did.as_deref(),
+            &request_doc_id,
+            sequence,
+        )
+        .await
     }
 
     pub async fn close(&self) -> anyhow::Result<()> {
         let session_id = self.state.lock().await.session_id.clone();
         if let Some(id) = session_id {
-            session::close_session(&self.node, &id).await?;
+            session::close_session(
+                &self.node,
+                &self.agent_did,
+                &id,
+                self.active_requester_did().await.as_deref(),
+            )
+            .await?;
         }
         Ok(())
     }

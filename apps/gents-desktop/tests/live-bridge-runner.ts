@@ -3,11 +3,7 @@ import { resolve } from "node:path";
 
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
-import type {
-  ChatSendResult,
-  DesktopClientSnapshot,
-  TaskRunResult,
-} from "@source-inc/gents-desktop-client";
+import type { ChatSendResult, TaskRunResult } from "@source-inc/gents-desktop-client";
 import type { TauriDriverBridge, TauriDriverChatRequest } from "./tauri-driver";
 import { createRunnerAdapter } from "./live-bridge-runner/adapter";
 import { JsonHttpClient } from "./live-bridge-runner/http";

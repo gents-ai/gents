@@ -25,6 +25,7 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
         required: false,
     };
     let intent = GraphIntent {
+        agent_did: CALLER_DID.to_owned(),
         graph_id: "lean-validation-fixture".to_owned(),
         nodes: vec![GraphNode {
             node_id: "worker".to_owned(),
@@ -59,14 +60,18 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
             max_total_invocations: 2,
             max_runtime_secs: 60,
         },
+        tags: Vec::new(),
     };
     let capability = StageCapability {
+        agent_did: CALLER_DID.to_owned(),
         capability_id: "approved-worker".to_owned(),
         revision: "v1".to_owned(),
         task_id: "worker-v1-task".to_owned(),
         input_ports: vec![input],
         output_ports: vec![output],
         allowed_callers: vec![CALLER_DID.to_owned()],
+        workspace_authority: None,
+        tags: Vec::new(),
     };
     (intent, vec![capability])
 }
@@ -76,32 +81,58 @@ fn generated_validation_cases_fence_whole_graph_compilation_gate() {
     let cases = &lean_contract_snapshot().graph_pipeline_validation_cases;
     assert_eq!(cases.len(), 32, "Lean must emit the full five-bit matrix");
 
+    // Single-bit cases pin the concrete diagnostic channel so rejection must
+    // come from the declared gate, not an unrelated compiler check. Multi-bit
+    // cases legitimately emit several codes at once.
+    use gents::graph_pipeline::DiagnosticCode;
     for test_case in cases {
         let (mut intent, mut capabilities) = valid_fixture();
+        let mut expected_codes = Vec::new();
         if !test_case.types_valid {
             intent.entries[0].schema = "WrongSchema/v1".to_owned();
+            expected_codes.push(DiagnosticCode::SchemaMismatch);
         }
         if !test_case.topology_valid {
             intent.entries.clear();
+            expected_codes.push(DiagnosticCode::MissingInputBinding);
         }
         if !test_case.capabilities_authorized {
             capabilities[0].allowed_callers.clear();
+            expected_codes.push(DiagnosticCode::UnauthorizedCapability);
         }
         if !test_case.within_bounds {
             intent.limits.max_nodes = 0;
+            expected_codes.push(DiagnosticCode::NodeLimitExceeded);
         }
         if !test_case.terminal_result_declared {
             intent.results.clear();
+            expected_codes.push(DiagnosticCode::MissingTerminalResult);
         }
 
-        let accepted = compile_graph(
+        let compiled = compile_graph(
             &intent,
             &capabilities,
             CALLER_DID,
             &CompilerPolicy::default(),
-        )
-        .is_ok();
-        assert_eq!(accepted, test_case.expected_valid, "{}", test_case.name);
+        );
+        assert_eq!(
+            compiled.is_ok(),
+            test_case.expected_valid,
+            "{}",
+            test_case.name
+        );
+        if let [expected_code] = expected_codes.as_slice() {
+            let error = compiled.unwrap_err();
+            assert!(
+                error
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == *expected_code),
+                "{} must reject through {expected_code:?}; observed {:?}",
+                test_case.name,
+                error.diagnostics
+            );
+        }
     }
 }
 

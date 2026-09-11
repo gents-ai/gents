@@ -9,18 +9,6 @@ private theorem request_subagentDepth_preserved
     post.subagentDepth = pre.subagentDepth := by
   cases h <;> simp_all
 
-private theorem request_causedByParentRequestId_preserved
-    {pre post : RequestContext}
-    (h : RequestContext.Transition pre post) :
-    post.causedByParentRequestId = pre.causedByParentRequestId := by
-  cases h <;> simp_all
-
-private theorem request_causedByParentToolCallId_preserved
-    {pre post : RequestContext}
-    (h : RequestContext.Transition pre post) :
-    post.causedByParentToolCallId = pre.causedByParentToolCallId := by
-  cases h <;> simp_all
-
 private theorem composed_subagentDepth_preserved
     {pre post : ComposedState}
     (h : ComposedState.Transition pre post) :
@@ -29,38 +17,6 @@ private theorem composed_subagentDepth_preserved
   | process_step _ h_req _ _ _ => rw [h_req]
   | request_step h_inner _ _ _ _ _ _ =>
     exact request_subagentDepth_preserved h_inner
-  | slot_acquire _ _ h_req _ _ _ _ => simp [h_req]
-  | request_interrupt _ h_req _ _ _ _ => simp [h_req]
-  | clock_advance _ _ h_req _ _ _ _ => simp [h_req]
-  | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
-  | call_step _ h_req _ _ _ => rw [h_req]
-  | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
-  | tool_step _ _ _ h_req _ _ _ _ _ => rw [h_req]
-
-private theorem composed_causedByParentRequestId_preserved
-    {pre post : ComposedState}
-    (h : ComposedState.Transition pre post) :
-    post.request.causedByParentRequestId = pre.request.causedByParentRequestId := by
-  cases h with
-  | process_step _ h_req _ _ _ => rw [h_req]
-  | request_step h_inner _ _ _ _ _ _ =>
-    exact request_causedByParentRequestId_preserved h_inner
-  | slot_acquire _ _ h_req _ _ _ _ => simp [h_req]
-  | request_interrupt _ h_req _ _ _ _ => simp [h_req]
-  | clock_advance _ _ h_req _ _ _ _ => simp [h_req]
-  | persistence_step _ _ _ h_req _ _ _ _ => rw [h_req]
-  | call_step _ h_req _ _ _ => rw [h_req]
-  | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
-  | tool_step _ _ _ h_req _ _ _ _ _ => rw [h_req]
-
-private theorem composed_causedByParentToolCallId_preserved
-    {pre post : ComposedState}
-    (h : ComposedState.Transition pre post) :
-    post.request.causedByParentToolCallId = pre.request.causedByParentToolCallId := by
-  cases h with
-  | process_step _ h_req _ _ _ => rw [h_req]
-  | request_step h_inner _ _ _ _ _ _ =>
-    exact request_causedByParentToolCallId_preserved h_inner
   | slot_acquire _ _ h_req _ _ _ _ => simp [h_req]
   | request_interrupt _ h_req _ _ _ _ => simp [h_req]
   | clock_advance _ _ h_req _ _ _ _ => simp [h_req]
@@ -102,7 +58,7 @@ private theorem inv_depth_step
     · rw [h_parent_eq]; exact h_init.1
     · rw [h_child_depth_eq]; exact h_init.2
 
-theorem inv_depth
+theorem subagent_depth_bounded
     (pre post : BridgedState)
     (h_init  : pre.parent.request.subagentDepth ≤ maxSubagentDepth ∧
                pre.child.request.subagentDepth ≤ maxSubagentDepth)
@@ -177,7 +133,7 @@ private theorem inv_link_step
     · show s₂.child.request.causedByParentToolCallId = some s₂.bridgeCallId
       rw [h_child_cBPT_eq, h_bridgeId_eq]; exact h_cLink.2
 
-theorem inv_link
+theorem bridge_link_symmetric
     (pre post : BridgedState)
     (h_init  : pre.linked)
     (h_trace : Trace pre post) :

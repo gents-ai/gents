@@ -32,12 +32,6 @@ theorem same_principal_next_request_authorized
     authorized { owner with requestId := nextRequestId } owner = true := by
   simp [authorized]
 
-theorem absent_requester_next_request_authorized
-    (owner : Scope) (nextRequestId : String)
-    (hRequester : owner.requesterDid = none) :
-    authorized { owner with requestId := nextRequestId } owner = true := by
-  simp [authorized, hRequester]
-
 theorem empty_requester_does_not_alias_absent
     (requestId nextRequestId sessionId agentDid : String) :
     authorized
@@ -52,18 +46,15 @@ theorem different_session_denied
 
 theorem different_agent_denied
     (caller owner : Scope)
-    (hSession : caller.sessionId = owner.sessionId)
     (hAgent : caller.agentDid ≠ owner.agentDid) :
     authorized caller owner = false := by
-  simp [authorized, hSession, hAgent]
+  simp [authorized, hAgent]
 
 theorem different_requester_denied
     (caller owner : Scope)
-    (hSession : caller.sessionId = owner.sessionId)
-    (hAgent : caller.agentDid = owner.agentDid)
     (hRequester : caller.requesterDid ≠ owner.requesterDid) :
     authorized caller owner = false := by
-  simp [authorized, hSession, hAgent, hRequester]
+  simp [authorized, hRequester]
 
 inductive WaitBoundary where
   | waitTimeout

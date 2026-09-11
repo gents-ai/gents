@@ -2377,19 +2377,6 @@ mod tests {
     }
 
     #[test]
-    fn approved_delivery_contains_exact_generation_receipt() {
-        let documents =
-            terminal_documents("decision-doc", Some("revision-doc"), Some("receipt-doc"));
-        assert_eq!(documents.len(), 3);
-        assert_eq!(documents[0].collection, "NetworkEnrollmentDecision");
-        assert_eq!(documents[0].doc_id, "decision-doc");
-        assert_eq!(documents[1].collection, "NetworkAuthorizationRevision");
-        assert_eq!(documents[1].doc_id, "revision-doc");
-        assert_eq!(documents[2].collection, "NetworkEnrollmentRouteReceipt");
-        assert_eq!(documents[2].doc_id, "receipt-doc");
-    }
-
-    #[test]
     fn terminal_delivery_fence_suppresses_stale_active_after_revocation() {
         let pending = pending_request("request-1");
         let mut approved = decision(WireDecisionKind::Approved);

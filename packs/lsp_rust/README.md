@@ -1,9 +1,15 @@
 # Pack: rust-analyzer through the native `lsp` tool
 
-Least-privilege coding surface: ReadOnly file tools rooted at **this Gents
-repository**, bash and every other tool off, `enable_lsp: true`. The model
+Least-privilege coding surface: readonly file access rooted at **this Gents
+repository**, bash and every other tool off, with the native LSP capability enabled in
+the canonical `Tools` document. The model
 has to call `lsp` against rust-analyzer and answer two
 checkable questions about the runtime crate.
+
+Runtime configuration is authored once in `pack_config.json`. The distribution
+`manifest.json` points to that canonical bundle and lists it with the schema and
+prompt sidecars needed to install the pack; there are no per-collection JSON
+document fragments.
 
 This pack is **not** a CI gate. Required CI still says no live rust-analyzer.
 Run it locally when `rust-analyzer` is on `PATH` and the DeepSeek box (or
@@ -44,9 +50,9 @@ test. The live pack and e2e point at the real Gents tree.
 | Path | Role |
 | --- | --- |
 | `workspace/` | Tiny Rust lib for the offline rust-analyzer unit test |
-| `tool_selections/lsp_readonly/` | ReadOnly files + `enable_lsp`; bash off; root is the repo |
-| `tasks/lsp_hover_task/` | Deterministic prompt asks checkable semantic questions |
-| `event_triggers/lsp_hover/` | Fires on `LspDemoJob` create |
+| `pack_config.json` | Canonical behavior, context, Tools, task, EventSource, Trigger, and inference configuration |
+| `tasks/lsp_hover_task/prompt.md` | Deterministic prompt asks checkable semantic questions |
+| `schemas/` | Pack-scoped `LspDemoJob` schema observed by the EventSource |
 
 ## Tools
 

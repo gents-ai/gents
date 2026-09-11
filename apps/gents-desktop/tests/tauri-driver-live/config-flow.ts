@@ -14,11 +14,12 @@ export type ConfigFlowIds = {
   backendId: string;
   profileId: string;
   toolServiceId: string;
-  toolSelectionId: string;
+  toolsId: string;
   behaviorId: string;
   taskId: string;
   scheduleId: string;
-  eventTriggerId: string;
+  eventSourceId: string;
+  triggerDocId: string;
 };
 
 type ConfigFlowContext = {
@@ -32,11 +33,9 @@ type BackendConfigFlowContext = ConfigFlowContext & {
   modelName: string;
 };
 
-type ToolSelectionConfigFlowContext = ConfigFlowContext & {
+type ToolsConfigFlowContext = ConfigFlowContext & {
   fileToolRoot: string;
 };
-
-type DriverConfigFlowContext = Pick<ConfigFlowContext, "driver" | "ids">;
 
 export function createConfigFlowIds(suffix = Date.now().toString()): ConfigFlowIds {
   return {
@@ -44,11 +43,12 @@ export function createConfigFlowIds(suffix = Date.now().toString()): ConfigFlowI
     backendId: `minimax-backend-${suffix}`,
     profileId: `minimax-profile-${suffix}`,
     toolServiceId: `http-mcp-${suffix}`,
-    toolSelectionId: `repo-tools-${suffix}`,
+    toolsId: `repo-tools-${suffix}`,
     behaviorId: `config-behavior-${suffix}`,
     taskId: `config-task-${suffix}`,
-    scheduleId: `config-timer-${suffix}`,
-    eventTriggerId: `config-event-${suffix}`,
+    scheduleId: `config-schedule-${suffix}`,
+    eventSourceId: `config-event-source-${suffix}`,
+    triggerDocId: `config-event-trigger-${suffix}`,
   };
 }
 
@@ -94,7 +94,7 @@ export async function createInferenceProfile({
   await driver.user.click(screen.getByTestId("profile-save"));
   await waitForDeploymentDocument(runner, (current) => {
     expect(
-      current.inferenceProfiles.some((profile) => profile.profileId === ids.profileId),
+      current.inferenceProfiles.some((profile) => profile.profile_id === ids.profileId),
     ).toBe(true);
   });
 }
@@ -117,55 +117,49 @@ export async function createToolService({ runner, driver, ids }: ConfigFlowConte
   await waitForDeploymentDocument(runner, (current) => {
     expect(
       current.toolServiceRegistries.some(
-        (service) => service.serviceId === ids.toolServiceId,
+        (service) => service.service_id === ids.toolServiceId,
       ),
     ).toBe(true);
   });
 }
 
-export async function createToolSelection({
+export async function createTools({
   runner,
   driver,
   ids,
   fileToolRoot,
-}: ToolSelectionConfigFlowContext) {
-  await driver.openConfigSection("toolSelections");
-  await driver.user.click(screen.getByTestId("tool-selection-new"));
-  await driver.replaceInput("tool-selection-id", ids.toolSelectionId);
-  await driver.replaceInput("tool-selection-display-name", "Repo Audit Readonly Tools");
-  await driver.setChecked("tool-enable-file-tools", true);
-  await driver.setChecked("tool-enable-bash", true);
-  await driver.setChecked("tool-enable-meta-tools", true);
-  await driver.setChecked(`tool-allowed-mcp-service-${ids.toolServiceId}`, true);
-  await driver.replaceInput("tool-file-tool-root", fileToolRoot);
-  await driver.selectOption("tool-command-execution-policy", "read_only");
-  await driver.selectOption("tool-command-network-mode", "disabled");
-  await driver.replaceTextarea("tool-command-allowed-argv-prefixes", "rg");
-  await driver.replaceTextarea("tool-command-forbidden-argv-prefixes", "rm -rf");
-  await driver.replaceTextarea("tool-cli-tool-names", "rg");
-  await driver.replaceTextarea("tool-backgroundable-tool-names", "bash");
-  await driver.replaceTextarea("tool-subagent-targets", ids.behaviorId);
-  await driver.replaceInput("tool-cross-deployment-spawn-timeout", "45");
-  await driver.setChecked("tool-subagent-spawn-enabled", true);
-  await driver.setChecked("tool-subagent-steering-enabled", true);
-  await driver.setChecked("tool-subagent-background-enabled", true);
-  await driver.user.click(screen.getByTestId("tool-selection-save"));
+}: ToolsConfigFlowContext) {
+  await driver.openConfigSection("tools");
+  await driver.user.click(screen.getByTestId("tools-new"));
+  await driver.replaceInput("tools-id", ids.toolsId);
+  await driver.replaceInput("tools-display-name", "Repo Audit Readonly Tools");
+  await driver.replaceInput("tools-root", fileToolRoot);
+  await driver.selectOption("tools-files-mode", "ReadWrite");
+  await driver.selectOption("tools-bash-mode", "ReadOnly");
+  await driver.setChecked("tools-bash-background", false);
+  await driver.user.click(screen.getByTestId(`tools-service-${ids.toolServiceId}`));
+  await driver.replaceTextarea(`tools-service-names-${ids.toolServiceId}`, "all");
+  await driver.replaceTextarea("tools-target-ids", ids.behaviorId);
+  await driver.replaceInput("tools-cross-principal-spawn-timeout", "45");
+  await driver.setChecked("tools-subagent-spawn", true);
+  await driver.setChecked("tools-subagent-steering", true);
+  await driver.setChecked("tools-subagent-background", true);
+  await driver.user.click(screen.getByTestId("tools-save"));
   await waitForDeploymentDocument(runner, (current) => {
-    const selection = current.toolSelections.find(
-      (candidate) => candidate.selectionId === ids.toolSelectionId,
-    );
-    expect(selection?.allowedMcpServiceIds).toContain(ids.toolServiceId);
-    expect(selection?.fileToolRoot).toBe(fileToolRoot);
-    expect(selection?.commandExecutionPolicy).toBe("read_only");
-    expect(selection?.commandAllowedArgvPrefixes).toContain("rg");
-    expect(selection?.commandForbiddenArgvPrefixes).toContain("rm -rf");
-    expect(selection?.commandNetworkMode).toBe("disabled");
-    expect(selection?.backgroundableToolNames).toContain("bash");
-    expect(selection?.subagentTargets).toContain(ids.behaviorId);
-    expect(selection?.subagentSpawnEnabled).toBe(true);
-    expect(selection?.subagentSteeringEnabled).toBe(true);
-    expect(selection?.subagentBackgroundEnabled).toBe(true);
-    expect(selection?.crossDeploymentSpawnTimeoutSeconds).toBe(45);
+    const tools = current.tools.find((candidate) => candidate.tools_id === ids.toolsId);
+    expect(tools).toBeDefined();
+    expect(
+      tools?.remote?.services?.some(
+        (grant) => grant.mcp_service_id === ids.toolServiceId,
+      ),
+    ).toBe(true);
+    expect(tools?.host?.files?.mode).toBe("ReadWrite");
+    expect(tools?.host?.bash?.mode).toBe("ReadOnly");
+    expect(tools?.host?.root).toBe(fileToolRoot);
+    expect(tools?.subagents?.target_ids).toContain(ids.behaviorId);
+    expect(tools?.subagents?.spawn_enabled).toBe(true);
+    expect(tools?.subagents?.steering_enabled).toBe(true);
+    expect(tools?.subagents?.background_enabled).toBe(true);
   });
 }
 
@@ -181,9 +175,9 @@ export async function createBehavior({ runner, driver, ids }: ConfigFlowContext)
     ).some((option) => option.value === ""),
   ).toBe(false);
   await driver.replaceBehaviorKey(ids.behaviorId);
-  await driver.selectOption("behavior-backend-id", ids.backendId);
   await driver.selectOption("behavior-profile-id", ids.profileId);
-  await driver.selectOption("behavior-tool-selection-id", ids.toolSelectionId);
+  await driver.replaceInput("behavior-context-id", ids.behaviorId);
+  await driver.selectOption("behavior-tools-id", ids.toolsId);
   await driver.replaceBehaviorSystemPrompt(
     `You are Amy running a desktop config acceptance flow. Include sentinel ${ids.suffix} when asked about this test.`,
   );
@@ -192,9 +186,13 @@ export async function createBehavior({ runner, driver, ids }: ConfigFlowContext)
     const behavior = current.behaviors.find(
       (candidate) => candidate.behaviorId === ids.behaviorId,
     );
-    expect(behavior?.backendId).toBe(ids.backendId);
     expect(behavior?.inferenceProfileId).toBe(ids.profileId);
-    expect(behavior?.toolSelectionId).toBe(ids.toolSelectionId);
+    expect(behavior?.contextId).toBe(ids.behaviorId);
+    const context = current.contexts.find(
+      (candidate) => candidate.context_id === ids.behaviorId,
+    );
+    expect(context?.tools_id).toBe(ids.toolsId);
+    expect(context?.system_prompt).toContain(`${ids.suffix}`);
   });
 }
 
@@ -219,34 +217,65 @@ export async function createTask({ runner, driver, ids }: ConfigFlowContext) {
 }
 
 export async function createSchedule({ runner, driver, ids }: ConfigFlowContext) {
-  await driver.openConfigSection("timerTriggers");
+  await driver.openConfigSection("schedules");
   await driver.user.click(screen.getByTestId("schedule-new"));
   await driver.replaceInput("schedule-id", ids.scheduleId);
-  await driver.selectOption("schedule-task-id", ids.taskId);
+  await driver.replaceInput("schedule-display-name", "Config Flow Hourly");
+  await driver.selectOption("schedule-cadence-kind", "interval");
   await driver.replaceInput("schedule-interval-secs", "3600");
-  await driver.selectOption("schedule-concurrency", "serial");
   await driver.user.click(screen.getByTestId("schedule-save"));
   await waitForDeploymentDocument(runner, (current) => {
     const schedule = current.schedules.find(
-      (candidate) => candidate.scheduleId === ids.scheduleId,
+      (candidate) => candidate.schedule_id === ids.scheduleId,
     );
-    expect(schedule?.taskId).toBe(ids.taskId);
+    expect(schedule?.cadence).toEqual({
+      kind: "interval",
+      interval_secs: 3600,
+    });
   });
 }
 
-export async function createEventTrigger({ driver, ids }: DriverConfigFlowContext) {
-  await driver.openConfigSection("eventTriggers");
-  await driver.user.click(screen.getByTestId("event-trigger-new"));
-  await driver.replaceInput("event-trigger-id", ids.eventTriggerId);
-  await driver.selectOption("event-trigger-task-id", ids.taskId);
-  await driver.replaceInput("event-trigger-source-collection", "AgentRequest");
-  await driver.selectOption("event-trigger-event-kind", "created");
-  await driver.selectOption("event-trigger-concurrency", "latest_only");
-  await driver.replaceTextarea(
-    "event-trigger-filter",
-    JSON.stringify({ status: "completed" }),
-  );
-  await driver.user.click(screen.getByTestId("event-trigger-save"));
+export async function createEventSource({ runner, driver, ids }: ConfigFlowContext) {
+  await driver.openConfigSection("eventSources");
+  await driver.user.click(screen.getByTestId("event-source-new"));
+  await driver.replaceInput("event-source-id", ids.eventSourceId);
+  await driver.replaceInput("event-source-display-name", "Config Flow Events");
+  await driver.replaceInput("event-source-source-collection", "AgentRequest");
+  await driver.selectOption("event-source-event-kind", "created");
+  await driver.user.click(screen.getByTestId("event-source-save"));
+  await waitForDeploymentDocument(runner, (current) => {
+    const eventSource = current.eventSources.find(
+      (candidate) => candidate.event_source_id === ids.eventSourceId,
+    );
+    expect(eventSource?.source_collection).toBe("AgentRequest");
+    expect(eventSource?.event_kind).toBe("created");
+  });
+}
+
+export async function createTriggerDocument({
+  runner,
+  driver,
+  ids,
+}: ConfigFlowContext) {
+  await driver.openConfigSection("triggers");
+  await driver.user.click(screen.getByTestId("trigger-new"));
+  await driver.replaceInput("trigger-id", ids.triggerDocId);
+  await driver.replaceInput("trigger-display-name", "Config Flow Event Trigger");
+  await driver.selectOption("trigger-task-id", ids.taskId);
+  await driver.selectOption("trigger-source-kind", "event");
+  await driver.selectOption("trigger-source-event-source", ids.eventSourceId);
+  await driver.selectOption("trigger-concurrency", "latest_only");
+  await driver.user.click(screen.getByTestId("trigger-save"));
+  await waitForDeploymentDocument(runner, (current) => {
+    const trigger = current.triggers.find(
+      (candidate) => candidate.config.trigger_id === ids.triggerDocId,
+    );
+    expect(trigger?.config.task_id).toBe(ids.taskId);
+    expect(trigger?.config.source).toEqual({
+      kind: "event",
+      event_source_id: ids.eventSourceId,
+    });
+  });
 }
 
 export async function waitForConfigFlowReady(

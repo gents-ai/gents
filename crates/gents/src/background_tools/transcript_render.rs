@@ -307,30 +307,21 @@ mod tests {
     }
 
     #[test]
-    fn bridge_only_assistant_renders_plain() {
-        let msgs = vec![assistant_with_tool_calls(
-            5,
-            "spawning child",
-            vec!["bridge-1"],
-            0,
-        )];
-        let out = render_transcript(&msgs, 0, OPTS_DEFAULT);
-        assert!(out.transcript.contains("[assistant seq=5]"));
-        assert!(!out.transcript.contains("tool_calls="));
-        assert!(!out.transcript.contains("bridge-1"));
-    }
-
-    #[test]
-    fn non_bridge_tool_calls_render_count_suffix() {
-        let msgs = vec![assistant_with_tool_calls(
-            5,
-            "using visible tool",
-            vec!["bridge-1"],
-            2,
-        )];
-        let out = render_transcript(&msgs, 0, OPTS_DEFAULT);
-        assert!(out.transcript.contains("[assistant seq=5 tool_calls=2]"));
-        assert!(!out.transcript.contains("bridge-1"));
+    fn bridge_and_non_bridge_tool_call_counts_render() {
+        for (visible_tool_calls, expected_header) in [
+            (0, "[assistant seq=5]"),
+            (2, "[assistant seq=5 tool_calls=2]"),
+        ] {
+            let msgs = vec![assistant_with_tool_calls(
+                5,
+                "assistant output",
+                vec!["bridge-1"],
+                visible_tool_calls,
+            )];
+            let out = render_transcript(&msgs, 0, OPTS_DEFAULT);
+            assert!(out.transcript.contains(expected_header));
+            assert!(!out.transcript.contains("bridge-1"));
+        }
     }
 
     #[test]

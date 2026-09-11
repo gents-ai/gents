@@ -317,3 +317,38 @@ fn generated_session_hydration_progress_cases_match_observe() {
         }
     }
 }
+
+#[test]
+fn hydration_coverage_distinguishes_same_doc_id_in_different_collections() {
+    use gents::agent::p2p_reconcile::session_hydration::{
+        project_durable_hydration_progress, ClientHydrationRequestState,
+    };
+    // Lean document references are interned (collection, _docID) pairs. Matching
+    // an ID from another collection must not satisfy the served manifest.
+    let message = SessionHydrationDocumentKey {
+        collection: "AgentMessage".into(),
+        doc_id: "shared-id".into(),
+    };
+    let response = SessionHydrationDocumentKey {
+        collection: "AgentResponse".into(),
+        doc_id: "shared-id".into(),
+    };
+    let served = BTreeSet::from([message.clone()]);
+    let incomplete = project_durable_hydration_progress(
+        "session",
+        "agent",
+        BTreeSet::from([response.clone()]),
+        ClientHydrationRequestState::Served(served.clone()),
+    );
+    assert_eq!(incomplete.phase, ClientHydrationPhase::Serving);
+    assert_eq!(incomplete.covered_count, 0);
+    let complete = project_durable_hydration_progress(
+        "session",
+        "agent",
+        BTreeSet::from([response, message]),
+        ClientHydrationRequestState::Served(served),
+    );
+    assert_eq!(complete.phase, ClientHydrationPhase::Complete);
+    assert_eq!(complete.covered_count, 1);
+    assert_eq!(complete.merged_count, 2);
+}

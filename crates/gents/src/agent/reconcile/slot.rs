@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::admission::BackendAdmissionConfig;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::startup_readiness::{BuildOutcome, BuildStanding};
@@ -38,7 +38,7 @@ pub(super) struct BehaviorSlot {
 impl BehaviorSlot {
     pub(super) fn matches(
         &self,
-        behavior: &Arc<AgentBehavior>,
+        behavior: &Arc<ResolvedBehavior>,
         tool_surface: &Arc<ToolSurface>,
         executor_capacity: usize,
     ) -> bool {
@@ -159,7 +159,7 @@ pub(super) fn spawn_slots<F, Fut>(
 ) -> HashMap<String, BehaviorSlot>
 where
     F: Fn(
-            Arc<AgentBehavior>,
+            Arc<ResolvedBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -197,7 +197,7 @@ where
 
 #[cfg(test)]
 pub(super) fn spawn_slot<F, Fut>(
-    behavior: Arc<AgentBehavior>,
+    behavior: Arc<ResolvedBehavior>,
     tool_surface: Arc<ToolSurface>,
     retry_policy: RetryPolicy,
     runner: F,
@@ -205,7 +205,7 @@ pub(super) fn spawn_slot<F, Fut>(
 ) -> BehaviorSlot
 where
     F: Fn(
-            Arc<AgentBehavior>,
+            Arc<ResolvedBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -230,7 +230,7 @@ where
 }
 
 pub(super) fn spawn_slot_with_capacity<F, Fut>(
-    behavior: Arc<AgentBehavior>,
+    behavior: Arc<ResolvedBehavior>,
     tool_surface: Arc<ToolSurface>,
     executor_capacity: usize,
     generation: u64,
@@ -241,7 +241,7 @@ pub(super) fn spawn_slot_with_capacity<F, Fut>(
 ) -> BehaviorSlot
 where
     F: Fn(
-            Arc<AgentBehavior>,
+            Arc<ResolvedBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -288,7 +288,7 @@ where
 }
 
 pub(super) fn behavior_executor_capacity(
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
 ) -> usize {
     let Some(backend_id) = behavior
@@ -321,7 +321,7 @@ pub(super) fn retire_slot(slot: BehaviorSlot) {
 }
 
 async fn run_slot_loop<F, Fut>(
-    behavior: Arc<AgentBehavior>,
+    behavior: Arc<ResolvedBehavior>,
     tool_surface: Arc<ToolSurface>,
     request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
     generation: u64,
@@ -333,7 +333,7 @@ async fn run_slot_loop<F, Fut>(
     standing: Arc<std::sync::Mutex<BuildStanding>>,
 ) where
     F: Fn(
-            Arc<AgentBehavior>,
+            Arc<ResolvedBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -448,7 +448,7 @@ async fn run_slot_loop<F, Fut>(
 }
 
 async fn run_slot_workers<F, Fut>(
-    behavior: Arc<AgentBehavior>,
+    behavior: Arc<ResolvedBehavior>,
     tool_surface: Arc<ToolSurface>,
     request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
     executor_capacity: usize,
@@ -461,7 +461,7 @@ async fn run_slot_workers<F, Fut>(
     standing: Arc<std::sync::Mutex<BuildStanding>>,
 ) where
     F: Fn(
-            Arc<AgentBehavior>,
+            Arc<ResolvedBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,

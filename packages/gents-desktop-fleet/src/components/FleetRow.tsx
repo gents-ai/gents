@@ -69,18 +69,18 @@ export function FleetRow({
     (backend) => backend.enabled !== false,
   ).length;
   const inferenceSetupNeeded = needsInferenceSetup(deployment);
-  const openWorkCount = deployment.conversations.filter(
-    (conversation) =>
-      conversation.turnState && !isTerminalTurnState(conversation.turnState),
+  const openWorkCount = deployment.sessions.filter(
+    (session) => session.turnState && !isTerminalTurnState(session.turnState),
   ).length;
   const defaultBehavior = deployment.behaviors.find(
     (behavior) =>
-      behavior.behaviorId ===
-      deployment.agentPrincipal.defaultBehaviorId,
+      behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
   );
   const toolIcons = toolCeilingIcons(
-    deployment.toolSelections,
-    defaultBehavior?.toolSelectionId,
+    deployment.tools,
+    deployment.contexts.find(
+      (context) => context.context_id === defaultBehavior?.contextId,
+    )?.tools_id,
     isLocalRuntimeSource(deployment.source) ? bootstrap?.initToolCeiling : null,
   );
   const runtimeLastUpdate = deployment.runtime?.updatedAt ?? null;
@@ -164,8 +164,8 @@ export function FleetRow({
               data-testid={`fleet-summary-${deployment.peerId}`}
             >
               {deployment.behaviors.length} behaviors ·{" "}
-              {deployment.conversations.length} conversations ·{" "}
-              {deployment.tasks.length} tasks
+              {deployment.sessions.length} sessions · {deployment.tasks.length}{" "}
+              tasks
             </span>
             {status.lastError ? (
               <span
@@ -230,7 +230,7 @@ export function FleetRow({
         <ToolIconStrip icons={toolIcons} />
       </td>
       <td>
-        <Metric title="Processing conversations" value={openWorkCount} />
+        <Metric title="Processing sessions" value={openWorkCount} />
       </td>
       <td title="Last runtime state change reported by this agent (agents write this on change, not on a timer — an idle agent ages here without being dead)">
         {formatRelativeTime(runtimeLastUpdate)}

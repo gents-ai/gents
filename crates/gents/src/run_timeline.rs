@@ -12,16 +12,12 @@ pub struct RunTimelineRows {
     pub request: TimelineRequestRow,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<TimelineSessionRow>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conversation: Option<TimelineConversationRow>,
     #[serde(default)]
     pub requests: Vec<TimelineRequestRow>,
     #[serde(default)]
     pub messages: Vec<TimelineMessageRow>,
     #[serde(default)]
     pub tool_calls: Vec<TimelineToolCallRow>,
-    #[serde(default)]
-    pub tool_approvals: Vec<TimelineToolApprovalRow>,
     #[serde(default)]
     pub goal_versions: Vec<TimelineGoalVersionRow>,
     #[serde(default)]
@@ -66,8 +62,6 @@ pub struct RunTimeline {
     pub request: TimelineRequestRow,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<TimelineSessionRow>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub conversation: Option<TimelineConversationRow>,
     pub child_request_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub descendant_edges: Vec<crate::DescendantEdge>,
@@ -103,17 +97,20 @@ pub struct TimelineRequestRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_did: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seed: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_total_tokens: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null"
+    )]
+    pub input: gents_protocol::request_input::RequestInput,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,9 +144,9 @@ pub struct TimelineRequestRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_authority: Option<String>,
+    pub workspace_owner_agent_did: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_owner_deployment_id: Option<String>,
+    pub workspace_authority: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_seal_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,12 +161,12 @@ impl From<gents_protocol::row::AgentRequestRow> for TimelineRequestRow {
             doc_id: row.doc_id,
             request_id: row.request_id,
             agent_did: row.agent_did,
+            requester_did: row.requester_did,
             behavior_id: row.behavior_id,
             session_id: row.session_id,
             content: row.content,
-            seed: row.seed,
             max_total_tokens: row.max_total_tokens,
-            metadata: row.metadata,
+            input: row.input.unwrap_or_default(),
             lifecycle_state: row.lifecycle_state,
             backend_id: row.backend_id,
             failure_reason: row.failure_reason,
@@ -186,8 +183,8 @@ impl From<gents_protocol::row::AgentRequestRow> for TimelineRequestRow {
             caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id,
             caused_by_parent_tool_call_doc_id: row.caused_by_parent_tool_call_doc_id,
             workspace_id: row.workspace_id,
+            workspace_owner_agent_did: row.workspace_owner_agent_did,
             workspace_authority: row.workspace_authority,
-            workspace_owner_deployment_id: row.workspace_owner_deployment_id,
             workspace_seal_hash: row.workspace_seal_hash,
             execution_origin: row.execution_origin,
             retry_summary: RetrySummary::default(),
@@ -319,30 +316,6 @@ pub struct TimelineInferenceCallRow {
     pub cached_input_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_accounting_json: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TimelineToolApprovalRow {
-    #[serde(default, rename = "_docID", skip_serializing)]
-    pub doc_id: Option<String>,
-    #[serde(default)]
-    pub approval_id: String,
-    #[serde(default, skip_serializing)]
-    pub tool_call_doc_id: String,
-    #[serde(default)]
-    pub tool_call_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub agent_did: String,
-    #[serde(default)]
-    pub decision: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approver_did: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
 }
 
 /// One content-addressed historical `Goal` document version reconstructed
@@ -512,7 +485,7 @@ pub struct TimelineCompactionRow {
     #[serde(default)]
     pub compaction_key: String,
     #[serde(default)]
-    pub request_id: String,
+    pub request_id: Option<String>,
     #[serde(default, skip_serializing)]
     pub request_doc_id: Option<String>,
     #[serde(default)]
@@ -565,52 +538,13 @@ pub struct TimelineProviderContextReductionRow {
     pub created_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Read-only database envelope; all session fields have the canonical protocol owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineSessionRow {
     #[serde(default, rename = "_docID", skip_serializing)]
     pub doc_id: Option<String>,
-    #[serde(default)]
-    pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub behavior_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub started: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ended: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TimelineConversationRow {
-    #[serde(default, rename = "_docID", skip_serializing)]
-    pub doc_id: Option<String>,
-    #[serde(default)]
-    pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_did: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub behavior_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title_source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview_text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latest_request_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub forked_from_session_id: Option<String>,
+    #[serde(flatten)]
+    pub session: gents_protocol::session::AgentSession,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -623,7 +557,6 @@ pub enum RunTimelineEvent {
     ProviderContextReduction(TimelineProviderContextReductionEvent),
     Message(TimelineMessageEvent),
     ToolCall(TimelineToolCallEvent),
-    ToolApproval(TimelineToolApprovalEvent),
     Response(TimelineResponseEvent),
     GoalTransition(TimelineGoalTransitionEvent),
 }
@@ -693,8 +626,7 @@ pub struct TimelineRequestEvent {
     pub failure_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<String>,
+    pub input: gents_protocol::request_input::RequestInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_origin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -793,21 +725,6 @@ pub struct TimelineInferenceCallEvent {
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TimelineToolApprovalEvent {
-    pub approval_id: String,
-    pub request_id: String,
-    pub tool_call_id: String,
-    pub agent_did: String,
-    pub decision: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approver_did: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<String>,
 }
 
 /// The proven state vocabulary recorded at one durable Goal version.
@@ -1013,10 +930,14 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
     }
 
     for compaction in &rows.compactions {
-        if included_request_ids.contains(&compaction.request_id) {
+        if let Some(request_id) = compaction
+            .request_id
+            .as_ref()
+            .filter(|id| included_request_ids.contains(*id))
+        {
             events.push(RunTimelineEvent::Compaction(TimelineCompactionEvent {
                 compaction_key: compaction.compaction_key.clone(),
-                request_id: compaction.request_id.clone(),
+                request_id: request_id.clone(),
                 session_id: compaction.session_id.clone(),
                 sequence: compaction.sequence,
                 summary: compaction.summary.clone(),
@@ -1119,31 +1040,6 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         }
     }
 
-    for approval in &rows.tool_approvals {
-        let Some(tool_call) = rows.tool_calls.iter().find(|tool_call| {
-            tool_call.doc_id.as_deref() == Some(approval.tool_call_doc_id.as_str())
-        }) else {
-            continue;
-        };
-        let Some(request_id) =
-            infer_request_id_for_tool_call(tool_call, &rows.requests, &rows.responses)
-        else {
-            continue;
-        };
-        if included_request_ids.contains(&request_id) {
-            events.push(RunTimelineEvent::ToolApproval(TimelineToolApprovalEvent {
-                approval_id: approval.approval_id.clone(),
-                request_id,
-                tool_call_id: approval.tool_call_id.clone(),
-                agent_did: approval.agent_did.clone(),
-                decision: approval.decision.clone(),
-                approver_did: approval.approver_did.clone(),
-                reason: approval.reason.clone(),
-                timestamp: approval.created_at.clone(),
-            }));
-        }
-    }
-
     events.extend(goal_transition_events(
         &rows.goal_versions,
         session_id.as_deref(),
@@ -1176,24 +1072,10 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         request_id: root_request_id,
         request_doc_id: rows.request.doc_id.clone(),
         session_id,
-        agent_did: first_owned([
-            rows.request.agent_did.as_deref(),
-            rows.conversation
-                .as_ref()
-                .and_then(|conversation| conversation.agent_did.as_deref()),
-        ]),
-        behavior_id: first_owned([
-            rows.request.behavior_id.as_deref(),
-            rows.conversation
-                .as_ref()
-                .and_then(|conversation| conversation.behavior_id.as_deref()),
-            rows.session
-                .as_ref()
-                .and_then(|session| session.behavior_id.as_deref()),
-        ]),
+        agent_did: rows.request.agent_did.clone(),
+        behavior_id: rows.request.behavior_id.clone(),
         request: rows.request,
         session: rows.session,
-        conversation: rows.conversation,
         child_request_ids,
         descendant_edges: Vec::new(),
         descendant_graph_diagnostics_error: None,
@@ -1323,10 +1205,10 @@ fn request_only_control_link_is_corroborated(request: &TimelineRequestRow) -> bo
     {
         return false;
     }
-    if crate::lifecycle::is_background_completion_request(request.metadata.as_deref()) {
+    if crate::lifecycle::is_background_completion_request(&request.input) {
         return true;
     }
-    crate::lifecycle::queue::parse_queue_hints(request.metadata.as_deref()).is_some_and(|hints| {
+    request.input.queue.as_ref().is_some_and(|hints| {
         matches!(
             hints.source,
             crate::lifecycle::queue::QueueSource::Steering
@@ -1416,7 +1298,7 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
             .map(|state| state.as_str().to_string()),
         failure_reason: request.failure_reason.clone(),
         content: request.content.clone(),
-        metadata: request.metadata.clone(),
+        input: request.input.clone(),
         execution_origin: request.execution_origin.clone(),
         timestamp: request.created_at.clone(),
         retry_summary: request.retry_summary.clone(),
@@ -1607,7 +1489,7 @@ fn should_include_event(
 /// unserialized internals and only break same-millisecond ties: request 0,
 /// provider_context_reduction 1, rendered_request 2 (both persistence fences
 /// precede the consuming send), inference_call 3, compaction/message 4,
-/// tool_call 5, approval 6, response 7, goal transition 8.
+/// tool_call 5, response 7, goal transition 8.
 fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
     match event {
         RunTimelineEvent::Request(event) => (
@@ -1671,16 +1553,6 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
             5,
             event.message_sequence.unwrap_or(i64::MAX),
             event.tool_call_id.clone(),
-        ),
-        RunTimelineEvent::ToolApproval(event) => (
-            event
-                .timestamp
-                .as_deref()
-                .and_then(timestamp_millis)
-                .unwrap_or(i64::MIN),
-            6,
-            i64::MAX,
-            event.approval_id.clone(),
         ),
         RunTimelineEvent::Response(event) => (
             event
@@ -1760,6 +1632,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_projection_cannot_supply_missing_request_identity() {
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "root".into(),
+                ..Default::default()
+            },
+            session: Some(TimelineSessionRow {
+                doc_id: Some("physical-session".into()),
+                session: gents_protocol::session::AgentSession {
+                    session_id: "session".into(),
+                    agent_did: "projection-owner".into(),
+                    requester_did: None,
+                    behavior_id: "projection-behavior".into(),
+                    created_at: "2026-01-01T00:00:00Z".into(),
+                    closed_at: None,
+                    title: None,
+                    tags: Vec::new(),
+                    provenance: None,
+                    observation: None,
+                },
+            }),
+            ..Default::default()
+        });
+        assert!(timeline.agent_did.is_none());
+        assert!(timeline.behavior_id.is_none());
+    }
+
+    #[test]
     fn goal_history_emits_semantic_changes_and_preserves_native_parent_cids() {
         let timeline = build_run_timeline(RunTimelineRows {
             request: TimelineRequestRow {
@@ -1829,7 +1729,7 @@ mod tests {
     }
 
     #[test]
-    fn timeline_projects_exact_approval_and_complete_inference_provenance() {
+    fn timeline_projects_complete_inference_provenance() {
         let timeline = build_run_timeline(RunTimelineRows {
             request: TimelineRequestRow {
                 doc_id: Some("doc-request".to_string()),
@@ -1874,18 +1774,6 @@ mod tests {
                 started_at: Some("2026-08-14T12:00:02Z".to_string()),
                 ..Default::default()
             }],
-            tool_approvals: vec![TimelineToolApprovalRow {
-                approval_id: "approval-1".to_string(),
-                tool_call_doc_id: "doc-tool".to_string(),
-                tool_call_id: "tool-1".to_string(),
-                request_id: Some("request-1".to_string()),
-                agent_did: "did:test:agent".to_string(),
-                decision: "approved".to_string(),
-                approver_did: Some("did:test:operator".to_string()),
-                reason: Some("reviewed".to_string()),
-                created_at: Some("2026-08-14T12:00:03Z".to_string()),
-                ..Default::default()
-            }],
             ..Default::default()
         });
 
@@ -1902,18 +1790,10 @@ mod tests {
         assert_eq!(inference.controller_generation, Some(11));
         assert_eq!(
             inference.backend_config_fingerprint.as_deref(),
-            Some("hmac-sha256:process-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            Some(
+                "hmac-sha256:process-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
         );
-
-        let approval = timeline.events.iter().find_map(|event| match event {
-            RunTimelineEvent::ToolApproval(event) => Some(event),
-            _ => None,
-        });
-        let approval = approval.expect("approval event");
-        assert_eq!(approval.request_id, "request-1");
-        assert_eq!(approval.tool_call_id, "tool-1");
-        assert_eq!(approval.approver_did.as_deref(), Some("did:test:operator"));
-        assert_eq!(approval.reason.as_deref(), Some("reviewed"));
     }
 
     #[test]
@@ -2428,7 +2308,7 @@ mod tests {
             compactions: vec![TimelineCompactionRow {
                 doc_id: Some("doc-compact".to_string()),
                 compaction_key: "session-root:1".to_string(),
-                request_id: "req-root".to_string(),
+                request_id: Some("req-root".to_string()),
                 request_doc_id: Some("doc-root".to_string()),
                 session_id: "session-root".to_string(),
                 sequence: 1,
@@ -2453,15 +2333,15 @@ mod tests {
 
     #[test]
     fn request_only_steering_and_goal_links_are_included_without_tool_bridges() {
-        let control_request = |request_id: &str, source: &str| TimelineRequestRow {
+        let control_request = |request_id: &str, source: &str| {
+            TimelineRequestRow {
             doc_id: Some(format!("doc-{request_id}")),
             request_id: request_id.to_string(),
-            metadata: Some(format!(
-                r#"{{"queue":{{"source":"{source}","policy":"append","key":null,"queued_after_request_id":"req-root"}}}}"#
-            )),
+            input: serde_json::from_value(serde_json::json!({"queue": {"source":source,"policy":"append","queued_after_request_id":"req-root"}})).unwrap(),
             caused_by_parent_request_id: Some("req-root".to_string()),
             caused_by_parent_request_doc_id: Some("doc-root".to_string()),
             ..Default::default()
+        }
         };
         let timeline = build_run_timeline(RunTimelineRows {
             request: TimelineRequestRow {
@@ -2587,10 +2467,11 @@ mod tests {
                 request_id: "req-wake".to_string(),
                 caused_by_parent_request_id: Some("req-root".to_string()),
                 caused_by_parent_request_doc_id: Some("doc-root".to_string()),
-                metadata: Some(
-                    r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"wake:1","queued_after_request_id":"req-root"},"background_completion_wake_version":1}"#
-                        .to_string(),
-                ),
+                input: serde_json::from_value(serde_json::json!({"queue": {
+                    "source":"background_completion", "policy":"coalesce", "key":"wake:1",
+                    "queued_after_request_id":"req-root", "background_completion_wake_version":1
+                }}))
+                .unwrap(),
                 ..Default::default()
             }],
             ..Default::default()

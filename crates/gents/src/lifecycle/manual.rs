@@ -127,7 +127,7 @@ mod tests {
                     caused_by_trigger_id
                     execution_origin
                     lifecycle_state
-                    metadata
+                    input
                 }}
             }}"#
         );
@@ -157,7 +157,7 @@ mod tests {
         );
         assert_eq!(row["execution_origin"].as_str(), Some("interactive"));
         assert_eq!(row["lifecycle_state"].as_str(), Some("pending"));
-        assert!(row["metadata"].is_null());
+        assert!(row["input"].is_null());
     }
 
     #[tokio::test]
@@ -203,7 +203,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writes_manual_request_with_slash_selected_skill_metadata() {
+    async fn writes_manual_request_with_slash_selected_skill_input() {
         let (node, agent_did) = test_node().await;
 
         let doc_id = write_manual_agent_request(
@@ -221,7 +221,7 @@ mod tests {
             r#"{{
                 AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
                     content
-                    metadata
+                    input
                 }}
             }}"#
         );
@@ -240,10 +240,7 @@ mod tests {
             .expect("expected request row");
 
         assert_eq!(row["content"].as_str(), Some("Review /work"));
-        assert_eq!(
-            row["metadata"].as_str(),
-            Some(r#"{"selected_skill_ids":["vuln-scan"]}"#)
-        );
+        assert_eq!(row["input"]["selected_skill_ids"][0], "vuln-scan");
     }
 
     #[tokio::test]
@@ -266,7 +263,7 @@ mod tests {
             r#"{{
                 AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
                     session_id
-                    metadata
+                    input
                 }}
             }}"#
         );
@@ -287,43 +284,39 @@ mod tests {
             .get("session_id")
             .and_then(Value::as_str)
             .expect("request should have session_id");
-        let metadata = request
-            .get("metadata")
-            .and_then(Value::as_str)
-            .and_then(|value| serde_json::from_str::<Value>(value).ok())
-            .expect("request should carry projection metadata");
+        let input = request
+            .get("input")
+            .expect("request should carry canonical input");
         assert_eq!(
-            metadata.get("conversation_title").and_then(Value::as_str),
+            input.pointer("/initial_title/text").and_then(Value::as_str),
             Some("mini-host-health-20260430t180405z")
         );
 
-        let conversation_query = format!(
+        let session_query = format!(
             r#"{{
-                AgentConversation(
+                AgentSession(
                     filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                     limit: 1
                 ) {{
                     title
-                    title_source
-                    status
                 }}
             }}"#
         );
-        let conversation_response = node.execute(&conversation_query).await;
+        let session_response = node.execute(&session_query).await;
         assert!(
-            !conversation_response.has_errors(),
-            "conversation query failed: {:?}",
-            conversation_response.errors
+            !session_response.has_errors(),
+            "session query failed: {:?}",
+            session_response.errors
         );
-        let conversations = conversation_response
+        let sessions = session_response
             .data
             .as_ref()
-            .and_then(|d| d.get("AgentConversation"))
+            .and_then(|d| d.get("AgentSession"))
             .and_then(Value::as_array)
-            .expect("conversation rows");
+            .expect("session rows");
         assert!(
-            conversations.is_empty(),
-            "enqueue must persist only AgentRequest; the runtime projects AgentConversation"
+            sessions.is_empty(),
+            "enqueue persists only AgentRequest; the runtime materializes AgentSession"
         );
     }
 

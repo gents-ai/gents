@@ -1,0 +1,695 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "scan-investigate",
+      "display_name": "Batch investigator",
+      "description": "Investigates one candidate batch in depth and records findings.",
+      "context_id": "scan-investigate-context",
+      "inference_profile_id": "scan-profile"
+    },
+    {
+      "behavior_id": "scan-plan",
+      "display_name": "Scan batch planner",
+      "description": "Batches pre-scan candidates into investigation assignments.",
+      "context_id": "scan-plan-context",
+      "inference_profile_id": "scan-profile"
+    },
+    {
+      "behavior_id": "scan-report",
+      "display_name": "Scan reporter",
+      "description": "Publishes confirmed findings and the run report.",
+      "context_id": "scan-report-context",
+      "inference_profile_id": "scan-profile"
+    },
+    {
+      "behavior_id": "scan-revalidate",
+      "display_name": "Adversarial revalidator",
+      "description": "Re-checks every candidate finding and stamps verdicts.",
+      "context_id": "scan-revalidate-context",
+      "inference_profile_id": "scan-profile"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "scan-investigate-context",
+      "display_name": "Batch investigator",
+      "system_prompt": "./agent_behaviors/scan_investigate/system_prompt.md",
+      "tools_id": "scan-investigate-tools",
+      "compaction_id": "security-scan-compaction"
+    },
+    {
+      "context_id": "scan-plan-context",
+      "display_name": "Scan batch planner",
+      "system_prompt": "./agent_behaviors/scan_plan/system_prompt.md",
+      "tools_id": "scan-plan-tools",
+      "compaction_id": "security-scan-compaction"
+    },
+    {
+      "context_id": "scan-report-context",
+      "display_name": "Scan reporter",
+      "system_prompt": "./agent_behaviors/scan_report/system_prompt.md",
+      "tools_id": "scan-report-tools",
+      "compaction_id": "security-scan-compaction"
+    },
+    {
+      "context_id": "scan-revalidate-context",
+      "display_name": "Adversarial revalidator",
+      "system_prompt": "./agent_behaviors/scan_revalidate/system_prompt.md",
+      "tools_id": "scan-revalidate-tools",
+      "compaction_id": "security-scan-compaction"
+    }
+  ],
+  "compactions": [
+    {
+      "compaction_id": "security-scan-compaction",
+      "display_name": "Security Scan compaction",
+      "strategy": "StripThenSummarize",
+      "threshold": 0.85
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "scan-investigate-tools",
+      "display_name": "Scan: inspect repository deeply and write results",
+      "host": {
+        "root": "${GENTS_SCAN_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        },
+        "bash": {
+          "mode": "Unrestricted",
+          "execution_mode": "unrestricted",
+          "network_mode": "enabled",
+          "background_enabled": true
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "scan-investigate-writes"
+        ]
+      },
+      "integrations": {
+        "lsp": {
+          "config": "{\"servers\":{\"rust-analyzer\":{\"warmup_timeout_ms\":60000,\"workspace_ready_timings\":{\"initial\":45000},\"settings\":{\"rust-analyzer\":{\"checkOnSave\":false}}}}}"
+        }
+      }
+    },
+    {
+      "tools_id": "scan-plan-tools",
+      "display_name": "Plan: batch candidates and write assignments",
+      "host": {
+        "root": "${GENTS_SCAN_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "scan-plan-writes"
+        ]
+      }
+    },
+    {
+      "tools_id": "scan-report-tools",
+      "display_name": "Scan: inspect repository deeply and write results",
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "scan-report-io"
+        ]
+      }
+    },
+    {
+      "tools_id": "scan-revalidate-tools",
+      "display_name": "Scan: inspect repository deeply and write results",
+      "host": {
+        "root": "${GENTS_SCAN_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        },
+        "bash": {
+          "mode": "Unrestricted",
+          "execution_mode": "unrestricted",
+          "network_mode": "disabled",
+          "background_enabled": true
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "scan-revalidate-io"
+        ]
+      },
+      "integrations": {
+        "lsp": {
+          "config": "{\"servers\":{\"rust-analyzer\":{\"warmup_timeout_ms\":60000,\"workspace_ready_timings\":{\"initial\":45000},\"settings\":{\"rust-analyzer\":{\"checkOnSave\":false}}}}}"
+        }
+      }
+    }
+  ],
+  "datastore_tool_surfaces": [
+    {
+      "surface_id": "scan-investigate-writes",
+      "display_name": "Candidate finding and sentinel writes",
+      "entries": [
+        {
+          "tool_name": "write_candidate_finding",
+          "collection": "CandidateFinding",
+          "description": "Record one evidenced security or bug finding for adversarial revalidation.",
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "finding_id",
+              "required": true
+            },
+            {
+              "name": "batch_id",
+              "required": true
+            },
+            {
+              "name": "severity",
+              "required": true
+            },
+            {
+              "name": "confidence",
+              "required": true
+            },
+            {
+              "name": "path",
+              "required": true
+            },
+            {
+              "name": "line"
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "detail",
+              "required": true
+            },
+            {
+              "name": "evidence",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_investigation_result",
+          "collection": "InvestigationResult",
+          "description": "Signal that one investigation batch is complete.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "batch_id",
+              "required": true
+            },
+            {
+              "name": "expected_total",
+              "fill": {
+                "source_field": "expected_total"
+              }
+            },
+            {
+              "name": "finding_count",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "scan-plan-writes",
+      "display_name": "Investigation batch writes",
+      "entries": [
+        {
+          "tool_name": "write_investigation_batch",
+          "collection": "InvestigationBatch",
+          "description": "Create one member of the closed investigation-batch set.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1,
+            "expected_count_field": "expected_total"
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "batch_id",
+              "required": true
+            },
+            {
+              "name": "scan_root",
+              "required": true
+            },
+            {
+              "name": "paths",
+              "required": true
+            },
+            {
+              "name": "hits",
+              "required": true
+            },
+            {
+              "name": "instructions",
+              "required": true
+            },
+            {
+              "name": "expected_total",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "scan-report-io",
+      "display_name": "Report reads and confirmed finding writes",
+      "entries": [
+        {
+          "kind": "query",
+          "tool_name": "query_finding_verdict",
+          "collection": "FindingVerdict",
+          "description": "Load every revalidation verdict for this run.",
+          "fields": [
+            "finding_id",
+            "batch_id",
+            "severity",
+            "confidence",
+            "path",
+            "line",
+            "title",
+            "detail",
+            "verdict",
+            "evidence",
+            "verification"
+          ],
+          "filter_fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            }
+          ]
+        },
+        {
+          "tool_name": "write_finding",
+          "collection": "Finding",
+          "description": "Publish one confirmed finding.",
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "finding_id",
+              "required": true
+            },
+            {
+              "name": "batch_id",
+              "required": true
+            },
+            {
+              "name": "severity",
+              "required": true
+            },
+            {
+              "name": "confidence",
+              "required": true
+            },
+            {
+              "name": "path",
+              "required": true
+            },
+            {
+              "name": "line"
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "detail",
+              "required": true
+            },
+            {
+              "name": "verdict",
+              "required": true
+            },
+            {
+              "name": "evidence",
+              "required": true
+            },
+            {
+              "name": "verification",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_scan_report",
+          "collection": "ScanReport",
+          "description": "Publish the final scan report.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "candidate_total",
+              "required": true
+            },
+            {
+              "name": "batch_count",
+              "required": true
+            },
+            {
+              "name": "confirmed_count",
+              "required": true
+            },
+            {
+              "name": "refuted_count",
+              "required": true
+            },
+            {
+              "name": "severity_counts",
+              "required": true
+            },
+            {
+              "name": "slug_counts",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "scan-revalidate-io",
+      "display_name": "Revalidation reads and verdict writes",
+      "entries": [
+        {
+          "kind": "query",
+          "tool_name": "query_candidate_finding",
+          "collection": "CandidateFinding",
+          "description": "Load every candidate finding for this run.",
+          "fields": [
+            "finding_id",
+            "batch_id",
+            "severity",
+            "confidence",
+            "path",
+            "line",
+            "title",
+            "detail",
+            "evidence"
+          ],
+          "filter_fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            }
+          ]
+        },
+        {
+          "tool_name": "write_finding_verdict",
+          "collection": "FindingVerdict",
+          "description": "Persist one confirmed or refuted decision for a candidate finding.",
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "finding_id",
+              "required": true
+            },
+            {
+              "name": "batch_id",
+              "required": true
+            },
+            {
+              "name": "severity",
+              "required": true
+            },
+            {
+              "name": "confidence",
+              "required": true
+            },
+            {
+              "name": "path",
+              "required": true
+            },
+            {
+              "name": "line"
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "detail",
+              "required": true
+            },
+            {
+              "name": "verdict",
+              "required": true
+            },
+            {
+              "name": "evidence",
+              "required": true
+            },
+            {
+              "name": "verification",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_revalidation_summary",
+          "collection": "RevalidationSummary",
+          "description": "Close the revalidation ledger and trigger the report stage.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "candidate_count",
+              "required": true
+            },
+            {
+              "name": "confirmed_count",
+              "required": true
+            },
+            {
+              "name": "refuted_count",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inference_backends": [
+    {
+      "backend_id": "scan-backend",
+      "name": "Security scan backend",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "${GENTS_SCAN_ENDPOINT:-http://127.0.0.1:8080/v1}",
+      "auth": {
+        "kind": "unauthenticated"
+      },
+      "max_concurrent": 8,
+      "max_queue_depth": 100
+    }
+  ],
+  "inference_profiles": [
+    {
+      "profile_id": "scan-profile",
+      "display_name": "Security scan profile",
+      "backend_id": "scan-backend",
+      "model_name": "${GENTS_SCAN_MODEL:-GLM-5.2}",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "sampling_id": "scan-profile-sampling",
+      "execution_id": "scan-profile-execution"
+    }
+  ],
+  "inference_sampling": [
+    {
+      "sampling_id": "scan-profile-sampling",
+      "display_name": "Security scan profile sampling",
+      "temperature": 1.0,
+      "top_p": 0.95
+    }
+  ],
+  "inference_execution": [
+    {
+      "execution_id": "scan-profile-execution",
+      "display_name": "Security scan profile execution",
+      "max_turns": 1000000,
+      "stream_batch_ms": 5000,
+      "retry_policy_id": "scan-profile-retry"
+    }
+  ],
+  "inference_retry_policies": [
+    {
+      "retry_policy_id": "scan-profile-retry",
+      "display_name": "Security scan profile retry",
+      "max_transport_retries": 720,
+      "backoff_ms": [
+        5000,
+        30000,
+        120000
+      ],
+      "max_resample_retries": 32
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "scan-investigate-task",
+      "display_name": "Investigate a candidate batch",
+      "behavior_id": "scan-investigate",
+      "prompt_template": "./tasks/scan_investigate_task/prompt.md"
+    },
+    {
+      "task_id": "scan-plan-task",
+      "display_name": "Plan investigation batches",
+      "behavior_id": "scan-plan",
+      "prompt_template": "./tasks/scan_plan_task/prompt.md"
+    },
+    {
+      "task_id": "scan-report-task",
+      "display_name": "Publish the scan report",
+      "behavior_id": "scan-report",
+      "prompt_template": "./tasks/scan_report_task/prompt.md"
+    },
+    {
+      "task_id": "scan-revalidate-task",
+      "display_name": "Revalidate candidate findings",
+      "behavior_id": "scan-revalidate",
+      "prompt_template": "./tasks/scan_revalidate_task/prompt.md"
+    }
+  ],
+  "event_sources": [
+    {
+      "event_source_id": "scan-investigate",
+      "display_name": "scan-investigate",
+      "source_collection": "InvestigationBatch",
+      "event_kind": "created",
+      "correlation_field": "run_id"
+    },
+    {
+      "event_source_id": "scan-plan",
+      "display_name": "scan-plan",
+      "source_collection": "ScanJob",
+      "event_kind": "created",
+      "correlation_field": "run_id"
+    },
+    {
+      "event_source_id": "scan-report",
+      "display_name": "scan-report",
+      "source_collection": "RevalidationSummary",
+      "event_kind": "created",
+      "correlation_field": "run_id"
+    },
+    {
+      "event_source_id": "scan-revalidate",
+      "display_name": "scan-revalidate",
+      "source_collection": "InvestigationResult",
+      "event_kind": "created",
+      "correlation_field": "run_id",
+      "group": {
+        "expected_count": {
+          "source_field": "expected_total"
+        }
+      }
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "scan-investigate",
+      "display_name": "scan-investigate",
+      "task_id": "scan-investigate-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "scan-investigate"
+      },
+      "concurrency": "parallel"
+    },
+    {
+      "trigger_id": "scan-plan",
+      "display_name": "scan-plan",
+      "task_id": "scan-plan-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "scan-plan"
+      },
+      "concurrency": "serial"
+    },
+    {
+      "trigger_id": "scan-report",
+      "display_name": "scan-report",
+      "task_id": "scan-report-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "scan-report"
+      },
+      "concurrency": "serial"
+    },
+    {
+      "trigger_id": "scan-revalidate",
+      "display_name": "scan-revalidate",
+      "task_id": "scan-revalidate-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "scan-revalidate"
+      },
+      "concurrency": "serial"
+    }
+  ]
+}

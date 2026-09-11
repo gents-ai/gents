@@ -52,16 +52,11 @@ pub(super) fn request(request_id: &str) -> AgentRequest {
         request_id: request_id.to_string(),
         agent_did: "did:test:test".to_string(),
         requester_did: None,
-        behavior_id: Some("default".to_string()),
+        behavior_id: "default".to_string(),
         session_id: format!("session-{request_id}"),
         content: "hello".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
+        input: Default::default(),
         execution_origin: None,
         created_at: "2026-04-15T00:00:00Z".to_string(),
         deadline: None,
@@ -80,7 +75,7 @@ pub(super) fn request(request_id: &str) -> AgentRequest {
         caused_by_trigger_context: None,
         workspace_id: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
+        workspace_owner_agent_did: None,
         workspace_seal_hash: None,
     }
 }
@@ -257,6 +252,7 @@ async fn call_rows(node: &EmbeddedNode) -> Vec<Value> {
                 InferenceCall(order: { call_seq: ASC }) {
                     request_id
                     request_doc_id
+                    agent_did
                     call_seq
                     backend_id
                     behavior_id
@@ -309,18 +305,6 @@ fn assert_reconstructed_slot_count(rows: &[Value], backend_id: &str, expected: u
         running_slot_count_for_backend(rows, backend_id),
         expected,
         "held backend slots are reconstructed from persisted InferenceCall rows with call_state=running"
-    );
-}
-
-fn assert_reconstructed_slot_count_at_most(
-    rows: &[Value],
-    backend_id: &str,
-    max_concurrent: usize,
-) {
-    let reconstructed = running_slot_count_for_backend(rows, backend_id);
-    assert!(
-        reconstructed <= max_concurrent,
-        "reconstructed running-row slot count {reconstructed} exceeded max_concurrent {max_concurrent}"
     );
 }
 
@@ -697,6 +681,12 @@ async fn missing_backend_persists_backend_gone_cancelled_terminal() {
     assert_eq!(rows[0]["backend_id"], "missing");
     assert_eq!(rows[0]["call_state"], "cancelled");
     assert_eq!(rows[0]["failure_reason"], "BackendGone");
+    // The terminal row must carry the request's principal and the physical
+    // request edge: the restart recovery sweep selects stale rows by
+    // agent_did, so a misattributed BackendGone row would be unrecoverable
+    // for its principal, and the logical request_id alone is not the edge.
+    assert_eq!(rows[0]["agent_did"], "did:test:test");
+    assert_eq!(rows[0]["request_doc_id"], "doc-req-backend-gone");
     assert_reconstructed_slot_count(&rows, "missing", 0);
 }
 
@@ -792,7 +782,6 @@ async fn reconstructed_running_rows_never_exceed_max_concurrent_under_contention
 
     let rows = wait_for_call_row_count(node.as_ref(), TASKS).await;
     assert_reconstructed_slot_count(&rows, "backend-a", MAX_CONCURRENT);
-    assert_reconstructed_slot_count_at_most(&rows, "backend-a", MAX_CONCURRENT);
     assert_eq!(state_count_for_backend(&rows, "backend-a", "queued"), 3);
 
     let released = acquired[0];
@@ -811,7 +800,6 @@ async fn reconstructed_running_rows_never_exceed_max_concurrent_under_contention
     tokio::time::sleep(Duration::from_millis(50)).await;
     let rows = call_rows(node.as_ref()).await;
     assert_reconstructed_slot_count(&rows, "backend-a", MAX_CONCURRENT);
-    assert_reconstructed_slot_count_at_most(&rows, "backend-a", MAX_CONCURRENT);
     assert_eq!(state_count_for_backend(&rows, "backend-a", "completed"), 1);
 
     for (_, release_tx) in release_senders {

@@ -25,7 +25,7 @@ private theorem dispatchStep_preserves_target_seriality
             , causedBy :=
                 match seed.causedByTriggerId with
                 | none => none
-                | some tid => some (tid, seed.causedByTriggerKind)
+                | some tid => some tid
             , concurrency := .parallel
             , isTerminal := false
             , executionOrigin :=
@@ -34,10 +34,10 @@ private theorem dispatchStep_preserves_target_seriality
                 | .schedule | .event => .scheduled } := by
           simpa using h_new
         cases h_new_req
-        have ⟨h_triggerId, h_kind⟩ :=
+        have h_triggerId :=
           dispatch_key_matches_intent_target snap intent seed t h_disp h_causedBy
         have h_intent_serial :=
-          FireIntent.serialForKey_target_is_serial h_serial h_triggerId h_kind
+          FireIntent.serialForKey_target_is_serial h_serial h_triggerId
         rw [h_conc] at h_intent_serial
         cases h_intent_serial
     | serial =>
@@ -51,7 +51,7 @@ private theorem dispatchStep_preserves_target_seriality
       | some tid =>
         simp [h_disp, h_conc, h_key] at h_mem
         by_cases h_any :
-            ∃ x ∈ s.requests, x.causedBy = some (tid, seed.causedByTriggerKind) ∧ x.isTerminal = false
+            ∃ x ∈ s.requests, x.causedBy = some tid ∧ x.isTerminal = false
         · rw [if_pos h_any] at h_mem
           exact h_before r h_mem h_causedBy
         · rw [if_neg h_any] at h_mem
@@ -60,7 +60,7 @@ private theorem dispatchStep_preserves_target_seriality
           · have h_new_req :
               r =
                 { id := s!"dispatched-{s.requests.length}"
-                , causedBy := some (tid, seed.causedByTriggerKind)
+                , causedBy := some tid
                 , concurrency := .serial
                 , isTerminal := false
                 , executionOrigin :=
@@ -85,20 +85,20 @@ private theorem dispatchStep_preserves_target_seriality
           have h_map_mem :
               r ∈
                 s.requests.map (fun r =>
-                  if r.causedBy = some (tid, seed.causedByTriggerKind) ∧ r.isTerminal = false then
+                  if r.causedBy = some tid ∧ r.isTerminal = false then
                     { r with isTerminal := true }
                   else r) := by
             simpa using h_superseded
           obtain ⟨r0, h_mem0, h_cb, h_conc'⟩ :=
             map_member_has_preimage_preserving_causedBy_and_concurrency s
               (fun r =>
-                if r.causedBy = some (tid, seed.causedByTriggerKind) ∧ r.isTerminal = false then
+                if r.causedBy = some tid ∧ r.isTerminal = false then
                   { r with isTerminal := true }
                 else r)
               (by
                 intro r0
                 by_cases h_cond :
-                    r0.causedBy = some (tid, seed.causedByTriggerKind) ∧ r0.isTerminal = false <;>
+                    r0.causedBy = some tid ∧ r0.isTerminal = false <;>
                   simp [h_cond])
               r
               h_map_mem
@@ -111,7 +111,7 @@ private theorem dispatchStep_preserves_target_seriality
         · have h_new_req :
             r =
               { id := s!"dispatched-{s.requests.length}"
-              , causedBy := some (tid, seed.causedByTriggerKind)
+              , causedBy := some tid
               , concurrency := .latestOnly
               , isTerminal := false
               , executionOrigin :=
@@ -123,12 +123,12 @@ private theorem dispatchStep_preserves_target_seriality
           have h_key_match :
               (match seed.causedByTriggerId with
               | none => none
-              | some tid' => some (tid', seed.causedByTriggerKind)) = some t := by
+              | some tid' => some tid') = some t := by
             simpa [h_key] using h_causedBy
-          have ⟨h_triggerId, h_kind⟩ :=
+          have h_triggerId :=
             dispatch_key_matches_intent_target snap intent seed t h_disp h_key_match
           have h_intent_serial :=
-            FireIntent.serialForKey_target_is_serial h_serial h_triggerId h_kind
+            FireIntent.serialForKey_target_is_serial h_serial h_triggerId
           rw [h_conc] at h_intent_serial
           cases h_intent_serial
 

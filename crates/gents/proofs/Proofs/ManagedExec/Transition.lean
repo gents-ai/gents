@@ -13,12 +13,7 @@ inductive Transition : ManagedExecContext → ManagedExecContext → Prop where
       (h_post : post = { pre with state := .spawnFailed })
       : Transition pre post
 
-  | observeExitSuccess {pre post : ManagedExecContext} (code : Int)
-      (h_state : pre.state = .running)
-      (h_post : post = { pre with state := .exited, exitCode := some code })
-      : Transition pre post
-
-  | observeExitFailure {pre post : ManagedExecContext} (code : Int)
+  | observeExit {pre post : ManagedExecContext} (code : Int)
       (h_state : pre.state = .running)
       (h_post : post = { pre with state := .exited, exitCode := some code })
       : Transition pre post

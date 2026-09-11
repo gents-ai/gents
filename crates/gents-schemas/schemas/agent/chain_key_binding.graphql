@@ -1,10 +1,12 @@
-type ChainKeyBinding @branchable {
-    binding_id: String @index(unique: true)
-    principal_did: String @index
-    address: String @index(unique: true)
+type ChainKeyBinding @branchable
+    @index(fields: ["agent_did", "binding_id"], unique: true)
+    @index(fields: ["agent_did", "address"], unique: true) {
+    binding_id: String
+    agent_did: String @index
+    address: String @index
     key_backend: String
     attestation: String
     created_at: String
     revoked_at: String
-    updated_at: DateTime @index(direction: DESC)
+    tags: [String!]
 }

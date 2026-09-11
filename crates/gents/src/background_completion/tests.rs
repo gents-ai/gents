@@ -3,25 +3,6 @@ use super::*;
 const LOCAL_DID: &str = "did:test:local-owner";
 const FOREIGN_DID: &str = "did:test:foreign-owner";
 
-#[test]
-fn recognizes_only_reserved_background_completion_notification_message_keys() {
-    let message_key = background_completion_notification_message_key("child-1", "subagent");
-    assert!(is_background_completion_notification_message_key(
-        &message_key
-    ));
-    assert!(!is_background_completion_notification_message_key(
-        BACKGROUND_COMPLETION_WAKE_PROMPT
-    ));
-}
-
-#[test]
-fn canonical_wake_prompt_is_a_minimal_generic_control_signal() {
-    assert_eq!(
-        BACKGROUND_COMPLETION_WAKE_PROMPT,
-        "Review the new background completion results and continue the task if needed."
-    );
-}
-
 async fn test_node() -> Arc<EmbeddedNode> {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();

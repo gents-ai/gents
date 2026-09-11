@@ -1,15 +1,15 @@
 use crate::error::BridgeError;
 use tauri::State;
 
-use crate::commands::{rename_conversation, send_chat_message};
+use crate::commands::{rename_session, send_chat_message};
 use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_live_delta,
     build_session_snapshot_for_agent_with_transcript,
 };
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    ChatSendRequest, ChatSendResult, ConversationRenameRequest, DesktopSessionSnapshot,
-    SessionLiveDeltaView,
+    ChatSendRequest, ChatSendResult, DesktopSessionSnapshot, SessionLiveDeltaView,
+    SessionRenameRequest,
 };
 
 #[tauri::command]
@@ -27,10 +27,10 @@ pub async fn desktop_session_snapshot(
     let agent_did = agent_did.or_else(|| {
         core.store()
             .snapshot()
-            .conversations
+            .sessions
             .iter()
-            .find(|conversation| conversation.session_id == session_id)
-            .and_then(|conversation| conversation.agent_did.clone())
+            .find(|session| session.session_id == session_id)
+            .map(|session| session.agent_did.clone())
     });
 
     if let Some(agent_did) = agent_did.as_deref() {
@@ -141,10 +141,10 @@ pub async fn desktop_session_hydration_retry(
         .or_else(|| {
             core.store()
                 .snapshot()
-                .conversations
+                .sessions
                 .iter()
-                .find(|conversation| conversation.session_id == session_id)
-                .and_then(|conversation| conversation.agent_did.clone())
+                .find(|session| session.session_id == session_id)
+                .map(|session| session.agent_did.clone())
         })
         .ok_or_else(|| {
             BridgeError::untyped(
@@ -200,15 +200,15 @@ pub async fn desktop_chat_send(
 }
 
 #[tauri::command]
-pub async fn desktop_conversation_rename(
-    request: ConversationRenameRequest,
+pub async fn desktop_session_rename(
+    request: SessionRenameRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
 
-    rename_conversation(core.as_ref(), request)
+    rename_session(core.as_ref(), request)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }

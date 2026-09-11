@@ -1,4 +1,4 @@
 export * from "./BehaviorEnvironmentSection";
 export * from "./ConnectedPeerSection";
-export * from "./ConversationListSection";
+export * from "./SessionListSection";
 export * from "./sidebarUtils";

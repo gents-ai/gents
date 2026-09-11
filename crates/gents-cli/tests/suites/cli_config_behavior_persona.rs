@@ -39,52 +39,15 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let backend_id = init
-        .get("init")
-        .and_then(|value| value.get("backend_id"))
-        .and_then(Value::as_str)
-        .context("init output missing init.backend_id")?
-        .to_string();
     let profile_id = init
         .get("inference_profile_id")
         .and_then(Value::as_str)
         .context("init output missing inference_profile_id")?
         .to_string();
-    let model = format!("{backend_id}|{model_name}");
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-
-    // -- bad model rejected with the catalog copy verbatim, exit non-zero --
-    let rejection = run_cli_failure_stderr(
-        &home_dir,
-        &[
-            "config",
-            "behavior",
-            "create",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--display-name",
-            "Bad Persona",
-            "--preset",
-            "write",
-            "--profile-id",
-            &profile_id,
-            "--model",
-            "nope|nope",
-        ],
-    )?;
-    assert!(
-        rejection.contains(r#"unknown model "nope|nope""#),
-        "{rejection}"
-    );
-    assert!(
-        rejection.contains("available_models"),
-        "rejection must name the catalog source: {rejection}"
-    );
 
     // -- create --
     let created = run_cli_json(
@@ -103,8 +66,6 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             "write",
             "--profile-id",
             &profile_id,
-            "--model",
-            &model,
         ],
     )?;
     assert_eq!(
@@ -130,6 +91,8 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             &graphql,
             "--display-name",
             "Cloned Assistant",
+            "--profile-id",
+            &profile_id,
         ],
     )?;
     assert_eq!(
@@ -225,8 +188,6 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             "readonly",
             "--profile-id",
             &profile_id,
-            "--model",
-            &model,
         ],
     )?;
     let readonly_id = readonly_created
@@ -253,15 +214,19 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             .and_then(Value::as_str),
         Some("readonly")
     );
-    let selection_id = readonly_show
-        .get("tool_selection_id")
+    let _tools_id = readonly_show
+        .pointer("/resolved/tools/tools_id")
         .and_then(Value::as_str)
-        .context("show output missing tool_selection_id")?
+        .context("show output missing tools_id")?
         .to_string();
 
     // Hand-tune the readonly-template selection: this is exactly the
     // "one extra argv prefix classifies as custom" case
     // `persona_presets::preset_name` fences.
+    let mut tools = readonly_show["resolved"]["tools"].clone();
+    tools["host"]["bash"]["allowed_argv_prefixes"] = serde_json::json!([["git", "status"]]);
+    let tools_file = tempdir.path().join("tuned-tools.json");
+    write_json_file(&tools_file, &tools)?;
     run_cli_json(
         &home_dir,
         &[
@@ -270,12 +235,8 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             "set",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
-            "--selection-id",
-            &selection_id,
-            "--command-allowed-argv-prefix",
-            "git status",
+            "--file",
+            tools_file.to_str().unwrap(),
         ],
     )?;
 

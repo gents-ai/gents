@@ -9,7 +9,7 @@
 //! to one probe interval while the server already reports `serving`; and a seed
 //! written before the event source observes its collection is dropped in
 //! silence, because triggers are created/first-seen only. `pack seed` waits
-//! for `/healthz` and an enabled EventTrigger, then confirms a correlated
+//! for `/healthz` and an enabled event-backed Trigger, then confirms a correlated
 //! AgentRequest actually fired.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -22,8 +22,7 @@ use serde_json::{json, Value};
 use super::cli_process::{path_arg, run_cli_json};
 use super::secscan;
 use super::server::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
-use crate::cli::args::{GraphScopeArgs, PackInitArgs, PackInstallArgs, PackRunArgs, PackSeedArgs};
-use crate::cli::output_format::OutputFormat;
+use crate::cli::args::{PackInitArgs, PackRunArgs, PackSeedArgs};
 use crate::config_writes::ConfigAccess;
 use crate::desired_state::interpolate::interpolate_with;
 use crate::graphql_access::post_graphql;
@@ -45,14 +44,17 @@ struct ScenarioManifest {
     await_timeout_secs: u64,
     #[serde(default)]
     scan: Option<PackScan>,
+    /// Environment required by canonical dependency configs, keyed by pack.
+    /// Values are expanded with the scenario's normal environment interpolation.
+    #[serde(default)]
+    graph_dependency_environment: BTreeMap<String, BTreeMap<String, String>>,
     /// Resolved from the distribution manifest, never authored a second time.
     #[serde(skip)]
     graph_dependencies: Vec<String>,
-    /// Optional package-specific inference bindings. Every declared role in
-    /// the named package inherits this backend/profile/model instead of the
-    /// bootstrap behavior's defaults, unless that role has an override.
-    #[serde(default)]
-    bundled_graph_bindings: BTreeMap<String, PackGraphBinding>,
+    /// The canonical configuration is loaded once and owns all task, context,
+    /// tool, trigger, and event-source references used by scenario validation.
+    #[serde(skip)]
+    config: Option<gents::document_config::PackConfig>,
 }
 
 fn default_timeout() -> u64 {
@@ -130,24 +132,6 @@ struct PackInit {
     /// Packs use this to fail fast when invoked from the wrong checkout.
     #[serde(default)]
     tool_root_markers: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct PackGraphBinding {
-    backend_id: String,
-    profile_id: String,
-    model_name: String,
-    /// Optional tighter bindings for individual logical package roles. Roles
-    /// not listed here inherit the package-level binding above.
-    #[serde(default)]
-    role_overrides: BTreeMap<String, PackGraphRoleBinding>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct PackGraphRoleBinding {
-    backend_id: String,
-    profile_id: String,
-    model_name: String,
 }
 
 fn default_tool_package() -> String {
@@ -425,139 +409,119 @@ fn load_manifest_with(
         "scenario name must match the distribution manifest"
     );
     manifest.graph_dependencies = distribution.metadata.dependencies.clone();
+    manifest.config = Some(load_pack_config_with(pack, lookup)?);
     validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
-    validate_prompt_tool_contracts_with(pack, &manifest, lookup)
+    validate_prompt_tool_contracts(pack, &manifest)
         .with_context(|| format!("validating prompt/tool contracts in {}", path.display()))?;
-    validate_task_goal_declarations_with(pack, lookup)
+    validate_task_goal_declarations(&manifest)
         .with_context(|| format!("validating task goal declarations in {}", path.display()))?;
     Ok(manifest)
 }
 
-fn read_pack_json(path: &Path) -> Result<Value> {
-    read_pack_json_with(path, &|name| std::env::var(name).ok())
+fn load_pack_config_with(
+    pack: &Path,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<gents::document_config::PackConfig> {
+    const VALIDATION_OWNER: &str = "did:key:zScenarioPackValidationOwner";
+    let path = pack.join("pack_config.json");
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading canonical pack config {}", path.display()))?;
+    let value = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing canonical pack config {}", path.display()))?;
+    gents::pack::decode_pack_config(
+        value,
+        Some(&gents::pack::PackInstallOptions {
+            agent_did: VALIDATION_OWNER.into(),
+        }),
+        lookup,
+        &|_, _, reference| {
+            let relative = reference
+                .strip_prefix("./")
+                .context("pack sidecar path must start with ./")?;
+            std::fs::read_to_string(pack.join(relative))
+                .with_context(|| format!("reading pack sidecar {relative}"))
+        },
+    )
+    .with_context(|| format!("decoding canonical pack config {}", path.display()))
 }
 
-fn read_pack_json_with(path: &Path, lookup: &dyn Fn(&str) -> Option<String>) -> Result<Value> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("reading pack document {}", path.display()))?;
-    let expanded = interpolate_with(&raw, lookup).map_err(|missing| {
-        anyhow::anyhow!(
-            "{} references unset environment variable(s): {}",
-            path.display(),
-            missing.join(", ")
-        )
-    })?;
-    serde_json::from_str(&expanded)
-        .with_context(|| format!("parsing pack document {}", path.display()))
-}
-
-fn required_json_string<'a>(value: &'a Value, field: &str, path: &Path) -> Result<&'a str> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .with_context(|| format!("{} has no non-empty {field}", path.display()))
+fn scenario_config(manifest: &ScenarioManifest) -> Result<&gents::document_config::PackConfig> {
+    manifest
+        .config
+        .as_ref()
+        .context("scenario canonical configuration was not loaded")
 }
 
 /// A Task goal declaration is controller-provisioned, so its behavior needs
 /// only the goal lifecycle tools. Model-facing goal creation must stay off:
 /// granting it would add unrelated authority and make provisioning ownership
 /// ambiguous.
-fn validate_task_goal_declarations_with(
-    pack: &Path,
-    lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<()> {
-    let tasks_dir = pack.join("tasks");
-    if !tasks_dir.is_dir() {
-        return Ok(());
-    }
-    for entry in
-        std::fs::read_dir(&tasks_dir).with_context(|| format!("reading {}", tasks_dir.display()))?
-    {
-        let task_path = entry?.path().join("object.json");
-        if !task_path.is_file() {
-            continue;
-        }
-        let task = read_pack_json_with(&task_path, lookup)?;
-        let Some(objective) = task
-            .get("goal_objective_template")
-            .filter(|value| !value.is_null())
-        else {
-            if task
-                .get("goal_token_budget")
-                .is_some_and(|value| !value.is_null())
-            {
+fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
+    let config = scenario_config(manifest)?;
+    for task in &config.tasks {
+        let Some(objective) = task.goal_objective_template.as_deref() else {
+            if task.goal_token_budget.is_some() {
                 bail!(
-                    "{} sets goal_token_budget without goal_objective_template",
-                    task_path.display()
+                    "Task {} sets goal_token_budget without goal_objective_template",
+                    task.task_id
                 );
             }
             continue;
         };
-        let objective = objective.as_str().with_context(|| {
-            format!(
-                "{} goal_objective_template must be a string",
-                task_path.display()
-            )
-        })?;
         if objective.trim().is_empty() {
             bail!(
-                "{} goal_objective_template must be non-empty",
-                task_path.display()
+                "Task {} goal_objective_template must be non-empty",
+                task.task_id
             );
         }
-        if let Some(budget) = task
-            .get("goal_token_budget")
-            .filter(|value| !value.is_null())
-        {
-            let budget = budget.as_i64().with_context(|| {
-                format!(
-                    "{} goal_token_budget must be an integer",
-                    task_path.display()
-                )
-            })?;
+        if let Some(budget) = task.goal_token_budget {
             if budget <= 0 {
-                bail!("{} goal_token_budget must be positive", task_path.display());
+                bail!("Task {} goal_token_budget must be positive", task.task_id);
             }
         }
 
-        let behavior_id = required_json_string(&task, "behavior_id", &task_path)?;
-        let behavior_path = pack
-            .join("agent_behaviors")
-            .join(crate::desired_state::document_handle(behavior_id))
-            .join("object.json");
-        let behavior = read_pack_json_with(&behavior_path, lookup)?;
-        let selection_id = required_json_string(&behavior, "tool_selection_id", &behavior_path)?;
-        let selection_path = pack
-            .join("tool_selections")
-            .join(crate::desired_state::document_handle(selection_id))
-            .join("object.json");
-        let selection = read_pack_json_with(&selection_path, lookup)?;
-        let goal_tools_enabled = selection
-            .get("enable_goal_tools")
-            .and_then(Value::as_bool)
-            .unwrap_or_else(|| {
-                selection
-                    .get("enable_meta_tools")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-            });
+        let behavior = config
+            .agent_behaviors
+            .iter()
+            .find(|behavior| behavior.behavior_id == task.behavior_id)
+            .with_context(|| format!("Task {} references a missing behavior", task.task_id))?;
+        let context = behavior
+            .context_id
+            .as_deref()
+            .and_then(|id| {
+                config
+                    .contexts
+                    .iter()
+                    .find(|context| context.context_id == id)
+            })
+            .with_context(|| format!("Task {} behavior has no context", task.task_id))?;
+        let tools = context
+            .tools_id
+            .as_deref()
+            .and_then(|id| config.tools.iter().find(|tools| tools.tools_id == id))
+            .with_context(|| format!("Task {} context has no tools", task.task_id))?;
+        let goal_tools_enabled = tools
+            .built_ins
+            .as_ref()
+            .and_then(|built_ins| built_ins.enable_goal_tools)
+            .unwrap_or(false);
         if !goal_tools_enabled {
             bail!(
-                "{} declares a durable goal but {} does not enable goal tools",
-                task_path.display(),
-                selection_path.display()
+                "Task {} declares a durable goal but Tools {} does not enable goal tools",
+                task.task_id,
+                tools.tools_id
             );
         }
-        if selection
-            .get("enable_goal_creation")
-            .and_then(Value::as_bool)
+        if tools
+            .built_ins
+            .as_ref()
+            .and_then(|built_ins| built_ins.enable_goal_creation)
             .unwrap_or(false)
         {
             bail!(
-                "{} declares a controller-provisioned durable goal but {} enables model goal creation",
-                task_path.display(),
-                selection_path.display()
+                "Task {} declares a controller-provisioned durable goal but Tools {} enables model goal creation",
+                task.task_id,
+                tools.tools_id
             );
         }
     }
@@ -567,14 +531,10 @@ fn validate_task_goal_declarations_with(
 /// Keep model instructions coupled to the exact tools exposed by the pack.
 ///
 /// A config can be structurally valid while asking the model to call a stale
-/// tool name. These contracts follow Task -> Behavior -> ToolSelection ->
+/// tool name. These contracts follow Task -> Behavior -> Context -> Tools ->
 /// DatastoreToolSurface and require the exact advertised name to occur in the
 /// task or system prompt. Surface collections must also exist in `schemas/`.
-fn validate_prompt_tool_contracts_with(
-    pack: &Path,
-    manifest: &ScenarioManifest,
-    lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<()> {
+fn validate_prompt_tool_contracts(pack: &Path, manifest: &ScenarioManifest) -> Result<()> {
     if manifest.expect.prompt_tool_contracts.is_empty() {
         return Ok(());
     }
@@ -586,70 +546,62 @@ fn validate_prompt_tool_contracts_with(
         .collect::<std::io::Result<Vec<_>>>()?
         .join("\n");
 
+    let config = scenario_config(manifest)?;
     for contract in &manifest.expect.prompt_tool_contracts {
-        let task_dir = pack
-            .join("tasks")
-            .join(crate::desired_state::document_handle(&contract.task_id));
-        let task_path = task_dir.join("object.json");
-        let task = read_pack_json_with(&task_path, lookup)?;
-        let behavior_id = required_json_string(&task, "behavior_id", &task_path)?;
-        let task_prompt_path = task_dir.join(
-            required_json_string(&task, "prompt_template", &task_path)?.trim_start_matches("./"),
-        );
-        let task_prompt = std::fs::read_to_string(&task_prompt_path)
-            .with_context(|| format!("reading {}", task_prompt_path.display()))?;
-
-        let behavior_dir = pack
-            .join("agent_behaviors")
-            .join(crate::desired_state::document_handle(behavior_id));
-        let behavior_path = behavior_dir.join("object.json");
-        let behavior = read_pack_json_with(&behavior_path, lookup)?;
-        let system_prompt_path = behavior_dir.join(
-            required_json_string(&behavior, "system_prompt", &behavior_path)?
-                .trim_start_matches("./"),
-        );
-        let system_prompt = std::fs::read_to_string(&system_prompt_path)
-            .with_context(|| format!("reading {}", system_prompt_path.display()))?;
-        let selection_id = required_json_string(&behavior, "tool_selection_id", &behavior_path)?;
-        let selection_path = pack
-            .join("tool_selections")
-            .join(crate::desired_state::document_handle(selection_id))
-            .join("object.json");
-        let selection = read_pack_json_with(&selection_path, lookup)?;
+        let task = config
+            .tasks
+            .iter()
+            .find(|task| task.task_id == contract.task_id)
+            .with_context(|| format!("missing Task {}", contract.task_id))?;
+        let behavior_id = task.behavior_id.as_str();
+        let behavior = config
+            .agent_behaviors
+            .iter()
+            .find(|behavior| behavior.behavior_id == behavior_id)
+            .with_context(|| format!("missing AgentBehavior {behavior_id}"))?;
+        let context = behavior
+            .context_id
+            .as_deref()
+            .and_then(|id| {
+                config
+                    .contexts
+                    .iter()
+                    .find(|context| context.context_id == id)
+            })
+            .with_context(|| format!("AgentBehavior {behavior_id} has no context"))?;
+        let tools = context
+            .tools_id
+            .as_deref()
+            .and_then(|id| config.tools.iter().find(|tools| tools.tools_id == id))
+            .with_context(|| format!("AgentContext {} has no tools", context.context_id))?;
+        let task_prompt = task.prompt_template.as_str();
+        let system_prompt = context.system_prompt.as_deref().unwrap_or_default();
 
         let mut advertised = std::collections::BTreeSet::new();
-        let query_collections = selection
-            .get("defra_query_collections")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
+        let datastore = tools.datastore.as_ref();
+        let query_collections = datastore
+            .and_then(|datastore| datastore.defra_query_collections.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .map(String::as_str)
             .collect::<std::collections::BTreeSet<_>>();
-        if selection
-            .get("enable_defra_query")
-            .and_then(Value::as_bool)
+        if datastore
+            .and_then(|datastore| datastore.enable_defra_query)
             .unwrap_or(false)
         {
             advertised.insert("defra_query".to_string());
         }
-        for surface_id in selection
-            .get("datastore_tool_surface_ids")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
+        for surface_id in datastore
+            .and_then(|datastore| datastore.datastore_tool_surface_ids.as_deref())
+            .unwrap_or_default()
         {
-            let surface_path = pack
-                .join("datastore_tool_surfaces")
-                .join(crate::desired_state::document_handle(surface_id))
-                .join("object.json");
-            let surface = read_pack_json_with(&surface_path, lookup)?;
-            for entry in surface
-                .get("entries")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
+            let surface = config
+                .datastore_tool_surfaces
+                .iter()
+                .find(|surface| surface.surface_id == *surface_id)
+                .with_context(|| format!("missing DatastoreToolSurface {surface_id}"))?;
+            for entry in surface.entries.as_deref().unwrap_or_default() {
+                let entry = serde_json::to_value(entry)?;
                 let tool_name = entry
                     .get("tool_name")
                     .and_then(Value::as_str)
@@ -745,15 +697,30 @@ fn validate_prompt_tool_contracts_with(
     Ok(())
 }
 
-fn trigger_source_collections(pack: &Path, trigger_ids: &[String]) -> Result<Vec<String>> {
+fn trigger_source_collections(
+    manifest: &ScenarioManifest,
+    trigger_ids: &[String],
+) -> Result<Vec<String>> {
+    let config = scenario_config(manifest)?;
     let mut collections = std::collections::BTreeSet::new();
     for trigger_id in trigger_ids {
-        let path = pack
-            .join("event_triggers")
-            .join(crate::desired_state::document_handle(trigger_id))
-            .join("object.json");
-        let trigger = read_pack_json(&path)?;
-        let source_collection = required_json_string(&trigger, "source_collection", &path)?;
+        let trigger = config
+            .triggers
+            .iter()
+            .find(|trigger| trigger.trigger_id == *trigger_id)
+            .with_context(|| format!("missing Trigger {trigger_id}"))?;
+        let event_source_id = match &trigger.source {
+            gents::document_config::TriggerSource::Event { event_source_id } => event_source_id,
+            gents::document_config::TriggerSource::Schedule { .. } => {
+                bail!("scenario Trigger {trigger_id} must use an event source")
+            }
+        };
+        let source = config
+            .event_sources
+            .iter()
+            .find(|source| source.event_source_id == *event_source_id)
+            .with_context(|| format!("missing EventSource {event_source_id}"))?;
+        let source_collection = source.source_collection.as_str();
         validate_collection_identifier(source_collection)?;
         collections.insert(source_collection.to_string());
     }
@@ -773,47 +740,6 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
         }
         if !graph_packages.insert(package) {
             bail!("manifest dependencies contain duplicate {package}");
-        }
-        let package_asset = gents::graph_package::load_bundled_graph_package(package)
-            .with_context(|| format!("loading bundled graph dependency {package}"))?;
-        let Some(binding) = manifest.bundled_graph_bindings.get(package) else {
-            continue;
-        };
-        for (field, value) in [
-            ("backend_id", &binding.backend_id),
-            ("profile_id", &binding.profile_id),
-            ("model_name", &binding.model_name),
-        ] {
-            if value.trim().is_empty() {
-                bail!("bundled_graph_bindings[{package}].{field} must not be empty");
-            }
-        }
-        let declared_roles = package_asset
-            .manifest
-            .roles
-            .iter()
-            .map(|role| role.name.as_str())
-            .collect::<BTreeSet<_>>();
-        for (role, override_binding) in &binding.role_overrides {
-            if !declared_roles.contains(role.as_str()) {
-                bail!("bundled_graph_bindings[{package}].role_overrides names unknown role {role}");
-            }
-            for (field, value) in [
-                ("backend_id", &override_binding.backend_id),
-                ("profile_id", &override_binding.profile_id),
-                ("model_name", &override_binding.model_name),
-            ] {
-                if value.trim().is_empty() {
-                    bail!(
-                        "bundled_graph_bindings[{package}].role_overrides[{role}].{field} must not be empty"
-                    );
-                }
-            }
-        }
-    }
-    for package in manifest.bundled_graph_bindings.keys() {
-        if !graph_packages.contains(package.as_str()) {
-            bail!("bundled_graph_bindings names package {package} that is not bundled");
         }
     }
     let mut result_collections = BTreeSet::new();
@@ -966,110 +892,32 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
 }
 
 async fn install_bundled_graph_dependencies(
+    bin: &Path,
     home: &Path,
     graphql: &str,
     agent_did: &str,
     packages: &[String],
-    bindings: &BTreeMap<String, PackGraphBinding>,
-    timeout: Duration,
+    environments: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<()> {
     for package in packages {
         tracing::info!(%package, "installing bundled graph dependency");
-        let explicit_binding = bindings.get(package);
-        let mut binding_path = None;
-        if let Some(binding) = explicit_binding {
-            let query = format!(
-                r#"{{
-                  HostDeployment(order: {{ created_at: ASC }}, limit: 8) {{ deployment_id }}
-                  InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 2) {{ backend_id enabled }}
-                  InferenceProfile(filter: {{ profile_id: {{ _eq: "{}" }} }}, limit: 2) {{ profile_id }}
-                }}"#,
-                escape_graphql_string(&binding.backend_id),
-                escape_graphql_string(&binding.profile_id),
-            );
-            let response = wait_for_unique_graphql_rows(
-                graphql,
-                &query,
-                &["HostDeployment", "InferenceBackend", "InferenceProfile"],
-                "bundled graph binding targets",
-                timeout,
-            )
-            .await?;
-            let deployment_id = response
-                .pointer("/data/HostDeployment/0/deployment_id")
-                .and_then(Value::as_str)
-                .context("bundled graph binding has no unambiguous HostDeployment")?;
-            let package_asset = gents::graph_package::load_bundled_graph_package(package)?;
-            for override_binding in binding.role_overrides.values() {
-                let override_query = format!(
-                    r#"{{
-                      InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 2) {{ backend_id enabled }}
-                      InferenceProfile(filter: {{ profile_id: {{ _eq: "{}" }} }}, limit: 2) {{ profile_id }}
-                    }}"#,
-                    escape_graphql_string(&override_binding.backend_id),
-                    escape_graphql_string(&override_binding.profile_id),
-                );
-                wait_for_unique_graphql_rows(
-                    graphql,
-                    &override_query,
-                    &["InferenceBackend", "InferenceProfile"],
-                    "bundled graph role override targets",
-                    timeout,
-                )
-                .await?;
-            }
-            let explicit = gents::graph_package::GraphPackageInstallBindings {
-                owner_did: agent_did.to_string(),
-                roles: package_asset
-                    .manifest
-                    .roles
-                    .iter()
-                    .map(|declared| {
-                        let (backend_id, profile_id, model_name) = binding
-                            .role_overrides
-                            .get(&declared.name)
-                            .map(|role| (&role.backend_id, &role.profile_id, &role.model_name))
-                            .unwrap_or((
-                                &binding.backend_id,
-                                &binding.profile_id,
-                                &binding.model_name,
-                            ));
-                        (
-                            declared.name.clone(),
-                            gents::graph_pipeline::PackageRoleBinding {
-                                principal_did: agent_did.to_string(),
-                                deployment_id: deployment_id.to_string(),
-                                backend_id: Some(backend_id.clone()),
-                                profile_id: Some(profile_id.clone()),
-                                model_name: Some(model_name.clone()),
-                            },
-                        )
-                    })
-                    .collect(),
-            };
-            let path = home.join(format!("bundled-graph-bindings-{package}.json"));
-            std::fs::write(
-                &path,
-                serde_json::to_vec_pretty(&explicit)
-                    .context("serializing bundled graph bindings")?,
-            )
-            .with_context(|| format!("writing bundled graph bindings {}", path.display()))?;
-            binding_path = Some(path);
-        }
-        crate::commands::graph::install(
-            PackInstallArgs {
-                package: package.clone(),
-                bindings: binding_path,
-                scope: GraphScopeArgs {
-                    home: Some(home.to_owned()),
-                    graphql: Some(graphql.to_owned()),
-                    agent_did: Some(agent_did.to_owned()),
-                },
-                output: OutputFormat::Json,
-                force_rebind_concrete_did: false,
-                registry: None,
-            },
-            false,
+        let args = vec![
+            "pack".to_owned(),
+            "install".to_owned(),
+            package.clone(),
+            "--home".to_owned(),
+            path_arg(home),
+            "--graphql".to_owned(),
+            graphql.to_owned(),
+            "--agent-did".to_owned(),
+            agent_did.to_owned(),
+            "--output".to_owned(),
+            "json".to_owned(),
+        ];
+        super::cli_process::run_cli_json_with_env(
+            bin,
+            &args,
+            environments.get(package).cloned().unwrap_or_default(),
         )
         .await
         .with_context(|| format!("installing bundled graph dependency {package}"))?;
@@ -1321,16 +1169,36 @@ fn pack_init_cli_args(
     init_args
 }
 
-fn event_trigger_ready(response: &Value, collection: &str) -> bool {
-    response
-        .pointer("/data/EventTrigger")
+fn event_backed_trigger_ready(response: &Value, collection: &str) -> bool {
+    let sources = response
+        .pointer("/data/EventSource")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .any(|row| {
-            row.get("source_collection").and_then(Value::as_str) == Some(collection)
-                && row.get("enabled").and_then(Value::as_bool) == Some(true)
+        .filter_map(|row| {
+            (row.get("source_collection").and_then(Value::as_str) == Some(collection))
+                .then(|| row.get("event_source_id").and_then(Value::as_str))
+                .flatten()
         })
+        .collect::<BTreeSet<_>>();
+    response
+        .pointer("/data/Trigger")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| row.get("enabled").and_then(Value::as_bool) == Some(true))
+        .filter_map(|row| row.get("source"))
+        .filter_map(|source| match source {
+            Value::String(source) => serde_json::from_str(source).ok(),
+            source => Some(source.clone()),
+        })
+        .filter_map(|source| {
+            source
+                .get("event_source_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .any(|source_id| sources.contains(source_id.as_str()))
 }
 
 fn has_correlated_request(response: &Value) -> bool {
@@ -1375,29 +1243,6 @@ where
     wait_until_value(label, deadline, probe, |ready| *ready)
         .await
         .map(|_| ())
-}
-
-async fn wait_for_unique_graphql_rows(
-    graphql: &str,
-    query: &str,
-    fields: &[&str],
-    label: &str,
-    deadline: Duration,
-) -> Result<Value> {
-    wait_until_value(
-        label,
-        deadline,
-        || post_graphql(graphql, query),
-        |response| {
-            fields.iter().all(|field| {
-                response
-                    .pointer(&format!("/data/{field}"))
-                    .and_then(Value::as_array)
-                    .is_some_and(|rows| rows.len() == 1)
-            })
-        },
-    )
-    .await
 }
 
 async fn wait_http_ok(url: &str, deadline: Duration) -> Result<()> {
@@ -2525,11 +2370,11 @@ fn stage_requests_query(trigger_id: &str, correlation: &str) -> String {
 /// The trigger's own `last_error`, when it recorded a failed fire.
 async fn trigger_error(graphql: &str, trigger_id: &str) -> Option<String> {
     let query = format!(
-        r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ last_status last_error }} }}"#,
+        r#"{{ Trigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ last_status last_error }} }}"#,
         escape_graphql_string(trigger_id)
     );
     let resp = post_graphql(graphql, &query).await.ok()?;
-    let row = resp.pointer("/data/EventTrigger/0")?;
+    let row = resp.pointer("/data/Trigger/0")?;
     if row.get("last_status").and_then(Value::as_str) != Some("error") {
         return None;
     }
@@ -3023,7 +2868,7 @@ async fn load_background_completion_evidence(
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{
-                request_id lifecycle_state execution_origin subagent_depth metadata
+                request_id lifecycle_state execution_origin subagent_depth input
             }}
         }}"#,
         escape_graphql_string(agent_did),
@@ -3058,10 +2903,16 @@ async fn load_background_completion_evidence(
                 _ => {}
             }
         }
+        let input = row
+            .get("input")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value::<gents_protocol::request_input::RequestInput>)
+            .transpose()
+            .context("decoding background-completion request input")?
+            .unwrap_or_default();
         if row.get("execution_origin").and_then(Value::as_str) == Some("scheduled")
-            && gents::lifecycle::is_background_completion_request(
-                row.get("metadata").and_then(Value::as_str),
-            )
+            && gents::lifecycle::is_background_completion_request(&input)
             && RequestLifecycleState::parse_opt(Some(lifecycle_state))
                 == Some(RequestLifecycleState::Completed)
         {
@@ -3198,7 +3049,7 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
         .await
         .with_context(|| format!("start the pack node first (waiting on {healthz})"))?;
     wait_until(
-        &format!("EventTrigger on {}", manifest.seed.collection),
+        &format!("Trigger on {}", manifest.seed.collection),
         Duration::from_secs(60),
         || {
             let graphql = graphql.clone();
@@ -3206,10 +3057,10 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
             async move {
                 let response = post_graphql(
                     &graphql,
-                    "{ EventTrigger { trigger_id source_collection enabled } }",
+                    "{ Trigger { trigger_id source enabled } EventSource { event_source_id source_collection } }",
                 )
                 .await?;
-                Ok(event_trigger_ready(&response, &collection))
+                Ok(event_backed_trigger_ready(&response, &collection))
             }
         },
     )
@@ -3266,7 +3117,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack)?;
     let mut manifest = load_manifest(&pack, &distribution)?;
-    let observed_collections = trigger_source_collections(&pack, &manifest.expect.trigger_ids)?;
+    let observed_collections = trigger_source_collections(&manifest, &manifest.expect.trigger_ids)?;
     let job_id = args.job_id.clone().unwrap_or_else(default_job_id);
     let prompt = args
         .prompt
@@ -3344,12 +3195,12 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         .await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
         install_bundled_graph_dependencies(
+            &bin,
             &home,
             &graphql,
             &agent_did,
             &manifest.graph_dependencies,
-            &manifest.bundled_graph_bindings,
-            Duration::from_secs(manifest.await_timeout_secs),
+            &manifest.graph_dependency_environment,
         )
         .await?;
         println!(
@@ -3721,7 +3572,11 @@ mod tests {
     }
 
     fn read_pack_json_defaults(path: &Path) -> Result<Value> {
-        read_pack_json_with(path, &|_| None)
+        let raw =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let expanded = interpolate_with(&raw, &|_| None)
+            .map_err(|missing| anyhow::anyhow!("unset variables: {}", missing.join(", ")))?;
+        serde_json::from_str(&expanded).with_context(|| format!("parsing {}", path.display()))
     }
 
     /// Regression: tracing colours its file output, so the raw bytes are
@@ -3769,24 +3624,31 @@ mod tests {
     }
 
     #[test]
-    fn event_trigger_ready_requires_enabled_matching_collection() {
+    fn event_backed_trigger_ready_requires_enabled_matching_collection() {
         let response = json!({
             "data": {
-                "EventTrigger": [
-                    {"trigger_id": "other", "source_collection": "Other", "enabled": true},
-                    {"trigger_id": "recon", "source_collection": "ReviewJob", "enabled": false}
+                "Trigger": [
+                    {"trigger_id": "other", "source": {"kind": "event", "event_source_id": "other-source"}, "enabled": true},
+                    {"trigger_id": "recon", "source": {"kind": "event", "event_source_id": "review-source"}, "enabled": false}
+                ],
+                "EventSource": [
+                    {"event_source_id": "other-source", "source_collection": "Other"},
+                    {"event_source_id": "review-source", "source_collection": "ReviewJob"}
                 ]
             }
         });
-        assert!(!event_trigger_ready(&response, "ReviewJob"));
+        assert!(!event_backed_trigger_ready(&response, "ReviewJob"));
         let response = json!({
             "data": {
-                "EventTrigger": [
-                    {"trigger_id": "recon", "source_collection": "ReviewJob", "enabled": true}
+                "Trigger": [
+                    {"trigger_id": "recon", "source": {"kind": "event", "event_source_id": "review-source"}, "enabled": true}
+                ],
+                "EventSource": [
+                    {"event_source_id": "review-source", "source_collection": "ReviewJob"}
                 ]
             }
         });
-        assert!(event_trigger_ready(&response, "ReviewJob"));
+        assert!(event_backed_trigger_ready(&response, "ReviewJob"));
     }
 
     #[test]
@@ -3895,8 +3757,9 @@ mod tests {
             },
             await_timeout_secs: 1,
             scan: None,
+            graph_dependency_environment: BTreeMap::new(),
             graph_dependencies: Vec::new(),
-            bundled_graph_bindings: BTreeMap::new(),
+            config: None,
         };
 
         let error = validate_manifest(&manifest).expect_err("unsigned source edges must fail");
@@ -3905,849 +3768,109 @@ mod tests {
             .contains("source_edges requires expect.signed_provenance=true"));
     }
 
+    fn canonical_document(
+        manifest: &ScenarioManifest,
+        collection: &str,
+        id_field: &str,
+        id: &str,
+    ) -> Value {
+        let config =
+            serde_json::to_value(manifest.config.as_ref().expect("canonical config loaded"))
+                .expect("canonical config serializes");
+        config[collection]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|row| row[id_field].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("missing {collection} document {id}"))
+            .clone()
+    }
+
     #[test]
     fn defending_code_pack_is_typed_static_and_closes_both_fan_outs() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/defending_code");
         let manifest = load_manifest_defaults(&pack).expect("defending-code pack should load");
+        let config = manifest.config.as_ref().unwrap();
         assert_eq!(manifest.expect.prompt_tool_contracts.len(), 14);
         assert_eq!(manifest.expect.result_documents.len(), 17);
         assert_eq!(manifest.init.tool_package, "write");
+        assert_eq!(config.agent_behaviors.len(), 16);
+        assert_eq!(config.tasks.len(), 16);
+        assert_eq!(config.triggers.len(), 16);
 
-        for (trigger, collection) in [
+        for (trigger_id, source_collection) in [
             ("defend-scan", "DefenseReviewArea"),
             ("defend-verifier", "DefenseVerificationAssignment"),
             ("defend-contract-review", "DefenseRootCauseCluster"),
         ] {
-            let source = manifest
-                .expect
-                .trigger_request_count_sources
-                .get(trigger)
-                .unwrap_or_else(|| panic!("{trigger} should have a count source"));
-            assert_eq!(source.collection, collection);
-            assert_eq!(source.correlation_field, "run_id");
-            assert_eq!(source.expected_count_field, "expected_total");
-        }
-
-        for (trigger, status) in [
-            ("defend-patch", "ready"),
-            ("defend-patch-skip", "skipped"),
-            ("defend-patch-validation", "ready"),
-            ("defend-patch-review", "ready"),
-            ("defend-patch-security-review", "ready"),
-        ] {
-            let source = manifest
-                .expect
-                .trigger_request_count_sources
-                .get(trigger)
-                .unwrap_or_else(|| panic!("{trigger} should have a filtered source"));
-            assert_eq!(source.collection, "DefensePatchAssignment");
-            assert_eq!(source.correlation_field, "run_id");
-            assert!(source.expected_count_field.is_empty());
-            assert_eq!(source.match_field.as_deref(), Some("status"));
-            assert_eq!(source.match_value.as_deref(), Some(status));
-        }
-
-        let fan_in = manifest.expect.fan_in.as_ref().expect("fan-in contract");
-        assert_eq!(fan_in.member_collection, "DefenseReviewArea");
-        assert_eq!(fan_in.result_collection, "DefenseScanResult");
-        assert_eq!(fan_in.report_collection, "DefenseReport");
-        assert_eq!(fan_in.min_expected_count, Some(4));
-        assert_eq!(fan_in.max_expected_count, Some(10));
-
-        for (trigger, collection, fire_mode) in [
-            ("defend-verification-plan", "DefenseScanResult", "per_group"),
-            (
-                "defend-verifier",
-                "DefenseVerificationAssignment",
-                "per_document",
-            ),
-            (
-                "defend-triage",
-                "DefenseVerificationCompletion",
-                "per_group",
-            ),
-            ("defend-cluster", "DefenseTriageSummary", "per_document"),
-            (
-                "defend-contract-review",
-                "DefenseRootCauseCluster",
-                "per_document",
-            ),
-            (
-                "defend-remediation-plan",
-                "DefenseContractReview",
-                "per_group",
-            ),
-            (
-                "defend-patch-validation",
-                "WorkspaceReceipt",
-                "per_document",
-            ),
-            (
-                "defend-patch-review",
-                "DefensePatchValidation",
-                "per_document",
-            ),
-            (
-                "defend-patch-security-review",
-                "DefensePatchReview",
-                "per_document",
-            ),
-        ] {
-            let document = read_pack_json_defaults(
-                &pack
-                    .join("event_triggers")
-                    .join(crate::desired_state::document_handle(trigger))
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{trigger} should load: {error:#}"));
-            assert_eq!(
-                document.get("source_collection").and_then(Value::as_str),
-                Some(collection)
-            );
-            assert_eq!(
-                document.get("fire_mode").and_then(Value::as_str),
-                Some(fire_mode)
-            );
-        }
-
-        for selection in [
-            "defend-threat-model-tools",
-            "defend-plan-tools",
-            "defend-scan-tools",
-            "defend-verification-plan-tools",
-            "defend-triage-tools",
-            "defend-verifier-tools",
-            "defend-cluster-tools",
-            "defend-contract-review-tools",
-            "defend-remediation-plan-tools",
-            "defend-patch-tools",
-            "defend-patch-validation-tools",
-            "defend-patch-review-tools",
-            "defend-patch-security-review-tools",
-            "defend-report-tools",
-        ] {
-            let document = read_pack_json_defaults(
-                &pack
-                    .join("tool_selections")
-                    .join(crate::desired_state::document_handle(&selection))
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
-            assert_eq!(
-                document.get("enable_defra_query").and_then(Value::as_bool),
-                Some(false),
-                "{selection} must use collection-bound reads"
-            );
-            let expected_network_mode = if matches!(
-                selection,
-                "defend-threat-model-tools"
-                    | "defend-plan-tools"
-                    | "defend-scan-tools"
-                    | "defend-verifier-tools"
-                    | "defend-contract-review-tools"
-                    | "defend-patch-tools"
-                    | "defend-patch-validation-tools"
-                    | "defend-patch-review-tools"
-                    | "defend-patch-security-review-tools"
-            ) {
-                "enabled"
-            } else {
-                "disabled"
+            let trigger = config
+                .triggers
+                .iter()
+                .find(|trigger| trigger.trigger_id == trigger_id)
+                .unwrap();
+            let gents::document_config::TriggerSource::Event { event_source_id } = &trigger.source
+            else {
+                panic!("{trigger_id} must use an event source")
             };
-            assert_eq!(
-                document.get("command_network_mode").and_then(Value::as_str),
-                Some(expected_network_mode)
-            );
-        }
-
-        for selection in [
-            "defend-threat-model-tools",
-            "defend-plan-tools",
-            "defend-scan-tools",
-            "defend-verifier-tools",
-            "defend-patch-tools",
-        ] {
-            let document = read_pack_json_defaults(
-                &pack
-                    .join("tool_selections")
-                    .join(crate::desired_state::document_handle(&selection))
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
-            assert_eq!(
-                document.get("enable_bash").and_then(Value::as_bool),
-                Some(true)
-            );
-            assert_eq!(
-                document.get("bash_mode").and_then(Value::as_str),
-                Some("Unrestricted")
-            );
-            assert_eq!(
-                document
-                    .get("command_execution_policy")
-                    .and_then(Value::as_str),
-                Some("unrestricted")
-            );
-            assert_eq!(
-                document.get("enable_lsp").and_then(Value::as_bool),
-                Some(true)
-            );
-            assert!(document
-                .get("lsp_config")
-                .and_then(Value::as_str)
-                .is_some_and(|config| config.contains("rust-analyzer")));
-            assert_eq!(
-                document
-                    .get("backgroundable_tool_names")
-                    .and_then(Value::as_array)
-                    .and_then(|names| names.first())
-                    .and_then(Value::as_str),
-                Some("bash_unrestricted")
-            );
-        }
-
-        let triage_tools = read_pack_json_defaults(
-            &pack
-                .join("tool_selections")
-                .join("defend_triage_tools")
-                .join("object.json"),
-        )
-        .expect("triage reducer tools should load");
-        assert_eq!(
-            triage_tools
-                .get("subagent_spawn_enabled")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            triage_tools
-                .get("subagent_background_enabled")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            triage_tools
-                .get("subagent_default_await_mode")
-                .is_some_and(Value::is_null),
-            true
-        );
-        assert_eq!(
-            triage_tools.get("enable_bash").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(triage_tools
-            .get("subagent_targets")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty));
-        let triage_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("defend_triage_task")
-                .join("prompt.md"),
-        )
-        .expect("triage reducer prompt should load");
-        assert!(!triage_prompt.contains("spawn_subagent"));
-
-        let verifier_surface = read_pack_json_defaults(
-            &pack
-                .join("datastore_tool_surfaces")
-                .join("defend_verifier_io")
-                .join("object.json"),
-        )
-        .expect("verifier datastore surface should load");
-        let completion_write = verifier_surface
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry.get("tool_name").and_then(Value::as_str)
-                        == Some("write_defense_verification_completion")
-                })
-            })
-            .expect("verifier surface should expose completion writes");
-        assert_eq!(
-            completion_write
-                .get("output_obligation")
-                .and_then(|obligation| obligation.get("scope"))
-                .and_then(Value::as_str),
-            Some("trigger"),
-            "every event-triggered verifier request must close its assignment"
-        );
-        assert!(
-            completion_write
-                .get("fields")
-                .and_then(Value::as_array)
-                .is_some_and(|fields| fields.iter().any(|field| {
-                    field.get("name").and_then(Value::as_str) == Some("status")
-                        && field.get("required").and_then(Value::as_bool) == Some(true)
-                })),
-            "verification completions must durably classify blocked handoffs"
-        );
-        let verdict_write = verifier_surface
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry.get("tool_name").and_then(Value::as_str) == Some("write_defense_verdict")
-                })
-            })
-            .expect("verifier surface should expose verdict writes");
-        let verdict_fields = verdict_write
-            .get("fields")
-            .and_then(Value::as_array)
-            .expect("verdict write should declare fields");
-        for verifier_owned in [
-            "verdict",
-            "adjudicated_claim_kind",
-            "security_boundary",
-            "severity",
-            "evidence",
-            "verification",
-            "preconditions",
-            "access_level",
-        ] {
-            assert!(verdict_fields.iter().any(|field| {
-                field.get("name").and_then(Value::as_str) == Some(verifier_owned)
-            }));
-        }
-        for other_stage_owned in [
-            "claim_kind",
-            "root_cause_key",
-            "title",
-            "description",
-            "recommendation",
-            "duplicate_of",
-            "owner_hint",
-            "threat_ids",
-        ] {
+            let source = config
+                .event_sources
+                .iter()
+                .find(|source| source.event_source_id == *event_source_id)
+                .unwrap();
+            assert_eq!(source.source_collection, source_collection);
+            assert_eq!(source.correlation_field.as_deref(), Some("run_id"));
             assert!(
-                !verdict_fields.iter().any(|field| {
-                    field.get("name").and_then(Value::as_str) == Some(other_stage_owned)
-                }),
-                "verdict writer must not make verifiers repeat {other_stage_owned}"
+                manifest
+                    .expect
+                    .trigger_request_count_sources
+                    .contains_key(trigger_id),
+                "{trigger_id} must declare its fan-out count source"
             );
         }
-        for provenance_field in ["source_revision", "source_tree_state"] {
-            let field = verdict_fields
-                .iter()
-                .find(|field| field.get("name").and_then(Value::as_str) == Some(provenance_field))
-                .unwrap_or_else(|| panic!("verdict writer should include {provenance_field}"));
-            assert_eq!(field.get("required").and_then(Value::as_bool), Some(false));
+
+        for trigger_id in ["defend-patch-review", "defend-patch-security-review"] {
+            let trigger = canonical_document(&manifest, "triggers", "trigger_id", trigger_id);
+            let source_id = trigger["source"]["event_source_id"].as_str().unwrap();
+            let source =
+                canonical_document(&manifest, "event_sources", "event_source_id", source_id);
             assert_eq!(
-                field
-                    .get("fill")
-                    .and_then(|fill| fill.get("source_field"))
-                    .and_then(Value::as_str),
-                Some(provenance_field),
-                "verdict provenance should come from the trigger assignment"
+                source["filter"],
+                "{ _and: [ { workspace_id: { _neq: null } }, { workspace_id: { _ne: \"\" } } ] }"
             );
         }
 
-        let scan_surface = read_pack_json_defaults(
-            &pack
-                .join("datastore_tool_surfaces")
-                .join("defend_scan_writes")
-                .join("object.json"),
-        )
-        .expect("scan datastore surface should load");
-        let candidate_description = scan_surface
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry.get("tool_name").and_then(Value::as_str)
-                        == Some("write_defense_candidate")
-                })
-            })
-            .and_then(|entry| entry.get("description"))
-            .and_then(Value::as_str)
-            .expect("candidate writer should describe its classification contract");
-        assert!(candidate_description.contains("vulnerability requires claimed_severity"));
-        assert!(candidate_description.contains("require claimed_severity NONE"));
-
-        let verification_plan_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("defend_verification_plan_task")
-                .join("prompt.md"),
-        )
-        .expect("verification-plan prompt should load");
-        assert!(verification_plan_prompt.contains("classification_mismatch:"));
-
-        let verification_plan_surface = read_pack_json_defaults(
-            &pack
-                .join("datastore_tool_surfaces")
-                .join("defend_verification_plan_io")
-                .join("object.json"),
-        )
-        .expect("verification-plan datastore surface should load");
-        let plan_candidate_fields = verification_plan_surface
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry.get("tool_name").and_then(Value::as_str) == Some("read_defense_candidate")
-                })
-            })
-            .and_then(|entry| entry.get("fields"))
-            .and_then(Value::as_array)
-            .expect("verification plan should read candidate classifications");
-        for classification_field in ["claim_kind", "claimed_severity"] {
-            assert!(plan_candidate_fields
-                .iter()
-                .any(|field| field.as_str() == Some(classification_field)));
-        }
-
-        let triage_surface = read_pack_json_defaults(
-            &pack
-                .join("datastore_tool_surfaces")
-                .join("defend_triage_io")
-                .join("object.json"),
-        )
-        .expect("triage datastore surface should load");
-        let triage_candidate_fields = triage_surface
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry.get("tool_name").and_then(Value::as_str) == Some("read_defense_candidate")
-                })
-            })
-            .and_then(|entry| entry.get("fields"))
-            .and_then(Value::as_array)
-            .expect("triage candidate read should declare its join fields");
-        for provenance_field in ["source_revision", "source_tree_state"] {
-            assert!(triage_candidate_fields
-                .iter()
-                .any(|field| field.as_str() == Some(provenance_field)));
-        }
-        for verifier_owned in ["claimed_severity", "confidence", "evidence"] {
-            assert!(!triage_candidate_fields
-                .iter()
-                .any(|field| field.as_str() == Some(verifier_owned)));
-        }
-        let triage_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("defend_triage_task")
-                .join("prompt.md"),
-        )
-        .expect("triage prompt should load");
-        assert!(triage_prompt.contains("`source_revision`"));
-        assert!(triage_prompt.contains("`source_tree_state`"));
-
-        let promoted_projection = manifest
-            .expect
-            .result_documents
+        let skip_surface = canonical_document(
+            &manifest,
+            "datastore_tool_surfaces",
+            "surface_id",
+            "defend-patch-skip-writes",
+        );
+        let collections = skip_surface["entries"]["entries"]
+            .as_array()
+            .unwrap()
             .iter()
-            .find(|result| result.collection == "DefendingFinding")
-            .expect("promoted finding result projection");
-        for joined_field in [
-            "claim_kind",
-            "root_cause_key",
-            "title",
-            "recommendation",
-            "owner_hint",
-            "threat_ids",
+            .filter_map(|entry| entry["collection"].as_str())
+            .collect::<BTreeSet<_>>();
+        for collection in [
+            "DefensePatchCandidate",
+            "DefensePatchValidation",
+            "DefensePatchReview",
+            "DefensePatchSecurityReview",
         ] {
-            assert!(
-                promoted_projection
-                    .fields
-                    .iter()
-                    .any(|field| field == joined_field),
-                "promoted finding projection should preserve {joined_field}"
-            );
+            assert!(collections.contains(collection));
         }
-
-        let schema_field_names = |path: &Path| {
-            std::fs::read_to_string(path)
-                .unwrap_or_else(|error| panic!("{} should load: {error}", path.display()))
-                .lines()
-                .filter_map(|line| {
-                    let line = line.trim();
-                    if line.is_empty() || line.starts_with("type ") || line == "}" {
-                        return None;
-                    }
-                    line.split_once(':').map(|(name, _)| name.to_string())
-                })
-                .collect::<std::collections::BTreeSet<_>>()
-        };
-        let json_string_set = |values: &[Value]| {
-            values
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .expect("field projection should contain strings")
-                        .to_string()
-                })
-                .collect::<std::collections::BTreeSet<_>>()
-        };
-        let write_field_set = |values: &[Value]| {
-            values
-                .iter()
-                .map(|value| {
-                    value
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .expect("write field should have a name")
-                        .to_string()
-                })
-                .collect::<std::collections::BTreeSet<_>>()
-        };
-
-        let verdict_schema_fields =
-            schema_field_names(&pack.join("schemas/defense_finding_verdict.graphql"));
-        assert_eq!(write_field_set(verdict_fields), verdict_schema_fields);
-        let verdict_projection_fields = verdict_schema_fields
-            .iter()
-            .filter(|field| field.as_str() != "run_id")
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
-        let triage_verdict_fields = triage_surface
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry.get("tool_name").and_then(Value::as_str) == Some("read_defense_verdict")
-                })
-            })
-            .and_then(|entry| entry.get("fields"))
-            .and_then(Value::as_array)
-            .expect("triage verdict read should declare fields");
-        assert_eq!(
-            json_string_set(triage_verdict_fields),
-            verdict_projection_fields
-        );
-        let report_surface = read_pack_json_defaults(
-            &pack
-                .join("datastore_tool_surfaces")
-                .join("defend_report_io")
-                .join("object.json"),
-        )
-        .expect("report datastore surface should load");
-        let report_verdict_fields = report_surface
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry.get("tool_name").and_then(Value::as_str) == Some("read_defense_verdict")
-                })
-            })
-            .and_then(|entry| entry.get("fields"))
-            .and_then(Value::as_array)
-            .expect("report verdict read should declare fields");
-        assert_eq!(
-            json_string_set(report_verdict_fields),
-            verdict_projection_fields
-        );
-        let verdict_result_fields = manifest
-            .expect
-            .result_documents
-            .iter()
-            .find(|result| result.collection == "DefenseFindingVerdict")
-            .expect("verdict result projection")
-            .fields
-            .iter()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(verdict_result_fields, verdict_projection_fields);
-
-        let promoted_schema_fields =
-            schema_field_names(&pack.join("schemas/defending_finding.graphql"));
-        let promoted_result_fields = promoted_projection
-            .fields
-            .iter()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(
-            promoted_result_fields,
-            promoted_schema_fields
-                .iter()
-                .filter(|field| field.as_str() != "run_id")
-                .cloned()
-                .collect::<std::collections::BTreeSet<_>>()
-        );
-        let promoted_write_fields = triage_surface
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry.get("tool_name").and_then(Value::as_str)
-                        == Some("write_defending_finding")
-                })
-            })
-            .and_then(|entry| entry.get("fields"))
-            .and_then(Value::as_array)
-            .expect("triage finding write should declare fields");
-        assert_eq!(
-            write_field_set(promoted_write_fields),
-            promoted_schema_fields
-        );
-
-        let assignment_write = verification_plan_surface
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry.get("tool_name").and_then(Value::as_str)
-                        == Some("write_defense_verification_assignment")
-                })
-            })
-            .expect("verification-plan surface should expose assignment writes");
-        assert_eq!(
-            assignment_write
-                .get("output_obligation")
-                .and_then(|obligation| obligation.get("expected_count_field"))
-                .and_then(Value::as_str),
-            Some("expected_total"),
-            "the planner must close the exact verifier work set"
-        );
-
-        for (task, surface, source_collection, source_template, redundant_read) in [
-            (
-                "defend-threat-model-task",
-                "defend-threat-model-writes",
-                "DefendingCodeJob",
-                "{{ doc.repository_path }}",
-                "read_defending_code_job",
-            ),
-            (
-                "defend-plan-task",
-                "defend-plan-writes",
-                "DefenseThreatModel",
-                "{{ doc.source_revision }}",
-                "read_defense_threat_model",
-            ),
-            (
-                "defend-scan-task",
-                "defend-scan-writes",
-                "DefenseReviewArea",
-                "{{ doc.area_id }}",
-                "read_defense_review_area",
-            ),
-            (
-                "defend-verification-plan-task",
-                "defend-verification-plan-io",
-                "DefenseScanResult",
-                "{{ group.docs }}",
-                "read_defense_scan_result",
-            ),
-            (
-                "defend-verifier-task",
-                "defend-verifier-io",
-                "DefenseVerificationAssignment",
-                "{{ doc.assignment_id }}",
-                "read_defense_verification_assignment",
-            ),
-            (
-                "defend-triage-task",
-                "defend-triage-io",
-                "DefenseVerificationCompletion",
-                "{{ group.docs }}",
-                "read_defense_verification_completion",
-            ),
-            (
-                "defend-cluster-task",
-                "defend-cluster-io",
-                "DefenseTriageSummary",
-                "{{ doc.promoted_count }}",
-                "read_defense_triage_summary",
-            ),
-            (
-                "defend-contract-review-task",
-                "defend-contract-review-io",
-                "DefenseRootCauseCluster",
-                "{{ doc.cluster_id }}",
-                "read_defense_root_cause_cluster",
-            ),
-            (
-                "defend-remediation-plan-task",
-                "defend-remediation-plan-io",
-                "DefenseContractReview",
-                "{{ group.docs }}",
-                "read_defense_contract_review",
-            ),
-            (
-                "defend-patch-task",
-                "defend-patch-io",
-                "CallbackResult",
-                "{{ doc.work_unit_id }}",
-                "read_callback_result",
-            ),
-            (
-                "defend-patch-validation-task",
-                "defend-patch-validation-writes",
-                "WorkspaceReceipt",
-                "{{ doc.seal_hash }}",
-                "read_workspace_receipt",
-            ),
-            (
-                "defend-patch-review-task",
-                "defend-patch-review-writes",
-                "DefensePatchValidation",
-                "{{ doc.validated_diff_sha256 }}",
-                "read_defense_patch_validation",
-            ),
-            (
-                "defend-patch-security-review-task",
-                "defend-patch-security-review-io",
-                "DefensePatchReview",
-                "{{ doc.validation_id }}",
-                "read_defense_patch_review",
-            ),
-            (
-                "defend-report-task",
-                "defend-report-io",
-                "DefensePatchSecurityReview",
-                "{{ group.docs }}",
-                "read_defense_patch_security_review",
-            ),
-        ] {
-            let prompt = std::fs::read_to_string(
-                pack.join("tasks")
-                    .join(crate::desired_state::document_handle(&task))
-                    .join("prompt.md"),
-            )
-            .unwrap_or_else(|error| panic!("{task} prompt should load: {error}"));
-            assert!(
-                prompt.contains(source_template),
-                "{task} must interpolate its trigger document directly"
-            );
-            assert!(
-                !prompt.contains(redundant_read),
-                "{task} must not re-query its trigger document with {redundant_read}"
-            );
-            let datastore = read_pack_json_defaults(
-                &pack
-                    .join("datastore_tool_surfaces")
-                    .join(crate::desired_state::document_handle(&surface))
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{surface} should load: {error:#}"));
-            assert!(
-                datastore
-                    .get("entries")
-                    .and_then(Value::as_array)
-                    .is_some_and(|entries| entries.iter().all(|entry| {
-                        entry.get("kind").and_then(Value::as_str) != Some("read")
-                            || entry.get("collection").and_then(Value::as_str)
-                                != Some(source_collection)
-                    })),
-                "{surface} must not expose a redundant read of trigger source {source_collection}"
-            );
-        }
-
-        for selection in [
-            "defend-contract-review-tools",
-            "defend-patch-validation-tools",
-            "defend-patch-review-tools",
-            "defend-patch-security-review-tools",
-        ] {
-            let document = read_pack_json_defaults(
-                &pack
-                    .join("tool_selections")
-                    .join(crate::desired_state::document_handle(&selection))
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
-            assert_eq!(
-                document.get("enable_bash").and_then(Value::as_bool),
-                Some(true)
-            );
-            assert_eq!(
-                document.get("enable_lsp").and_then(Value::as_bool),
-                Some(true)
-            );
-        }
-
-        let report_tools = read_pack_json_defaults(
-            &pack
-                .join("tool_selections")
-                .join("defend_report_tools")
-                .join("object.json"),
-        )
-        .expect("report tools should load");
-        assert_eq!(
-            report_tools.get("enable_bash").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            report_tools.get("enable_lsp").and_then(Value::as_bool),
-            Some(false)
-        );
-
-        let backend = read_pack_json_defaults(
-            &pack
-                .join("inference_backends")
-                .join("defending_backend")
-                .join("object.json"),
-        )
-        .expect("defending backend should load");
-        assert_eq!(
-            backend.get("max_concurrent").and_then(Value::as_u64),
-            Some(8)
-        );
-
-        for behavior in [
-            "defend-threat-model",
-            "defend-plan",
-            "defend-scan",
-            "defend-verification-plan",
-            "defend-triage",
-            "defend-verifier",
-            "defend-cluster",
-            "defend-contract-review",
-            "defend-remediation-plan",
-            "defend-patch",
-            "defend-patch-validation",
-            "defend-patch-review",
-            "defend-patch-security-review",
-            "defend-report",
-        ] {
-            let document = read_pack_json_defaults(
-                &pack
-                    .join("agent_behaviors")
-                    .join(crate::desired_state::document_handle(&behavior))
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{behavior} should load: {error:#}"));
-            assert_eq!(
-                document.get("compaction_threshold").and_then(Value::as_f64),
-                Some(0.762_939_453_125),
-                "{behavior} should compact at 200,000 of 262,144 tokens"
-            );
-        }
-
-        let review_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("defend_patch_review_task")
-                .join("prompt.md"),
-        )
-        .expect("patch review prompt should load");
-        assert!(review_prompt.contains("do not receive scanner conversation"));
-        assert!(!review_prompt.contains("{{ doc.rationale }}"));
-        assert!(!review_prompt.contains("{{ doc.description }}"));
-
-        let read_surface = std::fs::read_to_string(
-            pack.join("datastore_tool_surfaces")
-                .join("defend_report_io")
-                .join("object.json"),
-        )
-        .expect("report surface should load");
-        assert!(!read_surface.contains("defra_query"));
-        assert!(read_surface.contains("read_defense_patch_review"));
     }
 
     #[test]
     fn repo_maintenance_pack_preserves_categories_and_worktree_sized_packages() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/repo_maintenance");
         let manifest = load_manifest_defaults(&pack).expect("repo-maintenance pack should load");
+        let config = manifest.config.as_ref().unwrap();
         assert_eq!(manifest.expect.prompt_tool_contracts.len(), 6);
         assert_eq!(manifest.expect.result_documents.len(), 6);
         assert!(manifest
             .default_prompt
             .contains("one shared branch and worktree"));
-        assert!(!manifest
-            .default_prompt
-            .contains("independent 1-3 finding worktrees"));
         assert_eq!(
             manifest.seed.fields.get("area_count").map(String::as_str),
             Some("auto")
@@ -4760,932 +3883,83 @@ mod tests {
                 .map(String::as_str),
             Some("250")
         );
-        assert_eq!(
-            manifest.seed.fields.get("pr_base").map(String::as_str),
-            Some("main")
+        assert_eq!(config.tasks.len(), 8);
+        assert!(config
+            .triggers
+            .iter()
+            .any(|trigger| trigger.trigger_id == "maintenance-execute-skip"));
+
+        let triage_surface = canonical_document(
+            &manifest,
+            "datastore_tool_surfaces",
+            "surface_id",
+            "maintenance-triage-writes",
         );
-        assert_eq!(
-            manifest
-                .seed
-                .fields
-                .get("worktree_parent")
-                .map(String::as_str),
-            Some("..")
-        );
-        assert_eq!(
-            manifest
-                .seed
-                .fields
-                .get("worktree_path")
-                .map(String::as_str),
-            Some("../gents-maintenance")
-        );
-        assert_eq!(
-            manifest
-                .seed
-                .fields
-                .get("suggested_branch")
-                .map(String::as_str),
-            Some("agent/maintenance")
-        );
-        let fan_in = manifest.expect.fan_in.as_ref().expect("fan-in contract");
-        assert_eq!(fan_in.min_expected_count, Some(5));
-        assert_eq!(fan_in.max_expected_count, Some(10));
-
-        let recon_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("maintenance_recon_task")
-                .join("prompt.md"),
-        )
-        .expect("maintenance recon prompt should load");
-        for category in [
-            "dead-surface",
-            "duplicate-ownership",
-            "test-value",
-            "module-boundaries",
-            "comment-contract-drift",
-        ] {
-            assert!(recon_prompt.contains(category), "missing {category}");
-        }
-
-        let triage_surface = read_pack_json_defaults(
-            &pack
-                .join("datastore_tool_surfaces")
-                .join("maintenance_triage_writes")
-                .join("object.json"),
-        )
-        .expect("maintenance triage surface should load");
-        let package_entry = triage_surface["entries"]
-            .as_array()
-            .and_then(|entries| {
-                entries.iter().find(|entry| {
-                    entry["tool_name"].as_str() == Some("write_maintenance_work_package")
-                })
-            })
-            .expect("maintenance work-package writer");
-        assert_eq!(package_entry["collection"], "MaintenanceWorkPackage");
-
-        let triage_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("maintenance_triage_task")
-                .join("prompt.md"),
-        )
-        .expect("maintenance triage prompt should load");
-        assert!(triage_prompt.contains("becomes exactly one commit"));
-        assert!(triage_prompt.contains("runtime-owned execution boundary"));
-        assert!(triage_prompt.contains("do not supply or reinterpret them"));
-
-        let execute_trigger = read_pack_json_defaults(
-            &pack
-                .join("event_triggers")
-                .join("maintenance_execute")
-                .join("object.json"),
-        )
-        .expect("maintenance execute trigger should load");
-        assert_eq!(execute_trigger["concurrency"], "serial");
-        assert_eq!(execute_trigger["source_collection"], "CallbackResult");
-        assert_eq!(execute_trigger["workspace_authority"], "readWrite");
-
-        let execute_writes = read_pack_json_defaults(
-            &pack
-                .join("datastore_tool_surfaces")
-                .join("maintenance_execute_writes")
-                .join("object.json"),
-        )
-        .expect("maintenance execute writes should load");
-        let encoded = execute_writes.to_string();
-        assert!(
-            !encoded.contains("work_package_count"),
-            "execute must not fill expected_total from CallbackResult.work_package_count"
-        );
-
-        let execute_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("maintenance_execute_task")
-                .join("prompt.md"),
-        )
-        .expect("maintenance execute prompt should load");
-        assert!(execute_prompt.contains("single execution owner"));
-        assert!(execute_prompt.contains("Process packages strictly in numeric order"));
-        assert!(execute_prompt.contains("write_maintenance_execution_summary"));
-        assert!(!execute_prompt.contains("make worktree BRANCH="));
-        assert!(execute_prompt.contains("Do not run `git commit`"));
-        assert!(execute_prompt.contains("Do not run `make worktree`"));
-
-        let makefile = std::fs::read_to_string(pack.join("../../Makefile"))
-            .expect("repository Makefile should load");
-        assert!(makefile.contains("test \"$(MAINTENANCE_AREAS)\" -ge \"$(MAINTENANCE_MIN_AREAS)\""));
-
-        let publish_trigger = read_pack_json_defaults(
-            &pack
-                .join("event_triggers")
-                .join("maintenance_publish")
-                .join("object.json"),
-        )
-        .expect("maintenance publish trigger should load");
-        assert_eq!(publish_trigger["source_collection"], "WorkspaceReceipt");
-        assert_eq!(
-            publish_trigger["filter"],
-            "{ kind: { _eq: \"integrator\" } }"
-        );
-        assert!(publish_trigger.get("workspace_authority").is_none());
-
-        let publish_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("maintenance_publish_task")
-                .join("prompt.md"),
-        )
-        .expect("maintenance publish prompt should load");
+        assert!(triage_surface
+            .to_string()
+            .contains("MaintenanceWorkPackage"));
+        let publish_prompt =
+            std::fs::read_to_string(pack.join("tasks/maintenance_publish_task/prompt.md")).unwrap();
         assert!(publish_prompt.contains("one normal, non-draft PR"));
         assert!(publish_prompt.contains("Bound this at two full review rounds"));
-        assert!(publish_prompt.contains("cargo fmt --all --check"));
-        assert!(publish_prompt.contains("poll at intervals no longer than 60 seconds"));
-        assert!(publish_prompt.contains("Never kill by port or broad process-name match"));
         assert!(!publish_prompt.contains("make worktree BRANCH="));
-        assert!(publish_prompt.contains("Do not run `make worktree`"));
     }
 
     #[test]
-    fn workspace_packs_bind_callback_bindings_and_forbid_prompt_worktrees() {
+    fn workspace_packs_bind_callbacks_and_forbid_prompt_worktrees() {
         let catalog_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
-        for (pack_name, binding_id, source) in [
+        for (pack_name, binding_id, source_collection, worker_prompt) in [
             (
                 "defending_code",
                 "defense-patch-workspace",
                 "DefensePatchAssignment",
+                "tasks/defend_patch_task/prompt.md",
             ),
             (
                 "repo_maintenance",
                 "maintenance-execute-workspace",
                 "MaintenanceReport",
+                "tasks/maintenance_execute_task/prompt.md",
             ),
-            ("grok_tui_port", "port-implement-workspace", "PortWorkUnit"),
+            (
+                "grok_tui_port",
+                "port-implement-workspace",
+                "PortWorkUnit",
+                "tasks/port_implement_task/prompt.md",
+            ),
         ] {
             let pack = catalog_root.join(pack_name);
-            let binding = read_pack_json_defaults(
-                &pack
-                    .join("callback_bindings")
-                    .join(crate::desired_state::document_handle(&binding_id))
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{pack_name} callback binding should load: {error:#}"));
-            assert_eq!(binding["binding_id"], binding_id);
-            assert_eq!(binding["source_collection"], source);
-            assert_eq!(binding["builtin_emitter"], "create_workspace");
-            let experiment = read_pack_json_defaults(&pack.join("experiment.json"))
-                .unwrap_or_else(|error| panic!("{pack_name} experiment.json: {error:#}"));
-            let trigger_ids = experiment["expect"]["trigger_ids"]
-                .as_array()
-                .expect("trigger_ids");
-            if pack_name == "grok_tui_port" {
-                assert!(trigger_ids.iter().any(|id| id == "port-retry"));
-                assert!(trigger_ids.iter().any(|id| id == "port-integrate-record"));
-                assert!(trigger_ids.iter().any(|id| id == "port-recon-audit"));
-                assert!(trigger_ids.iter().any(|id| id == "port-final-review"));
-                assert!(trigger_ids.iter().any(|id| id == "port-converge"));
-                assert!(trigger_ids.iter().any(|id| id == "port-publish"));
-                assert!(trigger_ids.iter().any(|id| id == "port-review"));
-                let integrate_trigger = read_pack_json_defaults(
-                    &pack
-                        .join("event_triggers")
-                        .join("port_integrate")
-                        .join("object.json"),
-                )
-                .expect("port-integrate trigger should load");
-                assert_eq!(
-                    integrate_trigger["concurrency"], "parallel",
-                    "per-document integration triggers must not drop accepted closures while another integration is in flight; workspace binding remains the exclusive integration boundary"
-                );
-                for (stage, budget) in [
-                    ("recon", 1_000_000),
-                    ("recon-audit", 500_000),
-                    ("plan", 300_000),
-                    ("plan-skip", 100_000),
-                    ("implement", 2_000_000),
-                    ("review", 750_000),
-                    ("retry", 200_000),
-                    ("integrate", 200_000),
-                    ("integrate-record", 200_000),
-                    ("converge", 2_000_000),
-                    ("final-review", 2_000_000),
-                    ("live", 500_000),
-                    ("live-review", 500_000),
-                    ("publish", 300_000),
-                ] {
-                    let task = read_pack_json_defaults(
-                        &pack
-                            .join("tasks")
-                            .join(crate::desired_state::document_handle(&format!(
-                                "port_{stage}_task"
-                            )))
-                            .join("object.json"),
-                    )
-                    .unwrap_or_else(|error| panic!("port-{stage} task should load: {error:#}"));
-                    assert_eq!(task["goal_token_budget"], budget);
-                    assert!(task["goal_objective_template"]
-                        .as_str()
-                        .is_some_and(|objective| objective.contains("{{ event.correlation }}")));
-
-                    let tools = read_pack_json_defaults(
-                        &pack
-                            .join("tool_selections")
-                            .join(crate::desired_state::document_handle(&format!(
-                                "port_{stage}_tools"
-                            )))
-                            .join("object.json"),
-                    )
-                    .unwrap_or_else(|error| {
-                        panic!("port-{stage} tool selection should load: {error:#}")
-                    });
-                    assert_eq!(tools["tool_policy_version"], "tool-policy/v1");
-                    assert!(tools.get("orchestration_enabled").is_none());
-                    assert_eq!(tools["enable_goal_tools"], true);
-                    assert_eq!(tools["enable_goal_creation"], false);
-
-                    let prompt = std::fs::read_to_string(
-                        pack.join("tasks")
-                            .join(crate::desired_state::document_handle(&format!(
-                                "port_{stage}_task"
-                            )))
-                            .join("prompt.md"),
-                    )
-                    .unwrap_or_else(|error| panic!("port-{stage} prompt should load: {error:#}"));
-                    assert!(prompt.contains("`update_goal`"));
-                    assert!(prompt.contains("`status=\"complete\"`"));
-                }
-                assert!(!pack.join("event_triggers/port_revise").exists());
-                assert!(!pack.join("tasks/port_revise_task").exists());
-                assert!(experiment.get("bundled_graph_packages").is_none());
-                let distribution = read_pack_json_defaults(&pack.join("manifest.json")).unwrap();
-                assert_eq!(distribution["dependencies"], json!(["code_review"]));
-                assert_eq!(
-                    load_manifest_defaults(&pack).unwrap().graph_dependencies,
-                    vec!["code_review"]
-                );
-                assert_eq!(experiment["init"]["max_concurrent"], 16);
-                assert!(experiment["expect"]["stage_tool_sequences"][0]
-                    ["allowed_at_or_after_boundary"]
-                    .as_array()
-                    .is_some_and(|tools| ["get_goal", "update_goal"]
-                        .iter()
-                        .all(|expected| tools.iter().any(|tool| tool == expected))));
-                assert_eq!(
-                    experiment["bundled_graph_bindings"]["code_review"]["backend_id"],
-                    "grok-port-backend-ws1"
-                );
-                assert_eq!(
-                    experiment["bundled_graph_bindings"]["code_review"]["profile_id"],
-                    "grok-port-code-review-profile"
-                );
-                assert_eq!(
-                    experiment["bundled_graph_bindings"]["code_review"]["role_overrides"]
-                        ["reviewer"]["profile_id"],
-                    "grok-port-code-review-scan-profile"
-                );
-                let scan_profile = read_pack_json_defaults(
-                    &pack.join("inference_profiles/grok_port_code_review_scan_profile/object.json"),
-                )
-                .expect("code-review scan profile should load");
-                assert_eq!(scan_profile["max_turns"], 1_000_000);
-                assert_eq!(scan_profile["reasoning_effort"], "high");
-                let coordinator_profile = read_pack_json_defaults(
-                    &pack.join("inference_profiles/grok_port_code_review_profile/object.json"),
-                )
-                .expect("code-review coordinator profile should load");
-                assert_eq!(coordinator_profile["reasoning_effort"], "high");
-                let backend_dirs = std::fs::read_dir(pack.join("inference_backends"))
-                    .expect("grok backend directory should load")
-                    .collect::<Result<Vec<_>, _>>()
-                    .expect("grok backend entries should load");
-                assert_eq!(backend_dirs.len(), 1);
-                for behavior in std::fs::read_dir(pack.join("agent_behaviors"))
-                    .expect("grok behavior directory should load")
-                {
-                    let behavior = behavior.expect("grok behavior entry should load");
-                    let object = read_pack_json_defaults(&behavior.path().join("object.json"))
-                        .expect("grok behavior should load");
-                    assert_eq!(object["backend_id"], "grok-port-backend-ws1");
-                }
-                assert_eq!(
-                    experiment["expect"]["trigger_request_count_sources"]["port-implement"]
-                        ["match_value"],
-                    "ready"
-                );
-                assert_eq!(
-                    experiment["expect"]["trigger_request_count_sources"]["port-integrate"]
-                        ["match_value"],
-                    "accepted"
-                );
-                assert_eq!(
-                    experiment["expect"]["trigger_request_count_sources"]["port-retry"]
-                        ["match_value"],
-                    "retry"
-                );
-                assert_eq!(
-                    experiment["expect"]["trigger_request_count_sources"]["port-integrate-record"]
-                        ["match_value"],
-                    "integrator"
-                );
-                let retry_trigger = read_pack_json_defaults(
-                    &pack
-                        .join("event_triggers")
-                        .join("port_retry")
-                        .join("object.json"),
-                )
-                .expect("port-retry trigger should load");
-                assert_eq!(retry_trigger["source_collection"], "PortUnitClosure");
-                assert_eq!(retry_trigger["filter"], "{ status: { _eq: \"retry\" } }");
-                assert!(retry_trigger.get("workspace_authority").is_none());
-                let integrate_record_trigger = read_pack_json_defaults(
-                    &pack
-                        .join("event_triggers")
-                        .join("port_integrate_record")
-                        .join("object.json"),
-                )
-                .expect("port-integrate-record trigger should load");
-                assert_eq!(
-                    integrate_record_trigger["source_collection"],
-                    "WorkspaceReceipt"
-                );
-                assert_eq!(
-                    integrate_record_trigger["filter"],
-                    "{ kind: { _eq: \"integrator\" } }"
-                );
-                assert_eq!(integrate_record_trigger["workspace_authority"], "readOnly");
-                let route_review =
-                    std::fs::read_to_string(pack.join("tasks/port_review_task/prompt.md"))
-                        .expect("route review prompt should load");
-                assert!(!route_review.contains("gents graph run code_review"));
-                assert!(route_review.contains("structured `owned_paths` JSON"));
-                assert!(route_review.contains("There are no exceptions for `.tmp-build`"));
-                let review_io = read_pack_json_defaults(
-                    &pack.join("datastore_tool_surfaces/port_review_io/object.json"),
-                )
-                .expect("port review IO should load");
-                assert!(review_io["entries"]
-                    .as_array()
-                    .is_some_and(|entries| entries.iter().any(|entry| entry["tool_name"]
-                        == "read_port_work_unit"
-                        && entry["fields"].as_array().is_some_and(|fields| fields
-                            .iter()
-                            .any(|field| field == "owned_paths")))));
-                let review_behavior =
-                    read_pack_json_defaults(&pack.join("agent_behaviors/port_review/object.json"))
-                        .expect("review behavior should load");
-                assert_eq!(
-                    review_behavior["inference_profile_id"],
-                    "grok-port-review-profile"
-                );
-                let review_profile = read_pack_json_defaults(
-                    &pack.join("inference_profiles/grok_port_review_profile/object.json"),
-                )
-                .expect("review profile should load");
-                assert_eq!(review_profile["max_turns"], 1_000_000);
-                let recon = std::fs::read_to_string(pack.join("tasks/port_recon_task/prompt.md"))
-                    .expect("recon prompt should load");
-                assert!(recon.contains("`grok_wire_continuation`"));
-                assert!(recon.contains("preserve both wire fields verbatim"));
-                let recon_tools = read_pack_json_defaults(
-                    &pack.join("tool_selections/port_recon_tools/object.json"),
-                )
-                .expect("recon tool selection should load");
-                assert_eq!(recon_tools["enable_bash"], false);
-                assert_eq!(recon_tools["command_network_mode"], "disabled");
-                assert_eq!(
-                    recon_tools["file_tool_root"],
-                    "./packs/grok_tui_port/recon_input"
-                );
-                let recon_write = read_pack_json_defaults(
-                    &pack.join("datastore_tool_surfaces/port_recon_writes/object.json"),
-                )
-                .expect("recon write surface should load");
-                let recon_fields = recon_write["entries"][0]["fields"]
-                    .as_array()
-                    .expect("recon write fields should be an array");
-                assert!(recon_fields.iter().any(|field| {
-                    field["name"] == "grok_wire_continuation" && field["required"] == false
-                }));
-                let surface_schema =
-                    std::fs::read_to_string(pack.join("schemas/port_surface.graphql"))
-                        .expect("PortSurface schema should load");
-                assert!(surface_schema.contains("grok_wire_continuation: String @immutable"));
-                let audited_ledger: Value = serde_json::from_slice(
-                    &std::fs::read(pack.join("recon_input/audited_ledger.json"))
-                        .expect("audited recon ledger should exist"),
-                )
-                .expect("audited recon ledger should be valid JSON");
-                assert_eq!(
-                    audited_ledger["provenance"]["grok_build_sha"],
-                    "bc7f02eddd3d84085849dc19ed216f11c23b0571"
-                );
-                assert_eq!(
-                    audited_ledger["surfaces"]
-                        .as_array()
-                        .expect("audited surfaces should be an array")
-                        .len(),
-                    13
-                );
-                let audited_surfaces = audited_ledger["surfaces"]
-                    .as_array()
-                    .expect("audited surfaces should be an array");
-                assert_eq!(
-                    audited_surfaces
-                        .iter()
-                        .filter(|surface| surface["verdict"] != "ignore")
-                        .count(),
-                    12
-                );
-                let tracker_surface = audited_surfaces
-                    .iter()
-                    .find(|surface| {
-                        surface["surface_id"]
-                            .as_str()
-                            .is_some_and(|id| id.ends_with(":tool_call:tracker-stream"))
-                    })
-                    .expect("audited tool tracker surface should exist");
-                let tracker_wire = tracker_surface["grok_wire"]
-                    .as_str()
-                    .expect("tool tracker wire should be text");
-                let tracker_expect = tracker_surface["live_expect"]
-                    .as_str()
-                    .expect("tool tracker live expectation should be text");
-                assert!(tracker_wire.contains("When canonical tool metadata is present"));
-                assert!(tracker_wire.contains("task remains on the standard ACP rail"));
-                assert!(tracker_wire.contains("pager owns task suppression"));
-                assert!(tracker_expect.contains("optional `_meta`"));
-                assert!(tracker_expect.contains("explicit `_meta.subagentBackground` boolean"));
-                let subprocess_surface = audited_surfaces
-                    .iter()
-                    .find(|surface| {
-                        surface["surface_id"]
-                            .as_str()
-                            .is_some_and(|id| id.ends_with(":subprocess:terminal-acp"))
-                    })
-                    .expect("audited subprocess surface should exist");
-                let subprocess_docs = subprocess_surface["gents_docs"]
-                    .as_str()
-                    .expect("subprocess document contract should be text");
-                let subprocess_expect = subprocess_surface["live_expect"]
-                    .as_str()
-                    .expect("subprocess live expectation should be text");
-                assert!(
-                    subprocess_docs.contains("AgentToolCall` (execute kind) is the authoritative")
-                );
-                assert!(subprocess_docs.contains("AgentToolResult` is an optional spill"));
-                assert!(subprocess_expect.contains("a spill row is not required"));
-                let subagent_surface = audited_surfaces
-                    .iter()
-                    .find(|surface| {
-                        surface["surface_id"]
-                            .as_str()
-                            .is_some_and(|id| id.ends_with(":subagent:lifecycle"))
-                    })
-                    .expect("audited subagent lifecycle surface should exist");
-                let subagent_wire = subagent_surface["grok_wire"]
-                    .as_str()
-                    .expect("subagent lifecycle wire head should be text");
-                let subagent_wire_continuation = subagent_surface["grok_wire_continuation"]
-                    .as_str()
-                    .expect("subagent lifecycle wire continuation should be text");
-                assert!(!subagent_wire.is_empty() && subagent_wire.len() <= 2_000);
-                assert!(
-                    !subagent_wire_continuation.is_empty()
-                        && subagent_wire_continuation.len() <= 2_000
-                );
-                let complete_subagent_wire = format!("{subagent_wire}{subagent_wire_continuation}");
-                for lifecycle in ["subagent_spawned", "subagent_progress", "subagent_finished"] {
-                    assert!(complete_subagent_wire.contains(lifecycle));
-                }
-                for surface in audited_surfaces {
-                    for field in [
-                        "evidence",
-                        "grok_call_sites",
-                        "grok_wire",
-                        "grok_wire_continuation",
-                        "gents_docs",
-                        "live_prompt",
-                        "live_expect",
-                    ] {
-                        assert!(
-                            surface[field]
-                                .as_str()
-                                .is_none_or(|value| value.len() <= 2_000),
-                            "audited {field} exceeds the native datastore string ceiling"
-                        );
-                    }
-                    let call_sites = surface["grok_call_sites"]
-                        .as_str()
-                        .expect("audited call sites should be text");
-                    assert!(
-                        !call_sites.split_whitespace().any(|token| {
-                            token
-                                .trim_matches(|c: char| !c.is_ascii_alphanumeric())
-                                .strip_prefix('L')
-                                .is_some_and(|suffix| {
-                                    suffix
-                                        .split('-')
-                                        .all(|part| part.chars().all(|c| c.is_ascii_digit()))
-                                })
-                        }),
-                        "audited call sites must use symbols, not stale line anchors"
-                    );
-                }
-                let recon_behavior =
-                    read_pack_json_defaults(&pack.join("agent_behaviors/port_recon/object.json"))
-                        .expect("recon behavior should load");
-                assert_eq!(
-                    recon_behavior["inference_profile_id"],
-                    "grok-port-recon-profile"
-                );
-                let recon_profile = read_pack_json_defaults(
-                    &pack.join("inference_profiles/grok_port_recon_profile/object.json"),
-                )
-                .expect("recon profile should load");
-                assert_eq!(recon_profile["max_turns"], 1_000_000);
-                assert_eq!(recon_profile["reasoning_effort"], "high");
-                assert_eq!(
-                    experiment["expect"]["stage_tool_sequences"][0]["boundary_tool_name"],
-                    "write_port_surface"
-                );
-                let implement_prompt =
-                    std::fs::read_to_string(pack.join("tasks/port_implement_task/prompt.md"))
-                        .expect("implement prompt should load");
-                assert!(implement_prompt.contains("Navigate by symbol, not line number"));
-                assert!(implement_prompt.contains("`grok_wire_continuation`"));
-                assert!(implement_prompt.contains("The host seal captures untracked files too"));
-                assert!(implement_prompt.contains("There is no exception for `.tmp-build`"));
-                let work_unit_schema =
-                    std::fs::read_to_string(pack.join("schemas/port_work_unit.graphql"))
-                        .expect("PortWorkUnit schema should load");
-                assert!(work_unit_schema.contains("owned_paths: String @immutable"));
-                let receipt_paths = experiment["expect"]["workspace_receipt_paths"]
-                    .as_object()
-                    .expect("workspace receipt path verification should be configured");
-                assert_eq!(receipt_paths["work_unit_collection"], "PortWorkUnit");
-                assert_eq!(receipt_paths["owned_paths_field"], "owned_paths");
-                let implement_behavior = read_pack_json_defaults(
-                    &pack.join("agent_behaviors/port_implement/object.json"),
-                )
-                .expect("implement behavior should load");
-                assert_eq!(
-                    implement_behavior["inference_profile_id"],
-                    "grok-port-implement-profile"
-                );
-                let implement_profile = read_pack_json_defaults(
-                    &pack.join("inference_profiles/grok_port_implement_profile/object.json"),
-                )
-                .expect("implement profile should load");
-                assert_eq!(implement_profile["max_turns"], 1_000_000);
-                assert_eq!(implement_profile["max_output_tokens"], 65536);
-                assert_eq!(implement_profile["retry_max_resample"], 2);
-                assert_eq!(implement_profile["reasoning_effort"], "high");
-                for selection in ["port-implement-tools", "port-converge-tools"] {
-                    let tools = read_pack_json_defaults(
-                        &pack
-                            .join("tool_selections")
-                            .join(crate::desired_state::document_handle(&selection))
-                            .join("object.json"),
-                    )
-                    .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
-                    assert_eq!(
-                        tools["enable_bash"], true,
-                        "{selection} needs compiler shell"
-                    );
-                    assert_eq!(tools["bash_mode"], "Unrestricted");
-                    assert_eq!(tools["file_tools_mode"], "ReadWrite");
-                    let expected_execution_policy = if selection == "port-converge-tools" {
-                        "unrestricted"
-                    } else {
-                        "workspace_write"
-                    };
-                    assert_eq!(
-                        tools["command_execution_policy"], expected_execution_policy,
-                        "convergence must run the full foundation suite outside a nested Seatbelt"
-                    );
-                    let expected_network_mode = if selection == "port-converge-tools" {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    };
-                    assert_eq!(
-                        tools["command_network_mode"], expected_network_mode,
-                        "convergence must be allowed to bind the loopback listeners and Unix sockets exercised by the required Grok shim gate"
-                    );
-                    let expected_backgroundable = if selection == "port-converge-tools" {
-                        json!(["bash_unrestricted"])
-                    } else {
-                        json!([])
-                    };
-                    assert_eq!(
-                        tools["backgroundable_tool_names"], expected_backgroundable,
-                        "long convergence gates must use the managed background-process lifecycle"
-                    );
-                    assert!(
-                        tools["command_allowed_argv_prefixes"]
-                            .as_array()
-                            .is_none_or(Vec::is_empty),
-                        "{selection} must let the workspace sandbox admit compiler and shell commands without a second, brittle argv-prefix gate"
-                    );
-                    assert_ne!(
-                        (
-                            tools["command_execution_policy"].as_str(),
-                            tools["command_network_mode"].as_str(),
-                        ),
-                        (Some("unrestricted"), Some("disabled")),
-                        "{selection} must not request the unenforceable unrestricted+disabled pair"
-                    );
-                }
-                let final_review_tools = read_pack_json_defaults(
-                    &pack.join("tool_selections/port_final_review_tools/object.json"),
-                )
-                .expect("port-final-review-tools should load");
-                assert_eq!(final_review_tools["enable_bash"], true);
-                assert_eq!(final_review_tools["bash_mode"], "Unrestricted");
-                assert_eq!(final_review_tools["file_tools_mode"], "ReadWrite");
-                assert_eq!(
-                    final_review_tools["command_execution_policy"],
-                    "unrestricted"
-                );
-                assert_eq!(
-                    final_review_tools["command_network_mode"], "enabled",
-                    "final review must reach the local orchestrator GraphQL endpoint"
-                );
-                assert_eq!(
-                    final_review_tools["backgroundable_tool_names"],
-                    json!(["bash_unrestricted"]),
-                    "long final-review gates must use the managed background-process lifecycle"
-                );
-                for selection in ["port-live-tools", "port-publish-tools"] {
-                    let tools = read_pack_json_defaults(
-                        &pack
-                            .join("tool_selections")
-                            .join(crate::desired_state::document_handle(&selection))
-                            .join("object.json"),
-                    )
-                    .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
-                    assert_eq!(tools["command_execution_policy"], "unrestricted");
-                    assert_eq!(tools["command_network_mode"], "enabled");
-                    let expected_backgroundable = if selection == "port-publish-tools" {
-                        json!(["bash_unrestricted"])
-                    } else {
-                        json!([])
-                    };
-                    assert_eq!(
-                        tools["backgroundable_tool_names"], expected_backgroundable,
-                        "publish must track long repository gates with the managed process lifecycle"
-                    );
-                }
-                let live_io = read_pack_json_defaults(
-                    &pack.join("datastore_tool_surfaces/port_live_io/object.json"),
-                )
-                .expect("port-live-io should load");
-                let live_io_text = live_io.to_string();
-                assert!(live_io_text.contains("write_port_live_environment_proof"));
-                assert!(live_io_text.contains("cleanup_listener_absent"));
-                assert!(live_io_text.contains("pty_session_id"));
-                assert!(live_io_text.contains("proof_json_continuation"));
-                let live_review_io = read_pack_json_defaults(
-                    &pack.join("datastore_tool_surfaces/port_live_review_io/object.json"),
-                )
-                .expect("port-live-review-io should load");
-                let live_review_io_text = live_review_io.to_string();
-                assert!(live_review_io_text.contains("read_grok_port_job"));
-                assert!(live_review_io_text.contains("read_port_live_environment_proof"));
-                let live_prompt =
-                    std::fs::read_to_string(pack.join("tasks/port_live_task/prompt.md"))
-                        .expect("live prompt should load");
-                let live_behavior = std::fs::read_to_string(
-                    pack.join("agent_behaviors/port_live/system_prompt.md"),
-                )
-                .expect("live behavior prompt should load");
-                for prompt in [&live_prompt, &live_behavior] {
-                    assert!(prompt.contains("GENTS_GROK_PORT_ENDPOINT_1"));
-                    assert!(prompt.contains("obsolete"));
-                    assert!(prompt.contains("wrapper shell"));
-                    assert!(prompt.contains("durable assistant"));
-                    assert!(prompt.contains("Terminal repaint bytes"));
-                    assert!(prompt.contains("framed probe"));
-                }
-                assert!(live_prompt.contains("InferenceBackend"));
-                assert!(live_prompt.contains("fresh random"));
-                assert!(live_prompt.contains("grok_stock_pty_probe.py self-test"));
-                assert!(live_prompt.contains("grok_stock_pty_probe.py run"));
-                assert!(live_prompt.contains("grok_stock_pty_probe.py cleanup"));
-                assert!(live_prompt.contains("--total-timeout 95"));
-                assert!(live_prompt.contains("do not wrap it in another timeout"));
-                assert!(live_prompt.contains("pipe its output"));
-                assert!(live_prompt.contains("zero process exit"));
-                assert!(live_prompt.contains("connect(2)"));
-                assert!(live_prompt.contains("write_port_live_environment_proof"));
-                assert!(live_prompt.contains("exactly two non-empty strings"));
-                assert!(live_prompt
-                    .find("write_port_live_environment_proof")
-                    .zip(live_prompt.find("write_port_live_result"))
-                    .is_some_and(|(proof, result)| proof < result));
-                let live_behavior_words = live_behavior
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                assert!(live_behavior_words.contains("Only after that stock proof"));
-                assert!(live_behavior_words.contains("subprocess, subagent, and cancel"));
-                assert!(live_behavior.contains("--total-timeout 95"));
-                assert!(live_behavior_words.contains("private short Unix-socket alias"));
-                assert!(
-                    live_behavior_words.contains("never pipe or otherwise mask its exit status")
-                );
-                let live_review =
-                    std::fs::read_to_string(pack.join("tasks/port_live_review_task/prompt.md"))
-                        .expect("live review prompt should load");
-                let live_review_words =
-                    live_review.split_whitespace().collect::<Vec<_>>().join(" ");
-                assert!(live_review_words.contains("Require exactly one environment proof"));
-                assert!(live_review_words.contains("GENTS_STOCK_"));
-                assert!(live_review_words.contains("24-character lowercase hexadecimal"));
-                assert!(live_review_words.contains("every duplicated value"));
-                assert!(live_review_words.contains("coverage_complete=false"));
-                assert!(live_review_words.contains("two terminal request IDs"));
-                let live_proof_schema = std::fs::read_to_string(
-                    pack.join("schemas/port_live_environment_proof.graphql"),
-                )
-                .expect("live environment proof schema should load");
-                assert!(live_proof_schema.contains("run_id: String @index(unique: true)"));
-                assert!(live_proof_schema.contains("endpoint_verified: Boolean @immutable"));
-                assert!(live_proof_schema.contains("pty_verified: Boolean @immutable"));
-                assert!(live_proof_schema.contains("cleanup_socket_absent: Boolean @immutable"));
-                assert!(live_proof_schema.contains("proof_json_continuation: String @immutable"));
-                assert!(experiment["expect"]["collection_counts"]
-                    .get("PortLiveEnvironmentProof")
-                    .is_none());
-                let live_io = read_pack_json_defaults(
-                    &pack
-                        .join("datastore_tool_surfaces")
-                        .join("port_live_io")
-                        .join("object.json"),
-                )
-                .expect("live I/O surface should load");
-                let proof_write = live_io["entries"]
-                    .as_array()
-                    .expect("live I/O entries")
-                    .iter()
-                    .find(|entry| {
-                        entry["tool_name"].as_str() == Some("write_port_live_environment_proof")
-                    })
-                    .expect("live environment proof write");
-                assert!(proof_write.get("output_obligation").is_none());
-                let plan = std::fs::read_to_string(pack.join("tasks/port_plan_task/prompt.md"))
-                    .expect("plan prompt should load");
-                assert!(plan.contains("only a compact, sorted `[surface_id=<id>]` index"));
-                assert!(experiment["expect"]["collection_counts"]
-                    .get("PortWorkUnit")
-                    .is_none());
-                assert!(experiment["expect"]["collection_counts"]
-                    .get("PortImplementation")
-                    .is_none());
-                assert!(experiment["expect"]["collection_counts"]
-                    .get("PortReview")
-                    .is_none());
-                assert_eq!(
-                    experiment["expect"]["collection_counts"]["PortIntegrateResult"],
-                    8
-                );
-                assert_eq!(experiment["expect"]["collection_counts"]["PortSurface"], 13);
-                let makefile = std::fs::read_to_string(pack.join("../../Makefile"))
-                    .expect("repository Makefile should load");
-                assert!(makefile.contains("GROK_PORT_MIN_SURFACES ?= 13"));
-                assert!(makefile.contains("GROK_PORT_MAX_SURFACES ?= 13"));
-                let audit_io = read_pack_json_defaults(
-                    &pack
-                        .join("datastore_tool_surfaces")
-                        .join("port_recon_audit_io")
-                        .join("object.json"),
-                )
-                .expect("recon audit surface should load");
-                let audit_io = audit_io.to_string();
-                assert!(audit_io.contains("repository_id"));
-                assert!(audit_io.contains("base_sha"));
-                assert!(audit_io.contains("source_field"));
-                let final_review =
-                    std::fs::read_to_string(pack.join("tasks/port_final_review_task/prompt.md"))
-                        .expect("final review prompt should load");
-                assert!(final_review.contains("gents graph run code_review"));
-                assert!(final_review.contains("not the sentinel document count"));
-                assert!(final_review.contains("independently rerun all three convergence gates"));
-                assert!(final_review.contains("failures cannot be\nwaived as environmental"));
-                let convergence =
-                    std::fs::read_to_string(pack.join("tasks/port_converge_task/prompt.md"))
-                        .expect("convergence prompt should load");
-                assert!(convergence.contains("cargo test -p gents-cli --lib grok_shim"));
-                assert!(convergence.contains("cargo check -p gents-cli --all-targets"));
-                assert!(convergence.contains("Any nonzero exit is a failed\ngate"));
-                assert!(convergence.contains("Do not waive, reinterpret"));
-                let final_review_trigger = read_pack_json_defaults(
-                    &pack.join("event_triggers/port_final_review/object.json"),
-                )
-                .expect("final-review trigger should load");
-                assert_eq!(
-                    final_review_trigger["source_collection"],
-                    "PortConvergenceReport"
-                );
-            } else if pack_name == "repo_maintenance" {
-                assert!(trigger_ids
-                    .iter()
-                    .any(|id| id == "maintenance-execute-skip"));
-                assert_eq!(
-                    experiment["expect"]["trigger_request_count_sources"]["maintenance-execute"]
-                        ["match_value"],
-                    "planned"
-                );
-                assert_eq!(
-                    experiment["expect"]["trigger_request_count_sources"]
-                        ["maintenance-execute-skip"]["match_value"],
-                    "skipped"
-                );
-            } else {
-                assert!(trigger_ids.iter().any(|id| id == "defend-patch-skip"));
-                assert_eq!(
-                    experiment["expect"]["trigger_request_count_sources"]["defend-patch"]
-                        ["match_value"],
-                    "ready"
-                );
-                assert_eq!(
-                    experiment["expect"]["trigger_request_count_sources"]["defend-patch-skip"]
-                        ["match_value"],
-                    "skipped"
-                );
-                let skip_writes = read_pack_json_defaults(
-                    &pack
-                        .join("datastore_tool_surfaces")
-                        .join("defend_patch_skip_writes")
-                        .join("object.json"),
-                )
-                .expect("defending skip writes should load");
-                let skip_collections: Vec<&str> = skip_writes["entries"]
-                    .as_array()
-                    .expect("skip write entries")
-                    .iter()
-                    .filter_map(|entry| entry["collection"].as_str())
-                    .collect();
-                for collection in [
-                    "DefensePatchCandidate",
-                    "DefensePatchValidation",
-                    "DefensePatchReview",
-                    "DefensePatchSecurityReview",
-                ] {
-                    assert!(
-                        skip_collections.contains(&collection),
-                        "all-skip must write {collection} sentinels for collection_counts"
-                    );
-                }
-                let review_trigger = read_pack_json_defaults(
-                    &pack
-                        .join("event_triggers")
-                        .join("defend_patch_review")
-                        .join("object.json"),
-                )
-                .expect("defend-patch-review trigger should load");
-                assert_eq!(
-                    review_trigger["filter"],
-                    "{ _and: [ { workspace_id: { _neq: null } }, { workspace_id: { _ne: \"\" } } ] }"
-                );
-                let security_trigger = read_pack_json_defaults(
-                    &pack
-                        .join("event_triggers")
-                        .join("defend_patch_security_review")
-                        .join("object.json"),
-                )
-                .expect("defend-patch-security-review trigger should load");
-                assert_eq!(
-                    security_trigger["filter"],
-                    "{ _and: [ { workspace_id: { _neq: null } }, { workspace_id: { _ne: \"\" } } ] }"
-                );
-                let skip_prompt =
-                    std::fs::read_to_string(pack.join("tasks/defend_patch_skip_task/prompt.md"))
-                        .expect("skip prompt should load");
-                assert!(
-                    !skip_prompt.contains("workspace_id=none"),
-                    "skip must not use the string none as workspace_id"
-                );
-            }
-
-            let patch_or_execute = if pack_name == "defending_code" {
-                pack.join("tasks/defend_patch_task/prompt.md")
-            } else if pack_name == "grok_tui_port" {
-                pack.join("tasks/port_implement_task/prompt.md")
-            } else {
-                pack.join("tasks/maintenance_execute_task/prompt.md")
-            };
-            let prompt = std::fs::read_to_string(patch_or_execute)
-                .unwrap_or_else(|error| panic!("{pack_name} worker prompt: {error}"));
-            assert!(
-                !prompt.contains("make worktree BRANCH="),
-                "{pack_name} must not instruct make worktree"
+            let manifest = load_manifest_defaults(&pack)
+                .unwrap_or_else(|error| panic!("{pack_name}: {error:#}"));
+            let binding =
+                canonical_document(&manifest, "callback_bindings", "binding_id", binding_id);
+            let source = canonical_document(
+                &manifest,
+                "event_sources",
+                "event_source_id",
+                binding["event_source_id"].as_str().unwrap(),
             );
+            assert_eq!(source["source_collection"], source_collection);
+            let prompt = std::fs::read_to_string(pack.join(worker_prompt)).unwrap();
+            assert!(!prompt.contains("make worktree BRANCH="));
             assert!(
                 prompt.contains("Do not run `git commit`")
-                    || prompt.contains("Do not run git commit"),
-                "{pack_name} must forbid git commit"
+                    || prompt.contains("Do not run git commit")
             );
         }
+
+        let grok = catalog_root.join("grok_tui_port");
+        let experiment = read_pack_json_defaults(&grok.join("experiment.json")).unwrap();
+        assert!(experiment.get("bundled_graph_bindings").is_none());
+        assert_eq!(
+            experiment["graph_dependency_environment"]["code_review"]["GENTS_REVIEW_MODEL"],
+            "GLM-5.3-Flash-NVFP4"
+        );
+        let grok_config = load_manifest_defaults(&grok).unwrap().config.unwrap();
+        assert!(grok_config
+            .inference_profiles
+            .iter()
+            .all(|profile| profile.profile_id != "grok-port-code-review-profile"));
     }
 
     #[test]
@@ -5715,21 +3989,16 @@ mod tests {
     #[test]
     fn pipeline_stage_declares_controller_owned_goal_with_least_privilege_tools() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
-        load_manifest_defaults(&pack).expect("pipeline pack should load");
-
-        let task = read_pack_json_defaults(&pack.join("tasks/exp_stage1_task/object.json"))
-            .expect("stage-1 task");
+        let manifest = load_manifest_defaults(&pack).expect("pipeline pack should load");
+        let task = canonical_document(&manifest, "tasks", "task_id", "exp-stage1-task");
         assert!(task["goal_objective_template"]
             .as_str()
             .is_some_and(|value| !value.trim().is_empty()));
         assert_eq!(task["goal_token_budget"], 50_000);
 
-        let selection =
-            read_pack_json_defaults(&pack.join("tool_selections/exp_tools_stage1/object.json"))
-                .expect("stage-1 tool selection");
-        assert_eq!(selection["enable_meta_tools"], false);
-        assert_eq!(selection["enable_goal_tools"], true);
-        assert_eq!(selection["enable_goal_creation"], false);
+        let tools = canonical_document(&manifest, "tools", "tools_id", "exp-tools-stage1");
+        assert_eq!(tools["built_ins"]["enable_goal_tools"], true);
+        assert!(tools["built_ins"].get("enable_goal_creation").is_none());
     }
 
     #[test]
@@ -6065,8 +4334,9 @@ mod tests {
             },
             await_timeout_secs: 1,
             scan: None,
+            graph_dependency_environment: BTreeMap::new(),
             graph_dependencies: Vec::new(),
-            bundled_graph_bindings: BTreeMap::new(),
+            config: None,
         };
         let error = validate_manifest(&manifest).expect_err("readonly needs tool_root");
         assert!(error.to_string().contains("tool_root"), "{error}");

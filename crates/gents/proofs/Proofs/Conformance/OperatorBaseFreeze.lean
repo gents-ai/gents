@@ -8,7 +8,7 @@ open Conformance.Contracts
 private def workspace : IsolatedWorkspace :=
   {workspaceId := "workspace-1", workUnitId := "work-1", repositoryId := "repo-1",
    baseSha := "base-commit", branch := "workspace-branch", creationPolicy := .gitWorktreeDiff,
-   ownerDeploymentId := "host-1", sealHash := none, state := .ready,
+   ownerAgentDid := "host-1", sealHash := none, state := .ready,
    pathCapability := .exactPaths []}
 private def ready : Snapshot := ⟨workspace,none,none,0⟩
 private def sealed : Snapshot :=

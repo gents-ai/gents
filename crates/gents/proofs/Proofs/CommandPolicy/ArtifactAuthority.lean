@@ -111,14 +111,19 @@ def artifactSpawn (kind : SpawnKind) (m : ExecutionMode)
   if kind == .persistentLsp then none
   else if admitArtifact m binding then some .artifactWrite else none
 
+/-- A successful spawn preserves the admitted mode; it cannot manufacture an
+artifact grant from a different request or bypass binding validation. -/
 theorem spawned_never_escalates {k : SpawnKind} {m out : ExecutionMode}
     {c : Option ArtifactBinding} (h : artifactSpawn k m c = some out) :
-    out = .artifactWrite := by
+    out = m ∧ m = .artifactWrite ∧ admitArtifact m c = true := by
   simp only [artifactSpawn] at h
   split at h
   · contradiction
   · split at h
-    · simpa using h.symm
+    · rename_i hadmit
+      have hm := admitted_explicit hadmit
+      have hout : out = .artifactWrite := by simpa using h.symm
+      exact ⟨hout.trans hm.symm, hm, hadmit⟩
     · contradiction
 
 theorem artifact_requires_sandbox (support : RuntimeSupport) (sandbox : SandboxKind)

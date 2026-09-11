@@ -7,9 +7,6 @@
 //! values deserialize as empty vectors. Callers should treat these as the wire
 //! shape, not a runtime invariant.
 
-use std::fmt;
-
-use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::request_lifecycle::RequestLifecycleState;
@@ -25,118 +22,12 @@ pub use crate::behavior_readiness::{
     ProjectedBehaviorReadinessSummary, BEHAVIOR_READINESS_FORMAT_VERSION,
 };
 
-fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub(crate) fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de> + Default,
 {
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
-}
-
-fn deserialize_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct StringVecVisitor;
-
-    impl<'de> Visitor<'de> for StringVecVisitor {
-        type Value = Vec<String>;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("a string list, null, or empty string")
-        }
-
-        fn visit_unit<E>(self) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(Vec::new())
-        }
-
-        fn visit_none<E>(self) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(Vec::new())
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            if value.trim().is_empty() {
-                Ok(Vec::new())
-            } else {
-                Ok(vec![value.to_string()])
-            }
-        }
-
-        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            self.visit_str(&value)
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-        where
-            A: SeqAccess<'de>,
-        {
-            let mut values = Vec::new();
-            while let Some(value) = seq.next_element::<String>()? {
-                values.push(value);
-            }
-            Ok(values)
-        }
-    }
-
-    deserializer.deserialize_any(StringVecVisitor)
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentPrincipalRow {
-    pub agent_did: String,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub default_behavior_id: Option<String>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub created_by: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentBehaviorRow {
-    pub behavior_id: String,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub system_prompt: Option<String>,
-    #[serde(default)]
-    pub backend_id: Option<String>,
-    #[serde(default)]
-    pub model_name: Option<String>,
-    #[serde(default)]
-    pub tool_selection_id: Option<String>,
-    #[serde(default)]
-    pub inference_profile_id: Option<String>,
-    #[serde(default)]
-    pub compaction_strategy: Option<String>,
-    #[serde(default)]
-    pub compaction_threshold: Option<f64>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub skill_refs: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub skill_excludes: Vec<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -158,46 +49,6 @@ pub struct AgentRuntimeRow {
     pub last_reconcile_completed_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentMemoryRow {
-    pub memory_id: String,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub key: Option<String>,
-    #[serde(default)]
-    pub value: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentConversationRow {
-    pub session_id: String,
-    #[serde(default)]
-    pub agent_name: Option<String>,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub title_source: Option<String>,
-    #[serde(default)]
-    pub preview_text: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-    #[serde(default)]
-    pub latest_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -251,20 +102,11 @@ pub struct AgentRequestRow {
     pub superseded_by_request_doc_id: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
-    #[serde(default)]
-    pub temperature: Option<f64>,
-    #[serde(default)]
-    pub top_p: Option<f64>,
-    #[serde(default)]
-    pub top_k: Option<i64>,
-    #[serde(default)]
-    pub seed: Option<i64>,
-    #[serde(default)]
-    pub max_tokens: Option<i64>,
+    /// Execution-owner budget resolved from InferenceExecution, not a caller override.
     #[serde(default)]
     pub max_total_tokens: Option<i64>,
     #[serde(default)]
-    pub metadata: Option<String>,
+    pub input: Option<crate::request_input::RequestInput>,
     #[serde(default)]
     pub lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
@@ -325,10 +167,11 @@ pub struct AgentRequestRow {
     pub subagent_depth: Option<i64>,
     #[serde(default)]
     pub workspace_id: Option<String>,
+    /// Signed workspace reference scope, independent of the executing principal.
+    #[serde(default)]
+    pub workspace_owner_agent_did: Option<String>,
     #[serde(default)]
     pub workspace_authority: Option<String>,
-    #[serde(default)]
-    pub workspace_owner_deployment_id: Option<String>,
     #[serde(default)]
     pub workspace_seal_hash: Option<String>,
 }
@@ -396,6 +239,8 @@ pub struct MailboxItemRow {
 pub struct AgentResponseRow {
     pub response_key: String,
     #[serde(default)]
+    pub request_doc_id: Option<String>,
+    #[serde(default)]
     pub request_id: Option<String>,
     #[serde(default)]
     pub agent_did: Option<String>,
@@ -453,25 +298,15 @@ pub struct AgentMessageRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentSessionRow {
-    pub session_id: String,
-    #[serde(default)]
-    pub agent_name: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub started: Option<String>,
-    #[serde(default)]
-    pub ended: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GoalRow {
     pub goal_id: String,
+    /// User-managed labels; do not affect goal continuation or token accounting.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
     pub session_id: String,
     pub agent_did: String,
     #[serde(default)]
@@ -512,19 +347,6 @@ pub struct GoalRow {
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GoalCreationClaimRow {
-    pub creation_key: String,
-    pub goal_id: String,
-    pub session_id: String,
-    pub agent_did: String,
-    pub objective: String,
-    #[serde(default)]
-    pub token_budget: Option<i64>,
-    #[serde(default)]
-    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -596,6 +418,9 @@ pub struct AgentToolCallRow {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentToolResultRow {
+    /// Exact spill document identity for observation/merge; not a content heuristic.
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
@@ -613,7 +438,7 @@ pub struct AgentToolResultRow {
     #[serde(default)]
     pub truncation_metadata: Option<String>,
     #[serde(default)]
-    pub conversation_doc_id: Option<String>,
+    pub tool_call_doc_id: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
@@ -647,340 +472,6 @@ pub struct CompactionEntryRow {
     pub created_at: Option<String>,
 }
 
-/// One durable rendered-request fact (#840/#1059): the exact provider request
-/// body persisted before it was sent, keyed uniquely by `capture_key`.
-///
-/// Wire-shape mirror like every row here — only the identity key is required.
-/// `request_json` is the captured provider body; consumers that only need
-/// metadata should not select it (and the run timeline never does).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RenderedRequestRow {
-    pub capture_key: String,
-    #[serde(default)]
-    pub request_doc_id: Option<String>,
-    #[serde(default)]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub capture_scope: Option<String>,
-    #[serde(default)]
-    pub turn_index: Option<i64>,
-    #[serde(default)]
-    pub attempt: Option<i64>,
-    #[serde(default)]
-    pub capture_version: Option<i64>,
-    #[serde(default)]
-    pub model_name: Option<String>,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
-    pub request_json: Option<String>,
-    #[serde(default)]
-    pub prompt_hash: Option<String>,
-    #[serde(default)]
-    pub tools_hash: Option<String>,
-    #[serde(default)]
-    pub provenance_json: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-}
-
-impl RenderedRequestRow {
-    /// The row's stable identity ordering. Errors when `capture_scope`,
-    /// `turn_index`, or `attempt` is missing or malformed: those are core
-    /// facts, and defaulting them to zero would silently collide the row with
-    /// a real first-turn capture.
-    pub fn order_key(
-        &self,
-    ) -> Result<
-        crate::rendered_request::CaptureOrderKey,
-        crate::rendered_request::CaptureOrderKeyError,
-    > {
-        use crate::rendered_request::{CaptureOrderKey, CaptureOrderKeyError, CaptureScope};
-
-        let scope: CaptureScope = self
-            .capture_scope
-            .as_deref()
-            .ok_or(CaptureOrderKeyError::MissingScope)?
-            .parse()
-            .map_err(CaptureOrderKeyError::Scope)?;
-        let turn_index = self
-            .turn_index
-            .ok_or(CaptureOrderKeyError::MissingTurnIndex)?;
-        let attempt = self.attempt.ok_or(CaptureOrderKeyError::MissingAttempt)?;
-        Ok(CaptureOrderKey {
-            scope,
-            turn_index,
-            attempt,
-        })
-    }
-
-    /// Read the row's provenance manifest through the versioned reader.
-    pub fn provenance(
-        &self,
-    ) -> Result<
-        crate::rendered_request::ParsedProvenance,
-        crate::rendered_request::ProvenanceParseError,
-    > {
-        crate::rendered_request::ProvenanceManifest::parse(
-            self.provenance_json
-                .as_deref()
-                .ok_or(crate::rendered_request::ProvenanceParseError::Empty)?,
-        )
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskRow {
-    pub task_id: String,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub prompt_template: Option<String>,
-    #[serde(default)]
-    pub goal_objective_template: Option<String>,
-    #[serde(default)]
-    pub goal_token_budget: Option<i64>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub output_schema_ref: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SkillRow {
-    pub skill_id: String,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub scope: Option<String>,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub instructions: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub tool_refs: Vec<String>,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub interface_json: Option<String>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ScheduleRow {
-    pub schedule_id: String,
-    #[serde(default)]
-    pub task_id: Option<String>,
-    #[serde(default)]
-    pub interval_secs: Option<i64>,
-    #[serde(default)]
-    pub cron: Option<String>,
-    #[serde(default)]
-    pub timezone: Option<String>,
-    #[serde(default)]
-    pub missed_run_policy: Option<String>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub concurrency: Option<String>,
-    #[serde(default)]
-    pub next_run_at: Option<String>,
-    #[serde(default)]
-    pub last_attempt_at: Option<String>,
-    #[serde(default)]
-    pub last_status: Option<String>,
-    #[serde(default)]
-    pub last_error: Option<String>,
-    #[serde(default)]
-    pub fire_count: Option<i64>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EventTriggerRow {
-    pub trigger_id: String,
-    #[serde(default)]
-    pub task_id: Option<String>,
-    #[serde(default)]
-    pub source_collection: Option<String>,
-    #[serde(default)]
-    pub event_kind: Option<String>,
-    #[serde(default)]
-    pub filter: Option<String>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub concurrency: Option<String>,
-    #[serde(default)]
-    pub correlation_field: Option<String>,
-    #[serde(default)]
-    pub fire_mode: Option<String>,
-    #[serde(default)]
-    pub expected_count: Option<i64>,
-    #[serde(default)]
-    pub expected_count_field: Option<String>,
-    #[serde(default)]
-    pub group_timeout_secs: Option<i64>,
-    #[serde(default)]
-    pub group_min_count: Option<i64>,
-    #[serde(default)]
-    pub workspace_authority: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-    #[serde(default)]
-    pub last_attempt_at: Option<String>,
-    #[serde(default)]
-    pub last_fired_source_doc_id: Option<String>,
-    #[serde(default)]
-    pub last_status: Option<String>,
-    #[serde(default)]
-    pub last_error: Option<String>,
-    #[serde(default)]
-    pub fire_count: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolSelectionRow {
-    pub selection_id: String,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub tool_policy_version: Option<String>,
-    #[serde(default)]
-    pub enable_file_tools: Option<bool>,
-    #[serde(default)]
-    pub file_tools_mode: Option<String>,
-    #[serde(default)]
-    pub file_tool_root: Option<String>,
-    #[serde(default)]
-    pub enable_bash: Option<bool>,
-    #[serde(default)]
-    pub bash_mode: Option<String>,
-    #[serde(default)]
-    pub command_execution_policy: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub command_allowed_argv_prefixes: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub command_forbidden_argv_prefixes: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub read_only_command_allowlist: Vec<String>,
-    #[serde(default)]
-    pub command_network_mode: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub cli_tool_names: Vec<String>,
-    #[serde(default)]
-    pub enable_meta_tools: Option<bool>,
-    #[serde(default)]
-    pub enable_goal_tools: Option<bool>,
-    #[serde(default)]
-    pub enable_goal_creation: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub allowed_mcp_service_ids: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub required_mcp_service_ids: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub backgroundable_tool_names: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub subagent_targets: Vec<String>,
-    #[serde(default)]
-    pub subagent_spawn_enabled: Option<bool>,
-    #[serde(default)]
-    pub subagent_steering_enabled: Option<bool>,
-    #[serde(default)]
-    pub subagent_background_enabled: Option<bool>,
-    #[serde(default)]
-    pub subagent_default_await_mode: Option<String>,
-    #[serde(default)]
-    pub subagent_allow_cross_deployment: Option<bool>,
-    #[serde(default)]
-    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
-    #[serde(default)]
-    pub enable_memory: Option<bool>,
-    #[serde(default)]
-    pub enable_session_history_tool: Option<bool>,
-    #[serde(default)]
-    pub enable_context_budget: Option<bool>,
-    #[serde(default)]
-    pub enable_defra_query: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub defra_query_collections: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub write_tools: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub datastore_tool_surface_ids: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub eth_tool_ids: Vec<String>,
-    #[serde(default)]
-    pub enable_self_config: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub self_config_categories: Vec<String>,
-    #[serde(default)]
-    pub self_config_no_lockout: Option<bool>,
-    #[serde(default)]
-    pub self_config_dry_run: Option<bool>,
-    #[serde(default)]
-    pub enable_lsp: Option<bool>,
-    #[serde(default)]
-    pub lsp_config: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InferenceBackendRow {
-    pub backend_id: String,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub provider_kind: Option<String>,
-    #[serde(default)]
-    pub openai_wire_api: Option<String>,
-    #[serde(default)]
-    pub endpoint: Option<String>,
-    #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default)]
-    pub api_key_env_var: Option<String>,
-    #[serde(default)]
-    pub max_concurrent: Option<i64>,
-    #[serde(default)]
-    pub max_queue_depth: Option<i64>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub models: Vec<String>,
-    #[serde(default)]
-    pub last_probe: Option<String>,
-    #[serde(default)]
-    pub probe_status: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuthCredentialRow {
     #[serde(default, rename = "_docID")]
@@ -1008,53 +499,6 @@ pub struct OAuthCredentialRow {
     pub last_refresh: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InferenceProfileRow {
-    pub profile_id: String,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub context_window: Option<i64>,
-    #[serde(default)]
-    pub max_output_tokens: Option<i64>,
-    #[serde(default)]
-    pub max_turns: Option<i64>,
-    #[serde(default)]
-    pub temperature: Option<f64>,
-    #[serde(default)]
-    pub top_p: Option<f64>,
-    #[serde(default)]
-    pub top_k: Option<i64>,
-    #[serde(default)]
-    pub seed: Option<i64>,
-    #[serde(default)]
-    pub min_p: Option<f64>,
-    #[serde(default)]
-    pub frequency_penalty: Option<f64>,
-    #[serde(default)]
-    pub presence_penalty: Option<f64>,
-    #[serde(default)]
-    pub repetition_penalty: Option<f64>,
-    #[serde(default)]
-    pub reasoning_effort: Option<String>,
-    #[serde(default)]
-    pub stream_batch_ms: Option<i64>,
-    #[serde(default)]
-    pub stream_liveness_timeout_secs: Option<i64>,
-    #[serde(default)]
-    pub deadline_duration_secs: Option<i64>,
-    #[serde(default)]
-    pub retry_max_transport: Option<i64>,
-    #[serde(default)]
-    pub retry_backoff_ms: Option<Vec<i64>>,
-    #[serde(default)]
-    pub retry_max_resample: Option<i64>,
-    #[serde(default)]
-    pub retry_allow_repair: Option<bool>,
-    #[serde(default)]
-    pub retry_interactive_max: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1136,71 +580,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rendered_request_row_parses_a_graphql_response_row() {
-        let json = r#"{
-            "capture_key": "rendered:v1:abc",
-            "request_doc_id": "bae-doc-1",
-            "request_id": "req-1",
-            "session_id": "s-1",
-            "agent_did": "did:test:amy",
-            "requester_did": "",
-            "behavior_id": "amy-code",
-            "capture_scope": "compaction.2",
-            "turn_index": 1,
-            "attempt": 0,
-            "capture_version": 1,
-            "model_name": "test-model",
-            "source": "openai_chat_completions",
-            "request_json": "{\"model\":\"test-model\"}",
-            "prompt_hash": "aa",
-            "tools_hash": "bb",
-            "provenance_json": "{\"manifest_version\":99}",
-            "created_at": "2026-08-07T12:00:00Z"
-        }"#;
-        let row: RenderedRequestRow = serde_json::from_str(json).expect("parse");
-        assert_eq!(row.capture_key, "rendered:v1:abc");
-
-        let key = row.order_key().expect("order key");
-        assert_eq!(key.scope.kind.as_str(), "compaction");
-        assert_eq!(key.scope.seq, 2);
-        assert_eq!((key.turn_index, key.attempt), (1, 0));
-
-        // Unknown manifest versions are reported, not guessed at.
-        assert_eq!(
-            row.provenance().expect("well-formed provenance"),
-            crate::rendered_request::ParsedProvenance::Unsupported {
-                manifest_version: 99
-            }
-        );
-    }
-
-    /// A DefraDB response may omit unpopulated columns entirely; the row still
-    /// deserializes, but it cannot be ordered — and must say so rather than
-    /// defaulting into a first-turn collision.
-    #[test]
-    fn rendered_request_row_without_order_facts_deserializes_but_will_not_order() {
-        let row: RenderedRequestRow =
-            serde_json::from_str(r#"{ "capture_key": "rendered:v1:abc" }"#).expect("parse");
-        assert_eq!(
-            row.order_key(),
-            Err(crate::rendered_request::CaptureOrderKeyError::MissingScope)
-        );
-
-        let row: RenderedRequestRow = serde_json::from_str(
-            r#"{ "capture_key": "rendered:v1:abc", "capture_scope": "inference.1", "attempt": 0 }"#,
-        )
-        .expect("parse");
-        assert_eq!(
-            row.order_key(),
-            Err(crate::rendered_request::CaptureOrderKeyError::MissingTurnIndex)
-        );
-        assert!(matches!(
-            row.provenance(),
-            Err(crate::rendered_request::ProvenanceParseError::Empty)
-        ));
-    }
-
-    #[test]
     fn agent_request_row_roundtrips() {
         let json = r#"{
             "_docID": "doc-1",
@@ -1212,12 +591,13 @@ mod tests {
             "retry_root_request": "req-1",
             "superseded_by_request": "",
             "content": "hello",
-            "temperature": 0.0,
-            "top_p": 0.95,
-            "top_k": 40,
-            "max_tokens": 512,
             "max_total_tokens": 4096,
-            "metadata": "{\"run_id\":\"run-1\"}",
+            "input": {
+                "selected_skill_ids": ["review"],
+                "cwd": "/workspace",
+                "initial_title": {"text": "Review", "source": "task"},
+                "goal_continuation": {"sequence": 1, "wrapup": false}
+            },
             "lifecycle_state": "pending",
             "backend_id": "",
             "execution_origin": "interactive",
@@ -1230,12 +610,16 @@ mod tests {
         assert_eq!(row.doc_id.as_deref(), Some("doc-1"));
         assert_eq!(row.request_id, "req-1");
         assert_eq!(row.retry_count, Some(0));
-        assert_eq!(row.temperature, Some(0.0));
-        assert_eq!(row.top_p, Some(0.95));
-        assert_eq!(row.top_k, Some(40));
-        assert_eq!(row.max_tokens, Some(512));
         assert_eq!(row.max_total_tokens, Some(4096));
-        assert_eq!(row.metadata.as_deref(), Some(r#"{"run_id":"run-1"}"#));
+        let input = row.input.as_ref().expect("typed input");
+        assert_eq!(input.selected_skill_ids, ["review"]);
+        assert_eq!(input.cwd.as_deref(), Some("/workspace"));
+        assert_eq!(
+            input.initial_title.as_ref().unwrap().source,
+            crate::session::SessionTitleSource::Task
+        );
+        assert_eq!(input.goal_continuation.as_ref().unwrap().sequence, 1);
+        assert!(!input.goal_continuation.as_ref().unwrap().wrapup);
         assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Pending));
         assert!(row.is_claimable());
         assert!(!row.is_terminal());
@@ -1250,6 +634,36 @@ mod tests {
             },
             round
         );
+    }
+
+    #[test]
+    fn request_row_nullable_input_and_claim_observations_are_independent() {
+        for input in [
+            serde_json::Value::Null,
+            serde_json::json!({"selected_skill_ids": null}),
+        ] {
+            let row: AgentRequestRow = serde_json::from_value(serde_json::json!({
+                "request_id": "request-1", "input": input,
+                "backend_id": "resolved-at-claim", "max_total_tokens": 0
+            }))
+            .expect("nullable row decoder");
+            assert_eq!(row.backend_id.as_deref(), Some("resolved-at-claim"));
+            assert_eq!(
+                row.max_total_tokens,
+                Some(0),
+                "pinned exhausted budget is not absent"
+            );
+            if let Some(input) = row.input {
+                assert!(input.selected_skill_ids.is_empty());
+            }
+        }
+        let row: AgentRequestRow = serde_json::from_value(serde_json::json!({
+            "request_id": "request-1", "input": null, "backend_id": null, "max_total_tokens": null
+        }))
+        .unwrap();
+        assert!(row.input.is_none());
+        assert!(row.backend_id.is_none());
+        assert!(row.max_total_tokens.is_none());
     }
 
     #[test]
@@ -1280,131 +694,6 @@ mod tests {
             assert_eq!(row.is_terminal(), state.is_terminal(), "{state:?}");
             assert_eq!(row.is_claimable(), state.is_claimable(), "{state:?}");
         }
-    }
-
-    #[test]
-    fn tool_selection_row_handles_missing_arrays() {
-        let json = r#"{
-            "selection_id": "sel-1",
-            "agent_did": "did:test:amy",
-            "display_name": "tools-engineering",
-            "enable_file_tools": true,
-            "file_tools_mode": "read",
-            "enable_bash": false,
-            "bash_mode": "deny",
-            "enable_meta_tools": true
-        }"#;
-        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
-        assert_eq!(row.enable_goal_tools, None);
-        assert_eq!(row.enable_goal_creation, None);
-        assert!(row.cli_tool_names.is_empty());
-        assert!(row.allowed_mcp_service_ids.is_empty());
-        assert!(row.backgroundable_tool_names.is_empty());
-        assert!(row.subagent_targets.is_empty());
-        assert!(row.write_tools.is_empty());
-        assert_eq!(row.subagent_default_await_mode, None);
-    }
-
-    #[test]
-    fn tool_selection_row_round_trips_nullable_goal_capabilities() {
-        let json = r#"{
-            "selection_id": "sel-goals",
-            "enable_meta_tools": false,
-            "enable_goal_tools": true,
-            "enable_goal_creation": false
-        }"#;
-        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
-        assert_eq!(row.enable_goal_tools, Some(true));
-        assert_eq!(row.enable_goal_creation, Some(false));
-        let encoded = serde_json::to_string(&row).expect("serialize");
-        let round: ToolSelectionRow = serde_json::from_str(&encoded).expect("reparse");
-        assert_eq!(round, row);
-    }
-
-    #[test]
-    fn tool_selection_row_handles_null_arrays() {
-        let json = r#"{
-            "selection_id": "sel-2",
-            "agent_did": "did:test:amy",
-            "cli_tool_names": null,
-            "allowed_mcp_service_ids": null,
-            "backgroundable_tool_names": null,
-            "subagent_targets": null
-        }"#;
-        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
-        assert!(row.cli_tool_names.is_empty());
-        assert!(row.allowed_mcp_service_ids.is_empty());
-        assert!(row.backgroundable_tool_names.is_empty());
-        assert!(row.subagent_targets.is_empty());
-    }
-
-    #[test]
-    fn tool_selection_row_handles_empty_string_arrays() {
-        let json = r#"{
-            "selection_id": "sel-3",
-            "agent_did": "did:test:amy",
-            "cli_tool_names": "",
-            "allowed_mcp_service_ids": "",
-            "backgroundable_tool_names": "",
-            "subagent_targets": "",
-            "write_tools": ""
-        }"#;
-        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
-        assert!(row.cli_tool_names.is_empty());
-        assert!(row.allowed_mcp_service_ids.is_empty());
-        assert!(row.backgroundable_tool_names.is_empty());
-        assert!(row.subagent_targets.is_empty());
-        assert!(row.write_tools.is_empty());
-    }
-
-    #[test]
-    fn tool_selection_row_round_trips_subagent_fields() {
-        let json = r#"{
-            "selection_id": "sel-4",
-            "agent_did": "did:test:amy",
-            "subagent_targets": ["amy-research"],
-            "subagent_spawn_enabled": true,
-            "subagent_steering_enabled": true,
-            "subagent_background_enabled": true,
-            "subagent_allow_cross_deployment": true,
-            "cross_deployment_spawn_timeout_seconds": 45,
-            "enable_memory": true,
-            "enable_session_history_tool": true
-        }"#;
-        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
-        assert_eq!(row.subagent_targets, vec!["amy-research".to_string()]);
-        assert_eq!(row.subagent_spawn_enabled, Some(true));
-        assert_eq!(row.subagent_steering_enabled, Some(true));
-        assert_eq!(row.subagent_background_enabled, Some(true));
-        assert_eq!(row.subagent_allow_cross_deployment, Some(true));
-        assert_eq!(row.cross_deployment_spawn_timeout_seconds, Some(45));
-        assert_eq!(row.enable_memory, Some(true));
-        assert_eq!(row.enable_session_history_tool, Some(true));
-
-        let re: String = serde_json::to_string(&row).expect("serialize");
-        let round: ToolSelectionRow = serde_json::from_str(&re).expect("reparse");
-        assert_eq!(row, round);
-    }
-
-    #[test]
-    fn tool_selection_row_round_trips_write_tools_and_await_mode() {
-        let json = r#"{
-            "selection_id": "sel-5",
-            "agent_did": "did:test:amy",
-            "subagent_default_await_mode": "foreground",
-            "write_tools": ["{\"tool_name\":\"upsert_note\",\"collection\":\"Note\",\"fields\":[]}"]
-        }"#;
-        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
-        assert_eq!(
-            row.subagent_default_await_mode.as_deref(),
-            Some("foreground")
-        );
-        assert_eq!(row.write_tools.len(), 1);
-        assert!(row.write_tools[0].contains("\"tool_name\":\"upsert_note\""));
-
-        let re: String = serde_json::to_string(&row).expect("serialize");
-        let round: ToolSelectionRow = serde_json::from_str(&re).expect("reparse");
-        assert_eq!(row, round);
     }
 
     #[test]

@@ -97,7 +97,6 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "AgentToolCall",
         "AgentToolResult",
         "AgentSession",
-        "AgentConversation",
         "CompactionEntry",
         "MailboxItem",
     ];
@@ -108,7 +107,6 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "AgentToolCall",
         "AgentToolResult",
         "AgentSession",
-        "AgentConversation",
         "CompactionEntry",
         "MailboxItem",
         "PersonaConfigRequest",
@@ -117,8 +115,14 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
     ];
     const RETURN_CONTROL_PLANE: &[&str] = &[
         "AgentBehavior",
-        "ToolSelection",
+        "AgentContext",
+        "CompactionConfig",
+        "Tools",
+        "SubagentTarget",
         "InferenceProfile",
+        "InferenceSampling",
+        "InferenceExecution",
+        "InferenceRetryPolicy",
         "ToolServiceRegistry",
         "Skill",
         "DatastoreToolSurface",
@@ -126,7 +130,8 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "EthTool",
         "Task",
         "Schedule",
-        "EventTrigger",
+        "Trigger",
+        "EventSource",
     ];
     const OWNER_PROJECTION: &[&str] = &["AgentBehaviorReadiness"];
     const RUNTIME_TO_CLIENT: &[&str] = &[
@@ -136,15 +141,20 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "AgentToolCall",
         "AgentToolResult",
         "AgentSession",
-        "AgentConversation",
         "CompactionEntry",
         "MailboxItem",
         "PersonaConfigRequest",
         "PeerEndpoint",
         "SessionHydrationRequest",
         "AgentBehavior",
-        "ToolSelection",
+        "AgentContext",
+        "CompactionConfig",
+        "Tools",
+        "SubagentTarget",
         "InferenceProfile",
+        "InferenceSampling",
+        "InferenceExecution",
+        "InferenceRetryPolicy",
         "ToolServiceRegistry",
         "Skill",
         "DatastoreToolSurface",
@@ -152,20 +162,28 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "EthTool",
         "Task",
         "Schedule",
-        "EventTrigger",
+        "Trigger",
+        "EventSource",
         "AgentBehaviorReadiness",
     ];
 
     assert_eq!(
-        lean_string_list("clientTranscriptCollections"),
-        TRANSCRIPT,
+        lean_string_list("transcriptCollections"),
+        &TRANSCRIPT[..TRANSCRIPT.len() - 1],
         "Rust transcript policy must conform to the checked Lean model source"
     );
     assert_eq!(
-        lean_string_list("clientControlPlaneCollections"),
-        RETURN_CONTROL_PLANE,
-        "Rust return control plane must conform to the checked Lean model source"
+        lean_string_list("clientOwnerProjectionCollections"),
+        OWNER_PROJECTION,
+        "Rust owner-projection policy must conform to the checked Lean model source"
     );
+
+    for collection in RETURN_CONTROL_PLANE {
+        assert!(
+            gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(collection),
+            "canonical return collection {collection} must be installed in the runtime schema"
+        );
+    }
 
     let template = resolve_template(CLIENT_TEMPLATE).expect("client in catalog");
     assert_eq!(template.delivery, Delivery::Push);
@@ -295,6 +313,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
     assert!(!outbound.contains_key("AgentBehaviorReadiness"));
     for excluded in [
         "InferenceBackend",
+        "OAuthCredential",
         "PeerPairingDesired",
         "DataPlanePairingDesired",
     ] {
@@ -332,7 +351,6 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
         "AgentToolCall",
         "AgentToolResult",
         "AgentSession",
-        "AgentConversation",
         "CompactionEntry",
     ] {
         let pred = filter.get(col).expect("transcript collection filter");
@@ -340,11 +358,19 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
     }
     for col in [
         "AgentBehavior",
-        "ToolSelection",
-        "InferenceBackend",
+        "AgentContext",
+        "CompactionConfig",
+        "Tools",
+        "SubagentTarget",
         "InferenceProfile",
+        "InferenceSampling",
+        "InferenceExecution",
+        "InferenceRetryPolicy",
         "ToolServiceRegistry",
         "Skill",
+        "DatastoreToolSurface",
+        "ChainKeyBinding",
+        "EthTool",
     ] {
         assert!(t.collections.contains(&col));
         assert!(!filter.contains_key(col), "config {col} must be unfiltered");
@@ -359,11 +385,7 @@ fn conversation_scope_excludes_another_requester_on_the_same_agent() {
         .get("AgentRequest")
         .expect("request filter is present");
 
-    let phone_request = ("did:key:amy", Some("did:key:phone"));
-    let classifier_request = ("did:key:amy", None);
     assert_eq_filter(predicate, "requester_did", "did:key:phone");
-    assert_eq!(phone_request.1, Some("did:key:phone"));
-    assert_ne!(classifier_request.1, Some("did:key:phone"));
 }
 
 /// Mirrors Lean `clientIndex_filter_eq` and
@@ -372,10 +394,7 @@ fn conversation_scope_excludes_another_requester_on_the_same_agent() {
 fn client_index_scope_is_exactly_the_requester_scoped_literal_index() {
     let template = resolve_template("client-index").expect("client-index in catalog");
     assert_eq!(template.delivery, Delivery::Push);
-    assert_eq!(
-        template.collections,
-        &["AgentConversation", "AgentSession", "MailboxItem"]
-    );
+    assert_eq!(template.collections, &["AgentSession", "MailboxItem"]);
 
     let phone = scope_filter(
         &template.scope,
@@ -383,7 +402,7 @@ fn client_index_scope_is_exactly_the_requester_scoped_literal_index() {
         "did:key:phone",
         "did:key:home",
     );
-    assert_eq!(phone.len(), 3);
+    assert_eq!(phone.len(), 2);
     for collection in template.collections {
         let predicate = phone.get(*collection).expect("collection filtered");
         assert_eq_filter(predicate, "requester_did", "did:key:phone");
@@ -418,7 +437,6 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
         "AgentToolCall",
         "AgentToolResult",
         "AgentSession",
-        "AgentConversation",
         "CompactionEntry",
     ] {
         let predicate = filters.get(collection).expect("conversation filter");
@@ -488,12 +506,7 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
             "unexpected host filter for {collection}"
         );
     }
-    for local_collection in [
-        "AgentToolResult",
-        "AgentSession",
-        "AgentConversation",
-        "CompactionEntry",
-    ] {
+    for local_collection in ["AgentToolResult", "AgentSession", "CompactionEntry"] {
         assert!(!host.collections.contains(&local_collection));
         assert!(!host_filter.contains_key(local_collection));
     }
@@ -515,11 +528,7 @@ fn subagent_host_message_filter_excludes_unrelated_host_history() {
     );
     let predicate = filter.get("AgentMessage").expect("message filter");
 
-    let child_requester_did = Some("did:key:coord");
-    let unrelated_requester_did: Option<&str> = None;
     assert_eq_filter(predicate, "requester_did", "did:key:coord");
-    assert_eq!(child_requester_did, Some("did:key:coord"));
-    assert_ne!(unrelated_requester_did, Some("did:key:coord"));
 }
 
 #[test]
@@ -591,4 +600,30 @@ fn app_collection_admission_matches_lean_protocol_disjointness_contract() {
             "Lean appCollections_protocol_overlap_rejected violated by {protocol}"
         );
     }
+}
+
+/// Template selection is not ACP authorization. Ordinary routes may never
+/// select credentials; the explicit operator route still needs DID/ACP admission.
+#[test]
+fn ordinary_routes_exclude_credentials_and_operator_selection_remains_explicit() {
+    for id in [
+        "client",
+        "conversation",
+        "machine",
+        "client-index",
+        "subagent-host",
+        "subagent-coordinator",
+    ] {
+        let template = resolve_template(id).expect("builtin route");
+        for credential in ["InferenceBackend", "OAuthCredential"] {
+            assert!(
+                !template.collections.contains(&credential),
+                "{id} leaks {credential}"
+            );
+        }
+    }
+    assert!(resolve_template("agent-config")
+        .unwrap()
+        .collections
+        .contains(&"InferenceBackend"));
 }

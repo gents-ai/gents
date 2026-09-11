@@ -3,21 +3,25 @@ import type { FormEvent } from "react";
 
 import type {
   DeploymentView,
+  Schedule,
   ScheduleDeleteRequest,
   ScheduleSaveRequest,
-  ScheduleView,
   TaskRunResult,
-  TaskView,
 } from "@source-inc/gents-desktop-client";
+import type { ScheduleCadence } from "@source-inc/gents-desktop-client/generated/ScheduleCadence";
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
-import { ignoreHandledActionError, isOptionalInt, parseOptionalInt } from "./formUtils";
+import {
+  ignoreHandledActionError,
+  isOptionalInt,
+  linesToArray,
+  parseOptionalInt,
+} from "./formUtils";
 
 export type ScheduleConfigPanelProps = {
   deployment: DeploymentView;
   selectedScheduleId: string | null;
-  selectedTaskId: string | null;
   saving: boolean;
   runningTask: boolean;
   savedStatus: string | null;
@@ -33,7 +37,6 @@ export type ScheduleConfigPanelProps = {
 export function ScheduleConfigPanel({
   deployment,
   selectedScheduleId,
-  selectedTaskId,
   saving,
   runningTask,
   savedStatus,
@@ -48,27 +51,23 @@ export function ScheduleConfigPanel({
   const selectedSchedule = useMemo(
     () =>
       deployment.schedules.find(
-        (schedule) => schedule.scheduleId === selectedScheduleId,
+        (schedule) => schedule.schedule_id === selectedScheduleId,
       ) ?? null,
     [deployment.schedules, selectedScheduleId],
-  );
-  const selectedTask = useMemo(
-    () => deployment.tasks.find((task) => task.taskId === selectedTaskId) ?? null,
-    [deployment.tasks, selectedTaskId],
   );
 
   return (
     <section className="config-layout">
       <ConfigDocumentList
-        eyebrow="Triggers"
+        eyebrow="Automation"
         items={deployment.schedules.map((schedule) => ({
-          id: schedule.scheduleId,
-          title: schedule.scheduleId,
-          meta: `${schedule.taskId ?? "no task"} / ${schedule.concurrency ?? "serial"}`,
+          id: schedule.schedule_id,
+          title: schedule.display_name ?? schedule.schedule_id,
+          meta: describeCadence(schedule.cadence),
         }))}
         selectedId={selectedScheduleId}
         testPrefix="schedule"
-        title="Timer Triggers"
+        title="Schedules"
         onCreate={onCreateSchedule}
         onSelect={onSelectSchedule}
       />
@@ -79,8 +78,6 @@ export function ScheduleConfigPanel({
         savedStatus={savedStatus}
         saving={saving}
         schedule={selectedSchedule}
-        selectedTask={selectedTask}
-        tasks={deployment.tasks}
         onRunSchedule={onRunSchedule}
         onSaved={(scheduleId) => {
           onSelectSchedule(scheduleId);
@@ -98,9 +95,7 @@ export function ScheduleConfigPanel({
 
 export type ScheduleConfigEditorProps = {
   agentDid: string;
-  schedule: ScheduleView | null;
-  selectedTask: TaskView | null;
-  tasks: TaskView[];
+  schedule: Schedule | null;
   savedStatus: string | null;
   saving: boolean;
   runningTask: boolean;
@@ -114,8 +109,6 @@ export type ScheduleConfigEditorProps = {
 export function ScheduleConfigEditor({
   agentDid,
   schedule,
-  selectedTask,
-  tasks,
   savedStatus,
   saving,
   runningTask,
@@ -133,47 +126,68 @@ export function ScheduleConfigEditor({
       return;
     }
     try {
-      await onDeleteScheduleConfig({ scheduleId: schedule.scheduleId, agentDid });
+      await onDeleteScheduleConfig({ scheduleId: schedule.schedule_id, agentDid });
       onDeleted();
     } catch {}
   }
+
   const [scheduleId, setScheduleId] = useState("");
-  const [taskId, setTaskId] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [cadenceKind, setCadenceKind] = useState<"interval" | "cron">("interval");
   const [intervalSecs, setIntervalSecs] = useState("");
-  const [enabled, setEnabled] = useState(true);
-  const [concurrency, setConcurrency] = useState("serial");
+  const [cronExpression, setCronExpression] = useState("");
+  const [cronTimezone, setCronTimezone] = useState("UTC");
+  const [tags, setTags] = useState("");
   const [runStatus, setRunStatus] = useState<TaskRunResult | null>(null);
 
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    const b = scheduleFormValues(schedule, selectedTask?.taskId ?? null);
-    setScheduleId(b.scheduleId);
-    setTaskId(b.taskId);
-    setIntervalSecs(b.intervalSecs);
-    setEnabled(b.enabled);
-    setConcurrency(b.concurrency);
+    const baseline = scheduleFormValues(schedule);
+    setScheduleId(baseline.scheduleId);
+    setDisplayName(baseline.displayName);
+    setCadenceKind(baseline.cadenceKind);
+    setIntervalSecs(baseline.intervalSecs);
+    setCronExpression(baseline.cronExpression);
+    setCronTimezone(baseline.cronTimezone);
+    setTags(baseline.tags);
     setSaveError(null);
-  }, [schedule?.scheduleId, selectedTask?.taskId]);
+  }, [schedule?.schedule_id, schedule?.updated_at]);
 
   useEffect(() => {
     setRunStatus(null);
-  }, [schedule?.scheduleId]);
+  }, [schedule?.schedule_id]);
 
   const intervalValid = isOptionalInt(intervalSecs, { min: 1 });
+  const cronValid = cadenceKind !== "cron" || cronExpression.trim().length > 0;
+  const cadenceValid = cadenceKind === "interval" ? intervalValid : cronValid;
 
   async function submitSchedule(event: FormEvent) {
     event.preventDefault();
-    const nextId = scheduleId.trim();
+    if (!scheduleId.trim()) {
+      return;
+    }
+    const cadence: ScheduleCadence | null =
+      cadenceKind === "interval"
+        ? parseOptionalInt(intervalSecs) != null
+          ? { kind: "interval", interval_secs: parseOptionalInt(intervalSecs)! }
+          : null
+        : cronExpression.trim()
+          ? { kind: "cron", expression: cronExpression.trim(), timezone: cronTimezone }
+          : null;
+    if (cadence == null) {
+      return;
+    }
+    const document: Schedule = {
+      agent_did: agentDid,
+      schedule_id: scheduleId.trim(),
+      display_name: optionalTrimmed(displayName),
+      cadence,
+      tags: linesToArray(tags),
+    };
     try {
-      await onSaveScheduleConfig({
-        scheduleId: nextId,
-        taskId,
-        intervalSecs: parseOptionalInt(intervalSecs),
-        enabled,
-        concurrency,
-      });
-      onSaved(nextId);
+      await onSaveScheduleConfig({ document });
+      onSaved(document.schedule_id);
       setSaveError(null);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error));
@@ -193,12 +207,20 @@ export function ScheduleConfigEditor({
     <form className="panel config-editor" onSubmit={submitSchedule}>
       <ConfigEditorHeader
         dirty={isDirty(
-          { scheduleId, taskId, intervalSecs, enabled, concurrency },
-          scheduleFormValues(schedule, selectedTask?.taskId ?? null),
+          {
+            scheduleId,
+            displayName,
+            cadenceKind,
+            intervalSecs,
+            cronExpression,
+            cronTimezone,
+            tags,
+          },
+          scheduleFormValues(schedule),
         )}
-        eyebrow="Timer Trigger"
+        eyebrow="Schedule"
         saved={savedStatus === `schedule:${scheduleId.trim()}`}
-        title={scheduleId || "New Timer Trigger"}
+        title={displayName || scheduleId || "New Schedule"}
       />
       {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
       <div className="grid-2">
@@ -219,76 +241,82 @@ export function ScheduleConfigEditor({
           />
         </label>
         <label className="field">
-          <span>Task</span>
-          <select
-            data-testid="schedule-task-id"
-            onChange={(event) => setTaskId(event.currentTarget.value)}
-            value={taskId}
-          >
-            <option value="">Unset</option>
-            {tasks.map((task) => (
-              <option key={task.taskId} value={task.taskId}>
-                {task.name ?? task.taskId}
-              </option>
-            ))}
-          </select>
+          <span>Display name</span>
+          <input
+            data-testid="schedule-display-name"
+            onChange={(event) => setDisplayName(event.currentTarget.value)}
+            value={displayName}
+          />
         </label>
       </div>
       <div className="grid-3">
         <label className="field">
-          <span>Interval seconds</span>
-          <input
-            data-testid="schedule-interval-secs"
-            onChange={(event) => setIntervalSecs(event.currentTarget.value)}
-            type="number"
-            value={intervalSecs}
-          />
-          <FieldHint show={!intervalValid}>Whole number of 1 or more</FieldHint>
-        </label>
-        <label className="field">
-          <span>Concurrency</span>
+          <span>Cadence</span>
           <select
-            data-testid="schedule-concurrency"
-            onChange={(event) => setConcurrency(event.currentTarget.value)}
-            value={concurrency}
+            data-testid="schedule-cadence-kind"
+            onChange={(event) =>
+              setCadenceKind(event.currentTarget.value as "interval" | "cron")
+            }
+            value={cadenceKind}
           >
-            <option value="serial">Serial</option>
-            <option value="parallel">Parallel</option>
-            <option value="latest_only">Latest only</option>
+            <option value="interval">Interval</option>
+            <option value="cron">Cron</option>
           </select>
         </label>
-        <label className="checkbox">
-          <input
-            checked={enabled}
-            data-testid="schedule-enabled"
-            onChange={(event) => setEnabled(event.currentTarget.checked)}
-            type="checkbox"
-          />
-          <span>Enabled</span>
-        </label>
+        {cadenceKind === "interval" ? (
+          <label className="field">
+            <span>Interval seconds</span>
+            <input
+              data-testid="schedule-interval-secs"
+              onChange={(event) => setIntervalSecs(event.currentTarget.value)}
+              type="number"
+              value={intervalSecs}
+            />
+            <FieldHint show={!intervalValid}>Whole number of 1 or more</FieldHint>
+          </label>
+        ) : (
+          <label className="field">
+            <span>Cron expression</span>
+            <input
+              data-testid="schedule-cron-expression"
+              onChange={(event) => setCronExpression(event.currentTarget.value)}
+              value={cronExpression}
+            />
+          </label>
+        )}
+        {cadenceKind === "cron" ? (
+          <label className="field">
+            <span>Timezone</span>
+            <input
+              data-testid="schedule-cron-timezone"
+              onChange={(event) => setCronTimezone(event.currentTarget.value)}
+              value={cronTimezone}
+            />
+          </label>
+        ) : null}
       </div>
-      <div className="facts">
-        <div>
-          <dt>Last status</dt>
-          <dd>{schedule?.lastStatus ?? "none"}</dd>
+      <label className="field">
+        <span>Tags</span>
+        <textarea
+          className="config-small-textarea"
+          data-testid="schedule-tags"
+          onChange={(event) => setTags(event.currentTarget.value)}
+          placeholder="One tag per line"
+          value={tags}
+        />
+      </label>
+      {schedule ? (
+        <div className="facts">
+          <div>
+            <dt>Created</dt>
+            <dd>{schedule.created_at ?? "unknown"}</dd>
+          </div>
+          <div>
+            <dt>Updated</dt>
+            <dd>{schedule.updated_at ?? "unknown"}</dd>
+          </div>
         </div>
-        <div>
-          <dt>Fire count</dt>
-          <dd>{schedule?.fireCount ?? 0}</dd>
-        </div>
-        <div>
-          <dt>Next run</dt>
-          <dd>{schedule?.nextRunAt ?? "not scheduled"}</dd>
-        </div>
-        <div>
-          <dt>Last attempt</dt>
-          <dd>{schedule?.lastAttemptAt ?? "none"}</dd>
-        </div>
-        <div>
-          <dt>Last error</dt>
-          <dd>{schedule?.lastError ?? "none"}</dd>
-        </div>
-      </div>
+      ) : null}
       <div className="config-actions">
         {schedule ? (
           <button
@@ -304,7 +332,7 @@ export function ScheduleConfigEditor({
         <ConfirmDialog
           open={confirmingDelete}
           title="Delete schedule"
-          message={`Delete schedule "${schedule?.scheduleId ?? ""}"? This automation stops firing immediately.`}
+          message={`Delete schedule "${schedule?.schedule_id ?? ""}"? Triggers referencing it stop firing.`}
           confirmLabel="Delete Schedule"
           danger
           onConfirm={() => {
@@ -315,16 +343,10 @@ export function ScheduleConfigEditor({
         <button
           className="primary-button"
           data-testid="schedule-save"
-          disabled={
-            saving ||
-            !scheduleId.trim() ||
-            !taskId.trim() ||
-            !intervalSecs.trim() ||
-            !intervalValid
-          }
+          disabled={saving || !scheduleId.trim() || !cadenceValid}
           type="submit"
         >
-          {saving ? "Saving..." : "Save Timer"}
+          {saving ? "Saving..." : "Save Schedule"}
         </button>
       </div>
 
@@ -332,7 +354,7 @@ export function ScheduleConfigEditor({
         <div className="panel-header">
           <div>
             <p className="eyebrow">Manual Run</p>
-            <h3>{scheduleId || "Timer Trigger"}</h3>
+            <h3>{displayName || scheduleId || "Schedule"}</h3>
           </div>
           {runStatus ? (
             <span className="chip chip-green" data-testid="schedule-run-status">
@@ -348,7 +370,7 @@ export function ScheduleConfigEditor({
             onClick={() => void runSelectedSchedule()}
             type="button"
           >
-            {runningTask ? "Running..." : "Run Timer Now"}
+            {runningTask ? "Running..." : "Run Schedule Now"}
           </button>
         </div>
       </section>
@@ -356,15 +378,27 @@ export function ScheduleConfigEditor({
   );
 }
 
-function scheduleFormValues(
-  schedule: ScheduleView | null,
-  fallbackTaskId: string | null,
-) {
+function scheduleFormValues(schedule: Schedule | null) {
+  const cadence = schedule?.cadence;
   return {
-    scheduleId: schedule?.scheduleId ?? "",
-    taskId: schedule?.taskId ?? fallbackTaskId ?? "",
-    intervalSecs: schedule?.intervalSecs != null ? String(schedule.intervalSecs) : "",
-    enabled: schedule?.enabled ?? true,
-    concurrency: schedule?.concurrency ?? "serial",
+    scheduleId: schedule?.schedule_id ?? "",
+    displayName: schedule?.display_name ?? "",
+    cadenceKind: cadence?.kind === "cron" ? ("cron" as const) : ("interval" as const),
+    intervalSecs: cadence?.kind === "interval" ? String(cadence.interval_secs) : "",
+    cronExpression: cadence?.kind === "cron" ? cadence.expression : "",
+    cronTimezone: cadence?.kind === "cron" ? cadence.timezone : "UTC",
+    tags: schedule?.tags?.length ? schedule.tags.join("\n") : "",
   };
+}
+
+function optionalTrimmed(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function describeCadence(cadence: ScheduleCadence): string {
+  if (cadence.kind === "interval") {
+    return `every ${cadence.interval_secs}s`;
+  }
+  return `${cadence.expression} (${cadence.timezone})`;
 }

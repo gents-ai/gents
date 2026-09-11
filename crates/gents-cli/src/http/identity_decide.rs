@@ -362,15 +362,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identity_decide_endpoint_matches_lean_permission_cases() -> anyhow::Result<()> {
+    async fn identity_decide_endpoint_matches_resolved_lean_permission_cases() -> anyhow::Result<()>
+    {
         let cases = lean_identity_permission_cases();
-        assert_eq!(
-            cases.len(),
-            4,
-            "Lean should emit the four executable identity permission rows"
-        );
+        assert!(!cases.is_empty());
 
         for case in cases {
+            // This endpoint forwards an already resolved DID to Defra ACP;
+            // it does not own behavior lookup or ambiguous-key rejection.
+            if case.expected_actor_principal.is_none() || case.expected_peer_principal.is_none() {
+                continue;
+            }
             let defradb_base =
                 spawn_mock_defradb(build_local_acp_from_lean_case(case).await?).await?;
             let runtime_addr =
@@ -382,14 +384,14 @@ mod tests {
 
             let actor = post_identity_decide(
                 runtime_addr,
-                &case.expected_actor_principal,
+                &case.actor_principal,
                 &case.permission,
                 &resource,
             )
             .await?;
             let peer = post_identity_decide(
                 runtime_addr,
-                &case.expected_peer_principal,
+                &case.peer_principal,
                 &case.permission,
                 &resource,
             )

@@ -18,20 +18,20 @@ test.describe("mobile session sync fixture", () => {
     );
     await openChat(page);
     await openChatNavigation(page);
-    await page.getByTestId("conversation-session-remote").click();
+    await page.getByTestId("session-session-remote").click();
     await expect(
       page.getByTestId("transcript-panel").getByText("hello from desktop"),
     ).toBeVisible();
-    await expect(page.getByTestId("conversation-loading-status")).toHaveAttribute(
+    await expect(page.getByTestId("session-loading-status")).toHaveAttribute(
       "data-loading-layer",
       "sessionSync",
     );
-    await expect(page.getByTestId("conversation-loading-status")).toContainText(
-      "Requesting conversation history",
+    await expect(page.getByTestId("session-loading-status")).toContainText(
+      "Requesting session history",
     );
 
     await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.progress(2, 4));
-    await expect(page.getByTestId("conversation-loading-status")).toHaveText(/2 of 4/);
+    await expect(page.getByTestId("session-loading-status")).toHaveText(/2 of 4/);
     await expect(
       page
         .getByTestId("transcript-panel")
@@ -43,7 +43,7 @@ test.describe("mobile session sync fixture", () => {
         const shell = document.querySelector<HTMLElement>(".app-shell");
         const header = document.querySelector<HTMLElement>(".chat-header");
         const hydration = document.querySelector<HTMLElement>(
-          "[data-testid=conversation-loading-status]",
+          "[data-testid=session-loading-status]",
         );
         const transcript = document.querySelector<HTMLElement>(
           "[data-testid=transcript-panel]",
@@ -76,7 +76,7 @@ test.describe("mobile session sync fixture", () => {
     }
 
     await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.complete());
-    await expect(page.getByTestId("conversation-loading-status")).toHaveCount(0);
+    await expect(page.getByTestId("session-loading-status")).toHaveCount(0);
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
       "healthy",
@@ -87,9 +87,9 @@ test.describe("mobile session sync fixture", () => {
     await gotoHarness(page, "session-hydration");
     await openChat(page);
     await openChatNavigation(page);
-    await page.getByTestId("conversation-session-remote").click();
+    await page.getByTestId("session-session-remote").click();
     await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.fail());
-    await expect(page.getByTestId("conversation-loading-status")).toHaveAttribute(
+    await expect(page.getByTestId("session-loading-status")).toHaveAttribute(
       "data-loading-phase",
       "failed",
     );
@@ -98,16 +98,16 @@ test.describe("mobile session sync fixture", () => {
       "healthy",
     );
     await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.observe());
-    await expect(page.getByTestId("conversation-loading-status")).toHaveAttribute(
+    await expect(page.getByTestId("session-loading-status")).toHaveAttribute(
       "data-loading-phase",
       "failed",
     );
     expect(await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.retryCount())).toBe(
       0,
     );
-    await page.getByTestId("conversation-loading-retryHydration").click();
-    await expect(page.getByTestId("conversation-loading-status")).toContainText(
-      "Requesting conversation history",
+    await page.getByTestId("session-loading-retryHydration").click();
+    await expect(page.getByTestId("session-loading-status")).toContainText(
+      "Requesting session history",
     );
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",

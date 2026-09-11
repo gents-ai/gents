@@ -287,11 +287,6 @@ impl BehaviorReadinessPublisherHandle {
         self.observation.clone()
     }
 
-    #[cfg(test)]
-    pub(crate) fn command_capacity_for_test(&self) -> usize {
-        self.commands.capacity()
-    }
-
     pub(crate) async fn initialize(&self, default_behavior_id: &str) -> Result<()> {
         self.send(|ack| Command::Initialize {
             default_behavior_id: default_behavior_id.to_string(),

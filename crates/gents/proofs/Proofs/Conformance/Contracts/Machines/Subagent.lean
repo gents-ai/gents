@@ -1,49 +1,22 @@
-import Proofs.ToolExecution
+import Proofs.Background.Bridge
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts
 
-def awaitModeMachine : StateMachineContract :=
-  let names := Subagent.AwaitMode.all.map Subagent.AwaitMode.toDefraDB
-  machineContract
-    "AwaitMode"
-    names
-    []
-    []
-    []
+/-- Failure observations project into tool terminal states; this is a mapping,
+not an independent child lifecycle. Values come from the bridge owner. -/
+def childFailureObservations : List Subagent.ChildTerminal :=
+  [.failed, .dead, .interrupted, .superseded]
 
-def cancelPolicyMachine : StateMachineContract :=
-  let names := Subagent.CancelPolicy.all.map Subagent.CancelPolicy.toDefraDB
-  machineContract
-    "CancelPolicy"
-    names
-    []
-    []
-    []
+def childFailureNames : List String :=
+  childFailureObservations.map Subagent.ChildTerminal.toDefraDB
 
-def childTerminalMachine : StateMachineContract :=
-  let base :=
-    machineContract
-      "ChildTerminal"
-      ["failed", "dead", "interrupted", "superseded"]
-      ["failed", "dead", "interrupted", "superseded"]
-      []
-      []
-  { base with
-      namedTransitions :=
-        [ { name := "project_failed"
-          , source := "failed"
-          , target := "failed" }
-        , { name := "project_dead"
-          , source := "dead"
-          , target := "failed" }
-        , { name := "project_interrupted"
-          , source := "interrupted"
-          , target := "cancelled" }
-        , { name := "project_superseded"
-          , source := "superseded"
-          , target := "failed" }
-        ] }
+/-- Execute the bridge owner's failure projection rather than hand-writing a
+second transition table over mismatched child/tool state domains. -/
+def childFailureProjectionsJson : String :=
+  jsonArray (childFailureObservations.map fun child =>
+    "{" ++ "\"child_state\":" ++ jsonString child.toDefraDB ++ ","
+      ++ "\"tool_state\":" ++ jsonString child.projectedToolState.toDefraDB ++ "}")
 
 def toolRetryDispositions : List ToolExecution.RetryDisposition :=
   ToolExecution.RetryDisposition.all

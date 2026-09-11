@@ -90,9 +90,9 @@ describe("session context visibility", () => {
           },
         }}
         runtimeHealth={null}
-        selectedConversationTitle="weekend triage"
+        selectedSessionSummaryTitle="weekend triage"
         selectedSessionId="session-1"
-        onRenameConversationTitle={vi.fn()}
+        onRenameSessionTitle={vi.fn()}
       />,
     );
 
@@ -155,7 +155,7 @@ describe("ChatTranscriptPanel states", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows a loading skeleton (not the first-message empty state) while a selected conversation loads", () => {
+  it("shows a loading skeleton (not the first-message empty state) while a selected session loads", () => {
     render(<ChatTranscriptPanel selectedSessionId="s1" session={null} />);
     expect(screen.getByTestId("transcript-loading")).toBeInTheDocument();
     expect(screen.queryByText("Send the first message")).not.toBeInTheDocument();
@@ -385,7 +385,7 @@ describe("ChatTranscriptPanel states", () => {
     });
   });
 
-  it("loads an existing conversation at its tip", () => {
+  it("loads an existing session at its tip", () => {
     const timelineItems: RenderedTimelineItem[] = Array.from(
       { length: 90 },
       (_, index) => ({

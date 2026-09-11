@@ -1,6 +1,5 @@
 import type {
-  BackendSaveRequest,
-  BehaviorSaveRequest,
+  ConfigComponentsPatchRequest,
   CodexLoginResult,
   DeploymentView,
   GrokLoginResult,
@@ -10,8 +9,9 @@ import type {
 export type InferenceSetupOptions = {
   deployment: DeploymentView;
   onClose: () => void;
-  onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
-  onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onPatchConfigComponents: (
+    request: ConfigComponentsPatchRequest,
+  ) => Promise<unknown>;
   onProbeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
   onCodexLogin: (agentDid: string) => Promise<CodexLoginResult>;
   /** Abort a ChatGPT sign-in whose browser was closed, so it does not hang. */
@@ -21,7 +21,5 @@ export type InferenceSetupOptions = {
   ) => Promise<() => void>;
   onGrokLogin?: (agentDid: string) => Promise<GrokLoginResult>;
   onCancelGrokLogin?: () => Promise<unknown>;
-  onGrokLoginUrl?: (
-    onUrl: (url: string | null) => void,
-  ) => Promise<() => void>;
+  onGrokLoginUrl?: (onUrl: (url: string | null) => void) => Promise<() => void>;
 };

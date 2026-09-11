@@ -64,9 +64,9 @@ test.describe("desktop sidebar workflows", () => {
     await openChat(page);
     await openChatNavigation(page);
 
-    const taskFilter = page.getByTestId("conversation-task-filter");
+    const taskFilter = page.getByTestId("session-task-filter");
     await expect(taskFilter).toHaveCount(0);
-    await expect(page.getByTestId("conversation-session-intro")).toBeVisible();
+    await expect(page.getByTestId("session-session-intro")).toBeVisible();
 
     await page.getByTestId("agent-actions").click();
     await page
@@ -81,13 +81,13 @@ test.describe("desktop sidebar workflows", () => {
 
     await page.getByTestId("config-back-tab").click();
     await openChatNavigation(page);
-    const conversationList = page.locator(".conversation-list");
+    const sessionList = page.locator(".session-list");
     await expect(
-      conversationList
-        .locator(".conversation-list-title")
+      sessionList
+        .locator(".session-list-title")
         .filter({ hasText: "Run task host-check" }),
     ).toBeVisible();
-    await expect(conversationList.getByText("Host check")).toBeVisible();
-    await expect(page.getByTestId("conversation-session-intro")).toBeVisible();
+    await expect(sessionList.getByText("Host check")).toBeVisible();
+    await expect(page.getByTestId("session-session-intro")).toBeVisible();
   });
 });

@@ -246,17 +246,17 @@ theorem activeBlockValid_filterOrphanedFrom (l : List MessageRow) :
         activeBlockValidFrom_cons_ordinary row _ ∅ hk]
       exact ⟨rfl, ih ∅ huniq' (Finset.disjoint_empty_left _)⟩
 
-theorem sanitize_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
-    ProviderValid (sanitize msgs) := by
-  unfold sanitize dropUnpairedCalls dropOrphanedResults
+theorem sanitizeGlobal_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
+    ProviderValid (sanitizeGlobal msgs) := by
+  unfold sanitizeGlobal dropUnpairedCalls dropOrphanedResults
   constructor
   simpa using
     activeBlockValid_filterOrphanedFrom msgs ∅ huniq (Finset.disjoint_empty_left _)
 
-theorem sanitize_split_stable {old recent : List MessageRow}
+theorem sanitizeGlobal_split_stable {old recent : List MessageRow}
     (huniq : UniqueCallIds (old ++ recent)) :
-    ProviderValid (sanitize recent) :=
-  sanitize_sound (UniqueCallIds.of_append_right huniq)
+    ProviderValid (sanitizeGlobal recent) :=
+  sanitizeGlobal_sound (UniqueCallIds.of_append_right huniq)
 
 theorem dropOrphanedFrom_eq_self (l : List MessageRow) :
     ∀ pending, ActiveBlockValidFrom pending l → dropOrphanedFrom pending l = l := by
@@ -351,8 +351,8 @@ theorem filterCallsBy_eq_self (l : List MessageRow) :
 
 `filterCallsBy` credits an announcement from the global resolved set;
 `filterCallsByTurn` credits it only from its own turn. They coincide under
-`UniqueCallIds`, which every theorem here already assumes — so the per-turn
-model production implements is fenced by the same results. -/
+`UniqueCallIds`. Soundness transfers only on that fragment; structural helper
+lemmas with no uniqueness premise do not prove unconditional runtime alignment. -/
 
 /-- Every result closes a call owned by the nearest preceding announcement.
 This is `ActiveBlockValidFrom` without the `pending = ∅` obligations, i.e.
@@ -600,9 +600,9 @@ theorem filterCallsByTurn_eq_filterCallsBy (l : List MessageRow) :
 /-- **The alignment.** The per-turn sanitizer production implements and the
 global-resolution model the pairing theorems are stated over are the same
 function on unique-id transcripts. -/
-theorem sanitizeTurn_eq_sanitize {msgs : List MessageRow}
-    (huniq : UniqueCallIds msgs) : sanitizeTurn msgs = sanitize msgs := by
-  unfold sanitizeTurn sanitize dropUnpairedCallsTurn dropUnpairedCalls dropOrphanedResults
+theorem sanitizeTurn_eq_sanitizeGlobal {msgs : List MessageRow}
+    (huniq : UniqueCallIds msgs) : sanitizeTurn msgs = sanitizeGlobal msgs := by
+  unfold sanitizeTurn sanitizeGlobal dropUnpairedCallsTurn dropUnpairedCalls dropOrphanedResults
   exact filterCallsByTurn_eq_filterCallsBy (dropOrphanedFrom ∅ msgs)
     (resolvedIn (dropOrphanedFrom ∅ msgs)) ∅
     (resultsOwnedFrom_dropOrphanedFrom msgs ∅)
@@ -610,21 +610,85 @@ theorem sanitizeTurn_eq_sanitize {msgs : List MessageRow}
     (Finset.disjoint_empty_left _)
     (fun _ _ => Iff.rfl)
 
-theorem sanitize_fixpoint {msgs : List MessageRow} (hvalid : ProviderValid msgs)
-    (hne : NonemptyAnnouncements msgs) : sanitize msgs = msgs := by
-  unfold sanitize dropUnpairedCalls dropOrphanedResults
+theorem sanitizeGlobal_fixpoint {msgs : List MessageRow} (hvalid : ProviderValid msgs)
+    (hne : NonemptyAnnouncements msgs) : sanitizeGlobal msgs = msgs := by
+  unfold sanitizeGlobal dropUnpairedCalls dropOrphanedResults
   rw [dropOrphanedFrom_eq_self msgs ∅ hvalid.activeBlockValid]
   exact filterCallsBy_eq_self msgs (resolvedIn msgs) ∅ hvalid.activeBlockValid
     hne (Finset.Subset.refl _)
 
 theorem nonemptyAnnouncements_sanitize (msgs : List MessageRow) :
-    NonemptyAnnouncements (sanitize msgs) :=
+    NonemptyAnnouncements (sanitizeGlobal msgs) :=
   nonempty_filterCallsBy _ _
 
-theorem sanitize_idempotent {msgs : List MessageRow}
+theorem sanitizeGlobal_idempotent {msgs : List MessageRow}
     (huniq : UniqueCallIds msgs) :
-    sanitize (sanitize msgs) = sanitize msgs :=
-  sanitize_fixpoint (sanitize_sound huniq) (nonemptyAnnouncements_sanitize msgs)
+    sanitizeGlobal (sanitizeGlobal msgs) = sanitizeGlobal msgs :=
+  sanitizeGlobal_fixpoint (sanitizeGlobal_sound huniq) (nonemptyAnnouncements_sanitize msgs)
+
+/-! The per-turn row entry retains direct guarantees. Soundness still uses the
+unique-call-id bridge; this does not model repeated call occurrences. -/
+
+private theorem pending_subset_resolvedInTurn (l : List MessageRow) :
+    ∀ pending, ActiveBlockValidFrom pending l → pending ⊆ resolvedInTurn l := by
+  induction l with
+  | nil => intro pending h; simpa [ActiveBlockValidFrom] using h
+  | cons row rest ih =>
+    intro pending h c hc
+    cases hk : row.kind with
+    | toolResult callId key =>
+      have hs := (activeBlockValidFrom_cons_result row rest pending callId key hk).mp h
+      rw [resolvedInTurn_cons_result row rest callId key hk]
+      by_cases he : c = callId
+      · exact Finset.mem_insert.mpr (Or.inl he)
+      · exact Finset.mem_insert_of_mem
+          (ih (pending.erase callId) hs.2 (Finset.mem_erase.mpr ⟨he, hc⟩))
+    | assistantToolCalls ids =>
+      have hs := (activeBlockValidFrom_cons_assistant row rest pending ids hk).mp h
+      simp [hs.1] at hc
+    | ordinary =>
+      have hs := (activeBlockValidFrom_cons_ordinary row rest pending hk).mp h
+      simp [hs.1] at hc
+private theorem filterCallsByTurn_fixpoint (l : List MessageRow) :
+    ∀ pending, ActiveBlockValidFrom pending l → NonemptyAnnouncements l →
+      filterCallsByTurn l = l := by
+  induction l with
+  | nil => intro _ _ _; rfl
+  | cons row rest ih =>
+    intro pending h hn
+    cases hk : row.kind with
+    | assistantToolCalls ids =>
+      have hs := (activeBlockValidFrom_cons_assistant row rest pending ids hk).mp h
+      have hns := (nonemptyAnnouncements_cons_assistant row rest ids hk).mp hn
+      have hi : ids ∩ resolvedInTurn rest = ids :=
+        Finset.inter_eq_left.mpr (pending_subset_resolvedInTurn rest ids hs.2)
+      rw [filterCallsByTurn_cons_assistant row rest ids hk, hi, if_neg hns.1,
+        withKind_self row _ hk, ih ids hs.2 hns.2]
+    | toolResult callId key =>
+      have hs := (activeBlockValidFrom_cons_result row rest pending callId key hk).mp h
+      rw [filterCallsByTurn_cons_result row rest callId key hk]
+      congr 1
+      exact ih _ hs.2 (by simpa [NonemptyAnnouncements, hk] using hn)
+    | ordinary =>
+      have hs := (activeBlockValidFrom_cons_ordinary row rest pending hk).mp h
+      rw [filterCallsByTurn_cons_ordinary row rest hk]
+      congr 1
+      exact ih _ hs.2 (by simpa [NonemptyAnnouncements, hk] using hn)
+theorem sanitizeTurn_fixpoint {msgs : List MessageRow}
+    (hvalid : ProviderValid msgs) (hne : NonemptyAnnouncements msgs) :
+    sanitizeTurn msgs = msgs := by
+  unfold sanitizeTurn dropUnpairedCallsTurn dropOrphanedResults
+  rw [dropOrphanedFrom_eq_self msgs ∅ hvalid.activeBlockValid]
+  exact filterCallsByTurn_fixpoint msgs ∅ hvalid.activeBlockValid hne
+theorem sanitizeTurn_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
+    ProviderValid (sanitizeTurn msgs) := by
+  rw [sanitizeTurn_eq_sanitizeGlobal huniq]
+  exact sanitizeGlobal_sound huniq
+theorem sanitizeTurn_idempotent {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
+    sanitizeTurn (sanitizeTurn msgs) = sanitizeTurn msgs := by
+  apply sanitizeTurn_fixpoint (sanitizeTurn_sound huniq)
+  rw [sanitizeTurn_eq_sanitizeGlobal huniq]
+  exact nonemptyAnnouncements_sanitize msgs
 
 inductive ResultBlock : Finset ToolExecution.ToolCallId → List MessageRow → Prop
   | nil : ResultBlock ∅ []
@@ -656,40 +720,44 @@ theorem threaded_turn_fixpoint {row : MessageRow}
     {S : Finset ToolExecution.ToolCallId} {results : List MessageRow}
     (hrow : row.kind = .assistantToolCalls S) (hne : S ≠ ∅)
     (hresults : ResultBlock S results) :
-    ProviderValid (row :: results) ∧ sanitize (row :: results) = row :: results := by
+    ProviderValid (row :: results) ∧ sanitizeGlobal (row :: results) = row :: results := by
   have hvalid : ProviderValid (row :: results) := by
     constructor
     rw [ActiveBlockValid, activeBlockValidFrom_cons_assistant row results ∅ S hrow]
     exact ⟨rfl, hresults.activeBlockValid⟩
-  refine ⟨hvalid, sanitize_fixpoint hvalid ?_⟩
+  refine ⟨hvalid, sanitizeGlobal_fixpoint hvalid ?_⟩
   rw [nonemptyAnnouncements_cons_assistant row results S hrow]
   exact ⟨hne, hresults.nonemptyAnnouncements⟩
 
-theorem assemble_spec (skillCount summaryCount conversationLen : Nat) :
-    assemble skillCount summaryCount conversationLen =
-      Slot.preamble ::
+theorem assemble_spec (skillCount summaryCount conversationLen : Nat)
+    (instructions : Option String := none) :
+    assemble skillCount summaryCount conversationLen instructions =
+      Slot.preamble instructions ::
         ((List.range skillCount).map Slot.skillReminder ++
           ((if summaryCount = 0 then [] else [Slot.summaryReminder]) ++
             (List.range conversationLen).map Slot.conversation)) ++
         [Slot.prompt] := rfl
 
-theorem assemble_head (skillCount summaryCount conversationLen : Nat) :
-    (assemble skillCount summaryCount conversationLen).head? =
-      some Slot.preamble := rfl
+theorem assemble_head (skillCount summaryCount conversationLen : Nat)
+    (instructions : Option String := none) :
+    (assemble skillCount summaryCount conversationLen instructions).head? =
+      some (Slot.preamble instructions) := rfl
 
-theorem assemble_last (skillCount summaryCount conversationLen : Nat) :
-    (assemble skillCount summaryCount conversationLen).getLast? =
+theorem assemble_last (skillCount summaryCount conversationLen : Nat)
+    (instructions : Option String := none) :
+    (assemble skillCount summaryCount conversationLen instructions).getLast? =
       some Slot.prompt := by
-  rw [assemble_spec, ← List.cons_append, List.getLast?_concat]
+  rw [assemble_spec skillCount summaryCount conversationLen instructions,
+    ← List.cons_append, List.getLast?_concat]
 
 example :
-    sanitize
+    sanitizeGlobal
       [⟨0, 0, 0, .user, .toolResult 1 ⟨0, 0, 0⟩⟩,
         ⟨1, 0, 1, .assistant, .assistantToolCalls {1}⟩] = [] := by
   rfl
 
 example :
-    sanitize
+    sanitizeGlobal
       [⟨0, 0, 0, .assistant, .assistantToolCalls {1}⟩,
         ⟨1, 0, 1, .user, .ordinary⟩,
         ⟨2, 0, 2, .user, .toolResult 1 ⟨0, 0, 0⟩⟩] =

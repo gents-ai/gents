@@ -75,10 +75,12 @@ export function AgentConfigEditor({
     event.preventDefault();
     try {
       await onSaveAgentConfig({
-        agentDid: agent.agentDid,
-        displayName: editingDisplayName ? displayName : (agent.displayName ?? ""),
-        defaultBehaviorId,
-        enabled: agent.enabled ?? true,
+        document: {
+          agent_did: agent.agentDid,
+          display_name: editingDisplayName ? displayName : (agent.displayName ?? ""),
+          default_behavior_id: defaultBehaviorId ? defaultBehaviorId : null,
+          enabled: agent.enabled ?? true,
+        },
       });
       setEditingDisplayName(false);
       onSaved(agent.agentDid);

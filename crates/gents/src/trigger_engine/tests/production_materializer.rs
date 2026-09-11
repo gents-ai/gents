@@ -27,6 +27,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         goal_objective_template: Some("ship release".to_string()),
         goal_token_budget: Some(4_096),
         output_schema_ref: None,
+        hooks: Vec::new(),
     };
     let fire_key = "event:release-trigger:doc:release-42";
     let identity = crate::goal::task_goal_fire_identity(&agent_did, &task.task_id, fire_key);
@@ -219,6 +220,7 @@ async fn goal_task_identity_and_recovery_are_scoped_by_agent_did() {
         goal_objective_template: Some("shared objective".to_string()),
         goal_token_budget: None,
         output_schema_ref: None,
+        hooks: Vec::new(),
     };
     let fire_key = "shared-fire-key";
 
@@ -288,6 +290,7 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
         goal_objective_template: Some("objective".to_string()),
         goal_token_budget: None,
         output_schema_ref: None,
+        hooks: Vec::new(),
     };
     let fire_key = "foreign-collision-fire";
     let identity = crate::goal::task_goal_fire_identity(&agent_did, &task.task_id, fire_key);
@@ -362,239 +365,213 @@ async fn create_request(
     );
 }
 
-/// The AgentRequest lineage tuple is the durable at-most-once marker for a
-/// correlated group. Exercise the exact production GraphQL query against a
-/// terminal request so this test also proves that every lifecycle state is a
-/// marker, not only requests which remain active.
+/// All lifecycle states are durable markers, and the full delivery key keeps
+/// membership generations separate without adding a second persisted marker.
 #[tokio::test]
-async fn durable_group_marker_matches_all_four_lineage_discriminators() {
+async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
     let (node, materializer) = materializer_with_node().await;
-    let agent_did = "did:key:z-marker-owner";
-    let trigger_id = "review-\"verify";
+    let owner = "did:key:z-marker-owner";
+    let trigger = "review-\"verify";
     let correlation = "run-\"42";
+    let old = crate::trigger_engine::durable_fire_key("event-group", &["old-membership"]);
+    let next = crate::trigger_engine::durable_fire_key("event-group", &["new-membership"]);
     create_request(
-        node.as_ref(),
-        "marker-completed",
-        agent_did,
+        &node,
+        &old,
+        owner,
         "completed",
-        trigger_id,
+        trigger,
         TriggerKind::Event,
         correlation,
     )
     .await;
-
     assert!(materializer
-        .has_materialized_group_request(agent_did, trigger_id, TriggerKind::Event, correlation,)
+        .has_materialized_group_request(owner, trigger, &old)
+        .await
+        .unwrap());
+    assert!(
+        !materializer
+            .has_materialized_group_request(owner, trigger, &next)
+            .await
+            .unwrap(),
+        "same correlation in a different generation must remain eligible"
+    );
+    assert!(!materializer
+        .has_materialized_group_request("did:key:z-other", trigger, &old)
         .await
         .unwrap());
     assert!(!materializer
-        .has_materialized_group_request(
-            "did:key:z-other-owner",
-            trigger_id,
-            TriggerKind::Event,
-            correlation,
-        )
+        .has_materialized_group_request(owner, "other-trigger", &old)
         .await
         .unwrap());
+    let goal = crate::goal::task_goal_fire_identity(owner, "old-task-name", &next);
+    create_request(
+        &node,
+        &goal.request_id,
+        owner,
+        "completed",
+        trigger,
+        TriggerKind::Event,
+        correlation,
+    )
+    .await;
+    assert!(
+        materializer
+            .has_materialized_group_request(owner, trigger, &next)
+            .await
+            .unwrap(),
+        "goal task still marks the same delivery after task rename or goal-mode switch"
+    );
+    let later = crate::trigger_engine::durable_fire_key("event-group", &["third-membership"]);
     assert!(!materializer
-        .has_materialized_group_request(agent_did, "review-other", TriggerKind::Event, correlation,)
-        .await
-        .unwrap());
-    assert!(!materializer
-        .has_materialized_group_request(agent_did, trigger_id, TriggerKind::Schedule, correlation,)
-        .await
-        .unwrap());
-    assert!(!materializer
-        .has_materialized_group_request(agent_did, trigger_id, TriggerKind::Event, "run-other",)
+        .has_materialized_group_request(owner, trigger, &later)
         .await
         .unwrap());
 }
 
 #[tokio::test]
-async fn materializer_skips_workspace_bound_request_for_other_deployment() {
+async fn materializer_rejects_workspace_from_different_explicit_owner() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let snapshot =
-        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer =
-        ProductionMaterializer::new(node, snapshot_rx).with_local_deployment_id("deploy-replica");
-    let task = ResolvedTask {
-        task_id: "task-ws".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "patch".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
-    };
-    let context = serde_json::json!({
-        "version": 1,
-        "source_fields": {
-            "workspace_id": "ws-1",
-            "workspace_authority": "readWrite",
-            "workspace_owner_deployment_id": "deploy-owner"
-        }
-    })
-    .to_string();
+    ensure_runtime_schemas(&node).await.unwrap();
+    let behavior = integration_test_behavior("general");
+    insert_ready_workspace(
+        &node,
+        "ws-owner",
+        "did:key:z-correct-owner",
+        behavior.agent_did(),
+    )
+    .await;
+    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let context = writer_context("ws-owner", "did:key:z-wrong-owner");
     let error = materializer
         .materialize(
-            &task,
-            Some("trigger-ws"),
+            &workspace_writer_task(),
+            Some("trigger-owner"),
             TriggerKind::Event,
-            Some("trigger-ws-config-doc"),
-            Some("src-1"),
-            Some("corr-1"),
+            Some("trigger-owner-doc"),
+            Some("source"),
+            Some("corr"),
             Some(&context),
             "prompt",
             None,
             "test-fire",
         )
         .await
-        .expect_err("replica must not enqueue workspace-bound work");
+        .unwrap_err();
+    assert!(error.to_string().contains("not found"), "{error:#}");
     assert!(
-        error
-            .downcast_ref::<crate::trigger_engine::MaterializeSkip>()
-            .is_some(),
-        "{error}"
+        workspace_requests(&node, "ws-owner").await.is_empty(),
+        "wrong owner must reject before request publication"
     );
-    match crate::trigger_engine::fire_result_from_materialize(Err(error)) {
-        FireResult::Skipped { reason } => {
-            assert!(reason.contains("another deployment"), "{reason}");
-        }
-        other => panic!("expected Skipped, got {other:?}"),
-    }
 }
 
-/// Per-group Serial/LatestOnly gates include correlation; per-document gates
-/// deliberately omit it and remain trigger-wide. Prove both query shapes and
-/// the matching supersede mutation against persisted rows.
+/// Canonical per-document gates survive source-kind edits. Correlation is
+/// lineage here; only owner and logical Trigger ID define the concurrency scope.
 #[tokio::test]
-async fn active_gate_and_supersede_honor_optional_correlation_scope() {
+async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclusion() {
     let (node, materializer) = materializer_with_node().await;
-    let agent_did = "did:key:z-concurrency-owner";
-    let trigger_id = "review-verify";
-    for (request_id, correlation) in [("active-a", "run-a"), ("active-b", "run-b")] {
-        create_request(
-            node.as_ref(),
-            request_id,
-            agent_did,
-            "pending",
-            trigger_id,
-            TriggerKind::Event,
-            correlation,
-        )
-        .await;
-    }
-
-    assert!(materializer
-        .has_active_runtime_request_for_trigger(
-            agent_did,
-            trigger_id,
-            TriggerKind::Event,
-            Some("run-a"),
-            None,
-        )
-        .await
-        .unwrap());
-    assert!(!materializer
-        .has_active_runtime_request_for_trigger(
-            agent_did,
-            trigger_id,
-            TriggerKind::Event,
-            Some("run-a"),
-            Some("active-a"),
-        )
-        .await
-        .unwrap());
-    assert_eq!(
-        materializer
-            .supersede_active_runtime_requests_for_trigger(
-                agent_did,
-                trigger_id,
-                TriggerKind::Event,
-                Some("run-a"),
-                Some("active-a"),
-            )
-            .await
-            .unwrap(),
-        0,
-        "a retried durable fire must not supersede its own request"
-    );
-    assert!(!materializer
-        .has_active_runtime_request_for_trigger(
-            agent_did,
-            trigger_id,
-            TriggerKind::Event,
-            Some("run-missing"),
-            None,
-        )
-        .await
-        .unwrap());
+    let owner = "did:key:z-concurrency-owner";
+    let trigger = "review-verify";
+    create_request(
+        &node,
+        "old-schedule",
+        owner,
+        "pending",
+        trigger,
+        TriggerKind::Schedule,
+        "old-correlation",
+    )
+    .await;
     assert!(
         materializer
-            .has_active_runtime_request_for_trigger(
-                agent_did,
-                trigger_id,
-                TriggerKind::Event,
-                None,
-                None,
-            )
+            .has_active_runtime_request_for_trigger(owner, trigger, None)
             .await
             .unwrap(),
-        "omitting correlation must preserve trigger-wide per-document gating"
+        "changing Trigger.source to Event cannot forget a prior Schedule request"
     );
-
+    create_request(
+        &node,
+        "new-event",
+        owner,
+        "pending",
+        trigger,
+        TriggerKind::Event,
+        "new-correlation",
+    )
+    .await;
+    create_request(
+        &node,
+        "terminal",
+        owner,
+        "completed",
+        trigger,
+        TriggerKind::Event,
+        "terminal-correlation",
+    )
+    .await;
+    create_request(
+        &node,
+        "foreign-owner",
+        "other-owner",
+        "pending",
+        trigger,
+        TriggerKind::Event,
+        "new-correlation",
+    )
+    .await;
+    create_request(
+        &node,
+        "foreign-trigger",
+        owner,
+        "pending",
+        "other-trigger",
+        TriggerKind::Event,
+        "new-correlation",
+    )
+    .await;
+    assert!(materializer
+        .has_active_runtime_request_for_trigger(owner, trigger, Some("old-schedule"))
+        .await
+        .unwrap());
     assert_eq!(
         materializer
-            .supersede_active_runtime_requests_for_trigger(
-                agent_did,
-                trigger_id,
-                TriggerKind::Event,
-                Some("run-a"),
-                None,
-            )
+            .supersede_active_runtime_requests_for_trigger(owner, trigger, Some("old-schedule"))
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        !materializer
+            .has_active_runtime_request_for_trigger(owner, trigger, Some("old-schedule"))
+            .await
+            .unwrap(),
+        "self-retry exclusion must retain its own request and remove only the competing request"
+    );
+    assert!(materializer
+        .has_active_runtime_request_for_trigger(owner, trigger, None)
+        .await
+        .unwrap());
+    assert_eq!(
+        materializer
+            .supersede_active_runtime_requests_for_trigger(owner, trigger, None)
             .await
             .unwrap(),
         1
     );
     assert!(!materializer
-        .has_active_runtime_request_for_trigger(
-            agent_did,
-            trigger_id,
-            TriggerKind::Event,
-            Some("run-a"),
-            None,
-        )
+        .has_active_runtime_request_for_trigger(owner, trigger, None)
         .await
         .unwrap());
-    assert!(
-        materializer
-            .has_active_runtime_request_for_trigger(
-                agent_did,
-                trigger_id,
-                TriggerKind::Event,
-                Some("run-b"),
-                None,
-            )
-            .await
-            .unwrap(),
-        "correlated supersede must leave sibling groups active"
-    );
-    assert_eq!(
-        materializer
-            .supersede_active_runtime_requests_for_trigger(
-                agent_did,
-                trigger_id,
-                TriggerKind::Event,
-                None,
-                None,
-            )
-            .await
-            .unwrap(),
-        1,
-        "omitting correlation must supersede all remaining trigger-wide rows"
-    );
+    assert!(materializer
+        .has_active_runtime_request_for_trigger("other-owner", trigger, None)
+        .await
+        .unwrap());
+    assert!(materializer
+        .has_active_runtime_request_for_trigger(owner, "other-trigger", None)
+        .await
+        .unwrap());
 }
 
 fn workspace_writer_task() -> ResolvedTask {
@@ -606,25 +583,12 @@ fn workspace_writer_task() -> ResolvedTask {
         goal_objective_template: None,
         goal_token_budget: None,
         output_schema_ref: None,
+        hooks: Vec::new(),
     }
 }
 
-fn writer_context(workspace_id: &str, owner_field: &str, owner: &str) -> String {
-    let mut source_fields = serde_json::Map::new();
-    source_fields.insert(
-        "workspace_id".into(),
-        serde_json::Value::String(workspace_id.into()),
-    );
-    source_fields.insert(
-        "workspace_authority".into(),
-        serde_json::Value::String("readWrite".into()),
-    );
-    source_fields.insert(owner_field.into(), serde_json::Value::String(owner.into()));
-    serde_json::json!({
-        "version": 1,
-        "source_fields": source_fields
-    })
-    .to_string()
+fn writer_context(workspace_id: &str, owner: &str) -> String {
+    serde_json::json!({"version":1,"source_fields":{"workspace_id":workspace_id,"workspace_owner_agent_did":owner,"workspace_authority":"readWrite"}}).to_string()
 }
 
 async fn insert_ready_workspace(
@@ -642,9 +606,9 @@ async fn insert_ready_workspace(
             repository_id: "repo-1".into(),
             base_sha: "abc".into(),
             branch: "topic".into(),
-            creation_policy: "alwaysCreate".into(),
+            creation_policy: "git_worktree_diff".into(),
             adapter: "git_worktree".into(),
-            owner_deployment_id: owner.into(),
+            owner_agent_did: owner.into(),
             writer_principal: writer_principal.into(),
             integrator_principal: "did:key:integrator".into(),
             instruction_manifest: "{}".into(),
@@ -670,8 +634,11 @@ async fn workspace_requests(
         r#"{{
             AgentRequest(filter: {{ workspace_id: {{ _eq: "{id}" }} }}) {{
                 request_id
+                agent_did
                 lifecycle_state
-                workspace_owner_deployment_id
+                workspace_id
+                workspace_seal_hash
+                workspace_owner_agent_did
                 workspace_authority
             }}
         }}"#,
@@ -693,62 +660,64 @@ async fn workspace_requests(
 }
 
 #[tokio::test]
-async fn materializer_skips_callback_result_owner_deployment_id_on_replica() {
+async fn materializer_rejects_missing_workspace_owner_without_actor_fallback() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let snapshot =
-        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer =
-        ProductionMaterializer::new(node, snapshot_rx).with_local_deployment_id("deploy-replica");
-    let context = writer_context("ws-1", "owner_deployment_id", "deploy-owner");
+    ensure_runtime_schemas(&node).await.unwrap();
+    let behavior = integration_test_behavior("general");
+    // Even an actor-owned workspace cannot repair an incomplete source tuple.
+    insert_ready_workspace(
+        &node,
+        "ws-incomplete",
+        behavior.agent_did(),
+        behavior.agent_did(),
+    )
+    .await;
+    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let context=serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-incomplete","workspace_authority":"readWrite"}}).to_string();
     let error = materializer
         .materialize(
             &workspace_writer_task(),
-            Some("trigger-ws"),
+            Some("trigger-incomplete"),
             TriggerKind::Event,
-            Some("trigger-ws-config-doc"),
-            Some("src-1"),
-            Some("corr-1"),
+            Some("trigger-incomplete-doc"),
+            Some("source"),
+            Some("corr"),
             Some(&context),
             "prompt",
             None,
             "test-fire",
         )
         .await
-        .expect_err("replica must skip CallbackResult owner_deployment_id");
+        .unwrap_err();
     assert!(
         error
-            .downcast_ref::<crate::trigger_engine::MaterializeSkip>()
-            .is_some(),
-        "{error}"
+            .to_string()
+            .contains("owner principal and authority together"),
+        "{error:#}"
     );
+    assert!(workspace_requests(&node, "ws-incomplete").await.is_empty());
 }
 
 #[tokio::test]
-async fn materializer_stamps_owner_when_trigger_context_omits_it() {
+async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_behavior("general");
+    let executor = behavior.agent_did().to_owned();
+    assert_ne!(executor, "did:key:z-workspace-owner");
     insert_ready_workspace(
         node.as_ref(),
         "ws-stamp",
-        "deploy-owner",
+        "did:key:z-workspace-owner",
         behavior.agent_did(),
     )
     .await;
     let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx)
-        .with_local_deployment_id("deploy-owner");
-    let context = serde_json::json!({
-        "version": 1,
-        "source_fields": {
-            "workspace_id": "ws-stamp",
-            "workspace_authority": "readWrite"
-        }
-    })
-    .to_string();
+    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let context = writer_context("ws-stamp", "did:key:z-workspace-owner");
     let request_id = materializer
         .materialize(
             &workspace_writer_task(),
@@ -763,13 +732,16 @@ async fn materializer_stamps_owner_when_trigger_context_omits_it() {
             "test-fire",
         )
         .await
-        .expect("owner host stamps IsolatedWorkspace owner");
+        .expect("explicit workspace owner survives request publication");
     let rows = workspace_requests(node.as_ref(), "ws-stamp").await;
     assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["agent_did"].as_str(), Some(executor.as_str()));
+    assert_eq!(rows[0]["workspace_id"].as_str(), Some("ws-stamp"));
+    assert_eq!(rows[0]["workspace_authority"].as_str(), Some("readWrite"));
     assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
     assert_eq!(
-        rows[0]["workspace_owner_deployment_id"].as_str(),
-        Some("deploy-owner")
+        rows[0]["workspace_owner_agent_did"].as_str(),
+        Some("did:key:z-workspace-owner")
     );
 }
 
@@ -781,19 +753,14 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     insert_ready_workspace(
         node.as_ref(),
         "ws-goal-retry",
-        "deploy-owner",
+        "did:key:z-workspace-owner",
         behavior.agent_did(),
     )
     .await;
     let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx)
-        .with_local_deployment_id("deploy-owner");
-    let context = writer_context(
-        "ws-goal-retry",
-        "workspace_owner_deployment_id",
-        "deploy-owner",
-    );
+    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let context = writer_context("ws-goal-retry", "did:key:z-workspace-owner");
     let mut task = workspace_writer_task();
     task.goal_objective_template = Some("finish workspace change".to_string());
     task.goal_token_budget = Some(2_048);
@@ -833,6 +800,10 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     assert_eq!(retry, first);
     let rows = workspace_requests(node.as_ref(), "ws-goal-retry").await;
     assert_eq!(rows.len(), 1, "retry must reuse the staged request");
+    assert_eq!(
+        rows[0]["workspace_owner_agent_did"].as_str(),
+        Some("did:key:z-workspace-owner")
+    );
     assert_eq!(rows[0]["lifecycle_state"].as_str(), Some("pending"));
 }
 
@@ -841,12 +812,17 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_behavior("general");
-    insert_ready_workspace(node.as_ref(), "ws-rw", "deploy-owner", behavior.agent_did()).await;
+    insert_ready_workspace(
+        node.as_ref(),
+        "ws-rw",
+        "did:key:z-workspace-owner",
+        behavior.agent_did(),
+    )
+    .await;
     let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx)
-        .with_local_deployment_id("deploy-owner");
-    let context = writer_context("ws-rw", "workspace_owner_deployment_id", "deploy-owner");
+    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let context = writer_context("ws-rw", "did:key:z-workspace-owner");
     let first = materializer
         .materialize(
             &workspace_writer_task(),
@@ -933,13 +909,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
         }
         assert_eq!(
             materializer
-                .supersede_active_runtime_requests_for_trigger(
-                    agent_did,
-                    "latest",
-                    TriggerKind::Event,
-                    Some(state),
-                    None,
-                )
+                .supersede_active_runtime_requests_for_trigger(agent_did, "latest", None)
                 .await
                 .unwrap(),
             1
@@ -960,13 +930,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
         }
         assert_eq!(
             materializer
-                .supersede_active_runtime_requests_for_trigger(
-                    agent_did,
-                    "latest",
-                    TriggerKind::Event,
-                    Some(state),
-                    None,
-                )
+                .supersede_active_runtime_requests_for_trigger(agent_did, "latest", None)
                 .await
                 .unwrap(),
             0

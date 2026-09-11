@@ -3,8 +3,6 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents_protocol::client_protocol::ClientHeadProjection;
-use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use super::host_runtime::thread_git_info;
@@ -30,12 +28,10 @@ pub(super) use mutations::{
     set_codex_thread_memory_mode, set_codex_thread_name, set_codex_thread_settings,
 };
 
-use storage::{
-    list_scoped_request_session_ids, list_scoped_sessions, load_conversation, load_scoped_session,
-};
+use storage::{list_scoped_sessions, load_thread_state};
 pub(super) use usage::{
-    latest_inference_usage_observation, latest_requests_token_usage, session_token_usage,
-    thread_record_token_usage, thread_token_usage, TokenTotals,
+    latest_inference_usage_observation, submitted_token_usage, thread_record_token_usage,
+    thread_token_usage, TokenTotals,
 };
 
 #[allow(dead_code)]
@@ -50,7 +46,8 @@ pub(super) struct CodexThreadRecord {
     pub(super) settings_json: String,
     pub(super) git_info: Option<Value>,
     pub(super) projection_started: Option<String>,
-    pub(super) conversation: Option<ConversationRow>,
+    pub(super) session: Option<gents_protocol::session::AgentSession>,
+    pub(super) latest_request: Option<gents_protocol::graphql::GraphqlTurnState>,
     pub(super) subagent: Option<LinkedSubagentThread>,
 }
 
@@ -62,40 +59,9 @@ impl CodexThreadRecord {
     pub(super) fn projection_behavior_id<'a>(&'a self, root_behavior_id: &'a str) -> &'a str {
         self.subagent
             .as_ref()
-            .map(|link| link.behavior_id.trim())
-            .filter(|behavior_id| !behavior_id.is_empty())
+            .map(|link| link.behavior_id.as_str())
             .unwrap_or(root_behavior_id)
     }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default, Deserialize)]
-pub(super) struct ConversationRow {
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    pub(super) title: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    pub(super) preview_text: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    pub(super) status: String,
-    #[serde(default)]
-    pub(super) created_at: Option<String>,
-    #[serde(default)]
-    pub(super) updated_at: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    pub(super) latest_request_id: String,
-    #[serde(skip)]
-    pub(super) latest_request_projection: Option<ClientHeadProjection>,
-    #[serde(default)]
-    pub(super) latest_request_failure_reason: Option<String>,
-    #[serde(default)]
-    pub(super) forked_from_session_id: Option<String>,
-}
-
-fn deserialize_nullable_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 pub(super) async fn create_codex_thread(
@@ -136,22 +102,40 @@ pub(super) async fn load_codex_thread(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Option<CodexThreadRecord>> {
-    let session = load_scoped_session(state, thread_id).await?;
-    if let Some(conversation) = load_conversation(state, thread_id).await? {
+    // A wire thread ID has no principal/requester component. Validate child
+    // identities before choosing a root record with the same label.
+    let links = load_authorized_subagent_threads(state).await?;
+    if state.is_thread_created(thread_id).await {
+        for link in links.iter().filter(|link| link.session_id == thread_id) {
+            anyhow::ensure!(
+                link.agent_did == state.agent_did.as_ref()
+                    && link.requester_did.as_deref() == Some(state.local_requester_did()),
+                "ambiguous Codex ephemeral/child thread label across canonical scopes: {thread_id}"
+            );
+        }
+    }
+    if let Some((session, head)) = load_thread_state(state, thread_id).await? {
+        for link in links.iter().filter(|link| link.session_id == thread_id) {
+            anyhow::ensure!(
+                link.agent_did == session.agent_did && link.requester_did == session.requester_did,
+                "ambiguous Codex root/child thread label across canonical scopes: {thread_id}"
+            );
+        }
+        return Ok(Some(
+            assemble_record(state, thread_id, Some(session), head).await?,
+        ));
+    }
+    if state.is_thread_created(thread_id).await {
         return Ok(Some(
             assemble_record(
                 state,
                 thread_id,
-                session.and_then(|session| session.started),
-                Some(conversation),
+                None,
+                storage::load_local_head(state, thread_id).await?,
             )
             .await?,
         ));
     }
-    if state.is_thread_created(thread_id).await {
-        return Ok(Some(assemble_record(state, thread_id, None, None).await?));
-    }
-    let links = load_authorized_subagent_threads(state).await?;
     let Some(link) = links.into_iter().find(|link| link.session_id == thread_id) else {
         return Ok(None);
     };
@@ -178,33 +162,20 @@ async fn list_codex_threads_by_archived_with_git_cache(
     git_info_cache: &mut ThreadGitInfoCache,
 ) -> Result<Vec<CodexThreadRecord>> {
     let sessions = list_scoped_sessions(state).await?;
-    let request_session_ids = list_scoped_request_session_ids(state).await?;
-    let mut candidates = HashMap::with_capacity(sessions.len() + request_session_ids.len());
+    let mut seen = HashSet::with_capacity(sessions.len());
+    let mut records = Vec::with_capacity(sessions.len());
     for session in sessions {
-        candidates.insert(session.session_id, session.started);
-    }
-    for session_id in request_session_ids {
-        candidates.entry(session_id).or_insert(None);
-    }
-    let mut seen = HashSet::with_capacity(candidates.len());
-    let mut records = Vec::with_capacity(candidates.len());
-    for (session_id, started) in candidates {
+        let session_id = session.session_id;
         if state.is_thread_archived(&session_id).await != archived {
             continue;
         }
-        let Some(conversation) = load_conversation(state, &session_id).await? else {
+        let Some((session, head)) = load_thread_state(state, &session_id).await? else {
             continue;
         };
         seen.insert(session_id.clone());
         records.push(
-            assemble_record_with_git_cache(
-                state,
-                &session_id,
-                started,
-                Some(conversation),
-                git_info_cache,
-            )
-            .await?,
+            assemble_record_with_git_cache(state, &session_id, Some(session), head, git_info_cache)
+                .await?,
         );
     }
     for session_id in state.created_thread_ids().await {
@@ -212,7 +183,14 @@ async fn list_codex_threads_by_archived_with_git_cache(
             continue;
         }
         records.push(
-            assemble_record_with_git_cache(state, &session_id, None, None, git_info_cache).await?,
+            assemble_record_with_git_cache(
+                state,
+                &session_id,
+                None,
+                storage::load_local_head(state, &session_id).await?,
+                git_info_cache,
+            )
+            .await?,
         );
     }
     Ok(records)
@@ -246,6 +224,16 @@ pub(super) async fn list_codex_threads_for_sources(
     let root_workspaces = index_root_workspaces(active_roots.iter().chain(&archived_roots));
     let root_ids = root_workspaces.keys().cloned().collect::<Vec<_>>();
     let links = load_authorized_subagent_threads_for_root_ids(state, &root_ids).await?;
+    for link in &links {
+        if root_workspaces.contains_key(&link.session_id) {
+            anyhow::ensure!(
+                link.agent_did == state.agent_did.as_ref()
+                    && link.requester_did.as_deref() == Some(state.local_requester_did()),
+                "ambiguous Codex root/child thread label across canonical scopes: {}",
+                link.session_id
+            );
+        }
+    }
     let mut seen = HashSet::<String>::new();
     let mut records = if include_cli {
         active_roots
@@ -253,6 +241,7 @@ pub(super) async fn list_codex_threads_for_sources(
         Vec::new()
     };
     records.reserve(links.len());
+    seen.extend(records.iter().map(|record| record.session_id.clone()));
     for link in links {
         if seen.insert(link.session_id.clone()) {
             let Some(workspace) = root_workspace_for_link(&root_workspaces, &link) else {
@@ -294,15 +283,15 @@ pub(super) async fn store_forked_codex_thread(
 async fn assemble_record(
     state: &ShimState,
     session_id: &str,
-    started: Option<String>,
-    conversation: Option<ConversationRow>,
+    session: Option<gents_protocol::session::AgentSession>,
+    latest_request: Option<gents_protocol::graphql::GraphqlTurnState>,
 ) -> Result<CodexThreadRecord> {
     let mut git_info_cache = ThreadGitInfoCache::default();
     assemble_record_with_git_cache(
         state,
         session_id,
-        started,
-        conversation,
+        session,
+        latest_request,
         &mut git_info_cache,
     )
     .await
@@ -311,8 +300,8 @@ async fn assemble_record(
 async fn assemble_record_with_git_cache(
     state: &ShimState,
     session_id: &str,
-    started: Option<String>,
-    conversation: Option<ConversationRow>,
+    session: Option<gents_protocol::session::AgentSession>,
+    latest_request: Option<gents_protocol::graphql::GraphqlTurnState>,
     git_info_cache: &mut ThreadGitInfoCache,
 ) -> Result<CodexThreadRecord> {
     let cwd = storage::derive_thread_cwd(state, session_id).await?;
@@ -327,8 +316,9 @@ async fn assemble_record_with_git_cache(
         name: state.thread_name(session_id).await,
         settings_json: state.thread_settings(session_id).await,
         git_info,
-        projection_started: started,
-        conversation,
+        projection_started: state.thread_created_at(session_id).await,
+        session,
+        latest_request,
         subagent: None,
     })
 }
@@ -362,6 +352,39 @@ async fn assemble_subagent_record_parts(
     cwd: PathBuf,
     git_info: Option<Value>,
 ) -> Result<CodexThreadRecord> {
+    let session = gents::config_client::ConfigAccess::transact_local(
+        &state.node,
+        None,
+        "codex.subagent.session",
+        |txn| {
+            let owner = &link.agent_did;
+            let id = &link.session_id;
+            let requester = link.requester_did.as_deref();
+            Box::pin(async move {
+                Ok(
+                    gents::session::load_agent_session_row_in_txn(txn, owner, id, requester)
+                        .await?
+                        .map(|row| row.session),
+                )
+            })
+        },
+    )
+    .await?;
+    if let Some(session) = &session {
+        anyhow::ensure!(
+            session.behavior_id == link.behavior_id,
+            "child session binding differs from its authorized request"
+        );
+    } else {
+        // An admitted child request can be visible before its runtime session is created.
+        // Its actual request timestamp is the only creation fact available then.
+        chrono::DateTime::parse_from_rfc3339(
+            link.created_at
+                .as_deref()
+                .context("child request has no creation timestamp")?,
+        )
+        .context("child request has an invalid creation timestamp")?;
+    }
     state.set_thread_cwd(&link.session_id, cwd.clone()).await;
     Ok(CodexThreadRecord {
         session_id: link.session_id.clone(),
@@ -369,11 +392,16 @@ async fn assemble_subagent_record_parts(
         archived: false,
         loaded: state.is_thread_loaded(&link.session_id).await,
         memory_mode: "disabled".to_string(),
-        name: link.nickname.clone(),
+        name: session
+            .as_ref()
+            .and_then(|session| session.title.as_ref())
+            .map(|title| title.text.clone())
+            .unwrap_or_else(|| link.nickname.clone()),
         settings_json: String::new(),
         git_info,
         projection_started: link.created_at.clone(),
-        conversation: None,
+        session,
+        latest_request: None,
         subagent: Some(link),
     })
 }
@@ -484,7 +512,8 @@ mod tests {
             settings_json: String::new(),
             git_info: Some(json!({"sha": "abc", "branch": "main"})),
             projection_started: None,
-            conversation: None,
+            session: None,
+            latest_request: None,
             subagent: None,
         };
         let workspaces = index_root_workspaces([&root]);
@@ -492,6 +521,12 @@ mod tests {
 
         for index in 0..128 {
             let link = LinkedSubagentThread {
+                parent_request_doc_id: "test-parent-doc".into(),
+                parent_agent_did: "did:parent".into(),
+                parent_requester_did: None,
+                request_doc_id: "test-request-doc".into(),
+                latest_request_doc_id: "test-request-doc".into(),
+                requester_did: Some("did:parent".into()),
                 request_id: format!("request-{index}"),
                 latest_request_id: format!("request-{index}"),
                 latest_request_content: String::new(),
@@ -519,5 +554,62 @@ mod tests {
             assert!(std::ptr::eq(workspace, expected));
         }
         assert_eq!(workspaces.len(), 1);
+    }
+    #[test]
+    fn projection_behavior_id_preserves_exact_child_binding() {
+        let mut record = CodexThreadRecord {
+            session_id: "root-session".to_string(),
+            cwd: PathBuf::from("/workspace/root"),
+            archived: false,
+            loaded: true,
+            memory_mode: "disabled".to_string(),
+            name: String::new(),
+            settings_json: String::new(),
+            git_info: Some(json!({"sha": "abc", "branch": "main"})),
+            projection_started: None,
+            session: None,
+            latest_request: None,
+            subagent: None,
+        };
+        assert_eq!(
+            record.projection_behavior_id("root-behavior"),
+            "root-behavior"
+        );
+        let link = LinkedSubagentThread {
+            parent_request_doc_id: "test-parent-doc".into(),
+            parent_agent_did: "did:parent".into(),
+            parent_requester_did: None,
+            request_doc_id: "test-request-doc".into(),
+            latest_request_doc_id: "test-request-doc".into(),
+            requester_did: Some("did:parent".into()),
+            request_id: "request-0".to_string(),
+            latest_request_id: "request-0".to_string(),
+            latest_request_content: String::new(),
+            latest_request_created_at: None,
+            session_id: "child-0".to_string(),
+            parent_request_id: "parent-request".to_string(),
+            parent_tool_call_id: "spawn-0".to_string(),
+            parent_session_id: "root-session".to_string(),
+            root_session_id: "root-session".to_string(),
+            depth: 1,
+            agent_did: "did:test:child".to_string(),
+            behavior_id: "child-behavior".to_string(),
+            model: None,
+            nickname: "child-0".to_string(),
+            client_projection: gents_protocol::client_protocol::project_persisted_attempt(
+                "processing",
+                false,
+                None,
+            ),
+            failure_reason: None,
+            created_at: None,
+        };
+        record.subagent = Some(link);
+        assert_eq!(
+            record.projection_behavior_id("root-behavior"),
+            "child-behavior"
+        );
+        record.subagent.as_mut().unwrap().behavior_id = "  ".to_string();
+        assert_eq!(record.projection_behavior_id("root-behavior"), "  ");
     }
 }

@@ -179,18 +179,15 @@ pub struct AgentPrincipalView {
 #[serde(rename_all = "camelCase")]
 pub struct BehaviorView {
     pub behavior_id: String,
+    pub agent_did: String,
     pub display_name: String,
-    pub system_prompt: Option<String>,
-    pub backend_id: Option<String>,
-    pub model_name: Option<String>,
-    pub tool_selection_id: Option<String>,
+    pub description: Option<String>,
+    pub context_id: Option<String>,
     pub inference_profile_id: Option<String>,
-    pub compaction_strategy: Option<String>,
-    pub compaction_threshold: Option<f64>,
     pub enabled: bool,
     pub is_default: bool,
-    pub skill_refs: Vec<String>,
-    pub skill_excludes: Vec<String>,
+    pub tags: Vec<String>,
+    pub created_at: Option<String>,
 }
 
 /// Resolved, presentation-safe description of a configured behavior environment.
@@ -225,6 +222,9 @@ pub struct InferenceBackendView {
     pub provider_kind: Option<String>,
     pub openai_wire_api: Option<String>,
     pub endpoint: Option<String>,
+    pub auth_kind: Option<String>,
+    pub connect_timeout_secs: Option<i64>,
+    pub discovery_timeout_secs: Option<i64>,
     pub api_key_configured: bool,
     pub api_key_env_var: Option<String>,
     pub max_concurrent: Option<i64>,
@@ -234,74 +234,14 @@ pub struct InferenceBackendView {
     pub probe_status: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct InferenceProfileView {
-    pub profile_id: String,
-    pub display_name: Option<String>,
-    pub context_window: Option<i64>,
-    pub max_output_tokens: Option<i64>,
-    pub max_turns: Option<i64>,
-    pub temperature: Option<f64>,
-    pub reasoning_effort: Option<String>,
-    pub stream_batch_ms: Option<i64>,
-    pub stream_liveness_timeout_secs: Option<i64>,
-    pub deadline_duration_secs: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolSelectionView {
-    pub selection_id: String,
-    pub agent_did: Option<String>,
-    pub display_name: Option<String>,
-    pub enable_file_tools: Option<bool>,
-    pub file_tools_mode: Option<String>,
-    pub file_tool_root: Option<String>,
-    pub enable_bash: Option<bool>,
-    pub bash_mode: Option<String>,
-    pub command_execution_policy: Option<String>,
-    pub command_allowed_argv_prefixes: Vec<String>,
-    pub command_forbidden_argv_prefixes: Vec<String>,
-    pub command_network_mode: Option<String>,
-    pub cli_tool_names: Vec<String>,
-    pub enable_meta_tools: Option<bool>,
-    pub enable_goal_tools: Option<bool>,
-    pub enable_goal_creation: Option<bool>,
-    pub allowed_mcp_service_ids: Vec<String>,
-    pub required_mcp_service_ids: Vec<String>,
-    pub backgroundable_tool_names: Vec<String>,
-    pub subagent_targets: Vec<String>,
-    pub subagent_spawn_enabled: Option<bool>,
-    pub subagent_steering_enabled: Option<bool>,
-    pub subagent_background_enabled: Option<bool>,
-    pub subagent_allow_cross_deployment: Option<bool>,
-    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
-    pub enable_memory: Option<bool>,
-    pub enable_session_history_tool: Option<bool>,
-    pub enable_context_budget: Option<bool>,
-    pub enable_defra_query: Option<bool>,
-    pub defra_query_collections: Vec<String>,
-    pub write_tools: Vec<String>,
-    pub tool_policy_version: Option<String>,
-    pub subagent_default_await_mode: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolServiceRegistryView {
-    pub service_id: String,
-    pub display_name: Option<String>,
-    pub description: Option<String>,
-    pub hostname: Option<String>,
-    pub tailscale_ip: Option<String>,
-    pub lan_ip: Option<String>,
-    pub mcp_port: Option<i64>,
-    pub mcp_path: Option<String>,
-    pub status: Option<String>,
-    pub version: Option<String>,
-    pub updated_at: Option<String>,
-}
+// Configurations without credentials use their canonical serialized documents.
+// Derived presentation belongs to BehaviorEnvironmentView, not another config shape.
+pub use gents::document_config::{
+    AgentBehavior as AgentBehaviorDocument, AgentContext, AgentPrincipal, ChainKeyBindingDocument,
+    CompactionConfig, DatastoreToolSurfaceDocument, EventSource, InferenceExecution,
+    InferenceProfile, InferenceSampling, Schedule, SubagentTargetDocument, ToolServiceRegistry,
+    Tools, Trigger,
+};
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -313,8 +253,10 @@ pub struct TaskView {
     pub prompt_template: Option<String>,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
+    pub hooks: Vec<gents::document_config::TaskHook>,
     pub enabled: Option<bool>,
     pub output_schema_ref: Option<String>,
+    pub tags: Vec<String>,
     pub recent_runs: TaskRecentRunsView,
     pub run_history: Vec<TaskRunSummaryView>,
 }
@@ -327,13 +269,16 @@ pub struct TaskRecentRunsView {
     pub last_status: Option<String>,
     pub last_error: Option<String>,
     pub schedule_count: usize,
-    pub event_trigger_count: usize,
+    pub event_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRunSummaryView {
     pub request_id: String,
+    pub request_doc_id: Option<String>,
+    pub agent_did: String,
+    pub requester_did: Option<String>,
     pub session_id: Option<String>,
     pub behavior_id: Option<String>,
     pub lifecycle_state: Option<String>,
@@ -348,7 +293,6 @@ pub struct TaskRunSummaryView {
 pub struct SkillView {
     pub skill_id: String,
     pub agent_did: Option<String>,
-    pub scope: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
     pub instructions: Option<String>,
@@ -358,34 +302,13 @@ pub struct SkillView {
     pub created_at: Option<String>,
 }
 
+/// Authored trigger and its observed delivery state share one read-only envelope.
+/// Reusable schedules and event sources contain no execution counters.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ScheduleView {
-    pub schedule_id: String,
-    pub task_id: Option<String>,
-    pub interval_secs: Option<i64>,
-    pub cron: Option<String>,
-    pub timezone: Option<String>,
-    pub missed_run_policy: Option<String>,
-    pub enabled: Option<bool>,
-    pub concurrency: Option<String>,
+pub struct TriggerView {
+    pub config: Trigger,
     pub next_run_at: Option<String>,
-    pub last_attempt_at: Option<String>,
-    pub last_status: Option<String>,
-    pub last_error: Option<String>,
-    pub fire_count: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct EventTriggerView {
-    pub trigger_id: String,
-    pub task_id: Option<String>,
-    pub source_collection: Option<String>,
-    pub event_kind: Option<String>,
-    pub filter: Option<String>,
-    pub enabled: Option<bool>,
-    pub concurrency: Option<String>,
     pub last_attempt_at: Option<String>,
     pub last_fired_source_doc_id: Option<String>,
     pub last_status: Option<String>,
@@ -395,8 +318,14 @@ pub struct EventTriggerView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ConversationSummary {
+pub struct SessionSummary {
     pub session_id: String,
+    pub agent_did: String,
+    pub requester_did: Option<String>,
+    pub latest_request_doc_id: Option<String>,
+    pub closed_at: Option<String>,
+    pub tags: Vec<String>,
+    pub provenance: Option<gents_protocol::session::SessionProvenance>,
     pub title: Option<String>,
     pub preview_text: Option<String>,
     pub status: Option<String>,
@@ -506,19 +435,29 @@ pub struct DeploymentView {
     pub pairing: Vec<PairingCollectionStatusView>,
     pub last_error: Option<String>,
     pub agent_principal: AgentPrincipalView,
+    pub principal_config: Option<AgentPrincipal>,
+    pub behavior_configs: Vec<AgentBehaviorDocument>,
     pub runtime: Option<RuntimeView>,
     pub behavior_readiness: BehaviorReadinessView,
     pub behaviors: Vec<BehaviorView>,
     pub behavior_environments: Vec<BehaviorEnvironmentView>,
     pub inference_backends: Vec<InferenceBackendView>,
-    pub inference_profiles: Vec<InferenceProfileView>,
-    pub tool_selections: Vec<ToolSelectionView>,
-    pub tool_service_registries: Vec<ToolServiceRegistryView>,
+    pub inference_profiles: Vec<InferenceProfile>,
+    pub inference_sampling: Vec<InferenceSampling>,
+    pub inference_execution: Vec<InferenceExecution>,
+    pub contexts: Vec<AgentContext>,
+    pub compactions: Vec<CompactionConfig>,
+    pub tools: Vec<Tools>,
+    pub tool_service_registries: Vec<ToolServiceRegistry>,
+    pub subagent_targets: Vec<SubagentTargetDocument>,
+    pub datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument>,
+    pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
     pub skills: Vec<SkillView>,
     pub tasks: Vec<TaskView>,
-    pub schedules: Vec<ScheduleView>,
-    pub event_triggers: Vec<EventTriggerView>,
-    pub conversations: Vec<ConversationSummary>,
+    pub schedules: Vec<Schedule>,
+    pub event_sources: Vec<EventSource>,
+    pub triggers: Vec<TriggerView>,
+    pub sessions: Vec<SessionSummary>,
     pub mailbox_items: Vec<MailboxItemView>,
 }
 

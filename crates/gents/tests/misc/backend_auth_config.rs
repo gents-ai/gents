@@ -40,19 +40,6 @@ impl Drop for TestEnvGuard {
 }
 
 #[test]
-fn behavior_config_prefers_raw_backend_api_key() {
-    let _env_guard = ENV_VAR_LOCK.blocking_lock();
-    let mut behavior = test_behavior("behavior-raw", "backend-raw", Some("IGNORED_ENV_KEY"));
-    behavior.backend_api_key = Some("raw-key".to_string());
-
-    let mut env = TestEnvGuard::new(&["IGNORED_ENV_KEY"]);
-    env.set("IGNORED_ENV_KEY", "env-key");
-    let resolved = behavior.resolve_backend_api_key().expect("resolve api key");
-
-    assert_eq!(resolved.as_deref(), Some("raw-key"));
-}
-
-#[test]
 fn behavior_config_prefers_backend_specific_api_key_env_var() {
     let _env_guard = ENV_VAR_LOCK.blocking_lock();
     let behavior = test_behavior("behavior-a", "backend-a", Some("GENTS_TEST_BACKEND_KEY"));

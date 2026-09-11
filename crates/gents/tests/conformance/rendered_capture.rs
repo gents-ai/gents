@@ -30,23 +30,34 @@
 //!
 //! Two scope notes, both declared as emitted boundaries rather than assumed:
 //!
-//! * `boundary.rendered-capture.assembled-request-artifact` — **closed in
-//!   production, still open in Lean.** The model's `CanonicalRequest` is
-//!   opaque, so it is agnostic about which artifact the implementation binds to
-//!   the key; the earlier note recorded that production bound the *assembled*
-//!   request, which the ChatGPT-Codex and xAI Grok transports then rewrote.
-//!   Production now captures at the transport seam
-//!   (`rendered_request::transport::RenderedRequestCapturingHttpClient`), so the
-//!   bound artifact is the body the provider received. The order property is
-//!   unchanged and strictly better placed: capture and send are now the same
-//!   function call, in that order.
+//! * `boundary.rendered-capture.assembled-request-artifact` — the emitted
+//!   boundary records the settled production binding. The model's
+//!   `CanonicalRequest` is opaque, so it never names the artifact; production
+//!   captures at the transport seam
+//!   (`rendered_request::transport::RenderedRequestCapturingHttpClient`), after
+//!   the ChatGPT-Codex and xAI Grok body rewrites, so the bound artifact is the
+//!   body the provider received and capture and send are the same function
+//!   call, in that order. The boundary's residual is *fidelity*, not position:
+//!   the body is parsed and re-encoded through the canonical JSON encoder
+//!   before storage, so equality is canonical-JSON value equality and does not
+//!   preserve the sender's key order or serializer whitespace. That is the
+//!   boundary's accepted failure mode, not an open modeling question.
 //! * `boundary.rendered-capture.key-encoding-injectivity` — the model's key is
 //!   a tuple with componentwise equality; the durable column is a string, and
-//!   the model does not prove the encoder is injective on the tuple. Lean still
-//!   does not, but the Rust half is now fenced below: every generated row
-//!   asserts the derived `capture_key` string agrees with tuple equality, and
+//!   the model does not prove the encoder is injective on the tuple. The Rust
+//!   half is fenced below: every generated row asserts the derived
+//!   `capture_key` string agrees with tuple equality, and
 //!   `rendered_request::tests::capture_key_does_not_collide_across_component_boundaries`
 //!   covers the delimiter-collision shapes the generated rows do not reach.
+//!
+//! Scope of the claim: the generated rows are finite witnesses, each proven by
+//! `RenderedCapture.Scenario.trace_realizes` to be reachable by legal `Step`s
+//! from an `assembled` start, so reproducing them exercises
+//! `sent_implies_durably_captured`, `sent_requires_a_capture_step`, and
+//! `capture_failure_blocks_send` at those endpoints. Matching finite endpoints
+//! does not establish production transition ordering or universal runtime
+//! refinement; the ordering fence against the real owned loop named above
+//! remains a separate obligation.
 
 use gents::rendered_request::{
     capture_key as derive_capture_key, AssemblyBuildPath, AssemblyTrace, ProvenanceManifest,
@@ -156,8 +167,8 @@ fn rendered_in_scope(
 }
 
 /// The five components `RenderedCapture.CaptureKey` is made of, projected off
-/// the production DTO. PR2 derives the durable `capture_key` column from
-/// exactly this tuple.
+/// the production DTO. `rendered_request::capture_key` derives the durable
+/// `capture_key` column from exactly this tuple.
 fn capture_key(
     rendered: &RenderedCompletionRequest,
 ) -> (String, String, (String, String), usize, u32) {

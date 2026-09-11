@@ -63,15 +63,31 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     // the startup ordering that prevents a post-Ready config update from
     // falling into the gap between readiness and watcher startup.
     let subscription = node.subscribe(&[defra_node::EventName::Update]);
-    let mut default_behavior =
-        crate::load_agent_behavior(node.as_ref(), agent.default_behavior_id())
-            .await
-            .unwrap()
-            .expect("default behavior document");
-    default_behavior.system_prompt = Some("updated prompt".to_string());
-    crate::upsert_agent_behavior(node.as_ref(), &default_behavior)
-        .await
-        .unwrap();
+    let context = serde_json::json!({
+        "agent_did": agent.agent_did(),
+        "context_id": format!("{}:context", agent.default_behavior_id()),
+        "tools_id": format!("{}:tools", agent.default_behavior_id()),
+        "system_prompt": "updated prompt"
+    });
+    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
+        crate::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::AgentContext,
+            add: context.clone(),
+            update: context,
+        },
+    ])
+    .unwrap();
+    crate::config_client::ConfigAccess::transact_local(
+        node.as_ref(),
+        None,
+        "test.context.update",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        },
+    )
+    .await
+    .unwrap();
 
     let watcher_task = tokio::spawn(run_control_watcher(
         node.clone(),
@@ -195,10 +211,9 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         .unavailable_behaviors
         .get(&behavior_id)
         .expect("unavailable reason for demoted behavior");
-    assert!(
-        reason.diagnostic.contains("measured unhealthy"),
-        "reason must name the local measurement, got: {}",
-        reason.diagnostic
+    assert_eq!(
+        reason.public_reason,
+        BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
     );
     let config = snapshot
         .backend_admission_configs
@@ -309,7 +324,7 @@ async fn control_watcher_recovers_after_resolve_error() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() {
+async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-tools"));
@@ -355,41 +370,19 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
 
     tokio::task::yield_now().await;
 
-    let selection_id = crate::default_tool_selection_id_for_behavior(agent.default_behavior_id());
-    crate::upsert_tool_selection(
-        node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
-            agent_did: agent.agent_did().to_string(),
-            display_name: Some("Read tools".to_string()),
-            tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
-            enable_file_tools: Some(true),
-            file_tools_mode: Some("ReadOnly".to_string()),
-            file_tool_root: None,
-            enable_bash: Some(false),
-            bash_mode: Some("Off".to_string()),
-            command_execution_policy: None,
-            command_allowed_argv_prefixes: Some(Vec::new()),
-            command_forbidden_argv_prefixes: Some(Vec::new()),
-            command_network_mode: None,
-            cli_tool_names: Some(Vec::new()),
-            enable_meta_tools: Some(false),
-            allowed_mcp_service_ids: Some(Vec::new()),
-            ..Default::default()
-        },
+    let tools: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": format!("{}:tools", agent.default_behavior_id()),
+        "agent_did": agent.agent_did(),
+        "display_name": "Read tools",
+        "host": {"files": {"mode": "ReadOnly"}}
+    }))
+    .unwrap();
+    crate::config_client::write_tools_document(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &tools,
     )
     .await
     .unwrap();
-
-    let mut default_behavior =
-        crate::load_agent_behavior(node.as_ref(), agent.default_behavior_id())
-            .await
-            .unwrap()
-            .expect("default behavior document");
-    default_behavior.tool_selection_id = Some(selection_id);
-    crate::upsert_agent_behavior(node.as_ref(), &default_behavior)
-        .await
-        .unwrap();
 
     tokio::task::yield_now().await;
     tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;

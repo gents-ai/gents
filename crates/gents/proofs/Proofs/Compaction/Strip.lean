@@ -12,7 +12,7 @@ that doing nothing preserves meaning — true, and useless (#993).
 
 Production's `strip_tool_results` replaces each tool result's payload with a
 pointer stub and touches nothing else: same rows, same order, same call ids.
-That last part is the whole reason `strip` commutes with `sanitize`
+That last part is the whole reason `strip` commutes with `sanitizeGlobal`
 (`Proofs/Compaction/ProviderView.lean`), which is what licenses the production
 reordering of the compacted-prefix drop.
 -/

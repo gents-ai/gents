@@ -8,7 +8,6 @@ use gents_protocol::transcript::present_persisted_message;
 use serde_json::{json, Value};
 
 use super::progress::response_field_is_blank;
-use crate::materialized_message_query;
 
 /// Route shim reads and auto-committed writes through the runtime's bounded
 /// DefraDB conflict retry so overlapping reconciliation stays transparent to
@@ -49,13 +48,33 @@ pub(super) async fn hydrate_materialized_response_content(
         return Ok(!content_blank || !reasoning_blank);
     };
 
-    let message_response =
-        query_node_json(node, &materialized_message_query(session_id, sequence)).await?;
-    let Some(message) = message_response
+    let owner = response
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .context("materialized response omitted principal owner")?;
+    let requester = match response.get("requester_did") {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.as_str()),
+        _ => anyhow::bail!("materialized response omitted exact requester scope"),
+    };
+    let request_doc = response
+        .get("request_doc_id")
+        .and_then(Value::as_str)
+        .context("materialized response omitted physical request")?;
+    let scope = gents::session::session_scope_filter(owner, session_id, requester);
+    let physical = gents::graphql::escape_graphql_string(request_doc);
+    let message_response = query_node_json(node, &format!(
+        r#"{{AgentMessage(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}},sequence:{{_eq:{sequence}}}}}){{role content reasoning sequence}}}}"#
+    )).await?;
+    let messages = message_response
         .pointer("/data/AgentMessage")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-    else {
+        .context("materialized message query omitted rows")?;
+    anyhow::ensure!(
+        messages.len() <= 1,
+        "ambiguous materialized message identity"
+    );
+    let Some(message) = messages.first() else {
         return Ok(false);
     };
     let Some(role) = message.get("role").and_then(Value::as_str) else {

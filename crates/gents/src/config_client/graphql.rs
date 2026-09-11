@@ -85,11 +85,12 @@ pub(super) async fn txn_execute(
     id: &str,
     client: &reqwest::Client,
     query: &str,
+    variables: &Value,
 ) -> Result<Value> {
     let response = client
         .post(endpoint)
         .header("x-defradb-tx", id)
-        .json(&serde_json::json!({"query": query}))
+        .json(&serde_json::json!({"query": query, "variables": variables}))
         .send()
         .await
         .with_context(|| format!("posting transactional GraphQL to {endpoint}"))?
@@ -212,6 +213,47 @@ pub(crate) fn ensure_query_document(document: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn transaction_http_preserves_variables_and_transaction_header() {
+        use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
+        let expected =
+            serde_json::json!({"input": {"a-b": [], "nested": [{"": {}, "雪": [null, []]}]}});
+        let app =
+            Router::new()
+                .route(
+                    "/graphql",
+                    post(
+                        |State(expected): State<Value>,
+                         headers: HeaderMap,
+                         Json(body): Json<Value>| async move {
+                            assert_eq!(headers["x-defradb-tx"], "same-transaction");
+                            assert_eq!(
+                                body["query"],
+                                "mutation($input: JSON) { test(input: $input) { _docID } }"
+                            );
+                            assert_eq!(body["variables"], expected);
+                            Json(serde_json::json!({"data": {"test": [{"_docID": "written"}]}}))
+                        },
+                    ),
+                )
+                .with_state(expected.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let result = txn_execute(
+            &endpoint,
+            "same-transaction",
+            &http_client().unwrap(),
+            "mutation($input: JSON) { test(input: $input) { _docID } }",
+            &expected,
+        )
+        .await;
+        server.abort();
+        assert_eq!(result.unwrap()["data"]["test"][0]["_docID"], "written");
+    }
 
     #[test]
     fn counts_mutated_documents_in_graphql_envelope() {

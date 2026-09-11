@@ -16,17 +16,14 @@ use crate::workspace::{
 
 use super::claim::{claim_invocation, invocation_is_claimable};
 use super::documents::{
-    create_callback_result, flush_workspace_docs, load_binding, load_callback_module,
+    create_callback_result, flush_workspace_docs, load_callback, load_callback_module,
     load_callback_result, load_memory_workspace_docs, load_repository_placement,
-    load_trusted_callback_signers, strip_secret_fields, update_invocation,
-    validate_callback_binding, CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc,
-    CallbackResultDoc,
+    load_trusted_callback_signers, strip_secret_fields, update_invocation, CallbackInvocationDoc,
+    CallbackModuleDoc, CallbackResultDoc,
 };
-use super::scan::fetch_source_for_invocation;
 use super::wasm::{plan_from_wasm_module, validate_callback_module};
 use super::{
-    BUILTIN_CREATE_WORKSPACE, LIFECYCLE_CLAIMED, LIFECYCLE_DENIED, LIFECYCLE_FAILED,
-    LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
+    LIFECYCLE_CLAIMED, LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
 };
 
 /// Action N+1 must not enter Executing until N is ResultDocsWritten.
@@ -77,79 +74,53 @@ pub fn decode_journal(raw: Option<&str>) -> Result<Vec<ActionJournalEntry>> {
 
 #[cfg(test)]
 pub fn emit_plan_from_source(
-    binding: &CallbackBindingDoc,
+    callback: &crate::document_config::Callback,
     source: &Value,
 ) -> Result<ActionPlan, String> {
-    plan_from_binding(binding, source, None)
+    plan_from_callback(callback, source, None)
 }
 
-pub fn plan_from_binding(
-    binding: &CallbackBindingDoc,
+pub fn plan_from_callback(
+    callback: &crate::document_config::Callback,
     source: &Value,
     module: Option<&CallbackModuleDoc>,
 ) -> Result<ActionPlan, String> {
+    use crate::document_config::{BuiltInCallback, CallbackHandler};
     let source = strip_secret_fields(source.clone());
-    let builtin = binding
-        .builtin_emitter
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let module_id = binding
-        .module_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    match (builtin, module_id) {
-        (Some(BUILTIN_CREATE_WORKSPACE), None) => {
-            let admitted = binding
-                .projected_fields()
-                .map_err(|error| error.to_string())?;
-            for field in ["path_capability", "owned_files"] {
-                // Empty projection means the schema's full safe field set in
-                // fetch_source_doc; an explicit list remains restrictive.
-                if !admitted.is_empty()
-                    && source.get(field).is_some()
-                    && !admitted.iter().any(|name| name == field)
-                {
-                    return Err(format!("workspace capability source `{field}` is not admitted by this callback binding"));
-                }
+    match &callback.handler {
+        CallbackHandler::BuiltIn {
+            emitter: BuiltInCallback::CreateWorkspace,
+        } => emit_create_workspace_from_source(&source),
+        CallbackHandler::Module { module_id } => {
+            let module = module.ok_or_else(|| {
+                format!("CallbackModule {module_id} was not loaded for WASM planner")
+            })?;
+            if module.module_id != *module_id || module.agent_did != callback.agent_did {
+                return Err("callback module owner/reference mismatch".into());
             }
-            emit_create_workspace_from_source(&source)
-        }
-        (Some(other), None) => Err(format!("unknown builtin_emitter `{other}`")),
-        (None, Some(id)) => {
-            let module = module
-                .ok_or_else(|| format!("CallbackModule {id} was not loaded for WASM planner"))?;
-            plan_from_wasm_module(module, &source, &binding.capabilities())
-        }
-        (None, None) => Err("CallbackBinding needs builtin_emitter or module_id".into()),
-        (Some(_), Some(_)) => {
-            Err("CallbackBinding module_id and builtin_emitter are mutually exclusive".into())
+            plan_from_wasm_module(
+                module,
+                &source,
+                &callback.capabilities.iter().cloned().collect(),
+            )
         }
     }
 }
 
 async fn load_planner_module(
     node: &EmbeddedNode,
-    binding: &CallbackBindingDoc,
+    callback: &crate::document_config::Callback,
 ) -> Result<Option<CallbackModuleDoc>, String> {
-    let Some(module_id) = binding
-        .module_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let crate::document_config::CallbackHandler::Module { module_id } = &callback.handler else {
         return Ok(None);
     };
-    let Some(module) = load_callback_module(node, module_id)
+    let module = load_callback_module(node, module_id, &callback.agent_did)
         .await
-        .map_err(|error| error.to_string())?
-    else {
-        return Err(format!("CallbackModule {module_id} not found"));
-    };
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("CallbackModule {module_id} not found for callback owner"))?;
     let trusted = load_trusted_callback_signers(node)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|e| e.to_string())?;
     validate_callback_module(&module, &trusted)?;
     Ok(Some(module))
 }
@@ -285,16 +256,16 @@ fn stored_action_plan(invocation: &CallbackInvocationDoc) -> Result<Option<Actio
 #[cfg(test)]
 pub fn resolve_action_plan(
     invocation: &CallbackInvocationDoc,
-    binding: &CallbackBindingDoc,
+    callback: &crate::document_config::Callback,
     source: &Value,
 ) -> Result<ActionPlan, String> {
-    resolve_action_plan_with_module(invocation, binding, source, None)
+    resolve_action_plan_with_module(invocation, callback, source, None)
 }
 
 #[cfg(test)]
 pub fn resolve_action_plan_with_module(
     invocation: &CallbackInvocationDoc,
-    binding: &CallbackBindingDoc,
+    callback: &crate::document_config::Callback,
     source: &Value,
     module: Option<&CallbackModuleDoc>,
 ) -> Result<ActionPlan, String> {
@@ -306,7 +277,7 @@ pub fn resolve_action_plan_with_module(
     if !journal.is_empty() {
         return Err("missing stored ActionPlan with a non-empty journal".to_string());
     }
-    plan_from_binding(binding, source, module)
+    plan_from_callback(callback, source, module)
 }
 
 /// Host adapter may already have run; recovery must observe, not wipe.
@@ -339,17 +310,16 @@ pub(crate) fn apply_planner_deny(invocation: &mut CallbackInvocationDoc, reason:
 pub async fn run_owned_invocation(
     node: &EmbeddedNode,
     invocation: &CallbackInvocationDoc,
-    binding: &CallbackBindingDoc,
+    callback: &crate::document_config::Callback,
     ceiling: Option<&Path>,
 ) -> Result<()> {
-    if !invocation_is_claimable(&invocation.owner_deployment_id, invocation)
+    if !invocation_is_claimable(&invocation.owner_agent_did, invocation)
         && invocation.lifecycle_state != LIFECYCLE_CLAIMED
         && invocation.lifecycle_state != LIFECYCLE_RUNNING
     {
         return Ok(());
     }
-    let Some(mut claimed) =
-        claim_invocation(node, &invocation.owner_deployment_id, invocation).await?
+    let Some(mut claimed) = claim_invocation(node, &invocation.owner_agent_did, invocation).await?
     else {
         return Ok(());
     };
@@ -359,8 +329,8 @@ pub async fn run_owned_invocation(
         return Ok(());
     }
 
-    let source = fetch_source_for_invocation(node, binding, &claimed).await?;
-    execute_running_invocation(node, &mut claimed, binding, &source, ceiling).await
+    let source = claimed.input.clone();
+    execute_running_invocation(node, &mut claimed, callback, &source, ceiling).await
 }
 
 async fn persist_claimed_to_running(
@@ -374,7 +344,12 @@ async fn persist_claimed_to_running(
     if update_invocation(node, invocation, Some(LIFECYCLE_CLAIMED)).await? {
         return Ok(());
     }
-    let current = super::documents::load_invocation(node, &invocation.invocation_id).await?;
+    let current = super::documents::load_invocation(
+        node,
+        &invocation.invocation_id,
+        &invocation.owner_agent_did,
+    )
+    .await?;
     match current {
         Some(row) if row.lifecycle_state == LIFECYCLE_RUNNING => {
             *invocation = row;
@@ -396,12 +371,20 @@ async fn persist_claimed_to_running(
 async fn execute_running_invocation(
     node: &EmbeddedNode,
     invocation: &mut CallbackInvocationDoc,
-    binding: &CallbackBindingDoc,
+    callback: &crate::document_config::Callback,
     source: &Value,
     ceiling: Option<&Path>,
 ) -> Result<()> {
-    if let Err(error) = validate_callback_binding(binding) {
-        return deny(node, invocation, &error.to_string()).await;
+    if callback.agent_did != invocation.owner_agent_did
+        || callback.callback_id != invocation.callback_id
+        || !callback.enabled
+    {
+        return deny(
+            node,
+            invocation,
+            "callback is disabled or differs from invocation owner/reference",
+        )
+        .await;
     }
 
     let mut journal = decode_journal(invocation.action_journal.as_deref())?;
@@ -426,11 +409,11 @@ async fn execute_running_invocation(
         )
         .await;
     } else {
-        let module = match load_planner_module(node, binding).await {
+        let module = match load_planner_module(node, callback).await {
             Ok(module) => module,
             Err(reason) => return deny(node, invocation, &reason).await,
         };
-        match emit_new_plan(binding, source, module).await {
+        match emit_new_plan(callback, source, module).await {
             Ok(plan) => plan,
             Err(reason) => return deny(node, invocation, &reason).await,
         }
@@ -440,7 +423,7 @@ async fn execute_running_invocation(
         Err(reason) => return deny(node, invocation, &reason).await,
     };
     invocation.action_plan = Some(canonical);
-    if let Err(error) = plan.validate_against(&binding.capabilities()) {
+    if let Err(error) = plan.validate_against(&callback.capabilities.iter().cloned().collect()) {
         return deny(node, invocation, &error.to_string()).await;
     }
 
@@ -489,8 +472,7 @@ async fn execute_running_invocation(
     }
 
     let Some(repository) =
-        load_repository_placement(node, &action.repository_id, &invocation.owner_deployment_id)
-            .await?
+        load_repository_placement(node, &action.repository_id, &invocation.owner_agent_did).await?
     else {
         return deny(
             node,
@@ -518,17 +500,18 @@ async fn execute_running_invocation(
         persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
     }
 
-    let mut docs = load_memory_workspace_docs(node, &action.workspace_id).await?;
-    let capabilities: BTreeSet<String> = binding.capabilities();
+    let mut docs =
+        load_memory_workspace_docs(node, &action.workspace_id, &invocation.owner_agent_did).await?;
+    let capabilities: BTreeSet<String> = callback.capabilities.iter().cloned().collect();
     let correlation = correlation_from_source(source);
     let execute_result = {
         let mut ctx = HostExecutorContext {
-            deployment_id: invocation.owner_deployment_id.clone(),
+            owner_agent_did: invocation.owner_agent_did.clone(),
             repository,
             ceiling,
             capabilities,
-            writer_principal: binding.principal_did.clone(),
-            integrator_principal: binding.principal_did.clone(),
+            writer_principal: callback.agent_did.clone(),
+            integrator_principal: callback.agent_did.clone(),
             caused_by_invocation_id: invocation.invocation_id.clone(),
             caused_by_correlation: correlation.clone(),
             documents: &mut docs,
@@ -597,18 +580,18 @@ async fn persist_journal(
 }
 
 async fn emit_new_plan(
-    binding: &CallbackBindingDoc,
+    callback: &crate::document_config::Callback,
     source: &Value,
     module: Option<CallbackModuleDoc>,
 ) -> Result<ActionPlan, String> {
     if module.is_some() {
-        let binding = binding.clone();
+        let callback = callback.clone();
         let source = source.clone();
-        tokio::task::spawn_blocking(move || plan_from_binding(&binding, &source, module.as_ref()))
+        tokio::task::spawn_blocking(move || plan_from_callback(&callback, &source, module.as_ref()))
             .await
             .map_err(|error| format!("WASM planner task failed: {error}"))?
     } else {
-        plan_from_binding(binding, source, None)
+        plan_from_callback(callback, source, None)
     }
 }
 
@@ -657,8 +640,7 @@ async fn succeed_then_emit_result(
         &CallbackResultDoc {
             result_id: format!("res-{}", invocation.invocation_id),
             invocation_id: invocation.invocation_id.clone(),
-            binding_id: invocation.binding_id.clone(),
-            owner_deployment_id: invocation.owner_deployment_id.clone(),
+            owner_agent_did: invocation.owner_agent_did.clone(),
             workspace_id: Some(workspace.workspace_id.clone()),
             work_unit_id: Some(workspace.work_unit_id.clone()),
             caused_by_correlation: Some(correlation),
@@ -671,13 +653,12 @@ async fn succeed_then_emit_result(
 
 pub async fn recover_local_invocations(
     node: &EmbeddedNode,
-    local_deployment_id: &str,
+    agent_did: &str,
     ceiling: Option<&Path>,
 ) -> Result<()> {
-    let invocations =
-        super::documents::list_recoverable_invocations(node, local_deployment_id).await?;
+    let invocations = super::documents::list_recoverable_invocations(node, agent_did).await?;
     for invocation in invocations {
-        if invocation.owner_deployment_id != local_deployment_id {
+        if invocation.owner_agent_did != agent_did {
             continue;
         }
         if invocation.lifecycle_state == LIFECYCLE_SUCCEEDED {
@@ -690,18 +671,20 @@ pub async fn recover_local_invocations(
             }
             continue;
         }
-        if !invocation_is_claimable(local_deployment_id, &invocation) {
+        if !invocation_is_claimable(agent_did, &invocation) {
             continue;
         }
-        let Some(binding) = load_binding(node, &invocation.binding_id).await? else {
+        let Some(callback) =
+            load_callback(node, &invocation.callback_id, &invocation.owner_agent_did).await?
+        else {
             tracing::warn!(
                 invocation_id = %invocation.invocation_id,
-                binding_id = %invocation.binding_id,
-                "recovery skipped: CallbackBinding missing"
+                callback_id = %invocation.callback_id,
+                "recovery skipped: Callback missing"
             );
             continue;
         };
-        if let Err(error) = run_owned_invocation(node, &invocation, &binding, ceiling).await {
+        if let Err(error) = run_owned_invocation(node, &invocation, &callback, ceiling).await {
             tracing::warn!(
                 invocation_id = %invocation.invocation_id,
                 %error,
@@ -734,7 +717,7 @@ pub async fn finish_succeeded_if_docs_ready(
     let Some(workspace_id) = workspace_id else {
         return Ok(false);
     };
-    let docs = load_memory_workspace_docs(node, &workspace_id).await?;
+    let docs = load_memory_workspace_docs(node, &workspace_id, &invocation.owner_agent_did).await?;
     let workspace = docs.load_isolated_workspace(&workspace_id)?;
     let placement = docs.load_placement(&workspace_id)?;
     if !result_docs_ready(&journal, workspace.as_ref(), placement.as_ref()) {
@@ -746,7 +729,7 @@ pub async fn finish_succeeded_if_docs_ready(
     let Some(placement) = placement else {
         return Ok(false);
     };
-    if load_callback_result(node, &invocation.invocation_id)
+    if load_callback_result(node, &invocation.invocation_id, &invocation.owner_agent_did)
         .await?
         .is_some()
         && invocation.lifecycle_state == LIFECYCLE_SUCCEEDED
@@ -807,54 +790,22 @@ mod path_capability_tests {
     }
 
     #[test]
-    fn builtin_empty_source_projection_retains_explicit_manifest_requirement() {
-        for projection in [None, Some(""), Some("[]")] {
-            let mut binding: CallbackBindingDoc = serde_json::from_value(json!({
-                "binding_id": "path-contract", "source_collection": "WorkUnit", "event_kind": "created",
-                "principal_did": "did:key:writer", "owner_deployment_id": "local", "builtin_emitter": "create_workspace"
-            })).unwrap();
-            binding.source_fields = projection.map(str::to_owned);
-            assert!(binding.projected_fields().unwrap().is_empty());
-            let source = json!({"work_unit_id": "unit", "repository_id": "repo", "base_sha": "base", "branch": "branch", "owned_files": "[\"src/a.rs\"]"});
-            let plan = plan_from_binding(&binding, &source, None).unwrap();
-            let HostAction::CreateWorkspace(action) = &plan.actions[0] else {
-                panic!("expected workspace")
-            };
-            assert_eq!(
-                action.path_capability,
-                crate::workspace::WorkspacePathCapability::exact_paths(vec!["src/a.rs".into()])
-                    .unwrap()
-            );
-            let mut missing = source.clone();
-            missing.as_object_mut().unwrap().remove("owned_files");
-            assert!(plan_from_binding(&binding, &missing, None).is_err());
-            missing["path_capability"] = json!({"mode":"unrestrictedCompatibility"});
-            assert!(plan_from_binding(&binding, &missing, None).is_err());
-        }
-    }
-
-    #[test]
-    fn builtin_cannot_use_manifest_outside_binding_source_fields() {
-        let mut binding: CallbackBindingDoc = serde_json::from_value(json!({
-            "binding_id": "path-contract", "source_collection": "WorkUnit", "event_kind": "created",
-            "principal_did": "did:key:writer", "owner_deployment_id": "local", "builtin_emitter": "create_workspace",
-            "source_fields": "[\"work_unit_id\",\"repository_id\",\"base_sha\",\"branch\"]"
+    fn builtin_requires_capability_in_frozen_projected_input() {
+        let callback: crate::document_config::Callback = serde_json::from_value(json!({
+            "callback_id":"path-contract", "agent_did":"did:key:writer", "handler":{"kind":"built_in","emitter":"create_workspace"}
         })).unwrap();
-        let source = json!({"work_unit_id": "unit", "repository_id": "repo", "base_sha": "base", "branch": "branch", "owned_files": "[\"src/a.rs\"]"});
-        assert!(plan_from_binding(&binding, &source, None)
-            .unwrap_err()
-            .contains("not admitted"));
-        binding.source_fields = Some(
-            "[\"work_unit_id\",\"repository_id\",\"base_sha\",\"branch\",\"owned_files\"]".into(),
-        );
-        let plan = plan_from_binding(&binding, &source, None).unwrap();
+        let mut source = json!({"work_unit_id":"unit","repository_id":"repo","base_sha":"base","branch":"branch"});
+        assert!(plan_from_callback(&callback, &source, None).is_err());
+        source["owned_files"] = json!(["src/a.rs"]);
+        let plan = plan_from_callback(&callback, &source, None).unwrap();
         let HostAction::CreateWorkspace(action) = &plan.actions[0] else {
-            panic!("expected create workspace");
+            panic!("expected workspace");
         };
         assert_eq!(
             action.path_capability,
             crate::workspace::WorkspacePathCapability::exact_paths(vec!["src/a.rs".into()])
                 .unwrap()
         );
+        assert!(plan_from_callback(&callback, &json!({}), None).is_err());
     }
 }

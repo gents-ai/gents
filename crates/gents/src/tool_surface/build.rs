@@ -315,13 +315,16 @@ pub(super) fn resolve_path_with_canonical_prefix(path: &Path) -> Result<PathBuf>
 }
 
 pub(super) fn dedupe_subagent_targets(
-    values: Vec<crate::document_config::SubagentTarget>,
-) -> Vec<crate::document_config::SubagentTarget> {
+    values: Vec<crate::document_config::SubagentTargetDocument>,
+) -> Vec<crate::document_config::SubagentTargetDocument> {
     use std::collections::HashSet;
     let mut seen = HashSet::new();
     let mut deduped = Vec::with_capacity(values.len());
     for target in values {
-        if !target.is_structurally_valid() {
+        if target.name.trim().is_empty()
+            || target.target_agent_did.trim().is_empty()
+            || target.behavior_id.trim().is_empty()
+        {
             continue;
         }
         if seen.insert(target.name.trim().to_string()) {
@@ -434,41 +437,19 @@ mod tests {
     }
 }
 
-pub(super) async fn online_mcp_service_ids(node: &EmbeddedNode) -> Result<Vec<String>> {
-    let query = r#"{
-  ToolServiceRegistry(
-    filter: { status: { _eq: "online" } }
-  ) {
-    service_id
-  }
-}"#;
-
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        bail!(
-            "query ToolServiceRegistry for tool-surface resolution failed: {:?}",
-            response.errors
-        );
-    }
-
-    let services = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("ToolServiceRegistry"))
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    Ok(services
-        .iter()
-        .filter_map(|row| row.get("service_id").and_then(|value| value.as_str()))
-        .map(str::trim)
-        .filter(|service_id| !service_id.is_empty())
-        .map(str::to_string)
+pub(super) async fn enabled_mcp_service_ids(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<Vec<String>> {
+    Ok(crate::registry::configured_mcp_services(node, agent_did)
+        .await?
+        .into_iter()
+        .filter(|service| service.enabled)
+        .map(|service| service.service_id)
         .collect())
 }
 
-/// MCP services whose operator registry row is online and whose agent-scoped
+/// MCP services whose principal registry row is enabled and whose agent-scoped
 /// measured health permits calls, per `ToolServiceHealthState::project`
 /// (the single owner of the classification): `Healthy` and `Stale` remain
 /// callable (the normal health gate warns but proceeds on `Stale`);
@@ -478,113 +459,116 @@ pub(crate) async fn measured_available_mcp_service_ids(
     node: &EmbeddedNode,
     agent_did: &str,
 ) -> Result<Vec<String>> {
-    let registry_query = r#"{
-  ToolServiceRegistry(filter: { status: { _eq: "online" } }) {
-    service_id
-    hostname
-    tailscale_ip
-    lan_ip
-    mcp_port
-    mcp_path
-  }
-}"#;
-    let registry_response = node.execute(registry_query).await;
-    if registry_response.has_errors() {
-        bail!(
-            "query ToolServiceRegistry for measured MCP availability failed: {:?}",
-            registry_response.errors
-        );
+    let services = crate::registry::configured_mcp_services(node, agent_did).await?;
+    if services.is_empty() {
+        return Ok(Vec::new());
     }
-    let local_hostname = hostname::get()
+    let query = mcp_health_query(agent_did);
+    let response = crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "tools.measured_availability",
+        |txn| {
+            let query = query.clone();
+            Box::pin(async move { txn.execute(&query).await })
+        },
+    )
+    .await?;
+    let hostname = hostname::get()
         .ok()
-        .and_then(|value| value.into_string().ok())
-        .unwrap_or_default();
+        .and_then(|value| value.into_string().ok());
+    project_measured_mcp_services(agent_did, &services, &response, hostname.as_deref())
+}
+
+/// Explain the same measured availability for local or HTTP control-plane
+/// access. A remote server's loopback endpoint is never inferred from the CLI host.
+pub async fn measured_mcp_services_for_access(
+    access: &crate::config_client::ConfigAccess,
+    agent_did: &str,
+    services: &[crate::document_config::ToolServiceRegistry],
+) -> Result<Vec<String>> {
+    if services.is_empty() {
+        return Ok(Vec::new());
+    }
+    let response = access.execute(&mcp_health_query(agent_did)).await?;
+    let hostname = match access {
+        crate::config_client::ConfigAccess::Local(_) => hostname::get()
+            .ok()
+            .and_then(|value| value.into_string().ok()),
+        crate::config_client::ConfigAccess::Graphql(_) => None,
+    };
+    project_measured_mcp_services(agent_did, services, &response, hostname.as_deref())
+}
+
+fn mcp_health_query(agent_did: &str) -> String {
+    format!(
+        r#"{{ ToolServiceHealthState(filter: {{agent_did: {{_eq: "{}"}}}}) {{ service_id endpoint status }} }}"#,
+        crate::graphql::escape_graphql_string(agent_did)
+    )
+}
+
+fn project_measured_mcp_services(
+    agent_did: &str,
+    services: &[crate::document_config::ToolServiceRegistry],
+    response: &serde_json::Value,
+    local_hostname: Option<&str>,
+) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        !agent_did.trim().is_empty(),
+        "MCP availability requires principal scope"
+    );
     let mut expected_endpoints = HashMap::<String, HashSet<String>>::new();
-    for row in registry_response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("ToolServiceRegistry"))
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(service_id) = row
-            .get("service_id")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+    let mut seen = HashSet::new();
+    for service in services {
+        anyhow::ensure!(
+            service.agent_did == agent_did,
+            "MCP availability received foreign service"
+        );
+        anyhow::ensure!(
+            seen.insert(&service.service_id),
+            "duplicate scoped MCP service"
+        );
+        if !service.enabled {
+            continue;
+        }
+        let Some(port) = service
+            .mcp_port
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port > 0)
         else {
             continue;
         };
-        let Some(port) = row
-            .get("mcp_port")
-            .and_then(serde_json::Value::as_i64)
-            .filter(|port| (1..=u16::MAX as i64).contains(port))
-        else {
-            continue;
-        };
-        let raw_path = row
-            .get("mcp_path")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .trim();
-        let path = if raw_path.is_empty() {
-            "/mcp".to_string()
-        } else if raw_path.starts_with('/') {
-            raw_path.to_string()
+        let raw_path = service.mcp_path.as_deref().unwrap_or_default().trim();
+        let path = if raw_path.is_empty() || raw_path.starts_with('/') {
+            raw_path.to_owned()
         } else {
             format!("/{raw_path}")
         };
         let endpoints = expected_endpoints
-            .entry(service_id.to_string())
+            .entry(service.service_id.clone())
             .or_default();
-        for field in ["tailscale_ip", "lan_ip", "hostname"] {
-            if let Some(host) = row
-                .get(field)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                endpoints.insert(format!("http://{host}:{port}{path}"));
-                if field == "hostname" && host == local_hostname {
-                    endpoints.insert(format!("http://127.0.0.1:{port}{path}"));
-                }
+        for host in [&service.hostname, &service.tailscale_ip, &service.lan_ip]
+            .into_iter()
+            .flatten()
+            .filter(|host| !host.trim().is_empty())
+        {
+            endpoints.insert(format!("http://{host}:{port}{path}"));
+            if local_hostname == Some(host.as_str()) {
+                endpoints.insert(format!("http://127.0.0.1:{port}{path}"));
             }
         }
     }
-    if expected_endpoints.is_empty() {
-        return Ok(Vec::new());
-    }
-    let agent_did = crate::graphql::escape_graphql_string(agent_did);
-    let query = format!(
-        r#"{{
-  ToolServiceHealthState(
-    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
-  ) {{
-    service_id
-    endpoint
-    status
-  }}
-}}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        bail!(
-            "query ToolServiceHealthState for required-service resolution failed: {:?}",
-            response.errors
-        );
-    }
-    let mut available = response
-        .data
-        .as_ref()
+    let rows = response
+        .get("data")
         .and_then(|data| data.get("ToolServiceHealthState"))
         .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
+        .context("MCP health query returned no rows array")?;
+    let mut available = rows
+        .iter()
         .filter_map(|row| {
-            let service_id = row.get("service_id")?.as_str()?.trim();
-            let endpoint = row.get("endpoint")?.as_str()?.trim();
-            let status = row.get("status")?.as_str()?.trim();
+            let service_id = row.get("service_id")?.as_str()?;
+            let endpoint = row.get("endpoint")?.as_str()?;
+            let status = row.get("status")?.as_str()?;
             let callable = matches!(
                 ToolServiceHealthState::parse_opt(Some(status))
                     .map(ToolServiceHealthState::project),
@@ -594,7 +578,7 @@ pub(crate) async fn measured_available_mcp_service_ids(
                 && expected_endpoints
                     .get(service_id)
                     .is_some_and(|endpoints| endpoints.contains(endpoint)))
-            .then(|| service_id.to_string())
+            .then(|| service_id.to_owned())
         })
         .collect::<Vec<_>>();
     available.sort();

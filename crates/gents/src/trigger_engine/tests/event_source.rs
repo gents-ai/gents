@@ -56,6 +56,13 @@ fn resolved_event_trigger_with_filter(
     }
 }
 
+fn event_test_behavior() -> Arc<ResolvedBehavior> {
+    static BEHAVIOR: std::sync::OnceLock<Arc<ResolvedBehavior>> = std::sync::OnceLock::new();
+    BEHAVIOR
+        .get_or_init(|| integration_test_behavior("general"))
+        .clone()
+}
+
 /// Build an `ActiveRuntimeSnapshot` carrying the supplied event triggers and
 /// no other live state. Mirrors `snapshot_with_schedules` for the event-source
 /// tests.
@@ -65,12 +72,15 @@ fn snapshot_with_event_triggers(
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
-        vec![integration_test_behavior("general")],
+        vec![event_test_behavior()],
         HashMap::new(),
         HashMap::new(),
         HashMap::new(),
     )
-    .with_event_triggers(triggers, HashSet::new())
+    .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+        event_triggers: triggers,
+        ..Default::default()
+    })
     .with_principal(stub_principal());
     Arc::new(resolved.activate(generation, HashMap::new()))
 }
@@ -143,7 +153,7 @@ async fn event_source_reconciles_subscriptions_on_generation_bump() {
 /// 1. Registers a custom `WebhookEvent` schema on the embedded node so the
 ///    bus has a collection to emit events from (separate from the runtime
 ///    control collections so reconciliation is forced to walk the cache).
-/// 2. Publishes a snapshot with one active `EventTrigger` on `WebhookEvent`.
+/// 2. Publishes a snapshot with one active event-source trigger on `WebhookEvent`.
 /// 3. Opens the subscription (via `reconcile_subscriptions`) BEFORE creating
 ///    the document — `events::Bus` only buffers messages for already-
 ///    subscribed consumers, so a pre-subscription mutation is silently
@@ -172,16 +182,11 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         .await
         .expect("add_schema for WebhookEvent");
 
-    // Build a snapshot with exactly one active EventTrigger on WebhookEvent.
+    // Build a snapshot with exactly one active event-source trigger on WebhookEvent.
     // The trigger_id is what the returned FireIntent should carry.
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-webhook", "WebhookEvent", task.clone());
     let snapshot =
@@ -301,13 +306,8 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
     }
 
     let task = ResolvedTask {
-        task_id: "group-task".into(),
-        name: None,
-        behavior_id: "general".into(),
-        prompt_template: "{{ group.correlation_value }} {{ group.count }}".into(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        task_id: "group-task".to_string(),
+        ..resolved_task("{{ group.correlation_value }} {{ group.count }}")
     };
     let trigger = ResolvedEventTrigger {
         fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
@@ -373,22 +373,25 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
         group_min_count: 1,
         ..resolved_event_trigger("durable-group-trigger", "DurableGroupMember", task)
     };
-    let (group_key, trigger_config_key) = EventSource::group_state_keys(&trigger, "run-old");
+    let (group_key, trigger_config_key) =
+        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-old");
     let first_seen_at =
         (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339_opts(SecondsFormat::Millis, true);
     let mutation = format!(
         r#"mutation {{
-            create_EventTriggerGroupState(input: {{
+            create_EventGroupState(input: {{
                 group_key: "{}"
-                trigger_id: "durable-group-trigger"
+                agent_did: "{owner}"
+                consumer: {{kind:"trigger",trigger_id:"durable-group-trigger"}}
                 correlation: "run-old"
-                trigger_config_key: "{}"
+                consumer_config_key: "{}"
                 first_seen_at: "{}"
             }}) {{ _docID }}
         }}"#,
         escape_graphql_string(&group_key),
         escape_graphql_string(&trigger_config_key),
         escape_graphql_string(&first_seen_at),
+        owner = escape_graphql_string(event_test_behavior().agent_did()),
     );
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
@@ -487,7 +490,31 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
 }
 
 #[tokio::test]
-async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
+async fn generated_sibling_delivery_case_preserves_pending_correlation() {
+    use crate::lean_vocab_test::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
+
+    let cases = lean_event_delivery_transition_cases();
+    let case = cases
+        .iter()
+        .find(|case| case.name == "handle_ready_trigger_preserves_pending_sibling")
+        .expect("Lean sibling delivery case");
+    let LeanEventDeliveryAction::Handle { doc: ready_key } = &case.action else {
+        panic!("sibling case must observe a handled delivery");
+    };
+    let pending_key = case
+        .pre
+        .subscription_queue
+        .iter()
+        .find(|key| *key != ready_key)
+        .expect("pending sibling input");
+    let (ready_id, logical_doc) = ready_key.split_once(':').expect("ready delivery identity");
+    let (pending_id, pending_doc) = pending_key
+        .split_once(':')
+        .expect("pending delivery identity");
+    assert_eq!(
+        logical_doc, pending_doc,
+        "siblings must share one physical source row"
+    );
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema(
@@ -499,15 +526,11 @@ async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
     .await
     .expect("mixed correlation source schema");
 
-    let ready = resolved_event_trigger(
-        "trigger-a-ready",
-        "MixedCorrelationMember",
-        resolved_task("ready"),
-    );
+    let ready = resolved_event_trigger(ready_id, "MixedCorrelationMember", resolved_task("ready"));
     let pending = ResolvedEventTrigger {
         correlation_field: Some("run_id".into()),
         ..resolved_event_trigger(
-            "trigger-z-pending",
+            pending_id,
             "MixedCorrelationMember",
             resolved_task("{{ event.correlation }}"),
         )
@@ -546,7 +569,16 @@ async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
         .await
         .expect("ready sibling delivery timed out")
         .expect("ready sibling must not be blocked by missing correlation");
-    assert_eq!(first.trigger_id.as_deref(), Some("trigger-a-ready"));
+    assert_eq!(first.event_vars["source_doc_id"], doc_id);
+    let observed_ready = format!(
+        "{}:{logical_doc}",
+        first.trigger_id.as_deref().expect("ready trigger")
+    );
+    assert_eq!(
+        vec![observed_ready],
+        case.post.handled,
+        "observed ready delivery"
+    );
 
     let mutation = format!(
         r#"mutation {{
@@ -564,7 +596,19 @@ async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
         .await
         .expect("deferred sibling delivery timed out")
         .expect("deferred sibling must become eligible when correlation arrives");
-    assert_eq!(second.trigger_id.as_deref(), Some("trigger-z-pending"));
+    assert_eq!(second.event_vars["source_doc_id"], doc_id);
+    let observed_pending = format!(
+        "{}:{logical_doc}",
+        second.trigger_id.as_deref().expect("pending trigger")
+    );
+    // The Lean queue describes remaining delivery identities, not the source's
+    // internal queue. Successful later emission observes that the pending sibling
+    // survived the ready delivery; no test-local seen-set model is involved.
+    assert_eq!(
+        vec![observed_pending],
+        case.post.subscription_queue,
+        "pending sibling remains deliverable after its correlation arrives"
+    );
     assert_eq!(second.correlation.as_deref(), Some("run-late"));
 }
 
@@ -691,8 +735,8 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     let response = node
         .execute(
             r#"query {
-                EventTriggerGroupState(
-                    filter: { trigger_id: { _eq: "quiesced-group-trigger" } }
+                EventGroupState(
+                    limit: 2
                 ) { quiesced_at quiesced_reason }
             }"#,
         )
@@ -701,7 +745,7 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     let row = response
         .data
         .as_ref()
-        .and_then(|data| data.get("EventTriggerGroupState"))
+        .and_then(|data| data.get("EventGroupState"))
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
         .expect("durable group state");
@@ -730,19 +774,20 @@ fn group_state_identity_changes_only_with_membership_definition() {
         expected_count: Some(2),
         ..resolved_event_trigger("group-trigger", "GroupMember", task)
     };
-    let initial = EventSource::group_state_keys(&trigger, "run-a");
+    let initial =
+        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-a");
 
     trigger.task.prompt_template = "changed prompt".into();
     trigger.expected_count = Some(3);
     assert_eq!(
-        EventSource::group_state_keys(&trigger, "run-a"),
+        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-a"),
         initial,
         "task and policy changes must not restart a group's first-seen clock",
     );
 
     trigger.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
     assert_ne!(
-        EventSource::group_state_keys(&trigger, "run-a"),
+        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-a"),
         initial,
         "membership filter changes must use fresh recovery state",
     );
@@ -853,12 +898,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     // Trigger requires `kind == "signup"` — `other` events must not fire.
     let trigger = resolved_event_trigger_with_filter(
@@ -977,12 +1017,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     // No filter on the trigger — every create fires, and the fire must
     // carry the full doc projection.
@@ -1051,7 +1086,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
     cancel.cancel();
 }
 
-/// Helper: create an `EventTrigger` document keyed by `trigger_id` via a raw
+/// Helper: create an `Trigger` document keyed by `trigger_id` via a raw
 /// GraphQL mutation, matching the shape used by the CLI apply path and the
 /// `schedule_snapshot_reconcile` integration test. The `fire_count: 0` seed
 /// is required so the runtime's `fire_count += 1` increment has a value to
@@ -1062,32 +1097,36 @@ async fn create_event_trigger_doc(
     task_id: &str,
     source_collection: &str,
 ) {
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_source_collection = escape_graphql_string(source_collection);
-    let mutation = format!(
-        r#"mutation {{
-            create_EventTrigger(input: {{
-                trigger_id: "{escaped_trigger_id}",
-                task_id: "{escaped_task_id}",
-                source_collection: "{escaped_source_collection}",
-                event_kind: "created",
-                enabled: true,
-                concurrency: "serial",
-                fire_count: 0
-            }}) {{ _docID }}
-        }}"#
+    let input = serde_json::json!({"agent_did":event_test_behavior().agent_did(),"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":source_collection},"enabled":true,"concurrency":"serial","fire_count":0});
+    crate::config_client::ConfigAccess::transact_local(node, None, "test.trigger_fixture", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_with_variables(
+                "mutation($input:TriggerMutationInputArg!){create_Trigger(input:$input){_docID}}",
+                &serde_json::json!({"input":input}),
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await
+    .unwrap();
+}
+
+async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_json::Value {
+    let query = format!(
+        "{{Trigger(filter:{{agent_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}},limit:2){{task_id source enabled concurrency last_status last_error last_attempt_at last_fired_source_doc_id fire_count}}}}",
+        escape_graphql_string(event_test_behavior().agent_did()),
+        escape_graphql_string(id)
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create EventTrigger failed: {:?}",
-        response.errors,
-    );
+    let response = node.execute(&query).await;
+    let rows = crate::graphql::rows::<serde_json::Value>(&response, "Trigger").unwrap();
+    assert_eq!(rows.len(), 1, "scoped trigger disappeared or is ambiguous");
+    rows[0].clone()
 }
 
 /// Task 22: a Fired result dispatched through the `on_result` callback must
-/// write the runtime-owned bookkeeping fields back onto the `EventTrigger`
+/// write the runtime-owned bookkeeping fields back onto the canonical `Trigger`
 /// document: `last_status = "fired"`, `fire_count += 1`,
 /// `last_fired_source_doc_id` set to the source doc id that caused the fire,
 /// and `last_attempt_at` populated. Apply-owned fields (`enabled`, `task_id`,
@@ -1108,7 +1147,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
         .await
         .expect("add_schema for WebhookEvent");
 
-    // Seed the EventTrigger doc so `update_event_trigger_runtime_fields` has
+    // Seed the Trigger doc so `update_trigger_runtime_fields` has
     // a row to write back against. Apply-path fields are set here; the
     // runtime writeback must leave them alone.
     create_event_trigger_doc(
@@ -1121,12 +1160,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-fired", "WebhookEvent", task.clone());
     let snapshot =
@@ -1180,40 +1214,39 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
     let mut fired_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let records = list_event_trigger_records(node.as_ref()).await.unwrap();
-        let (_doc_id, trig) = records
-            .iter()
-            .find(|(_d, t)| t.trigger_id == "trigger-fired")
-            .cloned()
-            .expect("EventTrigger doc disappeared");
-        if trig.last_status.as_deref() == Some("fired") {
+        let trig = observed_trigger(node.as_ref(), "trigger-fired").await;
+        if trig["last_status"].as_str() == Some("fired") {
             fired_trigger = Some(trig);
             break;
         }
     }
-    let fired = fired_trigger.expect("EventTrigger.last_status never became \"fired\"");
-    assert_eq!(fired.last_status.as_deref(), Some("fired"));
-    assert_eq!(fired.fire_count, Some(1));
+    let fired = fired_trigger.expect("Trigger.last_status never became \"fired\"");
+    assert_eq!(fired["last_status"].as_str(), Some("fired"));
+    assert_eq!(fired["fire_count"].as_i64(), Some(1));
     assert_eq!(
-        fired.last_fired_source_doc_id.as_deref(),
+        fired["last_fired_source_doc_id"].as_str(),
         Some(fired_source_doc_id.as_str()),
         "last_fired_source_doc_id should match the source doc id carried \
          by the intent",
     );
     assert!(
-        fired.last_attempt_at.is_some(),
+        fired["last_attempt_at"].as_str().is_some(),
         "last_attempt_at should be set after a fire",
     );
     assert_eq!(
-        fired.last_error, None,
+        fired["last_error"],
+        serde_json::Value::Null,
         "last_error must be cleared on a successful fire",
     );
     // Apply-owned fields must not be clobbered by the runtime writeback.
-    assert_eq!(fired.task_id.as_deref(), Some("task-webhook"));
-    assert_eq!(fired.source_collection.as_deref(), Some("WebhookEvent"));
-    assert_eq!(fired.event_kind.as_deref(), Some("created"));
-    assert_eq!(fired.enabled, Some(true));
-    assert_eq!(fired.concurrency.as_deref(), Some("serial"));
+    assert_eq!(fired["task_id"].as_str(), Some("task-webhook"));
+    assert_eq!(
+        fired["source"]["event_source_id"].as_str(),
+        Some("WebhookEvent")
+    );
+    assert_eq!(fired["source"]["kind"].as_str(), Some("event"));
+    assert_eq!(fired["enabled"].as_bool(), Some(true));
+    assert_eq!(fired["concurrency"].as_str(), Some("serial"));
 
     cancel.cancel();
 }
@@ -1251,12 +1284,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-skip-err", "WebhookEvent", task.clone());
     let snapshot = snapshot_with_event_triggers(
@@ -1313,39 +1341,34 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let mut skipped_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let records = list_event_trigger_records(node.as_ref()).await.unwrap();
-        let (_doc_id, trig) = records
-            .iter()
-            .find(|(_d, t)| t.trigger_id == "trigger-skip-err")
-            .cloned()
-            .expect("EventTrigger doc disappeared");
-        if trig.last_status.as_deref() == Some("skipped") {
+        let trig = observed_trigger(node.as_ref(), "trigger-skip-err").await;
+        if trig["last_status"].as_str() == Some("skipped") {
             skipped_trigger = Some(trig);
             break;
         }
     }
-    let skipped = skipped_trigger.expect("EventTrigger.last_status never became \"skipped\"");
-    assert_eq!(skipped.last_status.as_deref(), Some("skipped"));
+    let skipped = skipped_trigger.expect("Trigger.last_status never became \"skipped\"");
+    assert_eq!(skipped["last_status"].as_str(), Some("skipped"));
     // fire_count MUST NOT advance on skip.
-    assert_eq!(skipped.fire_count, Some(0));
+    assert_eq!(skipped["fire_count"].as_i64(), Some(0));
     assert_eq!(
-        skipped.last_error.as_deref(),
+        skipped["last_error"].as_str(),
         Some("serial: prior fire still in-flight"),
         "last_error should carry the skip reason for operator visibility",
     );
     assert!(
-        skipped.last_attempt_at.is_some(),
+        skipped["last_attempt_at"].as_str().is_some(),
         "last_attempt_at should be set on a skip",
     );
     assert_eq!(
-        skipped.last_fired_source_doc_id.as_deref(),
+        skipped["last_fired_source_doc_id"].as_str(),
         Some(source_doc_id.as_str()),
         "last_fired_source_doc_id should record the candidate even on skip",
     );
     // Apply-owned fields intact.
-    assert_eq!(skipped.task_id.as_deref(), Some("task-webhook"));
-    assert_eq!(skipped.enabled, Some(true));
-    assert_eq!(skipped.concurrency.as_deref(), Some("serial"));
+    assert_eq!(skipped["task_id"].as_str(), Some("task-webhook"));
+    assert_eq!(skipped["enabled"].as_bool(), Some(true));
+    assert_eq!(skipped["concurrency"].as_str(), Some("serial"));
 
     // ---- Errored phase ----
     // Drive the same writeback path with an Errored result. The helper is
@@ -1353,6 +1376,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     // exactly the path the `on_result` closure takes internally.
     EventSource::spawn_runtime_field_write(
         node.clone(),
+        event_test_behavior().agent_did().to_owned(),
         trigger_id.clone(),
         source_doc_id.clone(),
         FireResult::Errored {
@@ -1363,30 +1387,25 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let mut errored_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let records = list_event_trigger_records(node.as_ref()).await.unwrap();
-        let (_doc_id, trig) = records
-            .iter()
-            .find(|(_d, t)| t.trigger_id == "trigger-skip-err")
-            .cloned()
-            .expect("EventTrigger doc disappeared");
-        if trig.last_status.as_deref() == Some("error") {
+        let trig = observed_trigger(node.as_ref(), "trigger-skip-err").await;
+        if trig["last_status"].as_str() == Some("error") {
             errored_trigger = Some(trig);
             break;
         }
     }
-    let errored = errored_trigger.expect("EventTrigger.last_status never became \"error\"");
-    assert_eq!(errored.last_status.as_deref(), Some("error"));
+    let errored = errored_trigger.expect("Trigger.last_status never became \"error\"");
+    assert_eq!(errored["last_status"].as_str(), Some("error"));
     // fire_count MUST still not advance on error.
-    assert_eq!(errored.fire_count, Some(0));
+    assert_eq!(errored["fire_count"].as_i64(), Some(0));
     assert_eq!(
-        errored.last_error.as_deref(),
+        errored["last_error"].as_str(),
         Some("materializer failed: backend timeout"),
         "last_error should carry the failure string on Errored",
     );
     // Apply-owned fields intact.
-    assert_eq!(errored.task_id.as_deref(), Some("task-webhook"));
-    assert_eq!(errored.enabled, Some(true));
-    assert_eq!(errored.concurrency.as_deref(), Some("serial"));
+    assert_eq!(errored["task_id"].as_str(), Some("task-webhook"));
+    assert_eq!(errored["enabled"].as_bool(), Some(true));
+    assert_eq!(errored["concurrency"].as_str(), Some("serial"));
 
     cancel.cancel();
 }

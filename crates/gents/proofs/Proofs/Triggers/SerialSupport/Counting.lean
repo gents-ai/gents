@@ -45,10 +45,10 @@ theorem dispatchStep_serial_bounds_count
       exact h_before
     | some k =>
       simp only
-      by_cases h_eq : (k, seed.causedByTriggerKind) = t
+      by_cases h_eq : k = t
       ·
         by_cases h_any :
-          s.requests.any (fun r => (r.causedBy == some (k, seed.causedByTriggerKind))
+          s.requests.any (fun r => (r.causedBy == some k)
                                      && !r.isTerminal) = true
         ·
           rw [if_pos h_any]
@@ -56,9 +56,9 @@ theorem dispatchStep_serial_bounds_count
         ·
           rw [if_neg h_any]
           have h_any_false :
-              s.requests.any (fun r => (r.causedBy == some (k, seed.causedByTriggerKind))
+              s.requests.any (fun r => (r.causedBy == some k)
                                          && !r.isTerminal) = false := by
-            cases h : s.requests.any (fun r => (r.causedBy == some (k, seed.causedByTriggerKind))
+            cases h : s.requests.any (fun r => (r.causedBy == some k)
                                                  && !r.isTerminal) with
             | false => rfl
             | true => exact absurd h h_any
@@ -68,7 +68,7 @@ theorem dispatchStep_serial_bounds_count
             rw [← h_eq]
             exact h_any_false
           have h_pred_true : p { id := s!"dispatched-{s.requests.length}",
-                                 causedBy := some (k, seed.causedByTriggerKind),
+                                 causedBy := some k,
                                  concurrency := intent.concurrency,
                                  isTerminal := false,
                                  executionOrigin :=
@@ -82,7 +82,7 @@ theorem dispatchStep_serial_bounds_count
               h_old_zero]
       ·
         by_cases h_any :
-          s.requests.any (fun r => (r.causedBy == some (k, seed.causedByTriggerKind))
+          s.requests.any (fun r => (r.causedBy == some k)
                                      && !r.isTerminal) = true
         ·
           rw [if_pos h_any]
@@ -90,7 +90,7 @@ theorem dispatchStep_serial_bounds_count
         ·
           rw [if_neg h_any]
           have h_pred_false : p { id := s!"dispatched-{s.requests.length}",
-                                  causedBy := some (k, seed.causedByTriggerKind),
+                                  causedBy := some k,
                                   concurrency := intent.concurrency,
                                   isTerminal := false,
                                   executionOrigin :=
@@ -98,7 +98,7 @@ theorem dispatchStep_serial_bounds_count
                                     | .manual => .interactive
                                     | .schedule | .event => .scheduled } = false := by
             simp only [hp_def]
-            have h_ne : (k, seed.causedByTriggerKind) ≠ t := h_eq
+            have h_ne : k ≠ t := h_eq
             simp [h_ne]
           show (List.filter p (s.requests ++ [_])).length ≤ 1
           rw [List.filter_append, List.filter_cons_of_neg (by rw [h_pred_false]; decide),
@@ -127,7 +127,7 @@ theorem dispatchStep_parallel_count_eq
       , causedBy :=
           match seed.causedByTriggerId with
           | none     => none
-          | some tid => some (tid, seed.causedByTriggerKind)
+          | some tid => some tid
       , concurrency := .parallel
       , isTerminal := false
       , executionOrigin :=
@@ -193,7 +193,7 @@ theorem dispatchStep_latestOnly_count_le
       simp only [h_key] at *
       set newRequest : AgentRequest :=
         { id := s!"dispatched-{s.requests.length}"
-        , causedBy := some (tid, seed.causedByTriggerKind)
+        , causedBy := some tid
         , concurrency := .latestOnly
         , isTerminal := false
         , executionOrigin :=
@@ -202,7 +202,7 @@ theorem dispatchStep_latestOnly_count_le
             | .schedule | .event => .scheduled } with hnew_def
       set superseded : List AgentRequest :=
         s.requests.map (fun r =>
-          if (r.causedBy == some (tid, seed.causedByTriggerKind)) && !r.isTerminal then
+          if (r.causedBy == some tid) && !r.isTerminal then
             { r with isTerminal := true }
           else r) with hsup_def
       by_cases h_match : p newRequest = true
@@ -227,11 +227,11 @@ theorem dispatchStep_latestOnly_count_le
         simp only [hsup_def]
         apply list_filter_map_length_le_filter_length
         intro r h_p_f_r
-        by_cases h_cond : ((r.causedBy == some (tid, seed.causedByTriggerKind)) && !r.isTerminal) = true
+        by_cases h_cond : ((r.causedBy == some tid) && !r.isTerminal) = true
         · rw [if_pos h_cond] at h_p_f_r
           simp [hp_def] at h_p_f_r
-        · have h_cond_false : ((r.causedBy == some (tid, seed.causedByTriggerKind)) && !r.isTerminal) = false := by
-            cases h : (r.causedBy == some (tid, seed.causedByTriggerKind)) && !r.isTerminal with
+        · have h_cond_false : ((r.causedBy == some tid) && !r.isTerminal) = false := by
+            cases h : (r.causedBy == some tid) && !r.isTerminal with
             | false => rfl
             | true => exact absurd h h_cond
           rw [if_neg (by rw [h_cond_false]; decide)] at h_p_f_r

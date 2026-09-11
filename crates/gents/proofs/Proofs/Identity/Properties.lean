@@ -25,29 +25,26 @@ theorem no_escalation
     (b : Behavior) (p : Permission) :
     canonicalDecide g b p = g.granted b.principal p := rfl
 
-theorem behavior_id_determines_principal
-    (w : World) (hw : w.WellFormed)
-    (b₁ b₂ : Behavior)
+/-- Principal and label together identify one behavior; a shared label alone
+never determines a principal or a permission decision. -/
+theorem scoped_behavior_key_unique
+    (w : World) (hw : w.WellFormed) (b₁ b₂ : Behavior)
     (h₁ : b₁ ∈ w.behaviors) (h₂ : b₂ ∈ w.behaviors)
-    (hid : b₁.id = b₂.id) :
-    b₁.principal = b₂.principal := by
-  have hbeh := hw.2.1
-  have heq : b₁ = b₂ := hbeh b₁ b₂ h₁ h₂ hid
-  rw [heq]
+    (howner : b₁.principal = b₂.principal) (hid : b₁.id = b₂.id) : b₁ = b₂ :=
+  hw.2.1 b₁ h₁ b₂ h₂ howner hid
 
-def Deployment.canHostBehavior (d : Deployment) (b : Behavior) : Bool :=
-  d.principal == b.principal
-
-theorem co_hostable_share_principal
-    (d : Deployment) (b₁ b₂ : Behavior)
-    (h₁ : d.canHostBehavior b₁ = true)
-    (h₂ : d.canHostBehavior b₂ = true) :
-    b₁.principal = b₂.principal := by
-  unfold Deployment.canHostBehavior at h₁ h₂
-  have e₁ : d.principal = b₁.principal := by
-    simpa [beq_iff_eq] using h₁
-  have e₂ : d.principal = b₂.principal := by
-    simpa [beq_iff_eq] using h₂
-  exact e₁.symm.trans e₂
+theorem selected_behavior_has_exact_scope
+    (behaviors : List Behavior) (principal : DID) (id : BehaviorId) (selected : Behavior)
+    (h : findBehavior? behaviors principal id = some selected) :
+    selected ∈ behaviors ∧ selected.principal = principal ∧ selected.id = id := by
+  unfold findBehavior? at h
+  split at h
+  · rename_i behavior heq
+    simp only [Option.some.injEq] at h
+    subst selected
+    have hm : behavior ∈ behaviors.filter (fun b => b.principal == principal && b.id == id) := by
+      rw [heq]; simp
+    simpa using hm
+  · contradiction
 
 end Identity

@@ -612,7 +612,7 @@ async fn wait_for_client_behavior_readiness(core: &ClientCore, agent_did: &str) 
         let has_behavior = snapshot
             .behaviors
             .iter()
-            .any(|row| row.agent_did.as_deref() == Some(agent_did));
+            .any(|row| row.agent_did == agent_did);
         let has_readiness = snapshot
             .behavior_readiness
             .iter()

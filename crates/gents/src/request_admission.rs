@@ -98,7 +98,7 @@ fn base_admission_observation(
         target_policy_allows: false,
         bridge_author_binding_current: false,
         bridge_author_authorization_fresh: false,
-        target_cross_deployment_policy_allows: false,
+        target_cross_principal_policy_allows: false,
     }
 }
 
@@ -175,6 +175,7 @@ pub(crate) async fn verify_fresh_local_self_request(
         row.requester_did.as_deref() == Some(admission.signer_did.as_str());
     observation.requester_matches_target = row.requester_did.as_deref() == row.agent_did.as_deref();
     require_admitted_observation(observation, None)?;
+    verify_request_input(node, &row, &admission).await?;
     row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
 }
 
@@ -339,7 +340,10 @@ impl AgentRequestAdmissionVerifier {
                     row.requester_did.as_deref() == row.agent_did.as_deref();
             }
             AgentRequestAdmissionKind::Enrollment => {
-                let requester = nonempty(row.requester_did.as_deref());
+                let requester = row
+                    .requester_did
+                    .as_deref()
+                    .filter(|did| !did.trim().is_empty());
                 observation.signer_matches_requester = requester == Some(&admission.signer_did);
                 if !observation.signer_matches_requester {
                     denied = Some(anyhow::anyhow!("enrollment signer is not requester"));
@@ -439,11 +443,11 @@ impl AgentRequestAdmissionVerifier {
                                     observation.source_tool_call_binding_current = true;
                                     observation.target_policy_allows = true;
                                 }
-                                RuntimeInternalSourceKind::CrossDeploymentChild => {
+                                RuntimeInternalSourceKind::CrossPrincipalChild => {
                                     observation.source_tool_call_binding_current = true;
                                     observation.bridge_author_binding_current = true;
                                     observation.bridge_author_authorization_fresh = true;
-                                    observation.target_cross_deployment_policy_allows = true;
+                                    observation.target_cross_principal_policy_allows = true;
                                 }
                                 RuntimeInternalSourceKind::LocalControl => {
                                     observation.source_document_binding_current = true;
@@ -463,8 +467,100 @@ impl AgentRequestAdmissionVerifier {
             }
         }
         require_admitted_observation(observation, denied)?;
+        verify_request_input(self.node.as_ref(), &row, &admission).await?;
         row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
     }
+}
+
+/// Signed input remains subordinate to the resolved context and issuance owner.
+async fn verify_request_input(
+    node: &EmbeddedNode,
+    row: &AgentRequestRow,
+    admission: &AgentRequestAdmissionRecord,
+) -> AdmissionResult<()> {
+    use gents_protocol::request_input::QueueSource;
+    let input = row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT);
+    let owner = required_row_string(row.agent_did.as_deref(), "agent_did")?;
+    let behavior = required_row_string(row.behavior_id.as_deref(), "behavior_id")?;
+    let (context, tools, _) = load_request_context(node, owner, behavior).await?;
+    let skills = context
+        .as_ref()
+        .map(|context| context.skill_ids.as_slice())
+        .unwrap_or_default();
+    deny_if(
+        input
+            .selected_skill_ids
+            .iter()
+            .all(|id| skills.contains(id)),
+        "request activates a skill outside its context allowlist",
+    )?;
+    let request =
+        AgentRequest::try_from(row.clone()).map_err(AgentRequestAdmissionError::denied)?;
+    let artifact_requested = tools
+        .as_ref()
+        .and_then(|tools| tools.host.as_ref())
+        .and_then(|host| host.bash.as_ref())
+        .and_then(|bash| bash.execution_mode)
+        == Some(crate::toolset::CommandExecutionMode::ArtifactWrite);
+    crate::workspace::validate_request_workspace_input(node, &request, artifact_requested)
+        .await
+        .map_err(AgentRequestAdmissionError::denied)?;
+    let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal
+        && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl);
+    if let Some(queue) = &input.queue {
+        deny_if(
+            queue.source == QueueSource::User || runtime_control,
+            "runtime queue source requires authenticated local-control issuance",
+        )?;
+    }
+    if input.goal_continuation.is_some()
+        || input
+            .queue
+            .as_ref()
+            .is_some_and(|queue| queue.source == QueueSource::Goal)
+    {
+        deny_if(
+            runtime_control && input.goal_continuation.is_some(),
+            "goal continuation requires authenticated original issuance facts",
+        )?;
+        let parent = load_exact_parent_request(
+            node,
+            required_row_string(
+                row.caused_by_parent_request_doc_id.as_deref(),
+                "parent document ID",
+            )?,
+        )
+        .await?;
+        crate::goal::verify_goal_continuation_edge(
+            owner,
+            required_row_string(row.session_id.as_deref(), "session_id")?,
+            required_row_string(row.caused_by_trigger_id.as_deref(), "goal_id")?,
+            &parent,
+            row,
+        )
+        .map_err(AgentRequestAdmissionError::denied)?;
+    }
+    Ok(())
+}
+
+fn request_workspace(row: &AgentRequestRow) -> crate::lifecycle::WorkspaceLineage {
+    crate::lifecycle::WorkspaceLineage {
+        workspace_id: row.workspace_id.clone(),
+        workspace_owner_agent_did: row.workspace_owner_agent_did.clone(),
+        workspace_authority: row.workspace_authority.clone(),
+        workspace_seal_hash: row.workspace_seal_hash.clone(),
+    }
+}
+
+fn verify_bridge_workspace(row: &AgentRequestRow, args: &str) -> AdmissionResult<()> {
+    // The caller has authenticated the exact physical bridge and author. Decode
+    // the existing tuple without introducing an unsigned owner lookup fallback.
+    let source: crate::lifecycle::WorkspaceLineage = serde_json::from_str(args)
+        .context("decode authenticated bridge workspace")
+        .map_err(AgentRequestAdmissionError::denied)?;
+    request_workspace(row)
+        .validate_source(&source, true)
+        .map_err(AgentRequestAdmissionError::denied)
 }
 
 async fn verify_runtime_source_binding(
@@ -521,6 +617,7 @@ async fn verify_runtime_source_binding(
                 required_row_string(parent.agent_did.as_deref(), "agent_did")?,
                 required_row_string(row.agent_did.as_deref(), "agent_did")?,
                 target_behavior_id,
+                row,
             )
             .await?;
             verify_exact_parent_subagent_policy(
@@ -532,13 +629,13 @@ async fn verify_runtime_source_binding(
             )
             .await
         }
-        RuntimeInternalSourceKind::CrossDeploymentChild => {
+        RuntimeInternalSourceKind::CrossPrincipalChild => {
             let bridge_author_did = bridge_author_did.ok_or_else(|| {
                 AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                    "cross-deployment child has no bridge author"
+                    "cross-principal child has no bridge author"
                 ))
             })?;
-            verify_cross_deployment_child_source(
+            verify_cross_principal_child_source(
                 node,
                 peer_admission,
                 row,
@@ -568,7 +665,10 @@ async fn verify_runtime_source_binding(
             deny_if(
                 parent.request_id == source && parent.agent_did == row.agent_did,
                 "local-control parent document does not exactly own the source",
-            )
+            )?;
+            request_workspace(row)
+                .validate_source(&request_workspace(&parent), true)
+                .map_err(AgentRequestAdmissionError::denied)
         }
         RuntimeInternalSourceKind::AutomatedTrigger => {
             deny_if(
@@ -586,6 +686,7 @@ async fn verify_runtime_source_binding(
                 source,
                 row.caused_by_trigger_doc_id.as_deref(),
                 target_behavior_id,
+                required_row_string(row.agent_did.as_deref(), "agent_did")?,
             )
             .await
         }
@@ -596,26 +697,15 @@ async fn load_exact_parent_request(
     node: &EmbeddedNode,
     source_doc_id: &str,
 ) -> AdmissionResult<AgentRequestRow> {
-    let response = node.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ request_id agent_did behavior_id }} }}"#,
-        escape_graphql_string(source_doc_id),
-    )).await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload runtime control parent failed: {:?}",
-            response.errors
-        )));
-    }
-    crate::graphql::first_row(&response, "AgentRequest")
-        .map_err(AgentRequestAdmissionError::denied)?
-        .ok_or_else(|| {
-            AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                "runtime source parent document is missing"
-            ))
-        })
+    let row = load_signed_request(node, source_doc_id).await?;
+    deny_if(
+        row.doc_id.as_deref() == Some(source_doc_id),
+        "runtime source parent physical document binding changed",
+    )?;
+    Ok(row)
 }
 
-async fn verify_cross_deployment_child_source(
+async fn verify_cross_principal_child_source(
     node: &EmbeddedNode,
     peer_admission: &dyn PeerAdmissionAuthority,
     row: &AgentRequestRow,
@@ -625,14 +715,14 @@ async fn verify_cross_deployment_child_source(
 ) -> AdmissionResult<()> {
     deny_if(
         row.caused_by_parent_request_id.as_deref() == Some(source),
-        "cross-deployment child logical parent does not match signed source",
+        "cross-principal child logical parent does not match signed source",
     )?;
     let parent_doc_id = row
         .caused_by_parent_request_doc_id
         .as_deref()
         .ok_or_else(|| {
             AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                "cross-deployment child has no opaque parent document binding"
+                "cross-principal child has no opaque parent document binding"
             ))
         })?;
     let tool_call_id = row
@@ -640,7 +730,7 @@ async fn verify_cross_deployment_child_source(
         .as_deref()
         .ok_or_else(|| {
             AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                "cross-deployment child has no parent tool-call binding"
+                "cross-principal child has no parent tool-call binding"
             ))
         })?;
     let tool_doc_id = row
@@ -648,7 +738,7 @@ async fn verify_cross_deployment_child_source(
         .as_deref()
         .ok_or_else(|| {
             AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                "cross-deployment child has no physical tool-call binding"
+                "cross-principal child has no physical tool-call binding"
             ))
         })?;
 
@@ -672,7 +762,7 @@ async fn verify_cross_deployment_child_source(
         .await;
     if response.has_errors() {
         return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload cross-deployment source bridge failed: {:?}",
+            "reload cross-principal source bridge failed: {:?}",
             response.errors
         )));
     }
@@ -680,7 +770,7 @@ async fn verify_cross_deployment_child_source(
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
             AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                "cross-deployment source bridge is missing"
+                "cross-principal source bridge is missing"
             ))
         })?;
     deny_if(
@@ -690,20 +780,20 @@ async fn verify_cross_deployment_child_source(
             && bridge.agent_did.as_deref() == Some(bridge_author_did)
             && bridge.spawn_target_did.as_deref() == row.agent_did.as_deref()
             && bridge.child_request_id.as_deref() == Some(row.request_id.as_str()),
-        "cross-deployment source bridge does not exactly own this child",
+        "cross-principal source bridge does not exactly own this child",
     )?;
     #[derive(Deserialize)]
     struct SpawnTargetArgs {
         behavior_id: String,
     }
     let args: SpawnTargetArgs = serde_json::from_str(bridge.args.as_deref().unwrap_or_default())
-        .context("parse cross-deployment source bridge arguments")
+        .context("parse cross-principal source bridge arguments")
         .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
         args.behavior_id == target_behavior_id
             && args.behavior_id == args.behavior_id.trim()
             && !args.behavior_id.is_empty(),
-        "cross-deployment source bridge targets another behavior",
+        "cross-principal source bridge targets another behavior",
     )?;
     let authorized = peer_admission
         .fresh_member_authorized_for_agent(
@@ -711,13 +801,14 @@ async fn verify_cross_deployment_child_source(
             required_row_string(row.agent_did.as_deref(), "agent_did")?,
         )
         .await
-        .context("reload cross-deployment bridge author admission")
+        .context("reload cross-principal bridge author admission")
         .map_err(AgentRequestAdmissionError::unavailable)?;
     deny_if(
         authorized,
-        "cross-deployment bridge author is no longer authorized for the target",
+        "cross-principal bridge author is no longer authorized for the target",
     )?;
-    verify_target_cross_deployment_policy(
+    verify_bridge_workspace(row, bridge.args.as_deref().unwrap_or_default())?;
+    verify_target_cross_principal_policy(
         node,
         required_row_string(row.agent_did.as_deref(), "agent_did")?,
         target_behavior_id,
@@ -725,65 +816,97 @@ async fn verify_cross_deployment_child_source(
     .await
 }
 
-async fn verify_target_cross_deployment_policy(
+/// Read the existing canonical configuration owner in one scoped snapshot.
+async fn load_request_context(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+) -> AdmissionResult<(
+    Option<crate::document_config::AgentContext>,
+    Option<crate::document_config::Tools>,
+    Vec<crate::document_config::SubagentTargetDocument>,
+)> {
+    use crate::collection::Collection;
+    use crate::config_client::{read_desired_state_document_in_txn as read, ConfigAccess};
+    use crate::document_config::{AgentBehavior, AgentContext, SubagentTargetDocument, Tools};
+    let owner = agent_did.to_owned();
+    let behavior_id = behavior_id.to_owned();
+    ConfigAccess::transact_local(node, None, "request_admission.context", move |txn| {
+        let owner = owner.clone();
+        let behavior_id = behavior_id.clone();
+        Box::pin(async move {
+            let behavior: AgentBehavior = serde_json::from_value(
+                read(txn, Collection::AgentBehavior, &owner, &behavior_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AgentRequestAdmissionError::denied(anyhow::anyhow!(
+                            "request behavior is missing"
+                        ))
+                    })?,
+            )?;
+            deny_if(behavior.enabled, "request behavior is disabled")?;
+            let Some(context_id) = behavior.context_id else {
+                return Ok((None, None, Vec::new()));
+            };
+            let context: AgentContext = serde_json::from_value(
+                read(txn, Collection::AgentContext, &owner, &context_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AgentRequestAdmissionError::denied(anyhow::anyhow!(
+                            "request context is missing"
+                        ))
+                    })?,
+            )?;
+            let tools: Option<Tools> = match context.tools_id.as_deref() {
+                None => None,
+                Some(id) => Some(serde_json::from_value(
+                    read(txn, Collection::Tools, &owner, id)
+                        .await?
+                        .ok_or_else(|| {
+                            AgentRequestAdmissionError::denied(anyhow::anyhow!(
+                                "request tools are missing"
+                            ))
+                        })?,
+                )?),
+            };
+            let mut targets = Vec::<SubagentTargetDocument>::new();
+            if let Some(subagents) = tools.as_ref().and_then(|tools| tools.subagents.as_ref()) {
+                for id in &subagents.target_ids {
+                    targets.push(serde_json::from_value(
+                        read(txn, Collection::SubagentTarget, &owner, id)
+                            .await?
+                            .ok_or_else(|| {
+                                AgentRequestAdmissionError::denied(anyhow::anyhow!(
+                                    "request subagent target is missing"
+                                ))
+                            })?,
+                    )?);
+                }
+            }
+            Ok((Some(context), tools, targets))
+        })
+    })
+    .await
+    .map_err(
+        |error| match error.downcast::<AgentRequestAdmissionError>() {
+            Ok(error) => error,
+            Err(error) => AgentRequestAdmissionError::unavailable(error),
+        },
+    )
+}
+
+async fn verify_target_cross_principal_policy(
     node: &EmbeddedNode,
     target_agent_did: &str,
     target_behavior_id: &str,
 ) -> AdmissionResult<()> {
-    #[derive(Deserialize)]
-    struct BehaviorRow {
-        tool_selection_id: Option<String>,
-    }
-    #[derive(Deserialize)]
-    struct SelectionRow {
-        subagent_allow_cross_deployment: Option<bool>,
-    }
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentBehavior(filter: {{ behavior_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ tool_selection_id }} }}"#,
-            escape_graphql_string(target_behavior_id),
-            escape_graphql_string(target_agent_did),
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload target cross-deployment behavior policy failed: {:?}",
-            response.errors
-        )));
-    }
-    let behaviors: Vec<BehaviorRow> = crate::graphql::rows(&response, "AgentBehavior")
-        .map_err(AgentRequestAdmissionError::denied)?;
+    let (_, tools, _) = load_request_context(node, target_agent_did, target_behavior_id).await?;
     deny_if(
-        behaviors.len() == 1,
-        "target cross-deployment behavior is missing or ambiguous",
-    )?;
-    let selection_id = behaviors[0].tool_selection_id.as_deref().ok_or_else(|| {
-        AgentRequestAdmissionError::denied(anyhow::anyhow!(
-            "target behavior has no cross-deployment policy"
-        ))
-    })?;
-    deny_if(
-        !selection_id.is_empty() && selection_id == selection_id.trim(),
-        "target cross-deployment policy binding is noncanonical",
-    )?;
-    let response = node
-        .execute(&format!(
-            r#"{{ ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ subagent_allow_cross_deployment }} }}"#,
-            escape_graphql_string(selection_id),
-            escape_graphql_string(target_agent_did),
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload target cross-deployment tool policy failed: {:?}",
-            response.errors
-        )));
-    }
-    let selections: Vec<SelectionRow> = crate::graphql::rows(&response, "ToolSelection")
-        .map_err(AgentRequestAdmissionError::denied)?;
-    deny_if(
-        selections.len() == 1 && selections[0].subagent_allow_cross_deployment == Some(true),
-        "target behavior no longer allows cross-deployment children",
+        tools
+            .and_then(|tools| tools.subagents)
+            .and_then(|subagents| subagents.allow_cross_principal)
+            == Some(true),
+        "target behavior no longer allows cross-principal children",
     )
 }
 
@@ -797,6 +920,7 @@ async fn verify_exact_parent_tool_call(
     parent_agent_did: &str,
     target_agent_did: &str,
     target_behavior_id: &str,
+    child: &AgentRequestRow,
 ) -> AdmissionResult<String> {
     #[derive(Deserialize)]
     struct ToolRow {
@@ -852,6 +976,7 @@ async fn verify_exact_parent_tool_call(
             && !target_name.is_empty(),
         "runtime source tool-call target does not match child behavior",
     )?;
+    verify_bridge_workspace(child, tool.args.as_deref().unwrap_or_default())?;
     Ok(target_name)
 }
 
@@ -862,95 +987,26 @@ async fn verify_exact_parent_subagent_policy(
     target_behavior_id: &str,
     target_agent_did: &str,
 ) -> AdmissionResult<()> {
-    #[derive(Deserialize)]
-    struct BehaviorPolicyRow {
-        tool_selection_id: Option<String>,
-    }
-    #[derive(Deserialize)]
-    struct SelectionPolicyRow {
-        subagent_spawn_enabled: Option<bool>,
-        subagent_targets: Option<Vec<String>>,
-    }
-
-    let parent_behavior_id = parent_behavior_id.ok_or_else(|| {
-        AgentRequestAdmissionError::denied(anyhow::anyhow!(
-            "exact runtime source parent has no behavior policy binding"
-        ))
-    })?;
+    let parent_behavior_id = required_row_string(parent_behavior_id, "parent behavior_id")?;
+    let (_, tools, targets) =
+        load_request_context(node, target_agent_did, parent_behavior_id).await?;
     deny_if(
-        parent_behavior_id == parent_behavior_id.trim() && !parent_behavior_id.is_empty(),
-        "exact runtime source parent behavior binding is noncanonical",
+        tools
+            .and_then(|tools| tools.subagents)
+            .and_then(|subagents| subagents.spawn_enabled)
+            == Some(true),
+        "exact parent subagent policy is disabled",
     )?;
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentBehavior(filter: {{ behavior_id: {{ _eq: "{}" }} }}, limit: 2) {{ tool_selection_id }} }}"#,
-            escape_graphql_string(parent_behavior_id),
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload exact parent behavior policy failed: {:?}",
-            response.errors
-        )));
-    }
-    let behaviors: Vec<BehaviorPolicyRow> = crate::graphql::rows(&response, "AgentBehavior")
-        .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
-        behaviors.len() == 1,
-        "exact parent behavior policy is missing or ambiguous",
-    )?;
-    let selection_id = behaviors[0].tool_selection_id.as_deref().ok_or_else(|| {
-        AgentRequestAdmissionError::denied(anyhow::anyhow!(
-            "exact parent behavior has no subagent policy"
-        ))
-    })?;
-    deny_if(
-        selection_id == selection_id.trim() && !selection_id.is_empty(),
-        "exact parent subagent policy binding is noncanonical",
-    )?;
-    let response = node
-        .execute(&format!(
-            r#"{{ ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 2) {{ subagent_spawn_enabled subagent_targets }} }}"#,
-            escape_graphql_string(selection_id),
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload exact parent subagent policy failed: {:?}",
-            response.errors
-        )));
-    }
-    let selections: Vec<SelectionPolicyRow> = crate::graphql::rows(&response, "ToolSelection")
-        .map_err(AgentRequestAdmissionError::denied)?;
-    deny_if(
-        selections.len() == 1 && selections[0].subagent_spawn_enabled == Some(true),
-        "exact parent subagent policy is missing, ambiguous, or disabled",
-    )?;
-    let targets = selections[0]
-        .subagent_targets
-        .as_deref()
-        .unwrap_or_default();
-    let mut exact_matches = 0usize;
-    for encoded in targets {
-        let target: crate::document_config::SubagentTarget = serde_json::from_str(encoded)
-            .context("parse exact parent subagent target policy")
-            .map_err(AgentRequestAdmissionError::denied)?;
-        deny_if(
-            target.is_structurally_valid()
-                && target.name == target.name.trim()
-                && target.agent_did == target.agent_did.trim()
-                && target.behavior_id == target.behavior_id.trim(),
-            "exact parent subagent target policy is noncanonical",
-        )?;
-        if target.name == target_name
-            && target.behavior_id == target_behavior_id
-            && target.agent_did == target_agent_did
-        {
-            exact_matches += 1;
-        }
-    }
-    deny_if(
-        exact_matches == 1,
+        targets
+            .iter()
+            .filter(|target| {
+                target.name == target_name
+                    && target.behavior_id == target_behavior_id
+                    && target.target_agent_did == target_agent_did
+            })
+            .count()
+            == 1,
         "parent no longer exactly authorizes the runtime-internal target",
     )
 }
@@ -961,12 +1017,14 @@ async fn verify_automated_trigger_source(
     trigger_id: &str,
     trigger_doc_id: Option<&str>,
     target_behavior_id: &str,
+    agent_did: &str,
 ) -> AdmissionResult<()> {
     #[derive(Deserialize)]
     struct TriggerRow {
-        #[serde(alias = "trigger_id", alias = "schedule_id")]
-        source_id: String,
+        trigger_id: String,
+        agent_did: String,
         task_id: String,
+        source: crate::document_config::TriggerSource,
         enabled: bool,
     }
     #[derive(Deserialize)]
@@ -974,78 +1032,61 @@ async fn verify_automated_trigger_source(
         behavior_id: String,
         enabled: bool,
     }
-    let collection = match kind {
-        "event" => "EventTrigger",
-        "schedule" => "Schedule",
-        _ => {
-            return Err(AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                "unsupported trigger kind"
-            )))
-        }
-    };
-    let id_field = match kind {
-        "event" => "trigger_id",
-        "schedule" => "schedule_id",
-        _ => unreachable!(),
-    };
-    let trigger_doc_id = trigger_doc_id.ok_or_else(|| {
-        AgentRequestAdmissionError::denied(anyhow::anyhow!(
-            "runtime trigger configuration document binding is absent"
-        ))
-    })?;
+    let doc = required_row_string(trigger_doc_id, "trigger document ID")?;
     let response = node.execute(&format!(
-        r#"{{ {collection}(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {id_field} task_id enabled }} }}"#,
-        escape_graphql_string(trigger_doc_id),
+        r#"{{ Trigger(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ trigger_id agent_did task_id source enabled }} }}"#,
+        escape_graphql_string(doc),
     )).await;
     if response.has_errors() {
         return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload runtime trigger source failed: {:?}",
+            "reload runtime trigger failed: {:?}",
             response.errors
         )));
     }
     let triggers: Vec<TriggerRow> =
-        crate::graphql::rows(&response, collection).map_err(AgentRequestAdmissionError::denied)?;
+        crate::graphql::rows(&response, "Trigger").map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
-        triggers.len() == 1 && triggers[0].enabled && triggers[0].source_id == trigger_id,
-        "runtime trigger source is missing, ambiguous, or disabled",
+        triggers.len() == 1,
+        "runtime trigger is missing or ambiguous",
     )?;
-    let task_response = node.execute(&format!(
-        r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }} }}, limit: 2) {{ behavior_id enabled }} }}"#,
-        escape_graphql_string(&triggers[0].task_id),
+    let trigger = &triggers[0];
+    deny_if(
+        trigger.enabled
+            && trigger.trigger_id == trigger_id
+            && trigger.agent_did == agent_did
+            && matches!(
+                (&trigger.source, kind),
+                (crate::document_config::TriggerSource::Event { .. }, "event")
+                    | (
+                        crate::document_config::TriggerSource::Schedule { .. },
+                        "schedule"
+                    )
+            ),
+        "runtime trigger physical source, principal, kind, or availability changed",
+    )?;
+    let response = node.execute(&format!(
+        r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ behavior_id enabled }} }}"#,
+        escape_graphql_string(&trigger.task_id), escape_graphql_string(agent_did),
     )).await;
-    if task_response.has_errors() {
+    if response.has_errors() {
         return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
             "reload runtime trigger task failed: {:?}",
-            task_response.errors
+            response.errors
         )));
     }
     let tasks: Vec<TaskRow> =
-        crate::graphql::rows(&task_response, "Task").map_err(AgentRequestAdmissionError::denied)?;
+        crate::graphql::rows(&response, "Task").map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
         tasks.len() == 1 && tasks[0].enabled && tasks[0].behavior_id == target_behavior_id,
         "runtime trigger task is missing, disabled, ambiguous, or targets another behavior",
-    )?;
-    Ok(())
-}
-
-fn nonempty(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
-
-#[cfg(test)]
-fn require_pending_deadline_absent(deadline: Option<&str>) -> Result<()> {
-    anyhow::ensure!(
-        deadline.is_none(),
-        "pending AgentRequest carries a caller-authored execution deadline"
-    );
-    Ok(())
+    )
 }
 
 /// Verify the original immutable request payload and its declared admission
 /// branch. Historical receipt authentication does not re-admit execution or
 /// require today's enrollment, TTL, lifecycle, or backend readiness. The
 /// operation's owner separately checks its expected principal/source scope.
-pub(crate) fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
+pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
     let admission = row_admission(row)?;
     admission.validate_canonical_fields()?;
     admission
@@ -1113,6 +1154,9 @@ fn row_admission(row: &AgentRequestRow) -> Result<AgentRequestAdmissionRecord> {
     .map_err(anyhow::Error::msg)
 }
 
+static DEFAULT_REQUEST_INPUT: std::sync::LazyLock<gents_protocol::request_input::RequestInput> =
+    std::sync::LazyLock::new(Default::default);
+
 fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields<'_>> {
     let subagent_depth = row
         .subagent_depth
@@ -1127,7 +1171,10 @@ fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields
             .as_deref()
             .context("AgentRequest is missing agent_did")?,
         requester_did: row.requester_did.as_deref(),
-        behavior_id: row.behavior_id.as_deref(),
+        behavior_id: row
+            .behavior_id
+            .as_deref()
+            .context("AgentRequest is missing behavior_id")?,
         session_id: row
             .session_id
             .as_deref()
@@ -1140,13 +1187,7 @@ fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields
             .content
             .as_deref()
             .context("AgentRequest is missing content")?,
-        temperature: row.temperature,
-        top_p: row.top_p,
-        top_k: row.top_k,
-        seed: row.seed,
-        max_tokens: row.max_tokens,
-        max_total_tokens: row.max_total_tokens,
-        metadata: row.metadata.as_deref(),
+        input: row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT),
         execution_origin: row.execution_origin.as_deref(),
         caused_by_trigger_id: row.caused_by_trigger_id.as_deref(),
         caused_by_trigger_kind: row.caused_by_trigger_kind.as_deref(),
@@ -1167,8 +1208,8 @@ fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields
         caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id.as_deref(),
         caused_by_parent_tool_call_doc_id: row.caused_by_parent_tool_call_doc_id.as_deref(),
         workspace_id: row.workspace_id.as_deref(),
+        workspace_owner_agent_did: row.workspace_owner_agent_did.as_deref(),
         workspace_authority: row.workspace_authority.as_deref(),
-        workspace_owner_deployment_id: row.workspace_owner_deployment_id.as_deref(),
         workspace_seal_hash: row.workspace_seal_hash.as_deref(),
     })
 }
@@ -1190,17 +1231,17 @@ fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResu
 /// Complete immutable request signature projection shared by fresh admission
 /// and transaction-scoped historical receipt readers. Lifecycle is included
 /// for callers decoding the row, but is not part of the signed payload.
-pub(crate) const SIGNED_REQUEST_FIELDS: &str = r#"
+pub const SIGNED_REQUEST_FIELDS: &str = r#"
 _docID lifecycle_state request_id agent_did requester_did behavior_id session_id
                 retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
-                content temperature top_p top_k seed max_tokens max_total_tokens metadata
+                content input max_total_tokens
                 execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
                 caused_by_trigger_context caused_by_source_doc_id caused_by_trigger_doc_id
-                created_at deadline retry_count
+                created_at deadline execution_generation execution_lease_expires_at execution_progress_seq retry_count
                 max_retries valid_until subagent_depth caused_by_parent_request_id
                 caused_by_parent_request_doc_id caused_by_parent_tool_call_id
-                caused_by_parent_tool_call_doc_id workspace_id workspace_authority
-                workspace_owner_deployment_id workspace_seal_hash admission_kind
+                caused_by_parent_tool_call_doc_id workspace_id workspace_owner_agent_did workspace_authority
+                workspace_seal_hash admission_kind
                 admission_signer_did admission_signature enrollment_request_id
                 enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence
                 enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id
@@ -1249,20 +1290,83 @@ pub(crate) async fn load_request_for_admission_test(
 mod tests {
     use std::sync::Arc;
 
-    use super::{require_pending_deadline_absent, AgentRequestAdmissionVerifier};
+    use super::AgentRequestAdmissionVerifier;
     use crate::agent::p2p_reconcile::enrollment_authority_channel;
     use crate::identity::{AgentIdentity, KeyIdentity};
     use crate::schema::ensure_runtime_schemas;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
-    #[test]
-    fn caller_authored_preclaim_deadline_fails_closed() {
-        assert!(require_pending_deadline_absent(None).is_ok());
-        assert!(require_pending_deadline_absent(Some(" ")).is_err());
-        let error = require_pending_deadline_absent(Some("2099-01-01T00:00:00Z")).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("caller-authored execution deadline"));
+    #[tokio::test]
+    async fn signed_input_cannot_expand_context_or_impersonate_runtime_queue() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(temp.path().join("input.key"), None).unwrap();
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
+        let owner = crate::graphql::escape_graphql_string(identity.did());
+        for mutation in [
+            format!(
+                r#"mutation {{ create_AgentContext(input: {{ context_id: "context", agent_did: "{owner}", skill_ids: ["allowed"] }}) {{ _docID }} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_AgentBehavior(input: {{ behavior_id: "behavior", agent_did: "{owner}", context_id: "context", inference_profile_id: "inference", enabled: true }}) {{ _docID }} }}"#
+            ),
+        ] {
+            let result = node.execute(&mutation).await;
+            assert!(!result.has_errors(), "{:?}", result.errors);
+        }
+        for (index, input, allowed) in [
+            (
+                0,
+                serde_json::json!({"selected_skill_ids":["allowed"]}),
+                true,
+            ),
+            (
+                1,
+                serde_json::json!({"selected_skill_ids":["unconfigured"]}),
+                false,
+            ),
+            (
+                2,
+                serde_json::json!({"queue":{"source":"steering","policy":"append"}}),
+                false,
+            ),
+            (
+                3,
+                serde_json::json!({"queue":{"source":"goal","policy":"coalesce"},"goal_continuation":{"sequence":1,"wrapup":false}}),
+                false,
+            ),
+        ] {
+            let mut create = AgentRequestCreate::base(
+                format!("input-{index}"),
+                identity.did(),
+                identity.did(),
+                "behavior",
+                "session",
+                "work",
+                "interactive",
+                "2026-09-01T00:00:00Z",
+                AgentRequestAdmissionRecord::local_self(identity.did()),
+            );
+            create.input = serde_json::from_value(input).unwrap();
+            crate::sign_agent_request_create(&identity, &mut create)
+                .await
+                .unwrap();
+            let result = node.execute(&create.graphql_mutation().unwrap()).await;
+            assert!(!result.has_errors(), "{:?}", result.errors);
+            let doc = crate::graphql::single_mutation_document(&result, "create_AgentRequest")
+                .unwrap()
+                .unwrap()["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let request = super::load_request_for_admission_test(&node, &doc)
+                .await
+                .unwrap();
+            let admitted =
+                super::verify_fresh_local_self_request(&node, &identity, &request, "behavior")
+                    .await;
+            assert_eq!(admitted.is_ok(), allowed, "case {index}: {admitted:?}");
+        }
     }
 
     #[tokio::test]
@@ -1339,6 +1443,9 @@ mod tests {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
+        let owner = crate::graphql::escape_graphql_string(identity.did());
+        let seeded = node.execute(&format!(r#"mutation {{ create_AgentBehavior(input: {{behavior_id:"behavior-1",agent_did:"{owner}",inference_profile_id:"inference",enabled:true}}) {{_docID}} }}"#)).await;
+        assert!(!seeded.has_errors(), "{:?}", seeded.errors);
         let request_id = uuid::Uuid::new_v4().to_string();
         let mut create = AgentRequestCreate::base(
             request_id,
@@ -1387,11 +1494,19 @@ mod tests {
         let mut queued = super::row_into_agent_request(row, &doc_id).unwrap();
         queued.content = "stale queued content".to_string();
 
+        let runtime_state = node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{_docID: {{_eq:"{}"}}}}, input: {{execution_generation:"previous-claim",max_total_tokens:0}}) {{_docID}} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id))).await;
+        assert!(!runtime_state.has_errors(), "{:?}", runtime_state.errors);
         let (_authority_owner, authority) = enrollment_authority_channel();
         let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, authority);
         let verified = verifier.verify_fresh(&queued, "behavior-1").await.unwrap();
         assert_eq!(verified.content, "durable signed content");
         assert_ne!(verified.content, queued.content);
+        assert_eq!(
+            verified.execution_generation.as_deref(),
+            Some("previous-claim")
+        );
+        assert_eq!(verified.max_total_tokens, Some(0));
 
         let response = node
             .execute(&format!(
@@ -1421,13 +1536,12 @@ mod tests {
             .execute(
                 r#"mutation {
                     task: create_Task(input: {
-                        task_id: "task-1", name: "task-1", behavior_id: "behavior-1",
+                        task_id: "task-1", agent_did: "did:key:target", behavior_id: "behavior-1",
                         prompt_template: "run", enabled: true
                     }) { _docID }
-                    trigger: create_EventTrigger(input: {
-                        trigger_id: "trigger-1", task_id: "task-1",
-                        source_collection: "AgentRequest", event_kind: "created",
-                        filter: "{}", enabled: true, concurrency: "serial", fire_count: 0
+                    trigger: create_Trigger(input: {
+                        trigger_id: "trigger-1", agent_did: "did:key:target", task_id: "task-1",
+                        source: {kind: "event", event_source_id: "events"}, enabled: true, concurrency: "serial"
                     }) { _docID }
                 }"#,
             )
@@ -1453,6 +1567,7 @@ mod tests {
             "trigger-1",
             Some(&trigger_doc_id),
             "behavior-1",
+            "did:key:target",
         )
         .await
         .unwrap();
@@ -1460,7 +1575,7 @@ mod tests {
         let response = node
             .execute(
                 r#"mutation {
-                    update_EventTrigger(
+                    update_Trigger(
                         filter: { trigger_id: { _eq: "trigger-1" } },
                         input: { enabled: false }
                     ) { _docID }
@@ -1477,7 +1592,8 @@ mod tests {
             "event",
             "trigger-1",
             Some(&trigger_doc_id),
-            "behavior-1"
+            "behavior-1",
+            "did:key:target"
         )
         .await
         .is_err());
@@ -1485,7 +1601,7 @@ mod tests {
         let response = node
             .execute(
                 r#"mutation {
-                    update_EventTrigger(
+                    update_Trigger(
                         filter: { trigger_id: { _eq: "trigger-1" } },
                         input: { enabled: true }
                     ) { _docID }
@@ -1506,7 +1622,8 @@ mod tests {
             "event",
             "trigger-1",
             Some(&trigger_doc_id),
-            "behavior-1"
+            "behavior-1",
+            "did:key:target"
         )
         .await
         .is_err());
@@ -1539,28 +1656,12 @@ mod tests {
         .unwrap_err();
         assert!(denied.is_denied(), "missing policy must terminally deny");
 
-        let target = crate::document_config::subagent_target_entry(
-            "researcher",
-            "did:key:target",
-            "research",
-            None,
-        );
-        let response = node
-            .execute(&format!(
-                r#"mutation {{
-                    selection: create_ToolSelection(input: {{
-                        selection_id: "parent-selection",
-                        subagent_spawn_enabled: true,
-                        subagent_targets: ["{}"]
-                    }}) {{ _docID }}
-                    behavior: create_AgentBehavior(input: {{
-                        behavior_id: "parent-behavior", agent_did: "did:key:parent",
-                        tool_selection_id: "parent-selection", enabled: true
-                    }}) {{ _docID }}
-                }}"#,
-                crate::graphql::escape_graphql_string(&target),
-            ))
-            .await;
+        let response = node.execute(r#"mutation {
+            create_SubagentTarget(input: {target_id:"research",agent_did:"did:key:target",target_agent_did:"did:key:target",behavior_id:"research",name:"researcher"}) {_docID}
+            create_Tools(input: {tools_id:"parent-tools",agent_did:"did:key:target",subagents:{spawn_enabled:true,target_ids:["research"]}}) {_docID}
+            create_AgentContext(input: {context_id:"parent-context",agent_did:"did:key:target",tools_id:"parent-tools"}) {_docID}
+            create_AgentBehavior(input: {behavior_id:"parent-behavior",agent_did:"did:key:target",context_id:"parent-context",inference_profile_id:"inference",enabled:true}) {_docID}
+        }"#).await;
         assert!(
             !response.has_errors(),
             "seed exact policy: {:?}",

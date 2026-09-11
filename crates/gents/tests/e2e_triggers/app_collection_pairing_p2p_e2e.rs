@@ -1,4 +1,4 @@
-//! #657 — reconcile-driven app-collection replication fires an EventTrigger.
+//! #657 — reconcile-driven app-collection replication fires an Trigger.
 //!
 //! Unlike `event_trigger_p2p_e2e` (manual `install_one_way_replicator`), this
 //! drives replication through `DataPlanePairingDesired` + the pairing
@@ -43,15 +43,23 @@ async fn register_change_proposed_schema(node: &EmbeddedNode) {
         .expect("add_schema ChangeProposed");
 }
 
-async fn create_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prompt_template: &str) {
+async fn create_task(
+    node: &EmbeddedNode,
+    owner: &str,
+    task_id: &str,
+    behavior_id: &str,
+    prompt_template: &str,
+) {
+    let escaped_owner = escape_graphql_string(owner);
     let escaped_task_id = escape_graphql_string(task_id);
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let escaped_prompt_template = escape_graphql_string(prompt_template);
     let mutation = format!(
         r#"mutation {{
             create_Task(input: {{
+                agent_did: "{escaped_owner}",
                 task_id: "{escaped_task_id}",
-                name: "{escaped_task_id}",
+                display_name: "{escaped_task_id}",
                 behavior_id: "{escaped_behavior_id}",
                 prompt_template: "{escaped_prompt_template}",
                 enabled: true
@@ -68,12 +76,14 @@ async fn create_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prom
 
 async fn create_event_trigger_with_filter(
     node: &EmbeddedNode,
+    owner: &str,
     trigger_id: &str,
     task_id: &str,
     source_collection: &str,
     event_kind: &str,
     filter: &str,
 ) {
+    let escaped_owner = escape_graphql_string(owner);
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let escaped_task_id = escape_graphql_string(task_id);
     let escaped_source_collection = escape_graphql_string(source_collection);
@@ -81,12 +91,18 @@ async fn create_event_trigger_with_filter(
     let escaped_filter = escape_graphql_string(filter);
     let mutation = format!(
         r#"mutation {{
-            create_EventTrigger(input: {{
-                trigger_id: "{escaped_trigger_id}",
-                task_id: "{escaped_task_id}",
+            create_EventSource(input: {{
+                event_source_id: "{escaped_trigger_id}",
+                agent_did: "{escaped_owner}",
                 source_collection: "{escaped_source_collection}",
                 event_kind: "{escaped_event_kind}",
-                filter: "{escaped_filter}",
+                filter: "{escaped_filter}"
+            }}) {{ _docID }}
+            create_Trigger(input: {{
+                trigger_id: "{escaped_trigger_id}",
+                agent_did: "{escaped_owner}",
+                task_id: "{escaped_task_id}",
+                source: {{ kind: "event", event_source_id: "{escaped_trigger_id}" }},
                 enabled: true,
                 concurrency: "serial",
                 fire_count: 0
@@ -96,7 +112,7 @@ async fn create_event_trigger_with_filter(
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
-        "create EventTrigger failed: {:?}",
+        "create Trigger failed: {:?}",
         response.errors
     );
 }
@@ -499,7 +515,7 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let query = format!(
         r#"{{
-            EventTrigger(
+            Trigger(
                 filter: {{ trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
                 limit: 1
             ) {{
@@ -508,28 +524,46 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
                 last_fired_source_doc_id
                 last_error
                 task_id
-                source_collection
-                event_kind
                 enabled
                 concurrency
             }}
+            EventSource(
+                filter: {{ event_source_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                limit: 1
+            ) {{ source_collection event_kind }}
         }}"#
     );
     let response = node.execute(&query).await;
     assert!(
         !response.has_errors(),
-        "EventTrigger query failed: {:?}",
+        "Trigger query failed: {:?}",
         response.errors
     );
     let row = response
         .data
         .as_ref()
-        .and_then(|data| data.get("EventTrigger"))
+        .and_then(|data| data.get("Trigger"))
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()
-        .expect("EventTrigger row missing");
-    serde_json::from_value(row).expect("decode EventTrigger row")
+        .expect("Trigger row missing");
+    let mut row: EventTriggerRow = serde_json::from_value(row).expect("decode Trigger row");
+    let source = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("EventSource"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .expect("EventSource row missing");
+    row.source_collection = source
+        .get("source_collection")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    row.event_kind = source
+        .get("event_kind")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    row
 }
 
 async fn write_change_proposed(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
@@ -670,7 +704,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await;
 
-    // B: document reconcile for Task + EventTrigger (ordering invariant).
+    // B: document reconcile for Task + Trigger (ordering invariant).
     let startup = wait_for_runtime_snapshot(db_b.node.as_ref(), &did_b, |s| {
         s.process_state == "ready" && s.reconcile_phase == "idle" && s.active_generation >= 1
     })
@@ -679,6 +713,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
 
     create_task(
         db_b.node.as_ref(),
+        &did_b,
         TASK_ID,
         &default_behavior_b,
         PROMPT_TEMPLATE,
@@ -686,6 +721,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     .await;
     create_event_trigger_with_filter(
         db_b.node.as_ref(),
+        &did_b,
         TRIGGER_ID,
         TASK_ID,
         "ChangeProposed",
@@ -800,7 +836,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for EventTrigger.last_status=\"fired\" (last row: {row:?})"
+            "timed out waiting for Trigger.last_status=\"fired\" (last row: {row:?})"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
@@ -1009,10 +1045,8 @@ async fn seed_preexisting_hydration_history(
                 session_id: "{HYDRATION_SESSION_ID}",
                 requester_did: "{requester_did}",
                 agent_did: "{agent_did}",
-                agent_name: "hydration-runtime",
                 behavior_id: "{behavior_id}",
-                started: "{now}",
-                status: "active"
+                created_at: "{now}"
             }}) {{ _docID }}
             message: create_AgentMessage(input: {{
                 message_key: "{HYDRATION_SESSION_ID}:1",

@@ -100,18 +100,14 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_historic_values() {
+    fn defaults_and_env_overrides_are_in_milliseconds() {
         let _env = EnvGuard::clear();
         assert_eq!(heartbeat_interval(), Duration::from_secs(30));
         assert_eq!(sweep_interval(), Duration::from_secs(30));
         assert_eq!(endpoint_interval(), Duration::from_secs(30));
         assert_eq!(lease_renewal_interval(), Duration::from_secs(30));
         assert_eq!(stale_after(), Duration::from_secs(90));
-    }
 
-    #[test]
-    fn env_overrides_are_in_milliseconds() {
-        let _env = EnvGuard::clear();
         std::env::set_var("GENTS_REGISTRY_HEARTBEAT_MS", "1250");
         std::env::set_var("GENTS_PAIRING_SWEEP_MS", "500");
         std::env::set_var("GENTS_ENDPOINT_HEARTBEAT_MS", "750");

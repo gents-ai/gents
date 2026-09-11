@@ -1,207 +1,161 @@
-//! Task and Schedule mutations for the desktop client.
-//!
-//! Task 52 wires real upsert mutations for the `Task` and `Schedule`
-//! collections. The schemas are apply-owned for `Task` (every field),
-//! and apply-owned-plus-runtime-owned for `Schedule`. This writer must
-//! only ever project apply-owned fields into the mutation input —
-//! runtime-owned fields (`next_run_at`, `last_attempt_at`,
-//! `last_status`, `last_error`, `fire_count`) are the scheduler's
-//! responsibility, and re-applying a desktop edit must never clobber
-//! them.
-//!
-//! `Schedule.created_at` / `updated_at` are intentionally omitted from
-//! the desktop write path for now. DefraDB currently round-trips those
-//! DateTime fields as plain strings when written through this upsert
-//! shape, and the trigger engine's later `update_Schedule` bookkeeping
-//! mutations then fail schema validation on the existing document. The
-//! runtime does not require these timestamps, so leaving them unset is
-//! safer than creating schedules the engine cannot advance.
-//!
-//! The `fire_schedule_now` path is deliberately left as an error until
-//! the manual-run surface lands in PR 3. The desktop can still show the
-//! "Run Now" button, but invoking it surfaces the intentional gap
-//! rather than silently mutating runtime state.
-//!
-//! These mutations target the embedded DefraDB node via
-//! `upsert_Task` / `upsert_Schedule`, mirroring the simpler shape
-//! `behavior.rs` and the other manage writers already use. The CLI's
-//! `config_writes/task.rs` and `config_writes/schedule.rs` carry a more
-//! defensive create/update split for manifest-apply flows; the desktop
-//! only needs the upsert path today.
-
-use anyhow::{anyhow, bail, Context, Result};
+//! Canonical automation configuration through the shared candidate transaction.
+//! Runtime task invocation below remains a separate integration surface.
+use super::super::graphql::{escape_graphql_string, normalize_required};
+use anyhow::{anyhow, bail, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
-use gents::{task_run_conversation_title, write_manual_agent_request_with_conversation_title};
-use gents_protocol::graphql::normalize_optional_rfc3339;
-use gents_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
-use serde_json::Value;
-
-use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
-    graphql_optional_int_field, graphql_string_field, join_fields, normalize_required,
+use gents::collection::Collection;
+use gents::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use gents::document_config::{EventSource, Schedule, Task, Trigger};
+use gents::{task_session_title, write_manual_agent_request_with_conversation_title};
 
-pub async fn upsert_task(node: &EmbeddedNode, row: &TaskRow) -> Result<()> {
-    let task_id = normalize_required("task_id", &row.task_id)?;
-    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let created_at = row.created_at.as_deref();
-    let created_at = normalize_optional_rfc3339(created_at)?.unwrap_or_else(|| now.clone());
-    let updated_at = row.updated_at.as_deref();
-    let updated_at = normalize_optional_rfc3339(updated_at)?.unwrap_or_else(|| now.clone());
-
-    let add_fields = [
-        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
-        Some(graphql_string_field("name", row.name.as_deref())),
-        Some(graphql_string_field(
-            "description",
-            row.description.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "behavior_id",
-            row.behavior_id.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "prompt_template",
-            row.prompt_template.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "goal_objective_template",
-            row.goal_objective_template.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "goal_token_budget",
-            row.goal_token_budget,
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_field(
-            "output_schema_ref",
-            row.output_schema_ref.as_deref(),
-        )),
-        Some(format!(
-            r#"created_at: "{}""#,
-            escape_graphql_string(&created_at)
-        )),
-        Some(format!(
-            r#"updated_at: "{}""#,
-            escape_graphql_string(&updated_at)
-        )),
-    ];
-    let update_fields = [
-        Some(graphql_string_field("name", row.name.as_deref())),
-        Some(graphql_string_field(
-            "description",
-            row.description.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "behavior_id",
-            row.behavior_id.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "prompt_template",
-            row.prompt_template.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "goal_objective_template",
-            row.goal_objective_template.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "goal_token_budget",
-            row.goal_token_budget,
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_field(
-            "output_schema_ref",
-            row.output_schema_ref.as_deref(),
-        )),
-        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
-    ];
-
-    let mutation = format!(
-        r#"mutation {{
-            upsert_Task(
-                filter: {{ task_id: {{ _eq: "{task_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        task_id = escape_graphql_string(task_id),
-        add_fields = join_fields(&add_fields),
-        update_fields = join_fields(&update_fields),
-    );
-    execute_mutation(node, &mutation, "upsert_task").await
+pub async fn upsert_task(node: &EmbeddedNode, document: &Task) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Task,
+        add: value.clone(),
+        update: value,
+    }])?;
+    ConfigAccess::transact_local(node, None, "desktop.task.save", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
-pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<()> {
-    let schedule_id = normalize_required("schedule_id", &row.schedule_id)?;
-    let task_id = normalize_required(
-        "task_id",
-        row.task_id
-            .as_deref()
-            .context("task_id is required for Schedule")?,
-    )?;
-    let add_fields = [
-        Some(format!(
-            r#"schedule_id: "{}""#,
-            escape_graphql_string(schedule_id)
-        )),
-        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
-        Some(graphql_optional_int_field(
-            "interval_secs",
-            row.interval_secs,
-        )),
-        Some(graphql_string_field("cron", row.cron.as_deref())),
-        Some(graphql_string_field("timezone", row.timezone.as_deref())),
-        Some(graphql_string_field(
-            "missed_run_policy",
-            row.missed_run_policy.as_deref(),
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_field(
-            "concurrency",
-            row.concurrency.as_deref(),
-        )),
-    ];
-    let update_fields = [
-        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
-        Some(graphql_optional_int_field(
-            "interval_secs",
-            row.interval_secs,
-        )),
-        Some(graphql_string_field("cron", row.cron.as_deref())),
-        Some(graphql_string_field("timezone", row.timezone.as_deref())),
-        Some(graphql_string_field(
-            "missed_run_policy",
-            row.missed_run_policy.as_deref(),
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_field(
-            "concurrency",
-            row.concurrency.as_deref(),
-        )),
-    ];
+pub async fn delete_task(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+        Collection::Task,
+        agent_did.to_owned(),
+        id.to_owned(),
+    )])?;
+    ConfigAccess::transact_local(node, None, "desktop.task.delete", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            let existed = read_desired_state_record_in_txn(txn, Collection::Task, agent_did, id)
+                .await?
+                .is_some();
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(usize::from(existed))
+        })
+    })
+    .await
+}
 
-    let mutation = format!(
-        r#"mutation {{
-            upsert_Schedule(
-                filter: {{ schedule_id: {{ _eq: "{schedule_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        schedule_id = escape_graphql_string(schedule_id),
-        add_fields = join_fields(&add_fields),
-        update_fields = join_fields(&update_fields),
-    );
-    execute_mutation(node, &mutation, "upsert_schedule").await
+pub async fn upsert_schedule(node: &EmbeddedNode, document: &Schedule) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Schedule,
+        add: value.clone(),
+        update: value,
+    }])?;
+    ConfigAccess::transact_local(node, None, "desktop.schedule.save", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(())
+        })
+    })
+    .await
+}
+
+pub async fn delete_schedule(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+        Collection::Schedule,
+        agent_did.to_owned(),
+        id.to_owned(),
+    )])?;
+    ConfigAccess::transact_local(node, None, "desktop.schedule.delete", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            let existed =
+                read_desired_state_record_in_txn(txn, Collection::Schedule, agent_did, id)
+                    .await?
+                    .is_some();
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(usize::from(existed))
+        })
+    })
+    .await
+}
+
+pub async fn upsert_trigger(node: &EmbeddedNode, document: &Trigger) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Trigger,
+        add: value.clone(),
+        update: value,
+    }])?;
+    ConfigAccess::transact_local(node, None, "desktop.trigger.save", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(())
+        })
+    })
+    .await
+}
+
+pub async fn delete_trigger(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+        Collection::Trigger,
+        agent_did.to_owned(),
+        id.to_owned(),
+    )])?;
+    ConfigAccess::transact_local(node, None, "desktop.trigger.delete", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            let existed = read_desired_state_record_in_txn(txn, Collection::Trigger, agent_did, id)
+                .await?
+                .is_some();
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(usize::from(existed))
+        })
+    })
+    .await
+}
+
+pub async fn upsert_event_source(node: &EmbeddedNode, document: &EventSource) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::EventSource,
+        add: value.clone(),
+        update: value,
+    }])?;
+    ConfigAccess::transact_local(node, None, "desktop.event_source.save", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(())
+        })
+    })
+    .await
+}
+
+pub async fn delete_event_source(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+        Collection::EventSource,
+        agent_did.to_owned(),
+        id.to_owned(),
+    )])?;
+    ConfigAccess::transact_local(node, None, "desktop.event_source.delete", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            let existed =
+                read_desired_state_record_in_txn(txn, Collection::EventSource, agent_did, id)
+                    .await?
+                    .is_some();
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(usize::from(existed))
+        })
+    })
+    .await
 }
 
 /// Fire a task immediately using the shared manual-run helper.
@@ -216,34 +170,29 @@ pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<(
 /// Returns the new `AgentRequest`'s `_docID` on success.
 pub async fn fire_task_now(
     node: &EmbeddedNode,
-    task_row: &TaskRow,
+    task_row: &Task,
     args: serde_json::Value,
 ) -> Result<String> {
     let task_id = normalize_required("task_id", &task_row.task_id)?;
-    let behavior_id = task_row
-        .behavior_id
-        .as_deref()
-        .and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then_some(trimmed)
-        })
-        .ok_or_else(|| anyhow!("task {task_id} has no behavior_id"))?;
-    let prompt_template = task_row
-        .prompt_template
-        .as_deref()
-        .ok_or_else(|| anyhow!("task {task_id} has no prompt_template"))?;
-    if !task_row.enabled.unwrap_or(false) {
+    let agent_did = normalize_required("agent_did", &task_row.agent_did)?;
+    let behavior_id = normalize_required("behavior_id", &task_row.behavior_id)?;
+    let prompt_template = normalize_required("prompt_template", &task_row.prompt_template)?;
+    if !task_row.enabled {
         bail!("task {task_id} is disabled");
     }
 
     let behavior_query = format!(
         r#"query {{
-            AgentBehavior(filter: {{ behavior_id: {{ _eq: "{id}" }} }}, limit: 1) {{
+            AgentBehavior(filter: {{
+                agent_did: {{ _eq: "{agent_did}" }},
+                behavior_id: {{ _eq: "{id}" }}
+            }}, limit: 1) {{
                 agent_did
                 enabled
             }}
         }}"#,
         id = escape_graphql_string(behavior_id),
+        agent_did = escape_graphql_string(agent_did),
     );
     let behavior_response = node.execute(&behavior_query).await;
     if behavior_response.has_errors() {
@@ -264,11 +213,14 @@ pub async fn fire_task_now(
                 behavior_id
             )
         })?;
-    let agent_did = behavior_row
+    let behavior_agent_did = behavior_row
         .get("agent_did")
         .and_then(|value| value.as_str())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("AgentBehavior {behavior_id} has no agent_did"))?;
+    if behavior_agent_did != agent_did {
+        bail!("AgentBehavior {behavior_id} belongs to a different principal");
+    }
     if !behavior_row
         .get("enabled")
         .and_then(|value| value.as_bool())
@@ -278,12 +230,12 @@ pub async fn fire_task_now(
     }
 
     let task_label = task_row
-        .name
+        .display_name
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(task_id);
-    let conversation_title = task_run_conversation_title(task_label);
+    let conversation_title = task_session_title(task_label);
 
     let goal_objective_template = task_row.goal_objective_template.as_deref();
     gents::goal::validate_task_goal_declaration(
@@ -372,35 +324,79 @@ pub async fn fire_task_now(
 /// not a cron fire, so observers can cleanly separate "the scheduler
 /// decided to fire" from "a human pressed Run Now on the Schedule row."
 ///
-/// We load the `TaskRow` from GraphQL directly rather than from the
+/// We load the canonical `Task` from GraphQL directly rather than from the
 /// desktop store, so this path stays correct even if the store is
 /// stale (e.g., the schedule was just created and the watcher has not
 /// caught up yet). The `SELECT` mirrors every field on
-/// `gents_protocol::row::TaskRow` so `serde_json::from_value`
-/// does not fail on a missing column.
-pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) -> Result<String> {
-    let task_id = schedule_row
-        .task_id
-        .as_deref()
-        .and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then_some(trimmed)
-        })
-        .ok_or_else(|| anyhow!("schedule {} has no task_id", schedule_row.schedule_id))?;
+/// canonical document so `serde_json::from_value` sees the authoritative shape.
+pub async fn fire_schedule_now(node: &EmbeddedNode, schedule: &Schedule) -> Result<String> {
+    let agent_did = normalize_required("agent_did", &schedule.agent_did)?;
+    let schedule_id = normalize_required("schedule_id", &schedule.schedule_id)?;
+    let trigger_query = format!(
+        r#"query {{
+            Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+                agent_did
+                trigger_id
+                task_id
+                display_name
+                description
+                source
+                enabled
+                concurrency
+                created_at
+                updated_at
+                tags
+            }}
+        }}"#,
+        agent_did = escape_graphql_string(agent_did),
+    );
+    let trigger_response = node.execute(&trigger_query).await;
+    if trigger_response.has_errors() {
+        bail!(
+            "fetch triggers for schedule {schedule_id} failed: {:?}",
+            trigger_response.errors
+        );
+    }
+    let mut matching = trigger_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("Trigger"))
+        .and_then(|rows| rows.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| serde_json::from_value::<Trigger>(value.clone()).ok())
+        .filter(|trigger| {
+            trigger.enabled
+                && matches!(
+                    &trigger.source,
+                    gents::document_config::TriggerSource::Schedule { schedule_id: id }
+                        if id == schedule_id
+                )
+        });
+    let trigger = matching
+        .next()
+        .ok_or_else(|| anyhow!("schedule {schedule_id} has no enabled Trigger"))?;
+    if matching.next().is_some() {
+        bail!("schedule {schedule_id} has multiple enabled Triggers; run a Trigger explicitly");
+    }
+    let task_id = trigger.task_id.as_str();
     let task_query = format!(
         r#"query {{
             Task(filter: {{ task_id: {{ _eq: "{id}" }} }}, limit: 1) {{
                 task_id
-                name
+                agent_did
+                display_name
                 description
                 behavior_id
                 prompt_template
                 goal_objective_template
                 goal_token_budget
+                hooks
                 enabled
                 output_schema_ref
                 created_at
                 updated_at
+                tags
             }}
         }}"#,
         id = escape_graphql_string(task_id),
@@ -410,7 +406,6 @@ pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) 
         bail!(
             "fetch task for schedule {schedule_id} failed: {:?}",
             task_response.errors,
-            schedule_id = schedule_row.schedule_id,
         );
     }
     let task_row_json = task_response
@@ -420,173 +415,98 @@ pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) 
         .and_then(|arr| arr.as_array())
         .and_then(|arr| arr.first())
         .ok_or_else(|| anyhow!("task {task_id} not found"))?;
-    let task_row: TaskRow = serde_json::from_value(task_row_json.clone())
-        .map_err(|e| anyhow!("deserialize TaskRow: {e}"))?;
+    let task_row: Task = serde_json::from_value(task_row_json.clone())
+        .map_err(|e| anyhow!("deserialize Task: {e}"))?;
 
     fire_task_now(node, &task_row, serde_json::json!({})).await
 }
 
-pub async fn upsert_event_trigger(node: &EmbeddedNode, row: &EventTriggerRow) -> Result<()> {
-    let trigger_id = normalize_required("trigger_id", &row.trigger_id)?;
-    let task_id = normalize_required(
-        "task_id",
-        row.task_id
-            .as_deref()
-            .context("task_id is required for EventTrigger")?,
-    )?;
-    let now = Utc::now().to_rfc3339();
-    let created_at = row
-        .created_at
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| now.clone());
-    let updated_at = row
-        .updated_at
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| now.clone());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
 
-    let add_fields = [
-        Some(format!(
-            r#"trigger_id: "{}""#,
-            escape_graphql_string(trigger_id)
-        )),
-        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
-        Some(graphql_string_field(
-            "source_collection",
-            row.source_collection.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "event_kind",
-            row.event_kind.as_deref(),
-        )),
-        Some(graphql_string_field("filter", row.filter.as_deref())),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_field(
-            "concurrency",
-            row.concurrency.as_deref(),
-        )),
-        Some(format!(
-            r#"created_at: "{}""#,
-            escape_graphql_string(&created_at)
-        )),
-        Some(format!(
-            r#"updated_at: "{}""#,
-            escape_graphql_string(&updated_at)
-        )),
-    ];
-    let update_fields = [
-        Some(format!(r#"task_id: "{}""#, escape_graphql_string(task_id))),
-        Some(graphql_string_field(
-            "source_collection",
-            row.source_collection.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "event_kind",
-            row.event_kind.as_deref(),
-        )),
-        Some(graphql_string_field("filter", row.filter.as_deref())),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_field(
-            "concurrency",
-            row.concurrency.as_deref(),
-        )),
-        Some(format!(r#"updated_at: "{}""#, escape_graphql_string(&now))),
-    ];
-
-    let mutation = format!(
-        r#"mutation {{
-            upsert_EventTrigger(
-                filter: {{ trigger_id: {{ _eq: "{trigger_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        trigger_id = escape_graphql_string(trigger_id),
-        add_fields = join_fields(&add_fields),
-        update_fields = join_fields(&update_fields),
-    );
-    execute_mutation(node, &mutation, "upsert_event_trigger").await
-}
-
-pub async fn delete_task(node: &EmbeddedNode, task_id: &str) -> Result<usize> {
-    let mutation = build_delete_task_mutation(task_id)?;
-    let response =
-        super::super::graphql::execute_mutation_response(node, &mutation, "desktop.task.delete")
+    #[tokio::test]
+    async fn automation_replacements_preserve_scoped_references_and_goal_hook_rules() -> Result<()>
+    {
+        let node = EmbeddedNode::builder().build().await?;
+        gents::ensure_runtime_schemas(&node).await?;
+        for owner in ["did:test:automation-a", "did:test:automation-b"] {
+            let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+                "agent_principal":{"agent_did":owner},
+                "inference_backends":[{"agent_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+                "inference_profiles":[{"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+                "agent_behaviors":[{"agent_did":owner,"behavior_id":"behavior","inference_profile_id":"profile"}]
+            }))?;
+            let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
+            ConfigAccess::transact_local(&node, None, "desktop.automation.seed", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan).await?;
+                    Ok(())
+                })
+            })
             .await?;
-    Ok(response
-        .pointer("/data/delete_Task")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0))
-}
-
-fn build_delete_task_mutation(task_id: &str) -> Result<String> {
-    let task_id = normalize_required("task_id", task_id)?;
-    let task_id = escape_graphql_string(task_id);
-    Ok(format!(
-        r#"mutation {{
-            delete_Task(
-                filter: {{ task_id: {{ _eq: "{task_id}" }} }}
-            ) {{ _docID }}
-        }}"#
-    ))
-}
-
-pub async fn delete_schedule(node: &EmbeddedNode, schedule_id: &str) -> Result<usize> {
-    let mutation = build_delete_schedule_mutation(schedule_id)?;
-    let response = super::super::graphql::execute_mutation_response(
-        node,
-        &mutation,
-        "desktop.schedule.delete",
-    )
-    .await?;
-    Ok(response
-        .pointer("/data/delete_Schedule")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0))
-}
-
-fn build_delete_schedule_mutation(schedule_id: &str) -> Result<String> {
-    let schedule_id = normalize_required("schedule_id", schedule_id)?;
-    let schedule_id = escape_graphql_string(schedule_id);
-    Ok(format!(
-        r#"mutation {{
-            delete_Schedule(
-                filter: {{ schedule_id: {{ _eq: "{schedule_id}" }} }}
-            ) {{ _docID }}
-        }}"#
-    ))
-}
-
-pub async fn delete_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> Result<usize> {
-    let mutation = build_delete_event_trigger_mutation(trigger_id)?;
-    let response = super::super::graphql::execute_mutation_response(
-        node,
-        &mutation,
-        "desktop.event_trigger.delete",
-    )
-    .await?;
-    Ok(response
-        .pointer("/data/delete_EventTrigger")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0))
-}
-
-fn build_delete_event_trigger_mutation(trigger_id: &str) -> Result<String> {
-    let trigger_id = normalize_required("trigger_id", trigger_id)?;
-    let trigger_id = escape_graphql_string(trigger_id);
-    Ok(format!(
-        r#"mutation {{
-            delete_EventTrigger(
-                filter: {{ trigger_id: {{ _eq: "{trigger_id}" }} }}
-            ) {{ _docID }}
-        }}"#
-    ))
+        }
+        let owner = "did:test:automation-a";
+        let mut task: Task = serde_json::from_value(
+            json!({"agent_did":owner,"task_id":"task","behavior_id":"behavior","prompt_template":"Do work","goal_objective_template":"Finish work","goal_token_budget":10000,"hooks":[{"hook_id":"prepare","phase":"before","command":["true"]}]}),
+        )?;
+        upsert_task(&node, &task).await?;
+        task.goal_objective_template = None;
+        assert!(upsert_task(&node, &task).await.is_err());
+        task.goal_token_budget = None;
+        upsert_task(&node, &task).await?;
+        task.hooks[0].timeout_secs = Some(0);
+        assert!(upsert_task(&node, &task).await.is_err());
+        task.hooks[0].timeout_secs = None;
+        let source: EventSource = serde_json::from_value(
+            json!({"agent_did":owner,"event_source_id":"source","source_collection":"AgentRequest"}),
+        )?;
+        upsert_event_source(&node, &source).await?;
+        let mut trigger: Trigger = serde_json::from_value(
+            json!({"agent_did":owner,"trigger_id":"trigger","task_id":"task","source":{"kind":"event","event_source_id":"source"}}),
+        )?;
+        upsert_trigger(&node, &trigger).await?;
+        assert!(delete_task(&node, owner, "task").await.is_err());
+        assert!(delete_event_source(&node, owner, "source").await.is_err());
+        // A foreign principal with the same behavior label cannot borrow this task/source.
+        trigger.agent_did = "did:test:automation-b".into();
+        assert!(upsert_trigger(&node, &trigger).await.is_err());
+        assert_eq!(
+            delete_trigger(&node, "did:test:automation-b", "trigger").await?,
+            0
+        );
+        trigger.agent_did = owner.into();
+        let schedule: Schedule = serde_json::from_value(
+            json!({"agent_did":owner,"schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":60}}),
+        )?;
+        upsert_schedule(&node, &schedule).await?;
+        trigger.source = gents::document_config::TriggerSource::Schedule {
+            schedule_id: "schedule".into(),
+        };
+        upsert_trigger(&node, &trigger).await?;
+        assert_eq!(delete_event_source(&node, owner, "source").await?, 1);
+        assert!(delete_schedule(&node, owner, "schedule").await.is_err());
+        ConfigAccess::transact_local(&node, None, "desktop.automation.verify", |txn| {
+            Box::pin(async move {
+                let (_, value) =
+                    read_desired_state_record_in_txn(txn, Collection::Task, owner, "task")
+                        .await?
+                        .unwrap();
+                let saved: Task = serde_json::from_value(value)?;
+                assert!(saved.goal_objective_template.is_none());
+                assert!(saved.goal_token_budget.is_none());
+                assert_eq!(saved.hooks.len(), 1);
+                assert_eq!(saved.hooks[0].command, vec!["true"]);
+                assert!(saved.hooks[0].timeout_secs.is_none());
+                Ok(())
+            })
+        })
+        .await?;
+        assert_eq!(delete_trigger(&node, owner, "trigger").await?, 1);
+        assert_eq!(delete_task(&node, owner, "task").await?, 1);
+        assert_eq!(delete_schedule(&node, owner, "schedule").await?, 1);
+        Ok(())
+    }
 }

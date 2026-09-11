@@ -301,45 +301,40 @@ pub(super) fn selected_skill_ids_from_input(input: &[codex::UserInput]) -> Vec<S
         .collect()
 }
 
-pub(super) fn codex_turn_metadata(
+pub(super) fn codex_turn_input(
     cwd: &Path,
     selected_skill_ids: &[String],
-    conversation_title: Option<&str>,
-) -> String {
-    let mut metadata = json!({
-        "codex_shim": {
-            "cwd": absolute_path(cwd)
-        }
-    });
-    if !selected_skill_ids.is_empty() {
-        metadata["selected_skill_ids"] = json!(selected_skill_ids);
+    title: Option<&str>,
+) -> gents_protocol::request_input::RequestInput {
+    gents_protocol::request_input::RequestInput {
+        cwd: Some(absolute_path(cwd)),
+        selected_skill_ids: selected_skill_ids.to_vec(),
+        initial_title: title.filter(|title| !title.trim().is_empty()).map(|title| {
+            gents_protocol::session::SessionTitle {
+                text: title.trim().into(),
+                source: gents_protocol::session::SessionTitleSource::User,
+            }
+        }),
+        ..Default::default()
     }
-    if let Some(title) = conversation_title.filter(|title| !title.trim().is_empty()) {
-        metadata["conversation_title"] = json!(title.trim());
-    }
-    metadata.to_string()
 }
 
-pub(super) fn codex_steering_metadata(
+pub(super) fn codex_steering_input(
     cwd: &Path,
     queued_after_request_id: &str,
     selected_skill_ids: &[String],
-) -> String {
-    let mut metadata = json!({
-        "codex_shim": {
-            "cwd": absolute_path(cwd)
-        },
-        "queue": {
-            "source": "steering",
-            "policy": "append",
-            "key": null,
-            "queued_after_request_id": queued_after_request_id
-        }
+) -> gents_protocol::request_input::RequestInput {
+    use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
+    let mut input = codex_turn_input(cwd, selected_skill_ids, None);
+    input.queue = Some(RequestQueue {
+        source: QueueSource::Steering,
+        policy: QueuePolicy::Append,
+        key: None,
+        queued_after_request_id: Some(queued_after_request_id.into()),
+        interrupted_request_id: None,
+        background_completion_wake_version: None,
     });
-    if !selected_skill_ids.is_empty() {
-        metadata["selected_skill_ids"] = json!(selected_skill_ids);
-    }
-    metadata.to_string()
+    input
 }
 
 pub(super) fn effective_cwd(state: &ShimState, cwd: Option<&str>) -> PathBuf {

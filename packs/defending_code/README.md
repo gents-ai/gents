@@ -9,6 +9,12 @@ ledger, clusters confirmed consequences into root causes, checks repository
 contracts, validates proposed patches, re-attacks them, and publishes one
 campaign report.
 
+Runtime configuration is authored once in `pack_config.json`. The distribution
+`manifest.json` points to that canonical bundle and lists it with the schema and
+prompt sidecars needed to install the pack; there are no per-collection JSON
+document fragments. The bundle connects AgentContext, Tools, Task, EventSource,
+Trigger, callback, inference, and repository-placement documents directly.
+
 ```text
 DefendingCodeJob
   -> DefenseThreatModel

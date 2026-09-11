@@ -233,13 +233,13 @@ pub(super) async fn wait_for_live_documents(
             .iter()
             .any(|row| row.backend_id == docs.subagent_backend_id);
         let has_tools = snapshot
-            .tool_selections
+            .tools
             .iter()
-            .any(|row| row.selection_id == docs.tool_selection_id);
+            .any(|row| row.tools_id == docs.tools_id);
         let has_subagent_tools = snapshot
-            .tool_selections
+            .tools
             .iter()
-            .any(|row| row.selection_id == docs.subagent_tool_selection_id);
+            .any(|row| row.tools_id == docs.subagent_tools_id);
         let has_profile = snapshot
             .inference_profiles
             .iter()

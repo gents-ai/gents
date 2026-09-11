@@ -1,0 +1,1197 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "research-plan",
+      "display_name": "Web research planner",
+      "description": "Turns one research question into a bounded, closed assignment set.",
+      "context_id": "research-plan-context",
+      "inference_profile_id": "research-plan-profile"
+    },
+    {
+      "behavior_id": "research-investigate",
+      "display_name": "Web evidence investigator",
+      "description": "Searches, extracts, and records evidence for one bounded research lens.",
+      "context_id": "research-investigate-context",
+      "inference_profile_id": "research-investigate-profile"
+    },
+    {
+      "behavior_id": "research-adjudicate",
+      "display_name": "Research evidence adjudicator",
+      "description": "Cross-checks claims, contradictions, provenance, and quote support.",
+      "context_id": "research-adjudicate-context",
+      "inference_profile_id": "research-adjudicate-profile"
+    },
+    {
+      "behavior_id": "research-report",
+      "display_name": "Cited research reporter",
+      "description": "Writes the final answer from adjudicated claims and source provenance.",
+      "context_id": "research-report-context",
+      "inference_profile_id": "research-report-profile"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "research-plan-context",
+      "system_prompt": "./agent_behaviors/research_plan/system_prompt.md",
+      "tools_id": "research-plan-tools",
+      "compaction_id": "research-compaction"
+    },
+    {
+      "context_id": "research-investigate-context",
+      "system_prompt": "./agent_behaviors/research_investigate/system_prompt.md",
+      "tools_id": "research-investigate-tools",
+      "compaction_id": "research-compaction"
+    },
+    {
+      "context_id": "research-adjudicate-context",
+      "system_prompt": "./agent_behaviors/research_adjudicate/system_prompt.md",
+      "tools_id": "research-adjudicate-tools",
+      "compaction_id": "research-compaction"
+    },
+    {
+      "context_id": "research-report-context",
+      "system_prompt": "./agent_behaviors/research_report/system_prompt.md",
+      "tools_id": "research-report-tools",
+      "compaction_id": "research-compaction"
+    }
+  ],
+  "compactions": [
+    {
+      "compaction_id": "research-compaction",
+      "threshold": 0.85
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "research-plan-tools",
+      "display_name": "Research plan document writes",
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "research-plan-writes"
+        ]
+      },
+      "remote": {
+        "services": [
+          {
+            "mcp_service_id": "web-research-mcp",
+            "tool_names": [
+              "web_collect_evidence"
+            ],
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "tools_id": "research-investigate-tools",
+      "display_name": "Bounded web evidence and research writes",
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "research-investigate-writes"
+        ]
+      },
+      "remote": {
+        "services": [
+          {
+            "mcp_service_id": "web-research-mcp",
+            "tool_names": [
+              "web_collect_evidence",
+              "web_find_in_fetch"
+            ],
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "tools_id": "research-adjudicate-tools",
+      "display_name": "Evidence reads, verification, and verdict writes",
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "research-adjudicate-io"
+        ]
+      }
+    },
+    {
+      "tools_id": "research-report-tools",
+      "display_name": "Adjudicated evidence reads and report write",
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "research-report-io"
+        ]
+      }
+    }
+  ],
+  "datastore_tool_surfaces": [
+    {
+      "surface_id": "research-plan-writes",
+      "display_name": "Research plan and closed assignment writes",
+      "entries": [
+        {
+          "tool_name": "write_research_assignment",
+          "collection": "WebResearchAssignment",
+          "description": "Create one member of the closed parallel investigation set.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1,
+            "expected_count_field": "expected_total"
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "assignment_id",
+              "required": true
+            },
+            {
+              "name": "question",
+              "required": true
+            },
+            {
+              "name": "lens",
+              "required": true
+            },
+            {
+              "name": "instructions",
+              "required": true
+            },
+            {
+              "name": "query_plan",
+              "required": true
+            },
+            {
+              "name": "source_requirements",
+              "required": true
+            },
+            {
+              "name": "freshness",
+              "required": true
+            },
+            {
+              "name": "expected_total",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_research_plan",
+          "collection": "WebResearchPlan",
+          "description": "Persist the bounded research strategy after the assignment ledger is complete.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "question",
+              "required": true
+            },
+            {
+              "name": "strategy",
+              "required": true
+            },
+            {
+              "name": "source_hierarchy",
+              "required": true
+            },
+            {
+              "name": "coverage_requirements",
+              "required": true
+            },
+            {
+              "name": "assignment_count",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "research-investigate-writes",
+      "display_name": "Fetched sources, atomic claims, typed evidence links, and investigation closure",
+      "entries": [
+        {
+          "tool_name": "write_research_source",
+          "collection": "WebResearchSource",
+          "description": "Record one fetched source with stable service provenance; primary_source is a required true/false string and relevance is a required short assignment-specific explanation. Only published_at is optional.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 2
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "source_id",
+              "required": true
+            },
+            {
+              "name": "assignment_id",
+              "required": false,
+              "fill": {
+                "source_field": "assignment_id"
+              }
+            },
+            {
+              "name": "url",
+              "required": true
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "publisher",
+              "required": true
+            },
+            {
+              "name": "source_kind",
+              "required": true
+            },
+            {
+              "name": "primary_source",
+              "required": true
+            },
+            {
+              "name": "published_at",
+              "required": false
+            },
+            {
+              "name": "fetched_at",
+              "required": true
+            },
+            {
+              "name": "fetch_id",
+              "required": true
+            },
+            {
+              "name": "content_hash",
+              "required": true
+            },
+            {
+              "name": "matched_query",
+              "required": true
+            },
+            {
+              "name": "retrieval_queries",
+              "required": true
+            },
+            {
+              "name": "search_engines",
+              "required": true
+            },
+            {
+              "name": "candidate_relevance_score",
+              "required": true
+            },
+            {
+              "name": "content_relevance_score",
+              "required": true
+            },
+            {
+              "name": "extraction_method",
+              "required": true
+            },
+            {
+              "name": "content_integrity_verified",
+              "required": true
+            },
+            {
+              "name": "verified_quote",
+              "required": true
+            },
+            {
+              "name": "quote_verified",
+              "required": true
+            },
+            {
+              "name": "relevance",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_research_claim",
+          "collection": "WebResearchClaim",
+          "description": "Record one atomic claim; link it to sources through write_research_evidence.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 6
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "claim_id",
+              "required": true
+            },
+            {
+              "name": "assignment_id",
+              "required": false,
+              "fill": {
+                "source_field": "assignment_id"
+              }
+            },
+            {
+              "name": "statement",
+              "required": true
+            },
+            {
+              "name": "confidence",
+              "required": true
+            },
+            {
+              "name": "caveats",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_research_evidence",
+          "collection": "WebResearchEvidence",
+          "description": "Link one claim to one authoritative source record with an explicit support relationship.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 6
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "evidence_id",
+              "required": true
+            },
+            {
+              "name": "assignment_id",
+              "required": false,
+              "fill": {
+                "source_field": "assignment_id"
+              }
+            },
+            {
+              "name": "claim_id",
+              "required": true
+            },
+            {
+              "name": "source_id",
+              "required": true
+            },
+            {
+              "name": "relationship",
+              "required": true
+            },
+            {
+              "name": "locator",
+              "required": true
+            },
+            {
+              "name": "supporting_excerpt",
+              "required": true
+            },
+            {
+              "name": "notes",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_research_investigation",
+          "collection": "WebResearchInvestigation",
+          "description": "Close one assignment after all source, claim, and evidence-link writes.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "assignment_id",
+              "required": false,
+              "fill": {
+                "source_field": "assignment_id"
+              }
+            },
+            {
+              "name": "expected_total",
+              "required": false,
+              "fill": {
+                "source_field": "expected_total"
+              }
+            },
+            {
+              "name": "requested_source_count",
+              "required": true
+            },
+            {
+              "name": "candidate_count",
+              "required": true
+            },
+            {
+              "name": "scrape_attempt_count",
+              "required": true
+            },
+            {
+              "name": "evidence_shortfall",
+              "required": true
+            },
+            {
+              "name": "accepted_search_engines",
+              "required": true
+            },
+            {
+              "name": "search_degradation",
+              "required": true
+            },
+            {
+              "name": "retrieval_failures",
+              "required": true
+            },
+            {
+              "name": "status",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": true
+            },
+            {
+              "name": "gaps",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "research-adjudicate-io",
+      "display_name": "Evidence ledger reads and adjudication writes",
+      "entries": [
+        {
+          "kind": "query",
+          "tool_name": "read_research_investigation",
+          "collection": "WebResearchInvestigation",
+          "description": "Load every typed investigation closure for the run and reconcile its retrieval diagnostics and gaps with the authoritative ledgers.",
+          "fields": [
+            "assignment_id",
+            "expected_total",
+            "requested_source_count",
+            "candidate_count",
+            "scrape_attempt_count",
+            "evidence_shortfall",
+            "accepted_search_engines",
+            "search_degradation",
+            "retrieval_failures",
+            "status",
+            "summary",
+            "gaps"
+          ],
+          "filter_fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            }
+          ]
+        },
+        {
+          "kind": "query",
+          "tool_name": "read_research_source",
+          "collection": "WebResearchSource",
+          "description": "Load every fetched source for the run.",
+          "fields": [
+            "source_id",
+            "assignment_id",
+            "url",
+            "title",
+            "publisher",
+            "source_kind",
+            "primary_source",
+            "published_at",
+            "fetched_at",
+            "fetch_id",
+            "content_hash",
+            "matched_query",
+            "retrieval_queries",
+            "search_engines",
+            "candidate_relevance_score",
+            "content_relevance_score",
+            "extraction_method",
+            "content_integrity_verified",
+            "verified_quote",
+            "quote_verified",
+            "relevance"
+          ],
+          "filter_fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            }
+          ]
+        },
+        {
+          "kind": "query",
+          "tool_name": "read_research_claim",
+          "collection": "WebResearchClaim",
+          "description": "Load every atomic investigator claim for the run.",
+          "fields": [
+            "claim_id",
+            "assignment_id",
+            "statement",
+            "confidence",
+            "caveats"
+          ],
+          "filter_fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            }
+          ]
+        },
+        {
+          "kind": "query",
+          "tool_name": "read_research_evidence",
+          "collection": "WebResearchEvidence",
+          "description": "Load typed claim-to-source links and join each source ID to the authoritative source provenance record.",
+          "fields": [
+            "evidence_id",
+            "assignment_id",
+            "claim_id",
+            "source_id",
+            "relationship",
+            "locator",
+            "supporting_excerpt",
+            "notes"
+          ],
+          "filter_fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            }
+          ]
+        },
+        {
+          "tool_name": "write_research_claim_verdict",
+          "collection": "WebResearchClaimVerdict",
+          "description": "Persist one supported, disputed, or insufficient verdict.",
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "claim_id",
+              "required": true
+            },
+            {
+              "name": "statement",
+              "required": true
+            },
+            {
+              "name": "verdict",
+              "required": true
+            },
+            {
+              "name": "confidence",
+              "required": true
+            },
+            {
+              "name": "rationale",
+              "required": true
+            },
+            {
+              "name": "evidence_summary",
+              "required": true
+            },
+            {
+              "name": "quote_verification",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_research_draft",
+          "collection": "WebResearchDraft",
+          "description": "Close adjudication with a bounded, evidence-aware report plan.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "thesis",
+              "required": true
+            },
+            {
+              "name": "outline",
+              "required": true
+            },
+            {
+              "name": "synthesis",
+              "required": true
+            },
+            {
+              "name": "unresolved_questions",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "research-report-io",
+      "display_name": "Adjudicated evidence reads and final result write",
+      "entries": [
+        {
+          "kind": "query",
+          "tool_name": "read_report_research_source",
+          "collection": "WebResearchSource",
+          "description": "Load source metadata and provenance for report citations.",
+          "fields": [
+            "source_id",
+            "url",
+            "title",
+            "publisher",
+            "source_kind",
+            "published_at",
+            "fetched_at",
+            "fetch_id",
+            "content_hash",
+            "matched_query",
+            "retrieval_queries",
+            "search_engines",
+            "candidate_relevance_score",
+            "content_relevance_score",
+            "extraction_method",
+            "content_integrity_verified",
+            "verified_quote",
+            "quote_verified",
+            "relevance"
+          ],
+          "filter_fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            }
+          ]
+        },
+        {
+          "kind": "query",
+          "tool_name": "read_report_research_evidence",
+          "collection": "WebResearchEvidence",
+          "description": "Load normalized claim-to-source joins for citation placement.",
+          "fields": [
+            "evidence_id",
+            "claim_id",
+            "source_id",
+            "relationship",
+            "locator",
+            "supporting_excerpt",
+            "notes"
+          ],
+          "filter_fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            }
+          ]
+        },
+        {
+          "kind": "query",
+          "tool_name": "read_report_claim_verdict",
+          "collection": "WebResearchClaimVerdict",
+          "description": "Load the complete adjudicated claim ledger.",
+          "fields": [
+            "claim_id",
+            "statement",
+            "verdict",
+            "confidence",
+            "rationale",
+            "evidence_summary",
+            "quote_verification"
+          ],
+          "filter_fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            }
+          ]
+        },
+        {
+          "tool_name": "write_research_result",
+          "collection": "WebResearchResult",
+          "description": "Publish one cited research report and provenance ledger.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "report_markdown",
+              "required": true
+            },
+            {
+              "name": "sources_json",
+              "required": true
+            },
+            {
+              "name": "limitations",
+              "required": true
+            },
+            {
+              "name": "completed_at",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inference_backends": [
+    {
+      "backend_id": "research-backend",
+      "name": "Web research backend",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "${GENTS_WEB_RESEARCH_ENDPOINT:-http://127.0.0.1:8080/v1}",
+      "auth": {
+        "kind": "unauthenticated"
+      },
+      "max_concurrent": 8
+    }
+  ],
+  "inference_sampling": [
+    {
+      "sampling_id": "research-sampling",
+      "temperature": 1.0,
+      "top_p": 0.95
+    }
+  ],
+  "inference_execution": [
+    {
+      "execution_id": "research-execution",
+      "max_turns": 1000
+    }
+  ],
+  "inference_profiles": [
+    {
+      "profile_id": "research-plan-profile",
+      "display_name": "Web research planner",
+      "backend_id": "research-backend",
+      "model_name": "${GENTS_WEB_RESEARCH_MODEL}",
+      "reasoning_effort": "high",
+      "sampling_id": "research-sampling",
+      "execution_id": "research-execution"
+    },
+    {
+      "profile_id": "research-investigate-profile",
+      "display_name": "Web evidence investigator",
+      "backend_id": "research-backend",
+      "model_name": "${GENTS_WEB_RESEARCH_MODEL}",
+      "reasoning_effort": "high",
+      "sampling_id": "research-sampling",
+      "execution_id": "research-execution"
+    },
+    {
+      "profile_id": "research-adjudicate-profile",
+      "display_name": "Research evidence adjudicator",
+      "backend_id": "research-backend",
+      "model_name": "${GENTS_WEB_RESEARCH_MODEL}",
+      "reasoning_effort": "high",
+      "sampling_id": "research-sampling",
+      "execution_id": "research-execution"
+    },
+    {
+      "profile_id": "research-report-profile",
+      "display_name": "Cited research reporter",
+      "backend_id": "research-backend",
+      "model_name": "${GENTS_WEB_RESEARCH_MODEL}",
+      "reasoning_effort": "high",
+      "sampling_id": "research-sampling",
+      "execution_id": "research-execution"
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "research-plan-task",
+      "display_name": "Plan bounded web research",
+      "behavior_id": "research-plan",
+      "prompt_template": "./tasks/research_plan_task/prompt.md"
+    },
+    {
+      "task_id": "research-investigate-task",
+      "display_name": "Investigate one web research lens",
+      "behavior_id": "research-investigate",
+      "prompt_template": "./tasks/research_investigate_task/prompt.md"
+    },
+    {
+      "task_id": "research-adjudicate-task",
+      "display_name": "Adjudicate the complete evidence ledger",
+      "behavior_id": "research-adjudicate",
+      "prompt_template": "./tasks/research_adjudicate_task/prompt.md"
+    },
+    {
+      "task_id": "research-report-task",
+      "display_name": "Write the cited research report",
+      "behavior_id": "research-report",
+      "prompt_template": "./tasks/research_report_task/prompt.md"
+    }
+  ],
+  "graphs": [
+    {
+      "graph_id": "web-deep-research"
+    }
+  ],
+  "graph_intents": [
+    {
+      "graph_id": "web-deep-research",
+      "nodes": [
+        {
+          "node_id": "plan",
+          "capability_id": "research-plan",
+          "capability_revision": "v1"
+        },
+        {
+          "node_id": "investigate",
+          "capability_id": "research-investigate",
+          "capability_revision": "v1"
+        },
+        {
+          "node_id": "adjudicate",
+          "capability_id": "research-adjudicate",
+          "capability_revision": "v1"
+        },
+        {
+          "node_id": "report",
+          "capability_id": "research-report",
+          "capability_revision": "v1"
+        }
+      ],
+      "edges": [
+        {
+          "from": {
+            "node_id": "plan",
+            "port": "assignments"
+          },
+          "to": {
+            "node_id": "investigate",
+            "port": "assignment"
+          },
+          "concurrency": "parallel"
+        },
+        {
+          "from": {
+            "node_id": "investigate",
+            "port": "investigations"
+          },
+          "to": {
+            "node_id": "adjudicate",
+            "port": "investigations"
+          },
+          "delivery": {
+            "expected_count": {
+              "source_field": "expected_total"
+            }
+          },
+          "concurrency": "serial"
+        },
+        {
+          "from": {
+            "node_id": "adjudicate",
+            "port": "draft"
+          },
+          "to": {
+            "node_id": "report",
+            "port": "draft"
+          },
+          "concurrency": "serial"
+        }
+      ],
+      "entries": [
+        {
+          "name": "research",
+          "collection": "WebResearchJob",
+          "schema": "WebResearchJob/v1",
+          "input_contract": "web-research-input/v1",
+          "to": {
+            "node_id": "plan",
+            "port": "job"
+          }
+        }
+      ],
+      "results": [
+        {
+          "name": "plan",
+          "from": {
+            "node_id": "plan",
+            "port": "plan"
+          },
+          "cardinality": {
+            "kind": "exactly",
+            "count": 1
+          },
+          "terminal": true
+        },
+        {
+          "name": "sources",
+          "from": {
+            "node_id": "investigate",
+            "port": "sources"
+          },
+          "cardinality": {
+            "kind": "at_most",
+            "count": 128
+          },
+          "terminal": true
+        },
+        {
+          "name": "claims",
+          "from": {
+            "node_id": "investigate",
+            "port": "claims"
+          },
+          "cardinality": {
+            "kind": "at_most",
+            "count": 128
+          },
+          "terminal": true
+        },
+        {
+          "name": "evidence",
+          "from": {
+            "node_id": "investigate",
+            "port": "evidence"
+          },
+          "cardinality": {
+            "kind": "at_most",
+            "count": 256
+          },
+          "terminal": true
+        },
+        {
+          "name": "verdicts",
+          "from": {
+            "node_id": "adjudicate",
+            "port": "verdicts"
+          },
+          "cardinality": {
+            "kind": "at_most",
+            "count": 128
+          },
+          "terminal": true
+        },
+        {
+          "name": "report",
+          "from": {
+            "node_id": "report",
+            "port": "result"
+          },
+          "cardinality": {
+            "kind": "exactly",
+            "count": 1
+          },
+          "terminal": true
+        }
+      ],
+      "limits": {
+        "max_nodes": 8,
+        "max_edges": 16,
+        "max_depth": 8,
+        "max_fan_out": 8,
+        "max_total_invocations": 32,
+        "max_runtime_secs": 7200
+      }
+    }
+  ],
+  "graph_capabilities": [
+    {
+      "capability_id": "research-plan",
+      "revision": "v1",
+      "input_ports": [
+        {
+          "name": "job",
+          "collection": "WebResearchJob",
+          "schema": "WebResearchJob/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one",
+          "required": true
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "plan",
+          "collection": "WebResearchPlan",
+          "schema": "WebResearchPlan/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one"
+        },
+        {
+          "name": "assignments",
+          "collection": "WebResearchAssignment",
+          "schema": "WebResearchAssignment/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one"
+        }
+      ],
+      "allowed_callers": [
+        "${GENTS_PACK_AGENT_DID}"
+      ],
+      "task_id": "research-plan-task"
+    },
+    {
+      "capability_id": "research-investigate",
+      "revision": "v1",
+      "input_ports": [
+        {
+          "name": "assignment",
+          "collection": "WebResearchAssignment",
+          "schema": "WebResearchAssignment/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one",
+          "required": true
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "investigations",
+          "collection": "WebResearchInvestigation",
+          "schema": "WebResearchInvestigation/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one"
+        },
+        {
+          "name": "sources",
+          "collection": "WebResearchSource",
+          "schema": "WebResearchSource/v1",
+          "correlation_field": "run_id",
+          "cardinality": "many"
+        },
+        {
+          "name": "claims",
+          "collection": "WebResearchClaim",
+          "schema": "WebResearchClaim/v1",
+          "correlation_field": "run_id",
+          "cardinality": "many"
+        },
+        {
+          "name": "evidence",
+          "collection": "WebResearchEvidence",
+          "schema": "WebResearchEvidence/v1",
+          "correlation_field": "run_id",
+          "cardinality": "many"
+        }
+      ],
+      "allowed_callers": [
+        "${GENTS_PACK_AGENT_DID}"
+      ],
+      "task_id": "research-investigate-task"
+    },
+    {
+      "capability_id": "research-adjudicate",
+      "revision": "v1",
+      "input_ports": [
+        {
+          "name": "investigations",
+          "collection": "WebResearchInvestigation",
+          "schema": "WebResearchInvestigation/v1",
+          "correlation_field": "run_id",
+          "cardinality": "many",
+          "required": true
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "draft",
+          "collection": "WebResearchDraft",
+          "schema": "WebResearchDraft/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one"
+        },
+        {
+          "name": "verdicts",
+          "collection": "WebResearchClaimVerdict",
+          "schema": "WebResearchClaimVerdict/v1",
+          "correlation_field": "run_id",
+          "cardinality": "many"
+        }
+      ],
+      "allowed_callers": [
+        "${GENTS_PACK_AGENT_DID}"
+      ],
+      "task_id": "research-adjudicate-task"
+    },
+    {
+      "capability_id": "research-report",
+      "revision": "v1",
+      "input_ports": [
+        {
+          "name": "draft",
+          "collection": "WebResearchDraft",
+          "schema": "WebResearchDraft/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one",
+          "required": true
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "result",
+          "collection": "WebResearchResult",
+          "schema": "WebResearchResult/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one"
+        }
+      ],
+      "allowed_callers": [
+        "${GENTS_PACK_AGENT_DID}"
+      ],
+      "task_id": "research-report-task"
+    }
+  ]
+}

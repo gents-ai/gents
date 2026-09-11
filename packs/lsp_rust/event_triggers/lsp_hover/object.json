@@ -1,9 +1,0 @@
-{
-  "trigger_id": "lsp-hover",
-  "task_id": "lsp-hover-task",
-  "source_collection": "LspDemoJob",
-  "event_kind": "created",
-  "filter": null,
-  "enabled": true,
-  "concurrency": "parallel"
-}

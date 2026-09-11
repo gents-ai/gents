@@ -56,7 +56,7 @@
 
 use std::{char::REPLACEMENT_CHARACTER, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use serde::Deserialize;
@@ -226,7 +226,7 @@ pub(super) struct ToolCallRow {
     completed_at: Option<String>,
 }
 
-/// One durable `AgentToolResult` conversation audit row for the projected
+/// One durable `AgentToolResult` spill row for the projected
 /// request, when the runtime wrote one. The schema keys the audit row by
 /// `tool_call_doc_id` and carries `output_text`; oversized outputs spill
 /// here from their `AgentToolCall`.
@@ -238,6 +238,7 @@ pub(super) struct ToolResultRow {
 }
 
 const TOOL_CALL_FIELDS: &str = r#"
+    agent_did requester_did session_id request_id request_doc_id
     _docID
     tool_call_key
     tool_call_id
@@ -256,6 +257,8 @@ const TOOL_CALL_FIELDS: &str = r#"
 "#;
 
 const TOOL_RESULT_FIELDS: &str = r#"
+    _docID
+    agent_did requester_did session_id
     tool_call_doc_id
     output_text
 "#;
@@ -459,77 +462,112 @@ pub(super) fn is_active_agent_message_meta(meta: Option<&Value>) -> bool {
 ///
 /// Bounded and request-id-scoped: the query set is exactly
 /// 1. one `AgentToolCall` query for the rows of this request id, and
-/// 2. one `AgentToolResult` query for the same session id (the audit
-///    collection is keyed by `tool_call_doc_id`/`session_id`, so the
-///    in-memory cross-check below keeps the observation scoped to this
-///    request's call rows).
+/// 2. one `AgentToolResult` query for the selected physical call IDs,
+///    under the same exact principal/session/requester scope.
 ///
 /// The projection is read-only: it never replays the session, never
 /// duplicates durable materialization, and never writes a document.
 pub(super) async fn project_tools(
     node: &Arc<EmbeddedNode>,
-    request_id: &str,
-    session_id: &str,
+    request: &gents_protocol::row::AgentRequestRow,
     executions: &gents::hook::BackgroundExecutionRegistry,
 ) -> Result<ToolProjection> {
-    let tool_response = node.execute(&tool_calls_query(request_id)).await;
+    let principal = request
+        .agent_did
+        .as_deref()
+        .context("tool request principal missing")?;
+    let session_id = request
+        .session_id
+        .as_deref()
+        .context("tool request session missing")?;
+    let scope = gents::session::session_scope_filter(
+        principal,
+        session_id,
+        request.requester_did.as_deref(),
+    );
+    let physical = request
+        .doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .context("tool request physical identity missing")?;
+    let tool_response = node.execute(&tool_calls_query(request)?).await;
     ensure_no_errors(&tool_response, "grok shim tool call query")?;
-    let mut rows = decode_tool_call_rows(&tool_response);
-    // Runtime authorization and retained buffers remain the single output
-    // owner. These are ephemeral projection inputs, never persisted copies.
-    if rows.iter().any(|row| {
-        row.await_mode.as_deref() == Some("background") && !observed_status(row).is_completed()
-    }) {
-        let scope = node.execute(&format!(r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{request_id session_id agent_did requester_did}} }}"#, gents::graphql::escape_graphql_string(request_id))).await;
-        ensure_no_errors(&scope, "Grok output scope")?;
-        let owners: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
-            scope
-                .data
-                .as_ref()
-                .and_then(|v| v.get("AgentRequest"))
-                .cloned()
-                .unwrap_or(json!([])),
-        )?;
-        if let [owner] = owners.as_slice() {
-            if owner.session_id.as_deref() == Some(session_id) {
-                if let Some(principal) = owner.agent_did.as_deref() {
-                    for row in &mut rows {
-                        if row.await_mode.as_deref() != Some("background")
-                            || observed_status(row).is_completed()
-                        {
-                            continue;
-                        }
-                        let Some(id) = row.tool_call_key_tool_call_id() else {
-                            continue;
-                        };
-                        if let Some(snapshot) = executions
-                            .read_process_output_snapshot(
-                                node,
-                                session_id,
-                                principal,
-                                owner.requester_did.as_deref(),
-                                &id,
-                            )
-                            .await?
-                        {
-                            if let Some(output) =
-                                snapshot["output"].as_str().filter(|s| !s.is_empty())
-                            {
-                                row.partial_output_tail = Some(json!({
+    let values = tool_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(Value::as_array)
+        .context("missing tool call rows")?;
+    let mut identities = std::collections::HashSet::new();
+    for value in values {
+        anyhow::ensure!(
+            value["request_doc_id"].as_str() == Some(physical)
+                && value["request_id"].as_str() == Some(request.request_id.as_str())
+                && value["agent_did"].as_str() == Some(principal)
+                && value["session_id"].as_str() == Some(session_id)
+                && value.get("requester_did") == Some(&json!(request.requester_did)),
+            "tool row has wrong request scope"
+        );
+        let id = value["_docID"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .context("tool row lacks physical identity")?;
+        anyhow::ensure!(identities.insert(id), "duplicate tool physical identity");
+    }
+    let mut rows = decode_tool_call_rows(&tool_response)?;
+    for row in &mut rows {
+        if row.await_mode.as_deref() != Some("background") || observed_status(row).is_completed() {
+            continue;
+        }
+        let Some(id) = row.tool_call_key_tool_call_id() else {
+            continue;
+        };
+        if let Some(snapshot) = executions
+            .read_process_output_snapshot(
+                node,
+                session_id,
+                principal,
+                request.requester_did.as_deref(),
+                &id,
+            )
+            .await?
+        {
+            if let Some(output) = snapshot["output"].as_str().filter(|s| !s.is_empty()) {
+                row.partial_output_tail = Some(json!({
                                 "stdout": output,
                                 "_gents_output_start": snapshot["first_available_offset"],
                                 "stdout_truncation": {"truncated": snapshot["first_available_offset"].as_u64().unwrap_or(0) > 0}
                             }).to_string());
-                            }
-                        }
-                    }
-                }
             }
         }
     }
-    let result_response = node.execute(&tool_results_query(session_id)).await;
+    let result_response = node.execute(&tool_results_query(&scope, &rows)).await;
     ensure_no_errors(&result_response, "grok shim tool result query")?;
-    let results = decode_tool_result_rows(&result_response);
+    let values = result_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolResult"))
+        .and_then(Value::as_array)
+        .context("missing tool spill rows")?;
+    let mut spills = std::collections::HashSet::new();
+    for value in values {
+        let call = value["tool_call_doc_id"]
+            .as_str()
+            .context("spill lacks exact call reference")?;
+        anyhow::ensure!(
+            identities.contains(call)
+                && value["agent_did"].as_str() == Some(principal)
+                && value["session_id"].as_str() == Some(session_id)
+                && value.get("requester_did") == Some(&json!(request.requester_did)),
+            "spill row has wrong call scope"
+        );
+        let spill_id = value["_docID"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .context("spill lacks physical identity")?;
+        anyhow::ensure!(spills.insert(spill_id), "duplicate physical spill row");
+    }
+    let results = decode_tool_result_rows(&result_response)?;
 
     let projection = project_tool_rows(&rows, &results);
     Ok(projection)
@@ -1056,76 +1094,88 @@ pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result
 // Queries and decoding
 // ---------------------------------------------------------------------------
 
-fn tool_calls_query(request_id: &str) -> String {
+fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
+    let scope = gents::session::session_scope_filter(
+        request
+            .agent_did
+            .as_deref()
+            .context("tool principal missing")?,
+        request
+            .session_id
+            .as_deref()
+            .context("tool session missing")?,
+        request.requester_did.as_deref(),
+    );
+    let doc = request
+        .doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .context("tool request physical identity missing")?;
+    Ok(format!(
+        r#"{{ AgentToolCall(filter: {{ {scope}, request_id: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}} }}, order: {{started_at: ASC}}) {{ {TOOL_CALL_FIELDS} }} }}"#,
+        escape_graphql_string(&request.request_id),
+        escape_graphql_string(doc)
+    ))
+}
+
+fn tool_results_query(scope: &str, rows: &[ToolCallRow]) -> String {
+    let calls = rows
+        .iter()
+        .map(|row| format!(r#""{}""#, escape_graphql_string(&row.doc_id)))
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ started_at: ASC }}
-            ) {{ {TOOL_CALL_FIELDS} }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
+        r#"{{ AgentToolResult(filter: {{ {scope}, tool_call_doc_id: {{_in: [{calls}]}} }}, order: {{created_at: ASC}}) {{ {TOOL_RESULT_FIELDS} }} }}"#
     )
 }
 
-fn tool_results_query(session_id: &str) -> String {
-    format!(
-        r#"{{
-            AgentToolResult(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                order: {{ created_at: ASC }}
-            ) {{ {TOOL_RESULT_FIELDS} }}
-        }}"#,
-        session_id = escape_graphql_string(session_id),
+fn decode_tool_call_rows(response: &defra_node::QueryResponse) -> Result<Vec<ToolCallRow>> {
+    serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .cloned()
+            .context("missing AgentToolCall rows")?,
     )
+    .context("invalid AgentToolCall row")
 }
 
-fn decode_tool_call_rows(response: &defra_node::QueryResponse) -> Vec<ToolCallRow> {
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|row| match serde_json::from_value::<ToolCallRow>(row) {
-            Ok(row) => Some(row),
-            Err(error) => {
-                tracing::debug!(
-                    %error,
-                    "grok shim skipped an undecodable AgentToolCall row"
-                );
-                None
-            }
-        })
-        .collect()
-}
-
-fn decode_tool_result_rows(response: &defra_node::QueryResponse) -> Vec<ToolResultRow> {
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolResult"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|row| match serde_json::from_value::<ToolResultRow>(row) {
-            Ok(row) => Some(row),
-            Err(error) => {
-                tracing::debug!(
-                    %error,
-                    "grok shim skipped an undecodable AgentToolResult row"
-                );
-                None
-            }
-        })
-        .collect()
+fn decode_tool_result_rows(response: &defra_node::QueryResponse) -> Result<Vec<ToolResultRow>> {
+    serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolResult"))
+            .cloned()
+            .context("missing AgentToolResult rows")?,
+    )
+    .context("invalid AgentToolResult row")
 }
 
 #[cfg(test)]
 mod tests {
+    fn request_fixture(
+        id: &str,
+        session: &str,
+        physical: &str,
+    ) -> gents_protocol::row::AgentRequestRow {
+        serde_json::from_value(serde_json::json!({"_docID":physical,"request_id":id,"session_id":session,"agent_did":"did:test:grok-shim","requester_did":"did:test:grok-shim"})).unwrap()
+    }
+    async fn seed_projection_request(
+        node: &EmbeddedNode,
+        id: &str,
+        session: &str,
+    ) -> gents_protocol::row::AgentRequestRow {
+        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{}", session_id: "{}", agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", behavior_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
+        ensure_no_errors(&response, "seed projection request").unwrap();
+        let physical = gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data":response.data}),
+            "AgentRequest",
+        )
+        .unwrap();
+        request_fixture(id, session, &physical)
+    }
     #[test]
     fn tool_results_use_acp_tool_call_content_not_bare_message_blocks() {
         assert_eq!(
@@ -1843,7 +1893,12 @@ mod tests {
 
     #[test]
     fn queries_escape_interpolated_values() {
-        let query = tool_calls_query(r#"request-"quoted\"-id"#);
+        let query = tool_calls_query(&request_fixture(
+            r#"request-"quoted\"-id"#,
+            "session",
+            "physical",
+        ))
+        .unwrap();
         assert!(
             !query.contains(r#""request-"quoted\"-id""#),
             "raw value must not appear unescaped: {query}"
@@ -1853,7 +1908,11 @@ mod tests {
         // query must select `_docID` alongside the projection fields.
         assert!(query.contains("_docID"), "{query}");
 
-        let results = tool_results_query(r#"request-"quoted\"-id"#);
+        let rows = vec![serde_json::from_value::<ToolCallRow>(
+            json!({"_docID":r#"request-"quoted\"-id"#, "tool_call_key":"call"}),
+        )
+        .unwrap()];
+        let results = tool_results_query("agent_did: {_eq: \"owner\"}", &rows);
         assert!(
             !results.contains(r#""request-"quoted\"-id""#),
             "raw value must not appear unescaped: {results}"
@@ -2087,6 +2146,7 @@ mod tests {
         let (_dir, node) = embedded_node().await;
         let session_id = "s-embedded-spill";
         let request_id = "req-embedded-spill";
+        let request = seed_projection_request(&node, request_id, session_id).await;
 
         // Seed the second call's row first (crossed creation order), with
         // an explicit `created_at` earlier than the first call's so the
@@ -2123,7 +2183,15 @@ mod tests {
             }) { _docID }
         }"#
         .to_string();
-        let response = node.execute(&seed_calls).await;
+        let response = node
+            .execute(&seed_calls.replace(
+                "request_id:",
+                &format!(
+                    "request_doc_id: \"{}\" request_id:",
+                    escape_graphql_string(request.doc_id.as_deref().unwrap())
+                ),
+            ))
+            .await;
         assert!(
             !response.has_errors(),
             "seed calls failed: {:?}",
@@ -2203,7 +2271,7 @@ mod tests {
         );
 
         // The actual production path: query + deserialize + projection.
-        let projection = project_tools(&node, request_id, session_id, &Default::default())
+        let projection = project_tools(&node, &request, &Default::default())
             .await
             .expect("tool projection");
         let output_for = |tool_call_id: &str| -> Option<String> {
@@ -2266,6 +2334,7 @@ mod tests {
         let (_dir, node) = embedded_node().await;
         let session_id = "s-embedded-task";
         let request_id = "req-embedded-task";
+        let request = seed_projection_request(&node, request_id, session_id).await;
 
         // Canonical tool meta recorded in the background row's args: the
         // full envelope must survive the projection verbatim.
@@ -2345,7 +2414,15 @@ mod tests {
                 }}) {{ _docID }}
             }}"#
         );
-        let response = node.execute(&seed_calls).await;
+        let response = node
+            .execute(&seed_calls.replace(
+                "request_id:",
+                &format!(
+                    "request_doc_id: \"{}\" request_id:",
+                    escape_graphql_string(request.doc_id.as_deref().unwrap())
+                ),
+            ))
+            .await;
         assert!(
             !response.has_errors(),
             "seed calls failed: {:?}",
@@ -2353,7 +2430,7 @@ mod tests {
         );
 
         // The full production path: query + deserialize + projection.
-        let projection = project_tools(&node, request_id, session_id, &Default::default())
+        let projection = project_tools(&node, &request, &Default::default())
             .await
             .expect("tool projection");
 
@@ -2437,7 +2514,7 @@ mod tests {
             response.errors
         );
 
-        let reprojection = project_tools(&node, request_id, session_id, &Default::default())
+        let reprojection = project_tools(&node, &request, &Default::default())
             .await
             .expect("tool reprojection");
         // Same toolCallId, still rendered, now terminal.
@@ -2481,6 +2558,7 @@ mod tests {
         let (_dir, node) = embedded_node().await;
         let session_id = "s-embedded-live";
         let request_id = "req-embedded-live";
+        let request = seed_projection_request(&node, request_id, session_id).await;
 
         let seed_calls = r#"mutation {
             live: create_AgentToolCall(input: {
@@ -2500,7 +2578,15 @@ mod tests {
             }) { _docID }
         }"#
         .to_string();
-        let response = node.execute(&seed_calls).await;
+        let response = node
+            .execute(&seed_calls.replace(
+                "request_id:",
+                &format!(
+                    "request_doc_id: \"{}\" request_id:",
+                    escape_graphql_string(request.doc_id.as_deref().unwrap())
+                ),
+            ))
+            .await;
         assert!(
             !response.has_errors(),
             "seed call failed: {:?}",
@@ -2526,7 +2612,7 @@ mod tests {
         );
 
         // The production path streams the window while the call runs.
-        let projection = project_tools(&node, request_id, session_id, &Default::default())
+        let projection = project_tools(&node, &request, &Default::default())
             .await
             .expect("live projection");
         let live = call_for(&projection, "call-live");
@@ -2561,7 +2647,7 @@ mod tests {
             response.errors
         );
 
-        let reprojection = project_tools(&node, request_id, session_id, &Default::default())
+        let reprojection = project_tools(&node, &request, &Default::default())
             .await
             .expect("terminal projection");
         let terminal = call_for(&reprojection, "call-live");

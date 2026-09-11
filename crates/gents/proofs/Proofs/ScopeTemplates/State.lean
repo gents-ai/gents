@@ -1,6 +1,14 @@
+import Proofs.ConfigDocuments
 import Proofs.Basic
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.List.Basic
+
+/-! Pairing scope templates. AgentSession is the single durable session
+document. Ordinary
+transcript/client routes never carry credential-bearing documents; backend and
+OAuth credentials ride only a route whose grant carries an explicit
+operator/runtime ACP authorization. Template names are not evidence of that
+authorization. -/
 
 namespace ScopeTemplates
 
@@ -36,12 +44,6 @@ inductive Scope where
   | clientRoute
   deriving DecidableEq, Repr
 
-structure ScopeFilterKey where
-  field : String
-  operator : String := "_eq"
-  value : Did
-  deriving DecidableEq, Repr
-
 structure CollectionScopeFilter where
   collection : String
   field : String
@@ -69,27 +71,41 @@ structure Template where
 
 abbrev Catalog := List Template
 
-def conversationTranscriptCollections : List String :=
+/-- Canonical transcript artifacts rooted in AgentSession. -/
+def transcriptCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
-   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry"]
+   "AgentToolResult", "AgentSession", "CompactionEntry"]
+
+/-- Configuration reachable from AgentBehavior -> AgentContext / InferenceProfile
+and its referenced settings and documents: Tools, CompactionConfig, sampling,
+execution, retry policy, MCP registries, skills, datastore surfaces, subagent
+targets, chain keys and eth tools. Excludes credential-bearing documents by
+construction, so ordinary client/conversation transport cannot carry them. -/
+def reachableConfigKinds : List ConfigDocuments.Collection :=
+  [.agentBehavior, .agentContext, .compaction, .tools, .subagentTarget,
+   .inferenceProfile, .inferenceSampling, .inferenceExecution,
+   .inferenceRetryPolicy, .toolServiceRegistry, .skill, .datastoreToolSurface,
+   .chainKeyBinding, .ethTool]
 
 def agentConfigCollections : List String :=
-  ["AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
-   "ToolServiceRegistry", "Skill", "DatastoreToolSurface", "ChainKeyBinding",
-   "EthTool"]
+  reachableConfigKinds.map ConfigDocuments.Collection.collectionName
+
+/-- The full operator configuration plane adds the credential-bearing backend
+document. Existing DID/ACP admission must authorize its operator/runtime
+route; this template model describes selection, not authorization. -/
+def operatorConfigCollections : List String :=
+  agentConfigCollections ++ ["InferenceBackend"]
+
+/-- Documents carrying credentials. `InferenceBackend` holds API-key material
+and `OAuthCredential` holds principal login/refresh credentials; neither
+belongs in ordinary client/conversation replication. -/
+def credentialCollections : List String := ["InferenceBackend", "OAuthCredential"]
 
 def conversationCollections : List String :=
-  conversationTranscriptCollections ++ agentConfigCollections
+  transcriptCollections ++ agentConfigCollections
 
 def clientTranscriptCollections : List String :=
-  ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
-   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry",
-   "MailboxItem"]
-
-def clientControlPlaneCollections : List String :=
-  ["AgentBehavior", "ToolSelection", "InferenceProfile", "ToolServiceRegistry",
-   "Skill", "DatastoreToolSurface", "ChainKeyBinding", "EthTool", "Task",
-   "Schedule", "EventTrigger"]
+  transcriptCollections ++ ["MailboxItem"]
 
 def clientOwnerProjectionCollections : List String :=
   ["AgentBehaviorReadiness"]
@@ -97,6 +113,11 @@ def clientOwnerProjectionCollections : List String :=
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
     ["PersonaConfigRequest", "PeerEndpoint", "SessionHydrationRequest"]
+
+def clientControlPlaneCollections : List String :=
+  agentConfigCollections ++
+    ([.task, .schedule, .trigger, .eventSource] : List ConfigDocuments.Collection).map
+      ConfigDocuments.Collection.collectionName
 
 def clientCollections : List String :=
   clientToRuntimeCollections ++ clientControlPlaneCollections ++
@@ -110,21 +131,23 @@ def machineCollections : List String :=
   conversationCollections ++
     ["MailboxItem", "SessionHydrationRequest", "AgentDirectoryEntry"]
 
+/-- Subagent legs stay minimal requester-scoped transcript carriers; host-local
+artifacts and configuration never ride them. -/
 def subagentHostCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall"]
 
+/-- The eager client index retains its existing requester scope. -/
 def clientIndexCollections : List String :=
-  ["AgentConversation", "AgentSession", "MailboxItem"]
+  ["AgentSession", "MailboxItem"]
 
 def conversationRules : List CollectionRule :=
-  [ { collection := "AgentRequest",      field := "requester_did", source := .peerDid }
-  , { collection := "AgentResponse",     field := "requester_did", source := .peerDid }
-  , { collection := "AgentMessage",      field := "requester_did", source := .peerDid }
-  , { collection := "AgentToolCall",     field := "requester_did", source := .peerDid }
-  , { collection := "AgentToolResult",   field := "requester_did", source := .peerDid }
-  , { collection := "AgentSession",      field := "requester_did", source := .peerDid }
-  , { collection := "AgentConversation", field := "requester_did", source := .peerDid }
-  , { collection := "CompactionEntry",   field := "requester_did", source := .peerDid } ]
+  [ { collection := "AgentRequest",    field := "requester_did", source := .peerDid }
+  , { collection := "AgentResponse",   field := "requester_did", source := .peerDid }
+  , { collection := "AgentMessage",    field := "requester_did", source := .peerDid }
+  , { collection := "AgentToolCall",   field := "requester_did", source := .peerDid }
+  , { collection := "AgentToolResult", field := "requester_did", source := .peerDid }
+  , { collection := "AgentSession",    field := "requester_did", source := .peerDid }
+  , { collection := "CompactionEntry", field := "requester_did", source := .peerDid } ]
 
 def machineRules : List CollectionRule :=
   conversationRules ++
@@ -136,15 +159,14 @@ def subagentCoordinatorRules : List CollectionRule :=
   [ { collection := "AgentToolCall", field := "spawn_target_did", source := .peerDid } ]
 
 def subagentHostRules : List CollectionRule :=
-  [ { collection := "AgentRequest",      field := "requester_did", source := .peerDid }
-  , { collection := "AgentResponse",     field := "requester_did", source := .peerDid }
-  , { collection := "AgentMessage",      field := "requester_did", source := .peerDid }
-  , { collection := "AgentToolCall",     field := "requester_did", source := .peerDid } ]
+  [ { collection := "AgentRequest",    field := "requester_did", source := .peerDid }
+  , { collection := "AgentResponse",   field := "requester_did", source := .peerDid }
+  , { collection := "AgentMessage",    field := "requester_did", source := .peerDid }
+  , { collection := "AgentToolCall",   field := "requester_did", source := .peerDid } ]
 
 def clientIndexRules : List CollectionRule :=
-  [ { collection := "AgentConversation", field := "requester_did", source := .peerDid }
-  , { collection := "AgentSession",      field := "requester_did", source := .peerDid }
-  , { collection := "MailboxItem",       field := "requester_did", source := .peerDid } ]
+  [ { collection := "AgentSession", field := "requester_did", source := .peerDid }
+  , { collection := "MailboxItem",  field := "requester_did", source := .peerDid } ]
 
 def conversationTemplate : Template :=
   { id := "conversation"
@@ -166,13 +188,13 @@ def clientTemplate : Template :=
 
 def agentConfigTemplate : Template :=
   { id := "agent-config"
-  , collections := agentConfigCollections.toFinset
+  , collections := operatorConfigCollections.toFinset
   , scope := .unscoped
   , delivery := .replicate }
 
 def backupTemplate : Template :=
   { id := "backup"
-  , collections := conversationTranscriptCollections.toFinset
+  , collections := transcriptCollections.toFinset
   , scope := .unscoped
   , delivery := .replicate }
 

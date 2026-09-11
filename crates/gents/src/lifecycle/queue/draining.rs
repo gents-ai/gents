@@ -4,12 +4,17 @@ pub async fn drain_automated_wakeups(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    requester_did: Option<&str>,
     reason: &str,
 ) -> Result<usize> {
-    drain_pending_session_requests_where(node, session_id, agent_did, reason, |row| {
-        row.execution_origin.as_deref() == Some("scheduled")
-            && is_automated_wakeup(row.metadata.as_deref())
-    })
+    drain_pending_session_requests_where(
+        node,
+        session_id,
+        agent_did,
+        requester_did,
+        reason,
+        |row| row.execution_origin.as_deref() == Some("scheduled") && row_is_automated_wakeup(row),
+    )
     .await
 }
 
@@ -17,11 +22,17 @@ pub(crate) async fn drain_subagent_owned_queue(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    requester_did: Option<&str>,
     reason: &str,
 ) -> Result<usize> {
-    drain_pending_session_requests_where(node, session_id, agent_did, reason, |row| {
-        is_subagent_owned_queue(row.metadata.as_deref())
-    })
+    drain_pending_session_requests_where(
+        node,
+        session_id,
+        agent_did,
+        requester_did,
+        reason,
+        |row| row_is_subagent_owned_queue(row),
+    )
     .await
 }
 
@@ -33,24 +44,23 @@ async fn drain_pending_session_requests_where(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    requester_did: Option<&str>,
     reason: &str,
     should_drain: impl Fn(&AgentRequestRow) -> bool,
 ) -> Result<usize> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    {scope},
                     lifecycle_state: {{ _eq: "pending" }}
                 }}
             ) {{
                 _docID
                 request_id
                 execution_origin
-                metadata
+                input
             }}
         }}"#
     );
@@ -79,7 +89,7 @@ async fn drain_pending_session_requests_where(
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
-                        agent_did: {{ _eq: "{escaped_agent_did}" }},
+                        {scope},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{

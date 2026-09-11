@@ -130,15 +130,6 @@ theorem persist_durable_iff (store : Store) (key : ReductionKey) (fact : Fact) :
       · subst heq; simp [persist, hpairs, h, PersistOutcome.durable]
       · simp [persist, hpairs, h, heq, PersistOutcome.durable]
 
-/-- Request retry is idempotent at the reduction layer.  Provider attempts can
-change while the reduction key remains fixed; a different accepted checkpoint
-must use the next ordinal and link its parent. -/
-theorem provider_attempt_not_in_reduction_identity
-    (key : ReductionKey) (_firstAttempt _retryAttempt : Nat) : key = key := rfl
-
-theorem claim_commit_not_in_reduction_identity
-    (key : ReductionKey) (_firstClaim _laterClaim : ClaimCommitId) : key = key := rfl
-
 theorem turn_separates_reductions (key : ReductionKey) {a b : Nat} (h : a ≠ b) :
     ({ key with turnIndex := a } : ReductionKey) ≠ { key with turnIndex := b } := by
   intro heq
@@ -307,16 +298,48 @@ theorem crash_then_restore_exact {durable crashed recovered : Machine}
   subst hrestore
   simp_all
 
-/-- Pair closure is checked before a fact can become active and is retained by
-exact restoration. -/
-theorem durable_checkpoint_pair_closed {pre post : Machine} (h : Step pre post)
-    (hdurable : post.stage = .durable) : post.fact.pairClosed = true := by
-  cases h with
+/-- Recovery trusts facts admitted by the creation owner. Arbitrary external
+stores do not acquire pair closure merely by containing a matching key. -/
+def Store.PairClosed (store : Store) : Prop :=
+  ∀ key fact, store key = some fact → fact.pairClosed = true
+
+@[simp] theorem Store.empty_pairClosed : Store.PairClosed Store.empty := by
+  intro key fact h
+  simp [Store.empty] at h
+
+theorem Store.bind_pairClosed (store : Store) (key : ReductionKey) (fact : Fact)
+    (hstore : store.PairClosed) (hpairs : fact.pairClosed = true) :
+    (Store.bind store key fact).PairClosed := by
+  intro probe stored h
+  by_cases heq : probe = key
+  · subst heq
+    simp at h
+    cases h
+    exact hpairs
+  · exact hstore probe stored (by simpa [Store.bind, heq] using h)
+
+theorem Step.preserves_pairClosed_store {pre post : Machine}
+    (hstore : pre.store.PairClosed) (hstep : Step pre post) : post.store.PairClosed := by
+  cases hstep with
+  | persistFresh _ _ hpairs hpost =>
+      subst hpost
+      exact Store.bind_pairClosed _ _ _ hstore hpairs
+  | persistIdempotent _ _ _ hpost => subst hpost; exact hstore
+  | crash hpost => subst hpost; exact hstore
+  | restore _ _ hpost => subst hpost; exact hstore
+  | sendDurable _ _ _ hpost => subst hpost; exact hstore
+
+/-- Creation checks pair closure; recovery and send retain it from a valid
+store. No recovery repair or additional transition is introduced. -/
+theorem active_checkpoint_pair_closed {pre post : Machine}
+    (hstore : pre.store.PairClosed) (hstep : Step pre post)
+    (hactive : successfulReduction post = true) : post.fact.pairClosed = true := by
+  cases hstep with
   | persistFresh _ _ hpairs hpost => subst hpost; exact hpairs
   | persistIdempotent _ _ hpairs hpost => subst hpost; exact hpairs
-  | crash hpost => subst hpost; contradiction
-  | restore _ _ hpost => subst hpost; contradiction
-  | sendDurable _ _ _ hpost => subst hpost; contradiction
+  | crash hpost => subst hpost; simp [successfulReduction] at hactive
+  | restore _ hbound hpost => subst hpost; exact hstore _ _ hbound
+  | sendDurable _ hbound _ hpost => subst hpost; exact hstore _ _ hbound
 
 /-! ## Executable create-and-compare cases -/
 

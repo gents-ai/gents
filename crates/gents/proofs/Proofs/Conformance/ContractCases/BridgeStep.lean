@@ -31,7 +31,6 @@ def bridgeStepToolRow
   , currentTime := 10
   , failureClass := none
   , persistence := persistence
-  , approval := none
   , awaitMode := .background
   , cancelPolicy := policy
   , childRequestId := some 901
@@ -51,7 +50,6 @@ def bridgeStepRequest
   , maxRetries := 3
   , progressSeq := 0
   , messageSeq := 0
-  , isLatest := true
   , persistence := .committed
   , interruptRequestedAt := none
   , validUntil := none
@@ -94,7 +92,6 @@ def bridgeStepFixture
         [ bridgeStepToolRow policy
             (if bridgeCommitted then .committed else .committing) ]
   , child := child
-  , secondLeg := .subagent child
   , bridgeCallId := 77
   }
 

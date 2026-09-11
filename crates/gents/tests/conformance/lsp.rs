@@ -1,3 +1,6 @@
+//! Generated permission cases exercise the LSP authorization owner.
+//! Mapping canonical per-service config into that owner belongs to the loader.
+
 use gents::tool_surface::FileToolMode;
 use gents::toolset::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
@@ -9,7 +12,8 @@ fn file_from_rank(rank: u8) -> FileToolMode {
     match rank {
         0 => FileToolMode::Off,
         1 => FileToolMode::ReadOnly,
-        _ => FileToolMode::ReadWrite,
+        2 => FileToolMode::ReadWrite,
+        rank => panic!("unknown Lean file rank {rank}"),
     }
 }
 

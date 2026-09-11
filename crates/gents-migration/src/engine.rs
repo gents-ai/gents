@@ -1,8 +1,7 @@
 //! Locate-in-chain → attach → patch-inactive → verify → activate.
 //!
-//! Phase A ships a zero-step chain: register baseline, enforce single-version
-//! DAGs, verify expectations. Step application paths are implemented for the
-//! registry enum so Phase B only adds data.
+//! Register the pinned baseline, reject unknown lineage, apply registered
+//! steps, and verify the active collection state.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -114,7 +113,7 @@ async fn register_baseline(
 }
 
 // ---------------------------------------------------------------------------
-// Steps (Phase B surface; Phase A steps is empty)
+// Declarative migration steps
 // ---------------------------------------------------------------------------
 
 async fn apply_steps(
@@ -234,9 +233,7 @@ async fn apply_patch_versioned(
         return Err(Error::StepFailed {
             step: id.to_string(),
             collection: collection.to_string(),
-            source: anyhow::anyhow!(
-                "PatchVersioned steps require expected_version pin (design §8.1)"
-            ),
+            source: anyhow::anyhow!("PatchVersioned steps require expected_version pin"),
         });
     };
 

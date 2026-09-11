@@ -9,7 +9,7 @@ use rig::completion::CompletionModel;
 
 use crate::agent::stream_processor::{StreamAction, StreamProcessor};
 use crate::completion_factory::loop_config;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::lifecycle::TerminalizeResult;
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage};
@@ -26,7 +26,7 @@ pub struct OneshotRunResult {
 
 pub async fn run_openai_oneshot(
     node: Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
     run_openai_oneshot_with_tools(node, behavior, Vec::new(), prompt).await
@@ -34,7 +34,7 @@ pub async fn run_openai_oneshot(
 
 pub async fn run_openai_oneshot_with_tools(
     node: Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
@@ -43,19 +43,22 @@ pub async fn run_openai_oneshot_with_tools(
     let api_key = behavior.completion_client_api_key()?;
     let tool_runtime =
         ToolRuntimeContext::oneshot_with_agent_did(node.clone(), behavior.agent_did());
-    let tool_surface = behavior.tools.resolve(node.as_ref()).await?;
+    let tool_surface = behavior
+        .tools
+        .resolve(node.as_ref(), behavior.agent_did())
+        .await?;
     let allowed_targets = tool_surface::resolve_subagent_target_descriptions(&tool_surface);
     let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface, &allowed_targets);
     let output_obligations = tool_surface.output_obligations();
 
     let lsp_pool = tool_runtime.lsp_pool.clone();
-    let mut tools = tool_surface.build_tools(&tool_runtime)?;
+    let mut tools = tool_surface.build_tools(&tool_runtime).await?;
     tools.extend(extra_tools);
     let tools = Arc::new(tools);
     // Background executions run through `call_tool_managed`, which owns the
     // deadline/cancellation envelope — no per-tool wrapper needed.
     let background_tool_registry = BackgroundToolRegistry::from_tools(
-        tool_surface.build_tools(&tool_runtime)?,
+        tool_surface.build_tools(&tool_runtime).await?,
         &tool_surface.background_tools().allowlist,
     );
 
@@ -85,7 +88,7 @@ pub async fn run_openai_oneshot_with_tools(
 
 async fn run_oneshot_with_completion_client<C>(
     node: Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     prompt: &str,
     prompt_builder: LayeredPromptBuilder,
     output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
@@ -105,7 +108,7 @@ where
     // `max_concurrent`/`max_queue_depth`/`probe_status`) so multiple daemon
     // slots sharing one backend stay bounded; it requires a registry that has
     // been `reconcile()`-d with that config, which only the daemon's runtime
-    // reconciler drives. `AgentBehavior` here carries no such fields (by
+    // reconciler drives. `ResolvedBehavior` here carries no such fields (by
     // design — one-shot is a single ad hoc call, not a slot pool with
     // contention to bound), so plugging in a fresh, never-reconciled registry
     // would make every completion fail immediately with "BackendGone: backend
@@ -160,7 +163,7 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
 #[allow(clippy::too_many_arguments)]
 async fn run_oneshot_owned<M: CompletionModel + 'static>(
     node: Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     prompt_builder: &LayeredPromptBuilder,
     model: M,
     prompt: &str,
@@ -257,6 +260,7 @@ where
         &request.session_id,
         &behavior.behavior_id,
         behavior.agent_did(),
+        request.requester_did.as_deref(),
         FailurePolicy::default(),
     )
     .await

@@ -150,45 +150,12 @@ theorem BridgeCancelCascadeStep.to_transition
     h.h_child_depth_eq
     h.h_child_tools_eq
 
-inductive RequestInterruptStep : RequestContext → RequestContext → Prop where
-  | before_claim {pre post : RequestContext} :
-      pre.state = .pending →
-      pre.admission = .released →
-      pre.interruptRequestedAt.isSome →
-      post = { pre with state := .interrupted, admission := .released } →
-      RequestInterruptStep pre post
-  | claimed {pre post : RequestContext} :
-      pre.state = .claimed →
-      (pre.admission = .waiting ∨ pre.admission = .acquired) →
-      pre.interruptRequestedAt.isSome →
-      post = { pre with state := .interrupted, admission := .released } →
-      RequestInterruptStep pre post
-  | processing {pre post : RequestContext} :
-      pre.state = .processing →
-      pre.admission = .executing →
-      pre.interruptRequestedAt.isSome →
-      post = { pre with state := .interrupted, admission := .released } →
-      RequestInterruptStep pre post
-
-theorem RequestInterruptStep.to_transition
-    {pre post : RequestContext}
-    (h : RequestInterruptStep pre post) :
-    RequestContext.Transition pre post := by
-  cases h with
-  | before_claim h_state h_admission h_interrupt h_post =>
-      exact RequestContext.Transition.interrupt_before_claim
-        h_state h_admission h_interrupt h_post
-  | claimed h_state h_admission h_interrupt h_post =>
-      exact RequestContext.Transition.interrupt_claimed
-        h_state h_admission h_interrupt h_post
-  | processing h_state h_admission h_interrupt h_post =>
-      exact RequestContext.Transition.interrupt_processing
-        h_state h_admission h_interrupt h_post
-
 structure ChildInterruptStep
     (pre post : BridgedState) : Prop where
   h_request_interrupt :
-    RequestInterruptStep pre.child.request post.child.request
+    RequestContext.Transition pre.child.request post.child.request
+  h_request_live : ¬ isTerminal pre.child.request.state
+  h_request_interrupted : post.child.request.state = .interrupted
   h_process_eq : post.child.process = pre.child.process
   h_call_eq : post.child.call = pre.child.call
   h_tools_eq : post.child.tools = pre.child.tools
@@ -212,7 +179,7 @@ theorem ChildInterruptStep.to_transition
     Transition pre post :=
   Transition.child_step
     (ComposedState.Transition.request_step
-      (RequestInterruptStep.to_transition h.h_request_interrupt)
+      h.h_request_interrupt
       h.h_process_eq
       h.h_call_eq
       h.h_tools_eq

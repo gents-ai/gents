@@ -35,14 +35,15 @@ pub use materialize::{
     activate_workspace_bound_request,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     build_signed_request, EnqueuedAgentRequest, ParentLink, RequestIdentity, RequestSigner,
-    RequestSpec, RetryLink, SamplingCarryover,
+    RequestSpec, RetryLink,
 };
 pub(crate) use materialize::{
     write_pending_agent_request_with_lineage_and_conversation_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
-pub(crate) use task_title::task_goal_conversation_title;
-pub use task_title::task_run_conversation_title;
+pub use queue::enqueue_local_steering_request;
+pub(crate) use task_title::task_goal_session_title;
+pub use task_title::task_session_title;
 
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
@@ -89,21 +90,28 @@ pub(crate) fn parse_valid_until(
     }
 }
 
-pub fn is_background_completion_request(metadata: Option<&str>) -> bool {
-    queue::is_automated_wakeup(metadata)
+pub fn is_background_completion_request(
+    input: &gents_protocol::request_input::RequestInput,
+) -> bool {
+    queue::is_automated_wakeup(input)
 }
 
 /// Whether `AgentRequest.content` itself owns the pending user bubble. Steering
 /// uses a separately persisted keyed message; goal and completion requests are
-/// controller turns. Unversioned requests retain the ordinary user default.
-pub fn request_content_owns_user_projection(metadata: Option<&str>) -> bool {
-    queue::parse_queue_hints(metadata).is_none_or(|hints| hints.source == queue::QueueSource::User)
+/// controller turns. Requests without queue input retain the ordinary user default.
+pub fn request_content_owns_user_projection(
+    input: &gents_protocol::request_input::RequestInput,
+) -> bool {
+    input
+        .queue
+        .as_ref()
+        .is_none_or(|hints| hints.source == queue::QueueSource::User)
 }
 
 /// Whether the request represents a logical user turn, regardless of whether
 /// its bubble is projected from the request or from a keyed steering message.
-pub fn request_owns_user_turn(metadata: Option<&str>) -> bool {
-    queue::parse_queue_hints(metadata).is_none_or(|hints| {
+pub fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInput) -> bool {
+    input.queue.as_ref().is_none_or(|hints| {
         matches!(
             hints.source,
             queue::QueueSource::User | queue::QueueSource::Steering
@@ -122,7 +130,7 @@ pub fn is_steering_input_message_key(message_key: &str) -> bool {
 /// Background-completion notifications and durable-goal controller prompts
 /// are entirely internal.
 pub fn is_runtime_control_message(
-    metadata: Option<&str>,
+    input: &gents_protocol::request_input::RequestInput,
     message_key: &str,
     request_has_keyed_steering_input: bool,
 ) -> bool {
@@ -130,13 +138,17 @@ pub fn is_runtime_control_message(
     {
         return true;
     }
-    queue::parse_queue_hints(metadata).is_some_and(|hints| match hints.source {
-        queue::QueueSource::BackgroundCompletion | queue::QueueSource::Goal => true,
-        queue::QueueSource::Steering => {
-            request_has_keyed_steering_input && !queue::is_steering_input_message_key(message_key)
-        }
-        queue::QueueSource::User => false,
-    })
+    input
+        .queue
+        .as_ref()
+        .is_some_and(|hints| match hints.source {
+            queue::QueueSource::BackgroundCompletion | queue::QueueSource::Goal => true,
+            queue::QueueSource::Steering => {
+                request_has_keyed_steering_input
+                    && !queue::is_steering_input_message_key(message_key)
+            }
+            queue::QueueSource::User => false,
+        })
 }
 
 fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
@@ -240,11 +252,12 @@ pub struct TriggerLineage {
     pub trigger_context: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
 pub struct WorkspaceLineage {
     pub workspace_id: Option<String>,
+    pub workspace_owner_agent_did: Option<String>,
     pub workspace_authority: Option<String>,
-    pub workspace_owner_deployment_id: Option<String>,
     pub workspace_seal_hash: Option<String>,
 }
 
@@ -256,9 +269,8 @@ pub fn snapshot_workspace_lineage_source_fields(
 ) {
     const SOURCE_KEYS: &[&str] = &[
         "workspace_id",
+        "workspace_owner_agent_did",
         "workspace_authority",
-        "workspace_owner_deployment_id",
-        "owner_deployment_id",
         "work_unit_id",
         "workspace_seal_hash",
         "seal_hash",
@@ -266,9 +278,8 @@ pub fn snapshot_workspace_lineage_source_fields(
     ];
     const BIND_KEYS: &[&str] = &[
         "workspace_id",
+        "workspace_owner_agent_did",
         "workspace_authority",
-        "workspace_owner_deployment_id",
-        "owner_deployment_id",
         "workspace_seal_hash",
         "seal_hash",
     ];
@@ -325,9 +336,8 @@ impl WorkspaceLineage {
         };
         Ok(Self {
             workspace_id: field("workspace_id"),
+            workspace_owner_agent_did: field("workspace_owner_agent_did"),
             workspace_authority: field("workspace_authority"),
-            workspace_owner_deployment_id: field("workspace_owner_deployment_id")
-                .or_else(|| field("owner_deployment_id")),
             workspace_seal_hash: field("workspace_seal_hash").or_else(|| field("seal_hash")),
         })
     }
@@ -337,35 +347,48 @@ impl WorkspaceLineage {
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
-            || self
-                .workspace_owner_deployment_id
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty())
-    }
-
-    pub fn owner_deployment_id(&self) -> Option<&str> {
-        self.workspace_owner_deployment_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
     }
 
     pub fn require_authority_if_workspace_id(&self) -> Result<()> {
-        let has_workspace_id = self
-            .workspace_id
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-        let has_authority = self
-            .workspace_authority
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-        if has_workspace_id && !has_authority {
-            anyhow::bail!("workspace-bound request requires workspace_authority");
+        gents_protocol::request_admission::validate_workspace_reference(
+            self.workspace_id.as_deref(),
+            self.workspace_owner_agent_did.as_deref(),
+            self.workspace_authority.as_deref(),
+            self.workspace_seal_hash.as_deref(),
+        )
+    }
+
+    /// `source_authenticated` is reconstructed by the existing admission/ACP
+    /// owner, never read from a request field. It permits opaque parent IDs.
+    pub fn validate_source(&self, source: &Self, source_authenticated: bool) -> Result<()> {
+        anyhow::ensure!(
+            source_authenticated,
+            "workspace source is not authenticated"
+        );
+        self.require_authority_if_workspace_id()?;
+        source.require_authority_if_workspace_id()?;
+        anyhow::ensure!(
+            self.workspace_id == source.workspace_id
+                && self.workspace_owner_agent_did == source.workspace_owner_agent_did
+                && self.workspace_seal_hash == source.workspace_seal_hash,
+            "workspace reference differs from its authenticated source"
+        );
+        match (
+            self.workspace_authority.as_deref(),
+            source.workspace_authority.as_deref(),
+        ) {
+            (None, None) => Ok(()),
+            (Some(requested), Some(granted)) => {
+                let requested = crate::toolset::WorkspaceAuthority::parse(requested)?;
+                let granted = crate::toolset::WorkspaceAuthority::parse(granted)?;
+                anyhow::ensure!(
+                    requested.infimum(granted) == requested,
+                    "workspace authority exceeds its authenticated source"
+                );
+                Ok(())
+            }
+            _ => anyhow::bail!("workspace authority differs from its authenticated source"),
         }
-        Ok(())
     }
 }
 
@@ -399,7 +422,6 @@ impl TriggerExecutionContext {
 
 pub struct RequestLifecycle {
     node: Arc<EmbeddedNode>,
-    agent_name: String,
     agent_did: String,
     behavior_id: String,
     execution_origin: ExecutionOrigin,
@@ -410,6 +432,7 @@ pub struct RequestLifecycle {
     response_doc_id: Option<String>,
     progress_seq: u32,
     deadline_duration_secs: u64,
+    configured_max_total_tokens: Option<u64>,
     claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
     background_completion_input_through_sequence: Option<u32>,
     state: LocalLifecycleState,
@@ -419,6 +442,17 @@ pub struct RequestLifecycle {
 }
 
 impl RequestLifecycle {
+    /// Configuration supplied by the runtime, never by request input. Only the
+    /// first claim pins it; resumed physical requests retain their durable limit.
+    pub(crate) fn set_configured_max_total_tokens(&mut self, limit: Option<u64>) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "configure token limit before claim"
+        );
+        self.configured_max_total_tokens = limit;
+    }
+
     pub(crate) fn claimed_deadline_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.claimed_deadline_at
     }
@@ -494,14 +528,6 @@ impl TerminalRedriveReport {
     pub fn is_noop(&self) -> bool {
         self.reasserted == 0
     }
-}
-
-fn resolve_behavior_id(default_behavior_id: &str, requested_behavior_id: Option<&str>) -> String {
-    requested_behavior_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(default_behavior_id)
-        .to_string()
 }
 
 #[cfg(test)]
@@ -672,42 +698,6 @@ mod tests {
     }
 
     #[test]
-    fn workspace_lineage_maps_callback_result_owner_deployment_id() {
-        let context = serde_json::json!({
-            "version": 1,
-            "source_fields": {
-                "workspace_id": "ws-1",
-                "workspace_authority": "readWrite",
-                "owner_deployment_id": "deploy-owner"
-            }
-        })
-        .to_string();
-        let lineage = WorkspaceLineage::from_trigger_context(Some(&context)).unwrap();
-        assert_eq!(lineage.workspace_id.as_deref(), Some("ws-1"));
-        assert_eq!(lineage.owner_deployment_id(), Some("deploy-owner"));
-        assert_eq!(
-            lineage.workspace_owner_deployment_id.as_deref(),
-            Some("deploy-owner")
-        );
-    }
-
-    #[test]
-    fn workspace_lineage_prefers_workspace_owner_deployment_id() {
-        let context = serde_json::json!({
-            "version": 1,
-            "source_fields": {
-                "workspace_id": "ws-1",
-                "workspace_authority": "readOnly",
-                "workspace_owner_deployment_id": "deploy-explicit",
-                "owner_deployment_id": "deploy-callback"
-            }
-        })
-        .to_string();
-        let lineage = WorkspaceLineage::from_trigger_context(Some(&context)).unwrap();
-        assert_eq!(lineage.owner_deployment_id(), Some("deploy-explicit"));
-    }
-
-    #[test]
     fn workspace_lineage_maps_receipt_seal_hash() {
         let context = serde_json::json!({
             "version": 1,
@@ -725,12 +715,16 @@ mod tests {
     fn snapshot_overlays_event_trigger_workspace_authority() {
         let source = serde_json::json!({
             "workspace_id": "ws-1",
-            "owner_deployment_id": "deploy-owner",
+            "workspace_owner_agent_did": "did:key:workspace-owner",
             "seal_hash": "tree-1"
         });
         let mut fields = std::collections::BTreeMap::new();
         snapshot_workspace_lineage_source_fields(&source, &mut fields, Some("readOnly"));
         assert_eq!(fields.get("workspace_id").map(String::as_str), Some("ws-1"));
+        assert_eq!(
+            fields.get("workspace_owner_agent_did").map(String::as_str),
+            Some("did:key:workspace-owner")
+        );
         assert_eq!(
             fields.get("workspace_authority").map(String::as_str),
             Some("readOnly")
@@ -747,7 +741,6 @@ mod tests {
         let lineage = WorkspaceLineage::from_trigger_context(Some(&encoded)).unwrap();
         lineage.require_authority_if_workspace_id().unwrap();
         assert_eq!(lineage.workspace_authority.as_deref(), Some("readOnly"));
-        assert_eq!(lineage.owner_deployment_id(), Some("deploy-owner"));
         assert_eq!(lineage.workspace_seal_hash.as_deref(), Some("tree-1"));
     }
 
@@ -794,6 +787,7 @@ mod tests {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        crate::test_support::install_test_behavior(node.as_ref(), "did:test:test", "default").await;
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",

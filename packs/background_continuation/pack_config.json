@@ -1,0 +1,125 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "background-parent",
+      "display_name": "Background delegation parent",
+      "context_id": "background-parent-context",
+      "inference_profile_id": "background-profile"
+    },
+    {
+      "behavior_id": "background-worker",
+      "display_name": "Background worker",
+      "context_id": "background-worker-context",
+      "inference_profile_id": "background-profile"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "background-parent-context",
+      "display_name": "Background delegation parent",
+      "system_prompt": "./agent_behaviors/background_parent/system_prompt.md",
+      "tools_id": "background-parent-tools"
+    },
+    {
+      "context_id": "background-worker-context",
+      "display_name": "Background worker",
+      "system_prompt": "./agent_behaviors/background_worker/system_prompt.md",
+      "tools_id": "background-worker-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "background-parent-tools",
+      "display_name": "Background subagent orchestration only",
+      "subagents": {
+        "target_ids": [
+          "background-parent-tools:worker"
+        ],
+        "spawn_enabled": true,
+        "background_enabled": true,
+        "default_await_mode": "background"
+      }
+    },
+    {
+      "tools_id": "background-worker-tools",
+      "display_name": "No tools"
+    }
+  ],
+  "subagent_targets": [
+    {
+      "target_id": "background-parent-tools:worker",
+      "target_agent_did": "${GENTS_PACK_AGENT_DID}",
+      "behavior_id": "background-worker",
+      "name": "worker",
+      "description": "Returns one concise analysis result"
+    }
+  ],
+  "inference_backends": [
+    {
+      "backend_id": "background-deepseek",
+      "name": "Background continuation demo backend",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "${GENTS_EXP_ENDPOINT:-http://127.0.0.1:8080/v1}",
+      "auth": {
+        "kind": "unauthenticated"
+      },
+      "max_concurrent": 4,
+      "max_queue_depth": 100
+    }
+  ],
+  "inference_profiles": [
+    {
+      "profile_id": "background-profile",
+      "display_name": "Background continuation demo",
+      "backend_id": "background-deepseek",
+      "model_name": "${GENTS_EXP_MODEL:-d4f}",
+      "max_output_tokens": 4096,
+      "sampling_id": "background-profile-sampling",
+      "execution_id": "background-profile-execution"
+    }
+  ],
+  "inference_sampling": [
+    {
+      "sampling_id": "background-profile-sampling",
+      "display_name": "Background continuation demo sampling",
+      "temperature": 0.1
+    }
+  ],
+  "inference_execution": [
+    {
+      "execution_id": "background-profile-execution",
+      "display_name": "Background continuation demo execution",
+      "max_turns": 8
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "background-parent-task",
+      "display_name": "background-parent-task",
+      "behavior_id": "background-parent",
+      "prompt_template": "./tasks/background_parent_task/prompt.md"
+    }
+  ],
+  "event_sources": [
+    {
+      "event_source_id": "background-parent",
+      "display_name": "background-parent",
+      "source_collection": "BackgroundContinuationJob",
+      "event_kind": "created"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "background-parent",
+      "display_name": "background-parent",
+      "task_id": "background-parent-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "background-parent"
+      },
+      "concurrency": "parallel"
+    }
+  ]
+}

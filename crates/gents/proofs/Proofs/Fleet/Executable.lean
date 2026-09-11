@@ -3,7 +3,6 @@ import Proofs.Fleet.Transition
 namespace FleetState
 
 inductive Action where
-  | materializeScheduled (wid : Nat) (bid : BackendId)
   | acceptExisting (wid : Nat)
   | acquireSlot (wid : Nat) (bid : BackendId)
   | beginExecution (wid : Nat)
@@ -11,29 +10,6 @@ inductive Action where
   deriving DecidableEq, Repr
 
 def step? (pre : FleetState) : Action → Option FleetState
-  | .materializeScheduled wid bid =>
-      if _h_not : wid ∉ pre.activeIds then
-        some
-          { activeIds := insert wid pre.activeIds
-          , ctx := Function.update pre.ctx wid
-              { state := .claimed
-              , origin := .scheduled
-              , backend := bid
-              , admission := .waiting
-              , deadline := 0
-              , claimTime := 0
-              , currentTime := 0
-              , retryCount := 0
-              , maxRetries := 3
-              , progressSeq := 0
-              , messageSeq := 0
-              , isLatest := true
-              , persistence := .uncommitted
-              }
-          , scheduler := pre.scheduler
-          }
-      else
-        none
   | .acceptExisting wid =>
       if _h_accept :
           wid ∉ pre.activeIds ∧
@@ -95,11 +71,6 @@ theorem step_sound
     (h_step : step? pre action = some post) :
     Transition pre post := by
   cases action with
-  | materializeScheduled wid bid =>
-      simp [step?] at h_step
-      rcases h_step with ⟨h_not, h_post⟩
-      subst post
-      exact Transition.materialize_scheduled wid bid h_not rfl rfl rfl
   | acceptExisting wid =>
       simp [step?] at h_step
       rcases h_step with ⟨h_accept, h_post⟩
@@ -127,31 +98,6 @@ theorem transition_complete
     (h_trans : Transition pre post) :
     ∃ action : Action, step? pre action = some post := by
   cases h_trans with
-  | materialize_scheduled wid bid h_not h_activeIds h_ctx h_scheduler =>
-      have h_post :
-          { activeIds := insert wid pre.activeIds
-          , ctx := Function.update pre.ctx wid
-              { state := .claimed
-              , origin := .scheduled
-              , backend := bid
-              , admission := .waiting
-              , deadline := 0
-              , claimTime := 0
-              , currentTime := 0
-              , retryCount := 0
-              , maxRetries := 3
-              , progressSeq := 0
-              , messageSeq := 0
-              , isLatest := true
-              , persistence := .uncommitted
-              }
-          , scheduler := pre.scheduler
-          } = post := by
-        apply ext
-        · exact h_activeIds.symm
-        · exact h_ctx.symm
-        · exact h_scheduler.symm
-      exact ⟨.materializeScheduled wid bid, by simp [step?, h_not, h_post]⟩
   | accept_existing wid h_not h_state h_admission h_activeIds h_ctx h_scheduler =>
       have h_post :
           { activeIds := insert wid pre.activeIds

@@ -16,21 +16,21 @@ pub(crate) async fn validate_manifest_against_live(
     access: &ConfigAccess,
 ) -> Result<Vec<String>> {
     let mut errors = Vec::new();
-    for trigger in &manifest.event_triggers {
-        let source_collection = trigger.source_collection.trim();
-        let trigger_id = trigger.trigger_id.trim();
-        if source_collection.is_empty() || trigger_id.is_empty() {
+    for source in &manifest.event_sources {
+        let source_collection = source.source_collection.trim();
+        let source_id = source.event_source_id.trim();
+        if source_collection.is_empty() || source_id.is_empty() {
             continue;
         }
         if let Err(error) = gents::graphql::validate_collection_identifier(source_collection) {
             errors.push(format!(
-                "event_trigger {} has invalid source_collection {:?}: {}",
-                trigger_id, trigger.source_collection, error
+                "event source {} has invalid source_collection {:?}: {}",
+                source_id, source.source_collection, error
             ));
             continue;
         }
 
-        if let Some(filter) = trigger.filter.as_deref().map(str::trim) {
+        if let Some(filter) = source.filter.as_deref().map(str::trim) {
             if !filter.is_empty() {
                 // `filter` is interpolated into the probe query as a raw filter
                 // fragment; validate it like the runtime trigger engine does
@@ -38,8 +38,8 @@ pub(crate) async fn validate_manifest_against_live(
                 // `source_collection` is already validated by the guard above.
                 if let Err(err) = gents::graphql::validate_graphql_filter_fragment(filter) {
                     errors.push(format!(
-                        "event_trigger {} filter is not a valid filter fragment: {}",
-                        trigger_id, err
+                        "event source {} filter is not a valid filter fragment: {}",
+                        source_id, err
                     ));
                 } else {
                     let probe = format!(
@@ -51,8 +51,8 @@ pub(crate) async fn validate_manifest_against_live(
                         Ok(_) => {}
                         Err(err) => {
                             errors.push(format!(
-                                "event_trigger {} filter syntax error: {}",
-                                trigger_id, err
+                                "event source {} filter syntax error: {}",
+                                source_id, err
                             ));
                         }
                     }
@@ -60,27 +60,41 @@ pub(crate) async fn validate_manifest_against_live(
             }
         }
 
-        let task_id = trigger.task_id.trim();
-        if task_id.is_empty() {
-            continue;
-        }
-        let Some(task) = manifest.tasks.iter().find(|t| t.task_id.trim() == task_id) else {
-            continue;
-        };
-        let refs = match parse_template_for_validation(&task.prompt_template) {
-            Ok(refs) => refs,
-            Err(_) => {
+        let mut doc_paths = Vec::new();
+        for trigger in &manifest.triggers {
+            if trigger.agent_did != source.agent_did
+                || !matches!(&trigger.source,
+                    gents::document_config::TriggerSource::Event { event_source_id }
+                    if event_source_id == &source.event_source_id)
+            {
                 continue;
             }
-        };
-        let doc_paths: Vec<Vec<String>> = refs
-            .into_iter()
-            .filter(|v| v.root() == Some("doc"))
-            .map(|v| v.path.clone())
-            .collect();
+            let Some(task) = manifest.tasks.iter().find(|task| {
+                task.agent_did == trigger.agent_did && task.task_id == trigger.task_id
+            }) else {
+                continue;
+            };
+            if let Ok(refs) = parse_template_for_validation(&task.prompt_template) {
+                doc_paths.extend(
+                    refs.into_iter()
+                        .filter(|reference| reference.root() == Some("doc"))
+                        .map(|reference| reference.path),
+                );
+            }
+        }
+        let expected_count_field = source
+            .group
+            .as_ref()
+            .and_then(|group| group.expected_count.as_ref())
+            .and_then(|count| match count {
+                gents::document_config::EventGroupCount::SourceField { source_field } => {
+                    Some(source_field.as_str())
+                }
+                gents::document_config::EventGroupCount::Fixed(_) => None,
+            });
         if doc_paths.is_empty()
-            && trigger.correlation_field.is_none()
-            && trigger.expected_count_field.is_none()
+            && source.correlation_field.is_none()
+            && expected_count_field.is_none()
         {
             continue;
         }
@@ -93,8 +107,8 @@ pub(crate) async fn validate_manifest_against_live(
             Ok(response) => response,
             Err(err) => {
                 errors.push(format!(
-                    "event_trigger {} introspection of source_collection {} failed: {}",
-                    trigger_id, source_collection, err
+                    "event source {} introspection of source_collection {} failed: {}",
+                    source_id, source_collection, err
                 ));
                 continue;
             }
@@ -106,8 +120,8 @@ pub(crate) async fn validate_manifest_against_live(
             .and_then(serde_json::Value::as_array);
         let Some(fields) = fields else {
             errors.push(format!(
-                "event_trigger {} references unknown source_collection {}",
-                trigger_id, source_collection
+                "event source {} references unknown source_collection {}",
+                source_id, source_collection
             ));
             continue;
         };
@@ -124,7 +138,7 @@ pub(crate) async fn validate_manifest_against_live(
                 ))
             })
             .collect();
-        if let Some(field) = trigger
+        if let Some(field) = source
             .correlation_field
             .as_deref()
             .map(str::trim)
@@ -133,30 +147,28 @@ pub(crate) async fn validate_manifest_against_live(
             match field_types.get(field).copied() {
                 Some("String") => {}
                 Some(actual) => errors.push(format!(
-                    "event_trigger {} correlation_field {} must be String, found {}",
-                    trigger_id, field, actual
+                    "event source {} correlation_field {} must be String, found {}",
+                    source_id, field, actual
                 )),
                 None => errors.push(format!(
-                    "event_trigger {} correlation_field {} does not exist on {}",
-                    trigger_id, field, source_collection
+                    "event source {} correlation_field {} does not exist on {}",
+                    source_id, field, source_collection
                 )),
             }
         }
-        if let Some(field) = trigger
-            .expected_count_field
-            .as_deref()
+        if let Some(field) = expected_count_field
             .map(str::trim)
             .filter(|field| !field.is_empty())
         {
             match field_types.get(field).copied() {
                 Some("String" | "Int") => {}
                 Some(actual) => errors.push(format!(
-                    "event_trigger {} expected_count_field {} must be String or Int, found {}",
-                    trigger_id, field, actual
+                    "event source {} expected_count_field {} must be String or Int, found {}",
+                    source_id, field, actual
                 )),
                 None => errors.push(format!(
-                    "event_trigger {} expected_count_field {} does not exist on {}",
-                    trigger_id, field, source_collection
+                    "event source {} expected_count_field {} does not exist on {}",
+                    source_id, field, source_collection
                 )),
             }
         }
@@ -172,8 +184,8 @@ pub(crate) async fn validate_manifest_against_live(
                 continue;
             }
             errors.push(format!(
-                "event_trigger {} template references doc.{} but {} has no such field",
-                trigger_id, first, source_collection
+                "event source {} template references doc.{} but {} has no such field",
+                source_id, first, source_collection
             ));
         }
     }

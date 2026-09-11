@@ -48,7 +48,6 @@ struct Observation {
     cancellation_requested: bool,
     generation: i64,
     primary: Option<u64>,
-    may_interrupt_for_failure: bool,
     children: usize,
 }
 async fn observe(node: &EmbeddedNode, run_id: &str, initial_generation: i64) -> Observation {
@@ -67,9 +66,6 @@ async fn observe(node: &EmbeddedNode, run_id: &str, initial_generation: i64) -> 
         .filter(|row| row["request_id"] != "graph-logical-root")
         .count();
     Observation {
-        may_interrupt_for_failure: view.status == "running"
-            && view.cancellation_requested_at.is_none()
-            && primary.is_some(),
         status: view.status,
         cancellation_requested: view.cancellation_requested_at.is_some(),
         generation: view.update_generation - initial_generation,
@@ -181,6 +177,35 @@ async fn generated_graph_invocation_publication_traces_drive_real_transactions()
 }
 
 #[tokio::test]
+async fn publication_fence_rejects_a_revision_it_is_not_pinned_to() {
+    let (node, run, _goal, _identity, _temp) = signed_invocation_fixture(3).await;
+    let before = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
+    assert_eq!(before.status, "running");
+    let other_digest = format!("sha256:{}", "f".repeat(64));
+    let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    let error =
+        crate::graph_pipeline::fence_graph_publication_in_txn(&txn, &run.run_id, &other_digest)
+            .await
+            .expect_err("a digest other than the pinned run revision must be denied");
+    assert!(
+        error
+            .to_string()
+            .contains("revision does not match the pinned run"),
+        "unexpected denial: {error:#}"
+    );
+    txn.discard().await.unwrap();
+    // Discarding the denied publication leaves the durable run unchanged.
+    let after = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
+    assert_eq!(after.update_generation, before.update_generation);
+    assert_eq!(after.status, "running");
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn discarding_graph_publication_rolls_back_generation_and_signed_child() {
     let (node, run, goal, identity, _temp) = signed_invocation_fixture(3).await;
     let before = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
@@ -211,7 +236,6 @@ async fn discarding_graph_publication_rolls_back_generation_and_signed_child() {
             cancellation_requested: false,
             generation: 0,
             primary: None,
-            may_interrupt_for_failure: false,
             children: 0,
         }
     );

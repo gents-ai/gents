@@ -37,14 +37,22 @@ describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
       const sentinel = `repl-d1-${Date.now()}`;
 
       const fixture = createFixtureHelpers(runner);
+      // Canonical BehaviorSaveRequest: one AgentBehavior document. The system
+      // prompt lives on the referenced AgentContext, so the sentinel is carried
+      // on the behavior document's display_name; the context linkage
+      // (behavior.contextId → deployment.contexts) is asserted unchanged below.
       await fixture.saveBehaviorConfigOnRemote({
-        agentDid: runner.agentDid,
-        behaviorId: behavior!.behaviorId,
-        displayName: behavior!.displayName,
-        systemPrompt: `${behavior!.systemPrompt ?? ""} ${sentinel}`,
-        backendId: behavior!.backendId ?? null,
-        toolSelectionId: behavior!.toolSelectionId ?? null,
-        inferenceProfileId: behavior!.inferenceProfileId ?? null,
+        document: {
+          agent_did: behavior!.agentDid,
+          behavior_id: behavior!.behaviorId,
+          display_name: `${behavior!.displayName} ${sentinel}`,
+          description: behavior!.description,
+          context_id: behavior!.contextId,
+          inference_profile_id: behavior!.inferenceProfileId!,
+          enabled: behavior!.enabled,
+          tags: behavior!.tags,
+          created_at: behavior!.createdAt,
+        },
       });
       logTurn(
         `D1/D2 remote write issued behaviorId=${behavior!.behaviorId} sentinel=${sentinel}`,
@@ -56,7 +64,14 @@ describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
           const replicated = snapshot.client?.deployments[0]?.behaviors.find(
             (b) => b.behaviorId === behavior!.behaviorId,
           );
-          expect(replicated?.systemPrompt).toContain(sentinel);
+          expect(replicated?.displayName).toContain(sentinel);
+          const replicatedContext = snapshot.client?.deployments[0]?.contexts.find(
+            (candidate) => candidate.context_id === replicated?.contextId,
+          );
+          expect(
+            replicatedContext?.tools_id,
+            "replicated behavior must keep its canonical context linkage",
+          ).toBeDefined();
         },
         { timeout: 5_000, interval: 200 },
       );

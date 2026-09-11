@@ -3,26 +3,6 @@ import Proofs.Fleet.State
 namespace FleetState
 
 inductive Transition : FleetState → FleetState → Prop where
-  | materialize_scheduled {pre post : FleetState} (wid : Nat) (bid : BackendId) :
-      wid ∉ pre.activeIds →
-      post.activeIds = insert wid pre.activeIds →
-      post.ctx = Function.update pre.ctx wid
-        { state := .claimed
-        , origin := .scheduled
-        , backend := bid
-        , admission := .waiting
-        , deadline := 0
-        , claimTime := 0
-        , currentTime := 0
-        , retryCount := 0
-        , maxRetries := 3
-        , progressSeq := 0
-        , messageSeq := 0
-        , isLatest := true
-        , persistence := .uncommitted
-        } →
-      post.scheduler = pre.scheduler →
-      Transition pre post
   | accept_existing {pre post : FleetState} (wid : Nat) :
       wid ∉ pre.activeIds →
       (pre.ctx wid).state = .claimed →

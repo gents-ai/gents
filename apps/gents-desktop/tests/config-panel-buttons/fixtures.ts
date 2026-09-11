@@ -1,11 +1,11 @@
 import type {
+  EventSource,
   InferenceBackendView,
-  InferenceProfileView,
-  ScheduleView,
-  TaskRunResult,
+  Schedule,
   TaskView,
-  ToolSelectionView,
-  ToolServiceRegistryView,
+  ToolServiceRegistry,
+  Tools,
+  TriggerView,
 } from "@source-inc/gents-desktop-client";
 
 export const backend: InferenceBackendView = {
@@ -20,46 +20,6 @@ export const backend: InferenceBackendView = {
   models: ["baa-ai/model"],
 };
 
-export const profile: InferenceProfileView = {
-  profileId: "default-profile",
-  displayName: "Default Profile",
-  contextWindow: 131072,
-  maxOutputTokens: 32768,
-  temperature: 0,
-};
-
-export const toolSelection: ToolSelectionView = {
-  selectionId: "default-tools",
-  agentDid: "did:key:z6MkAgent",
-  displayName: "Default Tools",
-  enableFileTools: true,
-  fileToolsMode: "ReadOnly",
-  fileToolRoot: "/tmp/work",
-  enableBash: true,
-  bashMode: "ReadOnly",
-  cliToolNames: ["grep"],
-  enableMetaTools: true,
-  enableGoalTools: null,
-  enableGoalCreation: null,
-  allowedMcpServiceIds: ["mcp-local"],
-  enableDefraQuery: true,
-  defraQueryCollections: ["AgentRequest"],
-  writeTools: [
-    '{"tool_name":"upsert_note","collection":"Note","description":"","fields":[]}',
-  ],
-  toolPolicyVersion: "tool-policy/v1",
-};
-
-export const toolService: ToolServiceRegistryView = {
-  serviceId: "mcp-local",
-  displayName: "Local MCP",
-  description: "Local tools",
-  hostname: "localhost",
-  mcpPort: 7331,
-  mcpPath: "/mcp",
-  status: "online",
-};
-
 export const task: TaskView = {
   taskId: "task-a",
   name: "Task A",
@@ -68,31 +28,72 @@ export const task: TaskView = {
   promptTemplate: "Run task A",
   goalObjectiveTemplate: null,
   goalTokenBudget: null,
+  hooks: [],
   enabled: true,
   outputSchemaRef: null,
+  tags: [],
   recentRuns: {
     totalFires: 0,
+    lastAttemptAt: null,
+    lastStatus: null,
+    lastError: null,
     scheduleCount: 0,
-    eventTriggerCount: 0,
+    eventCount: 0,
   },
   runHistory: [],
 };
 
-export const schedule: ScheduleView = {
-  scheduleId: "timer-a",
-  taskId: "task-a",
-  intervalSecs: 60,
-  enabled: true,
-  concurrency: "serial",
+export const schedule: Schedule = {
+  agent_did: "did:key:z6MkAgent",
+  schedule_id: "timer-a",
+  display_name: "Timer A",
+  cadence: { kind: "interval", interval_secs: 60 },
+  tags: [],
+};
+
+export const eventSource: EventSource = {
+  agent_did: "did:key:z6MkAgent",
+  event_source_id: "source-a",
+  display_name: "Source A",
+  source_collection: "AgentRequest",
+  event_kind: "created",
+  filter: null,
+  correlation_field: null,
+  group: null,
+  workspace_authority: null,
+  tags: [],
+};
+
+export const triggerView: TriggerView = {
+  config: {
+    agent_did: "did:key:z6MkAgent",
+    trigger_id: "trigger-a",
+    display_name: "Trigger A",
+    description: null,
+    task_id: "task-a",
+    source: { kind: "schedule", schedule_id: "timer-a" },
+    enabled: true,
+    concurrency: "serial",
+    tags: [],
+  },
+  nextRunAt: null,
+  lastAttemptAt: null,
+  lastFiredSourceDocId: null,
+  lastStatus: null,
+  lastError: null,
   fireCount: 0,
 };
 
-export const runResult: TaskRunResult = {
-  requestDocId: "bae-run",
-  requestId: "run-1",
-  sessionId: "session-1",
-  agentDid: "did:key:z6MkAgent",
-  behaviorId: "default",
-  status: "submitted",
-  lifecycleState: "queued",
+export const tools: Tools = {
+  tools_id: "default-tools",
+  agent_did: "did:key:z6MkAgent",
+};
+
+export const toolService: ToolServiceRegistry = {
+  service_id: "mcp-local",
+  agent_did: "did:key:z6MkAgent",
+  display_name: "Local MCP",
+  hostname: "localhost",
+  mcp_port: 7331,
+  mcp_path: "/mcp",
 };

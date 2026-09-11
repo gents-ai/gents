@@ -83,7 +83,7 @@ pub(super) async fn compaction_gate_blocks_reduction_while_a_response_streams() 
         GATE_MARKER,
     )
     .await;
-    wait_for_terminal_request(db.node.as_ref(), &blocked_doc_id).await;
+    let blocked = wait_for_terminal_request(db.node.as_ref(), &blocked_doc_id).await;
 
     assert_eq!(
         backend.observed_requests(COMPACTION_MARKER),
@@ -112,13 +112,15 @@ pub(super) async fn compaction_gate_blocks_reduction_while_a_response_streams() 
         GATE_MARKER,
     )
     .await;
-    wait_for_terminal_request(db.node.as_ref(), &allowed_doc_id).await;
+    let allowed = wait_for_terminal_request(db.node.as_ref(), &allowed_doc_id).await;
 
     let after_allowed = backend.observed_requests(COMPACTION_MARKER);
     assert!(
         after_allowed >= 1,
         "with every response in the session terminal the gate opens and the daemon reduces; \
-         a gate that never opens would starve compaction entirely"
+         a gate that never opens would starve compaction entirely; \
+         blocked={blocked:?}, allowed={allowed:?}, backend_requests={}",
+        backend.observed_completion_requests(),
     );
 
     // A later turn reusing an earlier call id resurrects that earlier
@@ -223,7 +225,15 @@ async fn seed_reused_call_id_turn(node: &EmbeddedNode, agent_did: &str, session_
 
 async fn boot_compaction_gate_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
     let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity("compaction-gate"));
-    upsert_gate_backend(db.node.as_ref(), endpoint).await;
+    support::fixtures::bind_behavior_backend(
+        db.node.as_ref(),
+        identity.did(),
+        AGENT_NAME,
+        GATE_BACKEND_ID,
+        endpoint,
+        GATE_MODEL,
+    )
+    .await;
 
     let agent = gents::Gents::builder()
         .node(db.node.clone())
@@ -411,45 +421,7 @@ async fn upsert_response_status(
     );
 }
 
-async fn upsert_gate_backend(node: &EmbeddedNode, endpoint: &str) {
-    let escaped_backend_id = escape_graphql_string(GATE_BACKEND_ID);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let escaped_model_name = escape_graphql_string(GATE_MODEL);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 1,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    endpoint: "{escaped_endpoint}",
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert compaction-gate backend failed: {:?}",
-        response.errors
-    );
-}
-
-async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) {
+async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) -> LifecycleStateRow {
     let escaped_doc_id = escape_graphql_string(request_doc_id);
     let started = std::time::Instant::now();
     loop {
@@ -463,7 +435,7 @@ async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) {
         let response = node.execute(&query).await;
         if let Some(row) = first_optional_row::<LifecycleStateRow>(&response, "AgentRequest") {
             if row.lifecycle_state.is_terminal() {
-                return;
+                return row;
             }
         }
         assert!(

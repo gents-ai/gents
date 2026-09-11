@@ -146,13 +146,9 @@ async fn project_child_request(
         session_id: link.session_id.clone(),
         agent_did: link.agent_did.clone(),
         behavior_id: Some(link.behavior_id.clone()),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
+        request_doc_id: link.latest_request_doc_id.clone(),
+        requester_did: link.requester_did.clone(),
+        input: None,
         created_at: link.latest_request_created_at.clone(),
     };
     let turn_id = submitted.request_id.clone();

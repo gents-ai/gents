@@ -58,14 +58,21 @@ struct ChatToolProgressMarker {
     completed_at: Option<String>,
 }
 
-pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String {
+pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
+    let request_doc_id = &request.request_doc_id;
+    let scope = gents::session::session_scope_filter(
+        &request.agent_did,
+        &request.session_id,
+        request.requester_did.as_deref(),
+    );
     format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                filter: {{ {scope}, _docID: {{ _eq: "{request_doc_id}" }} }},
                 order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
+                _docID agent_did requester_did session_id
                 request_id
                 lifecycle_state
                 failure_reason
@@ -73,11 +80,11 @@ pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String 
                 valid_until
             }}
             AgentResponse(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                filter: {{ {scope}, request_doc_id: {{ _eq: "{request_doc_id}" }} }},
                 order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
-                request_id
+                request_id request_doc_id agent_did requester_did
                 session_id
                 status
                 content
@@ -91,8 +98,8 @@ pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String 
             }}
             AgentToolCall(
                 filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    request_id: {{ _eq: "{request_id}" }}
+                    {scope},
+                    request_doc_id: {{ _eq: "{request_doc_id}" }}
                 }},
                 order: {{ started_at: ASC }}
             ) {{
@@ -105,8 +112,7 @@ pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String 
                 completed_at
             }}
         }}"#,
-        request_id = escape_graphql_string(request_id),
-        session_id = escape_graphql_string(session_id),
+        request_doc_id = escape_graphql_string(request_doc_id),
     )
 }
 
@@ -159,13 +165,17 @@ pub(super) async fn stream_turn_progress(
     let mut thinking_printed = false;
 
     loop {
-        let query = chat_progress_query(&submitted.request_id, &submitted.session_id);
+        let query = chat_progress_query(submitted);
         let response = post_graphql(graphql, &query).await?;
-        let request_row = response
+        let rows = response
             .pointer("/data/AgentRequest")
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned();
+            .context("chat request query omitted rows")?;
+        anyhow::ensure!(
+            rows.len() == 1,
+            "committed chat physical request missing or ambiguous"
+        );
+        let request_row = rows.first().cloned();
         let request = request_row
             .as_ref()
             .map(|row| {
@@ -173,6 +183,15 @@ pub(super) async fn stream_turn_progress(
                     .context("decoding chat progress AgentRequest row")
             })
             .transpose()?;
+
+        if let Some(request) = request.as_ref() {
+            anyhow::ensure!(
+                request.agent_did.as_deref() == Some(submitted.agent_did.as_str())
+                    && request.requester_did == submitted.requester_did
+                    && request.session_id.as_deref() == Some(submitted.session_id.as_str()),
+                "chat request scope differs from committed receipt"
+            );
+        }
 
         let tool_rows = response
             .pointer("/data/AgentToolCall")
@@ -197,11 +216,19 @@ pub(super) async fn stream_turn_progress(
             io::stdout().flush()?;
         }
 
-        let response_row = response
-            .pointer("/data/AgentResponse")
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned();
+        let response_row = crate::optional_response_row(&response)?;
+        if let Some(row) = response_row.as_ref() {
+            anyhow::ensure!(
+                row.get("agent_did").and_then(Value::as_str) == Some(submitted.agent_did.as_str())
+                    && row.get("requester_did").and_then(Value::as_str)
+                        == submitted.requester_did.as_deref()
+                    && row.get("session_id").and_then(Value::as_str)
+                        == Some(submitted.session_id.as_str())
+                    && row.get("request_doc_id").and_then(Value::as_str)
+                        == Some(submitted.request_doc_id.as_str()),
+                "chat response crossed committed request scope"
+            );
+        }
         let marker = chat_progress_marker(request.as_ref(), response_row.as_ref(), &tool_rows);
         if latest_progress_marker.as_ref() != Some(&marker) {
             latest_progress_marker = Some(marker);

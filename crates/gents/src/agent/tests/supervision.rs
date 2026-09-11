@@ -31,7 +31,8 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
         let sibling_ticks = sibling_ticks.clone();
         let panic_attempt_tx = panic_attempt_tx.clone();
         let sibling_tick_tx = sibling_tick_tx.clone();
-        move |behavior: Arc<crate::config::AgentBehavior>, mut shutdown: watch::Receiver<bool>| {
+        move |behavior: Arc<crate::config::ResolvedBehavior>,
+              mut shutdown: watch::Receiver<bool>| {
             let panic_attempts = panic_attempts.clone();
             let sibling_ticks = sibling_ticks.clone();
             let panic_attempt_tx = panic_attempt_tx.clone();

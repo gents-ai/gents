@@ -6,13 +6,24 @@ use super::{ClientStore, ClientStoreRows};
 
 impl ClientStore {
     pub fn from_rows(mut rows: ClientStoreRows) -> Self {
-        rows.conversations.sort_by(|left, right| {
-            cmp_opt_str_desc(left.updated_at.as_deref(), right.updated_at.as_deref())
-                .then_with(|| {
-                    cmp_opt_str_desc(left.created_at.as_deref(), right.created_at.as_deref())
-                })
+        sort_rows_with_sources(
+            &mut rows.sessions,
+            &mut rows.session_source_agent_dids,
+            |left, right| {
+                cmp_opt_str_desc(
+                    left.observation
+                        .as_ref()
+                        .map(|observation| observation.last_activity_at.as_str()),
+                    right
+                        .observation
+                        .as_ref()
+                        .map(|observation| observation.last_activity_at.as_str()),
+                )
+                .then_with(|| right.created_at.cmp(&left.created_at))
+                .then_with(|| left.agent_did.cmp(&right.agent_did))
                 .then_with(|| left.session_id.cmp(&right.session_id))
-        });
+            },
+        );
         sort_rows_with_sources(
             &mut rows.messages,
             &mut rows.message_source_agent_dids,
@@ -86,7 +97,6 @@ impl ClientStore {
             },
         );
 
-        normalize_source_agent_dids(&mut rows.session_source_agent_dids, rows.sessions.len());
         normalize_source_agent_dids(
             &mut rows.compaction_entry_source_agent_dids,
             rows.compaction_entries.len(),
@@ -94,32 +104,61 @@ impl ClientStore {
         normalize_source_agent_dids(&mut rows.task_source_agent_dids, rows.tasks.len());
         normalize_source_agent_dids(&mut rows.schedule_source_agent_dids, rows.schedules.len());
         normalize_source_agent_dids(
-            &mut rows.event_trigger_source_agent_dids,
-            rows.event_triggers.len(),
+            &mut rows.schedule_observation_source_agent_dids,
+            rows.schedule_observations.len(),
+        );
+        normalize_source_agent_dids(&mut rows.trigger_source_agent_dids, rows.triggers.len());
+        normalize_source_agent_dids(
+            &mut rows.trigger_observation_source_agent_dids,
+            rows.trigger_observations.len(),
         );
         normalize_source_agent_dids(&mut rows.skill_source_agent_dids, rows.skills.len());
+        normalize_source_agent_dids(&mut rows.tools_source_agent_dids, rows.tools.len());
+        normalize_source_agent_dids(&mut rows.context_source_agent_dids, rows.contexts.len());
+        normalize_source_agent_dids(
+            &mut rows.compaction_source_agent_dids,
+            rows.compactions.len(),
+        );
         normalize_source_agent_dids(
             &mut rows.inference_backend_source_agent_dids,
             rows.inference_backends.len(),
+        );
+        normalize_source_agent_dids(
+            &mut rows.backend_observation_source_agent_dids,
+            rows.backend_observations.len(),
         );
         normalize_source_agent_dids(
             &mut rows.inference_profile_source_agent_dids,
             rows.inference_profiles.len(),
         );
         normalize_source_agent_dids(
+            &mut rows.inference_sampling_source_agent_dids,
+            rows.inference_sampling.len(),
+        );
+        normalize_source_agent_dids(
+            &mut rows.inference_execution_source_agent_dids,
+            rows.inference_execution.len(),
+        );
+        normalize_source_agent_dids(
             &mut rows.tool_service_registry_source_agent_dids,
             rows.tool_service_registries.len(),
         );
-
-        let mut conversations_by_agent_did = HashMap::new();
-        for (index, row) in rows.conversations.iter().enumerate() {
-            if let Some(agent_did) = row.agent_did.as_deref().filter(|value| !value.is_empty()) {
-                conversations_by_agent_did
-                    .entry(agent_did.to_owned())
-                    .or_insert_with(Vec::new)
-                    .push(index);
-            }
-        }
+        normalize_source_agent_dids(
+            &mut rows.event_source_source_agent_dids,
+            rows.event_sources.len(),
+        );
+        normalize_source_agent_dids(
+            &mut rows.subagent_target_source_agent_dids,
+            rows.subagent_targets.len(),
+        );
+        normalize_source_agent_dids(
+            &mut rows.datastore_tool_surface_source_agent_dids,
+            rows.datastore_tool_surfaces.len(),
+        );
+        normalize_source_agent_dids(
+            &mut rows.chain_key_binding_source_agent_dids,
+            rows.chain_key_bindings.len(),
+        );
 
         let messages_by_session_id =
             build_vec_index(&rows.messages, |row| row.session_id.as_deref());
@@ -175,7 +214,6 @@ impl ClientStore {
             behaviors: rows.behaviors,
             runtimes: rows.runtimes,
             behavior_readiness: rows.behavior_readiness,
-            conversations: rows.conversations,
             requests: rows.requests,
             mailbox_items: rows.mailbox_items,
             responses: rows.responses,
@@ -192,20 +230,42 @@ impl ClientStore {
             compaction_entry_source_agent_dids: rows.compaction_entry_source_agent_dids,
             tasks: rows.tasks,
             schedules: rows.schedules,
-            event_triggers: rows.event_triggers,
+            schedule_observations: rows.schedule_observations,
+            triggers: rows.triggers,
+            trigger_observations: rows.trigger_observations,
             task_source_agent_dids: rows.task_source_agent_dids,
             schedule_source_agent_dids: rows.schedule_source_agent_dids,
-            event_trigger_source_agent_dids: rows.event_trigger_source_agent_dids,
+            schedule_observation_source_agent_dids: rows.schedule_observation_source_agent_dids,
+            trigger_source_agent_dids: rows.trigger_source_agent_dids,
+            trigger_observation_source_agent_dids: rows.trigger_observation_source_agent_dids,
             skills: rows.skills,
             skill_source_agent_dids: rows.skill_source_agent_dids,
-            tool_selections: rows.tool_selections,
+            tools: rows.tools,
+            tools_source_agent_dids: rows.tools_source_agent_dids,
+            contexts: rows.contexts,
+            context_source_agent_dids: rows.context_source_agent_dids,
+            compactions: rows.compactions,
+            compaction_source_agent_dids: rows.compaction_source_agent_dids,
             inference_backends: rows.inference_backends,
+            backend_observations: rows.backend_observations,
             inference_profiles: rows.inference_profiles,
+            inference_sampling: rows.inference_sampling,
+            inference_execution: rows.inference_execution,
             tool_service_registries: rows.tool_service_registries,
+            event_sources: rows.event_sources,
+            subagent_targets: rows.subagent_targets,
+            datastore_tool_surfaces: rows.datastore_tool_surfaces,
+            chain_key_bindings: rows.chain_key_bindings,
             inference_backend_source_agent_dids: rows.inference_backend_source_agent_dids,
+            backend_observation_source_agent_dids: rows.backend_observation_source_agent_dids,
             inference_profile_source_agent_dids: rows.inference_profile_source_agent_dids,
+            inference_sampling_source_agent_dids: rows.inference_sampling_source_agent_dids,
+            inference_execution_source_agent_dids: rows.inference_execution_source_agent_dids,
             tool_service_registry_source_agent_dids: rows.tool_service_registry_source_agent_dids,
-            conversations_by_agent_did,
+            event_source_source_agent_dids: rows.event_source_source_agent_dids,
+            subagent_target_source_agent_dids: rows.subagent_target_source_agent_dids,
+            datastore_tool_surface_source_agent_dids: rows.datastore_tool_surface_source_agent_dids,
+            chain_key_binding_source_agent_dids: rows.chain_key_binding_source_agent_dids,
             messages_by_session_id,
             requests_by_session_id,
             tool_calls_by_session_id,

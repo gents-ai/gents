@@ -6,7 +6,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
 import {
-  projectConversationLoadingStatus,
+  projectSessionLoadingStatus,
   projectStartupLoadingStatus,
   type SessionLoadState,
 } from "../src/lib/loadingStatus";
@@ -62,9 +62,9 @@ function session(
 }
 
 function project(
-  overrides: Partial<Parameters<typeof projectConversationLoadingStatus>[0]> = {},
+  overrides: Partial<Parameters<typeof projectSessionLoadingStatus>[0]> = {},
 ) {
-  return projectConversationLoadingStatus({
+  return projectSessionLoadingStatus({
     selectedSessionId: "session-1",
     selectedAgentDid: "did:test:agent",
     session: session(),
@@ -100,7 +100,7 @@ describe("startup loading projection", () => {
   });
 });
 
-describe("conversation loading projection", () => {
+describe("session loading projection", () => {
   it("distinguishes the exact local database read and its failure", () => {
     expect(
       project({
@@ -261,7 +261,7 @@ describe("conversation loading projection", () => {
     });
   });
 
-  it("renders no wait when the exact conversation and behavior are ready", () => {
+  it("renders no wait when the exact session and behavior are ready", () => {
     expect(project()).toBeNull();
   });
 });

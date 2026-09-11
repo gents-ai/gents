@@ -7,6 +7,7 @@ use gents::{
     DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
 };
 use gents_protocol::client_protocol::RequestLifecycleState;
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -47,13 +48,12 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         args.session_id.as_deref(),
         args.behavior_id.as_deref(),
         RequestSubmitOptions {
-            temperature: args.temperature,
-            top_p: args.top_p,
-            top_k: args.top_k,
-            seed: args.seed,
-            max_tokens: args.max_tokens,
-            max_total_tokens: args.max_total_tokens,
-            metadata: args.metadata.clone(),
+            input: args
+                .input
+                .as_deref()
+                .map(serde_json::from_str::<RequestInput>)
+                .transpose()
+                .context("--input must be canonical RequestInput JSON")?,
             valid_until,
             retry_parent_request: None,
             retry_parent_request_doc_id: None,
@@ -67,13 +67,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         "session_id": submitted.session_id,
         "agent_did": submitted.agent_did,
         "behavior_id": submitted.behavior_id,
-        "temperature": submitted.temperature,
-        "top_p": submitted.top_p,
-        "top_k": submitted.top_k,
-        "seed": submitted.seed,
-        "max_tokens": submitted.max_tokens,
-        "max_total_tokens": submitted.max_total_tokens,
-        "metadata": submitted.metadata,
+        "input": submitted.input,
     });
     if args.no_wait {
         print_json(&request_summary)?;
@@ -162,7 +156,7 @@ struct RequestShowHeader {
     interrupt_requested_at: Option<String>,
     retry_count: Option<i64>,
     max_retries: Option<i64>,
-    seed: Option<i64>,
+    input: Option<RequestInput>,
     max_total_tokens: Option<i64>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
@@ -173,7 +167,7 @@ struct RequestShowHeader {
     caused_by_source_doc_id: Option<String>,
     workspace_id: Option<String>,
     workspace_authority: Option<String>,
-    workspace_owner_deployment_id: Option<String>,
+    workspace_owner_agent_did: Option<String>,
     workspace_seal_hash: Option<String>,
 }
 
@@ -261,27 +255,37 @@ async fn load_request_show_snapshot(
     let request_response = post_graphql(graphql, &request_show_request_query(request_id, &schema))
         .await
         .with_context(|| format!("loading AgentRequest {request_id}"))?;
-    let request_row = request_response
+    let request_rows = request_response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
+        .context("request show query omitted rows")?;
+    anyhow::ensure!(
+        request_rows.len() == 1,
+        "request {request_id} is missing or ambiguous"
+    );
+    let request_row = request_rows[0].clone();
     let canonical_request: AgentRequestRow = serde_json::from_value(request_row.clone())
         .with_context(|| format!("decoding AgentRequest {request_id}"))?;
 
-    let response_response = post_graphql(graphql, &response_query(request_id))
+    let response_response = post_graphql(graphql, &response_query(&canonical_request)?)
         .await
         .with_context(|| format!("loading latest AgentResponse for {request_id}"))?;
-    let response_row = response_response
-        .pointer("/data/AgentResponse")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned();
+    let mut response_row = crate::optional_response_row(&response_response)?;
+    if let Some(response) = response_row.as_mut() {
+        let presentation = crate::hydrate_materialized_response_content(graphql, response).await?;
+        if presentation != crate::MaterializedResponsePresentation::Presentable {
+            anyhow::bail!(crate::materialized_response_diagnostic(
+                request_id, response
+            ));
+        }
+    }
 
-    let tool_response = post_graphql(graphql, &request_show_tool_calls_query(request_id, &schema))
-        .await
-        .with_context(|| format!("loading AgentToolCall rows for {request_id}"))?;
+    let tool_response = post_graphql(
+        graphql,
+        &request_show_tool_calls_query(&canonical_request, &schema)?,
+    )
+    .await
+    .with_context(|| format!("loading AgentToolCall rows for {request_id}"))?;
     let tool_rows = value_array(&tool_response, "/data/AgentToolCall");
 
     let access = ConfigAccess::Graphql(graphql.to_string());
@@ -370,7 +374,7 @@ async fn load_request_show_snapshot(
         response_row.as_ref(),
         terminal_cause.as_deref(),
     );
-    let request = request_header_view(&request_row, terminal_cause, transition_history);
+    let request = request_header_view(&request_row, terminal_cause, transition_history)?;
     let child_requests = descendant_edges
         .iter()
         .map(child_request_view)
@@ -418,6 +422,8 @@ async fn load_graphql_type_fields(graphql: &str, type_name: &str) -> BTreeSet<St
 
 fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> String {
     let mut fields = vec![
+        "_docID",
+        "requester_did",
         "request_id",
         "agent_did",
         "behavior_id",
@@ -428,13 +434,8 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "failure_reason",
         "retry_count",
         "max_retries",
-        "temperature",
-        "top_p",
-        "top_k",
-        "seed",
-        "max_tokens",
         "max_total_tokens",
-        "metadata",
+        "input",
         "created_at",
         "claimed_at",
         "deadline",
@@ -460,7 +461,7 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
             "cancel_initiated_at",
             "workspace_id",
             "workspace_authority",
-            "workspace_owner_deployment_id",
+            "workspace_owner_agent_did",
             "workspace_seal_hash",
         ],
     );
@@ -477,7 +478,25 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
     )
 }
 
-fn request_show_tool_calls_query(request_id: &str, schema: &RequestShowSchema) -> String {
+fn request_show_tool_calls_query(
+    request: &AgentRequestRow,
+    schema: &RequestShowSchema,
+) -> Result<String> {
+    let request_doc_id = request
+        .doc_id
+        .as_deref()
+        .context("request show missing physical identity")?;
+    let scope = gents::session::session_scope_filter(
+        request
+            .agent_did
+            .as_deref()
+            .context("request show missing principal")?,
+        request
+            .session_id
+            .as_deref()
+            .context("request show missing session")?,
+        request.requester_did.as_deref(),
+    );
     let mut fields = vec![
         "tool_call_key",
         "request_id",
@@ -500,17 +519,17 @@ fn request_show_tool_calls_query(request_id: &str, schema: &RequestShowSchema) -
         &["child_terminal", "cancel_cause", "cancel_initiated_at"],
     );
     let fields = fields.join("\n                ");
-    format!(
+    Ok(format!(
         r#"{{
             AgentToolCall(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                filter: {{ {scope}, request_doc_id: {{ _eq: "{request_doc_id}" }} }},
                 order: {{ started_at: ASC }}
             ) {{
                 {fields}
             }}
         }}"#,
-        request_id = escape_graphql_string(request_id),
-    )
+        request_doc_id = escape_graphql_string(request_doc_id),
+    ))
 }
 
 fn append_optional_fields(
@@ -529,8 +548,8 @@ fn request_header_view(
     row: &Value,
     terminal_cause: Option<String>,
     transition_history: Vec<RequestTransitionView>,
-) -> RequestShowHeader {
-    RequestShowHeader {
+) -> Result<RequestShowHeader> {
+    Ok(RequestShowHeader {
         request_id: string_field_or_unknown(row, "request_id"),
         agent_did: string_field_or_unknown(row, "agent_did"),
         behavior_id: string_field_or_unknown(row, "behavior_id"),
@@ -548,7 +567,13 @@ fn request_header_view(
         interrupt_requested_at: string_field(row, "interrupt_requested_at"),
         retry_count: integer_field(row, "retry_count"),
         max_retries: integer_field(row, "max_retries"),
-        seed: integer_field(row, "seed"),
+        input: row
+            .get("input")
+            .filter(|v| !v.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .context("decoding request input")?,
         max_total_tokens: integer_field(row, "max_total_tokens"),
         caused_by_parent_request_id: string_field(row, "caused_by_parent_request_id"),
         caused_by_parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
@@ -559,9 +584,9 @@ fn request_header_view(
         caused_by_source_doc_id: string_field(row, "caused_by_source_doc_id"),
         workspace_id: string_field(row, "workspace_id"),
         workspace_authority: string_field(row, "workspace_authority"),
-        workspace_owner_deployment_id: string_field(row, "workspace_owner_deployment_id"),
+        workspace_owner_agent_did: string_field(row, "workspace_owner_agent_did"),
         workspace_seal_hash: string_field(row, "workspace_seal_hash"),
-    }
+    })
 }
 
 fn transition_history(
@@ -1359,13 +1384,7 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         None,
         stale.behavior_id.as_deref(),
         RequestSubmitOptions {
-            temperature: stale.temperature,
-            top_p: stale.top_p,
-            top_k: stale.top_k,
-            seed: stale.seed,
-            max_tokens: stale.max_tokens,
-            max_total_tokens: stale.max_total_tokens,
-            metadata: stale.metadata.clone(),
+            input: stale.input.clone(),
             valid_until,
             retry_parent_request: Some(stale_id.clone()),
             retry_parent_request_doc_id: Some(stale_doc_id.to_string()),
@@ -1445,21 +1464,27 @@ mod tests {
     }
 
     #[test]
-    fn request_show_json_retains_persisted_seed_and_aggregate_budget() {
+    fn request_show_json_retains_typed_input_and_aggregate_budget() {
         let request = json!({
             "request_id": "request-one",
             "agent_did": "did:key:agent",
             "behavior_id": "default",
             "session_id": "session-one",
             "lifecycle_state": "pending",
-            "seed": 1234,
+            "input": {"selected_skill_ids":["review"]},
             "max_total_tokens": 250000,
         });
-        let header = request_header_view(&request, None, Vec::new());
+        let header = request_header_view(&request, None, Vec::new()).unwrap();
         let value = serde_json::to_value(header).unwrap();
 
-        assert_eq!(value["seed"], 1234);
+        assert_eq!(value["input"]["selected_skill_ids"], json!(["review"]));
         assert_eq!(value["max_total_tokens"], 250000);
+    }
+
+    #[test]
+    fn request_show_rejects_malformed_typed_input() {
+        let request = json!({"input": {"selected_skill_ids": 3}});
+        assert!(request_header_view(&request, None, Vec::new()).is_err());
     }
 
     #[test]
@@ -1471,7 +1496,7 @@ mod tests {
             "session_id": "session-one",
             "lifecycle_state": "pending",
         });
-        let header = request_header_view(&request, None, Vec::new());
+        let header = request_header_view(&request, None, Vec::new()).unwrap();
         let value = serde_json::to_value(header).unwrap();
 
         assert!(value.get("max_total_tokens").is_some());

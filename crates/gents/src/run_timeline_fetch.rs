@@ -17,10 +17,9 @@ use crate::descendant_graph::{
 use crate::graphql::escape_graphql_string;
 use crate::run_timeline::{
     build_run_timeline, RunActivityRows, RunTimeline, RunTimelineRows, TimelineCompactionRow,
-    TimelineConversationRow, TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
+    TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
     TimelineProviderContextReductionRow, TimelineRenderedRequestRef, TimelineRenderedRequestRow,
-    TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolApprovalRow,
-    TimelineToolCallRow,
+    TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
 };
 use gents_protocol::graphql::graphql_rows_from_response;
 
@@ -83,23 +82,53 @@ pub async fn load_run_activity_rows(
         .map(String::as_str)
         .filter(|value| !value.trim().is_empty())
         .collect::<BTreeSet<_>>();
-    let session_query = if session_ids.is_empty() {
-        String::new()
-    } else {
-        let session_list = session_ids
-            .iter()
-            .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(
-            "AgentSession(filter: {{ session_id: {{ _in: [{session_list}] }} }}) {{ session_id behavior_id started ended status }}"
-        )
-    };
+    // Session labels are not identities. Resolve owner/requester scopes from actual
+    // selected request rows before loading any canonical session projection.
+    let scope_query = format!(
+        "{{ AgentRequest(filter: {{ request_id: {{ _in: [{request_list}] }} }} ) {{ _docID request_id agent_did requester_did session_id }} }}"
+    );
+    let scope_rows =
+        load_rows::<gents_protocol::row::AgentRequestRow>(access, "AgentRequest", &scope_query)
+            .await?
+            .into_iter()
+            .map(TimelineRequestRow::from)
+            .collect::<Vec<_>>();
+    ensure_unique_timeline_request_ids(&scope_rows)?;
+    let mut session_scopes = BTreeSet::new();
+    for request in &scope_rows {
+        if let Some(session_id) = request
+            .session_id
+            .as_deref()
+            .filter(|id| session_ids.contains(id))
+        {
+            let owner = request
+                .agent_did
+                .as_deref()
+                .filter(|owner| !owner.trim().is_empty())
+                .context("activity request has no session owner")?;
+            session_scopes.insert((
+                owner.to_owned(),
+                session_id.to_owned(),
+                request.requester_did.clone(),
+            ));
+        }
+    }
+    let mut sessions = Vec::new();
+    for (owner, session_id, requester) in session_scopes.iter().take(MAX_RUN_ACTIVITY_ROWS + 1) {
+        if let Some(mut session) =
+            load_timeline_session(access, owner, session_id, requester.as_deref()).await?
+        {
+            session.session.title = None;
+            if let Some(observation) = &mut session.session.observation {
+                observation.preview = None;
+            }
+            sessions.push(session);
+        }
+    }
     let limit = MAX_RUN_ACTIVITY_ROWS + 1;
     let response = access
         .execute(&format!(
             r#"{{
-                {session_query}
                 InferenceCall(
                     filter: {{
                         request_id: {{ _in: [{request_list}] }},
@@ -122,11 +151,6 @@ pub async fn load_run_activity_rows(
             }}"#
         ))
         .await?;
-    let mut sessions = graphql_rows_from_response(&response, "AgentSession")
-        .into_iter()
-        .map(serde_json::from_value)
-        .collect::<std::result::Result<Vec<TimelineSessionRow>, _>>()
-        .context("decoding live AgentSession activity")?;
     let mut inference_calls = graphql_rows_from_response(&response, "InferenceCall")
         .into_iter()
         .map(serde_json::from_value)
@@ -137,7 +161,8 @@ pub async fn load_run_activity_rows(
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<TimelineToolCallRow>, _>>()
         .context("decoding live AgentToolCall activity")?;
-    let truncated = sessions.len() > MAX_RUN_ACTIVITY_ROWS
+    let truncated = session_scopes.len() > MAX_RUN_ACTIVITY_ROWS
+        || sessions.len() > MAX_RUN_ACTIVITY_ROWS
         || inference_calls.len() > MAX_RUN_ACTIVITY_ROWS
         || tool_calls.len() > MAX_RUN_ACTIVITY_ROWS;
     sessions.truncate(MAX_RUN_ACTIVITY_ROWS);
@@ -187,7 +212,18 @@ pub async fn load_run_timeline_rows(
     let root_session_id = request.session_id.clone();
 
     let mut requests = match root_session_id.as_deref() {
-        Some(session_id) => load_timeline_requests_for_session(access, session_id).await?,
+        Some(session_id) => {
+            load_timeline_requests_for_session(
+                access,
+                request
+                    .agent_did
+                    .as_deref()
+                    .context("timeline root request has no session owner")?,
+                session_id,
+                request.requester_did.as_deref(),
+            )
+            .await?
+        }
         None => Vec::new(),
     };
     ensure_unique_timeline_request_ids(&requests)?;
@@ -217,20 +253,58 @@ pub async fn load_run_timeline_rows(
     };
 
     let session_ids = timeline_session_ids(&requests);
+    let mut session_scopes = BTreeSet::new();
+    for request in &requests {
+        if let Some(session_id) = request.session_id.as_deref() {
+            let owner = request
+                .agent_did
+                .as_deref()
+                .filter(|owner| !owner.trim().is_empty())
+                .context("timeline session request has no owner")?;
+            session_scopes.insert((
+                owner.to_owned(),
+                session_id.to_owned(),
+                request.requester_did.clone(),
+            ));
+        }
+    }
+
     let mut messages = Vec::new();
     let mut tool_calls = Vec::new();
     let mut responses = Vec::new();
     let mut compactions = Vec::new();
-    for session_id in &session_ids {
-        messages.extend(load_timeline_messages_for_session(access, session_id).await?);
-        tool_calls.extend(load_timeline_tool_calls_for_session(access, session_id).await?);
-        responses.extend(load_timeline_responses_for_session(access, session_id).await?);
-        compactions.extend(load_timeline_compactions_for_session(access, session_id).await?);
+    for (owner, session_id, requester) in &session_scopes {
+        messages.extend(
+            load_timeline_messages_for_session(access, owner, session_id, requester.as_deref())
+                .await?,
+        );
+        tool_calls.extend(
+            load_timeline_tool_calls_for_session(access, owner, session_id, requester.as_deref())
+                .await?,
+        );
+        responses.extend(
+            load_timeline_responses_for_session(access, owner, session_id, requester.as_deref())
+                .await?,
+        );
+        compactions.extend(
+            load_timeline_compactions_for_session(access, owner, session_id, requester.as_deref())
+                .await?,
+        );
     }
     // Goal transitions describe the root run's session-scoped objective. Child
     // sessions have independent goals and are not projected into this timeline.
     let goal_versions = match root_session_id.as_deref() {
-        Some(session_id) => load_timeline_goal_versions_for_session(access, session_id).await?,
+        Some(session_id) => {
+            load_timeline_goal_versions_for_session(
+                access,
+                request
+                    .agent_did
+                    .as_deref()
+                    .context("timeline root request has no goal owner")?,
+                session_id,
+            )
+            .await?
+        }
         None => Vec::new(),
     };
     if session_ids.is_empty() || root_session_id.is_none() {
@@ -246,9 +320,16 @@ pub async fn load_run_timeline_rows(
         );
     }
     let mut rendered_requests = Vec::new();
-    for session_id in &session_ids {
-        rendered_requests
-            .extend(load_timeline_rendered_requests_for_session(access, session_id).await?);
+    for (owner, session_id, requester) in &session_scopes {
+        rendered_requests.extend(
+            load_timeline_rendered_requests_for_session(
+                access,
+                owner,
+                session_id,
+                requester.as_deref(),
+            )
+            .await?,
+        );
     }
     if session_ids.is_empty() || root_session_id.is_none() {
         rendered_requests.extend(
@@ -298,7 +379,7 @@ pub async fn load_run_timeline_rows(
         + compactions
             .iter()
             .filter(|row| {
-                in_scope_ids.contains(row.request_id.as_str())
+                nonempty(row.request_id.as_deref()).is_some_and(|id| in_scope_ids.contains(&id))
                     && nonempty(row.request_doc_id.as_deref()).is_none()
             })
             .count()
@@ -354,7 +435,7 @@ pub async fn load_run_timeline_rows(
     compactions.retain(|row| {
         request_scoped_row_is_in_timeline(
             &request_bindings,
-            Some(row.request_id.as_str()),
+            row.request_id.as_deref(),
             row.request_doc_id.as_deref(),
         )
     });
@@ -384,33 +465,25 @@ pub async fn load_run_timeline_rows(
     )?;
     validate_child_tool_bridges(&request, &requests, &tool_calls)?;
 
-    let mut tool_approvals = Vec::new();
-    for tool_call_doc_id in tool_calls
-        .iter()
-        .filter_map(|tool_call| nonempty(tool_call.doc_id.as_deref()))
-    {
-        tool_approvals
-            .extend(load_timeline_tool_approvals_for_call(access, tool_call_doc_id).await?);
-    }
-    validate_tool_approval_bindings(&tool_calls, &tool_approvals)?;
-
     let session = match root_session_id.as_deref() {
-        Some(session_id) => load_timeline_session(access, session_id).await?,
-        None => None,
-    };
-    let conversation = match root_session_id.as_deref() {
-        Some(session_id) => load_timeline_conversation(access, session_id).await?,
+        Some(session_id) => {
+            let owner = request
+                .agent_did
+                .as_deref()
+                .filter(|owner| !owner.trim().is_empty())
+                .context("timeline root request has no session owner")?;
+            load_timeline_session(access, owner, session_id, request.requester_did.as_deref())
+                .await?
+        }
         None => None,
     };
 
     Ok(RunTimelineRows {
         request,
         session,
-        conversation,
         requests,
         messages,
         tool_calls,
-        tool_approvals,
         goal_versions,
         inference_calls,
         compactions,
@@ -428,14 +501,13 @@ mod query_helpers;
 mod request_loaders;
 mod validation;
 
-use context_loaders::{load_timeline_conversation, load_timeline_session};
+use context_loaders::load_timeline_session;
 use event_loaders::{
     load_timeline_compactions_for_session, load_timeline_inference_calls_for_request,
     load_timeline_messages_for_session, load_timeline_provider_context_reductions_for_request,
     load_timeline_rendered_request_refs, load_timeline_rendered_requests_for_request,
     load_timeline_rendered_requests_for_session, load_timeline_responses_for_request,
-    load_timeline_responses_for_session, load_timeline_tool_approvals_for_call,
-    load_timeline_tool_calls_for_session,
+    load_timeline_responses_for_session, load_timeline_tool_calls_for_session,
 };
 use goal_history::load_timeline_goal_versions_for_session;
 use query_helpers::load_rows;
@@ -446,7 +518,6 @@ use validation::{
     ensure_unique_timeline_request_ids, merge_timeline_request, nonempty,
     request_scoped_row_is_in_timeline, timeline_request_bindings, timeline_request_doc_ids,
     timeline_session_ids, validate_child_tool_bridges, validate_request_scoped_rows,
-    validate_tool_approval_bindings,
 };
 
 #[cfg(test)]
@@ -484,11 +555,17 @@ mod tests {
                 r#"mutation {
                     create_AgentSession(input: {
                         session_id: "activity-session"
-                        agent_name: "agent"
                         agent_did: "did:test:agent"
                         behavior_id: "review"
-                        started: "2026-08-26T00:00:00Z"
-                        status: "active"
+                        created_at: "2026-08-26T00:00:00Z"
+                    }) { _docID }
+                    create_AgentRequest(input: {
+                        request_id: "activity-request"
+                        agent_did: "did:test:agent"
+                        behavior_id: "review"
+                        session_id: "activity-session"
+                        lifecycle_state: "completed"
+                        created_at: "2026-08-26T00:00:00Z"
                     }) { _docID }
                     create_InferenceCall(input: {
                         call_id: "activity-call"
@@ -530,7 +607,14 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(rows.sessions[0].status.as_deref(), Some("active"));
+        assert!(rows.sessions[0].session.closed_at.is_none());
+        assert!(rows.sessions[0].session.title.is_none());
+        assert!(rows.sessions[0]
+            .session
+            .observation
+            .as_ref()
+            .and_then(|observation| observation.preview.as_ref())
+            .is_none());
         assert_eq!(rows.inference_calls[0].prompt_tokens, Some(120));
         assert_eq!(
             rows.inference_calls[0].context_accounting_json.as_deref(),
@@ -551,7 +635,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetches_approvals_and_complete_inference_provenance() {
+    async fn fetches_complete_inference_provenance() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -560,11 +644,9 @@ mod tests {
                 r#"mutation {
                     create_AgentSession(input: {
                         session_id: "session-timeline"
-                        agent_name: "agent"
                         agent_did: "did:test:agent"
                         behavior_id: "general"
-                        started: "2026-08-14T12:00:00Z"
-                        status: "active"
+                        created_at: "2026-08-14T12:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "request-timeline"
@@ -632,41 +714,10 @@ mod tests {
             ))
             .await;
         assert!(!response.has_errors(), "seed calls: {:?}", response.errors);
-        let tool_call_doc_id = created_doc_id(&response, "create_AgentToolCall");
-
-        let response = node
-            .execute(&format!(
-                r#"mutation {{
-                    create_AgentToolApproval(input: {{
-                        approval_id: "approval-1"
-                        tool_call_doc_id: "{tool_call_doc_id}"
-                        tool_call_id: "tool-1"
-                        request_id: "request-timeline"
-                        agent_did: "did:test:agent"
-                        decision: "approved"
-                        approver_did: "did:test:operator"
-                        reason: "reviewed"
-                        created_at: "2026-08-14T12:00:03Z"
-                    }}) {{ _docID }}
-                }}"#,
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "seed approval: {:?}",
-            response.errors
-        );
-
         let access = ConfigAccess::Local(node.clone());
         let timeline = load_run_timeline(&access, "request-timeline")
             .await
             .expect("load timeline");
-        assert!(timeline.events.iter().any(|event| matches!(
-            event,
-            crate::run_timeline::RunTimelineEvent::ToolApproval(approval)
-                if approval.approval_id == "approval-1"
-                    && approval.tool_call_id == "tool-1"
-        )));
         let inference = timeline.events.iter().find_map(|event| match event {
             crate::run_timeline::RunTimelineEvent::InferenceCall(inference) => Some(inference),
             _ => None,
@@ -694,11 +745,9 @@ mod tests {
                 r#"mutation {
                     create_AgentSession(input: {
                         session_id: "session-goal-history"
-                        agent_name: "agent"
                         agent_did: "did:test:agent"
                         behavior_id: "general"
-                        started: "2026-08-14T12:00:00Z"
-                        status: "active"
+                        created_at: "2026-08-14T12:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "request-goal-history"

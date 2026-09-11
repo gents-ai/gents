@@ -100,19 +100,10 @@ pub(crate) struct LeanIdentityBehavior {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanIdentityDeployment {
-    pub(crate) id: String,
-    pub(crate) principal: String,
-    pub(crate) host_id: String,
-    pub(crate) enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanIdentityStructuralCase {
     pub(crate) name: String,
     pub(crate) principals: Vec<LeanIdentityPrincipal>,
     pub(crate) behaviors: Vec<LeanIdentityBehavior>,
-    pub(crate) deployments: Vec<LeanIdentityDeployment>,
     pub(crate) well_formed: bool,
 }
 
@@ -127,21 +118,19 @@ pub(crate) struct LeanIdentityPermissionCase {
     pub(crate) name: String,
     pub(crate) principals: Vec<LeanIdentityPrincipal>,
     pub(crate) behaviors: Vec<LeanIdentityBehavior>,
-    pub(crate) deployments: Vec<LeanIdentityDeployment>,
     pub(crate) grants: Vec<LeanIdentityPermissionGrant>,
     pub(crate) permission: String,
     pub(crate) row_owner: String,
+    pub(crate) actor_principal: String,
     pub(crate) actor_behavior: String,
+    pub(crate) peer_principal: String,
     pub(crate) peer_behavior: String,
-    pub(crate) expected_actor_principal: String,
-    pub(crate) expected_peer_principal: String,
+    pub(crate) expected_actor_principal: Option<String>,
+    pub(crate) expected_peer_principal: Option<String>,
     pub(crate) expected_actor_allowed: bool,
     pub(crate) expected_peer_allowed: bool,
     pub(crate) same_principal: bool,
     pub(crate) expected_decisions_equal: bool,
-    pub(crate) host_deployment: String,
-    pub(crate) expected_actor_hostable: bool,
-    pub(crate) expected_peer_hostable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -170,6 +159,8 @@ pub(crate) struct LeanQueueDeadlineConformanceCase {
     pub(crate) post_coalesced_pending_count: usize,
     pub(crate) automated_drained_request_ids: Vec<usize>,
     pub(crate) preserved_user_pending_request_ids: Vec<usize>,
+    pub(crate) preserved_foreign_requester_request_ids: Vec<usize>,
+    pub(crate) preserved_foreign_owner_request_ids: Vec<usize>,
     pub(crate) post_terminal_request_ids: Vec<usize>,
     pub(crate) pre_request_deadline: Option<usize>,
     pub(crate) synthesized_claim_deadline: Option<usize>,
@@ -223,22 +214,4 @@ pub(crate) struct LeanRestartDispositionCase {
     pub(crate) queue_key_prefix: Option<String>,
     #[allow(dead_code)]
     pub(crate) theorem: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanRecoveryEquivalenceCase {
-    pub(crate) name: String,
-    pub(crate) source_sweep_case: String,
-    pub(crate) sweep_id: String,
-    pub(crate) collection: String,
-    pub(crate) rust_function: String,
-    pub(crate) cadence: String,
-    pub(crate) pre_state: String,
-    pub(crate) recovered_state: String,
-    pub(crate) uninterrupted_state: String,
-    pub(crate) equivalent: bool,
-    pub(crate) reexecutes: bool,
-    pub(crate) can_hang: bool,
-    pub(crate) theorem: String,
-    pub(crate) aggregate_theorem: String,
 }

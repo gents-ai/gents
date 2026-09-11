@@ -3,7 +3,13 @@ use std::time::Duration;
 use gents::background_completion::{
     project_background_subagent_completion, BackgroundCompletionOutcome,
 };
+use gents::config_client::{
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{
+    AgentBehavior, AgentContext, SubagentTargetDocument, SubagentTools, Tools,
+};
 use gents::graphql::escape_graphql_string;
 use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
@@ -13,18 +19,22 @@ use gents::llm::ToolCallHookAction;
 use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
-use gents::{
-    fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection,
-    AgentBehaviorDocument, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
-};
+use gents::{fetch_interrupt_requested_at, DefraSessionHook, FailurePolicy};
+use gents_protocol::request_input::{QueuePolicy, QueueSource};
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::support::fixtures::spawn_subagent_source;
+use crate::support::fixtures::{bind_behavior_backend, spawn_subagent_source};
 use crate::support::{first_row, test_db};
 
 const PARENT_BEHAVIOR_ID: &str = "r4-completion-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4-completion-child";
+const BACKEND_ID: &str = "r4-completion-backend";
+/// Stable endpoint used only to satisfy backend connectivity config; this
+/// fixture drives persistence seams, never a live model call.
+const BACKEND_ENDPOINT: &str = "http://127.0.0.1:1/v1";
+
 #[derive(Debug, Deserialize)]
 struct RequestSessionRow {
     session_id: String,
@@ -59,88 +69,166 @@ struct ResponseStateRow {
     error_message: Option<String>,
 }
 
+/// Install the canonical configuration bundle and parent request/session for
+/// every scenario through the shared desired-state owners: an explicit
+/// `SubagentTargetDocument` (owner `agent_did`, destination
+/// `target_agent_did`), a canonical `Tools` document selecting it by
+/// `target_id`, an `AgentContext` binding that Tools doc, and an
+/// `AgentBehavior` binding `context_id` + `inference_profile_id`. Inference
+/// selection comes from `support::fixtures::bind_behavior_backend`, the
+/// existing shared owner; no implicit bootstrap defaults are invented.
+async fn install_canonical_behavior_bundle(node: &EmbeddedNode, agent_did: &str) {
+    // Seed both explicit behavior chains through the shared fixture owner.
+    // The parent and child may share a backend, but each behavior owns an
+    // explicit profile and never relies on an inferred bootstrap default.
+    bind_behavior_backend(
+        node,
+        agent_did,
+        PARENT_BEHAVIOR_ID,
+        BACKEND_ID,
+        BACKEND_ENDPOINT,
+        "test-model",
+    )
+    .await;
+    bind_behavior_backend(
+        node,
+        agent_did,
+        CHILD_BEHAVIOR_ID,
+        BACKEND_ID,
+        BACKEND_ENDPOINT,
+        "test-model",
+    )
+    .await;
+    let parent_profile_id = format!("{PARENT_BEHAVIOR_ID}-inference");
+    let child_profile_id = format!("{CHILD_BEHAVIOR_ID}-inference");
+
+    let target = SubagentTargetDocument {
+        target_id: format!("{PARENT_BEHAVIOR_ID}:{CHILD_BEHAVIOR_ID}"),
+        agent_did: agent_did.to_string(),
+        target_agent_did: agent_did.to_string(),
+        behavior_id: CHILD_BEHAVIOR_ID.to_string(),
+        name: CHILD_BEHAVIOR_ID.to_string(),
+        description: None,
+        tags: Vec::new(),
+    };
+    let tools = Tools {
+        tools_id: format!("{PARENT_BEHAVIOR_ID}:tools"),
+        agent_did: agent_did.to_string(),
+        subagents: Some(SubagentTools {
+            target_ids: vec![target.target_id.clone()],
+            spawn_enabled: Some(true),
+            background_enabled: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let context = AgentContext {
+        context_id: format!("{PARENT_BEHAVIOR_ID}:context"),
+        agent_did: agent_did.to_string(),
+        display_name: None,
+        description: None,
+        system_prompt: None,
+        tools_id: Some(tools.tools_id.clone()),
+        compaction_id: None,
+        skill_ids: Vec::new(),
+        tags: Vec::new(),
+    };
+    let parent_behavior = AgentBehavior {
+        behavior_id: PARENT_BEHAVIOR_ID.to_string(),
+        agent_did: agent_did.to_string(),
+        display_name: Some("R4 completion parent".to_string()),
+        description: None,
+        context_id: Some(context.context_id.clone()),
+        inference_profile_id: parent_profile_id,
+        enabled: true,
+        tags: Vec::new(),
+        created_at: Some("2026-05-12T00:00:00Z".to_string()),
+    };
+    let child_behavior = AgentBehavior {
+        behavior_id: CHILD_BEHAVIOR_ID.to_string(),
+        agent_did: agent_did.to_string(),
+        display_name: Some("R4 completion child".to_string()),
+        description: None,
+        context_id: None,
+        inference_profile_id: child_profile_id,
+        enabled: true,
+        tags: Vec::new(),
+        created_at: Some("2026-05-12T00:00:01Z".to_string()),
+    };
+    // One desired-state transaction installs the whole scoped bundle so
+    // reference validation sees the complete same-owner closure. Every
+    // document is the complete canonical replacement, addressed by owner DID.
+    ConfigAccess::transact_local(node, None, "r4_completion.canonical_bundle", |txn| {
+        let target = target.clone();
+        let tools = tools.clone();
+        let context = context.clone();
+        let parent_behavior = parent_behavior.clone();
+        let child_behavior = child_behavior.clone();
+        Box::pin(async move {
+            let mut documents = Vec::new();
+            for (collection, value) in [
+                (
+                    gents::Collection::SubagentTarget,
+                    serde_json::to_value(&target)?,
+                ),
+                (gents::Collection::Tools, serde_json::to_value(&tools)?),
+                (
+                    gents::Collection::AgentContext,
+                    serde_json::to_value(&context)?,
+                ),
+                (
+                    gents::Collection::AgentBehavior,
+                    serde_json::to_value(&parent_behavior)?,
+                ),
+                (
+                    gents::Collection::AgentBehavior,
+                    serde_json::to_value(&child_behavior)?,
+                ),
+            ] {
+                documents.push(DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                });
+            }
+            apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await
+        })
+    })
+    .await
+    .unwrap();
+}
+
 async fn setup_fixture(test_name: &str) -> (crate::support::TestDb, String, String) {
     let db = test_db(test_name).await;
     let agent_did = db.node_identity.did().to_string();
-    upsert_tool_selection(
-        db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: format!("{test_name}-tools"),
-            agent_did: agent_did.clone(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                CHILD_BEHAVIOR_ID,
-                &agent_did,
-                CHILD_BEHAVIOR_ID,
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R4 completion parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(format!("{test_name}-tools")),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-12T00:00:00Z".to_string()),
-        },
-    )
-    .await
-    .unwrap();
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R4 completion child".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-12T00:00:01Z".to_string()),
-        },
-    )
-    .await
-    .unwrap();
+    install_canonical_behavior_bundle(db.node.as_ref(), &agent_did).await;
 
     let session_id = format!("{test_name}-parent-session");
     let request_id = format!("{test_name}-parent-request");
     create_parent_request(db.node.as_ref(), &agent_did, &request_id, &session_id).await;
-    crate::support::create_agent_session(
-        db.node.as_ref(),
-        &session_id,
-        PARENT_BEHAVIOR_ID,
-        "2026-05-12T00:00:00Z",
+    create_parent_agent_session(db.node.as_ref(), &agent_did, &session_id).await;
+    (db, session_id, request_id)
+}
+
+async fn create_parent_agent_session(node: &EmbeddedNode, agent_did: &str, session_id: &str) {
+    // Canonical AgentSession is the single durable session document; create it
+    // under the same principal that owns the parent request.
+    crate::support::create_session_document(
+        node,
+        &gents_protocol::session::AgentSession {
+            session_id: session_id.to_string(),
+            agent_did: agent_did.to_string(),
+            requester_did: None,
+            behavior_id: PARENT_BEHAVIOR_ID.to_string(),
+            created_at: "2026-05-12T00:00:00Z".to_string(),
+            closed_at: None,
+            title: None,
+            tags: Vec::new(),
+            provenance: None,
+            observation: None,
+        },
     )
     .await;
-    (db, session_id, request_id)
 }
 
 async fn create_parent_request(
@@ -155,6 +243,8 @@ async fn create_parent_request(
     let agent_did = escape_graphql_string(agent_did);
     let now = chrono::Utc::now().to_rfc3339();
     let deadline = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+    // RequestInput replaces the retired metadata bag. This fixture carries no
+    // invocation extras, so the optional JSON field remains absent.
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -166,10 +256,10 @@ async fn create_parent_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "parent prompt",
+                input: null,
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
-                metadata: "",
                 failure_reason: "",
                 created_at: "{now}",
                 deadline: "{deadline}",
@@ -352,11 +442,21 @@ async fn persist_child_completion(
     let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
     let escaped_child_session_id = escape_graphql_string(child_session_id);
     let now = chrono::Utc::now().to_rfc3339();
+    // Stamp the physical child request binding plus the child's owning
+    // principal on the transcript row so the canonical final-response reader
+    // (`load_child_final_response`) resolves it under the exact child scope.
+    let escaped_agent_did = escape_graphql_string(&request_agent_did(node, child_request_id).await);
+    let escaped_request_doc_id =
+        escape_graphql_string(&crate::support::exact_request_doc_id(node, child_request_id).await);
     let create_message = format!(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{escaped_child_session_id}:1",
                 session_id: "{escaped_child_session_id}",
+                agent_did: "{escaped_agent_did}",
+                requester_did: null,
+                request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_request_doc_id}",
                 sequence: 1,
                 role: "assistant",
                 content: "{escaped_message}",
@@ -371,15 +471,14 @@ async fn persist_child_completion(
         response.errors
     );
 
-    let escaped_agent_did = escape_graphql_string(&request_agent_did(node, child_request_id).await);
-    let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let create_response = format!(
         r#"mutation {{
             create_AgentResponse(input: {{
                 response_key: "{escaped_child_request_id}",
                 request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_request_doc_id}",
                 agent_did: "{escaped_agent_did}",
-                behavior_id: "{escaped_behavior_id}",
+                behavior_id: "{escaped_child_behavior_id}",
                 session_id: "{escaped_child_session_id}",
                 content: "",
                 reasoning: "",
@@ -392,7 +491,8 @@ async fn persist_child_completion(
                 created_at: "{now}",
                 completed_at: "{now}"
             }}) {{ _docID }}
-        }}"#
+        }}"#,
+        escaped_child_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID),
     );
     let response = node.execute(&create_response).await;
     assert!(
@@ -569,23 +669,28 @@ async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<Mes
         .unwrap_or_default()
 }
 
-async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<serde_json::Value> {
-    let session_id = escape_graphql_string(session_id);
+/// Read the durable background-completion wake rows through the canonical
+/// typed input: select the bare `input` field, decode
+/// `gents_protocol::row::AgentRequestRow`, and match the coalescing owner's
+/// `QueueSource::BackgroundCompletion` source with the coalesce policy. The
+/// legacy `metadata` bag reader is retired; missing or malformed typed input
+/// fails decoding loudly instead of silently passing the count assertions.
+async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<AgentRequestRow> {
+    let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    execution_origin: {{ _eq: "scheduled" }}
-                }},
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
                 request_id
+                session_id
                 content
                 lifecycle_state
                 execution_origin
-                metadata
+                input
+                created_at
             }}
         }}"#
     );
@@ -595,12 +700,22 @@ async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<ser
         "wake query failed: {:?}",
         response.errors
     );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default()
+    let rows = gents::graphql::rows::<AgentRequestRow>(&response, "AgentRequest")
+        .expect("decode wake AgentRequest rows");
+    rows.into_iter()
+        .filter(|row| {
+            row.session_id.as_deref() == Some(session_id)
+                && row.execution_origin.as_deref() == Some("scheduled")
+                && row
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.queue.as_ref())
+                    .is_some_and(|queue| {
+                        queue.source == QueueSource::BackgroundCompletion
+                            && queue.policy == QueuePolicy::Coalesce
+                    })
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -769,6 +884,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
         &session_id,
         PARENT_BEHAVIOR_ID,
         db.node_identity.did(),
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -856,11 +972,11 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     assert_eq!(wakes.len(), 1);
     assert_eq!(
         messages[2].request_id.as_deref(),
-        wakes[0]["request_id"].as_str()
+        Some(wakes[0].request_id.as_str())
     );
     assert_eq!(
         messages[2].request_doc_id.as_deref(),
-        wakes[0]["_docID"].as_str()
+        wakes[0].doc_id.as_deref()
     );
 }
 
@@ -1133,6 +1249,7 @@ async fn stale_hook_sequence_does_not_overwrite_background_notification() {
         &session_id,
         PARENT_BEHAVIOR_ID,
         db.node_identity.did(),
+        None,
         FailurePolicy::default(),
     )
     .await

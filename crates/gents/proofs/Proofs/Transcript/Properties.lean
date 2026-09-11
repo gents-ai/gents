@@ -2,17 +2,28 @@ import Proofs.Transcript.Transition
 
 namespace Transcript
 
-theorem append_preserves_ordered
-    {pre post : TranscriptState}
-    (h_step : Transition pre post)
-    (h_append : ∃ messageId h_pre h_post_eq h_post_coherent,
-      h_step = Transition.append_user
-        (messageId := messageId)
-        h_pre h_post_eq h_post_coherent) :
-    post.OrderedBySequence := by
-  rcases h_append with ⟨messageId, h_pre, h_post_eq, h_post_coherent, h_eq⟩
-  subst h_eq
-  exact h_post_coherent.ordered
+/-- Ordering follows from the append operation and the pre-state sequence bound,
+not an assumed coherent post-state. -/
+theorem append_preserves_ordered (s : TranscriptState) (messageId : MessageId)
+    (kind : MessageKind) (h_order : s.OrderedBySequence)
+    (h_bound : ∀ row ∈ s.messages, row.sequence < s.nextSeq) :
+    (s.appendUserMessage messageId kind).OrderedBySequence := by
+  unfold TranscriptState.OrderedBySequence TranscriptState.appendUserMessage
+  simp only
+  unfold TranscriptState.OrderedBySequence at h_order
+  generalize hm : s.messages = rows at h_order h_bound ⊢
+  clear hm
+  induction rows with
+  | nil => simp [StrictlyIncreasingMessages]
+  | cons row rest ih =>
+    rcases h_order with ⟨h_first, h_rest⟩
+    refine ⟨?_, ih h_rest (fun other ho => h_bound other (List.mem_cons_of_mem _ ho))⟩
+    intro other ho
+    rcases List.mem_append.mp ho with ho | ho
+    · exact h_first other ho
+    · simp only [List.mem_singleton] at ho
+      subst other
+      exact h_bound row (List.mem_cons_self _ _)
 
 theorem append_user_advances_nextSeq
     (s : TranscriptState) (messageId : MessageId) (kind : MessageKind) :
@@ -27,15 +38,6 @@ theorem begin_assistant_tool_call_advances_or_reuses_assistant_sequence
       | none => s.nextSeq + 1 := by
   cases h_turn : s.assistantTurn <;>
     simp [TranscriptState.beginAssistantToolCall, h_turn]
-
-theorem tool_call_reserves_assistant_sequence
-    {pre post : TranscriptState} {callId : ToolExecution.ToolCallId}
-    (_h_post : post = pre.beginAssistantToolCall callId)
-    (h_coherent : post.Coherent) :
-    ∀ call, call ∈ post.toolCalls → call.callId = callId →
-      post.ReservedByPersistedMessage call ∨ post.ReservedByAssistantTurn call := by
-  intro call h_mem _
-  exact h_coherent.toolCallReservedByMessage call h_mem
 
 theorem persist_assistant_closes_reserved_tool_call_sequence
     {pre post : TranscriptState} {messageId : MessageId} {turn : AssistantTurn}
@@ -55,58 +57,33 @@ theorem persist_assistant_closes_reserved_tool_call_sequence
   · simp [TranscriptState.persistAssistantMessage]
   · simp [MessageRow.reservesToolCall, MessageKind.referencesToolCall, h_call]
 
-theorem complete_tool_with_result_preserves_coherent
-    {pre post : TranscriptState}
-    (h_step : Transition pre post)
-    (h_complete : ∃ callId messageId key h_pre h_in h_missing h_post_eq h_post_coherent,
-      h_step = Transition.complete_tool_with_result
-        (callId := callId)
-        (messageId := messageId)
-        (key := key)
-        h_pre h_in h_missing h_post_eq h_post_coherent) :
-    post.Coherent := by
-  rcases h_complete with
-    ⟨callId, messageId, key, h_pre, h_in, h_missing, h_post_eq, h_post_coherent, h_eq⟩
-  subst h_eq
-  exact h_post_coherent
-
-theorem completed_tool_has_exactly_one_result_message
-    {s : TranscriptState} {call : ToolCallRow} {key : ToolResultKey}
-    (h_coherent : s.Coherent)
-    (h_mem : call ∈ s.toolCalls)
-    (h_completed : call.state = .completed)
-    (h_key : call.resultKey = some key) :
-    s.toolResultMessageCount key = 1 :=
-  h_coherent.pairClosed.2.1 call h_mem h_completed key h_key
-
-theorem tool_result_message_has_completed_tool_call
-    {s : TranscriptState} {row : MessageRow}
-    {callId : ToolExecution.ToolCallId} {key : ToolResultKey}
-    (h_coherent : s.Coherent)
-    (h_mem : row ∈ s.messages)
-    (h_kind : row.kind = .toolResult callId key) :
-    ∃ call, call ∈ s.toolCalls ∧
-      call.callId = callId ∧
-      call.state = .completed ∧
-      call.resultKey = some key :=
-  h_coherent.pairClosed.2.2 row h_mem callId key h_kind
-
 theorem complete_tool_with_result_preserves_persisted_reservation
-    (s : TranscriptState)
-    (completedCallId : ToolExecution.ToolCallId)
+    (s : TranscriptState) (completedCallId : ToolExecution.ToolCallId)
     (messageId : MessageId) (key : ToolResultKey)
     {row : MessageRow} (h_mem : row ∈ s.messages)
-    (otherCallId : ToolExecution.ToolCallId)
-    (sessionId : SessionId) (sequence : Sequence)
+    (otherCallId : ToolExecution.ToolCallId) (sessionId : SessionId) (sequence : Sequence)
     (h_reserves : row.reservesToolCall otherCallId sessionId sequence) :
     ∃ row', row' ∈ (s.completeToolWithResult completedCallId messageId key).messages ∧
-      row'.reservesToolCall otherCallId sessionId sequence :=
-  ⟨row, List.mem_append_left _ h_mem, h_reserves⟩
+      row'.reservesToolCall otherCallId sessionId sequence := by
+  unfold TranscriptState.completeToolWithResult
+  split
+  · exact ⟨row, h_mem, h_reserves⟩
+  · exact ⟨row, List.mem_append_left _ h_mem, h_reserves⟩
 
 theorem complete_tool_with_result_clears_assistant_turn
     (s : TranscriptState) (callId : ToolExecution.ToolCallId)
-    (messageId : MessageId) (key : ToolResultKey) :
-    (s.completeToolWithResult callId messageId key).assistantTurn = none := rfl
+    (messageId : MessageId) (key : ToolResultKey)
+    (h_fresh : s.hasToolResultKey key = false) :
+    (s.completeToolWithResult callId messageId key).assistantTurn = none := by
+  simp [TranscriptState.completeToolWithResult, h_fresh]
+
+/-- Duplicate observations execute the same owner and preserve all state,
+including sequence allocation and in-flight ownership. -/
+theorem duplicate_tool_result_observation_noops (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) (messageId : MessageId) (key : ToolResultKey)
+    (h_seen : s.hasToolResultKey key = true) :
+    s.completeToolWithResult callId messageId key = s := by
+  simp [TranscriptState.completeToolWithResult, h_seen]
 
 theorem complete_tool_with_result_preserves_other_inflight
     (s : TranscriptState)
@@ -115,7 +92,10 @@ theorem complete_tool_with_result_preserves_other_inflight
     (messageId : MessageId) (key : ToolResultKey)
     (h_in : otherCallId ∈ s.inFlight) :
     otherCallId ∈ (s.completeToolWithResult callId messageId key).inFlight := by
-  simp [TranscriptState.completeToolWithResult, Finset.mem_erase, h_ne, h_in]
+  unfold TranscriptState.completeToolWithResult
+  split
+  · exact h_in
+  · simp [Finset.mem_erase, h_ne, h_in]
 
 theorem complete_tool_with_result_preserves_fresh_key
     (s : TranscriptState)
@@ -124,7 +104,10 @@ theorem complete_tool_with_result_preserves_fresh_key
     (h_fresh : s.hasToolResultKey otherKey = false) :
     (s.completeToolWithResult callId messageId key).hasToolResultKey otherKey =
       false := by
-  simp only [TranscriptState.completeToolWithResult, TranscriptState.hasToolResultKey,
+  unfold TranscriptState.completeToolWithResult
+  split
+  · exact h_fresh
+  simp only [TranscriptState.hasToolResultKey,
     List.any_append, List.any_cons, List.any_nil, Bool.or_eq_false_iff] at h_fresh ⊢
   refine ⟨h_fresh, ?_, trivial⟩
   simp [MessageRow.isToolResultFor, MessageKind.toolResultKey?, h_ne.symm]

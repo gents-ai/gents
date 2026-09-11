@@ -17,10 +17,8 @@ three bridge-local events on the subagent leg:
   tool) with a cascade-policy bridge sets the child's
   `interruptRequestedAt`.
 
-`parent_step` / `child_step` carry opaque composed-state payloads and
-`bridge_spawn`'s post-state mints fresh ids from outside the model, so those
-remain relational-only (`step` returns `none`; the constructors are the
-contract).
+Parent/child composition and bridge creation remain with their relational
+transition owner. This executable event type contains only operations it runs.
 
 The native background tool (R6, childless row) is deliberately **not** this
 surface: its single-row lifecycle is executable through
@@ -35,11 +33,6 @@ namespace BridgedState
 
 /-- An event that selects which bridge Transition to apply. -/
 inductive Event where
-  | parent_step           (innerEventOpaque : Unit)
-                            -- Opaque composed-state event payload.
-  | child_step            (innerEventOpaque : Unit)
-  | bridge_spawn          (newCallId : ToolExecution.ToolCallId)
-                          (newChildRid : RequestId)
   | bridge_complete
   | bridge_failure
   | bridge_cancel_cascade
@@ -149,7 +142,6 @@ def step (s : BridgedState) (e : Event) : Option BridgedState :=
       match findBridgeSlot? s.parent.tools s.bridgeCallId with
       | none => none
       | some slot => cascadePost s slot.2
-  | _ => none
 
 /-- Soundness: every executable step refines a bridge Transition. -/
 theorem step_refines_transition
@@ -157,9 +149,6 @@ theorem step_refines_transition
     (h : step s e = some s') :
     Transition s s' := by
   cases e with
-  | parent_step _ => simp [step] at h
-  | child_step _ => simp [step] at h
-  | bridge_spawn _ _ => simp [step] at h
   | bridge_complete =>
       unfold step at h
       cases h_find : findBridgeSlot? s.parent.tools s.bridgeCallId with

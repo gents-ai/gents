@@ -71,7 +71,10 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
         r#"mutation {{
             update_InferenceBackend(
                 filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ api_key_env_var: "GENTS_TEST_RUNTIME_BACKEND_KEY" }}
+                input: {{ auth: {{
+                    kind: "environment",
+                    variable: "GENTS_TEST_RUNTIME_BACKEND_KEY"
+                }} }}
             ) {{ _docID }}
         }}"#
     );
@@ -113,8 +116,19 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     let mut behavior = test_behavior("openrouter-oneshot", "backend-openrouter", None);
     behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
-    behavior.backend_api_key = Some("openrouter-key".to_string());
+    behavior.backend_auth = gents::document_config::BackendAuth::ApiKey {
+        key: "openrouter-key".to_string(),
+    };
     behavior.model_name = "openai/gpt-4o-mini".to_string();
+    crate::support::fixtures::bind_behavior_backend(
+        node.as_ref(),
+        behavior.agent_did(),
+        &behavior.behavior_id,
+        "backend-openrouter",
+        mock_endpoint.endpoint(),
+        "openai/gpt-4o-mini",
+    )
+    .await;
 
     let result =
         gents::run_openai_oneshot(node.clone(), &behavior, "Say hello in one sentence.").await?;
@@ -126,7 +140,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
                 AgentRequest { lifecycle_state }
                 AgentResponse { status content }
                 AgentMessage(order: { sequence: ASC }) { role content }
-                AgentConversation { status }
+                AgentSession { observation }
             }"#,
         )
         .await;
@@ -153,7 +167,8 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
         .as_str()
         .is_some_and(|content| content.contains("mock response")));
     assert_eq!(
-        projection.data.as_ref().unwrap()["AgentConversation"][0]["status"],
+        projection.data.as_ref().unwrap()["AgentSession"][0]["observation"]["latest_request"]
+            ["lifecycle_state"],
         "completed"
     );
 

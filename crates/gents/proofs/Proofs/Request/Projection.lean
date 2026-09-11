@@ -28,14 +28,6 @@ theorem duplicate_projection_values_converge {α : Type} (oldA oldB value : α) 
     projectAll value [oldA, oldB] = [value, value] := by
   simp [projectAll]
 
-/-- AgentConversation is a repairable read projection. Its cardinality cannot
-    veto the authoritative AgentRequest terminal transition. -/
-def terminalRequestCommits (_conversationRows : Nat) : Bool := true
-
-theorem terminal_request_independent_of_projection_cardinality (rows : Nat) :
-    terminalRequestCommits rows = true := by
-  rfl
-
 /-- A deterministic projection failure (for example, a missing repairable
     projection) may fall back to the authoritative request edge. A retryable
     storage failure must preserve atomic ownership and re-attempt the request
@@ -57,14 +49,6 @@ theorem terminal_request_commits_after_projection_error :
 
 theorem retryable_projection_failure_preserves_atomic_retry :
     terminalCommitAfterProjectionAttempt .retryableFailure = false := by
-  rfl
-
-/-- An already-terminal request still drives its repairable projection, so an
-    idempotent retry converges the conversation instead of becoming a no-op. -/
-def projectionRunsAfterRequestAttempt (_requestChanged : Bool) : Bool := true
-
-theorem idempotent_terminal_retry_repairs_projection :
-    projectionRunsAfterRequestAttempt false = true := by
   rfl
 
 end Request.Projection

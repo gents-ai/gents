@@ -8,7 +8,7 @@
 //! diagnostics (closest-match error hints) — it never selects an edit site.
 //! The stale-content precondition (#724) is enforced by the caller against
 //! raw bytes before this module runs; gate ordering is fenced in
-//! `tests/conformance/edit_match.rs`.
+//! `toolset::tests::edit_file_stale_hash_rejects_before_matching_and_reports_current`.
 
 use std::fmt::Write as _;
 

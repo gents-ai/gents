@@ -31,7 +31,7 @@ def inScope (s : Scope) (r : Row) : Bool := r.owner == s.owner && r.session == s
 
 /-- Cheap qualification/binding checks precede cryptographic validation.
 The shared Goal physical-edge helper checks original parent/child signatures,
-owner/session, exact physical parent pair, canonical Goal metadata and original
+owner/session, exact physical parent pair, typed signed Goal continuation facts and original
 deterministic request/retry identity. Historical omission of inherited source
 fields does not erase a signed physical edge. Fresh typed-resume receipt checks
 remain stricter; this ordering projection does not authorize publication. -/

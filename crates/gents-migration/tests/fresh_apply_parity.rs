@@ -1,4 +1,4 @@
-//! Guard for #1123/#1125: client-authored (conversation-plane) collections
+//! Guard for #1123/#1125: client-authored collections
 //! MUST remain fresh-apply compatible. A paired client mints its store from
 //! a collection's *current* SDL with no server history — one `add_schema`
 //! call producing a genesis version — while the server arrives at its active
@@ -54,12 +54,18 @@ fn current_sdl(name: &str) -> &'static str {
 /// apply below would no longer model a client's batch apply.
 #[test]
 fn client_authored_sdls_are_relation_free() {
-    const SCALAR_KINDS: &[&str] = &["String", "Int", "Float", "Boolean", "DateTime"];
+    const SCALAR_KINDS: &[&str] = &["String", "Int", "Float", "Boolean", "DateTime", "JSON"];
     for &name in CLIENT_AUTHORED_COLLECTIONS {
         for line in current_sdl(name).lines() {
             // GraphQL SDL comments run from `#` to end of line; a colon
-            // inside one is not a field type.
+            // inside one is not a field type. The `type` header is skipped
+            // entirely: its directives may embed `fields: [...]` arguments
+            // that are not field declarations.
             let code = line.split('#').next().unwrap_or_default();
+            let trimmed = code.trim();
+            if trimmed.is_empty() || trimmed.starts_with("type ") {
+                continue;
+            }
             let Some((_, after_colon)) = code.split_once(": ") else {
                 continue;
             };
@@ -121,7 +127,7 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
             mismatches.push(format!(
                 "{name}: server active version {} != client fresh-apply version {} — \
                  collection gained a post-baseline migration step or its baseline pin is \
-                 stale — conversation-plane collections must be re-pinned to the \
+                 stale — client-authored collections must be re-pinned to the \
                  fresh-apply CID, never chained; see #1123/#1125",
                 server_cv.version_id, client_cv.version_id
             ));

@@ -3,8 +3,7 @@
 //!
 //! A [`Skill`] declares the tools it *depends on* (`tool_refs`); it never
 //! *grants* them (decision D3, Codex-faithful). [`effective_skills`] computes
-//! the per-behavior candidate set (decision D5: scope-on-skill inheritance +
-//! `skill_refs`/`skill_excludes`). [`skill_tools`] intersects a skill's
+//! the context's explicit skill whitelist, filtered by owner and enablement. [`skill_tools`] intersects a skill's
 //! declared refs with the behavior's resolved tool ceiling and degrades when a
 //! dep is missing, so activation can never widen the tool surface beyond the
 //! ceiling — the executable counterpart of `Skills.activation_subset_ceiling`.
@@ -15,34 +14,10 @@
 
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkillScope {
-    Principal,
-    Behavior,
-}
-
-impl SkillScope {
-    pub fn parse(value: &str) -> Option<SkillScope> {
-        match value.trim() {
-            "principal" => Some(SkillScope::Principal),
-            "behavior" => Some(SkillScope::Behavior),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SkillScope::Principal => "principal",
-            SkillScope::Behavior => "behavior",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Skill {
     pub skill_id: String,
     pub agent_did: String,
-    pub scope: SkillScope,
     pub name: String,
     pub description: String,
     pub instructions: String,
@@ -54,18 +29,15 @@ pub struct Skill {
 pub fn effective_skills<'a>(
     skills: &'a [Skill],
     behavior_principal: &str,
-    skill_refs: &[String],
-    skill_excludes: &[String],
+    skill_ids: &[String],
 ) -> Vec<&'a Skill> {
-    let refs: BTreeSet<&str> = skill_refs.iter().map(String::as_str).collect();
-    let excludes: BTreeSet<&str> = skill_excludes.iter().map(String::as_str).collect();
+    let selected: BTreeSet<&str> = skill_ids.iter().map(String::as_str).collect();
     skills
         .iter()
         .filter(|skill| {
             skill.agent_did == behavior_principal
                 && skill.enabled
-                && (skill.scope == SkillScope::Principal || refs.contains(skill.skill_id.as_str()))
-                && !excludes.contains(skill.skill_id.as_str())
+                && selected.contains(skill.skill_id.as_str())
         })
         .collect()
 }
@@ -435,11 +407,10 @@ impl crate::llm::tool::Tool for LoadSkillTool {
 mod tests {
     use super::*;
 
-    fn skill(id: &str, principal: &str, scope: SkillScope, tool_refs: &[&str]) -> Skill {
+    fn skill(id: &str, principal: &str, tool_refs: &[&str]) -> Skill {
         Skill {
             skill_id: id.to_string(),
             agent_did: principal.to_string(),
-            scope,
             name: format!("{id}-name"),
             description: format!("{id}-desc"),
             instructions: format!("{id}-instructions"),
@@ -459,34 +430,26 @@ mod tests {
     }
 
     #[test]
-    fn principal_scope_is_inherited_without_refs() {
-        let skills = vec![skill("a", "did:p", SkillScope::Principal, &[])];
-        let got = effective_skills(&skills, "did:p", &[], &[]);
-        assert_eq!(ids(&got), vec!["a"]);
+    fn empty_whitelist_selects_no_skills() {
+        let skills = vec![skill("a", "did:p", &[])];
+        assert!(effective_skills(&skills, "did:p", &[]).is_empty());
     }
 
     #[test]
-    fn behavior_scope_requires_an_explicit_ref() {
-        let skills = vec![skill("a", "did:p", SkillScope::Behavior, &[])];
-        assert!(effective_skills(&skills, "did:p", &[], &[]).is_empty());
-        let got = effective_skills(&skills, "did:p", &["a".to_string()], &[]);
-        assert_eq!(ids(&got), vec!["a"]);
+    fn only_explicitly_selected_skills_are_available() {
+        let skills = vec![skill("a", "did:p", &[]), skill("b", "did:p", &[])];
+        let got = effective_skills(&skills, "did:p", &["b".into(), "b".into()]);
+        assert_eq!(ids(&got), vec!["b"]);
     }
 
     #[test]
-    fn excludes_remove_inherited_principal_skills() {
-        let skills = vec![skill("a", "did:p", SkillScope::Principal, &[])];
-        let got = effective_skills(&skills, "did:p", &[], &["a".to_string()]);
-        assert!(got.is_empty());
-    }
-
-    #[test]
-    fn disabled_and_foreign_principal_skills_are_excluded() {
-        let mut disabled = skill("a", "did:p", SkillScope::Principal, &[]);
+    fn explicit_selection_cannot_grant_disabled_or_foreign_skills() {
+        let mut disabled = skill("a", "did:p", &[]);
         disabled.enabled = false;
-        let foreign = skill("b", "did:other", SkillScope::Principal, &[]);
-        let skills = vec![disabled, foreign];
-        assert!(effective_skills(&skills, "did:p", &[], &[]).is_empty());
+        let foreign = skill("b", "did:other", &[]);
+        assert!(
+            effective_skills(&[disabled, foreign], "did:p", &["a".into(), "b".into()]).is_empty()
+        );
     }
 
     /// S-Skill-3 (candidate_set respects principal): every effective skill
@@ -494,11 +457,11 @@ mod tests {
     #[test]
     fn effective_skills_respect_principal() {
         let skills = vec![
-            skill("a", "did:p", SkillScope::Principal, &[]),
-            skill("b", "did:p", SkillScope::Behavior, &[]),
-            skill("c", "did:other", SkillScope::Principal, &[]),
+            skill("a", "did:p", &[]),
+            skill("b", "did:p", &[]),
+            skill("c", "did:other", &[]),
         ];
-        for got in effective_skills(&skills, "did:p", &["b".to_string()], &[]) {
+        for got in effective_skills(&skills, "did:p", &["b".to_string()]) {
             assert_eq!(got.agent_did, "did:p");
             assert!(got.enabled);
         }
@@ -510,12 +473,7 @@ mod tests {
     #[test]
     fn skill_tools_never_widen_the_ceiling() {
         let ceiling = ceiling(&["read", "bash"]);
-        let s = skill(
-            "a",
-            "did:p",
-            SkillScope::Principal,
-            &["read", "bash", "net"],
-        );
+        let s = skill("a", "did:p", &["read", "bash", "net"]);
         let resolved = skill_tools(&s, &ceiling);
         assert_eq!(resolved, vec!["read", "bash"]); // "net" degraded away
         for tool in &resolved {
@@ -527,10 +485,7 @@ mod tests {
     #[test]
     fn catalog_lists_descriptions_not_bodies() {
         assert!(render_skill_catalog(&[]).is_none());
-        let skills = vec![
-            skill("a", "did:p", SkillScope::Principal, &[]),
-            skill("b", "did:p", SkillScope::Behavior, &[]),
-        ];
+        let skills = vec![skill("a", "did:p", &[]), skill("b", "did:p", &[])];
         let catalog = render_skill_catalog(&skills).expect("catalog");
         assert!(catalog.contains("## Skills"));
         assert!(catalog.contains("load_skill")); // mandate to load on demand
@@ -544,7 +499,7 @@ mod tests {
 
     #[test]
     fn catalog_prefers_display_name_over_name() {
-        let mut s = skill("a", "did:p", SkillScope::Principal, &[]);
+        let mut s = skill("a", "did:p", &[]);
         s.display_name = Some("Pretty Label".to_string());
         let catalog = render_skill_catalog(std::slice::from_ref(&s)).expect("catalog");
         assert!(catalog.contains("Pretty Label"));
@@ -554,11 +509,11 @@ mod tests {
     #[test]
     fn render_activated_skill_appends_degrade_note() {
         let ceiling = ceiling(&["read"]);
-        let s = skill("a", "did:p", SkillScope::Principal, &["read", "net"]);
+        let s = skill("a", "did:p", &["read", "net"]);
         let body = render_activated_skill(&s, &ceiling);
         assert!(body.contains("a-instructions"));
         assert!(body.contains("net")); // degrade note names the missing tool
-        let s_ok = skill("b", "did:p", SkillScope::Principal, &["read"]);
+        let s_ok = skill("b", "did:p", &["read"]);
         assert!(!render_activated_skill(&s_ok, &ceiling).contains("not available"));
     }
 
@@ -566,12 +521,7 @@ mod tests {
     async fn load_skill_tool_returns_body_on_demand_and_handles_unknown() {
         use crate::llm::tool::Tool;
         let ceiling = ceiling(&["read"]);
-        let skills = vec![skill(
-            "research",
-            "did:p",
-            SkillScope::Principal,
-            &["read", "net"],
-        )];
+        let skills = vec![skill("research", "did:p", &["read", "net"])];
         let tool = LoadSkillTool::new(skills, ceiling);
 
         // load by name -> full body + degrade note for the ungranted "net" ref.
@@ -617,7 +567,7 @@ mod tests {
         assert!(ceiling.allows("observability-mcp"));
         assert!(!ceiling.allows("unlisted-service")); // restricted: unknown is denied
 
-        let mut mcp_skill = skill("a", "did:p", SkillScope::Principal, &["x-data"]);
+        let mut mcp_skill = skill("a", "did:p", &["x-data"]);
         mcp_skill.tool_refs = vec!["x-data".to_string()];
         assert!(missing_tool_refs(&mcp_skill, &ceiling).is_empty());
     }
@@ -634,7 +584,7 @@ mod tests {
         );
         assert!(ceiling.allows("read"));
         assert!(ceiling.allows("some-mcp-service")); // benefit of the doubt
-        let mut mcp_skill = skill("a", "did:p", SkillScope::Principal, &["some-mcp-service"]);
+        let mut mcp_skill = skill("a", "did:p", &["some-mcp-service"]);
         mcp_skill.tool_refs = vec!["some-mcp-service".to_string()];
         assert!(
             missing_tool_refs(&mcp_skill, &ceiling).is_empty(),
@@ -653,7 +603,7 @@ mod tests {
     #[tokio::test]
     async fn load_skill_resolves_by_display_name() {
         use crate::llm::tool::Tool;
-        let mut s = skill("research", "did:p", SkillScope::Principal, &["read"]);
+        let mut s = skill("research", "did:p", &["read"]);
         s.display_name = Some("Deep Research".to_string());
         let tool = LoadSkillTool::new(vec![s], ceiling(&["read"]));
         // The catalog labels it "Deep Research"; load_skill with that label must
@@ -691,13 +641,5 @@ mod tests {
         let codex_command = prompt_slash_skill_selection("/review inspect the diff");
         assert!(codex_command.selected_skill_ids.is_empty());
         assert_eq!(codex_command.prompt, "/review inspect the diff");
-    }
-
-    #[test]
-    fn scope_parse_round_trips_and_rejects_unknown() {
-        assert_eq!(SkillScope::parse("principal"), Some(SkillScope::Principal));
-        assert_eq!(SkillScope::parse(" behavior "), Some(SkillScope::Behavior));
-        assert_eq!(SkillScope::parse("global"), None);
-        assert_eq!(SkillScope::Principal.as_str(), "principal");
     }
 }

@@ -1,31 +1,15 @@
-type InferenceProfile @branchable {
-    profile_id: String @index(unique: true)
+type InferenceProfile @branchable @index(fields: ["agent_did", "profile_id"], unique: true) {
+    profile_id: String
+    agent_did: String @index
     display_name: String
+    description: String
+    backend_id: String @index
+    model_name: String
+    reasoning_effort: String
     context_window: Int
     max_output_tokens: Int
-    max_turns: Int
-    temperature: Float
-    # Sampling knobs beyond temperature (#649). Unset = inherit the served
-    # model's generation_config.json default; a set value pins it explicitly so
-    # a wrong/missing checkpoint default can be corrected from desired state.
-    top_p: Float
-    top_k: Int
-    # Requested provider sampling seed. This pins the request parameter but does
-    # not promise bitwise determinism across provider or hardware revisions.
-    seed: Int
-    min_p: Float
-    frequency_penalty: Float
-    presence_penalty: Float
-    repetition_penalty: Float
-    # Provider-specific thinking effort, normalized by the runtime adapter.
-    reasoning_effort: String
-    stream_batch_ms: Int
-    stream_liveness_timeout_secs: Int
-    deadline_duration_secs: Int
-    retry_max_transport: Int
-    retry_backoff_ms: [Int]
-    retry_max_resample: Int
-    retry_allow_repair: Boolean
-    retry_interactive_max: Int
+    sampling_id: String @index
+    execution_id: String @index
+    tags: [String!]
     updated_at: DateTime @index(direction: DESC)
 }

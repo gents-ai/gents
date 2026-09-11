@@ -1,15 +1,19 @@
 # Canonical pack: two-stage document pipeline
 
-Self-contained Gents pack: domain SDL, `DatastoreToolSurface`, least-privilege
-tool selections, tasks, and EventTriggers — all under this folder.
+Self-contained Gents pack: domain SDL plus one canonical `pack_config.json`
+containing its `DatastoreToolSurface`, least-privilege `Tools`, tasks,
+`EventSource` documents, and `Trigger` documents.
+`manifest.json` points to that bundle and lists it with the schema and prompt
+sidecars needed to install the pack; there are no per-collection JSON document
+fragments.
 
 ```text
 create ExperimentJob
         │
-        ▼  EventTrigger exp-stage1
+        ▼  EventSource + Trigger exp-stage1
    stage-1  ──write_experiment_finding (surface)──►  ExperimentFinding
                                                           │
-                                                          ▼  EventTrigger exp-stage2
+                                                          ▼  EventSource + Trigger exp-stage2
                                                      stage-2 (no tools)
 ```
 
@@ -18,10 +22,9 @@ create ExperimentJob
 | Path | Role |
 | --- | --- |
 | `schemas/` | Pack-scoped SDL (`ExperimentJob`, `ExperimentFinding`) — applied by `config apply` |
-| `datastore_tool_surfaces/experiment_writes/` | Create-tool grant → `ExperimentFinding` |
-| `tool_selections/exp_tools_stage1/` | Links the write surface plus goal lifecycle tools; discovery and model goal creation remain off |
-| `tool_selections/exp_tools_stage2/` | Zero tools |
-| `event_triggers/` | `exp-stage1` on job create; `exp-stage2` on finding create |
+| `pack_config.json` | Canonical behaviors, contexts, Tools, surfaces, tasks, EventSources, Triggers, and inference settings |
+| `tasks/*/prompt.md` | Prompt sidecars referenced by canonical Task documents |
+| `agent_behaviors/*/system_prompt.md` | System-prompt sidecars referenced by canonical AgentContext documents |
 | `runs/` | Gitignored exports |
 
 ## Tools (least privilege)
@@ -35,8 +38,8 @@ Surfaces name a **collection already on the node** (string). Pack apply
 registers `schemas/` first so that name resolves.
 
 The stage-1 Task also demonstrates the graph composition boundary: a Task may
-declare a goal objective template and optional token budget, while its tool
-selection grants only lifecycle access to that controller-owned goal. The
+declare a goal objective template and optional token budget, while its Tools
+document grants only lifecycle access to that controller-owned goal. The
 graph DSL still supplies the event topology; it does not own goal creation.
 
 ## Run (anyone with a gents install + a model endpoint)
@@ -63,7 +66,7 @@ graph DSL still supplies the event topology; it does not own goal creation.
 
    Add `--apply-prune` only on a home dedicated to this pack: it makes the
    pack the complete desired state for that home's agent and deletes any
-   config the pack does not declare (other behaviors, selections, skills,
+   config the pack does not declare (other behaviors, contexts, Tools documents, skills,
    surfaces, and their reachable tasks/schedules/triggers).
 
    Equivalent without folding into server:

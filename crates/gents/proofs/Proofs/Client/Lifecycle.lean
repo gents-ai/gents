@@ -35,71 +35,18 @@ theorem deriveAttempt_nonterminal_response_driven
     rcases h_state with h | h | h | h | h <;>
       cases h <;> cases h_not_super <;> rfl
 
-def LifecycleTransition : RequestState → RequestState → Prop
-  | .workspaceBindingPending, .pending => True
-  | .pending,        .claimed         => True
-  | .pending,        .superseded      => True
-  | .pending,        .failed          => True
-  | .claimed,        .processing      => True
-  | .processing,     .processing      => True
-  | .processing,     .completed       => True
-  | .processing,     .failed          => True
-  | .claimed,        .failed          => True
-  | .pending,        .dead            => True
-  | .pending,        .interrupted     => True
-  | .claimed,        .interrupted     => True
-  | .processing,     .interrupted     => True
-  | _,               _                => False
-
-theorem transition_implies_lifecycle
-    {pre post : RequestContext}
-    (h : RequestContext.Transition pre post) :
-    LifecycleTransition pre.state post.state := by
-  cases h with
-  | bind_workspace h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | claim h_state _ _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | dedup_lose h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | admission_reject h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | begin_inference h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | advance h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | finish h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | fail h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | fail_before_stream h_state _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | expire h_state _ _ _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | interrupt_before_claim h_state _ _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | interrupt_claimed h_state _ _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-  | interrupt_processing h_state _ _ h_post =>
-    subst h_post; simp [LifecycleTransition, h_state]
-
+/-- Monotonicity is over the request owner's transitions, without a client-local lifecycle. -/
 theorem lifecycle_transition_monotonic
-    {pre_state post_state : RequestState}
-    (h_trans : LifecycleTransition pre_state post_state)
+    {pre post : RequestContext}
+    (h_trans : RequestContext.Transition pre post)
     (isSuperseded : Bool)
     (resp : Option ResponseSnapshot) :
-    (deriveAttempt ⟨⟨post_state, isSuperseded⟩, resp⟩).rank ≥
-    (deriveAttempt ⟨⟨pre_state, isSuperseded⟩, resp⟩).rank := by
-  cases pre_state <;> cases post_state <;>
-    try (simp [LifecycleTransition] at h_trans)
-  all_goals
-    cases isSuperseded
-    · cases resp with
-      | none => simp [deriveAttempt, ClientTurnState.rank]
-      | some r =>
-        obtain ⟨status, _⟩ := r
-        cases status <;> simp [deriveAttempt, ClientTurnState.rank]
-    · simp [deriveAttempt, ClientTurnState.rank]
+    (deriveAttempt ⟨⟨post.state, isSuperseded⟩, resp⟩).rank ≥
+    (deriveAttempt ⟨⟨pre.state, isSuperseded⟩, resp⟩).rank := by
+  cases h_trans <;> subst_vars <;>
+    cases isSuperseded <;> cases resp with
+    | none => simp_all [deriveAttempt, ClientTurnState.rank]
+    | some r => cases hstatus : r.status <;> simp_all [deriveAttempt, ClientTurnState.rank]
 
 theorem response_advance_monotonic_none_to_some
     {req : RequestSnapshot}

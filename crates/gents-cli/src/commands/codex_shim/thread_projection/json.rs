@@ -17,11 +17,11 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
     record: &CodexThreadRecord,
     turns: Vec<codex::Turn>,
 ) -> Value {
-    let conversation = record.conversation.as_ref();
-    let preview = conversation.and_then(|conversation| {
-        let preview = conversation.preview_text.trim();
-        (!preview.is_empty()).then_some(preview)
-    });
+    let session = record.session.as_ref();
+    let preview = session
+        .and_then(|session| session.observation.as_ref())
+        .and_then(|observation| observation.preview.as_deref())
+        .filter(|preview| !preview.trim().is_empty());
     let mut thread = thread_json(
         &record.cwd,
         &record.session_id,
@@ -41,28 +41,21 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
     if !record.name.trim().is_empty() {
         object.insert("name".to_string(), Value::String(record.name.clone()));
     }
-    if let Some(conversation) = conversation {
-        if record.name.trim().is_empty() && !conversation.title.trim().is_empty() {
-            object.insert(
-                "name".to_string(),
-                Value::String(conversation.title.clone()),
-            );
+    if let Some(session) = session {
+        if let Some(title) = session.title.as_ref() {
+            if record.name.trim().is_empty() {
+                object.insert("name".into(), json!(title.text));
+            }
+            if preview.is_none() {
+                object.insert("preview".into(), json!(title.text));
+            }
         }
-        if preview.is_none() && !conversation.title.trim().is_empty() {
-            object.insert(
-                "preview".to_string(),
-                Value::String(conversation.title.clone()),
-            );
-        }
-        if let Some(parent) = conversation
-            .forked_from_session_id
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
+        if let Some(fork) = session
+            .provenance
+            .as_ref()
+            .and_then(|provenance| provenance.fork.as_ref())
         {
-            object.insert(
-                "forkedFromId".to_string(),
-                Value::String(parent.to_string()),
-            );
+            object.insert("forkedFromId".into(), json!(fork.source_session_id));
         }
     }
     if let Some(git_info) = record.git_info.clone() {
@@ -106,18 +99,18 @@ pub(in crate::commands::codex_shim) fn codex_thread_status(
     record: &CodexThreadRecord,
 ) -> codex::ThreadStatus {
     if let Some(link) = record.subagent.as_ref() {
-        return projected_thread_status(link.client_projection, "");
+        return projected_thread_status(link.client_projection);
     }
-    let conversation = record.conversation.as_ref();
     projected_thread_status(
-        conversation.and_then(|row| row.latest_request_projection),
-        conversation.map(|row| row.status.as_str()).unwrap_or(""),
+        record
+            .latest_request
+            .as_ref()
+            .and_then(gents_protocol::graphql::GraphqlTurnState::projected_head),
     )
 }
 
 pub(in crate::commands::codex_shim) fn projected_thread_status(
     head: Option<ClientHeadProjection>,
-    conversation_status: &str,
 ) -> codex::ThreadStatus {
     match head {
         Some(head) if head.waiting_on_user_input() => codex::ThreadStatus::Active {
@@ -134,7 +127,6 @@ pub(in crate::commands::codex_shim) fn projected_thread_status(
             ..
         }) => codex::ThreadStatus::SystemError,
         Some(_) => codex::ThreadStatus::Idle,
-        None if conversation_status.trim() == "error" => codex::ThreadStatus::SystemError,
         _ => codex::ThreadStatus::Idle,
     }
 }
@@ -181,23 +173,23 @@ pub(in crate::commands::codex_shim) fn thread_resume_response_json(
 
 fn thread_created_at(record: &CodexThreadRecord) -> Option<i64> {
     record
-        .conversation
+        .session
         .as_ref()
-        .and_then(|conversation| conversation.created_at.as_deref())
+        .map(|session| session.created_at.as_str())
         .or(record.projection_started.as_deref())
         .and_then(parse_timestamp_seconds)
 }
 
 fn thread_updated_at(record: &CodexThreadRecord) -> Option<i64> {
     record
-        .conversation
+        .session
         .as_ref()
-        .and_then(|conversation| conversation.updated_at.as_deref())
-        .or_else(|| {
-            record
-                .conversation
+        .map(|session| {
+            session
+                .observation
                 .as_ref()
-                .and_then(|conversation| conversation.created_at.as_deref())
+                .map(|observation| observation.last_activity_at.as_str())
+                .unwrap_or(&session.created_at)
         })
         .or(record.projection_started.as_deref())
         .and_then(parse_timestamp_seconds)
@@ -217,6 +209,43 @@ mod tests {
     use crate::commands::codex_shim::subagent_projection::LinkedSubagentThread;
 
     #[test]
+    fn canonical_session_supplies_title_fork_and_dates_but_not_execution_authority() {
+        let session: gents_protocol::session::AgentSession = serde_json::from_value(json!({
+            "session_id":"child", "agent_did":"did:agent", "behavior_id":"configured",
+            "created_at":"2026-01-01T00:00:00Z",
+            "title":{"text":"Reviewed title", "source":"user"},
+            "provenance":{"fork":{"source_session_id":"source", "at_user_turn":2}},
+            "observation":{"last_activity_at":"2026-01-02T00:00:00Z", "preview":"Actual preview",
+                "latest_request":{"request_doc_id":"old-doc", "request_id":"old", "lifecycle_state":"failed"}}
+        })).unwrap();
+        let record = CodexThreadRecord {
+            session_id:"child".into(), cwd:PathBuf::from("/tmp"), archived:false, loaded:true,
+            memory_mode:"disabled".into(), name:String::new(), settings_json:String::new(), git_info:None,
+            projection_started:Some("2026-02-01T00:00:00Z".into()), session:Some(session),
+            latest_request:Some(serde_json::from_value(json!({"request":{
+                "_docID":"new-doc", "request_id":"new", "lifecycle_state":"pending"}, "response":null})).unwrap()),
+            subagent:None,
+        };
+        let thread = codex_thread_json(&record, false);
+        assert_eq!(thread["name"], "Reviewed title");
+        assert_eq!(thread["preview"], "Actual preview");
+        assert_eq!(thread["forkedFromId"], "source");
+        assert_eq!(thread["createdAt"], 1767225600_i64);
+        assert_eq!(thread["updatedAt"], 1767312000_i64);
+        assert!(
+            matches!(
+                codex_thread_status(&record),
+                codex::ThreadStatus::Active { .. }
+            ),
+            "cached failed observation must not override actual pending request"
+        );
+        assert_eq!(
+            codex_thread_json(&record, false)["createdAt"],
+            thread["createdAt"]
+        );
+    }
+
+    #[test]
     fn subagent_thread_serializes_codex_navigation_metadata() {
         let root_session_id = uuid::Uuid::new_v4().to_string();
         let parent_session_id = root_session_id.clone();
@@ -231,8 +260,15 @@ mod tests {
             settings_json: String::new(),
             git_info: None,
             projection_started: None,
-            conversation: None,
+            session: None,
+            latest_request: None,
             subagent: Some(LinkedSubagentThread {
+                parent_request_doc_id: "test-parent-doc".into(),
+                parent_agent_did: "did:parent".into(),
+                parent_requester_did: None,
+                request_doc_id: "test-request-doc".into(),
+                latest_request_doc_id: "test-request-doc".into(),
+                requester_did: Some("did:parent".into()),
                 request_id: "child-request".to_string(),
                 latest_request_id: "child-request".to_string(),
                 latest_request_content: "Inspect the patch".to_string(),
@@ -299,8 +335,8 @@ mod tests {
                 false,
                 response_status,
             );
-            let encoded = serde_json::to_value(projected_thread_status(head, ""))
-                .expect("encode thread status");
+            let encoded =
+                serde_json::to_value(projected_thread_status(head)).expect("encode thread status");
             assert_eq!(
                 encoded.pointer("/type"),
                 Some(&json!(expected_type)),
@@ -312,11 +348,7 @@ mod tests {
         }
 
         assert_eq!(
-            serde_json::to_value(projected_thread_status(None, "error")).unwrap()["type"],
-            "systemError"
-        );
-        assert_eq!(
-            serde_json::to_value(projected_thread_status(None, "active")).unwrap()["type"],
+            serde_json::to_value(projected_thread_status(None)).unwrap()["type"],
             "idle"
         );
     }

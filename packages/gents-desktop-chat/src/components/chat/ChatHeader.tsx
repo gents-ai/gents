@@ -14,9 +14,9 @@ export type ChatHeaderProps = {
   behaviorLabel: string | null;
   syncHealth: SyncHealthView | null;
   context?: DesktopSessionSnapshot["context"] | null;
-  selectedConversationTitle: string | null;
+  selectedSessionTitle: string | null;
   selectedSessionId: string | null;
-  onRenameConversationTitle: (
+  onRenameSessionTitle: (
     sessionId: string,
     title: string,
   ) => void | Promise<void>;
@@ -218,23 +218,23 @@ export function ChatHeader({
   behaviorLabel,
   syncHealth,
   context,
-  selectedConversationTitle,
+  selectedSessionTitle,
   selectedSessionId,
-  onRenameConversationTitle,
+  onRenameSessionTitle,
   onOpenMobileNavigation,
 }: ChatHeaderProps) {
   const syncStatus = projectSyncOperationalStatus(syncHealth);
-  const visibleConversationTitle = selectedSessionId
-    ? displayConversationTitle(selectedConversationTitle)
+  const visibleSessionTitle = selectedSessionId
+    ? displayConversationTitle(selectedSessionTitle)
     : "Start a conversation";
   const [isRenamingTitle, setIsRenamingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(selectedConversationTitle ?? "");
+  const [titleDraft, setTitleDraft] = useState(selectedSessionTitle ?? "");
   const [renamingTitle, setRenamingTitle] = useState(false);
 
   useEffect(() => {
     setIsRenamingTitle(false);
-    setTitleDraft(selectedConversationTitle ?? "");
-  }, [selectedConversationTitle, selectedSessionId]);
+    setTitleDraft(selectedSessionTitle ?? "");
+  }, [selectedSessionTitle, selectedSessionId]);
 
   async function submitTitleRename(event?: FormEvent) {
     event?.preventDefault();
@@ -245,18 +245,18 @@ export function ChatHeader({
     const trimmed = titleDraft.trim();
     if (!trimmed) {
       setIsRenamingTitle(false);
-      setTitleDraft(selectedConversationTitle ?? "");
+      setTitleDraft(selectedSessionTitle ?? "");
       return;
     }
 
-    if (trimmed === (selectedConversationTitle ?? "").trim()) {
+    if (trimmed === (selectedSessionTitle ?? "").trim()) {
       setIsRenamingTitle(false);
       return;
     }
 
     setRenamingTitle(true);
     try {
-      await onRenameConversationTitle(selectedSessionId, trimmed);
+      await onRenameSessionTitle(selectedSessionId, trimmed);
       setIsRenamingTitle(false);
     } catch {
     } finally {
@@ -282,7 +282,7 @@ export function ChatHeader({
           isRenamingTitle ? (
             <form className="title-rename-form" onSubmit={submitTitleRename}>
               <input
-                aria-label={`Rename ${visibleConversationTitle}`}
+                aria-label={`Rename ${visibleSessionTitle}`}
                 autoFocus
                 className="title-rename-input"
                 data-testid="conversation-title-input"
@@ -291,7 +291,7 @@ export function ChatHeader({
                 onKeyDown={(event) => {
                   if (event.key === "Escape") {
                     setIsRenamingTitle(false);
-                    setTitleDraft(selectedConversationTitle ?? "");
+                    setTitleDraft(selectedSessionTitle ?? "");
                   }
                 }}
                 value={titleDraft}
@@ -299,9 +299,9 @@ export function ChatHeader({
             </form>
           ) : (
             <div className="chat-title-row">
-              <h2>{visibleConversationTitle}</h2>
+              <h2>{visibleSessionTitle}</h2>
               <button
-                aria-label={`Rename ${visibleConversationTitle}`}
+                aria-label={`Rename ${visibleSessionTitle}`}
                 className="icon-button"
                 data-testid="conversation-title-edit"
                 disabled={renamingTitle}
@@ -313,7 +313,7 @@ export function ChatHeader({
             </div>
           )
         ) : (
-          <h2>{visibleConversationTitle}</h2>
+          <h2>{visibleSessionTitle}</h2>
         )}
       </div>
       <div className="chat-status">

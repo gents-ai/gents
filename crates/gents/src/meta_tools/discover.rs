@@ -1,17 +1,15 @@
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
-use anyhow::anyhow;
 use serde::Deserialize;
 
 use crate::health_checker::HealthStatus;
-use crate::mcp_pool::resolve_mcp_url;
 
 use super::shared::{format_health_status, MetaToolContext, MetaToolError};
 
 #[derive(Debug, Deserialize)]
 pub struct DiscoverToolsArgs {
     #[serde(default)]
-    query: Option<String>,
+    pub(super) query: Option<String>,
 }
 
 #[derive(Clone)]
@@ -56,216 +54,99 @@ impl Tool for DiscoverToolsTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let gql = r#"{
-  ToolServiceRegistry(
-    filter: { status: { _eq: "online" } },
-    order: { updated_at: DESC }
-  ) {
-    service_id
-    display_name
-    description
-    hostname
-    tailscale_ip
-    lan_ip
-    mcp_port
-    mcp_path
-    send_agent_did
-  }
-}"#;
-
-        let resp = self.ctx.node.execute(gql).await;
-        if resp.has_errors() {
-            return Err(anyhow!("discover_tools query failed: {:?}", resp.errors).into());
-        }
-
-        let services = match resp.data.as_ref() {
-            Some(data) => match data.get("ToolServiceRegistry").and_then(|v| v.as_array()) {
-                Some(arr) => arr.clone(),
-                None => {
-                    tracing::warn!(
-                        "discover_tools: response missing ToolServiceRegistry array — \
-                         registry collection may not exist yet"
-                    );
-                    Vec::new()
-                }
-            },
-            None => {
-                tracing::warn!("discover_tools: response contained no data field");
-                Vec::new()
-            }
-        };
-
-        let services = services
-            .into_iter()
-            .filter(|svc| {
-                svc.get("service_id")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|service_id| self.ctx.is_mcp_service_allowed(service_id))
-            })
-            .collect::<Vec<_>>();
-
+        let services =
+            crate::registry::configured_mcp_services(&self.ctx.node, &self.ctx.agent_did)
+                .await?
+                .into_iter()
+                .filter(|service| {
+                    service.enabled && self.ctx.service_selection(&service.service_id).is_some()
+                })
+                .collect::<Vec<_>>();
         if services.is_empty() {
-            if self.ctx.allowed_mcp_service_ids.is_empty() {
-                return Ok("No MCP services are allowed for this behavior.".to_string());
-            }
-            return Ok(format!(
-                "No allowed data services are currently online. Allowed services: {}.",
-                self.ctx.allowed_mcp_service_ids.join(", ")
-            ));
+            return Ok(if self.ctx.allowed_mcp_service_ids.is_empty() {
+                "No MCP services are allowed for this behavior.".to_string()
+            } else {
+                format!(
+                    "No allowed data services are currently online. Allowed services: {}.",
+                    self.ctx.allowed_mcp_service_ids.join(", ")
+                )
+            });
         }
-
-        let query_lower = args.query.as_deref().map(|q| q.to_lowercase());
-
-        // Contact services concurrently — one dead or slow endpoint must not
-        // serialize the rest (#622). Unreachable services are not contacted
-        // at all: the same preflight decision `call_tool` enforces (Lean
-        // MCPHealth coupling C1/C2); their registry row still renders below
-        // so the model can see them and why they list no tools.
-        let fetches = services.iter().map(|svc| async {
-            let sid = svc
-                .get("service_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
+        let query = args.query.as_deref().unwrap_or_default().to_lowercase();
+        let results = futures::future::join_all(services.iter().map(|service| async {
+            let sid = &service.service_id;
             let health = self.ctx.health.get(sid).await;
             let unreachable = matches!(
                 health.as_ref().map(|h| h.status),
                 Some(HealthStatus::Unreachable)
             );
-
-            let svc_hostname = svc.get("hostname").and_then(|v| v.as_str()).unwrap_or("");
-            let svc_tsip = svc
-                .get("tailscale_ip")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let svc_lanip = svc.get("lan_ip").and_then(|v| v.as_str()).unwrap_or("");
-            let svc_port = svc.get("mcp_port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-            let svc_path = svc.get("mcp_path").and_then(|v| v.as_str()).unwrap_or("");
-            let send_agent_did = svc
-                .get("send_agent_did")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let endpoint = if svc_port > 0 && !svc_path.trim().is_empty() {
-                Ok(resolve_mcp_url(
-                    svc_hostname,
-                    svc_tsip,
-                    svc_lanip,
-                    svc_port,
-                    svc_path,
+            let catalog = if unreachable {
+                None
+            } else {
+                match super::shared::resolve_service(
+                    service,
                     &self.ctx.local_hostname,
                     self.ctx.local_subnet.as_deref(),
-                ))
-            } else {
-                Err(anyhow!("incomplete MCP route"))
+                ) {
+                    Ok(route) => self.ctx.list_tools(sid, &route).await.ok(),
+                    Err(_) => None,
+                }
             };
-            let tool_names: Vec<(String, String)> = if unreachable {
-                Vec::new()
-            } else if let Ok(ep) = &endpoint {
-                match self
-                    .ctx
-                    .mcp_pool
-                    .list_tools_with_agent_did(
-                        sid,
-                        ep,
-                        send_agent_did.then_some(self.ctx.agent_did.as_str()),
-                    )
-                    .await
-                {
-                    Ok(list) => list
+            let names = catalog
+                .map(|catalog| {
+                    catalog
                         .tools
-                        .iter()
-                        .map(|t| {
+                        .into_iter()
+                        .filter(|tool| self.ctx.is_tool_allowed(sid, tool.name.as_ref()))
+                        .map(|tool| {
                             (
-                                t.name.to_string(),
-                                t.description.as_deref().unwrap_or("").to_string(),
+                                tool.name.to_string(),
+                                tool.description.unwrap_or_default().to_string(),
                             )
                         })
-                        .collect(),
-                    Err(_) => Vec::new(),
-                }
-            } else {
-                Vec::new()
-            };
-            (health, unreachable, tool_names)
-        });
-        let contacted = futures::future::join_all(fetches).await;
-
-        let mut out = String::new();
-        let mut matched = 0usize;
-
-        for (svc, (health, unreachable, tool_names)) in services.iter().zip(contacted) {
-            let sid = svc
-                .get("service_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let name = svc
-                .get("display_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(sid);
-            let desc = svc
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let hostname = svc.get("hostname").and_then(|v| v.as_str()).unwrap_or("");
-
-            if let Some(ref q) = query_lower {
-                let tool_text = tool_names
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            (health, unreachable, names)
+        }))
+        .await;
+        let mut output = String::new();
+        for (service, (health, unreachable, names)) in services.iter().zip(results) {
+            let sid = &service.service_id;
+            let name = service.display_name.as_deref().unwrap_or(sid);
+            let description = service.description.as_deref().unwrap_or_default();
+            let haystack = format!(
+                "{sid} {name} {description} {}",
+                names
                     .iter()
-                    .map(|(n, d)| format!("{} {}", n, d).to_lowercase())
+                    .map(|(name, description)| format!("{name} {description}"))
                     .collect::<Vec<_>>()
-                    .join(" ");
-                let haystack = format!(
-                    "{} {} {} {} {}",
-                    sid.to_lowercase(),
-                    name.to_lowercase(),
-                    desc.to_lowercase(),
-                    hostname.to_lowercase(),
-                    tool_text,
-                );
-                if !q.split_whitespace().all(|word| haystack.contains(word)) {
-                    continue;
-                }
+                    .join(" ")
+            )
+            .to_lowercase();
+            if !query.split_whitespace().all(|word| haystack.contains(word)) {
+                continue;
             }
-
-            matched += 1;
-            out.push_str(&format!("## {name} ({sid})\n"));
-            out.push_str(&format!(
-                "Status: {}\n",
+            output.push_str(&format!(
+                "## {name} ({sid})\nStatus: {}\n{description}\n\nTools:\n",
                 format_health_status(health.as_ref())
             ));
-            out.push_str(&format!(
-                "Host: {}\n",
-                if hostname.is_empty() {
-                    "unknown"
-                } else {
-                    hostname
-                }
-            ));
-            if !desc.is_empty() {
-                out.push_str(&format!("{desc}\n"));
-            }
-            out.push_str("\nTools:\n");
-
             if unreachable {
-                out.push_str("  (not contacted — service is unreachable)\n");
+                output.push_str("  (not contacted — service is unreachable)\n");
             }
-            for (tn, td) in &tool_names {
-                out.push_str(&format!("  - {tn}: {td}\n"));
+            for (name, description) in names {
+                output.push_str(&format!("  - {name}: {description}\n"));
             }
-            out.push_str(
-                "Next: call describe_tool with this service_id and a tool_name before call_tool.\n",
-            );
-            out.push('\n');
+            output.push_str("Next: call describe_tool with this service_id and a tool_name before call_tool.\n\n");
         }
-
-        if matched == 0 {
-            Ok(format!(
-                "No services matched query {:?}. {} service(s) are online.",
-                args.query.as_deref().unwrap_or(""),
+        Ok(if output.is_empty() {
+            format!(
+                "No services matched query {query:?}. {} service(s) are enabled.",
                 services.len()
-            ))
+            )
         } else {
-            Ok(out)
-        }
+            output
+        })
     }
 }
 
@@ -286,6 +167,7 @@ mod tests {
                 filter: { service_id: { _eq: "observability-mcp" } },
                 add: {
                     service_id: "observability-mcp",
+                    agent_did: "did:key:z-test-agent",
                     display_name: "Observability",
                     description: "Metrics and logs",
                     hostname: "localhost",
@@ -293,9 +175,9 @@ mod tests {
                     lan_ip: "",
                     mcp_port: 1,
                     mcp_path: "/mcp",
-                    status: "online"
+                    enabled: true
                 },
-                update: { status: "online" }
+                update: { enabled: true }
             ) { _docID }
         }"#;
         let response = node.execute(mutation).await;
@@ -313,6 +195,7 @@ mod tests {
             local_subnet: None,
             agent_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["x-data".to_string()],
+            remote_tools: super::super::tests::remote_selection(&["x-data"], &["search_posts"]),
         });
 
         let output = tool
@@ -344,12 +227,15 @@ mod tests {
         hostname: &str,
         port: u16,
     ) {
+        let service_id = crate::graphql::escape_graphql_string(service_id);
+        let hostname = crate::graphql::escape_graphql_string(hostname);
         let mutation = format!(
             r#"mutation {{
             upsert_ToolServiceRegistry(
                 filter: {{ service_id: {{ _eq: "{service_id}" }} }},
                 add: {{
                     service_id: "{service_id}",
+                    agent_did: "did:key:z-test-agent",
                     display_name: "{service_id}",
                     description: "test service {service_id}",
                     hostname: "{hostname}",
@@ -357,9 +243,9 @@ mod tests {
                     lan_ip: "",
                     mcp_port: {port},
                     mcp_path: "/mcp",
-                    status: "online"
+                    enabled: true
                 }},
-                update: {{ status: "online" }}
+                update: {{ enabled: true }}
             ) {{ _docID }}
         }}"#
         );
@@ -396,6 +282,10 @@ mod tests {
                 "hf-data".to_string(),
                 "web-research-mcp".to_string(),
             ],
+            remote_tools: super::super::tests::remote_selection(
+                &["x-data", "hf-data", "web-research-mcp"],
+                &["search_posts"],
+            ),
         }
     }
 

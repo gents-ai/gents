@@ -1,248 +1,180 @@
-use anyhow::{Context, Result};
-use chrono::Utc;
+use anyhow::Result;
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigAccess;
-use gents::{AgentBehaviorDocument, ConfigReferences};
-use gents_protocol::row::AgentBehaviorRow;
-use serde_json::Value;
-
-use super::super::graphql::{
-    escape_graphql_string, graphql_optional_bool_field, graphql_optional_float_field,
-    graphql_string_field, graphql_string_list_field, join_fields, normalize_required,
+use gents::collection::Collection;
+use gents::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use gents::AgentBehaviorDocument;
 
-pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) -> Result<()> {
-    let behavior = agent_behavior_document(row)?;
-    let mutation = build_upsert_agent_behavior_mutation(row)?;
-    let behavior_ref = &behavior;
-    let mutation_ref = &mutation;
-    ConfigAccess::transact_local(node, None, "desktop.behavior.upsert", move |txn| {
+pub async fn upsert_agent_behavior(
+    node: &EmbeddedNode,
+    document: &AgentBehaviorDocument,
+) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::AgentBehavior,
+        add: value.clone(),
+        update: value,
+    }])?;
+    ConfigAccess::transact_local(node, None, "desktop.behavior.save", |txn| {
+        let plan = &plan;
         Box::pin(async move {
-            let references = ConfigReferences::load_in_txn(txn, &behavior_ref.agent_did).await?;
-            behavior_ref.validate_references(&references)?;
-            // Keep the desktop encoder: represented row options are authoritative
-            // clears, while columns absent from AgentBehaviorRow (description,
-            // summary, request_context_template) remain stored state.
-            txn.execute(mutation_ref).await?;
+            apply_desired_state_plan(txn, plan).await?;
             Ok(())
         })
     })
     .await
 }
 
-fn agent_behavior_document(row: &AgentBehaviorRow) -> Result<AgentBehaviorDocument> {
-    let agent_did = normalize_required(
-        "agent_did",
-        row.agent_did
-            .as_deref()
-            .context("agent_did is required for AgentBehavior")?,
-    )?;
-    let mut value = serde_json::to_value(row)?;
-    value["agent_did"] = Value::String(agent_did.to_string());
-    value["enabled"] = Value::Bool(row.enabled.unwrap_or(false));
-    Ok(serde_json::from_value(value)?)
-}
-
-fn build_upsert_agent_behavior_mutation(row: &AgentBehaviorRow) -> Result<String> {
-    let behavior_id = normalize_required("behavior_id", &row.behavior_id)?;
-    let agent_did = normalize_required(
-        "agent_did",
-        row.agent_did
-            .as_deref()
-            .context("agent_did is required for AgentBehavior")?,
-    )?;
-    let created_at = row
-        .created_at
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
-
-    let add_fields = [
-        Some(format!(
-            r#"behavior_id: "{}""#,
-            escape_graphql_string(behavior_id)
-        )),
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(agent_did)
-        )),
-        Some(graphql_string_field(
-            "display_name",
-            row.display_name.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "system_prompt",
-            row.system_prompt.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "backend_id",
-            row.backend_id.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "model_name",
-            row.model_name.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "tool_selection_id",
-            row.tool_selection_id.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "inference_profile_id",
-            row.inference_profile_id.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "compaction_strategy",
-            row.compaction_strategy.as_deref(),
-        )),
-        Some(graphql_optional_float_field(
-            "compaction_threshold",
-            row.compaction_threshold,
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_list_field("skill_refs", &row.skill_refs)),
-        Some(graphql_string_list_field(
-            "skill_excludes",
-            &row.skill_excludes,
-        )),
-        Some(format!(
-            r#"created_at: "{}""#,
-            escape_graphql_string(&created_at)
-        )),
-    ];
-    let update_fields = [
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(agent_did)
-        )),
-        Some(graphql_string_field(
-            "display_name",
-            row.display_name.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "system_prompt",
-            row.system_prompt.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "backend_id",
-            row.backend_id.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "model_name",
-            row.model_name.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "tool_selection_id",
-            row.tool_selection_id.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "inference_profile_id",
-            row.inference_profile_id.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "compaction_strategy",
-            row.compaction_strategy.as_deref(),
-        )),
-        Some(graphql_optional_float_field(
-            "compaction_threshold",
-            row.compaction_threshold,
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_list_field("skill_refs", &row.skill_refs)),
-        Some(graphql_string_list_field(
-            "skill_excludes",
-            &row.skill_excludes,
-        )),
-    ];
-
-    Ok(format!(
-        r#"mutation {{
-            upsert_AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        behavior_id = escape_graphql_string(behavior_id),
-        add_fields = join_fields(&add_fields),
-        update_fields = join_fields(&update_fields),
-    ))
-}
-
 pub async fn delete_agent_behavior(
     node: &EmbeddedNode,
     agent_did: &str,
-    behavior_id: &str,
+    id: &str,
 ) -> Result<usize> {
-    let mutation = build_delete_agent_behavior_mutation(agent_did, behavior_id)?;
-    let response = super::super::graphql::execute_mutation_response(
-        node,
-        &mutation,
-        "desktop.behavior.delete",
-    )
-    .await?;
-    Ok(response
-        .pointer("/data/delete_AgentBehavior")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0))
-}
-
-fn build_delete_agent_behavior_mutation(agent_did: &str, behavior_id: &str) -> Result<String> {
-    let agent_did = normalize_required("agent_did", agent_did)?;
-    let behavior_id = normalize_required("behavior_id", behavior_id)?;
-    let agent_did = escape_graphql_string(agent_did);
-    let behavior_id = escape_graphql_string(behavior_id);
-    Ok(format!(
-        r#"mutation {{
-            delete_AgentBehavior(
-                filter: {{
-                    _and: [
-                        {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
-                        {{ agent_did: {{ _eq: "{agent_did}" }} }}
-                    ]
-                }}
-            ) {{ _docID }}
-        }}"#
-    ))
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+        Collection::AgentBehavior,
+        agent_did.to_owned(),
+        id.to_owned(),
+    )])?;
+    ConfigAccess::transact_local(node, None, "desktop.behavior.delete", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            let existed =
+                read_desired_state_record_in_txn(txn, Collection::AgentBehavior, agent_did, id)
+                    .await?
+                    .is_some();
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(usize::from(existed))
+        })
+    })
+    .await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_behavior_document, build_delete_agent_behavior_mutation};
-    use gents::ConfigReferences;
-    use gents_protocol::row::AgentBehaviorRow;
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
 
-    #[test]
-    fn delete_is_scoped_to_agent_and_escapes_values() {
-        let mutation = build_delete_agent_behavior_mutation("did:test:remote", "say-\"hi\"")
-            .expect("delete mutation");
-
-        assert!(mutation.contains(r#"agent_did: { _eq: "did:test:remote" }"#));
-        assert!(mutation.contains(r#"behavior_id: { _eq: "say-\"hi\"" }"#));
-    }
-
-    #[test]
-    fn behavior_row_reports_all_missing_references() {
-        let row: AgentBehaviorRow = serde_json::from_value(serde_json::json!({
-            "behavior_id": "amy",
-            "agent_did": "did:test:amy",
-            "backend_id": "missing-backend",
-            "tool_selection_id": "missing-tools",
-            "inference_profile_id": "missing-profile"
-        }))
-        .expect("behavior row");
-        let behavior = agent_behavior_document(&row).expect("behavior document");
-
-        let error = behavior
-            .validate_references(&ConfigReferences::default())
-            .expect_err("invalid behavior")
-            .to_string();
-        assert!(error.contains("missing backend_id missing-backend"));
-        assert!(error.contains("missing tool_selection_id missing-tools"));
-        assert!(error.contains("missing inference_profile_id missing-profile"));
+    #[tokio::test]
+    async fn behavior_and_profile_deletion_obey_canonical_owned_references() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node.clone());
+        for owner in ["did:test:alpha", "did:test:beta"] {
+            gents::ensure_agent_principal(&node, owner).await?;
+            let backend = serde_json::from_value(json!({
+                "agent_did":owner, "backend_id":"backend", "name":"Backend",
+                "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}
+            }))?;
+            gents::config_client::write_inference_backend_document(&access, &backend).await?;
+            let profile = serde_json::from_value(json!({
+                "agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"
+            }))?;
+            super::super::profile::upsert_inference_profile(&node, &profile).await?;
+            let behavior = serde_json::from_value(json!({
+                "agent_did":owner,"behavior_id":"review","inference_profile_id":"profile"
+            }))?;
+            upsert_agent_behavior(&node, &behavior).await?;
+        }
+        let invalid = serde_json::from_value(json!({
+            "agent_did":"did:test:alpha","behavior_id":"review","inference_profile_id":"profile","context_id":"missing"
+        }))?;
+        assert!(upsert_agent_behavior(&node, &invalid).await.is_err());
+        assert!(super::super::profile::delete_inference_profile(
+            &node,
+            "did:test:alpha",
+            "profile"
+        )
+        .await
+        .is_err());
+        // The shared closure owns local target references; foreign destinations
+        // remain governed by delegation admission, not global label lookup.
+        let target = json!({
+            "agent_did":"did:test:alpha","target_id":"target","target_agent_did":"did:test:alpha","behavior_id":"review","name":"reviewer"
+        });
+        let target_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::SubagentTarget,
+            add: target.clone(),
+            update: target,
+        }])?;
+        access
+            .transact("test.target", |txn| {
+                let plan = &target_plan;
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan).await?;
+                    Ok(())
+                })
+            })
+            .await?;
+        assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
+            .await
+            .is_err());
+        assert_eq!(
+            delete_agent_behavior(&node, "did:test:beta", "review").await?,
+            1
+        );
+        assert_eq!(
+            super::super::profile::delete_inference_profile(&node, "did:test:beta", "profile")
+                .await?,
+            1
+        );
+        assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
+            .await
+            .is_err());
+        let remove_target = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+            Collection::SubagentTarget,
+            "did:test:alpha".into(),
+            "target".into(),
+        )])?;
+        access
+            .transact("test.target.remove", |txn| {
+                let plan = &remove_target;
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan).await?;
+                    Ok(())
+                })
+            })
+            .await?;
+        for default in [Some("review"), None] {
+            access
+                .transact("test.principal.default", |txn| {
+                    Box::pin(async move {
+                        let (_, mut value) = read_desired_state_record_in_txn(
+                            txn,
+                            Collection::AgentPrincipal,
+                            "did:test:alpha",
+                            "did:test:alpha",
+                        )
+                        .await?
+                        .unwrap();
+                        value["default_behavior_id"] = serde_json::to_value(default)?;
+                        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                            collection: Collection::AgentPrincipal,
+                            add: value.clone(),
+                            update: value,
+                        }])?;
+                        apply_desired_state_plan(txn, &plan).await?;
+                        Ok(())
+                    })
+                })
+                .await?;
+            if default.is_some() {
+                assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
+                    .await
+                    .is_err());
+            }
+        }
+        assert_eq!(
+            delete_agent_behavior(&node, "did:test:alpha", "review").await?,
+            1
+        );
+        assert_eq!(
+            super::super::profile::delete_inference_profile(&node, "did:test:alpha", "profile")
+                .await?,
+            1
+        );
+        Ok(())
     }
 }

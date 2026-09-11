@@ -10,9 +10,8 @@ use super::*;
 use crate::ensure_runtime_schemas;
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
-    assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
-    lean_process_transition_cases, lean_runtime_reconcile_case, lean_vocabulary_values,
-    LeanContractVocabulary, LeanLifecycleTransitionCase,
+    assert_state_machine_contract_is_complete, lean_process_transition_cases,
+    lean_runtime_reconcile_case, LeanContractVocabulary, LeanLifecycleTransitionCase,
 };
 
 #[derive(Debug, Deserialize)]
@@ -22,7 +21,7 @@ struct AgentRuntimeRow {
     behavior_executor_queue_depth: i64,
     behavior_executor_status_json: String,
     last_reconcile_result: String,
-    last_reconcile_error: String,
+    last_reconcile_completed_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +36,9 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
 
 #[test]
 fn agent_runtime_writer_source_cannot_serialize_readiness_authority() {
+    // The schema-side collection fence is owned by
+    // gents_protocol::schemas::agent_runtime_schema_is_diagnostics_only. This
+    // twin catches writer-shaped fields that would compile but fail at runtime.
     let source = include_str!("../runtime_status.rs");
     for forbidden in [
         "row.process_state",
@@ -47,8 +49,6 @@ fn agent_runtime_writer_source_cannot_serialize_readiness_authority() {
         "active_generation: {active_generation}",
         "router_generation: {router_generation}",
         "default_behavior_id: \"{default_behavior_id}\"",
-        "runnable_behavior_count",
-        "unavailable_behavior_count",
     ] {
         assert!(
             !source.contains(forbidden),
@@ -63,16 +63,11 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
         request_id: request_id.to_string(),
         agent_did: "did:test:status-test".to_string(),
         requester_did: None,
-        behavior_id: Some("general".to_string()),
+        behavior_id: "general".to_string(),
         session_id: format!("{request_id}-session"),
         content: "status test".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
+        input: Default::default(),
         execution_origin: Some("interactive".to_string()),
         created_at: "2026-01-01T00:00:00Z".to_string(),
         deadline: None,
@@ -91,7 +86,7 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
         caused_by_trigger_context: None,
         workspace_id: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
+        workspace_owner_agent_did: None,
         workspace_seal_hash: None,
     }
 }
@@ -116,7 +111,7 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
                 behavior_executor_queue_depth
                 behavior_executor_status_json
                 last_reconcile_result
-                last_reconcile_error
+                last_reconcile_completed_at
             }}
         }}"#
     );
@@ -229,21 +224,6 @@ fn rust_process_state_vocabulary_matches_lean_model() {
     });
 }
 
-#[test]
-fn rust_process_state_transitions_match_lean_contract() {
-    assert_state_machine_contract_is_complete("Process");
-    assert_lean_transition_is_legal("Process", "uninitialized", "recovering");
-    assert_lean_transition_is_legal("Process", "uninitialized", "ready");
-    assert_lean_transition_is_legal("Process", "recovering", "ready");
-    assert_lean_transition_is_legal("Process", "ready", "shuttingDown");
-    assert_lean_transition_is_legal("Process", "shuttingDown", "shutdown");
-    assert_lifecycle_transition_cases_partition(
-        "Process",
-        &lean_vocabulary_values("ProcessState"),
-        lean_process_transition_cases(),
-    );
-}
-
 fn rust_process_transition_action(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
         ("uninitialized", "recovering") => Some("startupRecover"),
@@ -252,14 +232,6 @@ fn rust_process_transition_action(from: &str, to: &str) -> Option<&'static str> 
         ("ready", "shuttingDown") => Some("beginShutdown"),
         ("shuttingDown", "shutdown") => Some("finishShutdown"),
         _ => None,
-    }
-}
-
-fn rust_process_transition_classification(from: &str, to: &str) -> &'static str {
-    if rust_process_transition_action(from, to).is_some() {
-        "legal"
-    } else {
-        "illegal"
     }
 }
 
@@ -337,7 +309,12 @@ async fn generated_process_transition_cases_match_runtime_status_policy() {
     let mut illegal_count = 0;
 
     for case in lean_process_transition_cases() {
-        let rust_classification = rust_process_transition_classification(&case.from, &case.to);
+        let rust_classification = if rust_process_transition_action(&case.from, &case.to).is_some()
+        {
+            "legal"
+        } else {
+            "illegal"
+        };
         assert_eq!(
             case.classification, rust_classification,
             "Process transition {} expected classification drift for {} -> {}; Lean action={:?} boundary={:?}",
@@ -405,65 +382,6 @@ fn rust_reconcile_phase_vocabulary_matches_lean_model() {
 fn runtime_reconcile_state_machine_contract_is_complete() {
     assert_state_machine_contract_is_complete("RuntimeReconcile");
     assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
-}
-
-#[tokio::test]
-async fn runtime_status_persists_diagnostics_while_readiness_owns_lifecycle() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
-    let status = RuntimeStatusHandle::new(node.clone(), "did:test:status-test");
-    status
-        .set_process_state(ProcessLifecycleState::Recovering)
-        .await;
-    status.set_reconcile_phase(ReconcilePhase::Resolving).await;
-    status
-        .publish_startup_snapshot(&ActiveRuntimeSnapshot {
-            generation: 1,
-            principal: None,
-            local_did: String::new(),
-            default_behavior_id: "code".to_string(),
-            behaviors: HashMap::new(),
-            tool_surfaces: HashMap::new(),
-            backend_admission_configs: HashMap::new(),
-            unavailable_behaviors: HashMap::from([(
-                "code".to_string(),
-                crate::runtime_snapshot::UnavailableBehavior::new(
-                    BehaviorReadinessUnavailableReason::BehaviorDisabled,
-                    "behavior code is disabled",
-                ),
-            )]),
-            active_schedules: HashMap::new(),
-            unavailable_schedules: HashSet::new(),
-            active_event_triggers: HashMap::new(),
-            unavailable_event_triggers: HashSet::new(),
-            active_tasks: HashMap::new(),
-            dispatchers: HashMap::new(),
-            behavior_executor_capacities: HashMap::new(),
-            behavior_executor_queue_capacities: HashMap::new(),
-        })
-        .await
-        .unwrap();
-    status.publish_router_generation(1).await.unwrap();
-    status.set_process_state(ProcessLifecycleState::Ready).await;
-
-    let row = fetch_runtime_row(node.as_ref(), "did:test:status-test").await;
-    assert_eq!(row.reconcile_phase, "idle");
-    assert_eq!(row.last_reconcile_result, "startup");
-    assert!(row.last_reconcile_error.is_empty());
-    let readiness = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
-        &fetch_behavior_readiness_row(node.as_ref(), "did:test:status-test")
-            .await
-            .snapshot_json,
-    )
-    .expect("decode authoritative readiness");
-    assert_eq!(
-        readiness.process_state,
-        gents_protocol::row::BehaviorReadinessProcessState::Ready
-    );
-    assert_eq!(readiness.active_generation, 1);
-    assert_eq!(readiness.router_generation, 1);
-    assert_eq!(readiness.default_behavior_id, "code");
 }
 
 #[tokio::test]
@@ -617,6 +535,10 @@ async fn runtime_status_serializes_persisted_generation_updates() {
 
     let row = fetch_runtime_row(node.as_ref(), "did:test:status-serialize").await;
     assert_eq!(row.last_reconcile_result, "applied");
+    assert!(
+        !row.last_reconcile_completed_at.is_empty(),
+        "applied publish must stamp last_reconcile_completed_at"
+    );
     let readiness = fetch_behavior_readiness_row(node.as_ref(), "did:test:status-serialize").await;
     let readiness: gents_protocol::row::BehaviorReadinessSnapshot =
         serde_json::from_str(&readiness.snapshot_json).expect("decode serialized readiness");

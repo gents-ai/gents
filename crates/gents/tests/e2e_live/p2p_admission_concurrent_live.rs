@@ -6,7 +6,7 @@
 //!
 //!   * Owner hub: `max_concurrent_push_tasks = 1` (TLA `PushWorkers = 1` shape)
 //!   * Two healthy peers as PushLog fan-out targets
-//!   * Real d4f completions (workstation-1:8000 / `d4f` by default)
+//!   * Real GLM completions on workstation-1:8000
 //!   * **Concurrent** request submission — N waves in flight at once so the
 //!     single push worker must serialize fan-out across peers without
 //!     stranding either peer
@@ -16,7 +16,7 @@
 //! ```bash
 //! GENTS_LIVE_P2P_ADMISSION=1 \
 //!   GENTS_LIVE_P2P_ADMISSION_ENDPOINT=http://workstation-1:8000/v1 \
-//!   GENTS_LIVE_P2P_ADMISSION_MODEL=d4f \
+//!   GENTS_LIVE_P2P_ADMISSION_MODEL=GLM-5.3-Flash-NVFP4 \
 //!   cargo test -p gents --test e2e_live \
 //!     concurrent_multiwave_single_push_worker_converges_with_live_d4f \
 //!     -- --ignored --nocapture --test-threads=1
@@ -29,11 +29,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{AgentBehavior, BackendAuth, InferenceBackend, InferenceProfile};
 use gents::graphql::escape_graphql_string;
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
-    DocumentRuntimeOptions, Gents, ToolCeiling,
+    ensure_agent_principal, AgentIdentity, BackendProviderKind, Collection, DocumentRuntimeOptions,
+    Gents, OpenAiWireApi, ToolCeiling,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
@@ -43,7 +44,7 @@ use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, 
 use crate::support::{first_optional_row, test_p2p_db_with_admission, TestDb, TestP2pAdmission};
 
 const DEFAULT_LIVE_ENDPOINT: &str = "http://workstation-1:8000/v1";
-const DEFAULT_LIVE_MODEL: &str = "d4f";
+const DEFAULT_LIVE_MODEL: &str = "GLM-5.3-Flash-NVFP4";
 const LIVE_BACKEND_ID: &str = "backend-live-p2p-admission";
 const CONCURRENT_WAVES: usize = 4;
 const REPLICATED: &[&str] = &["AgentRequest", "AgentResponse", "AgentMessage"];
@@ -163,48 +164,22 @@ async fn assert_endpoint_reachable(endpoint: &str) {
     }
 }
 
-async fn upsert_live_backend(node: &EmbeddedNode, endpoint: &str, model: &str) {
-    let backend_id = escape_graphql_string(LIVE_BACKEND_ID);
-    let endpoint = escape_graphql_string(endpoint);
-    let model = escape_graphql_string(model);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }},
-                add: {{
-                    backend_id: "{backend_id}",
-                    name: "{backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 8,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{model}"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 8,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{model}"],
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "upsert live backend failed: {:?}",
-        resp.errors
-    );
+fn live_backend(agent_did: &str, endpoint: &str) -> InferenceBackend {
+    InferenceBackend {
+        agent_did: agent_did.to_string(),
+        backend_id: LIVE_BACKEND_ID.to_string(),
+        name: LIVE_BACKEND_ID.to_string(),
+        provider_kind: BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
+        endpoint: endpoint.to_string(),
+        auth: BackendAuth::Unauthenticated,
+        connect_timeout_secs: None,
+        discovery_timeout_secs: None,
+        max_concurrent: Some(8),
+        max_queue_depth: Some(100),
+        enabled: true,
+        tags: Vec::new(),
+    }
 }
 
 async fn bind_live_backend(
@@ -214,23 +189,59 @@ async fn bind_live_backend(
     model: &str,
 ) -> (String, String) {
     let agent_did = identity.did().to_string();
-    let bootstrap = ensure_agent_principal(node, &agent_did)
+    let mut principal = ensure_agent_principal(node, &agent_did)
         .await
         .expect("ensure principal");
-    let behavior_id = bootstrap.default_behavior.behavior_id.clone();
-    upsert_live_backend(node, endpoint, model).await;
-
-    let mut behavior = load_agent_behavior(node, &behavior_id)
-        .await
-        .expect("load behavior")
-        .expect("default behavior exists");
-    behavior.backend_id = Some(LIVE_BACKEND_ID.to_string());
-    behavior.model_name = Some(model.to_string());
-    behavior.inference_profile_id = Some(default_inference_profile_id_for_behavior(&behavior_id));
-    behavior.enabled = true;
-    upsert_agent_behavior(node, &behavior)
-        .await
-        .expect("point behavior at live backend");
+    let behavior_id = default_behavior_id_for_agent(&agent_did);
+    let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
+    principal.default_behavior_id = Some(behavior_id.clone());
+    let backend = live_backend(&agent_did, endpoint);
+    let profile = InferenceProfile {
+        agent_did: agent_did.clone(),
+        profile_id: profile_id.clone(),
+        backend_id: LIVE_BACKEND_ID.to_string(),
+        model_name: model.to_string(),
+        ..Default::default()
+    };
+    let behavior = AgentBehavior {
+        behavior_id: behavior_id.clone(),
+        agent_did: agent_did.clone(),
+        display_name: Some("Live P2P admission behavior".to_string()),
+        description: None,
+        context_id: None,
+        inference_profile_id: profile_id,
+        enabled: true,
+        tags: Vec::new(),
+        created_at: Some(chrono::Utc::now().to_rfc3339()),
+    };
+    let documents = [
+        (Collection::AgentPrincipal, serde_json::to_value(principal)),
+        (Collection::InferenceBackend, serde_json::to_value(backend)),
+        (Collection::InferenceProfile, serde_json::to_value(profile)),
+        (Collection::AgentBehavior, serde_json::to_value(behavior)),
+    ]
+    .into_iter()
+    .map(|(collection, value)| {
+        let value = value.expect("serialize live P2P configuration document");
+        gents::config_client::DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        }
+    })
+    .collect();
+    let plan = gents::config_client::DesiredStateApplyPlan::new(documents)
+        .expect("build live P2P configuration plan");
+    gents::ConfigAccess::transact_local(node, None, "test.bind_live_p2p_backend", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            gents::config_client::apply_desired_state_plan(txn, plan)
+                .await
+                .map(|_| ())
+        })
+    })
+    .await
+    .expect("install live P2P configuration");
 
     debug_assert_eq!(behavior_id, default_behavior_id_for_agent(&agent_did));
     (agent_did, behavior_id)

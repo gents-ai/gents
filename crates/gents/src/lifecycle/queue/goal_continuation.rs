@@ -38,6 +38,8 @@ pub(crate) fn goal_continuation_identity(
 
 /// Prepare the existing continuation DTO without reads, signing, or publication.
 /// Transaction owners resolve behavior and time before staging this request.
+/// Original issuance facts are signed typed input; goal/parent identities stay
+/// on the signed request lineage (trigger edge and parent linkage).
 pub(crate) fn prepare_goal_continuation(
     parent: &AgentRequest,
     behavior_id: String,
@@ -49,23 +51,21 @@ pub(crate) fn prepare_goal_continuation(
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     let continuation =
         goal_continuation_identity(goal_id, &parent.request_id, continuation_sequence)?;
-    let queue_hints = QueueHints {
-        source: QueueSource::Goal,
-        policy: QueuePolicy::Coalesce,
-        key: Some(continuation.queue_key),
-        queued_after_request_id: Some(parent.request_id.clone()),
-        interrupted_request_id: None,
+    let input = RequestInput {
+        queue: Some(RequestQueue {
+            source: QueueSource::Goal,
+            policy: QueuePolicy::Coalesce,
+            key: Some(continuation.queue_key),
+            queued_after_request_id: Some(parent.request_id.clone()),
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        }),
+        goal_continuation: Some(GoalContinuationInput {
+            sequence: continuation_sequence,
+            wrapup,
+        }),
+        ..Default::default()
     };
-    let metadata = serde_json::json!({
-        "queue": queue_hints,
-        "goal": {
-            "goal_id": goal_id,
-            "parent_request_id": parent.request_id,
-            "continuation_sequence": continuation_sequence,
-            "wrapup": wrapup,
-        }
-    })
-    .to_string();
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
             &parent.agent_did,
@@ -92,8 +92,8 @@ pub(crate) fn prepare_goal_continuation(
         },
         workspace: Some(WorkspaceLineage {
             workspace_id: parent.workspace_id.clone(),
+            workspace_owner_agent_did: parent.workspace_owner_agent_did.clone(),
             workspace_authority: parent.workspace_authority.clone(),
-            workspace_owner_deployment_id: parent.workspace_owner_deployment_id.clone(),
             workspace_seal_hash: parent.workspace_seal_hash.clone(),
         }),
         subagent: Some(ParentLink {
@@ -102,54 +102,18 @@ pub(crate) fn prepare_goal_continuation(
             parent_request_doc_id: parent.doc_id.clone(),
             ..Default::default()
         }),
-        metadata: Some(metadata),
+        input,
         retry_key: Some(continuation.retry_key),
         ..RequestSpec::new(identity, admission)
     };
     build_request(spec)
 }
 
-/// Resolve the historical conversation fallback through the caller's transaction.
-/// This helper prepares request binding only; Goal owns publication.
+/// Resolve the behavior for a goal continuation from its required parent
+/// selection. The parent request is the sole authority for this choice.
 pub(crate) async fn goal_continuation_behavior(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    _txn: &crate::config_client::ConfigApplyTxn<'_>,
     parent: &AgentRequest,
 ) -> Result<String> {
-    if let Some(behavior) = parent
-        .behavior_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(behavior.to_owned());
-    }
-    let agent_did = escape_graphql_string(&parent.agent_did);
-    let session_id = escape_graphql_string(&parent.session_id);
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentConversation(filter: {{
-        agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}
-    }}, limit: 2) {{ behavior_id }} }}"#
-        ))
-        .await?;
-    let rows = response
-        .pointer("/data/AgentConversation")
-        .and_then(serde_json::Value::as_array)
-        .context("parent conversation query omitted rows")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "parent conversation scope resolved to multiple rows"
-    );
-    rows.first()
-        .and_then(|row| row.get("behavior_id"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
-        .with_context(|| {
-            format!(
-                "cannot enqueue same-session request: parent request {} has no behavior_id",
-                parent.request_id
-            )
-        })
+    parent_behavior_id(parent)
 }

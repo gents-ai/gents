@@ -4,63 +4,83 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatComposer } from "@source-inc/gents-desktop-chat";
 import {
   applySkillSelection,
-  effectiveBehaviorSkills,
+  effectiveContextSkills,
   slashSkillSuggestion,
 } from "@source-inc/gents-desktop-chat";
-import type { BehaviorView, SkillView } from "@source-inc/gents-desktop-client";
+import type { AgentContext, SkillView } from "@source-inc/gents-desktop-client";
 
 const skills: SkillView[] = [
-  { skillId: "review-skill", name: "Review", toolRefs: [], enabled: true },
-  { skillId: "deploy-skill", name: "Deploy", toolRefs: [], enabled: true },
-  { skillId: "off-skill", name: "Disabled", toolRefs: [], enabled: false },
+  {
+    skillId: "review-skill",
+    agentDid: "did:key:z6MkAgent",
+    name: "Review",
+    description: null,
+    instructions: null,
+    toolRefs: [],
+    displayName: null,
+    enabled: true,
+    createdAt: null,
+  },
+  {
+    skillId: "deploy-skill",
+    agentDid: "did:key:z6MkAgent",
+    name: "Deploy",
+    description: null,
+    instructions: null,
+    toolRefs: [],
+    displayName: null,
+    enabled: true,
+    createdAt: null,
+  },
+  {
+    skillId: "off-skill",
+    agentDid: "did:key:z6MkAgent",
+    name: "Disabled",
+    description: null,
+    instructions: null,
+    toolRefs: [],
+    displayName: null,
+    enabled: false,
+    createdAt: null,
+  },
 ];
 
-describe("effectiveBehaviorSkills", () => {
-  it("inherits principal skills, applies exclusions, and requires behavior opt-in", () => {
-    const behavior: BehaviorView = {
-      behaviorId: "default",
-      displayName: "Default",
-      enabled: true,
-      isDefault: true,
-      skillRefs: ["behavior-selected"],
-      skillExcludes: ["principal-excluded"],
-    };
+function context(skillIds: string[] | null): AgentContext {
+  return {
+    context_id: "ctx-default",
+    agent_did: "did:key:z6MkAgent",
+    system_prompt: null,
+    tools_id: null,
+    compaction_id: null,
+    skill_ids: skillIds,
+    tags: null,
+  };
+}
+
+describe("effectiveContextSkills", () => {
+  it("applies the active context's skill_ids as an explicit whitelist", () => {
     const deploymentSkills: SkillView[] = [
-      {
-        skillId: "principal-inherited",
-        scope: "principal",
-        toolRefs: [],
-        enabled: true,
-      },
-      {
-        skillId: "principal-excluded",
-        scope: "principal",
-        toolRefs: [],
-        enabled: true,
-      },
-      {
-        skillId: "behavior-selected",
-        scope: "behavior",
-        toolRefs: [],
-        enabled: true,
-      },
-      {
-        skillId: "behavior-unselected",
-        scope: "behavior",
-        toolRefs: [],
-        enabled: true,
-      },
-      {
-        skillId: "principal-disabled",
-        scope: "principal",
-        toolRefs: [],
-        enabled: false,
-      },
+      { ...skills[0], skillId: "context-allowed" },
+      { ...skills[0], skillId: "context-unlisted" },
+      { ...skills[2], skillId: "context-disabled-allowed" },
     ];
 
     expect(
-      effectiveBehaviorSkills(deploymentSkills, behavior).map((skill) => skill.skillId),
-    ).toEqual(["principal-inherited", "behavior-selected"]);
+      effectiveContextSkills(
+        deploymentSkills,
+        context(["context-allowed", "context-disabled-allowed"]),
+      ).map((skill) => skill.skillId),
+    ).toEqual(["context-allowed"]);
+  });
+
+  it("resolves no skills without an active context", () => {
+    expect(effectiveContextSkills(skills, null)).toEqual([]);
+    expect(effectiveContextSkills(skills, undefined)).toEqual([]);
+  });
+
+  it("allows no skills when the whitelist is empty or absent", () => {
+    expect(effectiveContextSkills(skills, context([]))).toEqual([]);
+    expect(effectiveContextSkills(skills, context(null))).toEqual([]);
   });
 });
 

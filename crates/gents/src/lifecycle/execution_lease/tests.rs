@@ -30,6 +30,7 @@ async fn test_node() -> (Arc<EmbeddedNode>, tempfile::TempDir) {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_behavior(&node, "did:test:execution-lease", "general").await;
     (node, dir)
 }
 

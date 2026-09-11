@@ -11,10 +11,6 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
-    let conversation = store.conversations.iter().find(|row| {
-        row.session_id == session_id
-            && agent_did.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
-    });
     let session_row = store
         .sessions
         .iter()
@@ -22,7 +18,13 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         .find(|(index, row)| {
             row.session_id == session_id
                 && agent_did.is_none_or(|agent_did| {
-                    source_matches_agent(&store.session_source_agent_dids, *index, agent_did, false)
+                    row.agent_did == agent_did
+                        && source_matches_agent(
+                            &store.session_source_agent_dids,
+                            *index,
+                            agent_did,
+                            false,
+                        )
                 })
         })
         .map(|(_index, row)| row);
@@ -58,7 +60,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
             completion_evidence: normalize_optional(row.completion_evidence.as_deref()),
         });
 
-    if conversation.is_none() && session_row.is_none() && requests.is_empty() && goal.is_none() {
+    if session_row.is_none() && requests.is_empty() && goal.is_none() {
         return None;
     }
 
@@ -193,12 +195,11 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         .and_then(|request_id| {
             build_pending_turn(store, context_store, agent_did, session_id, request_id)
         });
-    let resolved_agent_did = conversation
-        .and_then(|row| normalize_optional(row.agent_did.as_deref()))
+    let resolved_agent_did = session_row
+        .map(|row| row.agent_did.clone())
         .or_else(|| latest_request.and_then(|row| normalize_optional(row.agent_did.as_deref())));
-    let resolved_behavior_id = conversation
-        .and_then(|row| normalize_optional(row.behavior_id.as_deref()))
-        .or_else(|| session_row.and_then(|row| normalize_optional(row.behavior_id.as_deref())))
+    let resolved_behavior_id = session_row
+        .and_then(|row| normalize_optional(Some(row.behavior_id.as_str())))
         .or_else(|| latest_request.and_then(|row| normalize_optional(row.behavior_id.as_deref())));
     let decoded_messages = transcript
         .messages
@@ -355,11 +356,23 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         session_id: session_id.to_string(),
         agent_did: resolved_agent_did,
         behavior_id: resolved_behavior_id,
-        title: conversation.and_then(|row| normalize_optional(row.title.as_deref())),
-        preview_text: conversation.and_then(|row| normalize_optional(row.preview_text.as_deref())),
-        status: conversation
-            .and_then(|row| normalize_optional(row.status.as_deref()))
-            .or_else(|| session_row.and_then(|row| normalize_optional(row.status.as_deref()))),
+        title: session_row.and_then(|row| {
+            row.title
+                .as_ref()
+                .and_then(|title| normalize_optional(Some(&title.text)))
+        }),
+        preview_text: session_row.and_then(|row| {
+            row.observation
+                .as_ref()
+                .and_then(|observation| normalize_optional(observation.preview.as_deref()))
+        }),
+        status: session_row.map(|row| {
+            if row.closed_at.is_some() {
+                "closed".to_string()
+            } else {
+                "active".to_string()
+            }
+        }),
         goal,
         turn_state: turn_state_label,
         latest_request_id,

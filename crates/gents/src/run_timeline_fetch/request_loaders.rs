@@ -23,12 +23,12 @@ pub(super) async fn load_timeline_request_by_id(
                 _docID
                 request_id
                 agent_did
+                requester_did
                 behavior_id
                 session_id
                 content
-                seed
                 max_total_tokens
-                metadata
+                input
                 lifecycle_state
                 backend_id
                 failure_reason
@@ -46,7 +46,7 @@ pub(super) async fn load_timeline_request_by_id(
                 caused_by_parent_tool_call_doc_id
                 workspace_id
                 workspace_authority
-                workspace_owner_deployment_id
+                workspace_owner_agent_did
                 workspace_seal_hash
                 execution_origin
             }}
@@ -65,23 +65,26 @@ pub(super) async fn load_timeline_request_by_id(
 
 pub(super) async fn load_timeline_requests_for_session(
     access: &ConfigAccess,
+    agent_did: &str,
     session_id: &str,
+    requester_did: Option<&str>,
 ) -> Result<Vec<TimelineRequestRow>> {
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
+                filter: {{ {scope} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
                 request_id
                 agent_did
+                requester_did
                 behavior_id
                 session_id
                 content
-                seed
                 max_total_tokens
-                metadata
+                input
                 lifecycle_state
                 backend_id
                 failure_reason
@@ -99,12 +102,11 @@ pub(super) async fn load_timeline_requests_for_session(
                 caused_by_parent_tool_call_doc_id
                 workspace_id
                 workspace_authority
-                workspace_owner_deployment_id
+                workspace_owner_agent_did
                 workspace_seal_hash
                 execution_origin
             }}
         }}"#,
-        escape_graphql_string(session_id)
     );
     load_request_rows(access, &query).await
 }
@@ -122,12 +124,12 @@ pub(super) async fn load_timeline_child_requests(
                 _docID
                 request_id
                 agent_did
+                requester_did
                 behavior_id
                 session_id
                 content
-                seed
                 max_total_tokens
-                metadata
+                input
                 lifecycle_state
                 backend_id
                 failure_reason
@@ -145,7 +147,7 @@ pub(super) async fn load_timeline_child_requests(
                 caused_by_parent_tool_call_doc_id
                 workspace_id
                 workspace_authority
-                workspace_owner_deployment_id
+                workspace_owner_agent_did
                 workspace_seal_hash
                 execution_origin
             }}

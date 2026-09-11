@@ -102,7 +102,7 @@ function requestDiagnostics(
     requestId: "request-1",
     turnState: "completed",
     latestRequestId: "request-1",
-    conversationUpdatedAt: "2026-06-24T00:00:00Z",
+    sessionUpdatedAt: "2026-06-24T00:00:00Z",
     request: {
       status: "completed",
       lifecycleState: "terminal",

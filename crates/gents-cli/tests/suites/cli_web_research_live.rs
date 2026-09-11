@@ -3,6 +3,7 @@ use crate::support::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -42,44 +43,92 @@ async fn register_real_web_research_service(graphql: &str, agent_did: &str) -> R
 }
 
 async fn configure_live_research_inference_profile(graphql: &str, agent_did: &str) -> Result<()> {
-    let profile_id = escape_graphql_string(&format!("{agent_did}:default-profile"));
+    let owner = escape_graphql_string(agent_did);
     let response = graphql_query(
         graphql,
         &format!(
             r#"{{
                 InferenceProfile(
-                    filter: {{ profile_id: {{ _eq: "{profile_id}" }} }},
-                    limit: 1
+                    filter: {{ agent_did: {{ _eq: "{owner}" }} }}
                 ) {{ _docID profile_id }}
+                InferenceExecution(
+                    filter: {{ agent_did: {{ _eq: "{owner}" }}, execution_id: {{ _eq: "research-execution" }} }},
+                    limit: 1
+                ) {{ _docID execution_id }}
             }}"#
         ),
     )
     .await?;
-    let profile = response
-        .pointer("/data/InferenceProfile/0")
-        .context("initialized default inference profile is missing")?;
-    let doc_id = profile
-        .get("_docID")
+    let execution_doc_id = response
+        .pointer("/data/InferenceExecution/0/_docID")
         .and_then(Value::as_str)
-        .context("initialized default inference profile has no _docID")?;
+        .context("installed research inference execution is missing")?;
     graphql_query(
         graphql,
         &format!(
             r#"mutation {{
-                update_InferenceProfile(
+                update_InferenceExecution(
                     docID: "{}",
-                    input: {{
-                        max_output_tokens: 8192,
-                        max_turns: 64,
-                        reasoning_effort: "low"
-                    }}
+                    input: {{ max_turns: 64 }}
                 ) {{ _docID }}
             }}"#,
-            escape_graphql_string(doc_id),
+            escape_graphql_string(execution_doc_id),
         ),
     )
     .await?;
+    let profiles = response
+        .pointer("/data/InferenceProfile")
+        .and_then(Value::as_array)
+        .context("installed research inference profiles are missing")?
+        .iter()
+        .filter(|profile| {
+            profile
+                .get("profile_id")
+                .and_then(Value::as_str)
+                .is_some_and(|profile_id| profile_id.starts_with("research-"))
+        })
+        .collect::<Vec<_>>();
+    anyhow::ensure!(profiles.len() == 4, "expected four research profiles");
+    for profile in profiles {
+        let doc_id = profile
+            .get("_docID")
+            .and_then(Value::as_str)
+            .context("installed research inference profile has no _docID")?;
+        graphql_query(
+            graphql,
+            &format!(
+                r#"mutation {{
+                    update_InferenceProfile(
+                        docID: "{}",
+                        input: {{ max_output_tokens: 8192, reasoning_effort: "low" }}
+                    ) {{ _docID }}
+                }}"#,
+                escape_graphql_string(doc_id),
+            ),
+        )
+        .await?;
+    }
     Ok(())
+}
+
+fn run_cli_json_with_env(home_dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<Value> {
+    let output = Command::new(cli_bin())
+        .env("HOME", home_dir)
+        .env("RUST_LOG", "error")
+        .envs(envs.iter().copied())
+        .current_dir(home_dir)
+        .args(args)
+        .output()
+        .with_context(|| format!("running gents {}", args.join(" ")))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "gents {} failed\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("parsing JSON from gents {}", args.join(" ")))
 }
 
 async fn wait_for_all_research_behaviors_runnable(
@@ -413,7 +462,7 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
         "--agent-name".to_string(),
         format!("web-research-live-{}", Uuid::new_v4().simple()),
         "--model-name".to_string(),
-        model_name,
+        model_name.clone(),
         "--max-concurrent".to_string(),
         "6".to_string(),
         "--max-queue-depth".to_string(),
@@ -423,7 +472,7 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
         init_args.push("--api-key-env-var".to_string());
         init_args.push("GENTS_CLI_E2E_API_KEY".to_string());
     }
-    init_args.push(model_endpoint);
+    init_args.push(model_endpoint.clone());
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
     let agent_did = agent_did_from_init(&init)?;
@@ -441,8 +490,6 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
         "Gents server did not become ready: {readiness}"
     );
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-    configure_live_research_inference_profile(&graphql, &agent_did).await?;
-
     register_real_web_research_service(&graphql, &agent_did).await?;
     let probe = run_cli_json(
         &home_dir,
@@ -467,7 +514,7 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
     );
     wait_for_runtime_mcp_health(&graphql, &agent_did, Duration::from_secs(45)).await?;
 
-    let install = run_cli_json(
+    let install = run_cli_json_with_env(
         &home_dir,
         &[
             "pack",
@@ -478,11 +525,16 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
             "--output",
             "json",
         ],
+        &[
+            ("GENTS_WEB_RESEARCH_MODEL", model_name.as_str()),
+            ("GENTS_WEB_RESEARCH_ENDPOINT", model_endpoint.as_str()),
+        ],
     )?;
     anyhow::ensure!(
         install.pointer("/install/revision_digest").is_some(),
         "web research graph installation failed: {install}"
     );
+    configure_live_research_inference_profile(&graphql, &agent_did).await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
     wait_for_all_research_behaviors_runnable(&graphql, &agent_did, Duration::from_secs(30)).await?;
     wait_for_exact_research_tool_surfaces(&home_dir, &graphql, &agent_did, Duration::from_secs(45))

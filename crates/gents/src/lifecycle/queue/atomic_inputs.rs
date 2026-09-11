@@ -63,15 +63,14 @@ pub(crate) async fn persist_background_completion_with_message(
     notification_content: &str,
     message_key: &str,
     wake_content: &str,
-    queue_hints: QueueHints,
+    queue: RequestQueue,
     existing_notification_doc_id: Option<&str>,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     anyhow::ensure!(
-        queue_hints.source == QueueSource::BackgroundCompletion
-            && queue_hints.policy == QueuePolicy::Coalesce,
-        "atomic background completion enqueue requires coalescing background metadata"
+        queue.source == QueueSource::BackgroundCompletion && queue.policy == QueuePolicy::Coalesce,
+        "atomic background completion enqueue requires coalescing background queue input"
     );
-    let queue_key = queue_hints
+    let queue_key = queue
         .key
         .as_deref()
         .map(str::trim)
@@ -82,11 +81,10 @@ pub(crate) async fn persist_background_completion_with_message(
     let gate = background_completion_gate(node, &parent.session_id, &parent.agent_did, &queue_key);
     let _guard = gate.lock().await;
 
-    let behavior_id = parent_behavior_id(node, parent).await?;
-    let metadata = queue_metadata_json(&queue_hints);
+    let behavior_id = parent_behavior_id(parent)?;
     let queue_key_ref = &queue_key;
     let behavior_id = &behavior_id;
-    let metadata = &metadata;
+    let queue = &queue;
 
     let mut enqueued = crate::config_client::ConfigAccess::transact_local_idempotent(
         node,
@@ -103,7 +101,7 @@ pub(crate) async fn persist_background_completion_with_message(
                     queue_key_ref,
                     behavior_id,
                     wake_content,
-                    metadata,
+                    queue,
                     existing_notification_doc_id,
                 )
                 .await
@@ -143,7 +141,7 @@ async fn background_completion_transaction_attempt(
     queue_key: &str,
     behavior_id: &str,
     wake_content: &str,
-    metadata: &str,
+    queue: &RequestQueue,
     existing_notification_doc_id: Option<&str>,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     use sha2::{Digest, Sha256};
@@ -198,7 +196,7 @@ async fn background_completion_transaction_attempt(
                     _docID
                     request_id
                     session_id
-                    metadata
+                    input
                 }}
                 generations: AgentRequest(
                     filter: {{
@@ -245,7 +243,7 @@ async fn background_completion_transaction_attempt(
             .execute(&format!(
                 r#"{{ AgentRequest(
             filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2
-        ) {{ _docID request_id agent_did session_id metadata }} }}"#,
+        ) {{ _docID request_id agent_did session_id input }} }}"#,
                 escape_graphql_string(doc_id)
             ))
             .await?;
@@ -256,12 +254,19 @@ async fn background_completion_transaction_attempt(
             && bindings[0]["request_id"].as_str() == Some(request_id)
             && bindings[0]["agent_did"].as_str() == Some(parent.agent_did.as_str())
             && bindings[0]["session_id"].as_str() == Some(parent.session_id.as_str());
+        let binding_row: Option<AgentRequestRow> = bindings
+            .first()
+            .map(|row| serde_json::from_value(row.clone()))
+            .transpose()
+            .context("decode background receipt request binding")?;
         let wake_bound = scoped_binding
-            && queue_source_and_key_match(
-                bindings[0]["metadata"].as_str(),
-                QueueSource::BackgroundCompletion,
-                queue_key,
-            );
+            && binding_row.as_ref().is_some_and(|row| {
+                row_matches_coalesced_source_and_key(
+                    row,
+                    QueueSource::BackgroundCompletion,
+                    queue_key,
+                )
+            });
         anyhow::ensure!(
             !canonical || (scoped_binding && (parent_bound || wake_bound)),
             "canonical background notification references an invalid request binding"
@@ -289,16 +294,20 @@ async fn background_completion_transaction_attempt(
         .context("legacy notification timestamp is invalid")?;
         // Preserve the old acknowledgement rule, but observe it with Goal
         // presence and publication inside the same transaction.
-        let wakes = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
+        let wakes = txn
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{
             session_id: {{ _eq: "{escaped_session_id}" }},
             agent_did: {{ _eq: "{escaped_agent_did}" }},
             execution_origin: {{ _eq: "scheduled" }}
-        }}, order: {{ created_at: ASC }}) {{ _docID request_id session_id metadata created_at }} }}"#)).await?;
+        }}, order: {{ created_at: ASC }}) {{ _docID request_id session_id input created_at }} }}"#
+            ))
+            .await?;
         let rows: Vec<AgentRequestRow> =
             serde_json::from_value(wakes["data"]["AgentRequest"].clone())?;
         for row in rows {
-            if !queue_source_and_key_match(
-                row.metadata.as_deref(),
+            if !row_matches_coalesced_source_and_key(
+                &row,
                 QueueSource::BackgroundCompletion,
                 queue_key,
             ) {
@@ -331,7 +340,8 @@ async fn background_completion_transaction_attempt(
             !parent.doc_id.trim().is_empty() && !parent.request_id.trim().is_empty(),
             "Goal-owned background notification requires a parent request binding"
         );
-        let message_sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
+        let message_sequence =
+            next_append_sequence_in_transaction(txn, &parent.agent_did, &parent.session_id).await?;
         let message_mutation = session::create_message_mutation(
             &parent.session_id,
             &parent.agent_did,
@@ -358,16 +368,14 @@ async fn background_completion_transaction_attempt(
     let pending = pending_rows
         .into_iter()
         .find(|row| {
-            queue_source_and_key_match(
-                row.metadata.as_deref(),
-                QueueSource::BackgroundCompletion,
-                queue_key,
-            )
+            row_matches_coalesced_source_and_key(row, QueueSource::BackgroundCompletion, queue_key)
         })
         .and_then(|row| queue_row_to_enqueued_request(&row));
     let message_sequence = match existing_sequence {
         Some(sequence) => sequence,
-        None => next_append_sequence_in_transaction(txn, &parent.session_id).await?,
+        None => {
+            next_append_sequence_in_transaction(txn, &parent.agent_did, &parent.session_id).await?
+        }
     };
     let mut max_generation = None::<u64>;
     for row in response["data"]["generations"]
@@ -398,12 +406,21 @@ async fn background_completion_transaction_attempt(
             let request_id = format!("background-completion-{queue_scope}-{next_generation:020}");
             let retry_key = format!("{retry_key_prefix}{next_generation:020}");
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            // The durable wake format marker is stamped by this owner on
+            // creation, never taken from caller-supplied input.
+            let wake_input = RequestInput {
+                queue: Some(background_wake_queue(
+                    queue,
+                    queue.queued_after_request_id.clone(),
+                )),
+                ..Default::default()
+            };
             let request_mutation = session_request_create_mutation(
                 parent,
                 behavior_id,
                 wake_content,
                 ExecutionOrigin::Scheduled,
-                metadata,
+                wake_input,
                 &request_id,
                 &now,
                 Some(&retry_key),
@@ -453,7 +470,8 @@ pub(super) async fn steering_transaction_attempt(
 ) -> Result<EnqueuedAgentRequest> {
     let request_response = txn.execute(request_mutation).await?;
     let request_doc_id = transaction_created_doc_id(&request_response, "AgentRequest")?;
-    let sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
+    let sequence =
+        next_append_sequence_in_transaction(txn, &parent.agent_did, &parent.session_id).await?;
     let message_key = steering_input_message_key(request_id);
     let message_mutation = session::create_message_mutation(
         &parent.session_id,
@@ -476,22 +494,25 @@ pub(super) async fn steering_transaction_attempt(
     })
 }
 
-async fn next_append_sequence_in_transaction(
+pub(super) async fn next_append_sequence_in_transaction(
     txn: &ConfigApplyTxn<'_>,
+    agent_did: &str,
     session_id: &str,
 ) -> Result<u32> {
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_session_id = escape_graphql_string(session_id);
     let response = txn
         .execute(&format!(
             r#"{{
                 AgentMessage(
-                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}, agent_did: {{ _eq: "{escaped_agent_did}" }} }},
                     order: {{ sequence: DESC }},
                     limit: 1
                 ) {{ sequence }}
                 AgentToolCall(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
+                        agent_did: {{ _eq: "{escaped_agent_did}" }},
                         await_mode: {{ _eq: "background" }}
                     }}
                 ) {{ message_sequence }}

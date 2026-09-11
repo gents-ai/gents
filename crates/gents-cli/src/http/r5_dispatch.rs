@@ -493,6 +493,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn snapshot_uses_child_and_unknown_fallbacks_without_bridge_state() {
+        let generated_at = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for (child, expected_state, expected_start) in [
+            (
+                serde_json::json!({
+                    "request_id": "child", "lifecycle_state": "processing",
+                    "claimed_at": "2026-05-20T12:00:02Z", "created_at": "2026-05-20T12:00:01Z"
+                }),
+                "processing",
+                "2026-05-20T12:00:02Z",
+            ),
+            (
+                serde_json::json!({
+                    "request_id": "child", "lifecycle_state": "completed",
+                    "created_at": "2026-05-20T12:00:01Z"
+                }),
+                "completed",
+                "2026-05-20T12:00:01Z",
+            ),
+            (serde_json::Value::Null, "unknown", ""),
+        ] {
+            let requests = if child.is_null() { vec![] } else { vec![child] };
+            let envelope = serde_json::from_value(serde_json::json!({
+                "AgentToolCall": [{
+                    "request_id": "parent", "child_request_id": "child",
+                    "lifecycle_state": " ", "status": null, "started_at": " "
+                }],
+                "AgentRequest": requests,
+            }))
+            .unwrap();
+            let snapshot = build_subagent_dispatch_snapshot(
+                generated_at,
+                Some("parent".to_string()),
+                envelope,
+            );
+            assert_eq!(snapshot.dispatches.len(), 1);
+            assert_eq!(snapshot.dispatches[0].dispatch_state, expected_state);
+            assert_eq!(snapshot.dispatches[0].started_at, expected_start);
+        }
+    }
+
+    #[test]
+    fn unfiltered_dispatch_query_selects_running_subagent_bridges() {
+        let query = subagent_dispatch_query(None);
+        assert!(query.contains(r#"tool_name: { _eq: "spawn_subagent" }"#));
+        assert!(query.contains(r#"child_request_id: { _ne: "" }"#));
+        assert!(query.contains(r#"lifecycle_state: { _eq: "running" }"#));
+    }
+
     #[tokio::test]
     async fn subagent_dispatch_endpoint_matches_agent_request_parent_walk() -> anyhow::Result<()> {
         let graphql_response = r5_dispatch_graphql_response();

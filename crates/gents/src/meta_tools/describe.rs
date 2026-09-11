@@ -110,16 +110,7 @@ impl Tool for DescribeToolTool {
             }
         };
 
-        let list_result = match self
-            .ctx
-            .mcp_pool
-            .list_tools_with_agent_did(
-                &args.service_id,
-                &service.endpoint,
-                service.outbound_agent_did(&self.ctx),
-            )
-            .await
-        {
+        let mut list_result = match self.ctx.list_tools(&args.service_id, &service).await {
             Ok(result) => result,
             Err(error) => {
                 return Err(MetaToolError::structured(
@@ -136,6 +127,10 @@ impl Tool for DescribeToolTool {
             }
         };
 
+        list_result.tools.retain(|tool| {
+            self.ctx
+                .is_tool_allowed(&args.service_id, tool.name.as_ref())
+        });
         match describe_tool_result(
             &args.service_id,
             &args.tool_name,
@@ -970,6 +965,7 @@ mod tests {
             local_subnet: None,
             agent_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["x-data".to_string()],
+            remote_tools: super::super::tests::remote_selection(&["x-data"], &["search_posts"]),
         });
 
         let error = tool
@@ -1003,6 +999,10 @@ mod tests {
             local_subnet: None,
             agent_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["missing-service".to_string()],
+            remote_tools: super::super::tests::remote_selection(
+                &["missing-service"],
+                &["search_posts"],
+            ),
         });
 
         let error = tool

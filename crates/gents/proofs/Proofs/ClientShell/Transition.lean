@@ -22,11 +22,11 @@ def step
     (store : LocalStore) (_transport : TransportHealth)
     (ctx : SubmitContext) : ShellState :=
   match input with
-  | .user .requestNewConversation =>
+  | .user .requestNewSession =>
       { s with
           selection := { s.selection with session := none },
           workflow  := .idle }
-  | .user (.selectDeployment p a) =>
+  | .user (.selectPrincipalRoute p a) =>
       { s with
           selection := { s.selection with peer := some p, agent := some a, session := none },
           workflow  := .idle }

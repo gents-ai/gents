@@ -1,0 +1,17 @@
+# Canonical document_config::Tools. Capability groups share this document's
+# owner and round-trip as JSON values through the strict canonical Rust types.
+# Readers select each group as a bare JSON field. Missing groups grant no tools;
+# presentation and tags do not grant permissions.
+type Tools @branchable @index(fields: ["agent_did", "tools_id"], unique: true) {
+    tools_id: String
+    agent_did: String @index
+    display_name: String
+    host: JSON
+    remote: JSON
+    subagents: JSON
+    built_ins: JSON
+    datastore: JSON
+    integrations: JSON
+    self_config: JSON
+    tags: [String!]
+}

@@ -19,6 +19,10 @@ def readinessPublicationCasesJson : String :=
 
 def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
   "{"
+    ++ "\"requested_behavior\":" ++ jsonOptionalNat witness.requestedBehavior ++ ","
+    ++ "\"pre_default_behavior\":" ++ toString witness.preDefaultBehavior ++ ","
+    ++ "\"pre_session_behavior\":" ++ jsonOptionalNat witness.preSessionBehavior ++ ","
+    ++ "\"pre_runnable\":" ++ jsonArray (witness.preRunnable.map toString) ++ ","
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"action\":" ++ jsonString witness.action ++ ","
     ++ "\"legal\":" ++ boolString witness.legal ++ ","
@@ -131,8 +135,6 @@ def sessionRecoveryCaseJson (witness : SessionRecoveryCase) : String :=
     ++ "\"post_new_admission\":" ++ jsonString witness.postNewAdmission ++ ","
     ++ "\"pre_origin\":" ++ jsonString witness.preOrigin ++ ","
     ++ "\"post_new_origin\":" ++ jsonString witness.postNewOrigin ++ ","
-    ++ "\"pre_backend\":" ++ jsonString witness.preBackend ++ ","
-    ++ "\"post_new_backend\":" ++ jsonString witness.postNewBackend ++ ","
     ++ "\"failed_id\":" ++ toString witness.failedId ++ ","
     ++ "\"new_id\":" ++ toString witness.newId ++ ","
     ++ "\"pre_latest_id\":" ++ toString witness.preLatestId ++ ","
@@ -157,8 +159,7 @@ def sessionRecoveryCaseJson (witness : SessionRecoveryCase) : String :=
     ++ "\"pre_new_request_exists\":" ++ boolString witness.preNewRequestExists ++ ","
     ++ "\"old_request_retained\":" ++ boolString witness.oldRequestRetained ++ ","
     ++ "\"new_request_inserted\":" ++ boolString witness.newRequestInserted ++ ","
-    ++ "\"origin_preserved\":" ++ boolString witness.originPreserved ++ ","
-    ++ "\"backend_preserved\":" ++ boolString witness.backendPreserved
+    ++ "\"origin_preserved\":" ++ boolString witness.originPreserved
     ++ "}"
 
 def queueDeadlineConformanceCaseJson
@@ -187,6 +188,10 @@ def queueDeadlineConformanceCaseJson
       ++ toString witness.postCoalescedPendingCount ++ ","
     ++ "\"automated_drained_request_ids\":"
       ++ jsonArray (witness.automatedDrainedRequestIds.map toString) ++ ","
+    ++ "\"preserved_foreign_requester_request_ids\":"
+    ++ jsonArray (witness.preservedForeignRequesterRequestIds.map toString) ++ ","
+    ++ "\"preserved_foreign_owner_request_ids\":"
+    ++ jsonArray (witness.preservedForeignOwnerRequestIds.map toString) ++ ","
     ++ "\"preserved_user_pending_request_ids\":"
       ++ jsonArray (witness.preservedUserPendingRequestIds.map toString) ++ ","
     ++ "\"post_terminal_request_ids\":"

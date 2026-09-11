@@ -7,9 +7,8 @@ import Mathlib.Data.Finset.Card
 
 The model separates admission from document selection. Pairing, membership,
 and session ownership admit a request; requester/session/agent predicates then
-select the exact transcript documents eligible for replay. `pairingState` is
-opaque state owned by PairingReconcile and is carried here solely to prove that
-hydration never changes pairing filters or generations.
+select the exact transcript documents eligible for replay. Pairing observations
+are read-only admission inputs; hydration owns deliveries and terminal outcomes.
 -/
 
 namespace SessionHydration
@@ -22,6 +21,9 @@ structure Request where
   session : String
   deriving DecidableEq, Repr
 
+/-- Read-only ownership projection of canonical AgentSession. This is not a second
+durable session document. Hydration requires a present exact requester; absent or
+invalid requester metadata never becomes wildcard membership. -/
 structure SessionOwner where
   session : String
   requester : String
@@ -71,7 +73,6 @@ structure Terminal where
 structure State where
   delivered : Finset Document
   terminals : Finset Terminal
-  pairingState : Finset String
   deriving DecidableEq
 
 def transcriptCollections : Finset String :=

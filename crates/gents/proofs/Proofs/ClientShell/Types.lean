@@ -12,8 +12,9 @@ structure SessionObservation where
   latestTurn            : Option ClientTurnState
   deriving DecidableEq, Repr
 
+/-- Session observations available to the client shell. Transport selection
+lives in `Selection` and grants no authority. -/
 structure LocalStore where
-  deployments : List (PeerId × AgentDid)
   sessions    : List SessionObservation
   deriving Repr
 
@@ -66,9 +67,9 @@ def initial : ShellState :=
 end ShellState
 
 inductive UserAction where
-  | selectDeployment (peer : PeerId) (agent : AgentDid)
+  | selectPrincipalRoute (peer : PeerId) (agent : AgentDid)
   | selectSession    (session : SessionId)
-  | requestNewConversation
+  | requestNewSession
   | startSubmit
   | acknowledgeBlocker
   deriving DecidableEq, Repr

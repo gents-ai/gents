@@ -229,8 +229,8 @@ impl ToolCallLifecycle {
             return Ok(None);
         };
 
-        if child_request_is_locally_owned(&self.node, local_did, &intent.child_request_id).await? {
-            return Ok(Some(CascadeDispatch::Local(intent)));
+        if let Some(child) = self.locally_owned_bridge_child(local_did).await? {
+            return Ok(Some(CascadeDispatch::Local { intent, child }));
         }
 
         self.write_bridge_cancel_cascade_intent(intent.at).await?;
@@ -321,10 +321,10 @@ impl ToolCallLifecycle {
             child_request_id,
             at: chrono::Utc::now(),
         };
-        if child_request_is_locally_owned(&self.node, local_did, &intent.child_request_id).await? {
+        if let Some(child) = self.locally_owned_bridge_child(local_did).await? {
             let won = self.cancel_during_run_inner(cause, None, None).await?;
             if won {
-                return Ok(Some(CascadeDispatch::Local(intent)));
+                return Ok(Some(CascadeDispatch::Local { intent, child }));
             }
             return Ok(None);
         }
@@ -425,34 +425,25 @@ impl ToolCallLifecycle {
     }
 }
 
-async fn child_request_is_locally_owned(
-    node: &defra_node::EmbeddedNode,
-    local_did: &str,
-    child_request_id: &str,
-) -> Result<bool> {
-    let escaped = escape_graphql_string(child_request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
-                limit: 1
-            ) {{ agent_did }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query AgentRequest for cross-deployment cancel dispatch failed: {:?}",
-            response.errors
-        );
+impl super::ToolCallLifecycle {
+    async fn locally_owned_bridge_child(
+        &self,
+        local_did: &str,
+    ) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
+        let parent = self
+            .request_doc_id
+            .as_deref()
+            .context("cascade bridge missing physical parent")?;
+        let bridge = self
+            .doc_id
+            .as_deref()
+            .context("cascade bridge missing physical identity")?;
+        let child = crate::descendant_graph::resolve_physical_bridge_child(
+            crate::descendant_graph::DescendantGraphAccess::Local(&self.node),
+            parent,
+            bridge,
+        )
+        .await?;
+        Ok(child.filter(|child| child.agent_did.as_deref() == Some(local_did)))
     }
-    let did = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("agent_did"))
-        .and_then(|v| v.as_str());
-    Ok(did == Some(local_did))
 }

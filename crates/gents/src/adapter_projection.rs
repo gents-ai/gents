@@ -14,8 +14,8 @@ use crate::run_timeline::{
 mod atif;
 
 pub use atif::{
-    AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult, AtifStep, AtifStepSource,
-    AtifToolCall, AtifTrajectory, ATIF_SCHEMA_VERSION,
+    root_observed_model, AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult,
+    AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ATIF_SCHEMA_VERSION,
 };
 
 pub const ADAPTER_PROJECTION_VERSION: &str = "v1";
@@ -426,6 +426,115 @@ pub struct MultiAgentToolEvent {
     pub denial_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_request_id: Option<String>,
+}
+
+/// Project an external capture without persisting its framework state in requests.
+/// Native timeline provenance remains independent of externally asserted mappings.
+pub fn build_external_adapter_projection(
+    capture: &crate::external_adapter_capture::ExternalAdapterCapture,
+    context: &ProjectionContext,
+) -> anyhow::Result<AdapterProjectionEnvelope> {
+    use crate::external_adapter_capture::{
+        import_external_adapter_capture_to_timeline_rows, langgraph_state_history_projection,
+    };
+    let imported = import_external_adapter_capture_to_timeline_rows(capture)?;
+    let mapping = capture.mapping.as_ref().expect("import validated mapping");
+    let rows = &imported.rows;
+    let timeline = crate::run_timeline::build_run_timeline(rows.clone());
+    let mut envelope = build_adapter_projection(imported.projection, &timeline, context);
+    envelope.output = match imported.projection {
+        AdapterProjectionKind::LangGraphStateHistory => {
+            let mut projection = langgraph_state_history_projection(
+                capture,
+                mapping,
+                rows.request
+                    .session_id
+                    .as_deref()
+                    .unwrap_or(&mapping.request_id),
+            )?;
+            for value in projection.values.values_mut() {
+                *value = redact_json_value(value.take(), context);
+            }
+            for node in &mut projection.nodes {
+                node.content = redact_option(node.content.as_deref(), context);
+                node.reasoning = redact_option(node.reasoning.as_deref(), context);
+                node.agent_did = redact_option(node.agent_did.as_deref(), context);
+            }
+            AdapterProjection::LangGraphStateHistory(projection)
+        }
+        AdapterProjectionKind::MultiAgentTask => {
+            let mut participants = Vec::new();
+            for participant in &mapping.participants {
+                push_participant(
+                    &mut participants,
+                    redact_option(participant.agent_did.as_deref(), context),
+                    participant.behavior_id.clone(),
+                    &participant.role,
+                );
+            }
+            if participants.is_empty() {
+                push_participant(
+                    &mut participants,
+                    redact_option(rows.request.agent_did.as_deref(), context),
+                    rows.request.behavior_id.clone(),
+                    "owner",
+                );
+            }
+            AdapterProjection::MultiAgentTask(MultiAgentTaskProjection {
+                task_id: mapping.request_id.clone(),
+                context_id: rows.request.session_id.clone(),
+                status: rows
+                    .request
+                    .lifecycle_state
+                    .map(|state| state.as_str().to_string()),
+                participants,
+                messages: rows
+                    .messages
+                    .iter()
+                    .map(|message| MultiAgentMessage {
+                        id: format!("{}:message:{}", message.session_id, message.sequence),
+                        request_id: message.request_id.clone(),
+                        role: message.role.clone(),
+                        content: redact_str(&message.content, context),
+                        reasoning: redact_option(message.reasoning.as_deref(), context),
+                    })
+                    .collect(),
+                delegations: rows
+                    .requests
+                    .iter()
+                    .filter_map(|request| {
+                        Some(MultiAgentDelegation {
+                            parent_request_id: request.caused_by_parent_request_id.clone()?,
+                            child_request_id: request.request_id.clone(),
+                            parent_tool_call_id: request.caused_by_parent_tool_call_id.clone(),
+                            agent_did: redact_option(request.agent_did.as_deref(), context),
+                            behavior_id: request.behavior_id.clone(),
+                            status: request
+                                .lifecycle_state
+                                .map(|state| state.as_str().to_string()),
+                            input: redact_option(request.content.as_deref(), context),
+                        })
+                    })
+                    .collect(),
+                tool_events: rows
+                    .tool_calls
+                    .iter()
+                    .map(|tool| MultiAgentToolEvent {
+                        id: tool.tool_call_id.clone(),
+                        request_id: tool.request_id.clone(),
+                        tool_name: tool.tool_name.clone(),
+                        status: tool.status.clone(),
+                        selected_service_id: tool.selected_service_id.clone(),
+                        selected_tool_name: tool.selected_tool_name.clone(),
+                        denial_reason: redact_option(tool.denial_reason.as_deref(), context),
+                        child_request_id: tool.child_request_id.clone(),
+                    })
+                    .collect(),
+            })
+        }
+        _ => unreachable!("import rejects unsupported projections"),
+    };
+    Ok(envelope)
 }
 
 pub fn build_adapter_projection(
@@ -1892,7 +2001,6 @@ fn build_openai_codex_run_trace(
                     completed_at: event.completed_at.clone(),
                 });
             }
-            RunTimelineEvent::ToolApproval(_) => {}
             RunTimelineEvent::GoalTransition(_) => {}
             RunTimelineEvent::Response(event) => {
                 items.push(OpenAiCodexTraceItem::Response {
@@ -2050,18 +2158,6 @@ fn build_langgraph_state_history(
                 None,
                 None,
             ),
-            RunTimelineEvent::ToolApproval(event) => (
-                format!("tool_approval:{}", event.approval_id),
-                "tool_approval".to_string(),
-                Some(event.request_id.clone()),
-                Some(event.agent_did.clone()),
-                None,
-                None,
-                Some(event.tool_call_id.clone()),
-                Some(event.decision.clone()),
-                redact_option(event.reason.as_deref(), context),
-                None,
-            ),
             RunTimelineEvent::GoalTransition(event) => (
                 format!("goal_transition:{}", event.commit_cid),
                 "goal_transition".to_string(),
@@ -2197,7 +2293,7 @@ fn build_langgraph_state_history(
         values.insert("rendered_captures".to_string(), rendered_captures);
     }
 
-    let mut projection = LangGraphStateHistoryProjection {
+    let projection = LangGraphStateHistoryProjection {
         thread_id: timeline.session_id.clone(),
         checkpoint_id: format!(
             "gents:{}:{}",
@@ -2209,11 +2305,6 @@ fn build_langgraph_state_history(
         edges,
         tasks,
     };
-    apply_langgraph_metadata_hint(
-        &mut projection,
-        timeline.request.metadata.as_deref(),
-        context,
-    );
     projection
 }
 
@@ -2222,27 +2313,12 @@ fn build_multi_agent_task(
     context: &ProjectionContext,
 ) -> MultiAgentTaskProjection {
     let mut participants = Vec::new();
-    let has_metadata_participants = push_metadata_participants(
+    push_participant(
         &mut participants,
-        timeline.request.metadata.as_deref(),
-        context,
+        timeline.agent_did.clone(),
+        timeline.behavior_id.clone(),
+        "owner",
     );
-    if !has_metadata_participants
-        || participant_identity_present(
-            &participants,
-            timeline.agent_did.as_deref(),
-            timeline.behavior_id.as_deref(),
-        )
-    {
-        push_participant(
-            &mut participants,
-            timeline.agent_did.clone(),
-            timeline.behavior_id.clone(),
-            adapter_projection_metadata_string(timeline.request.metadata.as_deref(), "role")
-                .as_deref()
-                .unwrap_or("owner"),
-        );
-    }
     let mut messages = Vec::new();
     let mut delegations = Vec::new();
     let mut tool_events = Vec::new();
@@ -2275,26 +2351,16 @@ fn build_multi_agent_task(
     for event in &timeline.events {
         match event {
             RunTimelineEvent::Request(request) => {
-                if !has_metadata_participants
-                    || participant_identity_present(
-                        &participants,
-                        request.agent_did.as_deref(),
-                        request.behavior_id.as_deref(),
-                    )
-                {
-                    push_participant(
-                        &mut participants,
-                        request.agent_did.clone(),
-                        request.behavior_id.clone(),
-                        adapter_projection_metadata_string(request.metadata.as_deref(), "role")
-                            .as_deref()
-                            .unwrap_or(if request.request_id == timeline.request_id {
-                                "owner"
-                            } else {
-                                "delegate"
-                            }),
-                    );
-                }
+                push_participant(
+                    &mut participants,
+                    request.agent_did.clone(),
+                    request.behavior_id.clone(),
+                    if request.request_id == timeline.request_id {
+                        "owner"
+                    } else {
+                        "delegate"
+                    },
+                );
                 if timeline.descendant_edges.is_empty() {
                     if let Some(parent_request_id) = request.parent_request_id.as_deref() {
                         delegations.push(MultiAgentDelegation {
@@ -2336,7 +2402,6 @@ fn build_multi_agent_task(
                     child_request_id: tool.child_request_id.clone(),
                 });
             }
-            RunTimelineEvent::ToolApproval(_) => {}
             RunTimelineEvent::GoalTransition(_) => {}
             RunTimelineEvent::Response(_) => {}
         }
@@ -2354,113 +2419,6 @@ fn build_multi_agent_task(
         delegations,
         tool_events,
     }
-}
-
-fn apply_langgraph_metadata_hint(
-    projection: &mut LangGraphStateHistoryProjection,
-    metadata: Option<&str>,
-    context: &ProjectionContext,
-) {
-    let Some(hint) = adapter_projection_metadata_value(metadata, "langgraph_state_history") else {
-        return;
-    };
-    if let Some(thread_id) = hint
-        .get("thread_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        projection.thread_id = Some(thread_id.to_string());
-    }
-    if let Some(checkpoint_id) = hint
-        .get("checkpoint_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        projection.checkpoint_id = checkpoint_id.to_string();
-    }
-    if let Some(root_request_id) = hint
-        .get("root_request_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        projection.root_request_id = root_request_id.to_string();
-    }
-    if let Some(values) = hint.get("values").and_then(Value::as_object) {
-        projection.values = values
-            .iter()
-            .map(|(key, value)| (key.clone(), redact_json_value(value.clone(), context)))
-            .collect();
-    }
-    if let Some(nodes) = hint
-        .get("nodes")
-        .cloned()
-        .and_then(|nodes| serde_json::from_value::<Vec<LangGraphNode>>(nodes).ok())
-    {
-        projection.nodes = nodes;
-    }
-    if let Some(edges) = hint
-        .get("edges")
-        .cloned()
-        .and_then(|edges| serde_json::from_value::<Vec<LangGraphEdge>>(edges).ok())
-    {
-        projection.edges = edges;
-    }
-    if let Some(tasks) = hint
-        .get("tasks")
-        .cloned()
-        .and_then(|tasks| serde_json::from_value::<Vec<LangGraphTask>>(tasks).ok())
-    {
-        projection.tasks = tasks;
-    }
-}
-
-fn push_metadata_participants(
-    participants: &mut Vec<MultiAgentParticipant>,
-    metadata: Option<&str>,
-    context: &ProjectionContext,
-) -> bool {
-    let Some(value) = adapter_projection_metadata_value(metadata, "participants") else {
-        return false;
-    };
-    let Some(raw_participants) = value.as_array() else {
-        return false;
-    };
-    for participant in raw_participants {
-        let role = participant
-            .get("role")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or("participant");
-        let agent_did = participant
-            .get("agent_did")
-            .and_then(Value::as_str)
-            .map(|value| redact_str(value, context));
-        let behavior_id = participant
-            .get("behavior_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        push_participant(participants, agent_did, behavior_id, role);
-    }
-    !raw_participants.is_empty()
-}
-
-fn adapter_projection_metadata_string(metadata: Option<&str>, key: &str) -> Option<String> {
-    adapter_projection_metadata_value(metadata, key).and_then(|value| {
-        value
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
-}
-
-fn adapter_projection_metadata_value(metadata: Option<&str>, key: &str) -> Option<Value> {
-    let metadata = metadata?.trim();
-    if metadata.is_empty() {
-        return None;
-    }
-    let value = serde_json::from_str::<Value>(metadata).ok()?;
-    value.get("adapter_projection")?.get(key).cloned()
 }
 
 fn timeline_request_input(
@@ -2552,17 +2510,6 @@ fn push_participant(
         behavior_id,
         role: role.to_string(),
     });
-}
-
-fn participant_identity_present(
-    participants: &[MultiAgentParticipant],
-    agent_did: Option<&str>,
-    behavior_id: Option<&str>,
-) -> bool {
-    participants.iter().any(|participant| {
-        participant.agent_did.as_deref() == agent_did
-            && participant.behavior_id.as_deref() == behavior_id
-    })
 }
 
 fn redact_option(value: Option<&str>, context: &ProjectionContext) -> Option<String> {
