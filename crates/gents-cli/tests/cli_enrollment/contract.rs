@@ -60,8 +60,9 @@ async fn run_contract_with_streaming_cadence(
     let _guard = enrollment_e2e_lock().lock().await;
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "cli_enrollment=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "cli_enrollment=info,gents_desktop_core::startup=debug,gents_migration=info".into()
+            }),
         )
         .with_test_writer()
         .try_init();
@@ -212,20 +213,34 @@ async fn run_contract_with_streaming_cadence(
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?;
+        let client_core_ready = reconnect_started.elapsed();
         core.set_selected_agent_did(Some(agent_did.clone()));
         let recovered = timeout(RECONNECT_BUDGET.saturating_sub(reconnect_started.elapsed()), async {
             wait_for_chat_ready_enrollment(&core, &agent_did).await?;
+            let route_ready = reconnect_started.elapsed();
             wait_for_client_behavior_readiness(&core, &agent_did).await?;
-            wait_for_replicated_reply(&core, &session, &agent_did, &request, OFFLINE_REPLY).await
+            let behavior_ready = reconnect_started.elapsed();
+            wait_for_replicated_reply(&core, &session, &agent_did, &request, OFFLINE_REPLY).await?;
+            Ok::<_, anyhow::Error>((route_ready, behavior_ready, reconnect_started.elapsed()))
         }).await;
-        if !matches!(recovered, Ok(Ok(()))) {
-            let diagnostics = pairing_diagnostics(&core, &graphql).await;
-            core.shutdown().await?;
-            bail!("app reopen did not recover completed reply within 20s: {recovered:?}; {diagnostics}");
-        }
+        let (route_ready, behavior_ready, reply_ready) = match recovered {
+            Ok(Ok(phases)) => phases,
+            failed => {
+                let diagnostics = pairing_diagnostics(&core, &graphql).await;
+                core.shutdown().await?;
+                bail!("app reopen did not recover completed reply within 20s: {failed:?}; {diagnostics}");
+            }
+        };
         let reopened = core.peer_records().await;
         anyhow::ensure!(records.len() == reopened.len() && records.iter().zip(&reopened).all(|(old, new)| old.peer_id == new.peer_id && old.enrollment_request_id == new.enrollment_request_id), "reopen changed enrollment identity");
-        tracing::info!(elapsed_ms = reconnect_started.elapsed().as_millis(), "app recovered offline reply");
+        tracing::info!(
+            client_core_start_ms = client_core_ready.as_millis(),
+            route_after_core_ms = route_ready.saturating_sub(client_core_ready).as_millis(),
+            behavior_after_route_ms = behavior_ready.saturating_sub(route_ready).as_millis(),
+            reply_after_behavior_ms = reply_ready.saturating_sub(behavior_ready).as_millis(),
+            elapsed_ms = reply_ready.as_millis(),
+            "app recovered offline reply",
+        );
         visible_turn(&core, &graphql, &agent_did, &behavior, &session, FOLLOWUP_PROMPT, followup_stream_gate.as_deref()).await?;
         assert_local_pagination(&core, &session, &agent_did).await?;
         assert_observer_did_not_overflow(&core).await?;
