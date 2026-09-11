@@ -1,3 +1,4 @@
+pub(crate) mod afterburner_build;
 pub(crate) mod background;
 pub(crate) mod chain;
 pub(crate) mod chat;
@@ -21,6 +22,7 @@ pub(crate) mod mcp;
 pub(crate) mod native_fs_runner;
 pub(crate) mod p2p;
 pub(crate) mod pack;
+pub(crate) mod plugin;
 pub(crate) mod provision;
 pub(crate) mod query;
 pub(crate) mod request;

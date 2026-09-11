@@ -14,6 +14,128 @@ gents pack prune mailbox
 gents pack run pipeline --http-port 19191 --keep-home
 ```
 
+## What a pack is made of
+
+A pack directory holds `manifest.json` and the assets that manifest declares.
+Nothing that is not declared travels, so the manifest is the whole description
+of the pack, and the pack's digest is computed over exactly what it declares.
+
+```json
+{
+  "manifest_version": 1,
+  "name": "shipping_plugins",
+  "namespace": "acme",
+  "version": "0.1.0",
+  "description": "What this pack is for",
+  "authors": ["you"],
+  "tags": ["plugins"],
+  "kind": "plugins",
+  "assets": ["README.md", "plugins/format_check.afb"],
+  "plugins": [
+    {
+      "name": "format_check",
+      "description": "What the model is told this does",
+      "artifact": "plugins/format_check.afb",
+      "source": "plugins/format_check",
+      "language": "rust",
+      "input_schema": { "type": "object", "properties": {} },
+      "manifold": { "fs": { "ReadOnly": ["/workspace"] }, "net": "None" }
+    }
+  ]
+}
+```
+
+`namespace` is the registry namespace this pack publishes under, and the
+other half of its coordinate (`acme/shipping_plugins`). It is optional and
+`gents` when absent, so a first-party pack does not repeat it. A pack's
+plugins install under the pack's namespace, so two packs from different
+namespaces may each carry a `format_check` without one replacing the other.
+
+`kind` is `documents`, `graph`, `assets`, or `plugins`. A `plugins` pack
+installs no documents of its own: it exists to ship capabilities. Its plugins
+land in the same store `gents plugin install` uses, one store per home, so
+they are callable by name whichever pack put them there and one pack can
+build on another's capabilities instead of vendoring a copy.
+
+## Plugins
+
+A plugin is a complete Afterburner `.afb`: publishable and installable on its
+own, and also carried inside a pack as one of its declared assets. It is the
+one artifact every language Afterburner compiles down to, since some of them
+(Python to an emscripten-pyodide bundle, for instance) have no bare-`.wasm`
+form to ship instead, and only Afterburner's own runtime knows how to
+dispatch every one of those shapes.
+
+Today a plugin is called directly, by name (`gents plugin run`). Offering the
+same admitted plugin to a graph stage and to a model as an ordinary tool is
+the reason it is one definition rather than two, and neither of those call
+paths is wired yet. A plugin declares:
+
+- `artifact`, the compiled `.afb` inside the pack, under `plugins/`. It must
+  also appear in `assets`, so the pack's own digest covers it and nothing can
+  be swapped underneath the name it was admitted under.
+- `source`, optionally, where the artifact is built from. `gents pack build`
+  compiles it through Afterburner, whatever language `language` names.
+- `language`, the source language `source` is written in: `rust`, `go`,
+  `c`, `cpp`, `python`, `ruby`, `js`, or `ts` (see
+  `afterburner::cli::compile::lang::SourceLang` for the exact accepted
+  spellings). Required even for a plugin that ships only a compiled artifact.
+  Every one of them compiles, and every one of them runs under the bounds a
+  call applies. What decides that is the compiled artifact, not the language
+  name: whether a given `.afb` can be run with `stdin`, fuel, memory, a wall
+  clock and its manifold grants all enforced is asked of Afterburner itself
+  at admission, and a plugin that cannot be is refused by name rather than
+  run with a bound silently missing.
+- `input_schema`, which is what a model is shown.
+- `manifold`, what the plugin asks the sandbox to allow. Absent means it asks
+  for nothing, which is right for a pure transform. An operator's ceiling
+  narrows this at admission and can never widen it. A plugin may not listen
+  on a port: a pack's plugins are called, never served.
+
+The call ABI is deliberately narrow: canonical JSON arguments arrive on
+standard input, one JSON value is written to standard output, and standard
+error is diagnostics.
+
+## Building and publishing
+
+```sh
+gents pack build packs/shipping_plugins           # compile the plugins, write one .tar.gz
+gents pack publish shipping_plugins-0.1.0.tar.gz  # push it to the registry
+gents pack install acme/shipping_plugins          # from the registry, anywhere
+```
+
+A plugin is also managed on its own, without a pack around it:
+
+```sh
+gents plugin build ./format_check          # compile one .afb
+gents plugin publish format_check-0.1.0.afb
+gents plugin install acme/format_check
+gents plugin list
+gents plugin run acme/format_check --input '{"path":"src"}'
+gents plugin remove acme/format_check
+```
+
+Installing a pack installs its plugins into the same store `gents plugin
+install` uses, so a plugin that arrived inside a pack is runnable by name
+exactly like one installed alone.
+
+A built pack is a single gzip-compressed tar: a plain container any archive
+tool can read, holding `manifest.json` and every asset the manifest declares,
+including each plugin's compiled `.afb`. The registry at
+`https://packs.gents.xyz` serves both packs and plugins, so a plugin
+published on its own uses the same `.afb` a pack carries internally, and a
+pack that ships plugins is one artifact rather than an archive plus a pile of
+modules.
+
+The default registry is `https://packs.gents.xyz`, overridable per command and
+by `GENTS_REGISTRY`.
+
+A pack installed from a registry is the same pack as the one compiled into a
+binary: the digest is over the declared contents, never over the container, so
+neither the route a pack took nor the compression it arrived under changes
+what it is. A download is checked against the digest the registry advertised
+before it is opened.
+
 ## Installation and execution
 
 `pack install` resolves bundled assets by name, without a source checkout.
@@ -33,7 +155,7 @@ Graph role bindings inherit the target principal's default behavior; use
 `--bindings` for explicit graph bindings. Document packs use their authored
 configuration and `${VAR}` / `${VAR:-default}` substitutions. They bind to the
 target node through existing identity-rebinding checks; concrete DIDs require
-explicit `--force-rebind-concrete-did`. Review tool declarations and host
+explicit `--force-rebind-concrete-did`. Review plugin declarations and host
 authority before installing untrusted content. External dependency commands
 are documentation, never automatically executed.
 

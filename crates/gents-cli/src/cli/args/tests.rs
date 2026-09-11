@@ -655,6 +655,78 @@ fn pack_init_parses_pack_and_home() {
 }
 
 #[test]
+fn pack_install_parses_registry_override() {
+    match parse_pack(&["install", "widget", "--registry", "http://localhost:9"]) {
+        PackCommand::Install(args) => {
+            assert_eq!(args.package, "widget");
+            assert_eq!(args.registry.as_deref(), Some("http://localhost:9"));
+        }
+        _ => panic!("expected pack install"),
+    }
+    assert!(matches!(
+        parse_pack(&["install", "widget"]),
+        PackCommand::Install(args) if args.registry.is_none()
+    ));
+}
+
+#[test]
+fn pack_build_parses_dir_out_and_all() {
+    match parse_pack(&["build", "packs/mailbox", "--out", "/tmp/mailbox.tar.gz"]) {
+        PackCommand::Build(args) => {
+            assert_eq!(
+                args.dir.as_deref(),
+                Some(std::path::Path::new("packs/mailbox"))
+            );
+            assert_eq!(
+                args.out.as_deref(),
+                Some(std::path::Path::new("/tmp/mailbox.tar.gz"))
+            );
+            assert!(!args.all);
+        }
+        _ => panic!("expected pack build"),
+    }
+    match parse_pack(&["build", "--all"]) {
+        PackCommand::Build(args) => {
+            assert!(args.dir.is_none());
+            assert!(args.all);
+        }
+        _ => panic!("expected pack build --all"),
+    }
+    // Neither a directory nor --all is a usage error, not a silent no-op.
+    assert!(Cli::try_parse_from(["gents", "pack", "build"]).is_err());
+    // --all and an explicit directory are mutually exclusive.
+    assert!(Cli::try_parse_from(["gents", "pack", "build", "packs/mailbox", "--all"]).is_err());
+}
+
+#[test]
+fn pack_search_and_publish_parse() {
+    match parse_pack(&["search", "mailbox", "--registry", "http://localhost:9"]) {
+        PackCommand::Search(args) => {
+            assert_eq!(args.query.as_deref(), Some("mailbox"));
+            assert_eq!(args.registry.as_deref(), Some("http://localhost:9"));
+        }
+        _ => panic!("expected pack search"),
+    }
+    assert!(matches!(parse_pack(&["search"]), PackCommand::Search(args) if args.query.is_none()));
+
+    match parse_pack(&[
+        "publish",
+        "/tmp/mailbox-1.0.0.tar.gz",
+        "--token",
+        "gcpat_test",
+    ]) {
+        PackCommand::Publish(args) => {
+            assert_eq!(
+                args.file,
+                std::path::PathBuf::from("/tmp/mailbox-1.0.0.tar.gz")
+            );
+            assert_eq!(args.token.as_deref(), Some("gcpat_test"));
+        }
+        _ => panic!("expected pack publish"),
+    }
+}
+
+#[test]
 fn chain_key_commands_parse() {
     let list = Cli::try_parse_from(["gents", "chain", "key", "list"]).expect("list");
     assert!(matches!(
