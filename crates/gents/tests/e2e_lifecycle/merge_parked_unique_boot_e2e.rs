@@ -199,30 +199,40 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         }
     }
 
-    // The boot must be observable about what it tolerated: the report names
-    // the parked collection and the parked docID.
+    // A chain-free registry does not rescan current documents: DefraDB already
+    // maintained the unique index during merge, so boot has no conflict to
+    // tolerate or report. If a migration chain makes eager materialization
+    // necessary again, retain the original observability contract.
     let report = gents::migration::ensure_migrations(&home.node)
         .await
         .expect("ensure_migrations after boot");
-    assert_eq!(
-        report.materialization.parked_unique_conflicts.len(),
-        1,
-        "exactly one collection is parked; report={report:?}"
-    );
-    let detail = &report.materialization.parked_unique_conflicts[0];
-    assert!(
-        detail.contains("PeerEndpoint"),
-        "parked detail must name the collection: {detail}"
-    );
-    assert!(
-        detail.contains(&parked),
-        "parked detail must name the parked docID {parked}: {detail}"
-    );
-    assert!(
-        report.warnings.iter().any(|w| w.contains("PeerEndpoint")),
-        "report warnings must surface the parked collection: {:?}",
-        report.warnings
-    );
+    if report.materialization.collections_attempted == 0 {
+        assert!(
+            gents::migration::DEFAULT_STEPS.is_empty(),
+            "only a chain-free registry may skip eager materialization"
+        );
+        assert!(report.materialization.parked_unique_conflicts.is_empty());
+    } else {
+        assert_eq!(
+            report.materialization.parked_unique_conflicts.len(),
+            1,
+            "exactly one collection is parked; report={report:?}"
+        );
+        let detail = &report.materialization.parked_unique_conflicts[0];
+        assert!(
+            detail.contains("PeerEndpoint"),
+            "parked detail must name the collection: {detail}"
+        );
+        assert!(
+            detail.contains(&parked),
+            "parked detail must name the parked docID {parked}: {detail}"
+        );
+        assert!(
+            report.warnings.iter().any(|w| w.contains("PeerEndpoint")),
+            "report warnings must surface the parked collection: {:?}",
+            report.warnings
+        );
+    }
 
     // Nothing was lost and the deterministic pick is unchanged: both docs
     // remain persisted, and the unique index still resolves to the winner.
