@@ -3,9 +3,9 @@
    session projection: the timeline items are the bridge's own
    RenderedTimelineItem, rendered as they arrive. */
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, Copy, PanelRight, Pencil, Split, Target } from 'lucide-react'
+import { ArrowDown, ArrowLeft, Copy, PanelRight, Pencil, Split, Target, X } from 'lucide-react'
 import { toast } from 'sonner'
-import type { GoalView } from '@source-inc/gents-desktop-client'
+import type { DesktopSessionSnapshot, GoalView } from '@source-inc/gents-desktop-client'
 import { Button } from '@gents/ui/components/button'
 import { Input } from '@gents/ui/components/input'
 import {
@@ -48,6 +48,7 @@ import { Markdown } from './Markdown'
 import { ToolBody } from './tool-views'
 import { toolSummary } from './tool-summary'
 import { sendStatus } from '@/lib/send-status'
+import { Popover, PopoverContent, PopoverTrigger } from '@gents/ui/components/popover'
 
 const stepStatus = (kind: string): ToolStepStatus =>
   kind === 'completed' || kind === 'failed' || kind === 'cancelled' || kind === 'error'
@@ -55,6 +56,59 @@ const stepStatus = (kind: string): ToolStepStatus =>
     : kind === 'running' || kind === 'held'
       ? 'running'
       : 'pending'
+
+function formatTokens(value: number) {
+  if (value < 1_000) return String(value)
+  const amount = value / 1_000
+  return `${amount >= 10 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, '')}k`
+}
+
+function SessionContext({ context }: { context: DesktopSessionSnapshot['context'] }) {
+  const [open, setOpen] = useState(false)
+  const used = Math.max(0, context.estimatedConversationTokens)
+  const window = Math.max(1, context.lastRequest?.contextWindow ?? context.contextWindow)
+  const threshold = Math.max(
+    0,
+    context.lastRequest?.compactionThresholdTokens ?? context.compactionThresholdTokens,
+  )
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button variant="quiet" size="sm" data-testid="context-meter">
+            Context ~{formatTokens(used)} / {formatTokens(window)}
+          </Button>
+        }
+      />
+      <PopoverContent align="start" className="w-80" data-testid="context-details">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="font-heading text-sm font-medium text-heading">Conversation context</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {used.toLocaleString()} estimated tokens of {window.toLocaleString()}
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Close context details"
+            onClick={() => setOpen(false)}
+          >
+            <X />
+          </Button>
+        </div>
+        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5 text-sm">
+          <dt className="text-muted-foreground">Compacts at</dt>
+          <dd className="text-right font-mono text-xs">{threshold.toLocaleString()}</dd>
+          <dt className="text-muted-foreground">Durable transcript</dt>
+          <dd className="text-right font-mono text-xs">
+            {context.estimatedDurableTokens.toLocaleString()}
+          </dd>
+        </dl>
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 /* the trace panel's open state outlives the session; a person who works
    with the trace open keeps it open */
@@ -460,11 +514,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       {shell.sessionLoad.phase}
                     </h1>
                   )}
-                  <div className="mt-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     <BehaviorChip
                       behaviorId={session?.behaviorId ?? null}
                       deployment={deployment}
                     />
+                    {session?.context && <SessionContext context={session.context} />}
                   </div>
                 </div>
                 <div className="flex gap-1">

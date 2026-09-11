@@ -3,12 +3,10 @@
    runs are live, and an overflow menu with what the desktop's fleet row
    offers (rename the saved label, check the peer, remove). Add agent is
    the desktop's status enrolment: a server address, a request the
-   server's admin approves, then the peer joins. A Network section at the
-   foot shows this node and repairs P2P. */
+   server's admin approves, then the peer joins. */
 import { useState } from "react";
-import { ChevronDown, EllipsisVertical, Inbox, Plus, Server, Wifi } from "lucide-react";
+import { EllipsisVertical, Inbox, Plus, Server, Wifi } from "lucide-react";
 import { toast } from "sonner";
-import type { NetworkStatusView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
   Dialog,
@@ -35,8 +33,6 @@ import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentHoverCard } from "./HoverCards";
-import { CopyButton } from "./Markdown";
-import { Fact, Group, Row } from "./agent/rows";
 import { isMobileTauriShell } from "../../lib/shellPlatform";
 
 export function AgentsScreen({ shell }: { shell: Shell }) {
@@ -249,7 +245,6 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
             );
           })}
         </ul>
-        <Network shell={shell} />
       </div>
       <AddAgentDialog shell={shell} open={adding} onClose={() => setAdding(false)} />
       <RenameDialog
@@ -476,155 +471,5 @@ function RenameDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-/* this node: peer id, listen addresses, connections, saved peers, repair */
-function Network({ shell }: { shell: Shell }) {
-  const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState<NetworkStatusView | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [repairing, setRepairing] = useState(false);
-  const load = async () => {
-    setLoading(true);
-    try {
-      setStatus(await shell.api.fetchNetworkStatus());
-    } catch (e) {
-      toast(`Network status failed: ${String(e)}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-  const repair = async () => {
-    setRepairing(true);
-    try {
-      await shell.api.repairP2P();
-      await shell.refreshSnapshot();
-      await load();
-      toast("P2P repaired");
-    } catch (e) {
-      toast(`Repair failed: ${String(e)}`);
-    } finally {
-      setRepairing(false);
-    }
-  };
-  return (
-    <section className="mt-8">
-      <button
-        type="button"
-        aria-expanded={open}
-        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-        onClick={() => {
-          if (!open && !status) void load();
-          setOpen(!open);
-        }}
-      >
-        Network{" "}
-        <ChevronDown
-          className={cn("size-3.5 transition-transform", open && "rotate-180")}
-        />
-      </button>
-      {open && (
-        <div className="mt-3">
-          <Group
-            title="This node"
-            action={
-              <span className="flex gap-1">
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  disabled={loading}
-                  onClick={() => void load()}
-                >
-                  {loading ? <Spinner /> : "Refresh"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={repairing}
-                  onClick={() => void repair()}
-                  data-testid="fleet-repair-p2p"
-                >
-                  {repairing ? <Spinner /> : null} Repair P2P
-                </Button>
-              </span>
-            }
-          >
-            {status ? (
-              <>
-                <Row label="Peer ID">
-                  <Mono
-                    lines={[status.localPeerId ?? status.localPeerIdError ?? "unknown"]}
-                    copy={status.localPeerId}
-                  />
-                </Row>
-                <Row
-                  label="Listening"
-                  description="Addresses this node accepts peers on."
-                >
-                  <Mono
-                    lines={
-                      status.listenAddressesError
-                        ? [status.listenAddressesError]
-                        : status.listenAddresses
-                    }
-                    copy={status.listenAddresses.join("\n") || null}
-                  />
-                </Row>
-                <Row label="Connected">
-                  <Mono
-                    lines={
-                      status.connectedPeersError
-                        ? [status.connectedPeersError]
-                        : status.connectedPeers
-                    }
-                  />
-                </Row>
-                <Row label="Saved peers" description="Known peers this desktop dials.">
-                  <span className="grid max-w-[28rem] gap-1 text-right text-sm">
-                    {status.savedPeers.length === 0 && <Fact>none</Fact>}
-                    {status.savedPeers.map((p) => (
-                      <span
-                        key={p.peerId}
-                        className="flex items-center justify-end gap-2"
-                      >
-                        <span>{p.label}</span>
-                        <span className="truncate font-mono text-xs text-muted-foreground">
-                          {p.addr}
-                        </span>
-                      </span>
-                    ))}
-                  </span>
-                </Row>
-              </>
-            ) : (
-              <Row label={loading ? "Reading…" : "No status yet"}>
-                {loading ? <Spinner /> : null}
-              </Row>
-            )}
-          </Group>
-        </div>
-      )}
-    </section>
-  );
-}
-
-/* one or more mono lines, right-aligned, with a copy button when there is something to copy */
-function Mono({ lines, copy }: { lines: string[]; copy?: string | null }) {
-  return (
-    <span className="flex max-w-[28rem] items-start justify-end gap-1">
-      <span className="grid gap-0.5 text-right font-mono text-xs text-muted-foreground">
-        {lines.length ? (
-          lines.map((l) => (
-            <span key={l} className="truncate">
-              {l}
-            </span>
-          ))
-        ) : (
-          <span>none</span>
-        )}
-      </span>
-      {copy && <CopyButton getText={() => copy} className="-my-1" />}
-    </span>
   );
 }

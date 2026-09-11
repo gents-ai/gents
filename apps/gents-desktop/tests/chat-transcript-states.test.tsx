@@ -42,7 +42,7 @@ function expectReasoningBeforeAnswer() {
 }
 
 describe("session context visibility", () => {
-  it("shows current provider-view pressure, threshold, and compaction history", () => {
+  it("shows current provider-view pressure and closes its details", () => {
     render(
       <ChatHeader
         behaviorLabel="mobile"
@@ -106,6 +106,18 @@ describe("session context visibility", () => {
     expect(screen.getByText("198,288 (58%)")).toBeInTheDocument();
     expect(screen.getByText("1 durable compaction")).toBeInTheDocument();
     expect(screen.getByText("263,000 → 22,000 tokens")).toBeInTheDocument();
+
+    const meter = screen.getByTestId("context-meter") as HTMLDetailsElement;
+    const summary = meter.querySelector("summary") as HTMLElement;
+    meter.open = true;
+    fireEvent.click(screen.getByTestId("context-meter-close"));
+    expect(meter.open).toBe(false);
+    expect(summary).toHaveFocus();
+
+    meter.open = true;
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(meter.open).toBe(false);
+    expect(summary).toHaveFocus();
   });
 });
 

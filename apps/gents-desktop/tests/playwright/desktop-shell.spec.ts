@@ -31,9 +31,23 @@ test.describe("kit shell", () => {
     await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
     await expect(page.getByTestId("agents-screen")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+    await expect(page.getByText("Network", { exact: true })).toHaveCount(0);
 
     await openConfig(page);
     await expect(page.getByText("Agent details")).toBeVisible();
+  });
+
+  test("session context details have an explicit close control", async ({ page }) => {
+    await gotoHarness(page);
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    await page.getByTestId("context-meter").click();
+    await expect(page.getByTestId("context-details")).toBeVisible();
+
+    await page.getByRole("button", { name: "Close context details" }).click();
+    await expect(page.getByTestId("context-details")).not.toBeVisible();
   });
 
   test("mailbox is reachable from the rail", async ({ page }) => {
@@ -62,7 +76,10 @@ test.describe("kit shell", () => {
     page,
   }) => {
     await gotoHarness(page, "sync-offline");
-    await page.getByText("introduction-and-greetings", { exact: true }).click();
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
 
     await expect(page.getByTestId("session-screen")).toBeVisible();
     await expect(
