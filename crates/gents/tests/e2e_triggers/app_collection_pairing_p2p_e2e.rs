@@ -229,21 +229,7 @@ async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
     let Some(p2p) = node.p2p() else {
         return Vec::new();
     };
-    let Ok(ids) = p2p.get_collections().await else {
-        return Vec::new();
-    };
-    let Ok(names) = node.list_collections() else {
-        return Vec::new();
-    };
-    names
-        .into_iter()
-        .filter(|name| {
-            node.get_collection(name)
-                .ok()
-                .flatten()
-                .is_some_and(|definition| ids.contains(&definition.collection_id))
-        })
-        .collect()
+    p2p.get_collections().await.unwrap_or_default()
 }
 
 async fn wait_for_subscribed_collections(
