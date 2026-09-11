@@ -13,7 +13,7 @@ import {
   InferenceSetupWizard,
   LocalRuntimeConnect,
 } from "@source-inc/gents-desktop-fleet/local-runtime";
-import { HoldsPanel } from "@source-inc/gents-desktop-operations";
+import { RequestTracePanel } from "@source-inc/gents-desktop-operations";
 import {
   ConfirmDialog,
   CopyButton,
@@ -50,7 +50,7 @@ const publicComponents: ReactNode[] = [
     onCancel={() => undefined}
     onConfirm={() => undefined}
   />,
-  <HoldsPanel agentDid={null} api={client.api} />,
+  <RequestTracePanel agentDid="did:key:packed-consumer" api={client.api} />,
 ];
 
 void FleetDashboard;

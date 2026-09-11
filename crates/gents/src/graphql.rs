@@ -12,8 +12,8 @@
 //! The identifier validators live in `gents-protocol` so the mutation
 //! renderer there shares this crate's definition, and are re-exported here.
 //!
-//! A third position — a raw **object/fragment** spliced in whole, as
-//! `EventTrigger.filter` is by the trigger engine's filter probe — is
+//! A third position — a raw **object/fragment** spliced in whole, as an event
+//! source filter is by the trigger engine's filter probe — is
 //! covered by neither. See #1038.
 
 use std::time::Duration;

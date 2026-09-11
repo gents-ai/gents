@@ -21,10 +21,6 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     crate::document_config::ensure_agent_principal(&node, identity.did())
         .await
         .unwrap();
-    let deployment = node.execute(r#"mutation {
-        create_HostDeployment(input: {deployment_id: "freeze-local", display_name: "Freeze fixture"}) { _docID }
-    }"#).await;
-    assert!(!deployment.has_errors(), "{:?}", deployment.errors);
     let access = crate::ConfigAccess::Local(node.clone());
     let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
     let before_index = git(&fx.repo, &["write-tree"]);
@@ -32,18 +28,12 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         &fx.repo,
         &["rev-parse", &format!("{}^{{tree}}", fx.base_sha)],
     );
-    let outcome = provision_read_only_workspace(
-        &access,
-        &fx.repo,
-        &fx.base_sha,
-        "freeze-local",
-        identity.did(),
-    )
-    .await
-    .unwrap();
+    let outcome = provision_read_only_workspace(&access, &fx.repo, &fx.base_sha, identity.did())
+        .await
+        .unwrap();
     assert_eq!(outcome.workspace.lifecycle_state, "sealed");
     assert_eq!(outcome.workspace.base_sha, fx.base_sha);
-    assert_eq!(outcome.workspace.owner_deployment_id, "freeze-local");
+    assert_eq!(outcome.workspace.owner_agent_did, identity.did());
     assert_eq!(
         outcome.workspace.path_capability,
         WorkspacePathCapability::exact_paths(Vec::new()).unwrap()
@@ -62,9 +52,9 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
 
     // Inspect persisted state independently of the returned in-memory result.
     let persisted = node.execute(r#"{
-        IsolatedWorkspace { workspace_id owner_deployment_id base_sha lifecycle_state seal_hash path_capability }
-        WorkspacePlacement { workspace_id deployment_id host_path observed_tree_hash }
-        RepositoryPlacement { repository_id deployment_id }
+        IsolatedWorkspace { workspace_id owner_agent_did base_sha lifecycle_state seal_hash path_capability }
+        WorkspacePlacement { workspace_id owner_agent_did host_path observed_tree_hash }
+        RepositoryPlacement { repository_id agent_did }
         AgentRequest { _docID }
         AgentResponse { _docID }
         WorkspaceReceipt { _docID kind }
@@ -76,7 +66,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let workspace = &data["IsolatedWorkspace"][0];
     assert_eq!(workspace["workspace_id"], outcome.workspace.workspace_id);
     assert_eq!(workspace["lifecycle_state"], "sealed");
-    assert_eq!(workspace["owner_deployment_id"], "freeze-local");
+    assert_eq!(workspace["owner_agent_did"], identity.did());
     assert_eq!(workspace["base_sha"], fx.base_sha);
     assert_eq!(workspace["seal_hash"], base_tree);
     let capability: WorkspacePathCapability =
@@ -91,8 +81,8 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         workspace["workspace_id"]
     );
     assert_eq!(
-        data["WorkspacePlacement"][0]["deployment_id"],
-        "freeze-local"
+        data["WorkspacePlacement"][0]["owner_agent_did"],
+        identity.did()
     );
     assert_eq!(
         data["WorkspacePlacement"][0]["host_path"],

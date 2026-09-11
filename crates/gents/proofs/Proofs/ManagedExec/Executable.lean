@@ -5,8 +5,7 @@ namespace ManagedExecContext
 inductive Action where
   | spawn
   | spawnFailed
-  | observeExitSuccess (code : Int)
-  | observeExitFailure (code : Int)
+  | observeExit (code : Int)
   | deadlineElapsed
   | cancelRequested
   | killObserved
@@ -24,12 +23,7 @@ def step? (pre : ManagedExecContext) : Action → Option ManagedExecContext
         some { pre with state := .spawnFailed }
       else
         none
-  | .observeExitSuccess code =>
-      if pre.state = .running then
-        some { pre with state := .exited, exitCode := some code }
-      else
-        none
-  | .observeExitFailure code =>
+  | .observeExit code =>
       if pre.state = .running then
         some { pre with state := .exited, exitCode := some code }
       else
@@ -68,14 +62,10 @@ theorem step_refines_transition
       simp [step?] at h_step
       rcases h_step with ⟨h_state, h_post⟩
       exact Transition.spawnFailed (h_state := h_state) (h_post := h_post.symm)
-  | observeExitSuccess code =>
+  | observeExit code =>
       simp [step?] at h_step
       rcases h_step with ⟨h_state, h_post⟩
-      exact Transition.observeExitSuccess code (h_state := h_state) (h_post := h_post.symm)
-  | observeExitFailure code =>
-      simp [step?] at h_step
-      rcases h_step with ⟨h_state, h_post⟩
-      exact Transition.observeExitFailure code (h_state := h_state) (h_post := h_post.symm)
+      exact Transition.observeExit code (h_state := h_state) (h_post := h_post.symm)
   | deadlineElapsed =>
       simp [step?] at h_step
       rcases h_step with ⟨⟨h_state, h_deadline⟩, h_post⟩

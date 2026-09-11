@@ -1141,14 +1141,6 @@ mod tests {
     }
 
     #[test]
-    fn enrollment_ids_are_field_boundary_safe() {
-        assert_ne!(
-            derive_enrollment_id("domain", &["a\u{1f}b", "c"]),
-            derive_enrollment_id("domain", &["a", "b\u{1f}c"]),
-        );
-    }
-
-    #[test]
     fn offer_decoder_rejects_whitespace_trailing_data_and_invalid_shape() {
         let offer = EnrollmentOfferRecord {
             version: ENROLLMENT_PROTOCOL_VERSION,
@@ -1179,6 +1171,13 @@ mod tests {
 
     #[test]
     fn request_cannot_extend_or_escape_the_signed_offer_window() {
+        // Field-boundary safety of derived ids: the unit separator must not let
+        // one id's tail impersonate another's, or the request-id — which the
+        // signature window below covers — could be replayed across requests.
+        assert_ne!(
+            derive_enrollment_id("domain", &["a\u{1f}b", "c"]),
+            derive_enrollment_id("domain", &["a", "b\u{1f}c"]),
+        );
         let offer = EnrollmentOfferRecord {
             version: ENROLLMENT_PROTOCOL_VERSION,
             offer_id: "offer-a".into(),

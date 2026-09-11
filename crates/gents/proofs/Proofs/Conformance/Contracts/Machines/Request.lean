@@ -46,7 +46,6 @@ def requestContext
   , maxRetries := 3
   , progressSeq := 0
   , messageSeq := 0
-  , isLatest := true
   , persistence := .uncommitted
   , interruptRequestedAt := if hasInterrupt then some currentTime else none
   , validUntil := validUntil

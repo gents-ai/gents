@@ -53,8 +53,8 @@ export function renderTauriAppDriverWithBridge(
     sendButton() {
       return screen.getByTestId("composer-send");
     },
-    conversation(sessionId: string) {
-      return screen.getByTestId(`conversation-${sessionId}`);
+    session(sessionId: string) {
+      return screen.getByTestId(`session-${sessionId}`);
     },
     configButton() {
       if (firstPeerId) {

@@ -1,15 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use gents::document_config::{DatastoreTools, SurfaceToolDecl, Tools};
 use gents::graphql::escape_graphql_string;
 use gents::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
-use gents::{
-    load_agent_behavior, upsert_agent_behavior, upsert_tool_selection, AgentIdentity,
-    ToolSelectionDocument,
-};
+use gents::{AgentIdentity, Collection, DatastoreToolSurfaceDocument};
 
 use super::steward_loop_live::{bind_d4f_backend, boot_d4f_agent, wait_for_request_terminal};
-use crate::support::fixtures::test_identity;
+use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::test_db;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -23,25 +21,38 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let db = test_db("mailbox-real-inference").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("mailbox-real-inference"));
     let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
-    upsert_tool_selection(
+    let surface_id = "mailbox-live-surface";
+    configure_behavior_tools(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "mailbox-live-tools".into(),
+        &agent_did,
+        &behavior_id,
+        None,
+        Tools {
+            tools_id: "mailbox-live-tools".into(),
             agent_did: agent_did.clone(),
-            write_tools: Some(vec![canonical_mailbox_write_decl()]),
+            datastore: Some(DatastoreTools {
+                datastore_tool_surface_ids: Some(vec![surface_id.into()]),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        vec![(
+            Collection::DatastoreToolSurface,
+            serde_json::to_value(DatastoreToolSurfaceDocument {
+                surface_id: surface_id.into(),
+                agent_did: agent_did.clone(),
+                display_name: Some("Mailbox live surface".into()),
+                enabled: true,
+                entries: Some(vec![
+                    SurfaceToolDecl::Create(canonical_mailbox_write_decl()),
+                ]),
+                created_at: None,
+                tags: Vec::new(),
+            })
+            .unwrap(),
+        )],
     )
-    .await
-    .unwrap();
-    let mut behavior = load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .unwrap()
-        .unwrap();
-    behavior.tool_selection_id = Some("mailbox-live-tools".into());
-    upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .unwrap();
+    .await;
 
     db.node
         .add_schema("type MailboxLiveAgentAttention { owner: String @immutable }")

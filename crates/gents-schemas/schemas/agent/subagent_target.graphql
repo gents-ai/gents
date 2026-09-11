@@ -1,0 +1,10 @@
+# Calling principal owns this explicit destination behavior reference.
+type SubagentTarget @branchable @index(fields: ["agent_did", "target_id"], unique: true) {
+    target_id: String
+    agent_did: String @index
+    target_agent_did: String @index
+    behavior_id: String @index
+    name: String
+    description: String
+    tags: [String!]
+}

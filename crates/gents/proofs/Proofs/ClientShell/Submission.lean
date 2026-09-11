@@ -13,42 +13,55 @@ def behaviorMismatch
   | some r, some e => decide (r ≠ e)
   | _, _           => false
 
-def trustworthyForFollowUp
-    (s : ShellState) (store : LocalStore)
-    (requestedBehavior : Option BehaviorId) : Bool :=
-  match s.selection.session with
-  | none     => true
-  | some sid =>
-    match store.find sid with
-    | none     => false
-    | some obs =>
-      let tipCoherent :=
-        match obs.latestObservedRequest, obs.latestTurn with
-        | some _, some _ => true
-        | none,   none   => true
-        | _,      _      => false
-      let noMismatch := ¬ behaviorMismatch store sid requestedBehavior
-      tipCoherent && noMismatch
+inductive SendBlockedReason where
+  | clientOffline
+  | agentNotSelected
+  | composerEmpty
+  | mutationInFlight
+  | awaitingObservation
+  | awaitingTurnTerminality (turn : ClientTurnState)
+  | sessionBehaviorMismatch
+  | sessionAbsent
+  | inconsistentObservation
+  | workflowBlocked
+  deriving DecidableEq, Repr
 
-def canSubmit
-    (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : Bool :=
-  if ¬ ctx.clientAvailable then false
-  else if s.selection.agent.isNone then false
-  else if ¬ ctx.composerNonEmpty then false
-  else
-    match s.workflow with
-    | .submitting _ _ | .awaiting _ _ | .blocked _ => false
+inductive SendDecision where
+  | ready
+  | blocked (reason : SendBlockedReason)
+  deriving DecidableEq, Repr
+
+def projectSendDecision
+    (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : SendDecision :=
+  if ¬ ctx.clientAvailable then .blocked .clientOffline
+  else if s.selection.agent.isNone then .blocked .agentNotSelected
+  else if ¬ ctx.composerNonEmpty then .blocked .composerEmpty
+  else match s.workflow with
+    | .submitting _ _ => .blocked .mutationInFlight
+    | .awaiting _ _                 => .blocked .awaitingObservation
+    | .blocked _                    => .blocked .workflowBlocked
     | .idle =>
       match s.selection.session with
-      | none     => true
+      | none     => .ready
       | some sid =>
         match store.find sid with
-        | none     => false
+        | none     =>
+          .blocked .sessionAbsent
         | some obs =>
-          let tipTerminalOrUnstarted :=
+          if behaviorMismatch store sid ctx.requestedBehavior then
+            .blocked .sessionBehaviorMismatch
+          else
             match obs.latestObservedRequest, obs.latestTurn with
-            | some _, some t => t.isTerminal
-            | none,   none   => true
-            | _,      _      => false
-          let noMismatch := ¬ behaviorMismatch store sid ctx.requestedBehavior
-          tipTerminalOrUnstarted && noMismatch
+            | none,   none   => .ready
+            | some _, some t =>
+              if t.isTerminal then .ready
+              else .blocked (.awaitingTurnTerminality t)
+            | _,      _      => .blocked .inconsistentObservation
+
+def canSubmit (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : Bool :=
+  projectSendDecision s store ctx == .ready
+
+/-- Submission and its diagnostic projection share exactly one decision owner. -/
+theorem canSubmit_iff_ready (s : ShellState) (store : LocalStore) (ctx : SubmitContext) :
+    canSubmit s store ctx = true ↔ projectSendDecision s store ctx = .ready := by
+  simp [canSubmit]

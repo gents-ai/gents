@@ -1,81 +1,24 @@
 use crate::support::test_db;
-#[allow(unused_imports)]
 use gents::tool_call_lifecycle::{
-    create_subagent_request, AwaitMode, CancelCause, CancelPolicy, CascadeIntent, ChildTerminal,
-    FailureClass, IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    create_subagent_request, AwaitMode, CancelCause, CancelPolicy, ChildTerminal, FailureClass,
+    IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 
 fn test_deadline() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() + chrono::Duration::minutes(5)
 }
 
-async fn make_completed_request(
-    node: &gents::defra_node::EmbeddedNode,
-    request_id: &str,
-    parent_request_id: Option<&str>,
-    parent_tool_call_id: Option<&str>,
-    final_message: &str,
-) -> anyhow::Result<()> {
-    let depth: u32 = if parent_request_id.is_some() { 1 } else { 0 };
-    let parent_req_field = parent_request_id
-        .map(|id| {
-            let escaped = gents::graphql::escape_graphql_string(id);
-            format!(r#"caused_by_parent_request_id: "{escaped}","#)
-        })
-        .unwrap_or_default();
-    let parent_tc_field = parent_tool_call_id
-        .map(|id| {
-            let escaped = gents::graphql::escape_graphql_string(id);
-            format!(r#"caused_by_parent_tool_call_id: "{escaped}","#)
-        })
-        .unwrap_or_default();
-    let rid = gents::graphql::escape_graphql_string(request_id);
-    let content = gents::graphql::escape_graphql_string(final_message);
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let now_escaped = gents::graphql::escape_graphql_string(&now);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{rid}",
-                agent_did: "{agent_did}",
-                behavior_id: "test",
-                session_id: "{rid}",
-                retry_parent_request: "",
-                retry_root_request: "{rid}",
-                superseded_by_request: "",
-                content: "{content}",
-                lifecycle_state: "completed",
-                backend_id: "",
-                execution_origin: "interactive",
-                failure_reason: "",
-                created_at: "{now_escaped}",
-                retry_count: 0,
-                max_retries: {max_retries},
-                subagent_depth: {depth},
-                {prf}
-                {ptc}
-            }}) {{ _docID }}
-        }}"#,
-        agent_did = crate::support::AGENT_DID,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-        prf = parent_req_field,
-        ptc = parent_tc_field,
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "make_completed_request failed: {:?}",
-        resp.errors
-    );
-    Ok(())
-}
-
+/// Seeds an AgentRequest row for a child request at the given terminal
+/// `lifecycle_state`. Bridge tests create rows through this
+/// fixture: pass `content` for completed children, `""` for pure terminal
+/// markers (failed/dead/interrupted/superseded states).
 async fn make_terminal_request(
     node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
     parent_request_id: Option<&str>,
     parent_tool_call_id: Option<&str>,
     state: &str,
+    content: &str,
 ) -> anyhow::Result<()> {
     let depth: u32 = if parent_request_id.is_some() { 1 } else { 0 };
     let parent_req_field = parent_request_id
@@ -92,6 +35,7 @@ async fn make_terminal_request(
         .unwrap_or_default();
     let rid = gents::graphql::escape_graphql_string(request_id);
     let state_escaped = gents::graphql::escape_graphql_string(state);
+    let content_escaped = gents::graphql::escape_graphql_string(content);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now_escaped = gents::graphql::escape_graphql_string(&now);
     let mutation = format!(
@@ -104,7 +48,7 @@ async fn make_terminal_request(
                 retry_parent_request: "",
                 retry_root_request: "{rid}",
                 superseded_by_request: "",
-                content: "",
+                content: "{content_escaped}",
                 lifecycle_state: "{state_escaped}",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -556,104 +500,16 @@ async fn integration_detach_rejects_native_tool() {
 }
 
 #[tokio::test]
-async fn test_make_completed_request_creates_row() {
-    let db = test_db("tc-sa-sanity-1").await;
-
-    make_completed_request(&db.node, "req-sanity-1", None, None, "all done")
-        .await
-        .unwrap();
-
-    let query = r#"{
-        AgentRequest(filter: { request_id: { _eq: "req-sanity-1" } }) {
-            request_id
-            lifecycle_state
-            subagent_depth
-        }
-    }"#;
-    let resp = db.node.execute(query).await;
-    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
-
-    let data = resp.data.expect("data");
-    let rows = data["AgentRequest"].as_array().expect("AgentRequest array");
-    assert_eq!(rows.len(), 1, "expected exactly one AgentRequest row");
-
-    let row = &rows[0];
-    assert_eq!(
-        row["lifecycle_state"].as_str(),
-        Some("completed"),
-        "expected lifecycle_state to be 'completed', got: {:?}",
-        row["lifecycle_state"]
-    );
-    assert_eq!(
-        row["subagent_depth"].as_i64(),
-        Some(0),
-        "top-level request should have subagent_depth 0"
-    );
-}
-
-#[tokio::test]
-async fn test_make_completed_request_child_sets_depth_and_parent_fields() {
-    let db = test_db("tc-sa-sanity-2").await;
-
-    make_completed_request(
-        &db.node,
-        "req-sanity-child-1",
-        Some("req-parent-1"),
-        Some("tc-parent-1"),
-        "child done",
-    )
-    .await
-    .unwrap();
-
-    let query = r#"{
-        AgentRequest(filter: { request_id: { _eq: "req-sanity-child-1" } }) {
-            request_id
-            lifecycle_state
-            subagent_depth
-            caused_by_parent_request_id
-            caused_by_parent_tool_call_id
-        }
-    }"#;
-    let resp = db.node.execute(query).await;
-    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
-
-    let data = resp.data.expect("data");
-    let rows = data["AgentRequest"].as_array().expect("AgentRequest array");
-    assert_eq!(rows.len(), 1, "expected one row");
-
-    let row = &rows[0];
-    assert_eq!(
-        row["lifecycle_state"].as_str(),
-        Some("completed"),
-        "lifecycle_state should be completed"
-    );
-    assert_eq!(
-        row["subagent_depth"].as_i64(),
-        Some(1),
-        "child request should have subagent_depth 1"
-    );
-    assert_eq!(
-        row["caused_by_parent_request_id"].as_str(),
-        Some("req-parent-1"),
-        "parent request id should be set"
-    );
-    assert_eq!(
-        row["caused_by_parent_tool_call_id"].as_str(),
-        Some("tc-parent-1"),
-        "parent tool call id should be set"
-    );
-}
-
-#[tokio::test]
 async fn integration_bridge_complete_with_real_child() {
     let db = test_db("tc-sa-bc-1").await;
 
     let child_request_id = "child-bc-1";
-    make_completed_request(
+    make_terminal_request(
         &db.node,
         child_request_id,
         Some("parent-req-bc1"),
         Some("parent-tc-bc1"),
+        "completed",
         "child final assistant message",
     )
     .await
@@ -724,11 +580,12 @@ async fn integration_bridge_complete_with_real_child() {
 async fn integration_bridge_complete_does_not_overwrite_externally_terminal_bridge() {
     let db = test_db("tc-sa-bc-cas-1").await;
     let child_request_id = "child-bc-cas-1";
-    make_completed_request(
+    make_terminal_request(
         &db.node,
         child_request_id,
         Some("parent-req-bc-cas1"),
         Some("parent-tc-bc-cas1"),
+        "completed",
         "child final assistant message",
     )
     .await
@@ -791,6 +648,7 @@ async fn run_bridge_failure_case(
         Some(&parent_req),
         Some(&parent_tc),
         terminal_state,
+        "",
     )
     .await
     .unwrap();
@@ -851,6 +709,7 @@ async fn integration_bridge_failure_does_not_overwrite_externally_terminal_bridg
         Some("parent-req-bf-cas1"),
         Some("parent-tc-bf-cas1"),
         "dead",
+        "",
     )
     .await
     .unwrap();
@@ -1009,143 +868,6 @@ async fn integration_cascade_intent_for_native_returns_none() {
     assert!(
         intent.is_none(),
         "Native tool (no child_request_id) returns None"
-    );
-}
-
-#[tokio::test]
-async fn test_make_terminal_request_all_states() {
-    let db = test_db("tc-sa-sanity-3").await;
-
-    for (idx, state) in ChildTerminal::ALL_KIND.iter().enumerate() {
-        let rid = format!("req-terminal-{idx}");
-        make_terminal_request(
-            &db.node,
-            &rid,
-            Some("req-parent-x"),
-            Some("tc-parent-x"),
-            state,
-        )
-        .await
-        .unwrap_or_else(|e| panic!("make_terminal_request({state}) failed: {e}"));
-
-        let rid_escaped = gents::graphql::escape_graphql_string(&rid);
-        let query = format!(
-            r#"{{
-                AgentRequest(filter: {{ request_id: {{ _eq: "{rid_escaped}" }} }}) {{
-                    lifecycle_state
-                }}
-            }}"#
-        );
-        let resp = db.node.execute(&query).await;
-        assert!(
-            !resp.has_errors(),
-            "query failed for state {state}: {:?}",
-            resp.errors
-        );
-
-        let data = resp.data.expect("data");
-        let rows = data["AgentRequest"].as_array().expect("array");
-        assert_eq!(rows.len(), 1, "expected one row for state {state}");
-        assert_eq!(
-            rows[0]["lifecycle_state"].as_str(),
-            Some(*state),
-            "expected lifecycle_state={state}"
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Bucket 3 / Task 26 — migration round-trip default-population behavior
-// ---------------------------------------------------------------------------
-//
-// Approach (a) per Task 26: the standard `test_db` already registers the v3
-// schema directly (no patch needed because the SDL ships with the v3 fields).
-// We insert a minimal AgentToolCall row with only the v1/v2 fields and verify
-// what the schema does for the unset v3 fields (`await_mode`, `cancel_policy`,
-// `child_request_id`, `request_id`).
-//
-// The point of the test is to lock in the actual observed behavior so that any
-// future drift — whether DefraDB starts materializing schema defaults on insert,
-// or vice-versa — is caught by a deliberate signal rather than silent
-// regressions in dependent code.
-
-#[tokio::test]
-async fn integration_v3_schema_defaults_populate_correctly() {
-    let db = test_db("tc-sa-mig-1").await;
-
-    let mutation = r#"mutation {
-        create_AgentToolCall(input: {
-            tool_call_key: "mig-test-1",
-            session_id: "mig-sess-1",
-            message_sequence: 1,
-            tool_name: "echo",
-            tool_call_id: "mig-tc-1",
-            args: "{}",
-            lifecycle_state: "running"
-        }) { _docID }
-    }"#;
-    let resp = db.node.execute(mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create_AgentToolCall (minimal) failed: {:?}",
-        resp.errors
-    );
-
-    let query = r#"{
-        AgentToolCall(filter: { tool_call_key: { _eq: "mig-test-1" } }) {
-            tool_call_key
-            lifecycle_state
-            await_mode
-            cancel_policy
-            child_request_id
-            request_id
-        }
-    }"#;
-    let resp = db.node.execute(query).await;
-    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
-
-    let data = resp.data.expect("data");
-    let rows = data["AgentToolCall"].as_array().expect("array");
-    assert_eq!(rows.len(), 1, "expected exactly one row");
-    let row = &rows[0];
-
-    eprintln!("v3 schema default-population observed behavior: {row}");
-
-    assert_eq!(row["tool_call_key"].as_str(), Some("mig-test-1"));
-    assert_eq!(row["lifecycle_state"].as_str(), Some("running"));
-
-    // Lock in the observed behavior for the v3 fields.
-    //
-    // DefraDB's GraphQL @branchable schema does not materialize schema-level
-    // defaults onto directly-inserted rows: the SDL only declares each new
-    // field as a nullable `String`. The lens transform (registered by
-    // `ensure_subagent_extensions_migrations` in the daemon path) is what
-    // populates the v3 defaults onto pre-existing v2 rows on read. New rows
-    // inserted directly without these fields therefore observe Null for each
-    // unset v3 field.
-    //
-    // If a future change starts materializing defaults on insert, this test
-    // will fail — at which point the assertion should be flipped to the new
-    // observed values and a comment added explaining the change.
-    assert!(
-        row["await_mode"].is_null(),
-        "directly-inserted v3 row: await_mode expected null, got: {:?}",
-        row["await_mode"]
-    );
-    assert!(
-        row["cancel_policy"].is_null(),
-        "directly-inserted v3 row: cancel_policy expected null, got: {:?}",
-        row["cancel_policy"]
-    );
-    assert!(
-        row["child_request_id"].is_null(),
-        "directly-inserted v3 row: child_request_id expected null, got: {:?}",
-        row["child_request_id"]
-    );
-    assert!(
-        row["request_id"].is_null(),
-        "directly-inserted v3 row: request_id expected null, got: {:?}",
-        row["request_id"]
     );
 }
 

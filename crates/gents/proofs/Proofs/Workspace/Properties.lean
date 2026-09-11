@@ -74,11 +74,13 @@ instance (w : IsolatedWorkspace) (b : WorkspaceBinding) :
   unfold IntegrateOk
   infer_instance
 
-def OwnerClaimable (deploymentId : String) (w : IsolatedWorkspace) : Prop :=
-  w.ownerDeploymentId = deploymentId ∧ WorkspaceState.bindable w.state
+/-- Principal ownership plus workspace lifecycle eligibility. Local filesystem
+availability remains an execution observation; this is not a host fingerprint. -/
+def OwnerClaimable (agentDid : String) (w : IsolatedWorkspace) : Prop :=
+  w.ownerAgentDid = agentDid ∧ WorkspaceState.bindable w.state
 
-instance (deploymentId : String) (w : IsolatedWorkspace) :
-    Decidable (OwnerClaimable deploymentId w) := by
+instance (agentDid : String) (w : IsolatedWorkspace) :
+    Decidable (OwnerClaimable agentDid w) := by
   unfold OwnerClaimable
   infer_instance
 
@@ -136,7 +138,7 @@ theorem identity_fields_preserved
     post.baseSha = pre.baseSha ∧
     post.branch = pre.branch ∧
     post.creationPolicy = pre.creationPolicy ∧
-    post.ownerDeploymentId = pre.ownerDeploymentId ∧
+    post.ownerAgentDid = pre.ownerAgentDid ∧
     post.pathCapability = pre.pathCapability := by
   cases h <;> simp_all
 
@@ -200,14 +202,14 @@ theorem integrate_requires_matching_seal
   h hauth
 
 theorem owner_claimable_requires_owner
-    (deploymentId : String) (w : IsolatedWorkspace)
-    (h : OwnerClaimable deploymentId w) :
-    w.ownerDeploymentId = deploymentId :=
+    (agentDid : String) (w : IsolatedWorkspace)
+    (h : OwnerClaimable agentDid w) :
+    w.ownerAgentDid = agentDid :=
   h.1
 
 theorem owner_claimable_requires_bindable
-    (deploymentId : String) (w : IsolatedWorkspace)
-    (h : OwnerClaimable deploymentId w) :
+    (agentDid : String) (w : IsolatedWorkspace)
+    (h : OwnerClaimable agentDid w) :
     WorkspaceState.bindable w.state :=
   h.2
 

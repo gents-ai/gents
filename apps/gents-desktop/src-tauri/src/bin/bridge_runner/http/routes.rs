@@ -3,9 +3,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use gents::backend_registry::{derive_display_state, list_all_backends};
-use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
 use gents::subagent_tree::{build_local_subagent_tree, effective_subagent_tree_max_depth};
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
@@ -21,28 +18,29 @@ use gents_desktop_bridge::commands::mcp_health::{
     load_mcp_services_with_health, probe_mcp_service,
 };
 use gents_desktop_bridge::commands::{
-    rename_conversation, repair_p2p, run_schedule_config, run_task_config, save_agent_config,
-    save_backend_config, save_behavior_config, save_event_trigger_config,
+    delete_event_source_config, delete_schedule_config, delete_tools_config, delete_trigger_config,
+    rename_session, repair_p2p, run_schedule_config, run_task_config, save_agent_config,
+    save_backend_config, save_behavior_config, save_event_source_config,
     save_inference_profile_config, save_schedule_config, save_task_config,
-    save_tool_selection_config, save_tool_service_config, send_chat_message,
+    save_tool_service_config, save_tools_config, save_trigger_config, send_chat_message,
     test_tool_service_config,
 };
 use gents_desktop_bridge::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
 use gents_desktop_bridge::tauri_commands::operations::{
-    list_tool_call_holds_for_core, resolve_tool_call_hold_for_core, subagent_tree_view_from_gents,
+    list_backends_with_health_for_core, subagent_tree_view_from_gents,
 };
 use gents_desktop_bridge::types::{
-    AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BehaviorSaveRequest,
-    ChatSendRequest, ConversationRenameRequest, DesktopInterruptRequest, DesktopListHoldsRequest,
-    DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
-    DesktopResolveHoldRequest, EnrollmentRequestView, EnrollmentStatusRequest,
-    EventTriggerSaveRequest, InferenceCallSummaryView, InferenceProfileSaveRequest,
-    NativeExecutorStatusView, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleRunRequest,
-    ScheduleSaveRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
-    ToolSelectionSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
+    AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, ChatSendRequest,
+    DesktopInterruptRequest, DesktopListSubagentTreeRequest, DesktopOperationsSnapshot,
+    DesktopOperationsSnapshotRequest, DesktopPreviewInterruptCascadeRequest,
+    DesktopProbeMcpServiceRequest, EnrollmentRequestView, EnrollmentStatusRequest,
+    EventSourceDeleteRequest, EventSourceSaveRequest, InferenceProfileSaveRequest,
+    NativeExecutorStatusView, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleDeleteRequest,
+    ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest, SubagentTreeView,
+    TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
+    ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest, TriggerSaveRequest,
 };
 
 #[derive(Debug, Deserialize)]
@@ -92,8 +90,6 @@ struct DeleteReplicatorRequest {
 struct VersionResponse {
     version: u64,
 }
-
-const RECENT_CALLS_PER_BACKEND: usize = 10;
 
 pub(super) fn handle_request(
     runtime: &tokio::runtime::Handle,
@@ -274,10 +270,10 @@ pub(super) fn handle_request(
                     .desktop_core()
                     .store()
                     .snapshot()
-                    .conversations
+                    .sessions
                     .iter()
-                    .find(|conversation| conversation.session_id == request.session_id)
-                    .and_then(|conversation| conversation.agent_did.clone())
+                    .find(|session| session.session_id == request.session_id)
+                    .map(|session| session.agent_did.clone())
             });
             let agent_did = agent_did
                 .as_deref()
@@ -324,7 +320,7 @@ pub(super) fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&tree)?))
         }
         ("GET", "/desktop/backend-health") => {
-            let rows = runtime.block_on(list_backends_with_health(Arc::clone(
+            let rows = runtime.block_on(list_backends_with_health_for_core(Arc::clone(
                 fixture.desktop_core(),
             )))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
@@ -352,35 +348,9 @@ pub(super) fn handle_request(
                 runtime.block_on(send_chat_message(fixture.desktop_core().as_ref(), request))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
-        ("POST", "/desktop/tool-call-holds/list") => {
-            let request = decode::<DesktopListHoldsRequest>(
-                &request.body,
-                "decoding tool-call holds request",
-            )?;
-            let held = runtime.block_on(list_tool_call_holds_for_core(
-                Arc::clone(fixture.desktop_core()),
-                request,
-            ))?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&held)?))
-        }
-        ("POST", "/desktop/tool-call-holds/resolve") => {
-            let request = decode::<DesktopResolveHoldRequest>(
-                &request.body,
-                "decoding tool-call hold resolution",
-            )?;
-            let result = runtime.block_on(resolve_tool_call_hold_for_core(
-                Arc::clone(fixture.desktop_core()),
-                request,
-            ))?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
-        }
-        ("POST", "/desktop/conversation/rename") => {
-            let request =
-                decode::<ConversationRenameRequest>(&request.body, "decoding rename request")?;
-            runtime.block_on(rename_conversation(
-                fixture.desktop_core().as_ref(),
-                request,
-            ))?;
+        ("POST", "/desktop/session/rename") => {
+            let request = decode::<SessionRenameRequest>(&request.body, "decoding rename request")?;
+            runtime.block_on(rename_session(fixture.desktop_core().as_ref(), request))?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "status": "ok" }).to_string(),
             ))
@@ -417,7 +387,7 @@ pub(super) fn handle_request(
                 &request.body,
                 "decoding remote behavior save request",
             )?;
-            tracing::info!(behavior_id = %req.behavior_id, "remote-save-behavior: writing to remote core");
+            tracing::info!(behavior_id = %req.document.behavior_id, "remote-save-behavior: writing to remote core");
             runtime.block_on(save_behavior_config(fixture.remote_core().as_ref(), req))?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "ok": true }).to_string(),
@@ -533,12 +503,16 @@ pub(super) fn handle_request(
             ))?;
             Ok(snapshot_response(runtime, fixture)?)
         }
-        ("POST", "/desktop/tool-selection/save") => {
-            let request = decode::<ToolSelectionSaveRequest>(
-                &request.body,
-                "decoding tool selection save request",
-            )?;
-            runtime.block_on(save_tool_selection_config(
+        ("POST", "/desktop/tools/save") => {
+            let request =
+                decode::<ToolsSaveRequest>(&request.body, "decoding tool selection save request")?;
+            runtime.block_on(save_tools_config(fixture.desktop_core().as_ref(), request))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/tools/delete") => {
+            let request =
+                decode::<ToolsDeleteRequest>(&request.body, "decoding tools delete request")?;
+            runtime.block_on(delete_tools_config(
                 fixture.desktop_core().as_ref(),
                 request,
             ))?;
@@ -563,6 +537,28 @@ pub(super) fn handle_request(
             let result = runtime.block_on(test_tool_service_config(request))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
+        ("POST", "/desktop/config/components/apply") => {
+            let request = decode::<gents_desktop_bridge::types::ConfigComponentsApplyRequest>(
+                &request.body,
+                "decoding component apply request",
+            )?;
+            runtime.block_on(gents_desktop_bridge::commands::apply_config_components(
+                fixture.desktop_core().as_ref(),
+                request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/config/components/patch") => {
+            let request = decode::<gents_desktop_bridge::types::ConfigComponentsPatchRequest>(
+                &request.body,
+                "decoding component patch request",
+            )?;
+            runtime.block_on(gents_desktop_bridge::commands::patch_config_components(
+                fixture.desktop_core().as_ref(),
+                request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
         ("POST", "/desktop/task/save") => {
             let request = decode::<TaskSaveRequest>(&request.body, "decoding task save request")?;
             runtime.block_on(save_task_config(fixture.desktop_core().as_ref(), request))?;
@@ -577,6 +573,15 @@ pub(super) fn handle_request(
             ))?;
             Ok(snapshot_response(runtime, fixture)?)
         }
+        ("POST", "/desktop/schedule/delete") => {
+            let request =
+                decode::<ScheduleDeleteRequest>(&request.body, "decoding schedule delete request")?;
+            runtime.block_on(delete_schedule_config(
+                fixture.desktop_core().as_ref(),
+                request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
         ("POST", "/desktop/schedule/run") => {
             let request =
                 decode::<ScheduleRunRequest>(&request.body, "decoding schedule run request")?;
@@ -586,12 +591,41 @@ pub(super) fn handle_request(
             ))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
-        ("POST", "/desktop/event-trigger/save") => {
-            let request = decode::<EventTriggerSaveRequest>(
+        ("POST", "/desktop/event-source/save") => {
+            let request = decode::<EventSourceSaveRequest>(
                 &request.body,
-                "decoding event trigger save request",
+                "decoding event source save request",
             )?;
-            runtime.block_on(save_event_trigger_config(
+            runtime.block_on(save_event_source_config(
+                fixture.desktop_core().as_ref(),
+                request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/event-source/delete") => {
+            let request = decode::<EventSourceDeleteRequest>(
+                &request.body,
+                "decoding event source delete request",
+            )?;
+            runtime.block_on(delete_event_source_config(
+                fixture.desktop_core().as_ref(),
+                request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/trigger/save") => {
+            let request =
+                decode::<TriggerSaveRequest>(&request.body, "decoding trigger save request")?;
+            runtime.block_on(save_trigger_config(
+                fixture.desktop_core().as_ref(),
+                request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/trigger/delete") => {
+            let request =
+                decode::<TriggerDeleteRequest>(&request.body, "decoding trigger delete request")?;
+            runtime.block_on(delete_trigger_config(
                 fixture.desktop_core().as_ref(),
                 request,
             ))?;
@@ -790,122 +824,6 @@ async fn list_subagent_tree_response(
     .await
     .context("local subagent tree query failed")?;
     Ok(subagent_tree_view_from_gents(tree))
-}
-
-async fn list_backends_with_health(core: Arc<ClientCore>) -> Result<Vec<BackendHealthView>> {
-    let node = core.node();
-    let backends = list_all_backends(node).await?;
-    let mut views = Vec::with_capacity(backends.len());
-    for backend in backends {
-        let recent_calls = fetch_recent_calls(node, &backend.backend_id).await?;
-        views.push(BackendHealthView {
-            backend_id: backend.backend_id,
-            name: backend.name,
-            provider_kind: backend.provider_kind.as_str().to_string(),
-            endpoint: backend.endpoint,
-            enabled: backend.enabled,
-            probe_status: backend.probe_status.clone(),
-            display_state: derive_display_state(backend.enabled, &backend.probe_status).to_string(),
-            last_probe: None,
-            max_concurrent: backend.max_concurrent,
-            max_queue_depth: backend.max_queue_depth,
-            models: backend.models,
-            recent_calls,
-        });
-    }
-    Ok(views)
-}
-
-async fn fetch_recent_calls(
-    node: &EmbeddedNode,
-    backend_id: &str,
-) -> Result<Vec<InferenceCallSummaryView>> {
-    let escaped_id = escape_graphql_string(backend_id);
-    let query = format!(
-        r#"query {{
-            InferenceCall(
-                filter: {{ backend_id: {{ _eq: "{escaped_id}" }} }},
-                order: {{ queued_at: DESC }},
-                limit: {limit}
-            ) {{
-                call_id
-                call_seq
-                call_kind
-                call_state
-                failure_reason
-                queued_at
-                started_at
-                ended_at
-                queue_depth_at_enqueue
-                prompt_tokens
-                completion_tokens
-            }}
-        }}"#,
-        limit = RECENT_CALLS_PER_BACKEND,
-    );
-
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "list InferenceCall for backend {backend_id} failed: {:?}",
-            response.errors
-        );
-    }
-
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceCall"))
-        .and_then(|value| value.as_array())
-        .map(|rows| rows.iter().map(parse_call_row).collect::<Vec<_>>())
-        .unwrap_or_default())
-}
-
-fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
-    InferenceCallSummaryView {
-        call_id: row
-            .get("call_id")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        call_seq: row
-            .get("call_seq")
-            .and_then(|value| value.as_i64())
-            .unwrap_or(0),
-        call_kind: row
-            .get("call_kind")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        call_state: row
-            .get("call_state")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        failure_reason: row
-            .get("failure_reason")
-            .and_then(|value| value.as_str())
-            .map(ToOwned::to_owned),
-        queued_at: row
-            .get("queued_at")
-            .and_then(|value| value.as_str())
-            .map(ToOwned::to_owned),
-        started_at: row
-            .get("started_at")
-            .and_then(|value| value.as_str())
-            .map(ToOwned::to_owned),
-        ended_at: row
-            .get("ended_at")
-            .and_then(|value| value.as_str())
-            .map(ToOwned::to_owned),
-        queue_depth_at_enqueue: row
-            .get("queue_depth_at_enqueue")
-            .and_then(|value| value.as_i64()),
-        prompt_tokens: row.get("prompt_tokens").and_then(|value| value.as_i64()),
-        completion_tokens: row
-            .get("completion_tokens")
-            .and_then(|value| value.as_i64()),
-    }
 }
 
 fn decode<T: serde::de::DeserializeOwned>(body: &str, context: &str) -> Result<T> {

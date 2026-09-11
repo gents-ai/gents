@@ -1,5 +1,6 @@
-type ToolServiceRegistry @branchable {
-    service_id: String @index(unique: true)
+type ToolServiceRegistry @branchable @index(fields: ["agent_did", "service_id"], unique: true) {
+    service_id: String @index
+    agent_did: String @index
     display_name: String
     description: String
     hostname: String @index
@@ -8,6 +9,8 @@ type ToolServiceRegistry @branchable {
     mcp_port: Int
     mcp_path: String
     send_agent_did: Boolean
+    enabled: Boolean @index
+    tags: [String]
     status: String @index
     version: String
     updated_at: DateTime @index(direction: DESC)

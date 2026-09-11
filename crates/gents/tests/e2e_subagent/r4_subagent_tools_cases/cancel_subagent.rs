@@ -141,7 +141,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         .expect("child_request_id")
         .to_string();
     let child_session_id = wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
-    update_request_state(db.node.as_ref(), &child_request_id, "processing").await;
+    update_request_state(db.node.as_ref(), &child_request_id, "claimed").await;
 
     let automated_request_id = "cancel-subagent-active-auto-queue";
     create_child_session_queued_request(
@@ -186,7 +186,7 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         db.node.clone(),
         child_request_id.clone(),
         child_session_id.clone(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         "internal-cancel-descendant".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -197,7 +197,8 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         grandchild_request_id.to_string(),
         agent_did.clone(),
     )
-    .with_request_doc_id(Some(child_request_doc_id.clone()));
+    .with_request_doc_id(Some(child_request_doc_id.clone()))
+    .with_requester_did(Some(agent_did.clone()));
     descendant_bridge.start_running().await.unwrap();
     let descendant_bridge_doc_id = descendant_bridge
         .doc_id()

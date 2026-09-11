@@ -1,5 +1,0 @@
-{
-  "repository_id": "defending-code",
-  "host_path": "${GENTS_DEFENDING_ROOT:-.}",
-  "enabled": true
-}

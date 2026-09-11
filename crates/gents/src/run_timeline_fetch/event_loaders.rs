@@ -2,12 +2,15 @@ use super::*;
 
 pub(super) async fn load_timeline_messages_for_session(
     access: &ConfigAccess,
+    agent_did: &str,
     session_id: &str,
+    requester_did: Option<&str>,
 ) -> Result<Vec<TimelineMessageRow>> {
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
+                filter: {{ {scope} }},
                 order: {{ sequence: ASC }}
             ) {{
                 _docID
@@ -21,19 +24,21 @@ pub(super) async fn load_timeline_messages_for_session(
                 timestamp
             }}
         }}"#,
-        escape_graphql_string(session_id)
     );
     load_rows(access, "AgentMessage", &query).await
 }
 
 pub(super) async fn load_timeline_tool_calls_for_session(
     access: &ConfigAccess,
+    agent_did: &str,
     session_id: &str,
+    requester_did: Option<&str>,
 ) -> Result<Vec<TimelineToolCallRow>> {
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
+                filter: {{ {scope} }},
                 order: {{ started_at: ASC }}
             ) {{
                 _docID
@@ -68,46 +73,21 @@ pub(super) async fn load_timeline_tool_calls_for_session(
                 child_request_id
             }}
         }}"#,
-        escape_graphql_string(session_id)
     );
     load_rows(access, "AgentToolCall", &query).await
 }
 
-pub(super) async fn load_timeline_tool_approvals_for_call(
-    access: &ConfigAccess,
-    tool_call_doc_id: &str,
-) -> Result<Vec<TimelineToolApprovalRow>> {
-    let query = format!(
-        r#"{{
-            AgentToolApproval(
-                filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }},
-                order: {{ created_at: ASC }}
-            ) {{
-                _docID
-                approval_id
-                tool_call_doc_id
-                tool_call_id
-                request_id
-                agent_did
-                decision
-                approver_did
-                reason
-                created_at
-            }}
-        }}"#,
-        escape_graphql_string(tool_call_doc_id)
-    );
-    load_rows(access, "AgentToolApproval", &query).await
-}
-
 pub(super) async fn load_timeline_responses_for_session(
     access: &ConfigAccess,
+    agent_did: &str,
     session_id: &str,
+    requester_did: Option<&str>,
 ) -> Result<Vec<TimelineResponseRow>> {
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentResponse(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
+                filter: {{ {scope} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
@@ -129,7 +109,6 @@ pub(super) async fn load_timeline_responses_for_session(
                 interrupted_at
             }}
         }}"#,
-        escape_graphql_string(session_id)
     );
     load_rows(access, "AgentResponse", &query).await
 }
@@ -216,12 +195,23 @@ pub(super) async fn load_timeline_inference_calls_for_request(
 /// timeline.
 pub(super) async fn load_timeline_rendered_requests_for_session(
     access: &ConfigAccess,
+    agent_did: &str,
     session_id: &str,
+    requester_did: Option<&str>,
 ) -> Result<Vec<TimelineRenderedRequestRow>> {
+    // RenderedRequest stores absent requester authority as the required empty
+    // string, while canonical session-scoped documents represent it as null.
+    let requester_did = requester_did.unwrap_or_default();
+    let scope = format!(
+        r#"agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}"#,
+        escape_graphql_string(agent_did),
+        escape_graphql_string(session_id),
+        escape_graphql_string(requester_did),
+    );
     let query = format!(
         r#"{{
             RenderedRequest(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
+                filter: {{ {scope} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
@@ -239,7 +229,6 @@ pub(super) async fn load_timeline_rendered_requests_for_session(
                 created_at
             }}
         }}"#,
-        escape_graphql_string(session_id)
     );
     load_rows(access, "RenderedRequest", &query).await
 }
@@ -276,12 +265,15 @@ pub(super) async fn load_timeline_rendered_requests_for_request(
 
 pub(super) async fn load_timeline_compactions_for_session(
     access: &ConfigAccess,
+    agent_did: &str,
     session_id: &str,
+    requester_did: Option<&str>,
 ) -> Result<Vec<TimelineCompactionRow>> {
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             CompactionEntry(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
+                filter: {{ {scope} }},
                 order: {{ sequence: ASC }}
             ) {{
                 _docID
@@ -297,7 +289,6 @@ pub(super) async fn load_timeline_compactions_for_session(
                 created_at
             }}
         }}"#,
-        escape_graphql_string(session_id)
     );
     load_rows(access, "CompactionEntry", &query).await
 }

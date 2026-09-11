@@ -183,21 +183,25 @@ fn export_all(dir: &Path) -> Result<(), String> {
         EnrollmentStatusRequest,
         ChatSendRequest,
         MailboxItemRequest,
-        ConversationRenameRequest,
+        SessionRenameRequest,
         AgentConfigSaveRequest,
+        ConfigComponentsApplyRequest,
+        ConfigComponentsPatchRequest,
+        ConfigComponentPatch,
         BehaviorSaveRequest,
         SkillDeleteRequest,
         TaskDeleteRequest,
         ScheduleDeleteRequest,
-        EventTriggerDeleteRequest,
+        TriggerDeleteRequest,
+        EventSourceDeleteRequest,
         BackendDeleteRequest,
         InferenceProfileDeleteRequest,
-        ToolSelectionDeleteRequest,
+        ToolsDeleteRequest,
         ToolServiceDeleteRequest,
         BehaviorDeleteRequest,
         BackendSaveRequest,
         InferenceProfileSaveRequest,
-        ToolSelectionSaveRequest,
+        ToolsSaveRequest,
         ToolServiceSaveRequest,
         ToolServiceTestRequest,
         TaskSaveRequest,
@@ -205,12 +209,11 @@ fn export_all(dir: &Path) -> Result<(), String> {
         TaskRunRequest,
         ScheduleSaveRequest,
         ScheduleRunRequest,
-        EventTriggerSaveRequest,
+        TriggerSaveRequest,
+        EventSourceSaveRequest,
         DesktopOperationsSnapshotRequest,
         DesktopListSubagentTreeRequest,
         DesktopPreviewInterruptCascadeRequest,
-        DesktopListHoldsRequest,
-        DesktopResolveHoldRequest,
         DesktopInterruptRequest,
         DesktopProbeMcpServiceRequest,
         InferenceProbeRequest,
@@ -240,8 +243,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopOperationsSnapshot,
         CascadeCancelPreview,
         InterruptRequestResult,
-        HeldToolCallView,
-        ResolveHoldResult,
         BackendHealthView,
         MCPServiceHealthView,
         McpServiceProbeResult,
@@ -382,7 +383,8 @@ fn committed_bindings_match_regeneration() {
     let committed = bindings_dir();
     let actual_files = list_ts_files(&committed).unwrap_or_default();
     assert_eq!(
-        actual_files, expected_files,
+        actual_files,
+        expected_files,
         "bindings file set drifted under {}. Regenerate with:\n  cargo test -p gents-desktop-bridge write_bindings -- --ignored",
         committed.display()
     );
@@ -416,4 +418,50 @@ fn write_bindings() {
     }
     export_all(&dir).expect("export bindings");
     eprintln!("wrote bindings to {}", dir.display());
+}
+
+#[test]
+fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
+    let dir = tempfile::tempdir().expect("generated directory");
+    BackendSaveRequest::export_all_to(dir.path()).expect("backend export");
+    ToolsSaveRequest::export_all_to(dir.path()).expect("tools export");
+    ToolServiceSaveRequest::export_all_to(dir.path()).expect("service export");
+    BehaviorSaveRequest::export_all_to(dir.path()).expect("behavior export");
+    InferenceProfileSaveRequest::export_all_to(dir.path()).expect("profile export");
+    normalize_generated_types(dir.path()).expect("wire number normalization");
+    let behavior = std::fs::read_to_string(dir.path().join("AgentBehavior.ts")).unwrap();
+    assert!(behavior.contains("inference_profile_id: string"));
+    assert!(!behavior.contains("inference_profile_id?:"));
+    let effort = std::fs::read_to_string(dir.path().join("ReasoningEffort.ts")).unwrap();
+    assert!(effort.contains("high") && effort.contains("none"));
+    let auth = std::fs::read_to_string(dir.path().join("BackendAuth.ts")).unwrap();
+    for configured in [
+        gents::document_config::BackendAuth::Unauthenticated,
+        gents::document_config::BackendAuth::ApiKey {
+            key: "secret".into(),
+        },
+        gents::document_config::BackendAuth::Environment {
+            variable: "API_KEY".into(),
+        },
+        gents::document_config::BackendAuth::PrincipalOAuth,
+    ] {
+        let wire = serde_json::to_value(configured).unwrap();
+        assert!(auth.contains(wire["kind"].as_str().unwrap()));
+    }
+    assert!(auth.contains("kind"));
+    let tools = std::fs::read_to_string(dir.path().join("Tools.ts")).unwrap();
+    assert!(tools.contains("host?: HostTools | null"));
+    assert!(tools.contains("tags?: Array<string> | null"));
+    for compact in [
+        serde_json::json!({"document":{"tools_id":"tools","agent_did":"did:test:owner"}}),
+        serde_json::json!({"document":{"tools_id":"tools","agent_did":"did:test:owner","tags":null,"host":{"files":{"mode":null}}}}),
+    ] {
+        serde_json::from_value::<ToolsSaveRequest>(compact).unwrap();
+    }
+    assert!(
+        serde_json::from_value::<ToolsSaveRequest>(serde_json::json!({
+            "document":{"tools_id":"tools","agent_did":"did:test:owner","enable_file_tools":true}
+        }))
+        .is_err()
+    );
 }

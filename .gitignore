@@ -28,3 +28,6 @@ target/npm-pack/
 # Python tooling and Harbor adapter bytecode
 __pycache__/
 *.py[cod]
+
+# Worktree-local Gents runtime, credentials, and review artifacts
+/.gents/

@@ -41,8 +41,9 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent_principal.json"))?;
-    let behavior_id = principal
+    let config_path = root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let behavior_id = config["agent_principal"]
         .get("default_behavior_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
@@ -51,66 +52,45 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
     let task_id = format!("{agent_name}-task");
     let schedule_id = format!("{agent_name}-schedule");
     let trigger_id = format!("{agent_name}-trigger");
+    let event_source_id = format!("{agent_name}-event-source");
     let service_id = format!("{agent_name}-mcp");
 
-    write_json_file(
-        &root
-            .join("tasks")
-            .join(crate::support::document_handle(&task_id))
-            .join("object.json"),
-        &serde_json::json!({
-            "task_id": task_id.clone(),
-            "name": "Read Commands Task",
-            "description": "Seeds config read command coverage.",
-            "behavior_id": behavior_id.clone(),
-            "prompt_template": "Report config read status.",
-            "enabled": false,
-        }),
-    )?;
-    write_json_file(
-        &root
-            .join("schedules")
-            .join(crate::support::document_handle(&schedule_id))
-            .join("object.json"),
-        &serde_json::json!({
-            "schedule_id": schedule_id.clone(),
-            "task_id": task_id.clone(),
-            "interval_secs": 3600,
-            "enabled": false,
-            "concurrency": "serial",
-        }),
-    )?;
-    write_json_file(
-        &root
-            .join("event_triggers")
-            .join(crate::support::document_handle(&trigger_id))
-            .join("object.json"),
-        &serde_json::json!({
-            "trigger_id": trigger_id.clone(),
-            "task_id": task_id.clone(),
-            "source_collection": "InferenceBackend",
-            "event_kind": "created",
-            "enabled": false,
-            "concurrency": "serial",
-        }),
-    )?;
-    write_json_file(
-        &root
-            .join("tool_services")
-            .join(crate::support::document_handle(&service_id))
-            .join("object.json"),
-        &serde_json::json!({
-            "service_id": service_id.clone(),
-            "display_name": "Read Commands MCP",
-            "description": "Seeded MCP service.",
-            "hostname": "localhost",
-            "tailscale_ip": "",
-            "lan_ip": "",
-            "mcp_port": 3030,
-            "mcp_path": "/mcp",
-            "send_agent_did": true,
-        }),
-    )?;
+    config["tasks"] = serde_json::json!([{
+        "task_id": task_id.clone(),
+        "display_name": "Read Commands Task",
+        "description": "Seeds config read command coverage.",
+        "behavior_id": behavior_id.clone(),
+        "prompt_template": "Report config read status.",
+        "enabled": false,
+    }]);
+    config["schedules"] = serde_json::json!([{
+        "schedule_id": schedule_id.clone(),
+        "cadence": {"kind": "interval", "interval_secs": 3600},
+    }]);
+    config["event_sources"] = serde_json::json!([{
+        "event_source_id": event_source_id.clone(),
+        "source_collection": "InferenceBackend",
+        "event_kind": "created",
+    }]);
+    config["triggers"] = serde_json::json!([{
+        "trigger_id": trigger_id.clone(),
+        "task_id": task_id.clone(),
+        "source": {"kind": "event", "event_source_id": event_source_id},
+        "enabled": false,
+        "concurrency": "serial",
+    }]);
+    config["tool_service_registries"] = serde_json::json!([{
+        "service_id": service_id.clone(),
+        "display_name": "Read Commands MCP",
+        "description": "Seeded MCP service.",
+        "hostname": "localhost",
+        "tailscale_ip": "",
+        "lan_ip": "",
+        "mcp_port": 3030,
+        "mcp_path": "/mcp",
+        "send_agent_did": true,
+    }]);
+    write_json_file(&config_path, &config)?;
 
     let apply = run_cli_json(
         &home_dir,
@@ -129,7 +109,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
         &home_dir,
         &graphql,
         &["config", "trigger"],
-        "EventTrigger",
+        "Trigger",
         "trigger_id",
         &trigger_id,
     )?;

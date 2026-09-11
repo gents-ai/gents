@@ -9,6 +9,8 @@ use chrono::{DateTime, Utc};
 use gents::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::graphql::GraphqlRequestOptions;
+use gents_protocol::request_admission::AgentRequestCreate;
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::Value;
@@ -45,25 +47,15 @@ pub(crate) struct SubmittedRequest {
     pub(crate) session_id: String,
     pub(crate) agent_did: String,
     pub(crate) behavior_id: Option<String>,
-    pub(crate) temperature: Option<f64>,
-    pub(crate) top_p: Option<f64>,
-    pub(crate) top_k: Option<i64>,
-    pub(crate) seed: Option<i64>,
-    pub(crate) max_tokens: Option<i64>,
-    pub(crate) max_total_tokens: Option<i64>,
-    pub(crate) metadata: Option<String>,
+    pub(crate) request_doc_id: String,
+    pub(crate) requester_did: Option<String>,
+    pub(crate) input: Option<RequestInput>,
     pub(crate) created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RequestSubmitOptions {
-    pub(crate) temperature: Option<f64>,
-    pub(crate) top_p: Option<f64>,
-    pub(crate) top_k: Option<i64>,
-    pub(crate) seed: Option<i64>,
-    pub(crate) max_tokens: Option<i64>,
-    pub(crate) max_total_tokens: Option<i64>,
-    pub(crate) metadata: Option<String>,
+    pub(crate) input: Option<RequestInput>,
     pub(crate) valid_until: Option<DateTime<Utc>>,
     pub(crate) retry_parent_request: Option<String>,
     pub(crate) retry_parent_request_doc_id: Option<String>,
@@ -71,90 +63,87 @@ pub(crate) struct RequestSubmitOptions {
     pub(crate) retry_key: Option<String>,
 }
 
-pub(crate) fn response_query(request_id: &str) -> String {
-    format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
-            ) {{
-                request_id
-                behavior_id
-                session_id
-                status
-                content
-                reasoning
-                error_message
-                token_count
-                progress_seq
-                reasoning_progress_seq
-                materialized_message_sequence
-                materialized_at
-                completed_at
-                interrupted_at
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    )
+pub(crate) fn response_query(request: &AgentRequestRow) -> Result<String> {
+    let physical = escape_graphql_string(
+        request
+            .doc_id
+            .as_deref()
+            .context("request missing physical identity")?,
+    );
+    let scope = gents::session::session_scope_filter(
+        request
+            .agent_did
+            .as_deref()
+            .context("request missing principal")?,
+        request
+            .session_id
+            .as_deref()
+            .context("request missing session")?,
+        request.requester_did.as_deref(),
+    );
+    Ok(format!(
+        r#"{{AgentResponse(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}},limit:2){{
+        _docID request_id request_doc_id agent_did requester_did behavior_id session_id
+        status content reasoning error_message token_count progress_seq reasoning_progress_seq
+        materialized_message_sequence materialized_at completed_at interrupted_at
+    }}}}"#
+    ))
 }
 
-fn response_wait_progress_query(request_id: &str) -> String {
-    format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
-            ) {{
-                _docID
-                request_id
-                session_id
-                status
-                content
-                reasoning
-                error_message
-                token_count
-                progress_seq
-                reasoning_progress_seq
-                materialized_message_sequence
-                materialized_at
-                completed_at
-                interrupted_at
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    )
+pub(crate) fn materialized_message_query(response: &Value, sequence: i64) -> Result<String> {
+    let owner = response
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .context("materialized response missing principal")?;
+    let session = response
+        .get("session_id")
+        .and_then(Value::as_str)
+        .context("materialized response missing session")?;
+    let requester = match response.get("requester_did") {
+        Some(Value::Null) => None,
+        Some(Value::String(did)) => Some(did.as_str()),
+        _ => anyhow::bail!("materialized response missing canonical requester scope"),
+    };
+    let physical = escape_graphql_string(
+        response
+            .get("request_doc_id")
+            .and_then(Value::as_str)
+            .context("materialized response missing physical request")?,
+    );
+    let scope = gents::session::session_scope_filter(owner, session, requester);
+    Ok(format!(
+        r#"{{AgentMessage(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}},sequence:{{_eq:{sequence}}}}},limit:2){{role content reasoning sequence}}}}"#
+    ))
 }
 
-pub(crate) fn materialized_message_query(session_id: &str, sequence: i64) -> String {
-    format!(
-        r#"{{
-            AgentMessage(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    sequence: {{ _eq: {sequence} }}
-                }},
-                limit: 1
-            ) {{
-                role
-                content
-                reasoning
-                sequence
-            }}
-        }}"#,
-        session_id = escape_graphql_string(session_id),
-    )
+pub(crate) fn optional_response_row(response: &Value) -> Result<Option<Value>> {
+    let rows = response
+        .pointer("/data/AgentResponse")
+        .and_then(Value::as_array)
+        .context("response query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "multiple responses for exact physical request"
+    );
+    Ok(rows.first().cloned())
 }
 
-pub(crate) fn request_terminal_query(request_id: &str) -> String {
+pub(crate) fn request_terminal_query(request_id: &str, physical: Option<&str>) -> String {
+    let filter = match physical {
+        Some(id) => format!("_docID:{{_eq:\"{}\"}}", escape_graphql_string(id)),
+        None => format!(
+            "request_id:{{_eq:\"{}\"}}",
+            escape_graphql_string(request_id)
+        ),
+    };
     format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                filter: {{ {filter} }},
                 order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
+                _docID agent_did requester_did session_id
                 request_id
                 lifecycle_state
                 failure_reason
@@ -162,7 +151,6 @@ pub(crate) fn request_terminal_query(request_id: &str) -> String {
                 valid_until
             }}
         }}"#,
-        request_id = escape_graphql_string(request_id),
     )
 }
 
@@ -246,20 +234,24 @@ pub(crate) async fn hydrate_materialized_response_content(
             MaterializedResponsePresentation::Invalid,
         ));
     };
-    let Some(session_id) = response.get("session_id").and_then(Value::as_str) else {
+    let Some(_session_id) = response.get("session_id").and_then(Value::as_str) else {
         return Ok(classify_materialized_response(
             response,
             MaterializedResponsePresentation::Invalid,
         ));
     };
 
-    let query = materialized_message_query(session_id, sequence);
+    let query = materialized_message_query(response, sequence)?;
     let message_response = post_graphql(graphql, &query).await?;
-    let Some(message) = message_response
+    let messages = message_response
         .pointer("/data/AgentMessage")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-    else {
+        .context("materialized message query omitted rows")?;
+    anyhow::ensure!(
+        messages.len() <= 1,
+        "ambiguous materialized message within exact request scope"
+    );
+    let Some(message) = messages.first() else {
         return Ok(classify_materialized_response(
             response,
             MaterializedResponsePresentation::Pending,
@@ -322,7 +314,7 @@ pub(crate) async fn create_agent_request(
     behavior_id: Option<&str>,
     options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
-    let (prepared, _) = prepare_agent_request(
+    let prepared = prepare_agent_request(
         graphql,
         agent_did,
         content,
@@ -335,39 +327,12 @@ pub(crate) async fn create_agent_request(
     submit_prepared_agent_request_committed(graphql, &prepared).await
 }
 
-/// Create one stable, signed request mutation and retry transient submission
-/// failures without minting a new request identity. After every ambiguous
-/// failure, a request-id read proves whether the mutation committed before it
-/// is sent again.
-pub(crate) async fn create_agent_request_retrying_transient(
-    graphql: &str,
-    agent_did: &str,
-    content: &str,
-    session_id: Option<&str>,
-    behavior_id: Option<&str>,
-    request_id: String,
-    options: RequestSubmitOptions,
-) -> Result<SubmittedRequest> {
-    let (prepared, _) = prepare_agent_request(
-        graphql,
-        agent_did,
-        content,
-        session_id,
-        behavior_id,
-        Some(request_id),
-        options,
-    )
-    .await?;
-    submit_prepared_agent_request_committed(graphql, &prepared).await
-}
-
 #[derive(Debug, Clone)]
-struct PreparedAgentRequest {
-    mutation: String,
-    submitted: SubmittedRequest,
+pub(crate) struct PreparedAgentRequest {
+    pub(crate) create: AgentRequestCreate,
 }
 
-async fn prepare_agent_request(
+pub(crate) async fn prepare_agent_request(
     graphql: &str,
     agent_did: &str,
     content: &str,
@@ -375,15 +340,9 @@ async fn prepare_agent_request(
     behavior_id: Option<&str>,
     request_id: Option<String>,
     options: RequestSubmitOptions,
-) -> Result<(
-    PreparedAgentRequest,
-    gents_protocol::request_admission::AgentRequestCreate,
-)> {
-    if options.seed.is_some_and(|seed| seed < 0) {
-        anyhow::bail!("seed must be non-negative");
-    }
-    let (request_content, request_metadata) =
-        content_and_metadata_with_prompt_selected_skill_ids(options.metadata.as_deref(), content);
+) -> Result<PreparedAgentRequest> {
+    let (request_content, request_input) =
+        content_and_input_with_prompt_selected_skill_ids(options.input, content);
     let request_id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let behavior_id = resolve_request_behavior_id(graphql, agent_did, behavior_id).await?;
     let session_id = session_id
@@ -407,16 +366,7 @@ async fn prepare_agent_request(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did);
     let create = gents::build_signed_request(
         gents::RequestSpec {
-            sampling: Some(gents::SamplingCarryover {
-                temperature: options.temperature,
-                top_p: options.top_p,
-                top_k: options.top_k,
-                seed: options.seed,
-                max_tokens: options.max_tokens,
-                max_total_tokens: options.max_total_tokens,
-                backend_id: None,
-            }),
-            metadata: request_metadata.clone(),
+            input: request_input,
             valid_until: options
                 .valid_until
                 .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
@@ -446,28 +396,7 @@ async fn prepare_agent_request(
         gents::RequestSigner::RegisteredTarget,
     )
     .await?;
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    let submitted = SubmittedRequest {
-        request_id,
-        session_id,
-        agent_did: agent_did.to_string(),
-        behavior_id: Some(behavior_id),
-        temperature: options.temperature,
-        top_p: options.top_p,
-        top_k: options.top_k,
-        seed: options.seed,
-        max_tokens: options.max_tokens,
-        max_total_tokens: options.max_total_tokens,
-        metadata: request_metadata,
-        created_at: Some(created_at),
-    };
-    Ok((
-        PreparedAgentRequest {
-            mutation,
-            submitted,
-        },
-        create,
-    ))
+    Ok(PreparedAgentRequest { create })
 }
 
 /// Atomically establish a session goal and publish its first runnable request.
@@ -504,7 +433,7 @@ pub(crate) async fn create_goal_backed_agent_request(
         "goal-submit:{}",
         gents::goal::deterministic_goal_creation_key(agent_did, session_id)
     );
-    let (prepared, create) = prepare_agent_request(
+    let prepared = prepare_agent_request(
         graphql,
         agent_did,
         content,
@@ -525,10 +454,10 @@ pub(crate) async fn create_goal_backed_agent_request(
         session_id,
         objective,
         token_budget,
-        &create,
+        &prepared.create,
     )
     .await?;
-    Ok(prepared.submitted)
+    committed_submitted_request(graphql, &prepared.create).await
 }
 
 /// Embedded adapters keep their prompt identity and cancellation path while
@@ -546,7 +475,7 @@ pub(crate) async fn create_goal_backed_agent_request_local(
     mut options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
     options.retry_key = Some(format!("goal-request:{request_id}"));
-    let (prepared, create) = prepare_agent_request(
+    let prepared = prepare_agent_request(
         graphql,
         agent_did,
         objective,
@@ -562,38 +491,97 @@ pub(crate) async fn create_goal_backed_agent_request_local(
         session_id,
         objective,
         token_budget,
-        &create,
+        &prepared.create,
     )
     .await?;
-    Ok(prepared.submitted.clone())
+    committed_submitted_request(graphql, &prepared.create).await
 }
 
-async fn submit_prepared_agent_request_committed(
+pub(crate) async fn submit_prepared_agent_request_committed(
     graphql: &str,
     prepared: &PreparedAgentRequest,
 ) -> Result<SubmittedRequest> {
     let access = gents::ConfigAccess::Graphql(graphql.to_string());
-    let request_id = prepared.submitted.request_id.as_str();
+    let mutation = prepared
+        .create
+        .graphql_mutation()
+        .map_err(anyhow::Error::msg)?;
     access
-        .write_with_receipt("cli.request.submit", &prepared.mutation, || {
-            submitted_request_exists(graphql, request_id)
+        .write_with_receipt("cli.request.submit", &mutation, || async {
+            Ok(matching_prepared_receipt(graphql, &prepared.create)
+                .await?
+                .is_some())
         })
         .await
-        .with_context(|| format!("submitting prepared AgentRequest {request_id}"))?;
-    Ok(prepared.submitted.clone())
+        .with_context(|| {
+            format!(
+                "submitting prepared AgentRequest {}",
+                prepared.create.request_id
+            )
+        })?;
+    let row = matching_prepared_receipt(graphql, &prepared.create)
+        .await?
+        .context("committed signed request receipt missing")?;
+    submitted_from_receipt(row)
 }
 
-async fn submitted_request_exists(graphql: &str, request_id: &str) -> Result<bool> {
-    let escaped_request_id = escape_graphql_string(request_id);
+async fn committed_submitted_request(
+    graphql: &str,
+    create: &AgentRequestCreate,
+) -> Result<SubmittedRequest> {
+    let row = read_submitted_receipt(graphql, create)
+        .await?
+        .context("committed signed request receipt is missing")?;
+    submitted_from_receipt(row)
+}
+
+fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
+    Ok(SubmittedRequest {
+        request_doc_id: row
+            .doc_id
+            .filter(|id| !id.is_empty())
+            .context("receipt has no physical identity")?,
+        request_id: row.request_id,
+        session_id: row.session_id.context("receipt has no session")?,
+        agent_did: row.agent_did.context("receipt has no principal")?,
+        requester_did: row.requester_did,
+        behavior_id: row.behavior_id,
+        input: row.input,
+        created_at: row.created_at,
+    })
+}
+
+pub(crate) async fn matching_prepared_receipt(
+    graphql: &str,
+    create: &AgentRequestCreate,
+) -> Result<Option<AgentRequestRow>> {
+    let Some(row) = read_submitted_receipt(graphql, create).await? else {
+        return Ok(None);
+    };
+    let signature = bs58::encode(&create.admission.signature).into_string();
+    anyhow::ensure!(
+        row.admission_signer_did.as_deref() == Some(create.admission.signer_did.as_str())
+            && row.admission_signature.as_deref() == Some(signature.as_str()),
+        "submission receipt differs from prepared signed request"
+    );
+    Ok(Some(row))
+}
+
+async fn read_submitted_receipt(
+    graphql: &str,
+    create: &AgentRequestCreate,
+) -> Result<Option<AgentRequestRow>> {
+    let scope = gents::session::session_scope_filter(
+        &create.agent_did,
+        &create.session_id,
+        (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
+    );
+    let logical = escape_graphql_string(&create.request_id);
     let response = gents::config_client::query_graphql_with_options(
         graphql,
         &format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                    limit: 2
-                ) {{ request_id }}
-            }}"#
+            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{{}}}}}",
+            gents::SIGNED_REQUEST_FIELDS
         ),
         GraphqlRequestOptions {
             timeout: Duration::from_secs(30),
@@ -602,18 +590,26 @@ async fn submitted_request_exists(graphql: &str, request_id: &str) -> Result<boo
         },
     )
     .await
-    .context("reading stable request receipt")?;
+    .context("reading immutable signed submission receipt")?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if rows.len() > 1 {
-        anyhow::bail!("request_id {request_id} became ambiguous during submission recovery");
-    }
-    Ok(rows
-        .first()
-        .is_some_and(|row| row.get("request_id").and_then(Value::as_str) == Some(request_id)))
+        .context("request receipt query omitted rows")?;
+    anyhow::ensure!(rows.len() <= 1, "ambiguous scoped submission receipt");
+    let Some(value) = rows.first() else {
+        return Ok(None);
+    };
+    let row: AgentRequestRow = serde_json::from_value(value.clone())?;
+    anyhow::ensure!(
+        row.request_id == create.request_id
+            && row.agent_did.as_deref() == Some(create.agent_did.as_str())
+            && row.session_id.as_deref() == Some(create.session_id.as_str())
+            && row.requester_did.as_deref()
+                == (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
+        "submission receipt crossed exact request scope"
+    );
+    gents::verify_request_receipt_signature(&row)?;
+    Ok(Some(row))
 }
 
 async fn resolve_request_behavior_id(
@@ -680,55 +676,18 @@ async fn resolve_request_behavior_id(
     Ok(behavior_id)
 }
 
-pub(crate) fn content_and_metadata_with_prompt_selected_skill_ids(
-    metadata: Option<&str>,
+pub(crate) fn content_and_input_with_prompt_selected_skill_ids(
+    input: Option<RequestInput>,
     content: &str,
-) -> (String, Option<String>) {
+) -> (String, RequestInput) {
     let selection = prompt_slash_skill_selection(content);
-    let Some(metadata) = metadata_with_selected_skill_ids(metadata, &selection.selected_skill_ids)
-    else {
-        return (content.to_string(), metadata.map(ToOwned::to_owned));
-    };
-    (selection.prompt, metadata)
-}
-
-fn metadata_with_selected_skill_ids(
-    metadata: Option<&str>,
-    selected: &[String],
-) -> Option<Option<String>> {
-    if selected.is_empty() {
-        return Some(metadata.map(ToOwned::to_owned));
-    }
-
-    let mut value = match metadata.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(raw) => match serde_json::from_str::<Value>(raw) {
-            Ok(value) if value.is_object() => value,
-            _ => return None,
-        },
-        None => serde_json::json!({}),
-    };
-
-    let Some(object) = value.as_object_mut() else {
-        return None;
-    };
-    let entry = object
-        .entry("selected_skill_ids".to_string())
-        .or_insert_with(|| serde_json::json!([]));
-    if !entry.is_array() {
-        return None;
-    }
-    let Some(ids) = entry.as_array_mut() else {
-        return None;
-    };
-    for id in selected {
-        let already_present = ids
-            .iter()
-            .any(|existing| existing.as_str() == Some(id.as_str()));
-        if !already_present {
-            ids.push(Value::String(id.clone()));
+    let mut input = input.unwrap_or_default();
+    for id in selection.selected_skill_ids {
+        if !input.selected_skill_ids.contains(&id) {
+            input.selected_skill_ids.push(id);
         }
     }
-    Some(Some(value.to_string()))
+    (selection.prompt, input)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -815,15 +774,23 @@ pub(crate) async fn wait_for_terminal_response(
     let mut last_progress_at = tokio::time::Instant::now();
     let mut last_progress_marker: Option<WaitProgressMarker> = None;
 
+    let mut pinned: Option<AgentRequestRow> = None;
     loop {
         let (request_row, request_value) = {
-            let query = request_terminal_query(request_id);
+            let query = request_terminal_query(
+                request_id,
+                pinned.as_ref().and_then(|row| row.doc_id.as_deref()),
+            );
             let response = post_graphql(graphql, &query).await?;
-            let value = response
+            let rows = response
                 .pointer("/data/AgentRequest")
-                .and_then(|v| v.as_array())
-                .and_then(|rows| rows.first())
-                .cloned();
+                .and_then(Value::as_array)
+                .context("terminal request query omitted rows")?;
+            anyhow::ensure!(
+                rows.len() <= 1,
+                "ambiguous request ID while selecting terminal request"
+            );
+            let value = rows.first().cloned();
             let row = value
                 .as_ref()
                 .map(|row| {
@@ -833,14 +800,27 @@ pub(crate) async fn wait_for_terminal_response(
                 .transpose()?;
             (row, value)
         };
-        let response_row = {
-            let query = response_wait_progress_query(request_id);
-            let response = post_graphql(graphql, &query).await?;
-            response
-                .pointer("/data/AgentResponse")
-                .and_then(|v| v.as_array())
-                .and_then(|rows| rows.first())
-                .cloned()
+        if let Some(request) = request_row.as_ref() {
+            anyhow::ensure!(
+                request.doc_id.is_some(),
+                "terminal request has no physical identity"
+            );
+            if let Some(original) = pinned.as_ref() {
+                anyhow::ensure!(
+                    request.agent_did == original.agent_did
+                        && request.requester_did == original.requester_did
+                        && request.session_id == original.session_id
+                        && request.request_id == original.request_id,
+                    "terminal request scope changed"
+                );
+            } else {
+                pinned = Some(request.clone());
+            }
+        }
+        let response_row = if let Some(request) = request_row.as_ref() {
+            optional_response_row(&post_graphql(graphql, &response_query(request)?).await?)?
+        } else {
+            None
         };
 
         let marker = wait_progress_marker(request_row.as_ref(), response_row.as_ref());
@@ -861,16 +841,6 @@ pub(crate) async fn wait_for_terminal_response(
             "complete" | "completed" | "error" | "failed" | "interrupted" // AgentResponse.status
         );
         if terminal_by_request || terminal_by_response {
-            let response_row = if response_row.is_some() {
-                let response = post_graphql(graphql, &response_query(request_id)).await?;
-                response
-                    .pointer("/data/AgentResponse")
-                    .and_then(|v| v.as_array())
-                    .and_then(|rows| rows.first())
-                    .cloned()
-            } else {
-                None
-            };
             let mut envelope = response_row.unwrap_or_else(|| {
                 serde_json::json!({
                     "request_id": request_id,
@@ -1074,13 +1044,9 @@ pub(crate) async fn fetch_request_view(graphql: &str, request_id: &str) -> Resul
                 lifecycle_state
                 failure_reason
                 retry_root_request
-                temperature
-                top_p
-                top_k
-                seed
-                max_tokens
-                max_total_tokens
-                metadata
+                requester_did
+                session_id
+                input
             }}
         }}"#,
         request_id = escape_graphql_string(request_id),
@@ -1107,9 +1073,8 @@ pub(crate) async fn fetch_request_view(graphql: &str, request_id: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        content_and_metadata_with_prompt_selected_skill_ids, create_agent_request,
-        materialized_message_query, submit_prepared_agent_request_committed, PreparedAgentRequest,
-        RequestSubmitOptions, SubmittedRequest,
+        content_and_input_with_prompt_selected_skill_ids, materialized_message_query,
+        submit_prepared_agent_request_committed, PreparedAgentRequest, RequestSubmitOptions,
     };
     use axum::{
         body::{Body, Bytes},
@@ -1126,6 +1091,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct AmbiguousSubmitState {
         durable_ids: Arc<Mutex<BTreeSet<String>>>,
+        receipt: Arc<Mutex<Value>>,
         mutation_count: Arc<std::sync::atomic::AtomicUsize>,
         lose_transport_response: Arc<std::sync::atomic::AtomicBool>,
     }
@@ -1171,36 +1137,48 @@ mod tests {
             .lock()
             .expect("durable ids")
             .iter()
-            .map(|request_id| json!({"request_id": request_id}))
+            .map(|_| state.receipt.lock().unwrap().clone())
             .collect();
         Json(json!({"data": {"AgentRequest": rows}})).into_response()
     }
 
-    fn stable_test_prepared_request() -> PreparedAgentRequest {
-        PreparedAgentRequest {
-            // Keep the fixture byte-identical on the wire without placing the
-            // raw production-write spelling in this source file. The runtime
-            // fence scans the whole file (including tests) for direct writers.
-            mutation: concat!(
-                "mutation { create_",
-                "AgentRequest(input: { request_id: \"stable-request-id\" }) { _docID } }"
-            )
-            .to_string(),
-            submitted: SubmittedRequest {
-                request_id: "stable-request-id".to_string(),
-                session_id: "session".to_string(),
-                agent_did: "did:key:test".to_string(),
-                behavior_id: Some("behavior".to_string()),
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
-                metadata: None,
-                created_at: None,
-            },
-        }
+    async fn stable_test_prepared_request() -> (PreparedAgentRequest, Value) {
+        use gents::AgentIdentity;
+        let dir = tempfile::tempdir().unwrap();
+        let identity =
+            gents::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+        let did = identity.did().to_string();
+        let create = gents::build_signed_request(
+            gents::RequestSpec::new(
+                gents::RequestIdentity {
+                    request_id: "stable-request-id".into(),
+                    agent_did: did.clone(),
+                    requester_did: None,
+                    behavior_id: "behavior".into(),
+                    session_id: "session".into(),
+                    content: "hello".into(),
+                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: "2026-09-01T00:00:00Z".into(),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+            ),
+            gents::RequestSigner::Identity(&identity),
+        )
+        .await
+        .unwrap();
+        let receipt = json!({
+            "_docID":"physical-receipt", "request_id":create.request_id, "agent_did":create.agent_did,
+            "requester_did":create.requester_did, "behavior_id":create.behavior_id, "session_id":create.session_id,
+            "content":create.content, "input":create.input, "execution_origin":create.execution_origin,
+            "created_at":create.created_at, "retry_parent_request":create.retry_parent_request,
+            "retry_root_request":create.retry_root_request, "retry_count":create.retry_count,
+            "max_retries":create.max_retries, "subagent_depth":create.subagent_depth,
+            "admission_kind":"local-self", "admission_signer_did":create.admission.signer_did,
+            "admission_signature":bs58::encode(&create.admission.signature).into_string()
+        });
+        gents::verify_request_receipt_signature(&serde_json::from_value(receipt.clone()).unwrap())
+            .unwrap();
+        (PreparedAgentRequest { create }, receipt)
     }
 
     #[tokio::test]
@@ -1216,7 +1194,8 @@ mod tests {
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
-        let prepared = stable_test_prepared_request();
+        let (prepared, receipt) = stable_test_prepared_request().await;
+        *state.receipt.lock().unwrap() = receipt;
         let submitted =
             submit_prepared_agent_request_committed(&format!("http://{address}/"), &prepared)
                 .await
@@ -1249,7 +1228,8 @@ mod tests {
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
-        let prepared = stable_test_prepared_request();
+        let (prepared, receipt) = stable_test_prepared_request().await;
+        *state.receipt.lock().unwrap() = receipt;
         let submitted =
             submit_prepared_agent_request_committed(&format!("http://{address}/"), &prepared)
                 .await
@@ -1264,6 +1244,101 @@ mod tests {
         );
         assert_eq!(state.durable_ids.lock().expect("durable ids").len(), 1);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn submission_receipt_rejects_tampered_signed_content() {
+        let (prepared, mut receipt) = stable_test_prepared_request().await;
+        receipt["content"] = json!("substituted content");
+        let state = AmbiguousSubmitState::default();
+        state
+            .durable_ids
+            .lock()
+            .unwrap()
+            .insert(prepared.create.request_id.clone());
+        *state.receipt.lock().unwrap() = receipt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+        let router = Router::new()
+            .route("/", post(ambiguous_submit_endpoint))
+            .with_state(state.clone());
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        assert!(
+            super::matching_prepared_receipt(&endpoint, &prepared.create)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            state
+                .mutation_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        server.abort();
+    }
+
+    #[test]
+    fn response_and_hydration_queries_require_exact_physical_scope() {
+        let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":"physical", "request_id":"label", "agent_did":"owner", "session_id":"session", "requester_did":null})).unwrap();
+        let query = super::response_query(&row).unwrap();
+        assert!(query.contains("request_doc_id:{_eq:\"physical\"}"));
+        assert!(query.contains("requester_did: { _eq: null }"));
+        assert!(super::optional_response_row(&json!({"data":{"AgentResponse":[{},{}]}})).is_err());
+        assert!(super::optional_response_row(&json!({"data":{}})).is_err());
+        assert!(super::materialized_message_query(
+            &json!({"agent_did":"owner","session_id":"session","request_doc_id":"physical"}),
+            1
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn materialized_hydration_uses_actual_owner_requester_and_physical_request(
+    ) -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(dir.path())
+                .build()
+                .await?,
+        );
+        gents::ensure_runtime_schemas(&node).await?;
+        gents::ConfigAccess::transact_local(&node, None, "test.cli.hydration", |txn| Box::pin(async move {
+            for (key, owner, requester, physical, text) in [
+                ("foreign-owner", "foreign", None, "physical", "wrong owner"),
+                ("foreign-requester", "owner", Some("other"), "physical", "wrong requester"),
+                ("foreign-request", "owner", None, "other-physical", "wrong request"),
+                ("selected", "owner", None, "physical", "selected answer"),
+            ] {
+                let content = json!({"role":"assistant","id":null,"content":[{"text":text}]}).to_string();
+                txn.execute_with_variables("mutation($input:AgentMessageMutationInputArg!){create_AgentMessage(input:$input){_docID}}", &json!({"input":{"message_key":key,"agent_did":owner,"requester_did":requester,"session_id":"session","request_doc_id":physical,"request_id":"label","sequence":7,"role":"assistant","content":content,"reasoning":"selected reasoning","timestamp":"2026-09-01T00:00:00Z"}})).await?;
+            }
+            Ok(())
+        })).await?;
+        let served = node.clone();
+        let app = Router::new().route(
+            "/",
+            post(move |Json(body): Json<Value>| {
+                let node = served.clone();
+                async move { Json(node.execute(body["query"].as_str().unwrap()).await) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}/", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let mut response = json!({"request_id":"label","agent_did":"owner","requester_did":null,"session_id":"session","request_doc_id":"physical","status":"complete","content":"","reasoning":"","materialized_message_sequence":7});
+        assert_eq!(
+            super::hydrate_materialized_response_content(&endpoint, &mut response).await?,
+            super::MaterializedResponsePresentation::Presentable
+        );
+        assert_eq!(response["content"], "selected answer");
+        server.abort();
+        node.shutdown().await;
+        Ok(())
     }
 
     #[tokio::test]
@@ -1291,13 +1366,10 @@ mod tests {
             None,
             Some("stable-request".into()),
             RequestSubmitOptions {
-                temperature: Some(0.35),
-                top_p: Some(0.92),
-                top_k: Some(32),
-                seed: Some(1234),
-                max_tokens: Some(2048),
-                max_total_tokens: Some(100_000),
-                metadata: Some(r#"{"case":"client"}"#.into()),
+                input: Some(gents_protocol::request_input::RequestInput {
+                    cwd: Some("/work".into()),
+                    ..Default::default()
+                }),
                 valid_until: Some("2030-01-01T00:00:00Z".parse()?),
                 retry_parent_request: Some("parent".into()),
                 retry_parent_request_doc_id: Some("parent-doc".into()),
@@ -1307,16 +1379,10 @@ mod tests {
         )
         .await;
         server.abort();
-        let (_, create) = result?;
+        let create = result?.create;
         assert_eq!(create.request_id, "stable-request");
         assert_eq!(create.requester_did, did);
-        assert_eq!(create.behavior_id.as_deref(), Some("default"));
-        assert_eq!(create.temperature, Some(0.35));
-        assert_eq!(create.top_p, Some(0.92));
-        assert_eq!(create.top_k, Some(32));
-        assert_eq!(create.seed, Some(1234));
-        assert_eq!(create.max_tokens, Some(2048));
-        assert_eq!(create.max_total_tokens, Some(100_000));
+        assert_eq!(create.behavior_id, "default");
         assert_eq!(create.valid_until.as_deref(), Some("2030-01-01T00:00:00Z"));
         assert_eq!(create.retry_parent_request.as_deref(), Some("parent"));
         assert_eq!(
@@ -1326,13 +1392,8 @@ mod tests {
         assert_eq!(create.retry_root_request.as_deref(), Some("root"));
         assert_eq!(create.retry_key.as_deref(), Some("goal-submit:key"));
         assert_eq!((create.retry_count, create.max_retries), (0, 3));
-        let metadata: serde_json::Value =
-            serde_json::from_str(create.metadata.as_deref().unwrap())?;
-        assert_eq!(metadata["case"], "client");
-        assert_eq!(
-            metadata["selected_skill_ids"],
-            serde_json::json!(["vuln-scan"])
-        );
+        assert_eq!(create.input.cwd.as_deref(), Some("/work"));
+        assert_eq!(create.input.selected_skill_ids, ["vuln-scan"]);
         assert!(
             identity
                 .verify(&did, &create.signing_payload(), &create.admission.signature)
@@ -1341,70 +1402,51 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn create_agent_request_rejects_negative_seed_before_network_io() {
-        let error = create_agent_request(
-            "http://127.0.0.1:1/graphql",
-            "did:key:test",
-            "hello",
-            Some("session-one"),
-            None,
-            RequestSubmitOptions {
-                seed: Some(-1),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.to_string(), "seed must be non-negative");
+    #[test]
+    fn retired_request_sampling_and_metadata_are_rejected() {
+        for field in ["seed", "temperature", "metadata", "max_total_tokens"] {
+            let input = json!({field: 1});
+            assert!(
+                serde_json::from_value::<gents_protocol::request_input::RequestInput>(input)
+                    .is_err()
+            );
+        }
     }
 
     #[test]
     fn materialized_message_query_loads_dedicated_reasoning() {
-        let query = materialized_message_query("session-1", 7);
+        let query = materialized_message_query(&json!({"agent_did":"owner","requester_did":null,"session_id":"session-1","request_doc_id":"physical"}), 7).unwrap();
         assert!(query.contains("reasoning"));
-        assert!(query.contains("sequence: { _eq: 7 }"));
+        assert!(query.contains("sequence:{_eq:7}"));
+        assert!(query.contains("request_doc_id:{_eq:\"physical\"}"));
+        assert!(query.contains("requester_did"));
     }
 
     #[test]
-    fn slash_prompt_adds_selected_skill_ids_metadata() {
-        let (_content, metadata) =
-            content_and_metadata_with_prompt_selected_skill_ids(None, "/vuln-scan /work");
-        assert_eq!(
-            metadata.as_deref(),
-            Some(r#"{"selected_skill_ids":["vuln-scan"]}"#)
-        );
+    fn slash_prompt_adds_selected_skill_ids() {
+        let (_, input) = content_and_input_with_prompt_selected_skill_ids(None, "/vuln-scan /work");
+        assert_eq!(input.selected_skill_ids, ["vuln-scan"]);
     }
 
     #[test]
-    fn slash_prompt_merges_existing_selected_skill_ids() {
-        let (_content, metadata) = content_and_metadata_with_prompt_selected_skill_ids(
-            Some(r#"{"codex_shim":{},"selected_skill_ids":["triage"]}"#),
+    fn slash_prompt_merges_skills_and_preserves_other_typed_input() {
+        let (_, input) = content_and_input_with_prompt_selected_skill_ids(
+            Some(gents_protocol::request_input::RequestInput {
+                cwd: Some("/work".into()),
+                selected_skill_ids: vec!["triage".into(), "vuln-scan".into()],
+                ..Default::default()
+            }),
             "/vuln-scan /work",
         );
-        let metadata = metadata.expect("metadata");
-        assert!(metadata.contains(r#""codex_shim":{}"#));
-        assert!(metadata.contains(r#""triage""#));
-        assert!(metadata.contains(r#""vuln-scan""#));
-    }
-
-    #[test]
-    fn invalid_existing_metadata_is_preserved() {
-        let (content, metadata) =
-            content_and_metadata_with_prompt_selected_skill_ids(Some("not json"), "/vuln-scan");
-        assert_eq!(content, "/vuln-scan");
-        assert_eq!(metadata, Some("not json".to_string()));
+        assert_eq!(input.cwd.as_deref(), Some("/work"));
+        assert_eq!(input.selected_skill_ids, ["triage", "vuln-scan"]);
     }
 
     #[test]
     fn slash_prompt_strips_control_syntax_from_request_content() {
-        let (content, metadata) =
-            content_and_metadata_with_prompt_selected_skill_ids(None, "/vuln-scan\nReview /work");
-
+        let (content, input) =
+            content_and_input_with_prompt_selected_skill_ids(None, "/vuln-scan\nReview /work");
         assert_eq!(content, "Review /work");
-        assert_eq!(
-            metadata.as_deref(),
-            Some(r#"{"selected_skill_ids":["vuln-scan"]}"#)
-        );
+        assert_eq!(input.selected_skill_ids, ["vuln-scan"]);
     }
 }

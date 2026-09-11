@@ -31,6 +31,9 @@ fn capability(
     outputs: Vec<PortSpec>,
 ) -> StageCapability {
     StageCapability {
+        agent_did: "did:key:composer".to_owned(),
+        tags: vec![],
+        workspace_authority: None,
         capability_id: id.to_owned(),
         revision: "v1".to_owned(),
         task_id: behavior.to_owned(),
@@ -59,6 +62,8 @@ fn catalog() -> Vec<StageCapability> {
 
 fn linear_intent() -> GraphIntent {
     GraphIntent {
+        agent_did: "did:key:composer".to_owned(),
+        tags: vec![],
         graph_id: "review-pipeline".to_owned(),
         nodes: vec![
             GraphNode {
@@ -81,7 +86,7 @@ fn linear_intent() -> GraphIntent {
                 node_id: "review".to_owned(),
                 port: "finding".to_owned(),
             },
-            delivery: DeliveryMode::PerDocument,
+            delivery: None,
             concurrency: DeliveryConcurrency::Parallel,
             predicate: None,
         }],
@@ -247,16 +252,18 @@ fn per_group_requires_one_to_many_and_a_bounded_group() {
     let mut capabilities = catalog();
     capabilities[1].input_ports[0] = many_port("finding", "ExperimentFinding/v1", true);
     let mut intent = linear_intent();
-    intent.edges[0].delivery = DeliveryMode::PerGroup {
-        expected: GroupCount::Static { count: 3 },
+    intent.edges[0].delivery = Some(crate::document_config::EventGroup {
+        expected_count: Some(GroupCount::Fixed(3)),
         timeout_secs: None,
-    };
+        min_count: None,
+    });
     assert!(compile(&intent, &capabilities).is_ok());
 
-    intent.edges[0].delivery = DeliveryMode::PerGroup {
-        expected: GroupCount::Static { count: 1 },
+    intent.edges[0].delivery = Some(crate::document_config::EventGroup {
+        expected_count: Some(GroupCount::Fixed(1)),
         timeout_secs: None,
-    };
+        min_count: None,
+    });
     let error = compile(&intent, &capabilities).unwrap_err();
     assert!(has_code(&error, DiagnosticCode::InvalidGroupSize));
 }
@@ -266,22 +273,26 @@ fn per_group_accepts_a_bounded_source_field_and_validates_timeout() {
     let mut capabilities = catalog();
     capabilities[1].input_ports[0] = many_port("finding", "ExperimentFinding/v1", true);
     let mut intent = linear_intent();
-    intent.edges[0].delivery = DeliveryMode::PerGroup {
-        expected: GroupCount::SourceField {
-            field: "expected_total".to_owned(),
-        },
+    intent.edges[0].delivery = Some(crate::document_config::EventGroup {
+        expected_count: Some(crate::document_config::EventGroupCount::SourceField {
+            source_field: "expected_total".to_owned(),
+        }),
         timeout_secs: Some(60),
-    };
+        min_count: None,
+    });
     intent.edges[0].concurrency = DeliveryConcurrency::Serial;
 
     let plan = compile(&intent, &capabilities).expect("source-field group is valid");
     assert_eq!(plan.edges[0].delivery, intent.edges[0].delivery);
     assert_eq!(plan.edges[0].concurrency, DeliveryConcurrency::Serial);
 
-    if let DeliveryMode::PerGroup {
-        expected: GroupCount::SourceField { field },
+    if let Some(crate::document_config::EventGroup {
+        expected_count: Some(GroupCount::SourceField {
+            source_field: field,
+        }),
         timeout_secs,
-    } = &mut intent.edges[0].delivery
+        ..
+    }) = &mut intent.edges[0].delivery
     {
         *field = "not-valid!".to_owned();
         *timeout_secs = Some(0);
@@ -347,7 +358,6 @@ fn package_plan(artifacts: Vec<PlannedPackageArtifact>) -> PackagePlan {
             binary_version: "0.12.0".to_owned(),
             build_commit: "test".to_owned(),
         },
-        roles: BTreeMap::new(),
         workspace_authority: BTreeMap::new(),
         predecessor_revision_digest: None,
         artifacts,
@@ -360,14 +370,12 @@ fn package_plan_order_is_canonical_and_configuration_changes_revision_identity()
     let artifacts = vec![
         PlannedPackageArtifact {
             logical_id: "review".to_owned(),
-            physical_id: "pkg-review".to_owned(),
-            kind: PackageArtifactKind::Task,
+            collection: crate::Collection::Task,
             content_digest: format!("sha256:{}", "b".repeat(64)),
         },
         PlannedPackageArtifact {
             logical_id: "prepare".to_owned(),
-            physical_id: "pkg-prepare".to_owned(),
-            kind: PackageArtifactKind::Behavior,
+            collection: crate::Collection::AgentBehavior,
             content_digest: format!("sha256:{}", "a".repeat(64)),
         },
     ];
@@ -382,16 +390,11 @@ fn package_plan_order_is_canonical_and_configuration_changes_revision_identity()
     assert_eq!(first, second);
 
     let mut configured = package_plan(first.package.clone().unwrap().artifacts);
-    configured.roles.insert(
-        "reviewer".to_owned(),
-        PackageRoleBinding {
-            principal_did: "did:key:reviewer".to_owned(),
-            deployment_id: "local".to_owned(),
-            backend_id: Some("backend".to_owned()),
-            profile_id: Some("profile".to_owned()),
-            model_name: Some("model".to_owned()),
-        },
-    );
+    configured.artifacts.push(PlannedPackageArtifact {
+        collection: crate::Collection::AgentContext,
+        logical_id: "review-context".to_owned(),
+        content_digest: format!("sha256:{}", "c".repeat(64)),
+    });
     let configured = bind_package_plan(compile(&linear_intent(), &catalog()).unwrap(), configured);
     assert_ne!(first.digest, configured.digest);
     assert!(verify_graph_plan_digest(&configured));
@@ -432,7 +435,7 @@ fn rejects_cycles_and_unreachable_nodes() {
             node_id: "extract".to_owned(),
             port: "review".to_owned(),
         },
-        delivery: DeliveryMode::PerDocument,
+        delivery: None,
         concurrency: DeliveryConcurrency::Parallel,
         predicate: None,
     });

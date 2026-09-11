@@ -56,17 +56,19 @@ pub(super) fn message_is_runtime_control(
     requests_by_id: &HashMap<&str, &AgentRequestRow>,
     keyed_steering_request_ids: &std::collections::BTreeSet<String>,
 ) -> bool {
-    let request_metadata = message
+    let request_input = message
         .request_id
         .as_deref()
         .and_then(|request_id| requests_by_id.get(request_id))
-        .and_then(|request| request.metadata.as_deref());
+        .and_then(|request| request.input.as_ref())
+        .cloned()
+        .unwrap_or_default();
     let has_keyed_input = message
         .request_id
         .as_deref()
         .is_some_and(|request_id| keyed_steering_request_ids.contains(request_id));
     gents::lifecycle::is_runtime_control_message(
-        request_metadata,
+        &request_input,
         &message.message_key,
         has_keyed_input,
     )
@@ -83,7 +85,10 @@ pub(super) fn keyed_steering_request_ids(
 }
 
 pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> bool {
-    gents::lifecycle::is_background_completion_request(request.metadata.as_deref())
+    request
+        .input
+        .as_ref()
+        .is_some_and(gents::lifecycle::is_background_completion_request)
 }
 
 struct LoadedRequestContext {

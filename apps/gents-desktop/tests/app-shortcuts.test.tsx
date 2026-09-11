@@ -13,7 +13,7 @@ function Probe(handlers: AppShortcutHandlers) {
 function makeHandlers(): AppShortcutHandlers {
   return {
     setView: vi.fn(),
-    newConversation: vi.fn(),
+    newSession: vi.fn(),
     focusComposer: vi.fn(),
     toggleHelp: vi.fn(),
   };
@@ -29,7 +29,7 @@ describe("app shortcuts", () => {
     fireEvent.keyDown(window, { key: "3", ctrlKey: true });
     expect(handlers.setView).toHaveBeenCalledWith("config");
     fireEvent.keyDown(window, { key: "n", metaKey: true });
-    expect(handlers.newConversation).toHaveBeenCalledTimes(1);
+    expect(handlers.newSession).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     expect(handlers.focusComposer).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(window, { key: "/", metaKey: true });
@@ -38,7 +38,7 @@ describe("app shortcuts", () => {
     fireEvent.keyDown(window, { key: "2" });
     fireEvent.keyDown(window, { key: "n", metaKey: true, shiftKey: true });
     expect(handlers.setView).toHaveBeenCalledTimes(2);
-    expect(handlers.newConversation).toHaveBeenCalledTimes(1);
+    expect(handlers.newSession).toHaveBeenCalledTimes(1);
   });
 
   it("renders the reference dialog and closes on Escape and backdrop", () => {
@@ -46,7 +46,7 @@ describe("app shortcuts", () => {
     render(<ShortcutsHelp open onClose={onClose} />);
 
     expect(screen.getByTestId("shortcuts-help")).toBeInTheDocument();
-    expect(screen.getByText("New conversation")).toBeInTheDocument();
+    expect(screen.getByText("New session")).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);

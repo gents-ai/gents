@@ -177,8 +177,6 @@ pub struct ListSubagentsEntry {
     pub principal_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub behavior_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deployment_id: Option<String>,
     pub await_mode: String,
     pub cancel_policy: Option<String>,
     pub status: String,

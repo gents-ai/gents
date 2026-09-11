@@ -1,18 +1,28 @@
 use super::*;
 
 pub(super) fn queue_source_and_key_match(
-    metadata: Option<&str>,
+    input: Option<&RequestInput>,
     source: QueueSource,
     key: &str,
 ) -> bool {
-    parse_queue_hints(metadata).is_some_and(|hints| {
-        hints.source == source
-            && hints.policy == QueuePolicy::Coalesce
-            && hints
-                .key
-                .as_deref()
-                .is_some_and(|candidate| candidate.trim() == key)
-    })
+    input
+        .and_then(|input| input.queue.as_ref())
+        .is_some_and(|queue| {
+            queue.source == source
+                && queue.policy == QueuePolicy::Coalesce
+                && queue
+                    .key
+                    .as_deref()
+                    .is_some_and(|candidate| candidate.trim() == key)
+        })
+}
+
+pub(super) fn row_matches_coalesced_source_and_key(
+    row: &AgentRequestRow,
+    source: QueueSource,
+    key: &str,
+) -> bool {
+    queue_source_and_key_match(row.input.as_ref(), source, key)
 }
 
 pub async fn reconcile_coalesced_pending_request(
@@ -91,7 +101,7 @@ async fn matching_coalesced_pending_requests(
                 _docID
                 request_id
                 session_id
-                metadata
+                input
             }}
         }}"#
     );
@@ -108,7 +118,7 @@ async fn matching_coalesced_pending_requests(
 
     Ok(rows
         .into_iter()
-        .filter(|row| queue_source_and_key_match(row.metadata.as_deref(), source, key))
+        .filter(|row| row_matches_coalesced_source_and_key(row, source, key))
         .collect())
 }
 
@@ -120,162 +130,11 @@ pub(super) fn queue_row_to_enqueued_request(row: &AgentRequestRow) -> Option<Enq
     })
 }
 
-pub(super) async fn parent_behavior_id(
-    node: &EmbeddedNode,
-    parent: &AgentRequest,
-) -> Result<String> {
-    if let Some(behavior_id) = parent
-        .behavior_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(behavior_id.to_string());
-    }
-
-    let escaped_session_id = escape_graphql_string(&parent.session_id);
-    let escaped_agent_did = escape_graphql_string(&parent.agent_did);
-    let query = format!(
-        r#"{{
-            AgentConversation(
-                filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    session_id: {{ _eq: "{escaped_session_id}" }}
-                }},
-                limit: 2
-            ) {{
-                behavior_id
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query parent conversation for queued request failed: {:?}",
-            response.errors
-        );
-    }
-
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentConversation"))
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
+pub(super) fn parent_behavior_id(parent: &AgentRequest) -> Result<String> {
     anyhow::ensure!(
-        rows.len() <= 1,
-        "parent conversation scope resolved to multiple rows"
+        !parent.behavior_id.trim().is_empty(),
+        "cannot enqueue same-session request: parent {} has no behavior_id",
+        parent.request_id
     );
-    rows.first()
-        .and_then(|row| row.get("behavior_id"))
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "cannot enqueue same-session request: parent request {} has no behavior_id",
-                parent.request_id
-            )
-        })
-}
-
-pub(super) fn parent_linkage_graphql_fields(parent: &AgentRequest) -> Result<String> {
-    match (
-        parent.caused_by_parent_request_id.as_deref(),
-        parent.caused_by_parent_request_doc_id.as_deref(),
-        parent.caused_by_parent_tool_call_id.as_deref(),
-        parent.caused_by_parent_tool_call_doc_id.as_deref(),
-    ) {
-        (
-            Some(parent_request_id),
-            Some(parent_request_doc_id),
-            Some(parent_tool_call_id),
-            Some(parent_tool_call_doc_id),
-        ) if !parent_request_id.trim().is_empty()
-            && !parent_request_doc_id.trim().is_empty()
-            && !parent_tool_call_id.trim().is_empty()
-            && !parent_tool_call_doc_id.trim().is_empty() =>
-        {
-            Ok(format!(
-                r#",
-                caused_by_parent_request_id: "{}",
-                caused_by_parent_request_doc_id: "{}",
-                caused_by_parent_tool_call_id: "{}",
-                caused_by_parent_tool_call_doc_id: "{}""#,
-                escape_graphql_string(parent_request_id),
-                escape_graphql_string(parent_request_doc_id),
-                escape_graphql_string(parent_tool_call_id),
-                escape_graphql_string(parent_tool_call_doc_id),
-            ))
-        }
-        (Some(parent_request_id), Some(parent_request_doc_id), None, None)
-            if !parent_request_id.trim().is_empty() && !parent_request_doc_id.trim().is_empty() =>
-        {
-            Ok(format!(
-                r#",
-                caused_by_parent_request_id: "{}",
-                caused_by_parent_request_doc_id: "{}""#,
-                escape_graphql_string(parent_request_id),
-                escape_graphql_string(parent_request_doc_id),
-            ))
-        }
-        (None, None, None, None) => Ok(String::new()),
-        _ => anyhow::bail!("cannot enqueue request from incoherent parent linkage"),
-    }
-}
-
-pub(super) fn request_only_parent_linkage_graphql_fields(parent: &AgentRequest) -> Result<String> {
-    match (
-        parent.caused_by_parent_request_id.as_deref(),
-        parent.caused_by_parent_request_doc_id.as_deref(),
-        parent.caused_by_parent_tool_call_id.as_deref(),
-        parent.caused_by_parent_tool_call_doc_id.as_deref(),
-    ) {
-        (
-            Some(parent_request_id),
-            Some(parent_request_doc_id),
-            Some(parent_tool_call_id),
-            Some(parent_tool_call_doc_id),
-        ) if !parent_request_id.trim().is_empty()
-            && !parent_request_doc_id.trim().is_empty()
-            && !parent_tool_call_id.trim().is_empty()
-            && !parent_tool_call_doc_id.trim().is_empty() =>
-        {
-            Ok(format!(
-                r#",
-                caused_by_parent_request_id: "{}",
-                caused_by_parent_request_doc_id: "{}""#,
-                escape_graphql_string(parent_request_id),
-                escape_graphql_string(parent_request_doc_id),
-            ))
-        }
-        (Some(parent_request_id), Some(parent_request_doc_id), None, None)
-            if !parent_request_id.trim().is_empty() && !parent_request_doc_id.trim().is_empty() =>
-        {
-            Ok(format!(
-                r#",
-                caused_by_parent_request_id: "{}",
-                caused_by_parent_request_doc_id: "{}""#,
-                escape_graphql_string(parent_request_id),
-                escape_graphql_string(parent_request_doc_id),
-            ))
-        }
-        (None, None, None, None)
-            if !parent.request_id.trim().is_empty() && !parent.doc_id.trim().is_empty() =>
-        {
-            Ok(format!(
-                r#",
-                caused_by_parent_request_id: "{}",
-                caused_by_parent_request_doc_id: "{}""#,
-                escape_graphql_string(&parent.request_id),
-                escape_graphql_string(&parent.doc_id),
-            ))
-        }
-        (None, None, None, None) => {
-            anyhow::bail!("cannot enqueue control continuation from an unbound parent request")
-        }
-        _ => anyhow::bail!("cannot enqueue control continuation from incoherent parent linkage"),
-    }
+    Ok(parent.behavior_id.clone())
 }

@@ -62,12 +62,6 @@ theorem phase_change_decreases_measure
     rw [h_post]
     simp [terminationMeasure, h_pre]
 
-structure RecoveryStep where
-  request : RequestContext
-  h_stuck : request.state = .processing ∨ request.state = .claimed
-  result : RequestContext
-  h_terminal : isTerminal result.state
-
 private theorem failed_is_terminal : isTerminal RequestState.failed :=
   Or.inr (Or.inl rfl)
 
@@ -96,23 +90,3 @@ theorem claimed_eventually_terminal
           obtain ⟨_, h_proc⟩ := h_begin
           simp [post, postRequest] at h_proc
   refine ⟨post, ComposedState.Trace.step h_step ComposedState.Trace.refl, failed_is_terminal⟩
-
-theorem recovery_convergence
-    (stuck : List RequestContext)
-    (_h_all_stuck : ∀ r, r ∈ stuck → r.state = .processing ∨ r.state = .claimed) :
-    ∃ results : List RequestContext,
-      results.length = stuck.length ∧
-      ∀ r, r ∈ results → isTerminal r.state := by
-  induction stuck with
-  | nil =>
-    exact ⟨[], rfl, fun _ h => absurd h (List.not_mem_nil _)⟩
-  | cons hd tl ih =>
-    have h_tl : ∀ r, r ∈ tl → r.state = .processing ∨ r.state = .claimed :=
-      fun r hr => _h_all_stuck r (List.mem_cons_of_mem hd hr)
-    obtain ⟨rest, h_len, h_term⟩ := ih h_tl
-    refine ⟨{ hd with state := .failed, admission := .released } :: rest, ?_, ?_⟩
-    · simp [h_len]
-    · intro r hr
-      cases hr with
-      | head => exact failed_is_terminal
-      | tail _ h => exact h_term r h

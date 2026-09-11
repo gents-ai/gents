@@ -148,7 +148,7 @@ def unitVM : ValueMeet Unit :=
   , vmeet_le_left := by intro _ _; trivial
   , vmeet_le_right := by intro _ _; trivial }
 
-def NetMode.rank : NetMode → Nat
+def networkRank : CommandPolicy.NetworkMode → Nat
   | .disabled => 0
   | .inherit => 1
   | .enabled => 2
@@ -163,12 +163,6 @@ structure CmdReq where
 def prefixOf (needle haystack : List String) : Prop :=
   ∃ suffix, haystack = needle ++ suffix
 
-def BashPolicy.allowedPrefixMatched (p : BashPolicy) (req : CmdReq) : Prop :=
-  match p.allowed with
-  | .all => True
-  | .only keys _ => ∃ pre ∈ keys, prefixOf pre req.argv
-  | .none => False
-
 def BashPolicy.allowedGate (p : BashPolicy) (req : CmdReq) : Prop :=
   match p.allowed with
   | .all => True
@@ -176,20 +170,20 @@ def BashPolicy.allowedGate (p : BashPolicy) (req : CmdReq) : Prop :=
   | .only keys _ => ∃ pre ∈ keys, prefixOf pre req.argv
 
 def BashPolicy.modeGate (p : BashPolicy) (req : CmdReq) : Prop :=
-  (req.wantsSourceWrite = true → p.mode.toCommand.sourceWrites = true) ∧
-  (req.wantsArtifactWrite = true → p.mode.toCommand.artifactWrites = true) ∧
-  (p.mode = .readOnly → p.readOnly.permits req.cmdHead ∨ p.allowedPrefixMatched req)
+  (req.wantsSourceWrite = true → p.mode.sourceWrites = true) ∧
+  (req.wantsArtifactWrite = true → p.mode.artifactWrites = true) ∧
+  (p.mode = .readOnly → p.readOnly.permits req.cmdHead ∨ p.allowedGate req)
 
 def BashPolicy.permits (p : BashPolicy) (req : CmdReq) : Prop :=
   p.sandbox = true
   ∧ (∀ f ∈ p.forbidden, ¬ prefixOf f req.argv)
   ∧ p.allowedGate req
-  ∧ (req.wantsNetwork → p.network.rank ≥ NetMode.rank .inherit)
+  ∧ (req.wantsNetwork → networkRank p.network ≥ networkRank .inherit)
   ∧ p.modeGate req
 
 def BashPolicy.meet (a b : BashPolicy) : BashPolicy :=
   { mode := a.mode.meet b.mode
-  , network := if a.network.rank ≤ b.network.rank then a.network else b.network
+  , network := if networkRank a.network ≤ networkRank b.network then a.network else b.network
   , forbidden := a.forbidden ∪ b.forbidden
   , allowed := a.allowed.meet unitVM b.allowed
   , readOnly := a.readOnly.meet unitVM b.readOnly

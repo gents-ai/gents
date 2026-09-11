@@ -51,7 +51,7 @@ test.describe("fleet deployment navigation", () => {
 
     await page.getByTestId(`fleet-row-${PEER_ID}`).click();
     if ((page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 760) {
-      await page.getByTestId("conversation-session-intro").click();
+      await page.getByTestId("session-session-intro").click();
     }
 
     await expect(page.getByTestId("composer-input")).toBeVisible();

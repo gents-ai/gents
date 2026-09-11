@@ -1,9 +1,0 @@
-{
-  "task_id": "scan-revalidate-task",
-  "name": "Revalidate candidate findings",
-  "description": null,
-  "behavior_id": "scan-revalidate",
-  "prompt_template": "./prompt.md",
-  "enabled": true,
-  "output_schema_ref": null
-}

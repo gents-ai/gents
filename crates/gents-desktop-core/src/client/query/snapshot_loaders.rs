@@ -6,7 +6,6 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         behaviors: load_agent_behaviors(node).await?,
         runtimes: load_agent_runtimes(node).await?,
         behavior_readiness: load_agent_behavior_readiness(node).await?,
-        conversations: load_agent_conversations(node).await?,
         requests: load_agent_requests(node).await?,
         mailbox_items: load_mailbox_items(node).await?,
         responses: load_agent_responses(node).await?,
@@ -14,12 +13,23 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         goals: load_goals(node).await?,
         tasks: load_tasks(node).await?,
         schedules: load_schedules(node).await?,
-        event_triggers: load_event_triggers(node).await?,
+        schedule_observations: load_schedule_observations(node).await?,
+        triggers: load_triggers(node).await?,
+        trigger_observations: load_trigger_observations(node).await?,
         skills: load_skills(node).await?,
-        tool_selections: load_tool_selections(node).await?,
+        tools: load_tools(node).await?,
+        contexts: load_contexts(node).await?,
+        compactions: load_compactions(node).await?,
         inference_backends: load_inference_backends(node).await?,
+        backend_observations: load_backend_observations(node).await?,
         inference_profiles: load_inference_profiles(node).await?,
+        inference_sampling: load_inference_sampling(node).await?,
+        inference_execution: load_inference_execution(node).await?,
         tool_service_registries: load_tool_service_registries(node).await?,
+        event_sources: load_event_sources(node).await?,
+        subagent_targets: load_subagent_targets(node).await?,
+        datastore_tool_surfaces: load_datastore_tool_surfaces(node).await?,
+        chain_key_bindings: load_chain_key_bindings(node).await?,
         ..ClientStoreRows::default()
     }))
 }
@@ -41,20 +51,20 @@ pub async fn load_agent_scoped_snapshot_with_peer_records(
     load_agent_scoped_snapshot(node, agent_did).await
 }
 
-pub async fn load_agent_principals(node: &EmbeddedNode) -> Result<Vec<AgentPrincipalRow>> {
+pub async fn load_agent_principals(node: &EmbeddedNode) -> Result<Vec<AgentPrincipal>> {
     load_rows(
         node,
         "AgentPrincipal",
-        "query { AgentPrincipal { agent_did display_name default_behavior_id enabled created_at created_by } }",
+        &format!("query {{ AgentPrincipal {{ {AGENT_PRINCIPAL_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_agent_behaviors(node: &EmbeddedNode) -> Result<Vec<AgentBehaviorRow>> {
+pub async fn load_agent_behaviors(node: &EmbeddedNode) -> Result<Vec<AgentBehavior>> {
     load_rows(
         node,
         "AgentBehavior",
-        "query { AgentBehavior { behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at } }",
+        &format!("query {{ AgentBehavior {{ {AGENT_BEHAVIOR_FIELDS} }} }}"),
     )
     .await
 }
@@ -77,15 +87,6 @@ pub async fn load_agent_behavior_readiness(
         &format!(
             "query {{ {AGENT_BEHAVIOR_READINESS_NAME} {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"
         ),
-    )
-    .await
-}
-
-pub async fn load_agent_conversations(node: &EmbeddedNode) -> Result<Vec<AgentConversationRow>> {
-    load_rows(
-        node,
-        AGENT_CONVERSATION_NAME,
-        &format!("query {{ {AGENT_CONVERSATION_NAME} {{ {AGENT_CONVERSATION_FIELDS} }} }}"),
     )
     .await
 }
@@ -117,7 +118,7 @@ pub async fn load_agent_responses(node: &EmbeddedNode) -> Result<Vec<AgentRespon
     .await
 }
 
-pub async fn load_agent_sessions(node: &EmbeddedNode) -> Result<Vec<AgentSessionRow>> {
+pub async fn load_agent_sessions(node: &EmbeddedNode) -> Result<Vec<AgentSession>> {
     load_rows(
         node,
         AGENT_SESSION_NAME,
@@ -145,16 +146,16 @@ pub(crate) async fn load_agent_tool_calls(node: &EmbeddedNode) -> Result<Vec<Age
     .await
 }
 
-pub async fn load_tasks(node: &EmbeddedNode) -> Result<Vec<TaskRow>> {
+pub async fn load_tasks(node: &EmbeddedNode) -> Result<Vec<Task>> {
     load_rows(
         node,
         "Task",
-        "query { Task { task_id name description behavior_id prompt_template goal_objective_template goal_token_budget enabled output_schema_ref created_at updated_at } }",
+        &format!("query {{ Task {{ {TASK_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_skills(node: &EmbeddedNode) -> Result<Vec<SkillRow>> {
+pub async fn load_skills(node: &EmbeddedNode) -> Result<Vec<SkillDocument>> {
     load_rows(
         node,
         SKILL_NAME,
@@ -163,58 +164,159 @@ pub async fn load_skills(node: &EmbeddedNode) -> Result<Vec<SkillRow>> {
     .await
 }
 
-pub async fn load_schedules(node: &EmbeddedNode) -> Result<Vec<ScheduleRow>> {
+pub async fn load_schedules(node: &EmbeddedNode) -> Result<Vec<Schedule>> {
     load_rows(
         node,
         "Schedule",
-        "query { Schedule { schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at } }",
+        &format!("query {{ Schedule {{ {SCHEDULE_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_event_triggers(node: &EmbeddedNode) -> Result<Vec<EventTriggerRow>> {
+pub async fn load_schedule_observations(node: &EmbeddedNode) -> Result<Vec<ScheduleObservation>> {
     load_rows(
         node,
-        "EventTrigger",
-        "query { EventTrigger { trigger_id task_id source_collection event_kind filter correlation_field fire_mode expected_count expected_count_field group_timeout_secs group_min_count workspace_authority enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count } }",
+        TRIGGER_NAME,
+        &format!("query {{ {TRIGGER_NAME} {{ {SCHEDULE_OBSERVATION_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_tool_selections(node: &EmbeddedNode) -> Result<Vec<ToolSelectionRow>> {
+pub async fn load_triggers(node: &EmbeddedNode) -> Result<Vec<Trigger>> {
     load_rows(
         node,
-        "ToolSelection",
-        "query { ToolSelection { selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools enable_goal_tools enable_goal_creation allowed_mcp_service_ids required_mcp_service_ids backgroundable_tool_names enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds tool_policy_version write_tools datastore_tool_surface_ids eth_tool_ids subagent_default_await_mode enable_self_config self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config } }",
+        TRIGGER_NAME,
+        &format!("query {{ {TRIGGER_NAME} {{ {TRIGGER_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_inference_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackendRow>> {
+pub async fn load_trigger_observations(node: &EmbeddedNode) -> Result<Vec<TriggerObservation>> {
+    load_rows(
+        node,
+        TRIGGER_NAME,
+        &format!("query {{ {TRIGGER_NAME} {{ {TRIGGER_OBSERVATION_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_tools(node: &EmbeddedNode) -> Result<Vec<Tools>> {
+    load_rows(
+        node,
+        TOOLS_NAME,
+        &format!("query {{ {TOOLS_NAME} {{ {TOOLS_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_contexts(node: &EmbeddedNode) -> Result<Vec<AgentContext>> {
+    load_rows(
+        node,
+        "AgentContext",
+        &format!("query {{ AgentContext {{ {AGENT_CONTEXT_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_compactions(node: &EmbeddedNode) -> Result<Vec<CompactionConfig>> {
+    load_rows(
+        node,
+        "CompactionConfig",
+        &format!("query {{ CompactionConfig {{ {COMPACTION_CONFIG_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_inference_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
     load_rows(
         node,
         "InferenceBackend",
-        "query { InferenceBackend { backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status } }",
+        &format!("query {{ InferenceBackend {{ {INFERENCE_BACKEND_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_inference_profiles(node: &EmbeddedNode) -> Result<Vec<InferenceProfileRow>> {
+pub async fn load_backend_observations(
+    node: &EmbeddedNode,
+) -> Result<Vec<InferenceBackendObservation>> {
+    load_rows(
+        node,
+        "InferenceBackend",
+        &format!("query {{ InferenceBackend {{ {INFERENCE_BACKEND_OBSERVATION_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_inference_profiles(node: &EmbeddedNode) -> Result<Vec<InferenceProfile>> {
     load_rows(
         node,
         "InferenceProfile",
-        "query { InferenceProfile { profile_id display_name context_window max_output_tokens max_turns temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty reasoning_effort stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_max_transport retry_backoff_ms retry_max_resample retry_allow_repair retry_interactive_max } }",
+        &format!("query {{ InferenceProfile {{ {INFERENCE_PROFILE_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_tool_service_registries(
-    node: &EmbeddedNode,
-) -> Result<Vec<ToolServiceRegistryRow>> {
+pub async fn load_inference_sampling(node: &EmbeddedNode) -> Result<Vec<InferenceSampling>> {
+    load_rows(
+        node,
+        "InferenceSampling",
+        &format!("query {{ InferenceSampling {{ {INFERENCE_SAMPLING_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_inference_execution(node: &EmbeddedNode) -> Result<Vec<InferenceExecution>> {
+    load_rows(
+        node,
+        "InferenceExecution",
+        &format!("query {{ InferenceExecution {{ {INFERENCE_EXECUTION_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_tool_service_registries(node: &EmbeddedNode) -> Result<Vec<ToolServiceRegistry>> {
     load_rows(
         node,
         "ToolServiceRegistry",
-        "query { ToolServiceRegistry { service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path status version updated_at } }",
+        &format!("query {{ ToolServiceRegistry {{ {TOOL_SERVICE_REGISTRY_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_event_sources(node: &EmbeddedNode) -> Result<Vec<EventSource>> {
+    load_rows(
+        node,
+        "EventSource",
+        &format!("query {{ EventSource {{ {EVENT_SOURCE_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_subagent_targets(node: &EmbeddedNode) -> Result<Vec<SubagentTargetDocument>> {
+    load_rows(
+        node,
+        "SubagentTarget",
+        &format!("query {{ SubagentTarget {{ {SUBAGENT_TARGET_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_datastore_tool_surfaces(
+    node: &EmbeddedNode,
+) -> Result<Vec<DatastoreToolSurfaceDocument>> {
+    load_rows(
+        node,
+        "DatastoreToolSurface",
+        &format!("query {{ DatastoreToolSurface {{ {DATASTORE_TOOL_SURFACE_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_chain_key_bindings(node: &EmbeddedNode) -> Result<Vec<ChainKeyBindingDocument>> {
+    load_rows(
+        node,
+        "ChainKeyBinding",
+        &format!("query {{ ChainKeyBinding {{ {CHAIN_KEY_BINDING_FIELDS} }} }}"),
     )
     .await
 }

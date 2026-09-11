@@ -258,18 +258,10 @@
     ]
   },
   "await_timeout_secs": ${GENTS_GROK_PORT_AWAIT_TIMEOUT_SECS:-86400},
-  "bundled_graph_bindings": {
+  "graph_dependency_environment": {
     "code_review": {
-      "backend_id": "grok-port-backend-ws1",
-      "profile_id": "grok-port-code-review-profile",
-      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
-      "role_overrides": {
-        "reviewer": {
-          "backend_id": "grok-port-backend-ws1",
-          "profile_id": "grok-port-code-review-scan-profile",
-          "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}"
-        }
-      }
+      "GENTS_REVIEW_ENDPOINT": "${GENTS_GROK_PORT_ENDPOINT_1:-http://127.0.0.1:8000/v1}",
+      "GENTS_REVIEW_MODEL": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}"
     }
   }
 }

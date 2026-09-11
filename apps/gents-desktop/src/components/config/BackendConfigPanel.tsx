@@ -4,13 +4,17 @@ import type { FormEvent } from "react";
 import type {
   BackendDeleteRequest,
   BackendSaveRequest,
+  ConfigComponentsPatchRequest,
+  BackendAuth,
+  BackendProviderKind,
+  InferenceBackend,
   DeploymentView,
   InferenceBackendView,
 } from "@source-inc/gents-desktop-client";
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
-import { isOptionalInt, linesToArray, parseOptionalInt } from "./formUtils";
+import { isOptionalInt, parseOptionalInt } from "./formUtils";
 
 export type BackendConfigPanelProps = {
   deployment: DeploymentView;
@@ -21,6 +25,7 @@ export type BackendConfigPanelProps = {
   onCreateBackend: () => void;
   onSavedStatusChange: (value: string) => void;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
+  onPatchConfigComponents: (request: ConfigComponentsPatchRequest) => Promise<unknown>;
   onDeleteBackendConfig: (request: BackendDeleteRequest) => Promise<unknown>;
   onDeletedBackend: () => void;
 };
@@ -34,6 +39,7 @@ export function BackendConfigPanel({
   onCreateBackend,
   onSavedStatusChange,
   onSaveBackendConfig,
+  onPatchConfigComponents,
   onDeleteBackendConfig,
   onDeletedBackend,
 }: BackendConfigPanelProps) {
@@ -71,6 +77,7 @@ export function BackendConfigPanel({
           onSavedStatusChange(`backend:${backendId}`);
         }}
         onSaveBackendConfig={onSaveBackendConfig}
+        onPatchConfigComponents={onPatchConfigComponents}
         onDeleteBackendConfig={onDeleteBackendConfig}
         onDeleted={() => {
           onDeletedBackend();
@@ -87,6 +94,7 @@ export type BackendConfigEditorProps = {
   saving: boolean;
   onSaved: (backendId: string) => void;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
+  onPatchConfigComponents: (request: ConfigComponentsPatchRequest) => Promise<unknown>;
   onDeleteBackendConfig: (request: BackendDeleteRequest) => Promise<unknown>;
   onDeleted: () => void;
 };
@@ -98,6 +106,7 @@ export function BackendConfigEditor({
   saving,
   onSaved,
   onSaveBackendConfig,
+  onPatchConfigComponents,
   onDeleteBackendConfig,
   onDeleted,
 }: BackendConfigEditorProps) {
@@ -115,20 +124,22 @@ export function BackendConfigEditor({
   }
   const [backendId, setBackendId] = useState("");
   const [name, setName] = useState("");
-  const [providerKind, setProviderKind] = useState("OpenAiCompatible");
+  const [providerKind, setProviderKind] =
+    useState<BackendProviderKind>("OpenAiCompatible");
   const [endpoint, setEndpoint] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyEnvVar, setApiKeyEnvVar] = useState("");
   const [clearApiKey, setClearApiKey] = useState(false);
-  const [models, setModels] = useState("");
   const [maxConcurrent, setMaxConcurrent] = useState("");
   const [maxQueueDepth, setMaxQueueDepth] = useState("");
   const [enabled, setEnabled] = useState(true);
 
+  const [base, setBase] = useState(() => backendFormValues(backend));
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     const base = backendFormValues(backend);
+    setBase(base);
     setBackendId(base.backendId);
     setName(base.name);
     setProviderKind(base.providerKind);
@@ -136,7 +147,6 @@ export function BackendConfigEditor({
     setApiKey(base.apiKey);
     setApiKeyEnvVar(base.apiKeyEnvVar);
     setClearApiKey(base.clearApiKey);
-    setModels(base.models);
     setMaxConcurrent(base.maxConcurrent);
     setMaxQueueDepth(base.maxQueueDepth);
     setEnabled(base.enabled);
@@ -145,7 +155,6 @@ export function BackendConfigEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend?.backendId]);
 
-  const base = backendFormValues(backend);
   const dirty = isDirty(
     {
       backendId,
@@ -155,41 +164,78 @@ export function BackendConfigEditor({
       apiKey,
       apiKeyEnvVar,
       clearApiKey,
-      models: linesToArray(models),
       maxConcurrent,
       maxQueueDepth,
       enabled,
     },
-    {
-      ...base,
-      models: backend?.models ?? [],
-    },
+    backendFormValues(backend),
   );
 
   const maxConcurrentValid = isOptionalInt(maxConcurrent, { min: 1 });
-  const maxQueueDepthValid = isOptionalInt(maxQueueDepth, { min: 1 });
+  const maxQueueDepthValid = isOptionalInt(maxQueueDepth, { min: 0 });
 
   async function submitBackend(event: FormEvent) {
     event.preventDefault();
-    const nextId = backendId.trim();
-    const nextModels = linesToArray(models);
+    const nextId = backend?.backendId ?? backendId.trim();
     try {
-      await onSaveBackendConfig({
+      if (apiKey.trim() && apiKeyEnvVar.trim()) {
+        throw new Error("Choose an API key or an environment variable, not both.");
+      }
+      let auth: BackendAuth | undefined;
+      if (apiKey.trim()) auth = { kind: "api_key", key: apiKey };
+      else if (
+        apiKeyEnvVar !== base.apiKeyEnvVar ||
+        (!backend && apiKeyEnvVar.trim())
+      ) {
+        auth = apiKeyEnvVar.trim()
+          ? { kind: "environment", variable: apiKeyEnvVar }
+          : { kind: "unauthenticated" };
+      } else if (clearApiKey) auth = { kind: "unauthenticated" };
+
+      if (backend) {
+        const changes: Partial<Omit<InferenceBackend, "agent_did" | "backend_id">> = {};
+        if (name !== base.name) changes.name = name;
+        if (providerKind !== base.providerKind) changes.provider_kind = providerKind;
+        if (endpoint !== base.endpoint) changes.endpoint = endpoint;
+        if (maxConcurrent !== base.maxConcurrent)
+          changes.max_concurrent = parseOptionalInt(maxConcurrent);
+        if (maxQueueDepth !== base.maxQueueDepth)
+          changes.max_queue_depth = parseOptionalInt(maxQueueDepth);
+        if (enabled !== base.enabled) changes.enabled = enabled;
+        if (auth) changes.auth = auth;
+        await onPatchConfigComponents({
+          agentDid,
+          patches: [{ collection: "InferenceBackend", id: nextId, changes }],
+        });
+      } else {
+        await onSaveBackendConfig({
+          document: {
+            agent_did: agentDid,
+            backend_id: nextId,
+            name,
+            provider_kind: providerKind,
+            endpoint,
+            auth: auth ?? { kind: "unauthenticated" },
+            max_concurrent: parseOptionalInt(maxConcurrent),
+            max_queue_depth: parseOptionalInt(maxQueueDepth),
+            enabled,
+          },
+        });
+      }
+      setApiKey("");
+      setClearApiKey(false);
+      setBase({
         backendId: nextId,
         name,
         providerKind,
         endpoint,
-        apiKey: apiKey.trim() ? apiKey : undefined,
+        apiKey: "",
         apiKeyEnvVar,
-        clearApiKey,
-        models: nextModels,
-        maxConcurrent: parseOptionalInt(maxConcurrent),
-        maxQueueDepth: parseOptionalInt(maxQueueDepth),
+        clearApiKey: false,
+        maxConcurrent,
+        maxQueueDepth,
         enabled,
       });
-      setApiKey("");
-      setClearApiKey(false);
-      setModels(nextModels.join("\n"));
       onSaved(nextId);
       setSaveError(null);
     } catch (error) {
@@ -237,7 +283,9 @@ export function BackendConfigEditor({
           <span>Provider kind</span>
           <select
             data-testid="backend-provider-kind"
-            onChange={(event) => setProviderKind(event.currentTarget.value)}
+            onChange={(event) =>
+              setProviderKind(event.currentTarget.value as BackendProviderKind)
+            }
             value={providerKind}
           >
             <option value="OpenAiCompatible">OpenAI compatible</option>
@@ -253,15 +301,18 @@ export function BackendConfigEditor({
           />
         </label>
       </div>
-      <label className="field">
-        <span>Models</span>
-        <textarea
-          className="config-small-textarea"
-          data-testid="backend-models"
-          onChange={(event) => setModels(event.currentTarget.value)}
-          value={models}
-        />
-      </label>
+      {backend ? (
+        <label className="field">
+          <span>Advertised models</span>
+          <textarea
+            className="config-small-textarea"
+            data-testid="backend-models"
+            readOnly
+            value={backend.models.join("\n")}
+          />
+          <span>Select the model on an inference profile.</span>
+        </label>
+      ) : null}
       <div className="grid-2">
         <label className="field">
           <span>API key env var</span>
@@ -301,7 +352,7 @@ export function BackendConfigEditor({
             type="number"
             value={maxQueueDepth}
           />
-          <FieldHint show={!maxQueueDepthValid}>Whole number of 1 or more</FieldHint>
+          <FieldHint show={!maxQueueDepthValid}>Whole number of 0 or more</FieldHint>
         </label>
         <label className="checkbox">
           <input
@@ -355,7 +406,6 @@ export function BackendConfigEditor({
             !backendId.trim() ||
             !name.trim() ||
             !endpoint.trim() ||
-            !linesToArray(models).length ||
             !maxConcurrentValid ||
             !maxQueueDepthValid
           }
@@ -372,12 +422,11 @@ function backendFormValues(backend: InferenceBackendView | null) {
   return {
     backendId: backend?.backendId ?? "",
     name: backend?.name ?? backend?.backendId ?? "",
-    providerKind: backend?.providerKind ?? "OpenAiCompatible",
+    providerKind: (backend?.providerKind ?? "OpenAiCompatible") as BackendProviderKind,
     endpoint: backend?.endpoint ?? "",
     apiKey: "",
     apiKeyEnvVar: backend?.apiKeyEnvVar ?? "",
     clearApiKey: false,
-    models: (backend?.models ?? []).join("\n"),
     maxConcurrent: backend?.maxConcurrent != null ? String(backend.maxConcurrent) : "",
     maxQueueDepth: backend?.maxQueueDepth != null ? String(backend.maxQueueDepth) : "",
     enabled: backend?.enabled ?? true,

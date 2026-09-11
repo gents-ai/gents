@@ -28,11 +28,18 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
         (behavior) =>
           behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
       );
-      const defaultTools = deployment.toolSelections.find(
-        (s) => s.selectionId === defaultBehavior?.toolSelectionId,
+      const context = deployment.contexts.find(
+        (candidate) => candidate.context_id === defaultBehavior?.contextId,
       );
-      const subagentTarget = defaultTools?.subagentTargets[0];
+      const defaultTools = deployment.tools.find(
+        (tools) => tools.tools_id === context?.tools_id,
+      );
+      const targetId = defaultTools?.subagents?.target_ids?.[0];
+      const subagentTarget = deployment.subagentTargets.find(
+        (target) => target.target_id === targetId,
+      );
       expect(subagentTarget, "fixture must expose a subagent target").toBeDefined();
+      const subagentBehaviorId = subagentTarget?.behavior_id;
 
       await driver.ready();
       await driver.openChat();
@@ -54,7 +61,7 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
             includeTerminal: false,
           });
           expect(tree.edges.length).toBeGreaterThan(0);
-          const child = tree.nodes.find((n) => n.behaviorId === subagentTarget);
+          const child = tree.nodes.find((n) => n.behaviorId === subagentBehaviorId);
           expect(child?.lifecycleState).toMatch(/processing|claimed|pending/i);
         },
         { timeout: 60_000, interval: 500 },
@@ -133,7 +140,7 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
             agentDid: runner.agentDid,
             includeTerminal: true,
           });
-          const child = tree.nodes.find((n) => n.behaviorId === subagentTarget);
+          const child = tree.nodes.find((n) => n.behaviorId === subagentBehaviorId);
           expect(
             child?.lifecycleState,
             `B3 requires child.lifecycleState == "interrupted"; saw ${child?.lifecycleState}`,

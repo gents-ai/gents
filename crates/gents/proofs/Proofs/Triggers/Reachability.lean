@@ -11,7 +11,7 @@ def dispatchStep
     let key : Option TriggerKey :=
       match seed.causedByTriggerId with
       | none     => none
-      | some tid => some (tid, seed.causedByTriggerKind)
+      | some tid => some tid
     let origin : ExecutionOrigin :=
       match seed.causedByTriggerKind with
       | .manual            => .interactive
@@ -119,7 +119,7 @@ private theorem dispatchStep_preserves_causedBy_and_concurrency
       | some tid =>
         simp only
         by_cases h_any :
-          s.requests.any (fun r => (r.causedBy == some (tid, seed.causedByTriggerKind)) && !r.isTerminal) = true
+          s.requests.any (fun r => (r.causedBy == some tid) && !r.isTerminal) = true
         · rw [if_pos h_any]
           exact ⟨r, h_mem, rfl, rfl⟩
         · rw [if_neg h_any]
@@ -135,7 +135,7 @@ private theorem dispatchStep_preserves_causedBy_and_concurrency
       | some tid =>
         simp only
         refine ⟨
-          if (r.causedBy == some (tid, seed.causedByTriggerKind)) && !r.isTerminal then
+          if (r.causedBy == some tid) && !r.isTerminal then
             { r with isTerminal := true }
           else r,
           ?_, ?_, ?_⟩
@@ -210,20 +210,15 @@ theorem dispatch_key_matches_intent_target
     (h_key :
       (match seed.causedByTriggerId with
       | none => none
-      | some tid => some (tid, seed.causedByTriggerKind)) = some t) :
-    intent.triggerId = some t.1 ∧ intent.triggerKind = t.2 := by
+      | some tid => some tid) = some t) :
+    intent.triggerId = some t := by
   cases h_seedId : seed.causedByTriggerId with
-  | none =>
-    simp [h_seedId] at h_key
+  | none => simp [h_seedId] at h_key
   | some tid =>
-    have h_tuple : (tid, seed.causedByTriggerKind) = t := by
-      simpa [h_seedId] using h_key
-    have ⟨h_triggerId, h_kind⟩ :=
-      dispatch_seed_some_triggerId_matches_intent snap intent seed h_dispatch h_seedId
-    cases t with
-    | mk tid' kind' =>
-      cases h_tuple
-      simpa using And.intro h_triggerId h_kind
+    have h_id : tid = t := by simpa [h_seedId] using h_key
+    have h_target :=
+      (dispatch_seed_some_triggerId_matches_intent snap intent seed h_dispatch h_seedId).1
+    simpa [h_id] using h_target
 
 theorem dispatchStep_hypothesis_preservation
     (s : SystemState) (snap : TriggerSnapshot) (intent : FireIntent) (t : TriggerKey)

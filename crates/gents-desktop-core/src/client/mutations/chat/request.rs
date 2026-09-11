@@ -4,13 +4,12 @@ use defra_node::EmbeddedNode;
 use gents::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use gents::lifecycle::{ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES};
 use gents::skills::prompt_slash_skill_selection;
-use gents::{
-    build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink, SamplingCarryover,
-};
+use gents::{build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
@@ -30,6 +29,8 @@ pub struct SubmittedRequest {
 
 /// Optional submission-time controls. All fields default to "unset"; the
 /// caller opts in to TTL enforcement or retry threading by populating them.
+/// Sampling and output limits are owned by the behavior's InferenceProfile;
+/// invocation facts ride the canonical typed `RequestInput`.
 #[derive(Debug, Clone, Default)]
 pub struct SubmitRequestOptions {
     /// When set, written to the request's `valid_until` field. The runtime's
@@ -40,21 +41,9 @@ pub struct SubmitRequestOptions {
     /// request), the parent request id is threaded into `retry_parent_request`
     /// and the parent's retry root is carried forward into `retry_root_request`.
     pub retry_parent_request: Option<String>,
-    /// Sampling override: if set, written to the request's `temperature` field.
-    pub temperature: Option<f64>,
-    /// Sampling override: if set, written to the request's `top_p` field.
-    pub top_p: Option<f64>,
-    /// Sampling override: if set, written to the request's `top_k` field.
-    pub top_k: Option<i64>,
-    /// Sampling override: if set, written to the request's `seed` field.
-    pub seed: Option<i64>,
-    /// Sampling override: if set, written to the request's `max_tokens` field.
-    pub max_tokens: Option<i64>,
-    /// Positive provider-token allowance shared by every completion call made
-    /// for this durable request.
-    pub max_total_tokens: Option<i64>,
-    /// Free-form metadata attached to the request (submitter-defined JSON/string).
-    pub metadata: Option<String>,
+    /// Typed invocation facts (selected skills, cwd, initial title, queue).
+    /// Carryover submissions populate this from the prior request's row.
+    pub input: RequestInput,
     /// Mailbox item `_docID` that caused this user submission. Only the
     /// mailbox compose route sets this field.
     pub caused_by_source_doc_id: Option<String>,
@@ -76,12 +65,6 @@ pub async fn submit_request(
     let agent_did = normalize_required("agent_did", agent_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
     let content = normalize_required("content", content)?;
-    if options.seed.is_some_and(|seed| seed < 0) {
-        bail!("seed must be non-negative");
-    }
-    if options.max_total_tokens.is_some_and(|limit| limit <= 0) {
-        bail!("max_total_tokens must be positive");
-    }
     let (content, options) = prepare_prompt_submission(content, options)?;
     let request_id = Uuid::new_v4().to_string();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
@@ -130,16 +113,7 @@ pub async fn submit_request(
                 retry_count: 0,
                 max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
             }),
-            sampling: Some(SamplingCarryover {
-                temperature: options.temperature,
-                top_p: options.top_p,
-                top_k: options.top_k,
-                seed: options.seed,
-                max_tokens: options.max_tokens,
-                max_total_tokens: options.max_total_tokens,
-                backend_id: None,
-            }),
-            metadata: options.metadata,
+            input: options.input,
             valid_until: options
                 .valid_until
                 .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
@@ -243,42 +217,8 @@ fn prepare_prompt_submission(
         return Ok((content.to_string(), options));
     }
 
-    options.metadata = Some(merge_selected_skill_metadata(
-        options.metadata.take(),
-        &selection.selected_skill_ids,
-    )?);
+    options.input.selected_skill_ids = selection.selected_skill_ids;
     Ok((selection.prompt, options))
-}
-
-fn merge_selected_skill_metadata(
-    metadata: Option<String>,
-    selected_skill_ids: &[String],
-) -> Result<String> {
-    let mut value = match metadata
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(raw) => serde_json::from_str::<Value>(raw)
-            .with_context(|| "request metadata must be valid JSON to add selected_skill_ids")?,
-        None => Value::Object(Map::new()),
-    };
-
-    let object = value
-        .as_object_mut()
-        .context("request metadata must be a JSON object to add selected_skill_ids")?;
-    object.insert(
-        "selected_skill_ids".to_string(),
-        Value::Array(
-            selected_skill_ids
-                .iter()
-                .cloned()
-                .map(Value::String)
-                .collect(),
-        ),
-    );
-
-    serde_json::to_string(&value).context("serializing selected skill metadata")
 }
 
 pub async fn retry_request(
@@ -402,7 +342,6 @@ async fn retry_request_in_txn(
     let behavior_id = normalize_optional_string(parent.behavior_id.as_deref());
     let retry_root_request = normalize_optional_string(parent.retry_root_request.as_deref())
         .unwrap_or(parent_request_id);
-    let backend_id = normalize_optional_string(parent.backend_id.as_deref()).unwrap_or("");
     let created_at = canonical_request_created_at_after(parent.created_at.as_deref())?;
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(parent_session_id))?;
     let create = build_signed_request(
@@ -415,16 +354,9 @@ async fn retry_request_in_txn(
                 max_retries,
             }),
             retry_key: Some(retry_key),
-            sampling: Some(SamplingCarryover {
-                temperature: parent.temperature,
-                top_p: parent.top_p,
-                top_k: parent.top_k,
-                seed: parent.seed,
-                max_tokens: parent.max_tokens,
-                max_total_tokens: parent.max_total_tokens,
-                backend_id: (!backend_id.is_empty()).then(|| backend_id.to_string()),
-            }),
-            metadata: parent.metadata,
+            // Exact invocation-fact carryover from the parent row; no
+            // sampling/metadata scalars exist on the canonical request.
+            input: parent.input.clone().unwrap_or_default(),
             ..RequestSpec::new(
                 RequestIdentity {
                     request_id: candidate_request_id.to_string(),
@@ -537,13 +469,8 @@ async fn load_retry_parent_in_txn(
                 retry_root_request
                 superseded_by_request
                 content
-                temperature
-                top_p
-                top_k
-                seed
-                max_tokens
+                input
                 max_total_tokens
-                metadata
                 lifecycle_state
                 backend_id
                 execution_origin
@@ -774,7 +701,9 @@ pub async fn resend_request(
     {
         anyhow::bail!(
             "request {stale_request_id} is not a stale terminal (lifecycle_state={}, failure_reason={})",
-            stale.lifecycle_state.map_or("<missing>", RequestLifecycleState::as_str),
+            stale
+                .lifecycle_state
+                .map_or("<missing>", RequestLifecycleState::as_str),
             stale.failure_reason.as_deref().unwrap_or("<missing>")
         );
     }
@@ -800,15 +729,10 @@ pub async fn resend_request(
         SubmitRequestOptions {
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
             retry_parent_request: Some(stale_request_id.to_string()),
-            // Preserve sampling overrides + metadata from the stale row.
-            // Dropping them would silently change model behavior on retry.
-            temperature: stale.temperature,
-            top_p: stale.top_p,
-            top_k: stale.top_k,
-            seed: stale.seed,
-            max_tokens: stale.max_tokens,
-            max_total_tokens: stale.max_total_tokens,
-            metadata: stale.metadata.clone(),
+            // Preserve the exact typed invocation facts from the stale row.
+            // Sampling and output limits belong to the behavior's
+            // InferenceProfile; there are no per-request overrides to carry.
+            input: stale.input.unwrap_or_default(),
             caused_by_source_doc_id: None,
         },
     )
@@ -838,15 +762,9 @@ async fn fetch_request_view(
                 agent_did
                 behavior_id
                 content
+                input
                 lifecycle_state
                 failure_reason
-                temperature
-                top_p
-                top_k
-                seed
-                max_tokens
-                max_total_tokens
-                metadata
             }}
         }}"#
     );

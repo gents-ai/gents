@@ -1,5 +1,5 @@
 @layer chat {
-  .conversation-loading-status {
+  .session-loading-status {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -14,73 +14,73 @@
     letter-spacing: 0.01em;
   }
 
-  .conversation-loading-status.is-loading {
+  .session-loading-status.is-loading {
     border-left-color: var(--color-info);
   }
 
-  .conversation-loading-status.is-blocked {
+  .session-loading-status.is-blocked {
     border-left-color: var(--color-warning);
   }
 
-  .conversation-loading-status.is-failed {
+  .session-loading-status.is-failed {
     border-left-color: var(--color-error-strong);
     background: rgb(var(--color-error-deep-rgb) / 0.55);
     color: var(--color-error-soft);
   }
 
-  .conversation-loading-copy {
+  .session-loading-copy {
     display: inline-flex;
     align-items: center;
     gap: 0.55rem;
     min-width: 0;
   }
 
-  .conversation-loading-copy > span:last-child {
+  .session-loading-copy > span:last-child {
     display: grid;
     gap: 0.15rem;
   }
 
-  .conversation-loading-copy strong {
+  .session-loading-copy strong {
     color: var(--color-text-warm);
     font-weight: 650;
   }
 
-  .conversation-loading-pulse {
+  .session-loading-pulse {
     width: 0.55rem;
     height: 0.55rem;
     flex: 0 0 auto;
     border-radius: 999px;
     background: var(--color-info);
-    animation: conversation-loading-pulse var(--motion-pulse) ease-out infinite;
+    animation: session-loading-pulse var(--motion-pulse) ease-out infinite;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .conversation-loading-pulse {
+    .session-loading-pulse {
       animation: none;
     }
   }
 
-  @keyframes conversation-loading-pulse {
+  @keyframes session-loading-pulse {
     50% {
       opacity: 0.2;
     }
   }
 
   @media (max-width: 760px) {
-    .conversation-loading-status {
+    .session-loading-status {
       margin: 0 var(--space-3);
       padding: 0.4rem 0.55rem;
     }
   }
 
   @media (max-width: 520px) {
-    .conversation-loading-status {
+    .session-loading-status {
       align-items: flex-start;
       flex-direction: column;
       gap: var(--space-2);
     }
 
-    .conversation-loading-status > button {
+    .session-loading-status > button {
       align-self: flex-end;
     }
   }

@@ -26,7 +26,8 @@ async fn claim_request_with_projection<F>(
     node: &EmbeddedNode,
     session_id: &str,
     capture_background_snapshot: bool,
-    projection: &super::materialize::RequestSessionProjection,
+    request: &AgentRequest,
+    claimed_at: &str,
     build_mutation: F,
 ) -> Result<(defra_node::QueryResponse, BackgroundCompletionClaimSnapshot)>
 where
@@ -104,7 +105,8 @@ where
                     .and_then(|data| data.get("update_AgentRequest"))
                     .is_some_and(response_has_documents)
                 {
-                    super::materialize::apply_request_session_projection(&txn, projection).await?;
+                    super::materialize::apply_request_session_projection(&txn, request, claimed_at)
+                        .await?;
                 }
                 Ok::<_, anyhow::Error>((claimed, snapshot))
             })
@@ -481,13 +483,39 @@ impl RequestLifecycle {
         let execution_origin = self.execution_origin.as_str();
         let request_fields = crate::watcher::AGENT_REQUEST_FIELDS;
 
+        // The generation is written on every successful claim and never cleared
+        // when the same physical request resumes. It distinguishes an unclaimed
+        // request from a previously pinned unlimited (null) budget.
+        let prior_generation = gents_protocol::graphql::graphql_input_literal(
+            &serde_json::to_value(&self.request.execution_generation)?,
+        )?;
+        let budget_field = if self.request.execution_generation.is_none() {
+            let limit = self
+                .configured_max_total_tokens
+                .map(|limit| {
+                    anyhow::ensure!(limit > 0, "configured max_total_tokens must be positive");
+                    i64::try_from(limit).map_err(anyhow::Error::from)
+                })
+                .transpose()?;
+            format!(
+                "max_total_tokens: {},",
+                gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(limit)?)?
+            )
+        } else {
+            // Do not rewrite the durable allowance, including explicit zero or
+            // unlimited null, from edited configuration on reclaim.
+            crate::completion_factory::parse_aggregate_token_limit(self.request.max_total_tokens)?;
+            String::new()
+        };
+
         let build_mutation = |background_completion_snapshot_fields: &str| {
             format!(
                 r#"mutation {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "pending" }}
+                        lifecycle_state: {{ _eq: "pending" }},
+                        execution_generation: {{ _eq: {prior_generation} }}
                     }},
                     input: {{
                         lifecycle_state: "{lifecycle_state}",
@@ -496,6 +524,7 @@ impl RequestLifecycle {
                         execution_generation: "{escaped_execution_generation}",
                         execution_lease_expires_at: "{escaped_execution_lease_expires_at}",
                         execution_progress_seq: 0,
+                        {budget_field}
                         {background_completion_snapshot_fields}
                         deadline: "{escaped_deadline}"
                     }}
@@ -511,19 +540,13 @@ impl RequestLifecycle {
         };
 
         let is_background_completion =
-            crate::lifecycle::is_background_completion_request(self.request.metadata.as_deref());
-        let projection = super::materialize::request_session_projection(
-            &self.request,
-            &self.agent_name,
-            &self.agent_did,
-            &self.behavior_id,
-            &claimed_at,
-        );
+            crate::lifecycle::is_background_completion_request(&self.request.input);
         let (resp, snapshot) = claim_request_with_projection(
             self.node.as_ref(),
             &self.request.session_id,
             is_background_completion,
-            &projection,
+            &self.request,
+            &claimed_at,
             &build_mutation,
         )
         .await?;
@@ -596,15 +619,15 @@ mod tests {
         request_id: &str,
         session_id: &str,
         created_at: &str,
-        metadata: Option<&str>,
+        input: Option<&gents_protocol::request_input::RequestInput>,
         execution_origin: &str,
     ) -> AgentRequest {
         let escaped_request_id = escape_graphql_string(request_id);
         let escaped_session_id = escape_graphql_string(session_id);
         let escaped_created_at = escape_graphql_string(created_at);
-        let metadata_field = metadata
-            .map(|value| format!(r#"metadata: "{}","#, escape_graphql_string(value)))
-            .unwrap_or_default();
+        let input_literal =
+            gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
+                .unwrap();
         let escaped_execution_origin = escape_graphql_string(execution_origin);
         let mutation = format!(
             r#"mutation {{
@@ -617,7 +640,7 @@ mod tests {
                     retry_root_request: "{escaped_request_id}",
                     superseded_by_request: "",
                     content: "same-session request",
-                    {metadata_field}
+                    input: {input_literal},
                     lifecycle_state: "pending",
                     backend_id: "",
                     execution_origin: "{escaped_execution_origin}",
@@ -626,9 +649,10 @@ mod tests {
                     retry_count: 0,
                     max_retries: {max_retries},
                     subagent_depth: 0
-                }}) {{ _docID }}
+                }}) {{ {fields} }}
             }}"#,
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+            fields = crate::watcher::AGENT_REQUEST_FIELDS,
         );
         let response = crate::config_client::ConfigAccess::write_local_response(
             node,
@@ -637,95 +661,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let inline_doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("create_AgentRequest"))
-            .and_then(|value| {
-                value
-                    .get("_docID")
-                    .and_then(|doc_id| doc_id.as_str())
-                    .or_else(|| {
-                        value
-                            .as_array()
-                            .and_then(|rows| rows.first())
-                            .and_then(|row| row.get("_docID"))
-                            .and_then(|doc_id| doc_id.as_str())
-                    })
-            })
-            .map(ToOwned::to_owned);
-        let doc_id = match inline_doc_id {
-            Some(doc_id) => doc_id,
-            None => lookup_request_doc_id(node, request_id)
-                .await
-                .expect("created AgentRequest doc id"),
-        };
-
-        AgentRequest {
-            doc_id,
-            request_id: request_id.to_string(),
-            agent_did: TEST_AGENT_DID.to_string(),
-            requester_did: None,
-            behavior_id: Some(TEST_BEHAVIOR_ID.to_string()),
-            session_id: session_id.to_string(),
-            content: "same-session request".to_string(),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
-            max_total_tokens: None,
-            metadata: metadata.map(ToOwned::to_owned),
-            execution_origin: Some(execution_origin.to_string()),
-            created_at: created_at.to_string(),
-            deadline: None,
-            execution_generation: None,
-            execution_lease_expires_at: None,
-            execution_progress_seq: 0,
-            subagent_depth: 0,
-            caused_by_parent_request_id: None,
-            caused_by_parent_request_doc_id: None,
-            caused_by_parent_tool_call_id: None,
-            caused_by_parent_tool_call_doc_id: None,
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_source_doc_id: None,
-            caused_by_correlation: None,
-            caused_by_trigger_context: None,
-            workspace_id: None,
-            workspace_authority: None,
-            workspace_owner_deployment_id: None,
-            workspace_seal_hash: None,
-        }
-    }
-
-    async fn lookup_request_doc_id(
-        node: &EmbeddedNode,
-        request_id: &str,
-    ) -> anyhow::Result<String> {
-        let escaped_request_id = escape_graphql_string(request_id);
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                    limit: 1
-                ) {{ _docID }}
-            }}"#
-        );
-        let response = node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!("query created AgentRequest failed: {:?}", response.errors);
-        }
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(|value| value.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("_docID"))
-            .and_then(|value| value.as_str())
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| anyhow::anyhow!("AgentRequest {request_id} not found"))
+        crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")
+            .expect("decode created request")
+            .expect("created request receipt")
     }
 
     #[tokio::test]
@@ -823,20 +761,24 @@ mod tests {
     async fn background_claim_snapshots_transcript_before_successor_input() {
         let node = test_node().await;
         let session_id = "background-claim-snapshot";
-        let metadata =
-            crate::lifecycle::queue::queue_metadata_json(&crate::lifecycle::queue::QueueHints {
-                source: crate::lifecycle::queue::QueueSource::BackgroundCompletion,
-                policy: crate::lifecycle::queue::QueuePolicy::Coalesce,
+        use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+        let input = RequestInput {
+            queue: Some(RequestQueue {
+                source: QueueSource::BackgroundCompletion,
+                policy: QueuePolicy::Coalesce,
                 key: Some(format!("background_completion:{session_id}")),
                 queued_after_request_id: Some("parent-request".to_string()),
                 interrupted_request_id: None,
-            });
+                background_completion_wake_version: Some(1),
+            }),
+            ..Default::default()
+        };
         let request = insert_pending_request(
             node.as_ref(),
             "background-wake-1",
             session_id,
             "2026-08-12T22:00:00Z",
-            Some(&metadata),
+            Some(&input),
             "scheduled",
         )
         .await;
@@ -928,6 +870,8 @@ mod tests {
         let history = session::load_history_through_sequence(
             node.as_ref(),
             session_id,
+            TEST_AGENT_DID,
+            None,
             lifecycle.background_completion_input_through_sequence(),
         )
         .await
@@ -937,5 +881,77 @@ mod tests {
             2,
             "successor input must stay out of this attempt"
         );
+    }
+    #[tokio::test]
+    async fn claim_pins_configured_budget_and_reclaim_preserves_unlimited_or_zero() {
+        for (index, configured, durable_override) in [
+            (0, Some(50_u64), None),
+            (1, None, None),
+            (2, Some(1_u64), Some(0_i64)),
+        ] {
+            let node = test_node().await;
+            let mut request = insert_pending_request(
+                &node,
+                &format!("budget-{index}"),
+                &format!("budget-session-{index}"),
+                "2026-01-01T00:00:00Z",
+                None,
+                "interactive",
+            )
+            .await;
+            // Even an old envelope carrying a value cannot select first-claim
+            // allowance: only the invoking runtime configuration may do that.
+            request.max_total_tokens = Some(999);
+            let mut first = RequestLifecycle::new_with_execution_binding(
+                node.clone(),
+                TEST_BEHAVIOR_ID,
+                TEST_AGENT_DID,
+                request,
+                3600,
+                ExecutionOrigin::Interactive,
+                TEST_BACKEND_ID,
+            );
+            first.set_configured_max_total_tokens(configured);
+            assert!(matches!(
+                first.claim_with_identity().await.unwrap(),
+                ClaimOutcome::Claimed
+            ));
+            assert_eq!(
+                first.request().max_total_tokens,
+                configured.map(|value| value as i64)
+            );
+            let mut resumed_request = first.request().clone();
+            let expected = durable_override.or(resumed_request.max_total_tokens);
+            let budget_patch = durable_override
+                .map(|limit| format!(", max_total_tokens: {limit}"))
+                .unwrap_or_default();
+            let mutation = format!(
+                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending"{budget_patch} }}) {{ _docID }} }}"#,
+                escape_graphql_string(&resumed_request.doc_id)
+            );
+            crate::config_client::ConfigAccess::write_local_response(
+                &node,
+                "test.requeue_budget",
+                &mutation,
+            )
+            .await
+            .unwrap();
+            resumed_request.max_total_tokens = expected;
+            let mut resumed = RequestLifecycle::new_with_execution_binding(
+                node.clone(),
+                TEST_BEHAVIOR_ID,
+                TEST_AGENT_DID,
+                resumed_request,
+                3600,
+                ExecutionOrigin::Interactive,
+                TEST_BACKEND_ID,
+            );
+            resumed.set_configured_max_total_tokens(Some(10_000));
+            assert!(matches!(
+                resumed.claim_with_identity().await.unwrap(),
+                ClaimOutcome::Claimed
+            ));
+            assert_eq!(resumed.request().max_total_tokens, expected);
+        }
     }
 }

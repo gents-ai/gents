@@ -1,7 +1,5 @@
 export * from "./apiContext.js";
 export * from "./shortId.js";
-export * from "./components/operations/HoldsPanel.js";
-export * from "./components/operations/useToolCallHolds.js";
 export * from "./components/backendHealth/index.js";
 export * from "./components/mcpHealth/index.js";
 export * from "./components/mcpHealth/mcpHealthModel.js";

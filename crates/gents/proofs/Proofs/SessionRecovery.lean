@@ -1,415 +1,160 @@
 import Proofs.Request
+import Proofs.AgentSession
 import Mathlib.Data.Finset.Basic
+
+/-! Interactive retry publication, owned by desktop `retry_request_in_txn`.
+This is a projection of the fields that operation inspects or carries over,
+not another request lifecycle or a full RequestContext constructor. New requests
+use the signed RequestSpec owner; execution deadlines are absent until claim.
+Signatures and physical retry-key transactions remain adapter boundaries.
+`latest` is the scoped authoritative query result, never a session observation. -/
+namespace SessionRetry
+
+structure Request where
+  state : RequestState
+  origin : ExecutionOrigin
+  admission : AdmissionState
+  deadline : Option Time
+  currentTime : Time
+  retryCount : Nat
+  maxRetries : Nat
+
+def Request.deadlineExceeded (r : Request) : Prop :=
+  ∃ deadline, r.deadline = some deadline ∧ deadline < r.currentTime
+
+instance (r : Request) : Decidable r.deadlineExceeded := by
+  unfold Request.deadlineExceeded
+  cases r.deadline <;> simp <;> infer_instance
+
+end SessionRetry
 
 structure SessionState where
   sessionId : SessionId
   behaviorId : BehaviorId
   requestIds : Finset RequestId
-  ctx : RequestId → RequestContext
+  ctx : RequestId → SessionRetry.Request
   latest : RequestId
 
 namespace SessionState
 
-@[ext] theorem ext
-    {s t : SessionState}
-    (h_sessionId : s.sessionId = t.sessionId)
-    (h_behaviorId : s.behaviorId = t.behaviorId)
-    (h_requestIds : s.requestIds = t.requestIds)
-    (h_ctx : s.ctx = t.ctx)
-    (h_latest : s.latest = t.latest) :
-    s = t := by
-  cases s
-  cases t
-  cases h_sessionId
-  cases h_behaviorId
-  cases h_requestIds
-  cases h_ctx
-  cases h_latest
-  rfl
-
-def latestFlagInvariant (s : SessionState) : Prop :=
-  s.latest ∈ s.requestIds ∧
-    (s.ctx s.latest).isLatest = true ∧
-    ∀ rid, rid ∈ s.requestIds → rid ≠ s.latest → (s.ctx rid).isLatest = false
-
-def historicalContext (ctx : RequestContext) : RequestContext :=
-  { ctx with isLatest := false }
-
-def reissuedContext (ctx : RequestContext) : RequestContext :=
-  { state := .pending
-  , origin := ctx.origin
-  , backend := ctx.backend
-  , admission := .released
-  , deadline := ctx.currentTime + 1
-  , claimTime := ctx.currentTime
-  , currentTime := ctx.currentTime
-  , retryCount := ctx.retryCount + 1
-  , maxRetries := ctx.maxRetries
-  , progressSeq := 0
-  , messageSeq := 0
-  , isLatest := true
-  , persistence := .uncommitted
-  }
+/-- Projection of fresh RequestSpec creation, without inventing claim clocks,
+execution budgets, lineage resets, or tool state. -/
+def reissuedContext (ctx : SessionRetry.Request) : SessionRetry.Request :=
+  { ctx with
+    state := .pending
+    admission := .released
+    deadline := none
+    retryCount := ctx.retryCount + 1 }
 
 def CanReissue (pre : SessionState) (failedId newId : RequestId) : Prop :=
-  failedId = pre.latest ∧
-    failedId ∈ pre.requestIds ∧
-    newId ∉ pre.requestIds ∧
-    (pre.ctx failedId).state = .failed ∧
-    (pre.ctx failedId).admission = .released ∧
+  failedId = pre.latest ∧ failedId ∈ pre.requestIds ∧ newId ∉ pre.requestIds ∧
+    (pre.ctx failedId).state = .failed ∧ (pre.ctx failedId).admission = .released ∧
     (pre.ctx failedId).origin = .interactive ∧
     (pre.ctx failedId).retryCount < (pre.ctx failedId).maxRetries ∧
-    ¬ (pre.ctx failedId).deadlineExceeded ∧
-    (pre.ctx failedId).isLatest = true
+    ¬ (pre.ctx failedId).deadlineExceeded
 
 instance (pre : SessionState) (failedId newId : RequestId) :
     Decidable (CanReissue pre failedId newId) := by
   unfold CanReissue
   infer_instance
 
-inductive Transition : SessionState → SessionState → Prop where
-  | reissue_failed {pre post : SessionState} (failedId newId : RequestId) :
-      CanReissue pre failedId newId →
-      post.sessionId = pre.sessionId →
-      post.behaviorId = pre.behaviorId →
-      post.requestIds = insert newId pre.requestIds →
-      post.latest = newId →
-      post.ctx =
-        Function.update
-          (Function.update pre.ctx failedId (historicalContext (pre.ctx failedId)))
-          newId
-          (reissuedContext (pre.ctx failedId)) →
-      Transition pre post
-
 inductive Action where
   | reissueFailed (failedId newId : RequestId)
   deriving DecidableEq, Repr
 
+/-- Publish a fresh successor within the same session; preserve every other row.
+The transaction owner resolves concurrent candidates through `claimRetry` below. -/
 def step? (pre : SessionState) : Action → Option SessionState
   | .reissueFailed failedId newId =>
-      if _h_reissue : CanReissue pre failedId newId then
-        some
-          { sessionId := pre.sessionId
-          , behaviorId := pre.behaviorId
-          , requestIds := insert newId pre.requestIds
-          , latest := newId
-          , ctx :=
-              Function.update
-                (Function.update pre.ctx failedId (historicalContext (pre.ctx failedId)))
-                newId
-                (reissuedContext (pre.ctx failedId))
-          }
-      else
-        none
+    if CanReissue pre failedId newId then
+      some { pre with
+        requestIds := insert newId pre.requestIds
+        latest := newId
+        ctx := Function.update pre.ctx newId (reissuedContext (pre.ctx failedId)) }
+    else none
 
-inductive Trace : SessionState → SessionState → Prop where
-  | refl {s : SessionState} : Trace s s
-  | step {s₁ s₂ s₃ : SessionState} :
-      Transition s₁ s₂ → Trace s₂ s₃ → Trace s₁ s₃
+theorem reissue_requires_eligible_parent {pre post : SessionState} {failedId newId : RequestId}
+    (h : step? pre (.reissueFailed failedId newId) = some post) :
+    CanReissue pre failedId newId := by
+  simp only [step?, Option.ite_none_right_eq_some, Option.some.injEq] at h
+  exact h.1
 
-def replay? : SessionState → List Action → Option SessionState
-  | s, [] => some s
-  | s, action :: rest =>
-      match step? s action with
-      | some s' => replay? s' rest
-      | none => none
+/-- A retry creates a new pending request; it never reopens the terminal parent.
+The source configuration and bounded retry counter come from that parent, while
+execution deadline assignment stays with the later claim owner. -/
+theorem reissue_publishes_successor {pre post : SessionState} {failedId newId : RequestId}
+    (h : step? pre (.reissueFailed failedId newId) = some post) :
+    post.sessionId = pre.sessionId ∧ post.behaviorId = pre.behaviorId ∧
+    post.latest = newId ∧ newId ∈ post.requestIds ∧ failedId ∈ post.requestIds ∧
+    (post.ctx newId).state = .pending ∧ (post.ctx newId).admission = .released ∧
+    (post.ctx newId).deadline = none ∧
+    (post.ctx newId).origin = .interactive ∧
+    (post.ctx newId).retryCount = (pre.ctx failedId).retryCount + 1 ∧
+    (post.ctx newId).retryCount ≤ (post.ctx newId).maxRetries ∧
+    (post.ctx failedId).state = .failed := by
+  simp only [step?, Option.ite_none_right_eq_some, Option.some.injEq] at h
+  obtain ⟨hc, rfl⟩ := h
+  obtain ⟨_, hm, hn, hf, _, ho, hb, _⟩ := hc
+  have hne : failedId ≠ newId := by intro he; exact hn (he ▸ hm)
+  simp [reissuedContext, Function.update_of_ne hne,
+    hm, hf, ho, Nat.succ_le_of_lt hb]
 
-theorem step_sound
-    {pre post : SessionState}
-    {action : Action}
-    (h_step : step? pre action = some post) :
-    Transition pre post := by
-  cases action with
-  | reissueFailed failedId newId =>
-      simp [step?] at h_step
-      rcases h_step with ⟨h_reissue, h_post⟩
-      subst post
-      exact Transition.reissue_failed failedId newId h_reissue rfl rfl rfl rfl rfl
+/-- Retrying keeps the signed initial ceiling; it neither reconfigures that chain
+nor mutates its terminal parent. Transport/resample policies are separate owners. -/
+theorem reissue_preserves_parent_and_ceiling {pre post : SessionState} {failedId newId : RequestId}
+    (h : step? pre (.reissueFailed failedId newId) = some post) :
+    post.ctx failedId = pre.ctx failedId ∧
+    (post.ctx newId).maxRetries = (pre.ctx failedId).maxRetries := by
+  simp only [step?, Option.ite_none_right_eq_some, Option.some.injEq] at h
+  obtain ⟨hc, rfl⟩ := h
+  have hne : failedId ≠ newId := by
+    intro he
+    exact hc.2.2.1 (he ▸ hc.2.1)
+  simp [Function.update_of_ne hne, reissuedContext]
 
-theorem transition_complete
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    ∃ action : Action, step? pre action = some post := by
-  cases h_trans with
-  | reissue_failed failedId newId h_reissue h_session h_behavior h_requestIds h_latest h_ctx =>
-      have h_post :
-          { sessionId := pre.sessionId
-          , behaviorId := pre.behaviorId
-          , requestIds := insert newId pre.requestIds
-          , latest := newId
-          , ctx :=
-              Function.update
-                (Function.update pre.ctx failedId (historicalContext (pre.ctx failedId)))
-                newId
-                (reissuedContext (pre.ctx failedId))
-          } = post := by
-        apply ext
-        · exact h_session.symm
-        · exact h_behavior.symm
-        · exact h_requestIds.symm
-        · exact h_ctx.symm
-        · exact h_latest.symm
-      exact ⟨.reissueFailed failedId newId, by simp [step?, h_reissue, h_post]⟩
+theorem reissue_preserves_unrelated_request {pre post : SessionState} {failedId newId rid : RequestId}
+    (h : step? pre (.reissueFailed failedId newId) = some post)
+    (_hf : rid ≠ failedId) (hn : rid ≠ newId) : post.ctx rid = pre.ctx rid := by
+  simp only [step?, Option.ite_none_right_eq_some, Option.some.injEq] at h
+  obtain ⟨_, rfl⟩ := h
+  simp [Function.update_of_ne, hn]
 
-theorem replay_sound
-    {pre post : SessionState}
-    {actions : List Action}
-    (h_replay : replay? pre actions = some post) :
-    Trace pre post := by
-  induction actions generalizing pre with
-  | nil =>
-      simp [replay?] at h_replay
-      subst h_replay
-      exact Trace.refl
-  | cons action rest ih =>
-      simp [replay?] at h_replay
-      rcases h_step : step? pre action with (_ | next)
-      · simp [h_step] at h_replay
-      · simp [h_step] at h_replay
-        have h_trans : Transition pre next := step_sound h_step
-        exact Trace.step h_trans (ih h_replay)
+/-- Selection and successor creation run in one transaction. Recheck actual rows
+under exact requester scope and physical parent identity, not cached UI state. -/
+def retryFromRows? (pre : SessionState) (session : AgentSession.Document)
+    (rows : List AgentSession.RequestFact) (parentDoc failedId newId : Nat) : Option SessionState :=
+  match AgentSession.latest rows session.scope.agent session.scope.session
+      (some session.scope.requester) with
+  | none => none
+  | some parent =>
+    if parent.observed.docId = parentDoc ∧ parent.observed.requestId = failedId ∧
+        parent.behavior = session.behavior ∧ pre.behaviorId = session.behavior ∧
+        pre.sessionId = session.scope.session ∧ parent.observed.state = (pre.ctx failedId).state ∧
+        rows.all (fun row => row.observed.requestId != newId) then
+      step? { pre with latest := parent.observed.requestId } (.reissueFailed failedId newId)
+    else none
 
-theorem trace_complete
-    {pre post : SessionState}
-    (h_trace : Trace pre post) :
-    ∃ actions : List Action, replay? pre actions = some post := by
-  induction h_trace with
-  | refl =>
-      exact ⟨[], rfl⟩
-  | step h_trans h_trace ih =>
-      rcases transition_complete h_trans with ⟨action, h_action⟩
-      rcases ih with ⟨actions, h_actions⟩
-      refine ⟨action :: actions, ?_⟩
-      simp [replay?, h_action, h_actions]
+/-- A stale auxiliary requestIds projection cannot overwrite an existing request. -/
+theorem retry_rejects_existing_id (pre : SessionState) (session : AgentSession.Document)
+    (rows : List AgentSession.RequestFact) (parentDoc failedId newId : Nat)
+    (existing : AgentSession.RequestFact) (hm : existing ∈ rows)
+    (hid : existing.observed.requestId = newId) :
+    retryFromRows? pre session rows parentDoc failedId newId = none := by
+  have hnot : rows.all (fun row => row.observed.requestId != newId) = false := by
+    simp only [List.all_eq_false]
+    exact ⟨existing, hm, by simp [hid]⟩
+  unfold retryFromRows?
+  split <;> simp [hnot]
 
-theorem reissuedContext_pending
-    (ctx : RequestContext) :
-    (reissuedContext ctx).state = .pending := by
-  rfl
+/-- An arbitrary index projection cannot create retry eligibility. -/
+theorem observation_does_not_authorize_retry (pre : SessionState)
+    (session : AgentSession.Document) (observation : Option AgentSession.Observation)
+    (rows : List AgentSession.RequestFact) (parentDoc failedId newId : Nat) :
+    retryFromRows? pre { session with observation } rows parentDoc failedId newId =
+      retryFromRows? pre session rows parentDoc failedId newId := rfl
 
-theorem reissuedContext_released
-    (ctx : RequestContext) :
-    (reissuedContext ctx).admission = .released := by
-  rfl
-
-theorem reissuedContext_origin
-    (ctx : RequestContext) :
-    (reissuedContext ctx).origin = ctx.origin := by
-  rfl
-
-theorem reissuedContext_backend
-    (ctx : RequestContext) :
-    (reissuedContext ctx).backend = ctx.backend := by
-  rfl
-
-theorem reissuedContext_retryCount
-    (ctx : RequestContext) :
-    (reissuedContext ctx).retryCount = ctx.retryCount + 1 := by
-  rfl
-
-theorem reissuedContext_retryBound
-    {ctx : RequestContext}
-    (h_budget : ctx.retryCount < ctx.maxRetries) :
-    (reissuedContext ctx).retryCount ≤ (reissuedContext ctx).maxRetries := by
-  simpa [reissuedContext] using Nat.succ_le_of_lt h_budget
-
-theorem reissuedContext_deadline_open
-    (ctx : RequestContext) :
-    ¬ (reissuedContext ctx).deadlineExceeded := by
-  simp [RequestContext.deadlineExceeded, reissuedContext]
-
-theorem reissuedContext_coherent
-    (ctx : RequestContext) :
-    (reissuedContext ctx).coherent := by
-  simp [RequestContext.coherent, RequestContext.coherentStateAdmission, reissuedContext]
-
-theorem reissue_preserves_session
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    post.sessionId = pre.sessionId := by
-  cases h_trans with
-  | reissue_failed _ _ _ h_session _ _ _ _ => exact h_session
-
-theorem reissue_preserves_behavior
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    post.behaviorId = pre.behaviorId := by
-  cases h_trans with
-  | reissue_failed _ _ _ _ h_behavior _ _ _ => exact h_behavior
-
-theorem reissue_latest_in_requestIds
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    post.latest ∈ post.requestIds := by
-  cases h_trans with
-  | reissue_failed _ _ _ _ _ h_requestIds h_latest _ =>
-      rw [h_latest, h_requestIds]
-      exact Finset.mem_insert_self _ _
-
-theorem reissue_latest_pending
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    (post.ctx post.latest).state = .pending := by
-  cases h_trans with
-  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rw [h_latest, h_ctx]
-      simp [reissuedContext]
-
-theorem reissue_latest_released
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    (post.ctx post.latest).admission = .released := by
-  cases h_trans with
-  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rw [h_latest, h_ctx]
-      simp [reissuedContext]
-
-theorem reissue_latest_origin_preserved
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    (post.ctx post.latest).origin = (pre.ctx pre.latest).origin := by
-  cases h_trans with
-  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _, _⟩
-      rw [h_latest, h_ctx, h_failed_latest]
-      simp [reissuedContext]
-
-theorem reissue_source_interactive
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    (pre.ctx pre.latest).origin = .interactive := by
-  cases h_trans with
-  | reissue_failed _ _ h_can _ _ _ _ _ =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, h_interactive, _, _, _⟩
-      simpa [h_failed_latest] using h_interactive
-
-theorem reissue_latest_interactive
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    (post.ctx post.latest).origin = .interactive := by
-  rw [reissue_latest_origin_preserved h_trans]
-  exact reissue_source_interactive h_trans
-
-theorem reissue_latest_backend_preserved
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    (post.ctx post.latest).backend = (pre.ctx pre.latest).backend := by
-  cases h_trans with
-  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _, _⟩
-      rw [h_latest, h_ctx, h_failed_latest]
-      simp [reissuedContext]
-
-theorem reissue_latest_retryCount_succ
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    (post.ctx post.latest).retryCount = (pre.ctx pre.latest).retryCount + 1 := by
-  cases h_trans with
-  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _, _⟩
-      rw [h_latest, h_ctx, h_failed_latest]
-      simp [reissuedContext]
-
-theorem reissue_latest_retryBound
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    (post.ctx post.latest).retryCount ≤ (post.ctx post.latest).maxRetries := by
-  cases h_trans with
-  | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, h_budget, _, _⟩
-      have h_budget_latest : (pre.ctx pre.latest).retryCount < (pre.ctx pre.latest).maxRetries := by
-        simpa [← h_failed_latest] using h_budget
-      rw [h_latest, h_ctx, h_failed_latest]
-      simpa [reissuedContext] using reissuedContext_retryBound h_budget_latest
-
-theorem reissue_source_deadline_open
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    ¬ (pre.ctx pre.latest).deadlineExceeded := by
-  cases h_trans with
-  | reissue_failed _ _ h_can _ _ _ _ _ =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, h_deadline, _⟩
-      rw [h_failed_latest] at h_deadline
-      exact h_deadline
-
-theorem reissue_latest_deadline_open
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    ¬ (post.ctx post.latest).deadlineExceeded := by
-  cases h_trans with
-  | reissue_failed failedId newId _ _ _ _ h_latest h_ctx =>
-      rw [h_latest, h_ctx]
-      simpa [Function.update_self] using reissuedContext_deadline_open (pre.ctx failedId)
-
-theorem reissue_demotes_previous_latest
-    {pre post : SessionState}
-    (h_trans : Transition pre post) :
-    (post.ctx pre.latest).isLatest = false := by
-  cases h_trans with
-  | reissue_failed failedId newId h_can _ _ _ _ h_ctx =>
-      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _, _⟩
-      have h_distinct : newId ≠ pre.latest := by
-        intro h_eq
-        have h_latest_mem : pre.latest ∈ pre.requestIds := by
-          simpa [← h_failed_latest] using h_failed_mem
-        have h_new_mem : newId ∈ pre.requestIds := by
-          simpa [h_eq] using h_latest_mem
-        exact h_new h_new_mem
-      rw [h_ctx, h_failed_latest]
-      rw [Function.update_of_ne h_distinct.symm, Function.update_self]
-      simp [historicalContext]
-
-theorem reissue_preserves_latestFlagInvariant
-    {pre post : SessionState}
-    (h_pre : pre.latestFlagInvariant)
-    (h_trans : Transition pre post) :
-    post.latestFlagInvariant := by
-  cases h_trans with
-  | reissue_failed failedId newId h_can _ _ h_requestIds h_latest h_ctx =>
-      rcases h_pre with ⟨h_pre_latest_mem, h_pre_latest_flag, h_pre_others⟩
-      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _, _⟩
-      constructor
-      · rw [h_latest, h_requestIds]
-        exact Finset.mem_insert_self _ _
-      constructor
-      · rw [h_latest, h_ctx]
-        simp [reissuedContext]
-      · intro rid h_rid_mem h_rid_ne_latest
-        rw [h_ctx]
-        rw [h_latest] at h_rid_ne_latest
-        by_cases h_rid_new : rid = newId
-        · exact False.elim (h_rid_ne_latest h_rid_new)
-        · by_cases h_rid_failed : rid = failedId
-          · subst h_rid_failed
-            have h_failed_ne_new : rid ≠ newId := by
-              intro h_eq
-              rw [h_eq] at h_failed_mem
-              exact h_new h_failed_mem
-            rw [Function.update_of_ne h_failed_ne_new, Function.update_self]
-            simp [historicalContext]
-          · have h_rid_mem_pre : rid ∈ pre.requestIds := by
-              rw [h_requestIds] at h_rid_mem
-              exact Finset.mem_of_mem_insert_of_ne h_rid_mem h_rid_new
-            have h_rid_ne_pre_latest : rid ≠ pre.latest := by
-              intro h_eq
-              apply h_rid_failed
-              rw [h_failed_latest]
-              exact h_eq
-            have h_old_flag : (pre.ctx rid).isLatest = false :=
-              h_pre_others rid h_rid_mem_pre h_rid_ne_pre_latest
-            have h_rid_ne_failed : rid ≠ failedId := h_rid_failed
-            simp [Function.update_of_ne h_rid_new, Function.update_of_ne h_rid_ne_failed, h_old_flag]
-
-/-!
-## Durable retry intent
-
-`Transition.reissue_failed` is one atomic state transition. A distributed
-client implementation additionally needs an idempotency fence so two callers
-cannot choose different successors for the same failed predecessor before
-either observes the other's transition. `RetryIntentState` models the unique
-per-parent key persisted beside the successor request.
--/
-
+/-- The desktop owner keys a retry intent by the physical parent document,
+not a new host/session identity. The first successor wins repeated publication. -/
 structure RetryIntentState where
   successor : RequestId → Option RequestId
 

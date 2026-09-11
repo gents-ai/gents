@@ -6,7 +6,7 @@ use gents::defra_write::BoundedWriteTool;
 use gents::document_config::{WriteToolDecl, WriteToolField};
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::Tool;
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{AgentIdentity, Collection, DocumentRuntimeOptions, Gents, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 
@@ -35,59 +35,69 @@ async fn register_action_request_schema(node: &EmbeddedNode) {
         .expect("add_schema for ActionRequest");
 }
 
-async fn create_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prompt_template: &str) {
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let escaped_prompt_template = escape_graphql_string(prompt_template);
-    let mutation = format!(
-        r#"mutation {{
-            create_Task(input: {{
-                task_id: "{escaped_task_id}",
-                name: "{escaped_task_id}",
-                behavior_id: "{escaped_behavior_id}",
-                prompt_template: "{escaped_prompt_template}",
-                enabled: true
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create Task failed: {:?}",
-        response.errors
-    );
+/// Publish canonical desired-state documents through the shared apply owner.
+/// Exact owner (agent_did) is authored on every document; the desired-state
+/// owner validates same-owner references before committing.
+async fn apply_documents(node: &EmbeddedNode, documents: Vec<(Collection, serde_json::Value)>) {
+    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let plan = DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .unwrap();
+    ConfigAccess::transact_local(node, None, "test.automation_configuration", |txn| {
+        let plan = &plan;
+        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+}
+
+async fn create_task(
+    node: &EmbeddedNode,
+    owner: &str,
+    task_id: &str,
+    behavior_id: &str,
+    prompt_template: &str,
+) {
+    apply_documents(
+        node,
+        vec![(
+            Collection::Task,
+            serde_json::json!({"agent_did":owner,"task_id":task_id,"behavior_id":behavior_id,"prompt_template":prompt_template}),
+        )],
+    )
+    .await;
 }
 
 async fn create_event_trigger(
     node: &EmbeddedNode,
+    owner: &str,
     trigger_id: &str,
     task_id: &str,
     source_collection: &str,
     event_kind: &str,
 ) {
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_source_collection = escape_graphql_string(source_collection);
-    let escaped_event_kind = escape_graphql_string(event_kind);
-    let mutation = format!(
-        r#"mutation {{
-            create_EventTrigger(input: {{
-                trigger_id: "{escaped_trigger_id}",
-                task_id: "{escaped_task_id}",
-                source_collection: "{escaped_source_collection}",
-                event_kind: "{escaped_event_kind}",
-                enabled: true,
-                concurrency: "serial",
-                fire_count: 0
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create EventTrigger failed: {:?}",
-        response.errors
-    );
+    apply_documents(
+        node,
+        vec![
+            (
+                Collection::EventSource,
+                serde_json::json!({"agent_did":owner,"event_source_id":trigger_id,"source_collection":source_collection,"event_kind":event_kind}),
+            ),
+            (
+                Collection::Trigger,
+                serde_json::json!({"agent_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"}),
+            ),
+        ],
+    )
+    .await;
 }
 
 async fn wait_for_runtime_snapshot<F>(
@@ -273,6 +283,7 @@ async fn boot_agent_with_action_trigger(
 
     create_task(
         db.node.as_ref(),
+        &agent_did,
         task_id,
         &default_behavior_id,
         PROMPT_TEMPLATE,
@@ -280,6 +291,7 @@ async fn boot_agent_with_action_trigger(
     .await;
     create_event_trigger(
         db.node.as_ref(),
+        &agent_did,
         trigger_id,
         task_id,
         "ActionRequest",

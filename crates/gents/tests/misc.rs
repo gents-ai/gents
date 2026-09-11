@@ -8,8 +8,6 @@
 
 mod support;
 
-#[path = "misc/apply_property.rs"]
-mod apply_property;
 #[path = "misc/backend_auth_config.rs"]
 mod backend_auth_config;
 #[path = "misc/backend_auth_startup.rs"]

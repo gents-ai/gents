@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
-use gents::{ensure_runtime_schemas, load_tool_selection, upsert_tool_selection};
+use gents::ensure_runtime_schemas;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -41,12 +41,12 @@ async fn subagent_cancel_cascades_to_linked_child_request() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
         .to_string();
-    let tool_selection_id = init
-        .get("tool_selection_id")
+    let tools_id = init
+        .get("tools_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?;
+        .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?;
     mock_endpoint.set_behavior_id(default_behavior_id.clone());
-    enable_default_subagents_before_server(&home_dir, tool_selection_id, &default_behavior_id)
+    enable_default_subagents_before_server(&home_dir, tools_id, &default_behavior_id)
         .await?;
 
     let mut serve =
@@ -297,30 +297,45 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
 
 async fn enable_default_subagents_before_server(
     home_dir: &std::path::Path,
-    selection_id: &str,
+    tools_id: &str,
     target_behavior_id: &str,
 ) -> Result<()> {
-    let data_dir = home_dir.join(".gents").join("data");
-    let node = EmbeddedNode::builder()
-        .data_path(&data_dir)
-        .with_storage_backend(StorageBackend::Regolith)
-        .build()
-        .await
-        .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
-    let mut selection = load_tool_selection(&node, selection_id)
-        .await?
-        .ok_or_else(|| anyhow!("ToolSelection {selection_id} not found"))?;
-    selection.subagent_targets = Some(vec![gents::subagent_target_entry(
-        target_behavior_id,
-        &selection.agent_did,
-        target_behavior_id,
-        None,
-    )]);
-    selection.subagent_spawn_enabled = Some(true);
-    selection.subagent_background_enabled = Some(true);
-    upsert_tool_selection(&node, &selection)
-        .await
-        .context("enable subagent tool selection")?;
+    let root = home_dir.join("subagent-config");
+    run_cli_text(
+        home_dir,
+        &["config", "export", "--root", root.to_str().context("root")?],
+    )?;
+    let path = root.join("pack_config.json");
+    let mut config = read_json_file(&path)?;
+    let agent_did = config["agent_principal"]["agent_did"]
+        .as_str()
+        .context("agent principal DID")?
+        .to_string();
+    let tools = config["tools"]
+        .as_array_mut()
+        .context("tools is not an array")?
+        .iter_mut()
+        .find(|tools| tools["tools_id"] == tools_id)
+        .ok_or_else(|| anyhow!("Tools {tools_id} not found"))?;
+    tools["subagents"] = json!({
+        "target_ids": [target_behavior_id],
+        "spawn_enabled": true,
+        "background_enabled": true
+    });
+    config["subagent_targets"]
+        .as_array_mut()
+        .context("subagent_targets is not an array")?
+        .push(json!({
+            "target_id": target_behavior_id,
+            "target_agent_did": agent_did,
+            "behavior_id": target_behavior_id,
+            "name": target_behavior_id
+        }));
+    write_json_file(&path, &config)?;
+    run_cli_json(
+        home_dir,
+        &["config", "apply", "--root", root.to_str().context("root")?],
+    )?;
     Ok(())
 }
 

@@ -16,10 +16,11 @@ function makeHandlers() {
     onDeleteSkillConfig: vi.fn(),
     onDeleteTaskConfig: vi.fn(),
     onDeleteScheduleConfig: vi.fn(),
-    onDeleteEventTriggerConfig: vi.fn(),
+    onDeleteEventSourceConfig: vi.fn(),
+    onDeleteTriggerConfig: vi.fn(),
     onDeleteBackendConfig: vi.fn(),
     onDeleteInferenceProfileConfig: vi.fn(),
-    onDeleteToolSelectionConfig: vi.fn(),
+    onDeleteToolsConfig: vi.fn(),
     onDeleteToolServiceConfig: vi.fn(),
     onDeleteBehaviorConfig: vi.fn(),
   };

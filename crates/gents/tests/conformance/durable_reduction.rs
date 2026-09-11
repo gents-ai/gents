@@ -62,7 +62,7 @@ fn provenance(scope: &str, messages: Vec<Message>, keys: Vec<String>) -> String 
 }
 
 #[tokio::test]
-async fn generated_durable_reduction_cases_pin_identity_and_persist_before_send() {
+async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
     let cases = lean_durable_reduction_cases();
     assert!(!cases.is_empty(), "Lean emitted no durable-reduction cases");
 
@@ -184,28 +184,52 @@ async fn generated_durable_reduction_cases_pin_identity_and_persist_before_send(
         let rust_outcome = match &result {
             Ok(row) if prior_doc_id.as_deref() == Some(row.doc_id.as_str()) => "idempotent",
             Ok(_) => "fresh",
-            Err(_) if !case.pair_closed => "pair_open",
-            Err(_) => "conflict",
+            Err(error) if !case.pair_closed => {
+                // The only pair-open failure is the creation precondition
+                // itself; attributing any other error to `pair_open` would
+                // conflate transport noise with an integrity guarantee.
+                assert!(
+                    error.to_string().contains("open tool-call/result pair"),
+                    "{}: pair_open must be the pair-closure creation precondition, not another failure",
+                    case.name
+                );
+                "pair_open"
+            }
+            Err(error) => {
+                assert!(
+                    error.to_string().contains("conflicting immutable facts"),
+                    "{}: expected immutable-fact conflict, got {error:#}",
+                    case.name
+                );
+                "conflict"
+            }
         };
         assert_eq!(rust_outcome, case.outcome, "{} outcome drifted", case.name);
 
         let loaded = load_for_request(&node, &request_doc_id).await.unwrap();
-        let durable_after = result.is_ok()
-            && loaded.iter().any(|row| {
-                row.reduction_key == key
-                    && row.checkpoint_messages().unwrap() == intended_checkpoint
-            });
+        let durable_after = loaded.iter().any(|row| {
+            row.reduction_key == key
+                && row.request_commit_cid == request_commit_cid
+                && row.checkpoint_messages().unwrap() == intended_checkpoint
+        });
         assert_eq!(
             durable_after, case.durable_after,
             "{} durability drifted",
             case.name
         );
-        assert_eq!(
-            result_is_send_permitted(rust_outcome, case.pair_closed),
-            case.send_permitted,
-            "{} send fence drifted",
-            case.name
-        );
+        if !case.pair_closed {
+            // Valid-store premise for recovery: only projections admitted by
+            // the creation owner (pair-closed facts) can ever be restored. An
+            // open-pair reduction leaves nothing in the durable store, so
+            // recovery must not resurrect its checkpoint (`active_checkpoint_pair_closed`).
+            assert!(
+                !loaded.iter().any(|row| row.reduction_key == key),
+                "{}: recovery may only restore projections from a pair-closed store",
+                case.name
+            );
+        }
+        // Persist/load exercise the durable fact owner. No provider send is
+        // issued here, so this test cannot establish the emitted send fence.
 
         let cited_keys = |cites: bool| cites.then(|| vec![key.clone()]).unwrap_or_default();
         let inference_provenance = if case.inference_supported {
@@ -237,6 +261,7 @@ async fn generated_durable_reduction_cases_pin_identity_and_persist_before_send(
             "{} consumption drifted",
             case.name
         );
+        node.shutdown().await;
     }
 
     assert!(!rendered_capture_cites_reduction(
@@ -253,8 +278,4 @@ async fn generated_durable_reduction_cases_pin_identity_and_persist_before_send(
         0,
         "reduction-key",
     ));
-}
-
-fn result_is_send_permitted(outcome: &str, pair_closed: bool) -> bool {
-    matches!(outcome, "fresh" | "idempotent") && pair_closed
 }

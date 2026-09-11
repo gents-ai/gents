@@ -1,9 +1,5 @@
 import Proofs.Client.Terminal
 
-theorem deriveTurn_deterministic
-    (attempts : List AttemptView) :
-    deriveTurn attempts = deriveTurn attempts := rfl
-
 theorem turn_replacement_derives_new_tip
     (attempts : List AttemptView)
     (newTip : AttemptView) :

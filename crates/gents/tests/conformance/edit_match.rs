@@ -134,3 +134,40 @@ pub(super) fn near_miss_is_diagnosed_never_applied() {
         other => panic!("near-miss must be NotFound with diagnostics: {other:?}"),
     }
 }
+
+/// A relaxed-rung hit (TrailingWs/Trim/Unicode) is subject to the same
+/// ambiguity gate as an exact hit: two drifted occurrences must be reported,
+/// never silently resolved by picking the first.
+pub(super) fn relaxed_rung_hits_respect_the_ambiguity_gate() {
+    let content = "  let x = 1;\n  let x = 1;\n";
+    // Only the trim rung matches both drifted lines: the exact pattern
+    // (8-space indent) has zero occurrences.
+    match decide(content, &ladder_req("        let x = 1;", "hit", false)) {
+        EditOutcome::Ambiguous { count, .. } => assert_eq!(count, 2),
+        other => panic!("relaxed rung must be gated by ambiguity: {other:?}"),
+    }
+}
+
+/// Insert-before preserves the matched text at each selected replacement site.
+pub(super) fn insert_before_desugar_applies_to_every_replace_all_site() {
+    let content = "anchor\nrest\n";
+    let mut request = ladder_req("anchor", "before:", false);
+    request.operation = Operation::InsertBefore;
+    match decide(content, &request) {
+        EditOutcome::Applied { result, .. } => assert_eq!(result, "before:anchor\nrest\n"),
+        other => panic!("insert_before: {other:?}"),
+    }
+    let mut request = ladder_req("anchor", "before:", true);
+    request.operation = Operation::InsertBefore;
+    match decide("anchor\nmid\nanchor\n", &request) {
+        EditOutcome::Applied {
+            result,
+            replacements,
+            ..
+        } => {
+            assert_eq!(replacements, 2);
+            assert_eq!(result, "before:anchor\nmid\nbefore:anchor\n");
+        }
+        other => panic!("insert_before replace_all: {other:?}"),
+    }
+}

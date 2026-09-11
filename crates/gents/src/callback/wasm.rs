@@ -151,7 +151,7 @@ pub fn plan_from_wasm_module(
     source: &Value,
     capabilities: &BTreeSet<String>,
 ) -> Result<ActionPlan, String> {
-    if module.enabled == Some(false) {
+    if !module.enabled {
         return Err("CallbackModule is disabled".into());
     }
     let wasm = decode_wasm_bytes(module.wasm_bytes.as_deref().unwrap_or(""))?;

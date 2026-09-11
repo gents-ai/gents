@@ -23,7 +23,8 @@ phase inserts the visible overlay at the tail or immediately before one
 identified orphan sequence.
 
 Model boundary: the input message list is taken **already sorted** by the
-shell's total sequence order (the Rust sorts first; sort correctness is a
+shell's total sequence order, and tool-group keys are unique (the Rust uses map
+keys and sorts first; sort correctness is a
 standard fact, not re-derived here). The fence is the interleave / partition /
 tail discipline *on top of* that order — which is exactly the part a second
 shell re-implements and can get wrong.
@@ -283,7 +284,111 @@ theorem no_overlay_when_absent (groups : List Int) (msgs : List Msg)
   have hp := overlay_mem_placePending_iff pending (body groups msgs)
   simp [hp, List.mem_append, hb, ho]
 
-/-! ## Partition: every tool group is placed exactly once -/
+/-! ## Tool-group multiplicity in the emitted timeline -/
+
+private theorem group_count_bodyGo (groups attached : List Int) (msgs : List Msg) (seq : Int) :
+    (bodyGo groups attached msgs).count (.toolGroup seq) =
+      if seq ∈ groups ∧ seq ∉ attached ∧ seq ∈ msgs.map Msg.seq then 1 else 0 := by
+  induction msgs generalizing attached with
+  | nil => simp [bodyGo]
+  | cons m rest ih =>
+      by_cases heq : m.seq = seq
+      · by_cases hsg : seq ∈ groups <;> by_cases hsa : seq ∈ attached <;>
+          cases hemits : m.emitsItem <;>
+          simp [bodyGo, List.count_cons, ih, hasGroup, heq, hsg, hsa, hemits]
+      · have hne := Ne.symm heq
+        by_cases hmg : m.seq ∈ groups <;> by_cases hma : m.seq ∈ attached <;>
+          cases hemits : m.emitsItem <;>
+          simp [bodyGo, List.count_cons, ih, hasGroup, heq, hne, hmg, hma, hemits]
+
+private theorem group_count_insertPending (seq target : Int) (slots : List Slot) :
+    (insertPendingBefore target slots).count (.toolGroup seq) = slots.count (.toolGroup seq) := by
+  induction slots with
+  | nil => simp [insertPendingBefore]
+  | cons slot rest ih =>
+      cases slot with
+      | message key position role =>
+          by_cases h : position = target <;> simp [insertPendingBefore, h, List.count_cons, ih]
+      | toolGroup position =>
+          by_cases h : position = target <;> simp [insertPendingBefore, h, List.count_cons, ih]
+      | pending => simp [insertPendingBefore, List.count_cons, ih]
+      | overlay => simp [insertPendingBefore, List.count_cons, ih]
+
+private theorem group_count_placePending (seq : Int) (pending : Option PendingPlacement)
+    (slots : List Slot) :
+    (placePending pending slots).count (.toolGroup seq) = slots.count (.toolGroup seq) := by
+  cases pending with
+  | none => rfl
+  | some placement =>
+      cases placement <;> simp [placePending, group_count_insertPending]
+
+private theorem group_count_map (seq : Int) (groups : List Int) :
+    (groups.map Slot.toolGroup).count (.toolGroup seq) = groups.count seq := by
+  induction groups with
+  | nil => rfl
+  | cons head rest ih =>
+      by_cases heq : head = seq <;> simp [List.count_cons, ih, heq]
+
+private theorem group_count_insertOverlay (seq target : Int) (visible : List Slot)
+    (groups : List Int) :
+    (insertOverlayBefore target visible groups).count (.toolGroup seq) =
+      visible.count (.toolGroup seq) + groups.count seq := by
+  induction groups with
+  | nil => simp [insertOverlayBefore]
+  | cons head rest ih =>
+      by_cases ht : head = target <;>
+        by_cases hs : head = seq <;>
+        simp_all [insertOverlayBefore, List.count_cons, group_count_map, Nat.add_comm, Nat.add_left_comm, Nat.add_assoc]
+
+private theorem group_count_buildOrder (seq : Int) (groups : List Int) (msgs : List Msg)
+    (pending : Option PendingPlacement) (overlay : Option Overlay) :
+    (buildOrder groups msgs pending overlay).count (.toolGroup seq) =
+      (body groups msgs).count (.toolGroup seq) + (orphans groups msgs).count seq := by
+  cases overlay with
+  | none => simp [buildOrder, group_count_placePending, group_count_map]
+  | some o =>
+      cases hshow : o.hasDurableOwner <;> cases hplace : o.placement <;>
+        simp [buildOrder, hshow, hplace, placeOrphanTail, group_count_placePending,
+          group_count_map, group_count_insertOverlay]
+
+private theorem nodup_count (groups : List Int) (hunique : groups.Nodup) (seq : Int) :
+    groups.count seq = if seq ∈ groups then 1 else 0 := by
+  induction groups with
+  | nil => simp
+  | cons head rest ih =>
+      simp only [List.nodup_cons] at hunique
+      by_cases heq : head = seq
+      · subst head
+        simp [List.count_cons, (List.count_eq_zero.mpr hunique.1)]
+      · simp [List.count_cons, heq, Ne.symm heq, ih hunique.2]
+
+/-- Runtime tool groups come from unique map keys. Under that explicit adapter
+premise, the actual emitted timeline contains each group exactly once. Pending
+turns and overlays preserve this count, whatever their placement. -/
+theorem tool_group_emitted_once (groups : List Int) (hunique : groups.Nodup)
+    (msgs : List Msg) (pending : Option PendingPlacement) (overlay : Option Overlay)
+    (seq : Int) :
+    (buildOrder groups msgs pending overlay).count (.toolGroup seq) =
+      if seq ∈ groups then 1 else 0 := by
+  rw [group_count_buildOrder]
+  simp only [body, group_count_bodyGo, List.not_mem_nil, true_and]
+  by_cases hattached : seq ∈ attachedSeqs groups msgs
+  · have horphan : (orphans groups msgs).count seq = 0 := by
+      apply List.count_eq_zero.mpr
+      simp [orphans, hattached]
+    simp only [attachedSeqs, List.mem_filter, List.mem_map] at hattached
+    simp only [hasGroup, decide_eq_true_eq] at hattached
+    simp [horphan, hattached.1, hattached.2]
+  · have hcount : (orphans groups msgs).count seq = groups.count seq := by
+      apply List.count_filter
+      simpa using hattached
+    rw [hcount, nodup_count groups hunique seq]
+    have hnone : ¬ (seq ∈ groups ∧ seq ∈ (kept msgs).map Msg.seq) := by
+      simpa [attachedSeqs, hasGroup, and_comm] using hattached
+    simp only [List.mem_map] at hnone ⊢
+    simp only [not_false_eq_true, true_and, hnone, ↓reduceIte, Nat.zero_add]
+
+/-! ## Auxiliary membership partition -/
 
 /-- A sequence that a surviving message attaches a group to is a real group. -/
 theorem attachedSeqs_subset_groups (groups : List Int) (msgs : List Msg) {s : Int}
@@ -304,7 +409,7 @@ theorem group_attached_or_orphan (groups : List Int) (msgs : List Msg) {s : Int}
     exact ⟨h, by simpa using ha⟩
 
 /-- **Partition (disjointness).** No tool group is both attached and an orphan —
-none is placed twice. -/
+this membership partition alone does not establish output multiplicity. -/
 theorem group_not_both (groups : List Int) (msgs : List Msg) {s : Int}
     (ha : s ∈ attachedSeqs groups msgs) : s ∉ orphans groups msgs := by
   unfold orphans

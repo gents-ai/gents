@@ -18,7 +18,7 @@ use super::shared::{
 use super::*;
 use crate::lean_vocab_test::{
     lean_command_env_cases, lean_command_policy_case, lean_command_policy_cases,
-    lean_command_sandbox_cases, lean_native_filesystem_boundary_cases, LeanCommandPolicyCase,
+    lean_command_sandbox_cases, LeanCommandPolicyCase,
 };
 use crate::tool_call_lifecycle::AwaitMode;
 
@@ -331,13 +331,16 @@ async fn spawn_subagent_definition_uses_configured_default_await_mode() {
 }
 
 /// Build a single-target list for subagent tool tests. `name` doubles as the
-/// behavior id; the agent_did is a fixed local placeholder.
-fn subagent_targets(name: &str) -> Vec<crate::document_config::SubagentTarget> {
-    vec![crate::document_config::SubagentTarget {
-        name: name.to_string(),
+/// behavior id and the destination principal is the same fixed local owner.
+fn subagent_targets(name: &str) -> Vec<crate::document_config::SubagentTargetDocument> {
+    vec![crate::document_config::SubagentTargetDocument {
+        target_id: format!("{name}-target"),
         agent_did: "did:key:zTest".to_string(),
+        target_agent_did: "did:key:zTest".to_string(),
         behavior_id: name.to_string(),
+        name: name.to_string(),
         description: None,
+        tags: Vec::new(),
     }]
 }
 
@@ -492,37 +495,6 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
             assert!(text.contains("second request"));
         }
         other => panic!("second read should complete, got {other:?}"),
-    }
-}
-
-#[test]
-fn generated_native_filesystem_boundary_cases_match_preemptible_boundary_contract() {
-    let cases = lean_native_filesystem_boundary_cases();
-    let tool_names = cases
-        .iter()
-        .map(|case| case.tool_name.as_str())
-        .collect::<BTreeSet<_>>();
-
-    assert_eq!(tool_names, BTreeSet::from(["glob", "grep", "list_files"]));
-    for case in cases {
-        assert!(
-            case.name
-                .ends_with("_single_poll_blocker_times_out_and_queue_advances"),
-            "unexpected native filesystem boundary case name: {}",
-            case.name
-        );
-        assert_eq!(case.work_class, "filesystemTraversal");
-        assert_eq!(case.boundary, "managedExecProcessGroupBoundary");
-        assert!(case.inner_poll_blocks);
-        assert!(case.request_deadline_ms <= 20);
-        assert!(case.blocker_ms >= 200);
-        assert!(
-            case.request_deadline_ms < case.blocker_ms,
-            "deadline must be shorter than deterministic blocker"
-        );
-        assert_eq!(case.expected_terminal, "timedOut");
-        assert_eq!(case.expected_failure_class.as_deref(), Some("external"));
-        assert!(case.queue_advances_before_blocker_returns);
     }
 }
 
@@ -1149,7 +1121,7 @@ fn read_only_policy_allows_operator_configured_diagnostic_prefix() {
     .is_err());
 }
 
-/// The two ToolSelection knobs are not aliases: prefixes gate/extend by argv;
+/// The two ResolvedToolSelection knobs are not aliases: prefixes gate/extend by argv;
 /// the allowlist field replaces the whole-executable base.
 #[test]
 fn read_only_allowlist_knobs_match_operator_docs() {

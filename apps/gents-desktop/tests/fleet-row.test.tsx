@@ -47,7 +47,7 @@ describe("FleetRow", () => {
       `${deployment.behaviors.length} behaviors`,
     );
     expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
-      `${deployment.conversations.length} conversations`,
+      `${deployment.sessions.length} sessions`,
     );
     fireEvent.click(screen.getByTestId("fleet-row-peer-1"));
 

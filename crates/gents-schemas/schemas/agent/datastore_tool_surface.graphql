@@ -1,11 +1,11 @@
-type DatastoreToolSurface @branchable {
-    surface_id: String @index(unique: true)
+type DatastoreToolSurface @branchable @index(fields: ["agent_did", "surface_id"], unique: true) {
+    surface_id: String @index
     agent_did: String @index
     display_name: String
     enabled: Boolean @index
-    # JSON-serialized WriteToolDecl entries (same dual-shape as ToolSelection.write_tools).
-    # Query entries set "kind": "query" and share this column.
-    entries: [String]
+    # Canonical write/query declarations stored as native JSON values.
+    entries: JSON
     created_at: String
     updated_at: DateTime @index(direction: DESC)
+    tags: [String]
 }

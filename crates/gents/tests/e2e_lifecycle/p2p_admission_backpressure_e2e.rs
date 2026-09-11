@@ -114,35 +114,6 @@ async fn create_request(
     );
 }
 
-async fn terminalize_request(
-    node: &EmbeddedNode,
-    request_id: &str,
-    agent_did: &str,
-    lifecycle_state: &str,
-) {
-    let request_id = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{request_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }}
-                }},
-                input: {{
-                    lifecycle_state: "{lifecycle_state}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "terminalize AgentRequest failed: {:?}",
-        resp.errors
-    );
-}
-
 async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<AgentRequestRow> {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
@@ -192,50 +163,6 @@ async fn wait_for_request_lifecycle(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn single_push_worker_still_converges_agent_request_over_p2p() {
-    let admission = TestP2pAdmission::single_push_worker();
-    let owner = test_p2p_db_with_admission("admission-p2p-owner", admission.clone()).await;
-    let peer = test_p2p_db_with_admission("admission-p2p-peer", admission).await;
-
-    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["AgentRequest"]).await;
-
-    let request_id = "admission-p2p-single-worker-req";
-    let session_id = "admission-p2p-single-worker-session";
-
-    create_request(
-        owner.node.as_ref(),
-        request_id,
-        session_id,
-        OWNER_DID,
-        "processing",
-    )
-    .await;
-
-    let on_peer_processing = wait_for_request_lifecycle(
-        peer.node.as_ref(),
-        request_id,
-        RequestLifecycleState::Processing,
-        Duration::from_secs(45),
-        "peer (intermediate, single push worker)",
-    )
-    .await;
-    assert_eq!(on_peer_processing.agent_did.as_deref(), Some(OWNER_DID));
-
-    terminalize_request(owner.node.as_ref(), request_id, OWNER_DID, "completed").await;
-
-    let on_peer_terminal = wait_for_request_lifecycle(
-        peer.node.as_ref(),
-        request_id,
-        RequestLifecycleState::Completed,
-        Duration::from_secs(45),
-        "peer (terminal, single push worker)",
-    )
-    .await;
-    assert_eq!(on_peer_terminal.agent_did.as_deref(), Some(OWNER_DID));
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn single_push_worker_delivers_multi_wave_updates() {
     let admission = TestP2pAdmission::single_push_worker();

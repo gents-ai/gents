@@ -12,20 +12,13 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "agent_behaviors/background_parent/object.json",
     "agent_behaviors/background_parent/system_prompt.md",
-    "agent_behaviors/background_worker/object.json",
     "agent_behaviors/background_worker/system_prompt.md",
-    "agent_principal.json",
-    "event_triggers/background_parent/object.json",
     "experiment.json",
-    "inference_backends/background_deepseek/object.json",
-    "inference_profiles/background_profile/object.json",
+    "pack_config.json",
     "schemas/background_continuation_job.graphql",
-    "tasks/background_parent_task/object.json",
-    "tasks/background_parent_task/prompt.md",
-    "tool_selections/background_parent_tools/object.json",
-    "tool_selections/background_worker_tools/object.json"
+    "tasks/background_parent_task/prompt.md"
   ],
-  "dependencies": []
+  "dependencies": [],
+  "config": "pack_config.json"
 }

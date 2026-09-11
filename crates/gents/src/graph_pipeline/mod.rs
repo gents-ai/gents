@@ -1,7 +1,7 @@
 //! Compiler and publication adapter for model-proposed document graphs.
 //!
 //! Inputs to this module are untrusted proposals. Compilation resolves only
-//! operator-approved wrappers around existing Tasks. Publication creates only
+//! configured wrappers around existing Tasks. Publication creates only
 //! ordinary EventTriggers; the existing runtime remains the sole executor.
 
 mod compiler;
@@ -14,9 +14,10 @@ pub use compiler::{
     bind_package_plan, compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy,
     GraphCompileError,
 };
+#[cfg(test)]
+pub(crate) use run::derive_graph_workspace;
 pub(crate) use run::{
-    derive_graph_workspace, finalize_graph_workspace, graph_binding_for_request_in_txn,
-    run_graph_run_reconciler,
+    graph_binding_for_request_in_txn, resolve_graph_workspace, run_graph_run_reconciler,
 };
 pub use run::{
     load_graph_run_result_view_with_access, load_graph_run_view, load_graph_run_view_with_access,
@@ -24,7 +25,6 @@ pub use run::{
     request_graph_run_cancellation, request_graph_run_cancellation_with_access, GraphResultRef,
     GraphRunGroupView, GraphRunRequestView, GraphRunResultView, GraphRunStageView, GraphRunView,
 };
-pub(crate) use runtime::materialize_graph_revision_in_txn;
 pub use runtime::{
     activate_graph_revision, activate_graph_revision_with_access, graph_run_terminal_decision,
     load_active_graph_plan_with_access, materialize_graph_revision, publish_graph_plan,
@@ -34,8 +34,9 @@ pub use runtime::{
 };
 pub(crate) use runtime::{
     fence_graph_publication_in_txn, fence_graph_root_request_in_txn, graph_artifact_is_reserved,
-    graph_artifact_is_visible, load_visible_package_artifact_ids,
+    graph_artifact_is_visible, load_runtime_graph_artifacts_in_txn,
 };
+pub(crate) use runtime::{load_active_graph_plan_in_txn, materialize_graph_revision_in_txn};
 pub use tools::{
     CompileGraphArgs, CompileGraphResponse, CompileGraphTool, GraphPipelineToolError,
     COMPILE_GRAPH_TOOL_NAME, GRAPH_PIPELINE_TOOL_NAMES,
@@ -43,10 +44,9 @@ pub use tools::{
 pub use types::{
     BundledProvenance, CapabilityManifestEntry, DeliveryConcurrency, DeliveryMode, Diagnostic,
     DiagnosticCode, EntryBinding, GraphEdge, GraphIntent, GraphLimits, GraphNode, GraphPlan,
-    GroupCount, PackageArtifactKind, PackagePlan, PackageRoleBinding, PlannedEdge, PlannedEntry,
-    PlannedNode, PlannedPackageArtifact, PlannedResult, PortCardinality, PortRef, PortSpec,
-    RequiredSchemaDigest, ResultCardinality, ResultContract, StageCapability,
-    WorkspaceAuthorityCeiling, COMPILER_VERSION,
+    GroupCount, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode, PlannedPackageArtifact,
+    PlannedResult, PortCardinality, PortRef, PortSpec, RequiredSchemaDigest, ResultCardinality,
+    ResultContract, StageCapability, WorkspaceAuthority, COMPILER_VERSION,
 };
 
 #[cfg(test)]

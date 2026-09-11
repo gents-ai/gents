@@ -2,7 +2,7 @@
   "name": "@source-inc/gents-desktop-operations",
   "version": "0.16.4",
   "license": "Apache-2.0",
-  "description": "Focused holds, health, trace, and workspace surfaces for Gents desktop",
+  "description": "Focused health, trace, and workspace surfaces for Gents desktop",
   "type": "module",
   "sideEffects": [
     "./styles.css",

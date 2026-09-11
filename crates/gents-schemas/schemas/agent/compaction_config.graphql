@@ -1,0 +1,14 @@
+type CompactionConfig @branchable @index(fields: ["agent_did", "compaction_id"], unique: true) {
+    compaction_id: String
+    agent_did: String @index
+    display_name: String
+    strategy: String
+    threshold: Float
+    keep_recent_tokens: Int
+    tool_result_max_chars: Int
+    summary_max_output_tokens: Int
+    summary_file_list_max: Int
+    inference_profile_id: String @index
+    tags: [String!]
+    updated_at: DateTime @index(direction: DESC)
+}

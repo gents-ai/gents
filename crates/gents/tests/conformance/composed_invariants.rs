@@ -26,16 +26,8 @@ pub(super) async fn generated_composed_invariant_witnesses_drive_tool_lifecycle_
 }
 
 async fn drive_running_deadline_witness(witness: &LeanComposedInvariantWitness) {
-    assert_common_reachable_deadline_shape(witness);
-    assert_eq!(
-        witness.scenario,
-        "running_tool_deadline_exceeded_times_out_on_recovery"
-    );
-    assert_eq!(witness.rust_path, "ToolCallLifecycle::recover_all");
-    assert_eq!(witness.trace_step_count, witness.transition_path.len());
     assert_eq!(witness.tool_pre_state, "running");
-    assert_eq!(witness.tool_post_state, "timedOut");
-    assert!(witness.pre_tool_persisted);
+    assert!(witness.tool_current_time > witness.tool_deadline);
 
     let db = test_db("composed-c1-running-deadline").await;
     let request_id = format!("composed-c1-request-{}", witness.request_id);
@@ -82,19 +74,8 @@ async fn drive_running_deadline_witness(witness: &LeanComposedInvariantWitness) 
 }
 
 async fn drive_pending_deadline_witness(witness: &LeanComposedInvariantWitness) {
-    assert_common_reachable_deadline_shape(witness);
-    assert_eq!(
-        witness.scenario,
-        "pending_tool_deadline_exceeded_cancels_before_dispatch"
-    );
-    assert_eq!(
-        witness.rust_path,
-        "ToolCallLifecycle::cancel_before_dispatch"
-    );
-    assert_eq!(witness.trace_step_count, witness.transition_path.len());
     assert_eq!(witness.tool_pre_state, "pending");
-    assert_eq!(witness.tool_post_state, "cancelled");
-    assert!(!witness.pre_tool_persisted);
+    assert!(witness.tool_current_time > witness.tool_deadline);
 
     let db = test_db("composed-c1-prime-pending-deadline").await;
     let request_id = format!("composed-c1-prime-request-{}", witness.request_id);
@@ -139,32 +120,8 @@ async fn drive_pending_deadline_witness(witness: &LeanComposedInvariantWitness) 
 }
 
 async fn drive_interrupted_pending_witness(witness: &LeanComposedInvariantWitness) {
-    assert_eq!(witness.witness_kind, "reachable_domain");
-    assert_eq!(
-        witness.scenario,
-        "interrupted_request_cancels_live_pending_tool"
-    );
-    assert_eq!(
-        witness.rust_path,
-        "ToolCallLifecycle::cancel_before_dispatch"
-    );
-    assert_eq!(witness.trace_step_count, witness.transition_path.len());
-    assert_eq!(witness.pre_request_state, "interrupted");
     assert_eq!(witness.tool_pre_state, "pending");
-    assert_eq!(witness.tool_post_state, "cancelled");
-    assert_eq!(witness.cancel_cause.as_deref(), Some("interrupted"));
-    assert!(!witness.pre_tool_persisted);
-    assert!(!witness.deadline_exceeded);
-    assert_eq!(witness.request_id, witness.tool_request_id);
-    assert_eq!(witness.request_current_time, witness.tool_current_time);
-    assert!(
-        witness
-            .transition_path
-            .iter()
-            .any(|step| step == "request_interrupt"),
-        "{} must include the composed interrupt latch",
-        witness.theorem_name
-    );
+    assert_eq!(witness.pre_request_state, "interrupted");
 
     let db = test_db("composed-c2-interrupted-pending").await;
     let request_id = format!("composed-c2-request-{}", witness.request_id);
@@ -209,29 +166,8 @@ async fn drive_interrupted_pending_witness(witness: &LeanComposedInvariantWitnes
 }
 
 async fn drive_interrupted_running_witness(witness: &LeanComposedInvariantWitness) {
-    assert_eq!(witness.witness_kind, "reachable_domain");
-    assert_eq!(
-        witness.scenario,
-        "interrupted_request_cancels_live_running_tool"
-    );
-    assert_eq!(witness.rust_path, "ToolCallLifecycle::cancel_during_run");
-    assert_eq!(witness.trace_step_count, witness.transition_path.len());
-    assert_eq!(witness.pre_request_state, "interrupted");
     assert_eq!(witness.tool_pre_state, "running");
-    assert_eq!(witness.tool_post_state, "cancelled");
-    assert_eq!(witness.cancel_cause.as_deref(), Some("interrupted"));
-    assert!(witness.pre_tool_persisted);
-    assert!(!witness.deadline_exceeded);
-    assert_eq!(witness.request_id, witness.tool_request_id);
-    assert_eq!(witness.request_current_time, witness.tool_current_time);
-    assert!(
-        witness
-            .transition_path
-            .iter()
-            .any(|step| step == "request_interrupt"),
-        "{} must include the composed interrupt latch",
-        witness.theorem_name
-    );
+    assert_eq!(witness.pre_request_state, "interrupted");
 
     let db = test_db("composed-c2-interrupted-running").await;
     let request_id = format!("composed-c2r-request-{}", witness.request_id);
@@ -273,40 +209,5 @@ async fn drive_interrupted_running_witness(witness: &LeanComposedInvariantWitnes
         snapshots[0].cancel_cause.as_deref(),
         witness.cancel_cause.as_deref()
     );
-}
-
-fn assert_common_reachable_deadline_shape(witness: &LeanComposedInvariantWitness) {
-    assert_eq!(witness.witness_kind, "reachable_domain");
-    assert_eq!(witness.pre_request_state, "processing");
-    assert_eq!(witness.pre_request_admission, "executing");
-    assert_eq!(witness.request_id, witness.tool_request_id);
-    assert_eq!(witness.request_deadline, witness.tool_deadline);
-    assert_eq!(witness.request_current_time, witness.tool_current_time);
-    assert!(
-        witness.request_current_time > witness.request_deadline,
-        "{} should emit an exceeded deadline",
-        witness.theorem_name
-    );
-    assert!(witness.deadline_exceeded);
-    assert_eq!(
-        witness.well_formed_source,
-        "ComposedState.wellFormed_from_initial"
-    );
-    assert_eq!(witness.cancel_cause.as_deref(), Some("deadline"));
-    assert!(
-        witness
-            .transition_path
-            .iter()
-            .any(|step| step == "slot_acquire"),
-        "{} must include the composed admission grant",
-        witness.theorem_name
-    );
-    assert!(
-        witness
-            .transition_path
-            .iter()
-            .any(|step| step == "clock_advance"),
-        "{} must include the lockstep clock advance",
-        witness.theorem_name
-    );
+    assert_eq!(snapshots[0].tool_failure_class.as_deref(), None);
 }

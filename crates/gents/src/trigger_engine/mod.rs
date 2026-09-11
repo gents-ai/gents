@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 pub(crate) mod cross_deployment_cancel_mirror;
+pub(crate) mod event_delivery;
 pub(crate) mod event_source;
 pub(crate) mod goal_source;
 pub(crate) mod manual_source;
@@ -20,7 +21,9 @@ pub mod subscription_source;
 #[cfg(test)]
 mod tests;
 
-type TriggerLockKey = (String, String, TriggerKind, Option<String>);
+// Per-document fires share the canonical owner/trigger gate; grouped fires
+// additionally select the complete typed group generation through its durable key.
+type TriggerLockKey = (String, String, Option<String>);
 type TriggerLock = Arc<Mutex<()>>;
 type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
 
@@ -73,6 +76,9 @@ impl FireIntent {
     fn well_formed_error(&self) -> Option<&'static str> {
         if self.durable_fire_key.trim().is_empty() {
             return Some("Trigger fire intent must carry a durable fire key");
+        }
+        if self.group_vars.is_some() && !event_delivery::is_group_fire_key(&self.durable_fire_key) {
+            return Some("Grouped trigger intent requires its canonical event-group fire key");
         }
         match self.trigger_kind {
             TriggerKind::Manual if self.trigger_id.is_some() => {
@@ -160,8 +166,6 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         &self,
         agent_did: &str,
         trigger_id: &str,
-        trigger_kind: TriggerKind,
-        correlation: Option<&str>,
         excluded_request_id: Option<&str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
@@ -169,8 +173,6 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         &self,
         agent_did: &str,
         trigger_id: &str,
-        trigger_kind: TriggerKind,
-        correlation: Option<&str>,
         excluded_request_id: Option<&str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>;
 
@@ -186,8 +188,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         &self,
         agent_did: &str,
         trigger_id: &str,
-        trigger_kind: TriggerKind,
-        correlation: &str,
+        durable_fire_key: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 }
 
@@ -443,18 +444,13 @@ impl TriggerEngine {
                 return result;
             }
         };
-        // Correlation scopes concurrency only for an actual group fire. A
-        // per-document trigger may carry correlation for lineage and fills,
-        // but Serial/LatestOnly remain trigger-wide as modeled in Lean.
-        let concurrency_correlation = intent
-            .group_vars
-            .as_ref()
-            .and_then(|_| intent.correlation.clone());
         let lock_key = (
             agent_did.clone(),
             trigger_id.clone(),
-            intent.trigger_kind,
-            concurrency_correlation.clone(),
+            intent
+                .group_vars
+                .as_ref()
+                .map(|_| intent.durable_fire_key.clone()),
         );
         let lock = {
             let mut map = self.per_trigger_locks.lock().await;
@@ -465,7 +461,7 @@ impl TriggerEngine {
         let guard = lock.lock().await;
 
         if intent.group_vars.is_some() {
-            let Some(correlation) = intent
+            let Some(_correlation) = intent
                 .correlation
                 .as_deref()
                 .map(str::trim)
@@ -481,12 +477,7 @@ impl TriggerEngine {
             };
             match self
                 .materializer
-                .has_materialized_group_request(
-                    &agent_did,
-                    &trigger_id,
-                    intent.trigger_kind,
-                    correlation,
-                )
+                .has_materialized_group_request(&agent_did, &trigger_id, &intent.durable_fire_key)
                 .await
             {
                 Ok(true) => {
@@ -512,15 +503,16 @@ impl TriggerEngine {
         }
 
         use crate::runtime_snapshot::ConcurrencyMode;
-        match intent.concurrency {
-            ConcurrencyMode::Parallel => {}
-            ConcurrencyMode::Serial => match self
+        // Every request, including active work, is a group marker. Under the
+        // full group lock, an absent marker leaves no grouped request to gate
+        // or supersede. Per-document concurrency remains trigger-wide.
+        match (intent.group_vars.is_some(), intent.concurrency) {
+            (true, _) | (false, ConcurrencyMode::Parallel) => {}
+            (false, ConcurrencyMode::Serial) => match self
                 .materializer
                 .has_active_runtime_request_for_trigger(
                     &agent_did,
                     &trigger_id,
-                    intent.trigger_kind,
-                    concurrency_correlation.as_deref(),
                     durable_goal_request_id.as_deref(),
                 )
                 .await
@@ -545,14 +537,12 @@ impl TriggerEngine {
                     return result;
                 }
             },
-            ConcurrencyMode::LatestOnly => {
+            (false, ConcurrencyMode::LatestOnly) => {
                 if let Err(error) = self
                     .materializer
                     .supersede_active_runtime_requests_for_trigger(
                         &agent_did,
                         &trigger_id,
-                        intent.trigger_kind,
-                        concurrency_correlation.as_deref(),
                         durable_goal_request_id.as_deref(),
                     )
                     .await
@@ -669,8 +659,6 @@ pub async fn run_subagent_source_for_test(
             &self,
             _agent_did: &str,
             _trigger_id: &str,
-            _trigger_kind: TriggerKind,
-            _correlation: Option<&str>,
             _excluded_request_id: Option<&str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
         {
@@ -681,8 +669,6 @@ pub async fn run_subagent_source_for_test(
             &self,
             _agent_did: &str,
             _trigger_id: &str,
-            _trigger_kind: TriggerKind,
-            _correlation: Option<&str>,
             _excluded_request_id: Option<&str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>
         {
@@ -703,8 +689,7 @@ pub async fn run_subagent_source_for_test(
             &self,
             _agent_did: &str,
             _trigger_id: &str,
-            _trigger_kind: TriggerKind,
-            _correlation: &str,
+            _durable_fire_key: &str,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
         {
             Box::pin(async { Ok(false) })

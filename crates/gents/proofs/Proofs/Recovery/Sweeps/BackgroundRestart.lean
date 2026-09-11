@@ -154,7 +154,7 @@ def restartDisposition (row : RestartRow) : RestartDisposition :=
   if row.deadlineExpired then
     .terminalize .deadlineExceeded
   else if row.unclaimedExpired then
-    .terminalize .unclaimedCrossDeploymentSpawn
+    .terminalize .unclaimedCrossPrincipalSpawn
   else if row.isNativeBackgroundTool ∧ row.parent = .live then
     .terminalize .terminalizeBackgroundedAsInterrupted
   else if row.isDetachedBridge ∧ row.parent = .interrupted then
@@ -226,7 +226,7 @@ def restartNotificationObligation
       | .parentInterrupted => "parent_interrupted"
       | .parentTerminal => "parent_terminal"
       | .terminalizeBackgroundedAsInterrupted => "interrupted_on_restart"
-      | .unclaimedCrossDeploymentSpawn => "unclaimed_spawn_timeout"
+      | .unclaimedCrossPrincipalSpawn => "unclaimed_spawn_timeout"
       | _ => "tool_failed"
   , queueSource := "background_completion"
   , queueKeyPrefix := "background_completion:"
@@ -389,7 +389,7 @@ theorem unclaimed_precedes_leave_running_exemptions
     (row : RestartRow)
     (h_deadline : row.deadlineExpired = false)
     (h_unclaimed : row.unclaimedExpired = true) :
-    restartDisposition row = .terminalize .unclaimedCrossDeploymentSpawn := by
+    restartDisposition row = .terminalize .unclaimedCrossPrincipalSpawn := by
   simp [restartDisposition, h_deadline, h_unclaimed]
 
 end Recovery

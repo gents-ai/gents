@@ -1,9 +1,0 @@
-{
-  "task_id": "defend-triage-task",
-  "name": "Reduce the closed verdict ledger and route confirmed findings",
-  "description": null,
-  "behavior_id": "defend-triage",
-  "prompt_template": "./prompt.md",
-  "enabled": true,
-  "output_schema_ref": null
-}

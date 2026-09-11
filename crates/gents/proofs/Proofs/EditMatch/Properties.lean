@@ -33,27 +33,31 @@ theorem occurrences_sound {s : Strategy} {doc pat : Doc} {i : Nat}
     matchesAt fold s doc pat i = true :=
   (List.mem_filter.mp h).2
 
+/-- A selected ladder rung contains exactly its actual, nonempty occurrences. -/
+theorem ladderMatch_resolves {doc pat : Doc} {s : Strategy} {occ : List Nat}
+    (h : ladderMatch fold doc pat = some (s, occ)) :
+    occ = occurrences fold s doc pat ∧ occ ≠ [] := by
+  have aux : ∀ ss : List Strategy,
+      ladderMatch.go fold doc pat ss = some (s, occ) →
+      occ = occurrences fold s doc pat ∧ occ ≠ [] := by
+    intro ss
+    induction ss with
+    | nil => intro h; simp [ladderMatch.go] at h
+    | cons head rest ih =>
+      intro h
+      simp only [ladderMatch.go] at h
+      split at h
+      · exact ih h
+      · next hnonempty =>
+        cases h
+        exact ⟨rfl, by simpa [List.isEmpty_iff] using hnonempty⟩
+  exact aux Strategy.ladder h
+
 theorem ladderMatch_sound {doc pat : Doc} {s : Strategy} {occ : List Nat}
     (h : ladderMatch fold doc pat = some (s, occ)) :
     ∀ i ∈ occ, matchesAt fold s doc pat i = true := by
   intro i hi
-  have hocc : occ = occurrences fold s doc pat := by
-    have aux : ∀ ss : List Strategy,
-        ladderMatch.go fold doc pat ss = some (s, occ) →
-        occ = occurrences fold s doc pat := by
-      intro ss
-      induction ss with
-      | nil => intro h; simp [ladderMatch.go] at h
-      | cons head rest ih =>
-        intro h
-        by_cases hempty : (occurrences fold s doc pat).isEmpty
-        all_goals
-          simp only [ladderMatch.go] at h
-          split at h
-          · exact ih h
-          · simp at h; simp [← h.1, h.2]
-    exact aux Strategy.ladder h
-  subst hocc
+  rw [(ladderMatch_resolves fold h).1] at hi
   exact occurrences_sound fold hi
 
 theorem selectDisjointGo_subset {len : Nat} :
@@ -125,22 +129,7 @@ theorem ambiguous_needs_multiple {doc : Doc} {req : Request} {s : Strategy}
       obtain ⟨hs, hn⟩ := h
       subst hn
       refine ⟨?_, Bool.eq_false_iff.mpr hall⟩
-      have hne : occM ≠ [] := by
-        have aux : ∀ ss : List Strategy,
-            ladderMatch.go fold doc req.pattern ss = some (sM, occM) →
-            occM ≠ [] := by
-          intro ss
-          induction ss with
-          | nil => intro hgo; simp [ladderMatch.go] at hgo
-          | cons head rest ih =>
-            intro hgo
-            simp only [ladderMatch.go] at hgo
-            split at hgo
-            · exact ih hgo
-            · rename_i hnonempty
-              cases hgo
-              simpa [List.isEmpty_iff] using hnonempty
-        exact aux Strategy.ladder heq
+      have hne : occM ≠ [] := (ladderMatch_resolves fold heq).2
       have hsel : selectDisjoint req.pattern.length occM ≠ [] := by
         cases occM with
         | nil => exact absurd rfl hne

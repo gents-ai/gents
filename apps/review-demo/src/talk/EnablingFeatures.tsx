@@ -48,14 +48,14 @@ const FEATURES = [
     title: "Task triggers",
     body: (
       <>
-        A Task is fired by a document: Schedule, Manual, or EventTrigger on a collection create.
+        A Task is fired by a Trigger whose source is a Schedule or EventSource, or by a manual request.
         Grouping is the latest increment.
       </>
     ),
     timeline: (
       <>
         Designed Apr 21. Engine <a href="https://github.com/source-inc/gents/pull/63">#63</a> +
-        EventTrigger <a href="https://github.com/source-inc/gents/pull/68">#68</a> + manual{" "}
+        EventSource + Trigger <a href="https://github.com/source-inc/gents/pull/68">#68</a> + manual{" "}
         <a href="https://github.com/source-inc/gents/pull/70">#70</a>. Write→fire{" "}
         <a href="https://github.com/source-inc/gents/pull/431">#431</a> (Jun 8). CLI{" "}
         <a href="https://github.com/source-inc/gents/pull/474">#474</a>. Filter validation{" "}

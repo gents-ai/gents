@@ -1,216 +1,66 @@
-import Mathlib.Data.List.Basic
+import Proofs.ConfigDocuments
 
 namespace SelfConfig
 
-inductive Target where
-  | agentBehavior
-  | toolSelection
-  | inferenceProfile
-  | inferenceBackend
-  | toolServiceRegistry
-  | task
-  | schedule
-  | eventTrigger
-  deriving DecidableEq, Repr
-
+abbrev Target := ConfigDocuments.Collection
+/-- Existing self-config families plus their extracted subdocuments. Pack-owned
+callback modules, keys, graph definitions, and placements do not become writable
+merely because the shared catalog knows about them. -/
 def allTargets : List Target :=
-  [ .agentBehavior
-  , .toolSelection
-  , .inferenceProfile
-  , .inferenceBackend
-  , .toolServiceRegistry
-  , .task
-  , .schedule
-  , .eventTrigger
-  ]
-
-def Target.collectionName : Target → String
-  | .agentBehavior => "AgentBehavior"
-  | .toolSelection => "ToolSelection"
-  | .inferenceProfile => "InferenceProfile"
-  | .inferenceBackend => "InferenceBackend"
-  | .toolServiceRegistry => "ToolServiceRegistry"
-  | .task => "Task"
-  | .schedule => "Schedule"
-  | .eventTrigger => "EventTrigger"
-
-def Target.uniqueField : Target → String
-  | .agentBehavior => "behavior_id"
-  | .toolSelection => "selection_id"
-  | .inferenceProfile => "profile_id"
-  | .inferenceBackend => "backend_id"
-  | .toolServiceRegistry => "service_id"
-  | .task => "task_id"
-  | .schedule => "schedule_id"
-  | .eventTrigger => "trigger_id"
-
-def Target.category : Target → String
-  | .agentBehavior => "behavior"
-  | .toolSelection => "tools"
-  | .inferenceProfile => "profile"
-  | .inferenceBackend => "backend"
-  | .toolServiceRegistry => "mcp_service"
-  | .task => "automation"
-  | .schedule => "automation"
-  | .eventTrigger => "automation"
+  [.agentBehavior, .agentContext, .compaction, .tools, .inferenceProfile,
+   .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy,
+   .inferenceBackend, .toolServiceRegistry, .task, .schedule, .trigger, .eventSource]
+abbrev Target.collectionName (t : Target) := ConfigDocuments.Collection.collectionName t
+abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField t
+abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
 
 def selfConfigCategories : List String :=
   ["behavior", "tools", "profile", "backend", "mcp_service", "automation", "persona"]
-
-def defaultCategories : List String :=
-  ["behavior", "tools", "profile"]
-
+def defaultCategories : List String := ["behavior", "tools", "profile"]
 abbrev FieldKey := String
+abbrev allFields := ConfigDocuments.Collection.fields
 
-def allFields : Target → List FieldKey
-  | .agentBehavior =>
-      [ "behavior_id", "agent_did", "display_name", "description", "summary"
-      , "system_prompt", "request_context_template", "backend_id", "model_name"
-      , "tool_selection_id", "inference_profile_id", "compaction_strategy"
-      , "compaction_threshold", "enabled", "skill_refs", "skill_excludes"
-      , "created_at", "updated_at" ]
-  | .toolSelection =>
-      [ "selection_id", "agent_did", "display_name", "tool_policy_version"
-      , "enable_file_tools", "file_tools_mode", "file_tool_root", "enable_bash"
-      , "bash_mode", "command_execution_policy", "command_allowed_argv_prefixes"
-      , "command_forbidden_argv_prefixes", "read_only_command_allowlist"
-      , "command_network_mode", "cli_tool_names", "enable_meta_tools"
-      , "enable_goal_tools", "enable_goal_creation"
-      , "allowed_mcp_service_ids", "required_mcp_service_ids", "backgroundable_tool_names"
-      , "approval_required_tools", "subagent_targets", "subagent_spawn_enabled"
-      , "subagent_steering_enabled", "subagent_background_enabled"
-      , "subagent_default_await_mode", "subagent_allow_cross_deployment"
-      , "cross_deployment_spawn_timeout_seconds", "enable_memory"
-      , "enable_session_history_tool", "enable_context_budget"
-      , "enable_defra_query", "defra_query_collections", "write_tools"
-      , "datastore_tool_surface_ids", "eth_tool_ids"
-      , "enable_self_config", "self_config_categories"
-      , "self_config_no_lockout", "self_config_dry_run", "enable_lsp"
-      , "lsp_config", "updated_at" ]
-  | .inferenceProfile =>
-      [ "profile_id", "display_name", "context_window", "max_output_tokens"
-      , "max_turns", "temperature", "top_p", "top_k", "seed", "min_p", "frequency_penalty", "presence_penalty", "repetition_penalty", "reasoning_effort", "stream_batch_ms"
-      , "stream_liveness_timeout_secs", "deadline_duration_secs"
-      , "retry_max_transport", "retry_backoff_ms", "retry_max_resample"
-      , "retry_allow_repair", "retry_interactive_max", "updated_at" ]
-  | .inferenceBackend =>
-      [ "backend_id", "name", "provider_kind", "openai_wire_api", "endpoint"
-      , "api_key", "api_key_env_var", "max_concurrent", "max_queue_depth"
-      , "enabled", "models", "last_probe", "probe_status", "updated_at" ]
-  | .toolServiceRegistry =>
-      [ "service_id", "display_name", "description", "hostname", "tailscale_ip"
-      , "lan_ip", "mcp_port", "mcp_path", "send_agent_did", "status", "version"
-      , "updated_at" ]
-  | .task =>
-      [ "task_id", "name", "description", "behavior_id", "prompt_template"
-      , "goal_objective_template", "goal_token_budget"
-      , "enabled", "output_schema_ref", "created_at", "updated_at" ]
-  | .schedule =>
-      [ "schedule_id", "task_id", "interval_secs", "cron", "timezone"
-      , "missed_run_policy", "enabled", "concurrency", "next_run_at"
-      , "last_attempt_at", "last_status", "last_error", "fire_count"
-      , "created_at", "updated_at" ]
-  | .eventTrigger =>
-      [ "trigger_id", "task_id", "source_collection", "event_kind", "filter"
-      , "enabled", "concurrency", "correlation_field", "fire_mode"
-      , "expected_count", "expected_count_field", "group_timeout_secs"
-      , "group_min_count", "workspace_authority", "created_at", "updated_at", "last_attempt_at"
-      , "last_fired_source_doc_id", "last_status", "last_error", "fire_count" ]
+/-- Identity/provenance and module material are operator-managed. Nested auth
+references remain editable; raw-key protection belongs to the typed guard. -/
+def protectedKey (t : Target) (k : FieldKey) : Bool :=
+  (t == .task && k == "behavior_id") || k == t.uniqueField || ["agent_did", "created_at", "updated_at", "created_by",
+    "wasm_bytes", "canonical_args", "signer_did", "provenance"].contains k
 
-def writableFields : Target → List FieldKey
-  | .agentBehavior =>
-      [ "display_name", "description", "summary", "system_prompt"
-      , "request_context_template", "backend_id", "model_name"
-      , "tool_selection_id", "inference_profile_id", "compaction_strategy"
-      , "compaction_threshold", "enabled", "skill_refs", "skill_excludes" ]
-  | .toolSelection =>
-      [ "display_name", "enable_file_tools", "file_tools_mode", "file_tool_root"
-      , "enable_bash", "bash_mode", "command_execution_policy"
-      , "command_allowed_argv_prefixes", "command_forbidden_argv_prefixes"
-      , "read_only_command_allowlist", "command_network_mode", "cli_tool_names"
-      , "enable_meta_tools", "enable_goal_tools", "enable_goal_creation"
-      , "allowed_mcp_service_ids", "required_mcp_service_ids"
-      , "backgroundable_tool_names", "approval_required_tools", "subagent_targets"
-      , "subagent_spawn_enabled"
-      , "subagent_steering_enabled", "subagent_background_enabled"
-      , "subagent_default_await_mode", "subagent_allow_cross_deployment"
-      , "cross_deployment_spawn_timeout_seconds", "enable_memory"
-      , "enable_session_history_tool", "enable_context_budget"
-      , "enable_defra_query", "defra_query_collections", "enable_self_config"
-      , "self_config_categories", "self_config_no_lockout"
-      , "self_config_dry_run", "enable_lsp", "lsp_config" ]
-  | .inferenceProfile =>
-      [ "display_name", "context_window", "max_output_tokens", "max_turns"
-      , "temperature", "top_p", "top_k", "seed", "min_p", "frequency_penalty", "presence_penalty", "repetition_penalty", "reasoning_effort", "stream_batch_ms", "stream_liveness_timeout_secs"
-      , "deadline_duration_secs", "retry_max_transport", "retry_backoff_ms"
-      , "retry_max_resample", "retry_allow_repair", "retry_interactive_max" ]
-  | .inferenceBackend =>
-      [ "name", "provider_kind", "openai_wire_api", "endpoint"
-      , "api_key_env_var", "max_concurrent", "max_queue_depth", "enabled"
-      , "models" ]
-  | .toolServiceRegistry =>
-      [ "display_name", "description", "hostname", "tailscale_ip", "lan_ip"
-      , "mcp_port", "mcp_path", "send_agent_did", "status" ]
-  | .task =>
-      [ "name", "description", "prompt_template", "goal_objective_template"
-      , "goal_token_budget", "enabled"
-      , "output_schema_ref" ]
-  | .schedule =>
-      [ "task_id", "interval_secs", "cron", "timezone", "missed_run_policy"
-      , "enabled", "concurrency" ]
-  | .eventTrigger =>
-      [ "task_id", "source_collection", "event_kind", "filter", "enabled"
-      , "concurrency", "correlation_field", "fire_mode", "expected_count"
-      , "expected_count_field", "group_timeout_secs", "group_min_count"
-      , "workspace_authority" ]
-
+def writableFields (t : Target) : List FieldKey :=
+  if t ∈ allTargets then (allFields t).filter (fun k => !protectedKey t k) else []
 def protectedFields (t : Target) : List FieldKey :=
   (allFields t).filter (fun k => decide (k ∉ writableFields t))
 
-theorem writable_subset_all :
-    ∀ t ∈ allTargets, ∀ k ∈ writableFields t, k ∈ allFields t := by
-  native_decide
+theorem writable_subset_all (t : Target) (_ht : t ∈ allTargets)
+    (k : FieldKey) (hk : k ∈ writableFields t) : k ∈ allFields t :=
+  by
+    simp only [writableFields, if_pos _ht] at hk
+    exact (List.mem_filter.mp hk).1
 
-theorem all_fields_nodup : ∀ t ∈ allTargets, (allFields t).Nodup := by
-  native_decide
+theorem all_fields_nodup : ∀ t ∈ allTargets, (allFields t).Nodup := by decide
 
-theorem writable_fields_nodup : ∀ t ∈ allTargets, (writableFields t).Nodup := by
-  native_decide
+theorem writable_fields_nodup : ∀ t ∈ allTargets, (writableFields t).Nodup := by decide
 
 theorem unique_field_protected :
-    ∀ t ∈ allTargets, t.uniqueField ∈ protectedFields t := by
-  native_decide
+    ∀ t ∈ allTargets, t.uniqueField ∈ protectedFields t := by decide
 
 theorem agent_did_never_writable :
-    ∀ t ∈ allTargets, "agent_did" ∉ writableFields t := by
-  native_decide
+    ∀ t ∈ allTargets, "agent_did" ∉ writableFields t := by decide
 
-theorem api_key_protected :
-    "api_key" ∈ protectedFields .inferenceBackend
-      ∧ "api_key_env_var" ∈ writableFields .inferenceBackend := by
-  native_decide
+theorem auth_reference_editable : "auth" ∈ writableFields .inferenceBackend := by decide
 
-theorem backend_probe_fields_protected :
-    "probe_status" ∈ protectedFields .inferenceBackend
-      ∧ "last_probe" ∈ protectedFields .inferenceBackend := by
-  native_decide
-
-theorem automation_runtime_fields_protected :
-    (["next_run_at", "last_attempt_at", "last_status", "last_error",
-      "fire_count"]).all (fun k => decide (k ∈ protectedFields .schedule))
-      ∧ (["last_attempt_at", "last_fired_source_doc_id", "last_status",
-          "last_error", "fire_count"]).all
-          (fun k => decide (k ∈ protectedFields .eventTrigger)) := by
-  native_decide
+/-- Observations cannot be introduced by a self-config patch. -/
+theorem observations_not_writable :
+    ∀ t ∈ allTargets, ∀ k ∈ ["probe_status", "last_probe", "fire_count",
+      "next_run_at", "publication_status", "published_at"],
+      k ∉ writableFields t := by decide
 
 theorem recreate_identity_field_protected :
     ∀ t ∈ allTargets,
-      "updated_at" ∈ allFields t → "updated_at" ∈ protectedFields t := by
-  native_decide
+      "updated_at" ∈ allFields t → "updated_at" ∈ protectedFields t := by decide
 
 theorem categories_well_formed :
     (∀ t ∈ allTargets, t.category ∈ selfConfigCategories)
-      ∧ ∀ c ∈ defaultCategories, c ∈ selfConfigCategories := by
-  native_decide
+      ∧ ∀ c ∈ defaultCategories, c ∈ selfConfigCategories := by decide
 
 end SelfConfig

@@ -77,13 +77,13 @@ export function findAssistantResponseMarker(
   );
 }
 
-export function conversationRowCount(root: ParentNode): number {
+export function sessionRowCount(root: ParentNode): number {
   return root.querySelectorAll(
-    '.conversation-list .conversation-row > button[data-testid^="conversation-"]',
+    '.session-list .session-row > button[data-testid^="session-"]',
   ).length;
 }
 
-export function isConversationTurnSettled(
+export function isSessionTurnSettled(
   root: ParentNode,
   expectedResponse: string,
 ): boolean {

@@ -8,7 +8,6 @@ export type HarnessScenario =
   | "save-error"
   | "backend-health-error"
   | "backend-unavailable"
-  | "tool-hold"
   | "mailbox-overflow"
   | "long-content"
   | "active-turn"
@@ -91,7 +90,7 @@ export async function openChat(page: Page) {
   await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
   await page.getByTestId(`fleet-row-${PEER_ID}`).click();
   if ((page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 760) {
-    await page.getByTestId("conversation-session-intro").click();
+    await page.getByTestId("session-session-intro").click();
   }
   await expect(page.getByTestId("composer-input")).toBeVisible();
 }
@@ -211,7 +210,7 @@ export async function expectNoPageHorizontalOverflow(page: Page) {
             ".chat-header",
             ".chat-title-block",
             ".chat-status",
-            ".conversation-loading-status",
+            ".session-loading-status",
             ".composer-panel",
             ".fleet-header",
             ".config-header",
@@ -221,8 +220,6 @@ export async function expectNoPageHorizontalOverflow(page: Page) {
             ".dialog",
             ".context-meter-popover",
             ".sync-health-details",
-            ".holds-panel",
-            ".holds-panel-row",
             ".mailbox-item",
           ].join(", "),
         ),

@@ -58,7 +58,7 @@
 //! (advancing the request-local cursor only after a successful send), and
 //! delivers.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -470,7 +470,7 @@ struct PendingPrompt {
     response_tx: Option<oneshot::Sender<Result<Value>>>,
     /// The Gents request id once submission succeeded; registered here
     /// *before* the first fallible outbound send.
-    request_id: Option<String>,
+    request: Option<gents_protocol::row::AgentRequestRow>,
     /// Latch for the cancel-before-request-id window.
     cancel_before_id: Arc<Mutex<CancelBeforeIdLatch>>,
     /// Whether cancel/disconnect already drained this entry.
@@ -741,24 +741,13 @@ impl TurnManager {
             // The stock client hides auto-wake prompts by their ID family.
             // Preserve the submitted identity when replaying a human turn;
             // labeling every historical prompt notifications-* hides history.
-            let metadata = row
-                .metadata
-                .as_deref()
-                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-            let prompt_id = metadata
-                .as_ref()
-                .and_then(|meta| meta.get("promptId"))
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| {
-                    if row.runtime_source_kind.is_some() {
-                        live_prompt_id.clone()
-                    } else {
-                        row.request_id.clone()
-                    }
-                });
+            let prompt_id = if row.runtime_source_kind.is_some() {
+                live_prompt_id.clone()
+            } else {
+                row.request_id.clone()
+            };
             let mut progress = ObservedRequest::new(live_prompt_id.clone(), started_at, false);
+            progress.cursor.lock().await.request = Some(row.clone());
             if let Some(content) = row.content.as_deref().filter(|value| !value.is_empty()) {
                 projections.session_updates().send(session_id, |event_id, total_tokens| {
                     Ok(super::projection::session_notification_for_method(SESSION_UPDATE_METHOD, session_id,
@@ -771,7 +760,7 @@ impl TurnManager {
             }
             // Read terminal state before flushing, as in live delivery:
             // completion must never overtake final persisted output.
-            let terminal = self.request_stop_reason(&row.request_id).await?;
+            let terminal = self.request_stop_reason(row).await?;
             self.stream_projection_updates(
                 session_id,
                 &row.request_id,
@@ -833,10 +822,11 @@ impl TurnManager {
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }},
                 agent_did: {{ _eq: "{principal}" }}, requester_did: {{ _eq: "{principal}" }},
                 created_at: {{ _gte: "{}" }}, request_id: {{ _gt: "{}" }} }},
-                order: {{ request_id: ASC }}, limit: {PAGE_SIZE}) {{ request_id created_at }} }}"#,
+                order: {{ request_id: ASC }}, limit: {PAGE_SIZE}) {{ {fields} }} }}"#,
             escape_graphql_string(session_id),
             escape_graphql_string(&attached_at),
             escape_graphql_string(after),
+            fields = gents::SIGNED_REQUEST_FIELDS,
         );
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "Grok shim session request discovery")?;
@@ -847,6 +837,15 @@ impl TurnManager {
             .and_then(Value::as_array)
             .context("missing session request discovery rows")?;
         for row in rows {
+            let request: gents_protocol::row::AgentRequestRow =
+                serde_json::from_value(row.clone())?;
+            anyhow::ensure!(
+                request.agent_did.as_deref() == Some(self.config.agent_did.as_str())
+                    && request.requester_did.as_deref() == Some(self.config.agent_did.as_str())
+                    && request.session_id.as_deref() == Some(session_id)
+                    && request.doc_id.as_deref().is_some_and(|id| !id.is_empty()),
+                "observed request query crossed physical scope"
+            );
             let request_id = row
                 .get("request_id")
                 .and_then(Value::as_str)
@@ -858,8 +857,9 @@ impl TurnManager {
             if state.entries.iter().any(|((session, _), pending)| {
                 session == session_id
                     && pending
-                        .request_id
-                        .as_deref()
+                        .request
+                        .as_ref()
+                        .map(|row| row.request_id.as_str())
                         .is_none_or(|id| id == request_id)
             }) {
                 continue;
@@ -881,6 +881,7 @@ impl TurnManager {
                         false,
                     );
                     progress.echo_sent = false;
+                    progress.cursor.get_mut().request = Some(request);
                     Arc::new(Mutex::new(progress))
                 });
         }
@@ -1036,7 +1037,10 @@ impl TurnManager {
             }
             // Read terminal state first, then flush. Completion must never
             // overtake the final content persisted before terminalization.
-            let terminal = self.request_stop_reason(&request_id).await?;
+            let projected = self
+                .pinned_projection_request(&progress.cursor, session_id, &request_id, true)
+                .await?;
+            let terminal = self.request_stop_reason(&projected).await?;
             let ObservedRequest {
                 prompt_id,
                 cursor,
@@ -1144,7 +1148,7 @@ impl TurnManager {
                 key.clone(),
                 PendingPrompt {
                     response_tx: Some(response_tx),
-                    request_id: None,
+                    request: None,
                     cancel_before_id: cancel_before_id.clone(),
                     drained: false,
                 },
@@ -1163,13 +1167,15 @@ impl TurnManager {
         )));
         let mut progress_guard = progress.lock().await;
         let submission = self.submit_request(&request, &prompt_id).await;
-        let request_id = match submission {
-            Ok(request_id) => {
+        let (request_id, submitted_request) = match submission {
+            Ok(row) => {
+                let request_id = row.request_id.clone();
+                progress_guard.cursor.lock().await.request = Some(row.clone());
                 let registered_own_entry = {
                     let mut state = self.state.lock().await;
                     match state.entries.get_mut(&key) {
                         Some(entry) if Arc::ptr_eq(&entry.cancel_before_id, &cancel_before_id) => {
-                            entry.request_id = Some(request_id.clone());
+                            entry.request = Some(row.clone());
                             // Install delivery ownership before cancellation
                             // can remove the pending entry or the first echo
                             // can yield. Discovery checks under this same lock.
@@ -1190,7 +1196,7 @@ impl TurnManager {
                     // alone is not proof that this submission still owns it.
                     // The per-instance latch/Arc identity is the generation
                     // token: never stamp or stream through a replacement.
-                    self.interrupt_submitted(&request_id).await;
+                    self.interrupt_submitted(&row).await;
                     drop(response_rx);
                     tracing::info!(
                         session_id = %request.session_id,
@@ -1202,7 +1208,7 @@ impl TurnManager {
                     );
                     return Ok(json!({"stopReason": StopReason::Cancelled.wire_name()}));
                 }
-                request_id
+                (request_id, row)
             }
             Err(error) => {
                 // Submission failed before any request id existed. The
@@ -1262,7 +1268,7 @@ impl TurnManager {
             })
         };
         if drained_during_submission {
-            self.interrupt_submitted(&request_id).await;
+            self.interrupt_submitted(&submitted_request).await;
             drop(response_rx);
             tracing::info!(
                 session_id = %request.session_id,
@@ -1292,7 +1298,7 @@ impl TurnManager {
                 // request, drain the entry, and surface the failure. The
                 // common send path already rolled the reservation back, so
                 // the failed echo consumed no event id.
-                self.interrupt_and_drain(&key, &request_id, &cancel_before_id)
+                self.interrupt_and_drain(&key, &submitted_request, &cancel_before_id)
                     .await;
                 drop(response_rx);
                 tracing::warn!(
@@ -1314,7 +1320,7 @@ impl TurnManager {
         let outcome = self
             .watch_terminal(
                 &key,
-                &request_id,
+                &submitted_request,
                 &request.session_id,
                 &prompt_id,
                 &cancel_before_id,
@@ -1342,7 +1348,7 @@ impl TurnManager {
         let query = format!(
             r#"{{AgentRequest(filter:{{request_id:{{_eq:"{}"}},session_id:{{_eq:"{}"}},
             agent_did:{{_eq:"{principal}"}},requester_did:{{_eq:"{principal}"}}}})
-            {{metadata content runtime_source_kind}}}}"#,
+            {{content runtime_source_kind}}}}"#,
             escape_graphql_string(request),
             escape_graphql_string(session)
         );
@@ -1361,17 +1367,8 @@ impl TurnManager {
         if row["runtime_source_kind"].as_str().is_some() {
             return Ok(None);
         }
-        let metadata = row["metadata"]
-            .as_str()
-            .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-        let prompt_id = metadata
-            .as_ref()
-            .and_then(|meta| meta["promptId"].as_str())
-            .filter(|value| !value.is_empty())
-            .unwrap_or(request)
-            .to_owned();
         Ok(Some((
-            prompt_id,
+            request.to_owned(),
             row["content"].as_str().unwrap_or_default().to_owned(),
         )))
     }
@@ -1409,13 +1406,13 @@ impl TurnManager {
         }
         let had_foreground_target = !targets.is_empty();
         for (key, generation) in targets {
-            let request_id = self
+            let request = self
                 .drain_entry(&key, &generation, StopReason::Cancelled)
                 .await;
-            if let Some(request_id) = request_id {
-                self.interrupt_submitted(&request_id).await;
+            if let Some(request) = request {
+                self.interrupt_submitted(&request).await;
                 if notification.cancel_subagents {
-                    self.interrupt_child_requests(&request_id).await;
+                    self.interrupt_child_requests(&request).await;
                 }
             }
         }
@@ -1460,10 +1457,27 @@ impl TurnManager {
                 .lock()
                 .await
                 .contains_key(&(notification.session_id.clone(), request_id.to_owned()));
-            if observed && self.request_stop_reason(request_id).await?.is_none() {
-                self.interrupt_submitted(request_id).await;
+            let row = if observed {
+                Some(
+                    self.load_projection_request(
+                        &self.config.agent_did,
+                        &notification.session_id,
+                        Some(&self.config.agent_did),
+                        request_id,
+                        None,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
+            if let Some(row) = row.filter(|_| observed) {
+                if self.request_stop_reason(&row).await?.is_some() {
+                    return Ok(());
+                }
+                self.interrupt_submitted(&row).await;
                 if notification.cancel_subagents {
-                    self.interrupt_child_requests(request_id).await;
+                    self.interrupt_child_requests(&row).await;
                 }
             }
         }
@@ -1485,18 +1499,14 @@ impl TurnManager {
         let drained: Vec<(
             (String, String),
             Arc<Mutex<CancelBeforeIdLatch>>,
-            Option<String>,
+            Option<gents_protocol::row::AgentRequestRow>,
         )> = std::mem::take(&mut state.entries)
             .into_iter()
             .map(|(key, mut entry)| {
                 entry.resolve(Ok(json!({
                     "stopReason": StopReason::Cancelled.wire_name(),
                 })));
-                (
-                    key,
-                    entry.cancel_before_id.clone(),
-                    entry.request_id.clone(),
-                )
+                (key, entry.cancel_before_id.clone(), entry.request.clone())
             })
             .collect();
         drop(state);
@@ -1520,21 +1530,10 @@ impl TurnManager {
                 gate.release.notified().await;
             }
         }
-        for ((_session_id, prompt_id), latch, request_id) in drained {
-            // Latch the cancel-before-id window for submitters that are still
-            // inside `create_agent_request` and have not registered a request
-            // id yet; they observe the latch and resolve cancelled.
+        for ((_session_id, _prompt_id), latch, request) in drained {
             let _first_cancel = latch.lock().await.cancel();
-            if let Some(request_id) = request_id {
-                if let Err(error) = gents::interrupt_request(self.node.as_ref(), &request_id).await
-                {
-                    tracing::warn!(
-                        %error,
-                        prompt_id = %prompt_id,
-                        request_id = %request_id,
-                        "Grok shim failed to interrupt request after disconnect"
-                    );
-                }
+            if let Some(request) = request {
+                self.interrupt_submitted(&request).await;
             }
         }
         Ok(())
@@ -1550,7 +1549,7 @@ impl TurnManager {
         key: &(String, String),
         generation: &Arc<Mutex<CancelBeforeIdLatch>>,
         stop_reason: StopReason,
-    ) -> Option<String> {
+    ) -> Option<gents_protocol::row::AgentRequestRow> {
         let (entry, _) = self.take_entry_if_generation(key, generation).await;
         let mut entry = entry?;
         #[cfg(test)]
@@ -1570,14 +1569,14 @@ impl TurnManager {
         entry.resolve(Ok(json!({
             "stopReason": stop_reason.wire_name(),
         })));
-        entry.request_id.clone()
+        entry.request.clone()
     }
 
     /// Interrupt the submitted request and drain only its pending generation.
     async fn interrupt_and_drain(
         &self,
         key: &(String, String),
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         generation: &Arc<Mutex<CancelBeforeIdLatch>>,
     ) {
         if let (Some(mut entry), _) = self.take_entry_if_generation(key, generation).await {
@@ -1586,7 +1585,7 @@ impl TurnManager {
                 "stopReason": StopReason::Cancelled.wire_name(),
             })));
         }
-        self.interrupt_submitted(request_id).await;
+        self.interrupt_submitted(request).await;
     }
 
     /// Atomically take only the caller's pending-entry generation and observe
@@ -1611,90 +1610,94 @@ impl TurnManager {
         (entry, state.is_closed())
     }
 
-    async fn interrupt_submitted(&self, request_id: &str) {
-        if let Err(error) = gents::interrupt_request(self.node.as_ref(), request_id).await {
-            tracing::warn!(
-                %error,
-                request_id,
-                "Grok shim failed to interrupt submitted request"
-            );
+    async fn interrupt_submitted(&self, request: &gents_protocol::row::AgentRequestRow) {
+        let Some(physical) = request.doc_id.as_deref() else {
+            tracing::error!(request_id=%request.request_id,"submitted request has no physical identity");
+            return;
+        };
+        let Some(owner) = request.agent_did.as_deref() else {
+            tracing::error!(request_id=%request.request_id,"submitted request has no principal identity");
+            return;
+        };
+        if let Err(error) = gents::interrupt_request_by_doc_id(
+            &self.node,
+            physical,
+            owner,
+            request.requester_did.as_deref(),
+        )
+        .await
+        {
+            tracing::warn!(%error,request_id=%request.request_id,"Grok shim failed to interrupt submitted request");
         }
     }
 
-    /// Interrupt runtime child `AgentRequest` rows linked to the parent by
-    /// `caused_by_parent_request_id`. Static `Task` rows are never queried or
-    /// mutated as runtime state.
-    async fn interrupt_child_requests(&self, parent_request_id: &str) {
-        let escaped_parent = escape_graphql_string(parent_request_id);
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{
-                        caused_by_parent_request_id: {{ _eq: "{escaped_parent}" }}
-                    }}
-                ) {{
-                    request_id
-                    lifecycle_state
-                }}
-            }}"#
-        );
-        let response = self.node.execute(&query).await;
-        if let Err(error) = ensure_no_errors(&response, "grok shim child request query") {
-            tracing::warn!(
-                %error,
-                parent_request_id,
-                "Grok shim failed to load child requests for cancelSubagents"
-            );
-            return;
+    async fn interrupt_child_requests(&self, parent: &gents_protocol::row::AgentRequestRow) {
+        let result: Result<()> = async {
+            let mut query = gents::DescendantQuery::direct(&parent.request_id);
+            query.limit = gents::MAX_DESCENDANT_PAGE_LIMIT;
+            loop {
+                let page = gents::resolve_descendant_graph(
+                    gents::DescendantGraphAccess::Local(&self.node),
+                    &query,
+                )
+                .await?;
+                for child in page.edges.into_iter().filter(|edge| edge.controllable()) {
+                    anyhow::ensure!(
+                        Some(child.immediate_parent_request_doc_id.as_str())
+                            == parent.doc_id.as_deref()
+                            && Some(child.immediate_parent_agent_did.as_str())
+                                == parent.agent_did.as_deref()
+                            && child.immediate_parent_requester_did == parent.requester_did
+                            && Some(child.immediate_parent_session_id.as_str())
+                                == parent.session_id.as_deref(),
+                        "subagent cancellation crossed pinned parent scope"
+                    );
+                    let row = self
+                        .load_projection_request(
+                            child
+                                .principal_did
+                                .as_deref()
+                                .context("child principal missing")?,
+                            child
+                                .child_session_id
+                                .as_deref()
+                                .context("child session missing")?,
+                            child.child_requester_did.as_deref(),
+                            &child.child_request_id,
+                            Some(
+                                child
+                                    .child_request_doc_id
+                                    .as_deref()
+                                    .context("child physical request missing")?,
+                            ),
+                        )
+                        .await?;
+                    self.interrupt_submitted(&row).await;
+                }
+                if !page.has_more {
+                    break;
+                }
+                query.after = page.next_cursor;
+            }
+            Ok(())
         }
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for row in rows {
-            let Some(request_id) = row.get("request_id").and_then(Value::as_str) else {
-                continue;
-            };
-            let lifecycle_state = row
-                .get("lifecycle_state")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if is_terminal_lifecycle_state(lifecycle_state) {
-                continue;
-            }
-            if let Err(error) = gents::interrupt_request(self.node.as_ref(), request_id).await {
-                tracing::warn!(
-                    %error,
-                    request_id,
-                    parent_request_id,
-                    "Grok shim failed to interrupt child request after cancelSubagents"
-                );
-            }
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(%error,parent_request_id=%parent.request_id,"Grok shim subagent cancellation failed");
         }
     }
 
     /// Submit the durable Gents request for the prompt and return its request
     /// id. The caller registers the id on the pending entry before the first
     /// fallible outbound send.
-    async fn submit_request(&self, request: &PromptRequest, prompt_id: &str) -> Result<String> {
+    async fn submit_request(
+        &self,
+        request: &PromptRequest,
+        _prompt_id: &str,
+    ) -> Result<gents_protocol::row::AgentRequestRow> {
         let content = prompt_text(request);
-        let mut metadata = json!({
-            "promptId": prompt_id,
-        });
-        if let Some(screen_mode) = request.screen_mode.as_deref() {
-            metadata["screenMode"] = json!(screen_mode);
-        }
-        if request.send_now {
-            metadata["sendNow"] = json!(true);
-        }
         let stable_request_id = uuid::Uuid::new_v4().to_string();
-        let options = crate::RequestSubmitOptions {
-            metadata: Some(metadata.to_string()),
-            ..Default::default()
-        };
+        let options = crate::RequestSubmitOptions::default();
         let submitted = if let Some(super::goals::GoalCommand::Create {
             objective,
             token_budget,
@@ -1713,25 +1716,97 @@ impl TurnManager {
             )
             .await
         } else {
-            crate::create_agent_request_retrying_transient(
+            let prepared = crate::request_helpers::prepare_agent_request(
                 self.config.graphql.as_ref(),
-                self.config.agent_did.as_str(),
+                &self.config.agent_did,
                 &content,
-                Some(request.session_id.as_str()),
-                Some(self.config.behavior_id.as_str()),
-                stable_request_id.clone(),
+                Some(&request.session_id),
+                Some(&self.config.behavior_id),
+                Some(stable_request_id.clone()),
                 options,
             )
-            .await
-        };
-        let submitted = match submitted {
-            Ok(submitted) => submitted,
-            Err(error) => {
-                self.interrupt_submitted(&stable_request_id).await;
-                return Err(error);
+            .await?;
+            let result = crate::request_helpers::submit_prepared_agent_request_committed(
+                self.config.graphql.as_ref(),
+                &prepared,
+            )
+            .await;
+            if result.is_err() {
+                if let Ok(Some(row)) = crate::request_helpers::matching_prepared_receipt(
+                    self.config.graphql.as_ref(),
+                    &prepared.create,
+                )
+                .await
+                {
+                    self.interrupt_submitted(&row).await;
+                }
             }
+            result
         };
-        Ok(submitted.request_id)
+        // Goal publication retains the existing atomic goal/request owner. An
+        // error without a committed receipt grants no request to interrupt.
+        let submitted = submitted?;
+        let row = self
+            .load_projection_request(
+                &submitted.agent_did,
+                &submitted.session_id,
+                submitted.requester_did.as_deref(),
+                &submitted.request_id,
+                Some(&submitted.request_doc_id),
+            )
+            .await;
+        if row.is_err() {
+            if let Err(error) = gents::interrupt_request_by_doc_id(
+                &self.node,
+                &submitted.request_doc_id,
+                &submitted.agent_did,
+                submitted.requester_did.as_deref(),
+            )
+            .await
+            {
+                tracing::warn!(%error,request_id=%submitted.request_id,"failed to interrupt committed request after projection read failure");
+            }
+        }
+        row
+    }
+
+    async fn load_projection_request(
+        &self,
+        agent: &str,
+        session: &str,
+        requester: Option<&str>,
+        request: &str,
+        physical: Option<&str>,
+    ) -> Result<gents_protocol::row::AgentRequestRow> {
+        let physical_filter = physical
+            .map(|id| format!("_docID: {{_eq: \"{}\"}},", escape_graphql_string(id)))
+            .unwrap_or_default();
+        let query = format!("{{AgentRequest(filter: {{{physical_filter} {}, request_id: {{_eq: \"{}\"}}}},limit:2) {{{}}}}}",
+            gents::session::session_scope_filter(agent,session,requester), escape_graphql_string(request),
+            gents::SIGNED_REQUEST_FIELDS);
+        let response = self.node.execute(&query).await;
+        ensure_no_errors(&response, "load scoped projection request")?;
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .context("projection request query returned no rows")?;
+        let [row] = rows.as_slice() else {
+            anyhow::bail!("projection request missing or ambiguous");
+        };
+        let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())?;
+        anyhow::ensure!(
+            row.request_id == request
+                && row.agent_did.as_deref() == Some(agent)
+                && row.session_id.as_deref() == Some(session)
+                && row.requester_did.as_deref() == requester
+                && row.doc_id.as_deref().is_some_and(
+                    |id| !id.is_empty() && physical.is_none_or(|expected| expected == id)
+                ),
+            "projection request query crossed exact physical scope"
+        );
+        Ok(row)
     }
 
     /// Watch the durable request until it terminalizes or the pending entry
@@ -1755,7 +1830,7 @@ impl TurnManager {
     async fn watch_terminal(
         &self,
         key: &(String, String),
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         session_id: &str,
         prompt_id: &str,
         generation: &Arc<Mutex<CancelBeforeIdLatch>>,
@@ -1764,6 +1839,7 @@ impl TurnManager {
         progress: &mut ObservedRequest,
         mut response_rx: oneshot::Receiver<Result<Value>>,
     ) -> Result<TerminalOutcome> {
+        let request_id = request.request_id.as_str();
         // Request-local token-observation high-water: one per pending
         // request, so sequential requests accumulate per-request deltas into
         // the session total without double-counting and a retry-replaced
@@ -1787,7 +1863,10 @@ impl TurnManager {
                     .unwrap_or(StopReason::Cancelled.wire_name());
                 return Ok(stop_reason_from_wire(stop_reason).into());
             }
-            let terminal = match self.request_terminal(request_id).await {
+            let projected = self
+                .pinned_projection_request(cursor, session_id, request_id, false)
+                .await?;
+            let terminal = match self.request_terminal(&projected).await {
                 Ok(terminal) => terminal,
                 Err(error)
                     if register_transient_read_retry(
@@ -1816,7 +1895,7 @@ impl TurnManager {
                 Err(error) => {
                     // A terminal query failure after submission must not
                     // leak the submitted request.
-                    self.interrupt_and_drain(key, request_id, generation).await;
+                    self.interrupt_and_drain(key, request, generation).await;
                     drop(response_rx);
                     tracing::warn!(
                         %error,
@@ -1873,7 +1952,7 @@ impl TurnManager {
                 Err(error) => {
                     // A send failure or projection query failure after
                     // submission must not leak the submitted request.
-                    self.interrupt_and_drain(key, request_id, generation).await;
+                    self.interrupt_and_drain(key, request, generation).await;
                     drop(response_rx);
                     tracing::warn!(
                         %error,
@@ -1964,10 +2043,13 @@ impl TurnManager {
         // An old prompt ID on parent activity makes the stock pager adopt
         // that old turn as a viewer. Activity has no conversation ownership.
         let prompt_id = if activity_only { None } else { prompt_id };
+        let request = self
+            .pinned_projection_request(cursor, session_id, request_id, descendant_depth == 0)
+            .await?;
         let batch = {
             let mut cursor = cursor.lock().await;
             projections
-                .project_request_updates(session_id, request_id, &mut cursor)
+                .project_request_updates(&request, &mut cursor, prompt_id)
                 .await?
         };
         let mut deferred_notifications = false;
@@ -2119,6 +2201,12 @@ impl TurnManager {
         if depth >= gents::tool_call_lifecycle::MAX_SUBAGENT_DEPTH as usize {
             return Ok(deferred);
         }
+        let parent = parent_cursor
+            .lock()
+            .await
+            .request
+            .clone()
+            .context("parent projection identity missing")?;
         let mut query = gents::DescendantQuery::direct(parent_request_id);
         query.limit = gents::MAX_DESCENDANT_PAGE_LIMIT;
         loop {
@@ -2128,6 +2216,15 @@ impl TurnManager {
             )
             .await?;
             for child in page.edges.into_iter().filter(|edge| edge.readable()) {
+                anyhow::ensure!(
+                    Some(child.immediate_parent_request_doc_id.as_str())
+                        == parent.doc_id.as_deref()
+                        && Some(child.immediate_parent_agent_did.as_str())
+                            == parent.agent_did.as_deref()
+                        && child.immediate_parent_requester_did == parent.requester_did
+                        && child.immediate_parent_session_id == parent_session_id,
+                    "descendant graph crossed pinned parent scope"
+                );
                 let Some(session_id) = child.child_session_id.as_deref() else {
                     continue;
                 };
@@ -2139,10 +2236,14 @@ impl TurnManager {
                 {
                     continue;
                 }
-                for (request_id, started_at) in self
-                    .readable_child_session_requests(session_id, &child.child_request_id)
-                    .await?
-                {
+                for row in self.readable_child_session_requests(&child).await? {
+                    let request_id = row.request_id.clone();
+                    let started_at = row
+                        .created_at
+                        .as_deref()
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                        .map(|value| value.timestamp_millis())
+                        .unwrap_or(0);
                     let progress = self
                         .observed
                         .lock()
@@ -2162,7 +2263,27 @@ impl TurnManager {
                         deferred.insert(session_id.to_owned());
                         continue;
                     };
-                    let terminal = self.request_stop_reason(&request_id).await?;
+                    {
+                        let mut cursor = progress.cursor.lock().await;
+                        if let Some(pinned) = &cursor.request {
+                            anyhow::ensure!(
+                                pinned.doc_id == row.doc_id
+                                    && pinned.agent_did == row.agent_did
+                                    && pinned.requester_did == row.requester_did,
+                                "child projection cannot rebind physical request"
+                            );
+                        } else {
+                            cursor.request = Some(row);
+                        }
+                    }
+                    let projected = progress
+                        .cursor
+                        .lock()
+                        .await
+                        .request
+                        .clone()
+                        .expect("verified child identity pinned");
+                    let terminal = self.request_stop_reason(&projected).await?;
                     if terminal.is_none() {
                         deferred.insert(session_id.to_owned());
                     }
@@ -2194,139 +2315,171 @@ impl TurnManager {
     /// child agent/requester identity, including absent requester identity.
     async fn readable_child_session_requests(
         &self,
-        session_id: &str,
-        child_request_id: &str,
-    ) -> Result<Vec<(String, i64)>> {
-        let response = self
-            .node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2)
-            {{ request_id session_id agent_did requester_did }} }}"#,
-                escape_graphql_string(child_request_id)
-            ))
-            .await;
-        ensure_no_errors(&response, "load canonical child session principal")?;
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(Value::as_array)
-            .context("missing canonical child request rows")?;
-        let [owner] = rows.as_slice() else {
-            anyhow::bail!("canonical child request is missing or ambiguous")
-        };
-        let agent = owner
-            .get("agent_did")
-            .and_then(Value::as_str)
-            .filter(|id| !id.trim().is_empty())
-            .context("canonical child principal is missing")?;
-        anyhow::ensure!(
-            owner.get("session_id").and_then(Value::as_str) == Some(session_id),
-            "canonical child session changed"
+        child: &gents::DescendantEdge,
+    ) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
+        let session = child
+            .child_session_id
+            .as_deref()
+            .context("child session missing")?;
+        let agent = child
+            .principal_did
+            .as_deref()
+            .context("child principal missing")?;
+        let physical = child
+            .child_request_doc_id
+            .as_deref()
+            .context("child physical request missing")?;
+        self.load_projection_request(
+            agent,
+            session,
+            child.child_requester_did.as_deref(),
+            &child.child_request_id,
+            Some(physical),
+        )
+        .await?;
+        let scope = gents::session::session_scope_filter(
+            agent,
+            session,
+            child.child_requester_did.as_deref(),
         );
-        let requester = owner.get("requester_did").and_then(Value::as_str);
-        let mut after = String::new();
+        let mut seen = HashSet::new();
         let mut requests = Vec::new();
+        let mut offset = 0usize;
         loop {
-            let response = self.node.execute(&format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }},
-                agent_did: {{ _eq: "{}" }}, request_id: {{ _gt: "{}" }} }}, order: {{ request_id: ASC }}, limit: 128)
-                {{ request_id requester_did created_at }} }}"#,
-                escape_graphql_string(session_id), escape_graphql_string(agent), escape_graphql_string(&after))).await;
-            ensure_no_errors(&response, "discover readable child session requests")?;
+            let query = format!(
+                "{{AgentRequest(filter: {{{scope}}}, order: {{request_id: ASC}}, limit: 128, offset: {offset}) {{{}}}}}",
+                gents::SIGNED_REQUEST_FIELDS
+            );
+            let response = self.node.execute(&query).await;
+            ensure_no_errors(&response, "read scoped child session requests")?;
             let rows = response
                 .data
                 .as_ref()
                 .and_then(|data| data.get("AgentRequest"))
                 .and_then(Value::as_array)
-                .context("missing child session request rows")?;
-            for row in rows {
-                if row.get("requester_did").and_then(Value::as_str) != requester {
-                    continue;
-                }
-                let id = row
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .context("child session request missing ID")?;
-                let started_at = row
-                    .get("created_at")
-                    .and_then(Value::as_str)
-                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                    .map(|value| value.timestamp_millis())
-                    .unwrap_or(0);
-                requests.push((id.to_owned(), started_at));
+                .context("child session query missing rows")?;
+            anyhow::ensure!(rows.len() <= 128, "child session query exceeded page limit");
+            for value in rows {
+                let row: gents_protocol::row::AgentRequestRow =
+                    serde_json::from_value(value.clone())?;
+                anyhow::ensure!(
+                    row.agent_did.as_deref() == Some(agent)
+                        && row.session_id.as_deref() == Some(session)
+                        && row.requester_did == child.child_requester_did
+                        && row.doc_id.as_deref().is_some_and(|id| !id.is_empty())
+                        && seen.insert(row.request_id.clone()),
+                    "child session query crossed scope or has ambiguous request labels"
+                );
+                requests.push(row);
             }
             if rows.len() < 128 {
                 break;
             }
-            after = rows
-                .last()
-                .and_then(|row| row.get("request_id"))
-                .and_then(Value::as_str)
-                .context("child session discovery missing pagination ID")?
-                .to_owned();
+            offset = offset
+                .checked_add(rows.len())
+                .context("child session pagination overflow")?;
         }
-        requests.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+        requests
+            .sort_by(|a, b| (&a.created_at, &a.request_id).cmp(&(&b.created_at, &b.request_id)));
         Ok(requests)
+    }
+
+    async fn pinned_projection_request(
+        &self,
+        cursor: &Mutex<RequestCursor>,
+        session: &str,
+        request_id: &str,
+        allow_root_read: bool,
+    ) -> Result<gents_protocol::row::AgentRequestRow> {
+        let mut cursor = cursor.lock().await;
+        if cursor.request.is_none() {
+            anyhow::ensure!(
+                allow_root_read,
+                "projection requires verified physical request receipt"
+            );
+            cursor.request = Some(
+                self.load_projection_request(
+                    &self.config.agent_did,
+                    session,
+                    Some(&self.config.agent_did),
+                    request_id,
+                    None,
+                )
+                .await?,
+            );
+        }
+        let request = cursor.request.clone().expect("projection identity pinned");
+        anyhow::ensure!(
+            request.request_id == request_id && request.session_id.as_deref() == Some(session),
+            "projection cursor cannot change request scope"
+        );
+        Ok(request)
     }
 
     /// Query the durable request's terminal state and project a `stopReason`.
     /// Returns `None` while the request is still non-terminal.
-    async fn request_stop_reason(&self, request_id: &str) -> Result<Option<StopReason>> {
+    async fn request_stop_reason(
+        &self,
+        request: &gents_protocol::row::AgentRequestRow,
+    ) -> Result<Option<StopReason>> {
         Ok(self
-            .request_terminal(request_id)
+            .request_terminal(request)
             .await?
             .map(|outcome| outcome.stop_reason))
     }
 
-    /// Terminal projection plus the runtime's error text, for the one caller
-    /// that answers the pager's deferred prompt.
-    async fn request_terminal(&self, request_id: &str) -> Result<Option<TerminalOutcome>> {
-        let escaped_request_id = escape_graphql_string(request_id);
+    /// Terminal projection plus the runtime's error text, scoped to the exact
+    /// physical request that the pager already pinned.
+    async fn request_terminal(
+        &self,
+        request: &gents_protocol::row::AgentRequestRow,
+    ) -> Result<Option<TerminalOutcome>> {
+        let physical = request
+            .doc_id
+            .as_deref()
+            .context("terminal projection physical request missing")?;
+        let scope = gents::session::session_scope_filter(
+            request
+                .agent_did
+                .as_deref()
+                .context("terminal projection owner missing")?,
+            request
+                .session_id
+                .as_deref()
+                .context("terminal projection session missing")?,
+            request.requester_did.as_deref(),
+        );
+        let physical = escape_graphql_string(physical);
         let query = format!(
             r#"{{
-                AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                    order: {{ created_at: DESC }},
-                    limit: 1
-                ) {{
-                    request_id
-                    lifecycle_state
-                    interrupt_requested_at
-                }}
-                AgentResponse(
-                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                    order: {{ created_at: DESC }},
-                    limit: 1
-                ) {{
-                    request_id
-                    status
-                    error_message
-                    interrupted_at
-                }}
-            }}"#
+            AgentRequest(filter: {{{scope}, _docID: {{_eq:"{physical}"}}}},limit:2)
+                {{request_id lifecycle_state interrupt_requested_at}}
+            AgentResponse(filter: {{{scope}, request_doc_id: {{_eq:"{physical}"}}}},limit:2)
+                {{request_id status error_message interrupted_at}}
+        }}"#
         );
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "grok shim turn terminal query")?;
-        let request_row = response
+        let request_rows = response
             .data
             .as_ref()
             .and_then(|data| data.get("AgentRequest"))
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned()
-            .unwrap_or(Value::Null);
-        if request_row.is_null() {
-            // The request row has not been durably observed yet.
-            return Ok(None);
-        }
-        let response_row = response
+            .context("terminal projection request rows missing")?;
+        let response_rows = response
             .data
             .as_ref()
             .and_then(|data| data.get("AgentResponse"))
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned()
-            .unwrap_or(Value::Null);
+            .context("terminal projection response rows missing")?;
+        anyhow::ensure!(
+            request_rows.len() <= 1 && response_rows.len() <= 1,
+            "ambiguous terminal projection physical scope"
+        );
+        let Some(request_row) = request_rows.first() else {
+            return Ok(None);
+        };
+        let response_row = response_rows.first().unwrap_or(&Value::Null);
         let lifecycle_state = request_row
             .get("lifecycle_state")
             .and_then(Value::as_str)
@@ -2415,6 +2568,7 @@ fn is_background_activity(payload: &Value) -> bool {
 }
 
 /// Whether a durable request lifecycle state is terminal.
+#[cfg(test)]
 pub(super) fn is_terminal_lifecycle_state(state: &str) -> bool {
     gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(Some(state))
 }
@@ -2905,7 +3059,7 @@ mod tests {
         let (tx, mut rx) = oneshot::channel::<Result<Value>>();
         let mut entry = PendingPrompt {
             response_tx: Some(tx),
-            request_id: None,
+            request: None,
             cancel_before_id: Arc::new(Mutex::new(CancelBeforeIdLatch::default())),
             drained: false,
         };
@@ -3062,7 +3216,7 @@ mod tests {
             ("session-1".to_string(), "prompt-live".to_string()),
             PendingPrompt {
                 response_tx: Some(tx),
-                request_id: None,
+                request: None,
                 cancel_before_id: Arc::new(Mutex::new(CancelBeforeIdLatch::default())),
                 drained: false,
             },
@@ -3230,26 +3384,15 @@ mod tests {
         gents::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
-        let response = node
-            .execute(&format!(
-                r#"mutation {{
-                    create_AgentPrincipal(input: {{
-                        agent_did: "{agent_did}"
-                        display_name: "Grok shim test"
-                        default_behavior_id: "{behavior_id}"
-                        enabled: true
-                    }}) {{ _docID }}
-                    create_AgentBehavior(input: {{
-                        behavior_id: "{behavior_id}"
-                        agent_did: "{agent_did}"
-                        display_name: "Grok shim test"
-                        enabled: true
-                    }}) {{ _docID }}
-                }}"#,
-            ))
-            .await;
-        gents::graphql::ensure_no_errors(&response, "seed admitted test behavior")
-            .expect("seed admitted test behavior");
+        super::super::seed_test_behavior_configuration(
+            node.as_ref(),
+            &agent_did,
+            &behavior_id,
+            &behavior_id,
+            "GLM-5.3-NVFP4",
+            true,
+        )
+        .await;
         (tempdir, node, agent_did)
     }
 
@@ -3274,15 +3417,20 @@ mod tests {
         ))
     }
 
-    async fn seed_runtime_wake(node: &EmbeddedNode, principal: &str, content: &str) -> String {
+    async fn seed_runtime_wake(
+        node: &EmbeddedNode,
+        principal: &str,
+        content: &str,
+    ) -> gents_protocol::row::AgentRequestRow {
         // Source identity is immutable: seed a runtime-shaped request at
         // creation, never relabel a human submission after admission.
+        let behavior = gents::default_behavior_id_for_agent(principal);
         let request = uuid::Uuid::new_v4().to_string();
         let result = node
             .execute(&format!(
                 r#"mutation {{create_AgentRequest(input:{{
             request_id:"{request}",agent_did:"{principal}",requester_did:"{principal}",
-            session_id:"session-1",runtime_source_kind:"local-control",lifecycle_state:"pending",
+            behavior_id:"{behavior}",session_id:"session-1",runtime_source_kind:"local-control",lifecycle_state:"pending",
             content:"{}",created_at:"{}"}}) {{_docID}}}}"#,
                 escape_graphql_string(content),
                 chrono::Utc::now().to_rfc3339(),
@@ -3290,7 +3438,12 @@ mod tests {
             ))
             .await;
         ensure_no_errors(&result, "seed runtime wake fixture").unwrap();
-        request
+        let doc = gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data":result.data}),
+            "AgentRequest",
+        )
+        .unwrap();
+        serde_json::from_value(json!({"_docID":doc,"request_id":request,"agent_did":principal,"requester_did":principal,"behavior_id":behavior,"session_id":"session-1","runtime_source_kind":"local-control"})).unwrap()
     }
 
     fn buffer_sender() -> (Arc<Mutex<Vec<String>>>, PromptSender) {
@@ -3302,38 +3455,48 @@ mod tests {
     /// lifecycle state plus a response row carrying the audited fields, as
     /// the runtime does. A single mutation avoids the watch observing a
     /// transient intermediate state between two writes.
+    fn fixture_request_filter(request: &gents_protocol::row::AgentRequestRow) -> String {
+        format!(
+            "{}, _docID: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}",
+            gents::session::session_scope_filter(
+                request.agent_did.as_deref().expect("fixture owner"),
+                request.session_id.as_deref().expect("fixture session"),
+                request.requester_did.as_deref()
+            ),
+            escape_graphql_string(request.doc_id.as_deref().expect("fixture physical request")),
+            escape_graphql_string(&request.request_id)
+        )
+    }
+
+    fn fixture_request_fields(request: &gents_protocol::row::AgentRequestRow) -> String {
+        let requester = request
+            .requester_did
+            .as_deref()
+            .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+            .unwrap_or_else(|| "null".into());
+        format!("request_id: \"{}\", request_doc_id: \"{}\", agent_did: \"{}\", session_id: \"{}\", requester_did: {requester}",
+            escape_graphql_string(&request.request_id),
+            escape_graphql_string(request.doc_id.as_deref().expect("fixture physical request")),
+            escape_graphql_string(request.agent_did.as_deref().expect("fixture owner")),
+            escape_graphql_string(request.session_id.as_deref().expect("fixture session")))
+    }
+
     async fn terminalize_request(
         node: &Arc<EmbeddedNode>,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         lifecycle_state: &str,
     ) {
-        let escaped = escape_graphql_string(request_id);
-        let escaped_state = escape_graphql_string(lifecycle_state);
+        let filter = fixture_request_filter(request);
+        let fields = fixture_request_fields(request);
+        let behavior =
+            escape_graphql_string(request.behavior_id.as_deref().expect("fixture behavior"));
+        let key = escape_graphql_string(request.doc_id.as_deref().unwrap());
+        let state = escape_graphql_string(lifecycle_state);
         let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped}" }} }},
-                    input: {{ lifecycle_state: "{escaped_state}" }}
-                ) {{ _docID }}
-                create_AgentResponse(input: {{
-                    response_key: "{escaped}"
-                    request_id: "{escaped}"
-                    agent_did: "did:test:grok-shim"
-                    behavior_id: "did:test:grok-shim:default"
-                    session_id: "session-1"
-                    content: ""
-                    reasoning: ""
-                    status: "complete"
-                    error_message: ""
-                    token_count: 0
-                    progress_seq: 0
-                    created_at: "{now}"
-                    completed_at: "{now}"
-                }}) {{ _docID }}
-            }}"#
-        );
-        let response = node.execute(&mutation).await;
+        let response = node.execute(&format!(r#"mutation {{
+            update_AgentRequest(filter: {{{filter}}}, input: {{lifecycle_state: "{state}"}}) {{_docID}}
+            create_AgentResponse(input: {{ {fields}, response_key: "{key}", behavior_id: "{behavior}", content: "", reasoning: "", status: "complete", error_message: "", token_count: 0, progress_seq: 0, created_at: "{now}", completed_at: "{now}" }}) {{_docID}}
+        }}"#)).await;
         ensure_no_errors(&response, "test terminalize request").expect("terminalize");
     }
 
@@ -3342,35 +3505,38 @@ mod tests {
     /// persisted envelope decoded by the message leaf.
     async fn seed_assistant_message(
         node: &Arc<EmbeddedNode>,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         sequence: i64,
         text: &str,
     ) {
         let message = serde_json::to_string(&gents_protocol::message::Message::assistant(text))
             .expect("serialize assistant message");
-        seed_message_row(node, request_id, sequence, "assistant", &message).await;
+        seed_message_row(node, request, sequence, "assistant", &message).await;
     }
 
     /// Seed one durable `AgentMessage` row with an explicit serialized
     /// content blob and role.
     async fn seed_message_row(
         node: &Arc<EmbeddedNode>,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         sequence: i64,
         role: &str,
         content: &str,
     ) {
-        let escaped_request = escape_graphql_string(request_id);
+        let fields = fixture_request_fields(request);
+        let key = escape_graphql_string(&gents::session::sequence_message_key(
+            request.agent_did.as_deref().unwrap(),
+            request.session_id.as_deref().unwrap(),
+            request.requester_did.as_deref(),
+            sequence.try_into().unwrap(),
+        ));
         let escaped_content = escape_graphql_string(content);
         let escaped_role = escape_graphql_string(role);
         let mutation = format!(
             r#"mutation {{
                 create_AgentMessage(input: {{
-                    message_key: "{escaped_request}:{sequence}"
-                    session_id: "session-1"
-                    agent_did: "did:test:grok-shim"
-                    requester_did: "did:test:grok-shim"
-                    request_id: "{escaped_request}"
+                    message_key: "{key}"
+                    {fields}
                     sequence: {sequence}
                     role: "{escaped_role}"
                     content: "{escaped_content}"
@@ -3385,31 +3551,22 @@ mod tests {
     /// authoritative lifecycle state.
     async fn seed_tool_call(
         node: &Arc<EmbeddedNode>,
-        request_id: &str,
+        request: &gents_protocol::row::AgentRequestRow,
         tool_call_id: &str,
         tool_name: &str,
         lifecycle_state: &str,
         result: &str,
         child_request_id: Option<&str>,
-    ) {
-        let escaped_request = escape_graphql_string(request_id);
+    ) -> String {
+        let fields = fixture_request_fields(request);
+        let key = escape_graphql_string(&format!(
+            "{}:{tool_call_id}",
+            request.doc_id.as_deref().unwrap()
+        ));
         let escaped_id = escape_graphql_string(tool_call_id);
         let escaped_name = escape_graphql_string(tool_name);
         let escaped_state = escape_graphql_string(lifecycle_state);
         let escaped_result = escape_graphql_string(result);
-        let parent = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request}" }} }}, limit: 1) {{ _docID }} }}"#
-            ))
-            .await;
-        ensure_no_errors(&parent, "test load parent doc id").expect("parent doc id query");
-        let parent_doc_id = parent
-            .data
-            .as_ref()
-            .and_then(|data| data.pointer("/AgentRequest/0/_docID"))
-            .and_then(Value::as_str)
-            .expect("parent doc id");
-        let escaped_parent_doc = escape_graphql_string(parent_doc_id);
         let child_field = child_request_id.map_or_else(String::new, |child_request_id| {
             format!(
                 "child_request_id: \"{}\"",
@@ -3419,12 +3576,8 @@ mod tests {
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolCall(input: {{
-                    tool_call_key: "session-1:{escaped_id}"
-                    request_id: "{escaped_request}"
-                    session_id: "session-1"
-                    agent_did: "did:test:grok-shim"
-                    requester_did: "did:test:grok-shim"
-                    request_doc_id: "{escaped_parent_doc}"
+                    tool_call_key: "{key}"
+                    {fields}
                     tool_call_id: "{escaped_id}"
                     tool_name: "{escaped_name}"
                     lifecycle_state: "{escaped_state}"
@@ -3435,79 +3588,55 @@ mod tests {
         );
         let response = node.execute(&mutation).await;
         ensure_no_errors(&response, "test seed tool call").expect("seed tool call");
+        gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data":response.data}),
+            "AgentToolCall",
+        )
+        .unwrap()
     }
 
     /// Seed one runtime child `AgentRequest` row linked to the parent
     /// request, the durable shape the subagent projection observes.
     async fn seed_child_request(
         node: &Arc<EmbeddedNode>,
-        parent_request_id: &str,
+        parent: &gents_protocol::row::AgentRequestRow,
+        tool_doc_id: &str,
         child_request_id: &str,
         lifecycle_state: &str,
-    ) {
-        let escaped_parent = escape_graphql_string(parent_request_id);
-        let escaped_child = escape_graphql_string(child_request_id);
-        let escaped_state = escape_graphql_string(lifecycle_state);
-        let bridge = node
-            .execute(&format!(
-                r#"{{
-                    parent: AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_parent}" }} }}, limit: 1) {{ _docID }}
-                    tool: AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped_parent}" }}, tool_call_id: {{ _eq: "call-1" }} }}, limit: 1) {{ _docID }}
-                }}"#
-            ))
-            .await;
-        ensure_no_errors(&bridge, "test load spawn bridge ids").expect("spawn bridge ids");
-        let parent_doc_id = bridge
-            .data
-            .as_ref()
-            .and_then(|data| data.pointer("/parent/0/_docID"))
-            .and_then(Value::as_str)
-            .expect("parent doc id");
-        let tool_doc_id = bridge
-            .data
-            .as_ref()
-            .and_then(|data| data.pointer("/tool/0/_docID"))
-            .and_then(Value::as_str)
-            .expect("tool doc id");
-        let escaped_parent_doc = escape_graphql_string(parent_doc_id);
-        let escaped_tool_doc = escape_graphql_string(tool_doc_id);
+    ) -> gents_protocol::row::AgentRequestRow {
+        let owner = escape_graphql_string(parent.agent_did.as_deref().unwrap());
+        let requester = "null";
+        let behavior =
+            escape_graphql_string(parent.behavior_id.as_deref().expect("fixture behavior"));
+        let logical_parent = escape_graphql_string(&parent.request_id);
+        let physical_parent = escape_graphql_string(parent.doc_id.as_deref().unwrap());
+        let tool = escape_graphql_string(tool_doc_id);
+        let child = escape_graphql_string(child_request_id);
+        let state = escape_graphql_string(lifecycle_state);
         let now = chrono::Utc::now().to_rfc3339();
-        let escaped_now = escape_graphql_string(&now);
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentRequest(input: {{
-                    request_id: "{escaped_child}"
-                    agent_did: "did:test:grok-shim"
-                    session_id: "session-1-child"
-                    caused_by_parent_request_id: "{escaped_parent}"
-                    caused_by_parent_request_doc_id: "{escaped_parent_doc}"
-                    caused_by_parent_tool_call_id: "call-1"
-                    caused_by_parent_tool_call_doc_id: "{escaped_tool_doc}"
-                    content: "child work"
-                    lifecycle_state: "{escaped_state}"
-                    backend_id: ""
-                    execution_origin: "interactive"
-                    failure_reason: ""
-                    created_at: "{escaped_now}"
-                    retry_count: 0
-                    max_retries: 3
-                }}) {{ _docID }}
-            }}"#
-        );
-        let response = node.execute(&mutation).await;
-        ensure_no_errors(&response, "test seed child request").expect("seed child request");
+        let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
+            request_id: "{child}", agent_did: "{owner}", requester_did: {requester}, behavior_id: "{behavior}", session_id: "session-1-child",
+            caused_by_parent_request_id: "{logical_parent}", caused_by_parent_request_doc_id: "{physical_parent}", caused_by_parent_tool_call_id: "call-1", caused_by_parent_tool_call_doc_id: "{tool}", content: "child work", lifecycle_state: "{state}", created_at: "{now}"
+        }}) {{_docID}} }}"#)).await;
+        ensure_no_errors(&response, "test seed child request").unwrap();
+        let doc = gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data":response.data}),
+            "AgentRequest",
+        )
+        .unwrap();
+        serde_json::from_value(json!({"_docID":doc,"request_id":child_request_id,"agent_did":parent.agent_did,"requester_did":null,"behavior_id":parent.behavior_id,"session_id":"session-1-child", "caused_by_parent_request_id":parent.request_id,"caused_by_parent_request_doc_id":parent.doc_id,"caused_by_parent_tool_call_id":"call-1","caused_by_parent_tool_call_doc_id":tool_doc_id})).unwrap()
     }
 
     /// Transition a seeded tool call to its terminal completed state with a
     /// recorded result, the way the runtime finalizes a tool call.
-    async fn complete_tool_call(node: &Arc<EmbeddedNode>, tool_call_id: &str, result: &str) {
-        let escaped_id = escape_graphql_string(tool_call_id);
+    async fn complete_tool_call(node: &Arc<EmbeddedNode>, tool_doc_id: &str, result: &str) {
+        let escaped_id = escape_graphql_string(tool_doc_id);
         let escaped_state = escape_graphql_string("completed");
         let escaped_result = escape_graphql_string(result);
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
-                    filter: {{ tool_call_id: {{ _eq: "{escaped_id}" }} }},
+                    filter: {{ _docID: {{ _eq: "{escaped_id}" }} }},
                     input: {{
                         lifecycle_state: "{escaped_state}"
                         result: "{escaped_result}"
@@ -3521,14 +3650,17 @@ mod tests {
 
     /// Transition a seeded child request to its terminal completed state,
     /// the durable edge the subagent projection finishes on.
-    async fn complete_child_request(node: &Arc<EmbeddedNode>, child_request_id: &str) {
-        let escaped_child = escape_graphql_string(child_request_id);
+    async fn complete_child_request(
+        node: &Arc<EmbeddedNode>,
+        request: &gents_protocol::row::AgentRequestRow,
+    ) {
+        let filter = fixture_request_filter(request);
         let escaped_state = escape_graphql_string("completed");
         let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped_child}" }} }},
+                    filter: {{{filter}}},
                     input: {{
                         lifecycle_state: "{escaped_state}"
                         terminalized_at: "{now}"
@@ -3538,6 +3670,69 @@ mod tests {
         );
         let response = node.execute(&mutation).await;
         ensure_no_errors(&response, "test complete child request").expect("complete child request");
+    }
+
+    #[tokio::test]
+    async fn fixture_receipts_keep_colliding_requests_and_child_owners_separate() {
+        let (_dir, node, principal) = test_node().await;
+        let behavior = gents::default_behavior_id_for_agent(&principal);
+        let mut receipts = Vec::new();
+        for content in ["selected", "same-label other document"] {
+            let result = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
+                request_id:"collision", agent_did:"{principal}", requester_did:"{principal}",
+                session_id:"session-1", behavior_id:"{behavior}", content:"{content}", lifecycle_state:"pending"
+            }}) {{_docID}} }}"#)).await;
+            ensure_no_errors(&result, "seed colliding requests").unwrap();
+            let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                &json!({"data":result.data}),
+                "AgentRequest",
+            )
+            .unwrap();
+            receipts.push(serde_json::from_value::<gents_protocol::row::AgentRequestRow>(json!({
+                "_docID":doc,"request_id":"collision","agent_did":principal,"requester_did":principal,
+                "session_id":"session-1","behavior_id":behavior
+            })).unwrap());
+        }
+        assert_ne!(receipts[0].doc_id, receipts[1].doc_id);
+        let selected = &receipts[0];
+        seed_assistant_message(&node, selected, 1, "selected output").await;
+        let tool = seed_tool_call(
+            &node,
+            selected,
+            "call-1",
+            "spawn_subagent",
+            "running",
+            "",
+            Some("child"),
+        )
+        .await;
+        let child = seed_child_request(&node, selected, &tool, "child", "processing").await;
+        assert_eq!(child.agent_did.as_deref(), Some(principal.as_str()));
+        assert_eq!(child.requester_did, None);
+        seed_assistant_message(&node, &child, 1, "child output").await;
+        complete_child_request(&node, &child).await;
+        complete_tool_call(&node, &tool, "done").await;
+        terminalize_request(&node, selected, "completed").await;
+        for (index, receipt) in receipts.iter().enumerate() {
+            let query = format!("{{AgentRequest(filter: {{{}}}) {{lifecycle_state}} AgentResponse(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{agent_did requester_did request_doc_id}} AgentMessage(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{agent_did requester_did request_doc_id}}}}",
+                fixture_request_filter(receipt), escape_graphql_string(receipt.doc_id.as_deref().unwrap()), escape_graphql_string(receipt.doc_id.as_deref().unwrap()));
+            let result = node.execute(&query).await;
+            ensure_no_errors(&result, "read fixture effects").unwrap();
+            let data = result.data.unwrap();
+            assert_eq!(
+                data["AgentRequest"][0]["lifecycle_state"],
+                if index == 0 { "completed" } else { "pending" }
+            );
+            for collection in ["AgentResponse", "AgentMessage"] {
+                let rows = data[collection].as_array().unwrap();
+                assert_eq!(rows.len(), if index == 0 { 1 } else { 0 });
+                for row in rows {
+                    assert_eq!(row["agent_did"], principal);
+                    assert_eq!(row["requester_did"], principal);
+                    assert_eq!(row["request_doc_id"], receipt.doc_id.as_deref().unwrap());
+                }
+            }
+        }
     }
 
     /// The parsed `session/update` notification values in a buffer of
@@ -3585,24 +3780,33 @@ mod tests {
         .unwrap();
 
         let node_for_terminalize = node.clone();
+        let principal_for_terminalize = agent_did.clone();
         let handle = tokio::spawn(async move {
             // Wait for the request row to exist, then terminalize it.
             loop {
-                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { request_id } }"#;
-                let response = node_for_terminalize.execute(query).await;
+                let scope = gents::session::session_scope_filter(
+                    &principal_for_terminalize,
+                    "session-1",
+                    Some(&principal_for_terminalize),
+                );
+                let query = format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS);
+                let response = node_for_terminalize.execute(&query).await;
+                ensure_no_errors(&response, "pending fixture rows").unwrap();
                 let rows = response
                     .data
                     .as_ref()
                     .and_then(|data| data.get("AgentRequest"))
                     .and_then(Value::as_array)
                     .cloned()
-                    .unwrap_or_default();
+                    .expect("pending fixture rows");
+                assert!(rows.len() <= 1, "ambiguous pending fixture request");
                 if let Some(row) = rows.first() {
-                    let request_id = row.get("request_id").and_then(Value::as_str).unwrap();
+                    let receipt: gents_protocol::row::AgentRequestRow =
+                        serde_json::from_value(row.clone()).unwrap();
                     // A completed lifecycle with a `complete` response status
                     // projects `end_turn`; the single atomic mutation avoids
                     // the watch observing a transient `interrupted` state.
-                    terminalize_request(&node_for_terminalize, request_id, "completed").await;
+                    terminalize_request(&node_for_terminalize, &receipt, "completed").await;
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -3634,10 +3838,11 @@ mod tests {
             None,
         )
         .unwrap();
-        let id = manager
+        let id_receipt = manager
             .submit_request(&prompt, "goal-prompt-id")
             .await
             .unwrap();
+        let id = id_receipt.request_id.clone();
         let goal = gents::goal::load_canonical_goal(&node, &principal, &prompt.session_id)
             .await
             .unwrap()
@@ -3646,7 +3851,7 @@ mod tests {
         assert_eq!(goal.status, "active");
         assert_eq!(goal.token_budget, Some(100000));
         let response = node.execute(&format!(
-            "{{AgentRequest(filter:{{request_id:{{_eq:\"{id}\"}}}}){{request_id agent_did session_id content metadata retry_key admission_signer_did}}}}"
+            "{{AgentRequest(filter:{{request_id:{{_eq:\"{id}\"}}}}){{request_id agent_did session_id content input retry_key admission_signer_did}}}}"
         )).await;
         gents::graphql::ensure_no_errors(&response, "goal submission").unwrap();
         let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
@@ -3655,10 +3860,7 @@ mod tests {
         assert_eq!(row["admission_signer_did"], principal);
         assert_eq!(row["session_id"], prompt.session_id);
         assert_eq!(row["retry_key"], format!("goal-request:{id}"));
-        let metadata: Value = serde_json::from_str(row["metadata"].as_str().unwrap()).unwrap();
-        assert_eq!(metadata["promptId"], "goal-prompt-id");
-        assert_eq!(metadata["screenMode"], "inline");
-        assert_eq!(metadata["sendNow"], true);
+        assert!(row["input"].is_null());
 
         prompt.prompt[0].text = "/goal Conflicting objective".into();
         assert!(manager.submit_request(&prompt, "conflict").await.is_err());
@@ -3687,10 +3889,11 @@ mod tests {
         gents::goal::delete_goals_for_session(&node, &principal, &prompt.session_id)
             .await
             .unwrap();
-        let next = manager
+        let next_receipt = manager
             .submit_request(&prompt, "new-incarnation")
             .await
             .unwrap();
+        let next = next_receipt.request_id.clone();
         assert_ne!(id, next);
     }
 
@@ -3708,8 +3911,9 @@ mod tests {
             None,
         )
         .unwrap();
-        let first = manager.submit_request(&prompt, "first").await.unwrap();
-        seed_assistant_message(&node, &first, 1, "Before reconnect.").await;
+        let first_receipt = manager.submit_request(&prompt, "first").await.unwrap();
+        let first = first_receipt.request_id.clone();
+        seed_assistant_message(&node, &first_receipt, 1, "Before reconnect.").await;
         let attached = chrono::Utc::now().to_rfc3339();
         let rows = super::super::sessions::requests(&node, &principal, Some("session-1"))
             .await
@@ -3724,13 +3928,13 @@ mod tests {
             .iter()
             .all(|event| event["params"]["_meta"]["isReplay"] == true));
         buffer.lock().await.clear();
-        seed_assistant_message(&node, &first, 2, "After reconnect.").await;
-        terminalize_request(&node, &first, "completed").await;
+        seed_assistant_message(&node, &first_receipt, 2, "After reconnect.").await;
+        terminalize_request(&node, &first_receipt, "completed").await;
         // This request was not in the replay manifest. Discovery must begin
         // at the pre-replay attachment time, not the later response time.
-        let second = manager.submit_request(&prompt, "second").await.unwrap();
-        seed_assistant_message(&node, &second, 3, "Created during replay.").await;
-        terminalize_request(&node, &second, "completed").await;
+        let second_receipt = manager.submit_request(&prompt, "second").await.unwrap();
+        seed_assistant_message(&node, &second_receipt, 3, "Created during replay.").await;
+        terminalize_request(&node, &second_receipt, "completed").await;
         let mut after = String::new();
         let mut delivery_after = String::new();
         for _ in 0..3 {
@@ -3828,8 +4032,9 @@ mod tests {
             None,
         )
         .unwrap();
-        let request = manager.submit_request(&prompt, "peer-human").await.unwrap();
-        seed_assistant_message(&node, &request, 1, "Peer answer").await;
+        let request_receipt = manager.submit_request(&prompt, "peer-human").await.unwrap();
+        let request = request_receipt.request_id.clone();
+        seed_assistant_message(&node, &request_receipt, 1, "Peer answer").await;
         let mut after = String::new();
         let mut delivery_after = String::new();
         manager
@@ -3853,7 +4058,7 @@ mod tests {
             .iter()
             .find(|event| event["params"]["update"]["sessionUpdate"] == "user_message_chunk")
             .unwrap();
-        assert_eq!(echo["params"]["_meta"]["promptId"], "peer-human");
+        assert_eq!(echo["params"]["_meta"]["promptId"], request);
         assert_eq!(
             echo["params"]["update"]["_meta"]["hideFromScrollback"],
             false
@@ -3862,7 +4067,7 @@ mod tests {
             echo["params"]["update"]["content"]["text"],
             "Human from another client"
         );
-        for target in ["different-prompt", "peer-human"] {
+        for target in ["different-prompt", request.as_str()] {
             manager
                 .handle_cancel(
                     parse_cancel_notification(
@@ -3878,11 +4083,11 @@ mod tests {
                 interrupted.data.as_ref().unwrap()["AgentRequest"][0]["interrupt_requested_at"]
                     .as_str()
                     .is_some(),
-                target == "peer-human"
+                target == request
             );
         }
         // The runtime, not the viewer, acknowledges cancellation.
-        terminalize_request(&node, &request, "interrupted").await;
+        terminalize_request(&node, &request_receipt, "interrupted").await;
         manager
             .observe_session_tick(
                 "session-1",
@@ -3911,7 +4116,7 @@ mod tests {
             .iter()
             .find(|event| event["params"]["update"]["sessionUpdate"] == "turn_completed")
             .unwrap();
-        assert_eq!(completed["params"]["update"]["prompt_id"], "peer-human");
+        assert_eq!(completed["params"]["update"]["prompt_id"], request);
         assert_eq!(completed["params"]["update"]["stop_reason"], "cancelled");
     }
 
@@ -3928,15 +4133,26 @@ mod tests {
             None,
         )
         .unwrap();
-        let root = manager.submit_request(&prompt, "root").await.unwrap();
-        terminalize_request(&node, &root, "completed").await;
+        let root_receipt = manager.submit_request(&prompt, "root").await.unwrap();
+        let root = root_receipt.request_id.clone();
+        terminalize_request(&node, &root_receipt, "completed").await;
         manager.observed.lock().await.insert(
             ("session-1".into(), root.clone()),
             Arc::new(Mutex::new(ObservedRequest::new("root".into(), 0, true))),
         );
-        let first = seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
-        seed_assistant_message(&node, &first, 1, "Wake A is working.").await;
-        seed_tool_call(&node, &first, "wake-a-tool", "bash", "running", "", None).await;
+        let first_receipt = seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
+        let first = first_receipt.request_id.clone();
+        seed_assistant_message(&node, &first_receipt, 1, "Wake A is working.").await;
+        seed_tool_call(
+            &node,
+            &first_receipt,
+            "wake-a-tool",
+            "bash",
+            "running",
+            "",
+            None,
+        )
+        .await;
         let mut after = String::new();
         let mut delivery_after = String::new();
         manager
@@ -3958,26 +4174,25 @@ mod tests {
         // Completion notices on both the older root and the active wake must
         // wait; the pager treats either user chunk as a destructive boundary.
         for (request, sequence, text) in [
-            (&root, 2, "Root task finished."),
-            (&first, 3, "Wake task finished."),
+            (&root_receipt, 2, "Root task finished."),
+            (&first_receipt, 3, "Wake task finished."),
         ] {
             let result = node
                 .execute(&format!(
                     r#"mutation {{ create_AgentMessage(input: {{
                 message_key: "background-completion-notification:{sequence}:tool",
-                session_id: "session-1", request_id: "{}", sequence: {sequence},
-                agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim",
-                role: "user", content: "{}" }}) {{ _docID }} }}"#,
-                    escape_graphql_string(request),
+                {}, sequence: {sequence}, role: "user", content: "{}" }}) {{ _docID }} }}"#,
+                    fixture_request_fields(request),
                     escape_graphql_string(text)
                 ))
                 .await;
             ensure_no_errors(&result, "seed delayed completion notice").unwrap();
         }
-        let second = seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
-        seed_assistant_message(&node, &second, 4, "Wake B response.").await;
-        terminalize_request(&node, &second, "completed").await;
-        seed_assistant_message(&node, &first, 5, "Wake A continues.").await;
+        let second_receipt =
+            seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
+        seed_assistant_message(&node, &second_receipt, 4, "Wake B response.").await;
+        terminalize_request(&node, &second_receipt, "completed").await;
+        seed_assistant_message(&node, &first_receipt, 5, "Wake A continues.").await;
         manager
             .observe_session_tick(
                 "session-1",
@@ -4023,7 +4238,7 @@ mod tests {
             .and_then(|data| data.pointer("/AgentRequest/0/interrupt_requested_at"))
             .and_then(Value::as_str)
             .is_some_and(|value| !value.is_empty()));
-        terminalize_request(&node, &first, "interrupted").await;
+        terminalize_request(&node, &first_receipt, "interrupted").await;
         for _ in 0..3 {
             manager
                 .observe_session_tick(
@@ -4084,18 +4299,20 @@ mod tests {
         let manager = TurnManager::new(node.clone(), test_config(String::new(), &agent_did));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
-        let response = node
-            .execute(
-                r#"mutation { create_AgentRequest(input: {
-            request_id: "pane-root", session_id: "session-1", agent_did: "did:test:grok-shim",
-            requester_did: "did:test:grok-shim", lifecycle_state: "processing"
-        }) { _docID } }"#,
-            )
-            .await;
+        let behavior = gents::default_behavior_id_for_agent(&agent_did);
+        let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
+            request_id:"pane-root", session_id:"session-1", agent_did:"{agent_did}", requester_did:"{agent_did}", behavior_id:"{behavior}", lifecycle_state:"processing"
+        }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "seed pane root").unwrap();
-        seed_tool_call(
+        let doc = gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data":response.data}),
+            "AgentRequest",
+        )
+        .unwrap();
+        let parent: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({"_docID":doc,"request_id":"pane-root","agent_did":agent_did,"requester_did":agent_did,"behavior_id":behavior,"session_id":"session-1"})).unwrap();
+        let tool = seed_tool_call(
             &node,
-            "pane-root",
+            &parent,
             "call-1",
             "spawn_subagent",
             "running",
@@ -4103,46 +4320,50 @@ mod tests {
             Some("pane-child"),
         )
         .await;
-        seed_child_request(&node, "pane-root", "pane-child", "processing").await;
+        let child = seed_child_request(&node, &parent, &tool, "pane-child", "processing").await;
+        let mut followup = None;
         for (id, requester, text) in [
             ("pane-child", None, "Original child output"),
             ("pane-followup", None, "Steered child output"),
             ("pane-foreign", Some("did:foreign"), "MUST NOT LEAK"),
         ] {
-            if id != "pane-child" {
-                let requester = requester
-                    .map(|did| format!("requester_did: \"{did}\""))
-                    .unwrap_or_default();
-                let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-                    request_id: "{id}", session_id: "session-1-child", agent_did: "did:test:grok-shim",
-                    {requester}, lifecycle_state: "processing"
-                }}) {{ _docID }} }}"#)).await;
+            let row = if id == "pane-child" {
+                child.clone()
+            } else {
+                let requester_field = requester
+                    .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+                    .unwrap_or_else(|| "null".into());
+                let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{request_id:"{id}", session_id:"session-1-child", agent_did:"{agent_did}", requester_did:{requester_field}, behavior_id:"{behavior}", lifecycle_state:"processing"}}) {{_docID}} }}"#)).await;
                 ensure_no_errors(&response, "seed child followup").unwrap();
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &json!({"data":response.data}),
+                    "AgentRequest",
+                )
+                .unwrap();
+                serde_json::from_value(json!({"_docID":doc,"request_id":id,"agent_did":agent_did,"requester_did":requester,"behavior_id":behavior,"session_id":"session-1-child"})).unwrap()
+            };
+            // Distinct requests in this same session share its sequence namespace.
+            let sequence = if id == "pane-followup" { 2 } else { 1 };
+            seed_assistant_message(&node, &row, sequence, text).await;
+            if id == "pane-followup" {
+                followup = Some(row);
             }
-            let content = escape_graphql_string(
-                &serde_json::to_string(&gents_protocol::message::Message::assistant(text)).unwrap(),
-            );
-            let response = node.execute(&format!(r#"mutation {{ create_AgentMessage(input: {{
-                message_key: "{id}:1", request_id: "{id}", session_id: "session-1-child",
-                agent_did: "did:test:grok-shim", sequence: 1, role: "assistant", content: "{content}"
-            }}) {{ _docID }} }}"#)).await;
-            ensure_no_errors(&response, "seed child transcript").unwrap();
         }
-        let response = node
-            .execute(
-                r#"mutation { create_AgentToolCall(input: {
-            tool_call_key: "session-1-child:child-bash", tool_call_id: "child-bash",
-            request_id: "pane-child", session_id: "session-1-child",
-            agent_did: "did:test:grok-shim", tool_name: "bash", lifecycle_state: "running",
-            await_mode: "background", started_at: "2026-01-01T00:00:00Z",
-            args: "{\"command\":\"echo CHILD_BG_OUTPUT\"}",
-            partial_output_tail: "CHILD_BG_OUTPUT"
-        }) { _docID } }"#,
-            )
-            .await;
+        let fields = fixture_request_fields(&child);
+        let response = node.execute(&format!(r#"mutation {{create_AgentToolCall(input: {{
+            tool_call_key:"session-1-child:child-bash", tool_call_id:"child-bash", {fields},
+            tool_name:"bash", lifecycle_state:"running", await_mode:"background", started_at:"2026-01-01T00:00:00Z",
+            args:"{{\"command\":\"echo CHILD_BG_OUTPUT\"}}", partial_output_tail:"CHILD_BG_OUTPUT"
+        }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "scope child tool").unwrap();
-        seed_assistant_message(&node, "pane-root", 7, "PARENT MUST WAIT").await;
+        let child_tool_doc = gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data":response.data}),
+            "AgentToolCall",
+        )
+        .unwrap();
+        seed_assistant_message(&node, &parent, 7, "PARENT MUST WAIT").await;
         let cursor = Mutex::new(RequestCursor::new());
+        cursor.lock().await.request = Some(parent);
         let mut timing = RequestUpdateTiming::new(0);
         manager
             .stream_projection_updates_mode(
@@ -4194,9 +4415,9 @@ mod tests {
             assert!(row.pointer("/params/_meta/promptId").is_none());
             assert!(row.pointer("/params/_meta/turnStartMs").is_none());
         }
-        complete_child_request(&node, "pane-child").await;
-        complete_tool_call(&node, "child-bash", "child tool done").await;
-        complete_tool_call(&node, "call-1", "done").await;
+        complete_child_request(&node, &child).await;
+        complete_tool_call(&node, &child_tool_doc, "child tool done").await;
+        complete_tool_call(&node, &tool, "done").await;
         manager
             .stream_projection_updates(
                 "session-1",
@@ -4215,7 +4436,7 @@ mod tests {
             .await
             .iter()
             .any(|kind| kind == "subagent_finished"));
-        complete_child_request(&node, "pane-followup").await;
+        complete_child_request(&node, followup.as_ref().unwrap()).await;
         manager
             .stream_projection_updates(
                 "session-1",
@@ -4295,9 +4516,18 @@ mod tests {
             let sender = sender.clone();
             tokio::spawn(async move { manager.handle_prompt(prompt, &sender, &engine).await })
         };
-        let root = wait_for_pending_request(&node).await;
-        seed_tool_call(&node, &root, "late-bash", "bash", "running", "", None).await;
-        seed_assistant_message(&node, &root, 1, "Root response.").await;
+        let root_receipt = wait_for_pending_request(&node, &agent_did).await;
+        let late_tool_doc = seed_tool_call(
+            &node,
+            &root_receipt,
+            "late-bash",
+            "bash",
+            "running",
+            "",
+            None,
+        )
+        .await;
+        seed_assistant_message(&node, &root_receipt, 1, "Root response.").await;
         let mut after = String::new();
         let mut delivery_after = String::new();
         // A discovery poll while foreground ownership is installed cannot
@@ -4313,7 +4543,7 @@ mod tests {
             )
             .await
             .unwrap();
-        terminalize_request(&node, &root, "completed").await;
+        terminalize_request(&node, &root_receipt, "completed").await;
         let result = tokio::time::timeout(Duration::from_secs(30), turn)
             .await
             .unwrap()
@@ -4322,23 +4552,29 @@ mod tests {
         assert_eq!(result["stopReason"], "end_turn");
 
         let update = node
-            .execute(
-                r#"mutation { update_AgentToolCall(
-            filter: { tool_call_id: { _eq: "late-bash" } },
-            input: { lifecycle_state: "failed", result: "exit 7" }) { _docID } }"#,
-            )
+            .execute(&format!(
+                r#"mutation {{ update_AgentToolCall(
+            filter: {{ _docID: {{ _eq: "{}" }} }},
+            input: {{ lifecycle_state: "failed", result: "exit 7" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&late_tool_doc)
+            ))
             .await;
         ensure_no_errors(&update, "late tool finish").unwrap();
-        let wake = seed_runtime_wake(&node, &agent_did, "internal notification instruction").await;
-        seed_assistant_message(&node, &wake, 2, "Background work finished.").await;
-        terminalize_request(&node, &wake, "completed").await;
+        let wake_receipt =
+            seed_runtime_wake(&node, &agent_did, "internal notification instruction").await;
+        let wake = wake_receipt.request_id.clone();
+        seed_assistant_message(&node, &wake_receipt, 2, "Background work finished.").await;
+        terminalize_request(&node, &wake_receipt, "completed").await;
         let (pending_tx, _pending_rx) = oneshot::channel();
         let foreground_key = ("session-1".to_owned(), "new-foreground".to_owned());
         manager.state.lock().await.entries.insert(
             foreground_key.clone(),
             PendingPrompt {
                 response_tx: Some(pending_tx),
-                request_id: Some("new-foreground-request".to_owned()),
+                request: Some(
+                    serde_json::from_value(json!({"request_id": "new-foreground-request"}))
+                        .unwrap(),
+                ),
                 cancel_before_id: Arc::new(Mutex::new(CancelBeforeIdLatch::default())),
                 drained: false,
             },
@@ -4539,11 +4775,12 @@ mod tests {
         // the intermediate (non-terminal) state, and finish with a
         // terminalization.
         let node_for_seed = node.clone();
+        let principal_for_seed = agent_did.clone();
         let seed_handle = tokio::spawn(async move {
-            let request_id = wait_for_pending_request(&node_for_seed).await;
+            let request_id = wait_for_pending_request(&node_for_seed, &principal_for_seed).await;
             // Stage 1: an in-flight tool call and a running child request —
             // observed by at least one non-terminal poll.
-            seed_tool_call(
+            let tool_doc = seed_tool_call(
                 &node_for_seed,
                 &request_id,
                 "call-1",
@@ -4553,12 +4790,19 @@ mod tests {
                 Some("child-1"),
             )
             .await;
-            seed_child_request(&node_for_seed, &request_id, "child-1", "processing").await;
+            let child = seed_child_request(
+                &node_for_seed,
+                &request_id,
+                &tool_doc,
+                "child-1",
+                "processing",
+            )
+            .await;
             tokio::time::sleep(Duration::from_millis(600)).await;
             // Stage 2: the terminal tool status, the finished child, the
             // assistant output, and the request's terminal state.
-            complete_tool_call(&node_for_seed, "call-1", "file contents").await;
-            complete_child_request(&node_for_seed, "child-1").await;
+            complete_tool_call(&node_for_seed, &tool_doc, "file contents").await;
+            complete_child_request(&node_for_seed, &child).await;
             seed_assistant_message(&node_for_seed, &request_id, 1, "the answer").await;
             terminalize_request(&node_for_seed, &request_id, "completed").await;
         });
@@ -4678,8 +4922,9 @@ mod tests {
         .unwrap();
 
         let node_for_seed = node.clone();
+        let principal_for_seed = agent_did.clone();
         let seed_handle = tokio::spawn(async move {
-            let request_id = wait_for_pending_request(&node_for_seed).await;
+            let request_id = wait_for_pending_request(&node_for_seed, &principal_for_seed).await;
             // Two distinct assistant rows carrying the same text.
             seed_assistant_message(&node_for_seed, &request_id, 1, "same text").await;
             seed_assistant_message(&node_for_seed, &request_id, 2, "same text").await;
@@ -4753,10 +4998,11 @@ mod tests {
             closed_signal.notify_one();
         });
         let node_for_seed = node.clone();
+        let principal_for_seed = agent_did.clone();
         let seed_handle = tokio::spawn(async move {
-            let request_id = wait_for_pending_request(&node_for_seed).await;
+            let request_id = wait_for_pending_request(&node_for_seed, &principal_for_seed).await;
             outbound_closed.notified().await;
-            seed_tool_call(
+            let _tool_doc = seed_tool_call(
                 &node_for_seed,
                 &request_id,
                 "call-1",
@@ -4811,20 +5057,28 @@ mod tests {
         )
         .unwrap();
         let node_for_terminalize = node.clone();
+        let principal_for_terminalize = agent_did.clone();
         let terminalize_handle = tokio::spawn(async move {
             loop {
-                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { request_id } }"#;
-                let response = node_for_terminalize.execute(query).await;
+                let scope = gents::session::session_scope_filter(
+                    &principal_for_terminalize,
+                    "session-1",
+                    Some(&principal_for_terminalize),
+                );
+                let query = format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS);
+                let response = node_for_terminalize.execute(&query).await;
+                ensure_no_errors(&response, "pending fixture rows").unwrap();
                 let rows = response
                     .data
                     .as_ref()
                     .and_then(|data| data.get("AgentRequest"))
                     .and_then(Value::as_array)
                     .cloned()
-                    .unwrap_or_default();
+                    .expect("pending fixture rows");
                 for row in &rows {
-                    let request_id = row.get("request_id").and_then(Value::as_str).unwrap();
-                    terminalize_request(&node_for_terminalize, request_id, "interrupted").await;
+                    let receipt: gents_protocol::row::AgentRequestRow =
+                        serde_json::from_value(row.clone()).unwrap();
+                    terminalize_request(&node_for_terminalize, &receipt, "interrupted").await;
                 }
                 if rows.is_empty() {
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -4845,23 +5099,25 @@ mod tests {
     }
 
     /// Wait for the first pending `AgentRequest` row and return its id.
-    async fn wait_for_pending_request(node: &Arc<EmbeddedNode>) -> String {
+    async fn wait_for_pending_request(
+        node: &Arc<EmbeddedNode>,
+        principal: &str,
+    ) -> gents_protocol::row::AgentRequestRow {
+        let scope = gents::session::session_scope_filter(principal, "session-1", Some(principal));
         loop {
-            let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { request_id } }"#;
-            let response = node.execute(query).await;
+            let response = node.execute(&format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS)).await;
+            ensure_no_errors(&response, "wait for fixture request").unwrap();
             let rows = response
                 .data
                 .as_ref()
-                .and_then(|data| data.get("AgentRequest"))
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+                .and_then(|data| data["AgentRequest"].as_array())
+                .expect("request rows");
+            assert!(rows.len() <= 1, "ambiguous pending fixture request");
             if let Some(row) = rows.first() {
-                return row
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .unwrap()
-                    .to_string();
+                let row: gents_protocol::row::AgentRequestRow =
+                    serde_json::from_value(row.clone()).unwrap();
+                assert!(row.doc_id.is_some());
+                return row;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
@@ -4957,20 +5213,28 @@ mod tests {
         )
         .unwrap();
         let node_for_terminalize = node.clone();
+        let principal_for_terminalize = agent_did.clone();
         let terminalize_handle = tokio::spawn(async move {
             loop {
-                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { request_id } }"#;
-                let response = node_for_terminalize.execute(query).await;
+                let scope = gents::session::session_scope_filter(
+                    &principal_for_terminalize,
+                    "session-1",
+                    Some(&principal_for_terminalize),
+                );
+                let query = format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS);
+                let response = node_for_terminalize.execute(&query).await;
+                ensure_no_errors(&response, "pending fixture rows").unwrap();
                 let rows = response
                     .data
                     .as_ref()
                     .and_then(|data| data.get("AgentRequest"))
                     .and_then(Value::as_array)
                     .cloned()
-                    .unwrap_or_default();
+                    .expect("pending fixture rows");
                 for row in &rows {
-                    let request_id = row.get("request_id").and_then(Value::as_str).unwrap();
-                    terminalize_request(&node_for_terminalize, request_id, "interrupted").await;
+                    let receipt: gents_protocol::row::AgentRequestRow =
+                        serde_json::from_value(row.clone()).unwrap();
+                    terminalize_request(&node_for_terminalize, &receipt, "interrupted").await;
                 }
                 if rows.is_empty() {
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -5058,7 +5322,7 @@ mod tests {
                     .await
                     .entries
                     .get(&("session-reuse".to_string(), "same-prompt".to_string()))
-                    .and_then(|entry| entry.request_id.clone());
+                    .and_then(|entry| entry.request.as_ref().map(|row| row.request_id.clone()));
                 if let Some(request_id) = request_id {
                     break request_id;
                 }
@@ -5082,7 +5346,7 @@ mod tests {
                 .await
                 .entries
                 .get(&("session-reuse".to_string(), "same-prompt".to_string()))
-                .and_then(|entry| entry.request_id.as_deref()),
+                .and_then(|entry| entry.request.as_ref().map(|row| row.request_id.as_str())),
             Some(replacement_request_id.as_str()),
             "the old generation must not overwrite the exact-key replacement"
         );
@@ -5184,7 +5448,7 @@ mod tests {
                     .await
                     .entries
                     .get(&key)
-                    .and_then(|entry| entry.request_id.clone())
+                    .and_then(|entry| entry.request.as_ref().map(|row| row.request_id.clone()))
                 {
                     break request_id;
                 }
@@ -5208,7 +5472,7 @@ mod tests {
                 .await
                 .entries
                 .get(&key)
-                .and_then(|entry| entry.request_id.as_deref()),
+                .and_then(|entry| entry.request.as_ref().map(|row| row.request_id.as_str())),
             Some(replacement_request_id.as_str()),
             "the failed old generation must not remove its replacement"
         );
@@ -5249,7 +5513,9 @@ mod tests {
             key.clone(),
             PendingPrompt {
                 response_tx: Some(old_tx),
-                request_id: Some("old-request".to_string()),
+                request: Some(
+                    serde_json::from_value(json!({"request_id": "old-request"})).unwrap(),
+                ),
                 cancel_before_id: old_generation,
                 drained: false,
             },
@@ -5283,7 +5549,10 @@ mod tests {
                 key.clone(),
                 PendingPrompt {
                     response_tx: Some(replacement_tx),
-                    request_id: Some("replacement-request".to_string()),
+                    request: Some(
+                        serde_json::from_value(json!({"request_id": "replacement-request"}))
+                            .unwrap(),
+                    ),
                     cancel_before_id: replacement_generation.clone(),
                     drained: false,
                 },
@@ -5312,7 +5581,10 @@ mod tests {
                 &replacement_generation
             ));
             assert_eq!(
-                replacement.request_id.as_deref(),
+                replacement
+                    .request
+                    .as_ref()
+                    .map(|row| row.request_id.as_str()),
                 Some("replacement-request")
             );
             assert!(!replacement.drained);
@@ -6031,20 +6303,29 @@ mod tests {
         // The rejection must not have disturbed the live turn: terminalize the
         // first prompt's request and confirm it resolves normally.
         let node_for_terminalize = node.clone();
+        let principal_for_terminalize = agent_did.clone();
         let terminalize_handle = tokio::spawn(async move {
             loop {
-                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { request_id } }"#;
-                let response = node_for_terminalize.execute(query).await;
+                let scope = gents::session::session_scope_filter(
+                    &principal_for_terminalize,
+                    "session-1",
+                    Some(&principal_for_terminalize),
+                );
+                let query = format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS);
+                let response = node_for_terminalize.execute(&query).await;
+                ensure_no_errors(&response, "pending fixture rows").unwrap();
                 let rows = response
                     .data
                     .as_ref()
                     .and_then(|data| data.get("AgentRequest"))
                     .and_then(Value::as_array)
                     .cloned()
-                    .unwrap_or_default();
+                    .expect("pending fixture rows");
+                assert!(rows.len() <= 1, "ambiguous pending fixture request");
                 if let Some(row) = rows.first() {
-                    let request_id = row.get("request_id").and_then(Value::as_str).unwrap();
-                    terminalize_request(&node_for_terminalize, request_id, "completed").await;
+                    let receipt: gents_protocol::row::AgentRequestRow =
+                        serde_json::from_value(row.clone()).unwrap();
+                    terminalize_request(&node_for_terminalize, &receipt, "completed").await;
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;

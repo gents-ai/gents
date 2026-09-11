@@ -14,7 +14,7 @@ pub struct NativeE2eConfig {
     server_address: String,
     prompt: String,
     expected_response: String,
-    expect_empty_conversation_slice: bool,
+    expect_empty_session_slice: bool,
     correlation_id: String,
     measure_performance: bool,
 }
@@ -68,7 +68,7 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeErro
             }),
             expected_response: std::env::var("GENTS_E2E_EXPECTED_RESPONSE")
                 .unwrap_or_else(|_| "FLEET_IPHONE_SIMULATOR_E2E".to_owned()),
-            expect_empty_conversation_slice: std::env::var("GENTS_E2E_EXPECT_EMPTY_CONVERSATIONS")
+            expect_empty_session_slice: std::env::var("GENTS_E2E_EXPECT_EMPTY_SESSIONS")
                 .ok()
                 .as_deref()
                 == Some("1"),

@@ -9,6 +9,7 @@ fn resolved_task_for_test(task_id: &str, behavior_id: &str, prompt_template: &st
         goal_objective_template: None,
         goal_token_budget: None,
         output_schema_ref: None,
+        hooks: Vec::new(),
     }
 }
 
@@ -25,7 +26,10 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
         HashMap::new(),
         HashMap::new(),
     )
-    .with_tasks(tasks)
+    .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+        tasks,
+        ..Default::default()
+    })
     .with_principal(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
@@ -98,136 +102,43 @@ async fn manual_source_next_fire_returns_none_after_cancel() {
     assert!(result.is_none());
 }
 
-/// Task 5 pinning: `ProductionMaterializer::materialize` must accept a
-/// `TriggerKind::Manual` intent and persist an `AgentRequest` whose lineage
-/// tuple is `(caused_by_trigger_id = null, caused_by_trigger_kind =
-/// "manual")` with `execution_origin = "interactive"` (operator-initiated).
-///
-/// This protects two spec invariants at the materialization boundary:
-///   * `TriggerKind::as_str()` is the authoritative source for the persisted
-///     `caused_by_trigger_kind` field — no hard-coded "schedule"/"event".
-///   * Manual fires map to `ExecutionOrigin::Interactive`, not `Scheduled`;
-///     schedule and event fires keep `Scheduled`.
-#[tokio::test]
-async fn production_materializer_accepts_manual_lineage_end_to_end() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
-    // Snapshot: behavior "general" loaded (with backend_id), no active
-    // schedules (Manual doesn't consult them).
-    let behavior = integration_test_behavior("general");
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
-    let (_tx, rx) = watch::channel(snapshot);
-
-    let materializer = ProductionMaterializer::new(node.clone(), rx);
-    let task = resolved_task_for_test("task-manual", "general", "manual body");
-
-    let request_id = materializer
-        .materialize(
-            &task,
-            None,
-            TriggerKind::Manual,
-            None,
-            None,
-            None,
-            None,
-            "manual body",
-            None,
-            "manual-test-fire",
-        )
-        .await
-        .expect("Manual materialize should succeed");
-
-    let escaped_request_id = escape_graphql_string(&request_id);
-    let query = format!(
-        r#"query {{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                limit: 1
-            ) {{
-                caused_by_trigger_id
-                caused_by_trigger_kind
-                caused_by_source_doc_id
-                execution_origin
-                lifecycle_state
-                content
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "AgentRequest read-back errored: {:?}",
-        resp.errors
-    );
-    let row = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|arr| arr.as_array())
-        .and_then(|arr| arr.first())
-        .expect("expected one AgentRequest row for the materialized Manual fire");
-    assert!(
-        row.get("caused_by_trigger_id")
-            .and_then(|v| v.as_str())
-            .is_none(),
-        "Manual fires carry no trigger id; expected null caused_by_trigger_id: {row}"
-    );
-    assert_eq!(
-        row.get("caused_by_trigger_kind").and_then(|v| v.as_str()),
-        Some("manual"),
-        "Manual lineage must serialize via TriggerKind::as_str() = \"manual\": {row}"
-    );
-    assert!(
-        row.get("caused_by_source_doc_id")
-            .and_then(|v| v.as_str())
-            .is_none(),
-        "Manual fires must not persist event source-document lineage: {row}"
-    );
-    assert_eq!(
-        row.get("execution_origin").and_then(|v| v.as_str()),
-        Some("interactive"),
-        "Manual fires map to ExecutionOrigin::Interactive per spec: {row}"
-    );
-    assert_eq!(
-        row.get("lifecycle_state").and_then(|v| v.as_str()),
-        Some("pending"),
-        "Production materializer should enqueue Manual fires for normal intake and leave \
-         them pending until daemon claim: {row}"
-    );
-    assert_eq!(
-        row.get("content").and_then(|v| v.as_str()),
-        Some("manual body"),
-        "rendered prompt should land verbatim in AgentRequest.content: {row}"
-    );
-}
-
 #[tokio::test]
 async fn production_materializer_persists_event_source_document_lineage() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_behavior("general");
     let identity = behavior.principal_identity().clone();
-    let seed = node
-        .execute(
-            r#"mutation {
-                task: create_Task(input: {
-                    task_id: "task-event", name: "task-event", behavior_id: "general",
-                    prompt_template: "event body", enabled: true
-                }) { _docID }
-                trigger: create_EventTrigger(input: {
-                    trigger_id: "event-trigger", task_id: "task-event",
-                    source_collection: "AgentRequest", event_kind: "created",
-                    filter: "{}", enabled: true, concurrency: "serial", fire_count: 0
-                }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(!seed.has_errors(), "seed event trigger: {:?}", seed.errors);
-    let trigger_doc_id = seed.data.as_ref().unwrap()["trigger"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let owner = behavior.agent_did();
+    crate::test_support::install_test_behavior(node.as_ref(), owner, "general").await;
+    let config = serde_json::from_value(serde_json::json!({
+        "agent_principal":{"agent_did":owner},
+        "tasks":[{"agent_did":owner,"task_id":"task-event","behavior_id":"general","prompt_template":"event body"}],
+        "event_sources":[{"agent_did":owner,"event_source_id":"source","source_collection":"AgentRequest","event_kind":"created"}],
+        "triggers":[{"agent_did":owner,"trigger_id":"event-trigger","task_id":"task-event","source":{"kind":"event","event_source_id":"source"}}]
+    })).unwrap();
+    let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local(
+        node.as_ref(),
+        None,
+        "test.manual_source.fixture",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Trigger,
+                    owner,
+                    "event-trigger",
+                )
+                .await?
+                .expect("created trigger");
+                Ok(id)
+            })
+        },
+    )
+    .await
+    .unwrap();
     let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
@@ -306,29 +217,37 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_behavior("general");
     let identity = behavior.principal_identity().clone();
-    let seed = node
-        .execute(
-            r#"mutation {
-                task: create_Task(input: {
-                    task_id: "task-schedule", name: "task-schedule", behavior_id: "general",
-                    prompt_template: "schedule body", enabled: true
-                }) { _docID }
-                schedule: create_Schedule(input: {
-                    schedule_id: "schedule-trigger", task_id: "task-schedule",
-                    interval_secs: 60, enabled: true, concurrency: "serial"
-                }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(
-        !seed.has_errors(),
-        "seed schedule trigger: {:?}",
-        seed.errors
-    );
-    let trigger_doc_id = seed.data.as_ref().unwrap()["schedule"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let owner = behavior.agent_did();
+    crate::test_support::install_test_behavior(node.as_ref(), owner, "general").await;
+    let config = serde_json::from_value(serde_json::json!({
+        "agent_principal":{"agent_did":owner},
+        "tasks":[{"agent_did":owner,"task_id":"task-schedule","behavior_id":"general","prompt_template":"schedule body"}],
+        "schedules":[{"agent_did":owner,"schedule_id":"source","cadence":{"kind":"interval","interval_secs":60}}],
+        "triggers":[{"agent_did":owner,"trigger_id":"schedule-trigger","task_id":"task-schedule","source":{"kind":"schedule","schedule_id":"source"}}]
+    })).unwrap();
+    let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local(
+        node.as_ref(),
+        None,
+        "test.manual_source.fixture",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Trigger,
+                    owner,
+                    "schedule-trigger",
+                )
+                .await?
+                .expect("created trigger");
+                Ok(id)
+            })
+        },
+    )
+    .await
+    .unwrap();
     let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);

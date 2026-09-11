@@ -1,14 +1,22 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use gents::background_completion::{
     observe_cancel_cascade_ack, project_background_subagent_completion,
     reconcile_unclaimed_cross_deployment_spawns,
 };
+use gents::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn as read_desired_state_record,
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
+use gents::document_config::{
+    AgentBehavior, AgentContext, BackendAuth, InferenceBackend, SubagentTools,
+};
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
 use gents::{
-    interrupt_request, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
-    RequestLifecycle, ToolSelectionDocument,
+    BackendProviderKind, InferenceProfile, OpenAiWireApi, RequestLifecycle, SubagentTargetDocument,
+    Tools,
 };
+use gents_protocol::request_input::QueueSource;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -202,7 +210,9 @@ impl Harness {
             Action::RunBackgroundCompletionObserverOnA => {
                 run_background_completion_on_a(&self.a).await?
             }
-            Action::RunCancelMirrorObserverOnB => run_cancel_mirror_on_b(&self.b).await?,
+            Action::RunCancelMirrorObserverOnB => {
+                run_cancel_mirror_on_b(&self.b, self.a.did()).await?;
+            }
             Action::RunUnclaimedSpawnReconcilerOnA => {
                 let _ = reconcile_unclaimed_cross_deployment_spawns(
                     self.a.db.node.clone(),
@@ -236,7 +246,7 @@ impl Harness {
     async fn wait_for_convergence(&mut self) -> Result<()> {
         run_background_completion_on_a(&self.a).await?;
         let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
-        run_cancel_mirror_on_b(&self.b).await?;
+        run_cancel_mirror_on_b(&self.b, self.a.did()).await?;
         Ok(())
     }
 
@@ -301,6 +311,49 @@ impl Harness {
     }
 }
 
+/// The delegation destination for fixture targets is the paired peer's actual
+/// DID, read from the PeerPairingDesired the harness writes as its first
+/// actions. Fixtures never invent a destination principal.
+async fn peer_did_from_pairing(node: &HarnessNode) -> Result<String> {
+    let peer_id = match node.id.as_str() {
+        "A" => "B",
+        "B" => "A",
+        other => bail!("unknown R5 fixture node {other}"),
+    };
+    let query = format!(
+        "{{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: \"{}\" }} }}, limit: 2) {{ agent_did }} }}",
+        escape_graphql_string(peer_id)
+    );
+    let response = node.db.node.execute(&query).await;
+    if response.has_errors() {
+        bail!("query PeerPairingDesired failed: {:?}", response.errors);
+    }
+    #[derive(Deserialize)]
+    struct Row {
+        agent_did: String,
+    }
+    let rows: Vec<Row> = serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("PeerPairingDesired"))
+            .context("pairing query omitted PeerPairingDesired")?
+            .clone(),
+    )
+    .context("decoding R5 fixture pairing")?;
+    let [peer] = rows.as_slice() else {
+        bail!(
+            "expected one pairing for R5 peer {peer_id}, found {}",
+            rows.len()
+        );
+    };
+    anyhow::ensure!(
+        !peer.agent_did.trim().is_empty() && peer.agent_did != node.did(),
+        "R5 pairing must identify the distinct peer principal"
+    );
+    Ok(peer.agent_did.clone())
+}
+
 async fn write_pairing(
     node: &HarnessNode,
     peer: &str,
@@ -314,6 +367,11 @@ async fn write_pairing(
         .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
         .collect::<Vec<_>>()
         .join(", ");
+    let collections = if collections.is_empty() {
+        "null".to_string()
+    } else {
+        format!("[{collections}]")
+    };
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -322,15 +380,15 @@ async fn write_pairing(
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: "{peer_did}",
-                    collections: [{collections}],
-                    replicator_addresses: [],
+                    collections: {collections},
+                    replicator_addresses: null,
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
                     agent_did: "{peer_did}",
-                    collections: [{collections}],
-                    replicator_addresses: [],
+                    collections: {collections},
+                    replicator_addresses: null,
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}
@@ -348,7 +406,19 @@ async fn write_agent_request(
     parent_request_id: Option<&str>,
     parent_tool_call_id: Option<&str>,
 ) -> Result<()> {
-    ensure_behavior(node, behavior_id, agent_did).await?;
+    // R5 explicitly pairs two principals. A foreign fixture owner must be
+    // that exact peer; fixture installation must not authorize arbitrary actors.
+    let peer_did = peer_did_from_pairing(node).await?;
+    let target_agent_did = if agent_did == node.did() {
+        peer_did
+    } else {
+        anyhow::ensure!(
+            agent_did == peer_did,
+            "request fixture owner is not a paired principal"
+        );
+        node.did().to_string()
+    };
+    ensure_behavior(node, behavior_id, agent_did, &target_agent_did).await?;
 
     let (parent_request_doc_id, parent_tool_call_doc_id) =
         match (parent_request_id, parent_tool_call_id) {
@@ -401,7 +471,6 @@ async fn write_agent_request(
                     lifecycle_state: "{state}",
                     backend_id: "",
                     execution_origin: "interactive",
-                    metadata: "",
                     failure_reason: "",
                     created_at: "{now}",
                     deadline: "{deadline}",
@@ -537,9 +606,11 @@ async fn export_doc(
             "tool_call_key request_id session_id agent_did message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
         }
         "AgentResponse" => {
-            "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at"
+            "response_key request_id request_doc_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at"
         }
-        "AgentMessage" => "message_key session_id sequence role content timestamp",
+        "AgentMessage" => {
+            "message_key request_id request_doc_id agent_did session_id sequence role content timestamp"
+        }
         _ => unreachable!(),
     };
     let query = format!(
@@ -681,102 +752,211 @@ async fn import_response(node: &HarnessNode, row: &serde_json::Value) -> Result<
 }
 
 async fn import_message(node: &HarnessNode, row: &serde_json::Value) -> Result<()> {
-    let message_key = str_field(row, "message_key")?;
-    let session_id = str_field(row, "session_id")?;
-    let sequence = row.get("sequence").and_then(|v| v.as_i64()).unwrap_or(1);
-    let role = opt_str_field(row, "role").unwrap_or("assistant");
-    let content = opt_str_field(row, "content").unwrap_or("");
-    let timestamp = opt_str_field(row, "timestamp")
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentMessage(
-                filter: {{ message_key: {{ _eq: "{}" }} }},
-                add: {{
-                    message_key: "{}",
-                    session_id: "{}",
-                    sequence: {sequence},
-                    role: "{}",
-                    content: "{}",
-                    timestamp: "{timestamp}"
-                }},
-                update: {{
-                    role: "{}",
-                    content: "{}",
-                    timestamp: "{timestamp}"
-                }}
-            ) {{ _docID }}
-        }}"#,
-        escape_graphql_string(message_key),
-        escape_graphql_string(message_key),
-        escape_graphql_string(session_id),
-        escape_graphql_string(role),
-        escape_graphql_string(content),
-        escape_graphql_string(role),
-        escape_graphql_string(content),
+    let child = load_request(node, str_field(row, "request_id")?).await?;
+    anyhow::ensure!(
+        child.agent_did == str_field(row, "agent_did")?
+            && child.session_id == str_field(row, "session_id")?,
+        "replicated AgentMessage scope differs from its child request"
     );
-    exec(node, &mutation, "import AgentMessage").await
+    anyhow::ensure!(
+        row.get("sequence").and_then(|value| value.as_i64()) == Some(1)
+            && opt_str_field(row, "role") == Some("assistant"),
+        "R5 fixture only imports the materialized final assistant message"
+    );
+    let content = opt_str_field(row, "content").unwrap_or("");
+    create_agent_message(node, &child, content).await
 }
 
-async fn ensure_behavior(node: &HarnessNode, behavior_id: &str, agent_did: &str) -> Result<()> {
-    let selection_id = format!("{behavior_id}-tools");
-    upsert_tool_selection(
+/// Install the R5 behavior chain in one canonical configuration transaction.
+/// Targets name the paired principal used by the A-to-B delegation scenarios.
+async fn ensure_behavior(
+    node: &HarnessNode,
+    behavior_id: &str,
+    agent_did: &str,
+    target_agent_did: &str,
+) -> Result<()> {
+    let context_id = format!("{behavior_id}:context");
+    let tools_id = format!("{behavior_id}:tools");
+    let profile_id = format!("{behavior_id}-inference");
+    let backend_id = format!("{behavior_id}-backend");
+
+    ConfigAccess::transact_local(
         node.db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
-            agent_did: agent_did.to_string(),
-            subagent_targets: Some(
-                [
-                    "child-behavior",
-                    "child-behavior-1",
-                    "child-behavior-2",
-                    behavior_id,
-                ]
-                .into_iter()
-                .map(|target_behavior_id| {
-                    gents::subagent_target_entry(
-                        target_behavior_id,
-                        agent_did,
-                        target_behavior_id,
-                        None,
-                    )
-                })
-                .collect(),
-            ),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            cross_deployment_spawn_timeout_seconds: Some(60),
-            enable_defra_query: None,
-            defra_query_collections: None,
-            ..Default::default()
+        None,
+        "r5_conformance.ensure_behavior",
+        |txn| {
+            let tools_id = tools_id.clone();
+            let context_id = context_id.clone();
+            let profile_id = profile_id.clone();
+            let backend_id = backend_id.clone();
+            Box::pin(async move {
+                // Preserve the full current canonical documents inside this
+                // scoped transaction before deciding the replacement values.
+                let mut tools =
+                    read_desired_state_record(txn, gents::Collection::Tools, agent_did, &tools_id)
+                        .await?
+                        .map(|(_, value)| serde_json::from_value::<Tools>(value))
+                        .transpose()?
+                        .unwrap_or_else(|| Tools {
+                            tools_id: tools_id.clone(),
+                            agent_did: agent_did.to_string(),
+                            ..Default::default()
+                        });
+                let mut target_behavior_ids: Vec<String> =
+                    ["child-behavior", "child-behavior-1", "child-behavior-2"]
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect();
+                if !target_behavior_ids.iter().any(|id| id == behavior_id) {
+                    target_behavior_ids.push(behavior_id.to_string());
+                }
+                let targets: Vec<SubagentTargetDocument> = target_behavior_ids
+                    .iter()
+                    .map(|target_behavior_id| SubagentTargetDocument {
+                        target_id: format!("{behavior_id}:{target_behavior_id}"),
+                        agent_did: agent_did.to_string(),
+                        target_agent_did: target_agent_did.to_string(),
+                        behavior_id: target_behavior_id.clone(),
+                        name: target_behavior_id.clone(),
+                        description: None,
+                        tags: Vec::new(),
+                    })
+                    .collect();
+                tools.subagents = Some(SubagentTools {
+                    target_ids: targets
+                        .iter()
+                        .map(|target| target.target_id.clone())
+                        .collect(),
+                    spawn_enabled: Some(true),
+                    background_enabled: Some(true),
+                    allow_cross_principal: Some(true),
+                    cross_principal_spawn_timeout_secs: Some(60),
+                    ..Default::default()
+                });
+                let mut context = read_desired_state_record(
+                    txn,
+                    gents::Collection::AgentContext,
+                    agent_did,
+                    &context_id,
+                )
+                .await?
+                .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
+                .transpose()?
+                .unwrap_or_else(|| AgentContext {
+                    context_id: context_id.clone(),
+                    agent_did: agent_did.to_string(),
+                    display_name: None,
+                    description: None,
+                    system_prompt: None,
+                    tools_id: Some(tools_id.clone()),
+                    compaction_id: None,
+                    skill_ids: Vec::new(),
+                    tags: Vec::new(),
+                });
+                context.tools_id = Some(tools_id.clone());
+                let behavior = AgentBehavior {
+                    behavior_id: behavior_id.to_string(),
+                    agent_did: agent_did.to_string(),
+                    display_name: Some(behavior_id.to_string()),
+                    description: None,
+                    context_id: Some(context_id.clone()),
+                    inference_profile_id: profile_id.clone(),
+                    enabled: true,
+                    tags: Vec::new(),
+                    created_at: None,
+                };
+                let mut profile = read_desired_state_record(
+                    txn,
+                    gents::Collection::InferenceProfile,
+                    agent_did,
+                    &profile_id,
+                )
+                .await?
+                .map(|(_, value)| serde_json::from_value::<InferenceProfile>(value))
+                .transpose()?
+                .unwrap_or_else(|| InferenceProfile {
+                    agent_did: agent_did.to_string(),
+                    profile_id: profile_id.clone(),
+                    backend_id: backend_id.clone(),
+                    model_name: "test-model".to_string(),
+                    display_name: None,
+                    description: None,
+                    reasoning_effort: None,
+                    context_window: None,
+                    max_output_tokens: None,
+                    sampling_id: None,
+                    execution_id: None,
+                    tags: Vec::new(),
+                });
+                profile.backend_id = backend_id.clone();
+                let mut backend = read_desired_state_record(
+                    txn,
+                    gents::Collection::InferenceBackend,
+                    agent_did,
+                    &backend_id,
+                )
+                .await?
+                .map(|(_, value)| serde_json::from_value::<InferenceBackend>(value))
+                .transpose()?
+                .unwrap_or_else(|| InferenceBackend {
+                    agent_did: agent_did.to_string(),
+                    backend_id: backend_id.clone(),
+                    name: format!("{behavior_id} backend"),
+                    provider_kind: BackendProviderKind::OpenAiCompatible,
+                    openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
+                    endpoint: "http://127.0.0.1:1/v1".to_string(),
+                    auth: BackendAuth::Unauthenticated,
+                    connect_timeout_secs: None,
+                    discovery_timeout_secs: None,
+                    max_concurrent: None,
+                    max_queue_depth: None,
+                    enabled: true,
+                    tags: Vec::new(),
+                });
+                backend.enabled = true;
+                // Stage the canonical documents together, then validate their
+                // references against the complete retained same-owner candidate.
+                let mut documents = Vec::new();
+                for target in targets {
+                    let value = serde_json::to_value(&target)?;
+                    documents.push(DesiredStateApplyDocument {
+                        collection: gents::Collection::SubagentTarget,
+                        add: value.clone(),
+                        update: value,
+                    });
+                }
+                for (collection, value) in [
+                    (gents::Collection::Tools, serde_json::to_value(&tools)?),
+                    (
+                        gents::Collection::AgentContext,
+                        serde_json::to_value(&context)?,
+                    ),
+                    (
+                        gents::Collection::InferenceBackend,
+                        serde_json::to_value(&backend)?,
+                    ),
+                    (
+                        gents::Collection::InferenceProfile,
+                        serde_json::to_value(&profile)?,
+                    ),
+                    (
+                        gents::Collection::AgentBehavior,
+                        serde_json::to_value(&behavior)?,
+                    ),
+                ] {
+                    documents.push(DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    });
+                }
+                let plan = DesiredStateApplyPlan::new(documents)?;
+                apply_desired_state_plan(txn, &plan).await?;
+                Ok(())
+            })
         },
     )
-    .await?;
-    upsert_agent_behavior(
-        node.db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: behavior_id.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some(behavior_id.to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(selection_id),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-14T00:00:00Z".to_string()),
-        },
-    )
-    .await?;
-    Ok(())
+    .await
 }
 
 async fn terminalize_child_on_b(
@@ -798,7 +978,7 @@ async fn terminalize_child_on_b(
     exec(node, &mutation, "terminalize child").await?;
     if let Some(final_response) = final_response {
         let child = load_request(node, request_id).await?;
-        create_agent_message(node, &child.session_id, final_response).await?;
+        create_agent_message(node, &child, final_response).await?;
         create_agent_response(
             node,
             request_id,
@@ -825,8 +1005,20 @@ async fn cancel_parent_on_a(node: &HarnessNode, parent_tool_call_id: &str) -> Re
         .cancel_during_run(CancelCause::Interrupted)
         .await?;
     if let Some(dispatch) = lifecycle.bridge_cancel_cascade_dispatch(node.did()).await? {
-        if let CascadeDispatch::Local(intent) = dispatch {
-            interrupt_request(node.db.node.as_ref(), &intent.child_request_id).await?;
+        if let CascadeDispatch::Local { child, .. } = dispatch {
+            gents::interrupt_request_by_doc_id(
+                node.db.node.as_ref(),
+                child
+                    .doc_id
+                    .as_deref()
+                    .expect("verified physical cascade child"),
+                child
+                    .agent_did
+                    .as_deref()
+                    .expect("verified local child principal"),
+                child.requester_did.as_deref(),
+            )
+            .await?;
         }
     }
     Ok(())
@@ -851,32 +1043,66 @@ async fn parent_request_for_tool(node: &HarnessNode, tool_call_id: &str) -> Resu
 
 async fn run_background_completion_on_a(node: &HarnessNode) -> Result<()> {
     for request_id in terminal_child_request_ids(node).await? {
-        let _ =
+        let outcome =
             project_background_subagent_completion(node.db.node.clone(), &request_id, node.did())
                 .await?;
+        anyhow::ensure!(
+            matches!(
+                outcome,
+                gents::background_completion::BackgroundCompletionOutcome::Projected { .. }
+                    | gents::background_completion::BackgroundCompletionOutcome::AlreadyProjected
+            ),
+            "background projection for child {request_id} did not converge: {outcome:?}"
+        );
     }
     Ok(())
 }
 
-async fn run_cancel_mirror_on_b(node: &HarnessNode) -> Result<()> {
-    for bridge in load_bridge_rows(node).await? {
-        let Some(intent_at) = bridge.cancel_cascade_intent_at.as_deref() else {
-            continue;
-        };
-        let Some(child_request_id) = bridge.child_request_id.as_deref() else {
-            continue;
-        };
-        let Some(child) = load_request_optional(node, child_request_id).await? else {
-            continue;
-        };
-        if child.agent_did == node.did()
-            && !child.is_terminal()
-            && child.interrupt_requested_at.is_none()
-        {
-            set_child_interrupt(node, child_request_id, intent_at).await?;
+async fn run_cancel_mirror_on_b(node: &HarnessNode, admitted_parent_did: &str) -> Result<()> {
+    use gents::agent::p2p_reconcile::PeerAdmissionAuthority;
+    use std::sync::Arc;
+
+    // Enrollment is a controlled input to this scenario. The real mirror owns
+    // author coherence, admission checks, child scope, deduplication and writes.
+    struct ScenarioPeer(String);
+    #[async_trait::async_trait]
+    impl PeerAdmissionAuthority for ScenarioPeer {
+        async fn fresh_member_authorized(&self, member_did: &str) -> Result<bool> {
+            Ok(member_did == self.0)
+        }
+        async fn fresh_member_authorized_for_agent(
+            &self,
+            member_did: &str,
+            _owner_agent: &str,
+        ) -> Result<bool> {
+            self.fresh_member_authorized(member_did).await
         }
     }
-    Ok(())
+
+    let snapshot = Arc::new(gents::ActiveRuntimeSnapshot {
+        generation: node.db.process_generation,
+        principal: None,
+        local_did: node.did().to_string(),
+        default_behavior_id: String::new(),
+        behaviors: Default::default(),
+        tool_surfaces: Default::default(),
+        backend_admission_configs: Default::default(),
+        unavailable_behaviors: Default::default(),
+        active_schedules: Default::default(),
+        unavailable_schedules: Default::default(),
+        active_event_triggers: Default::default(),
+        unavailable_event_triggers: Default::default(),
+        active_tasks: Default::default(),
+        dispatchers: Default::default(),
+        behavior_executor_capacities: Default::default(),
+        behavior_executor_queue_capacities: Default::default(),
+    });
+    gents::__test_internals::scan_cross_deployment_cancel_intents(
+        node.db.node.clone(),
+        snapshot,
+        Arc::new(ScenarioPeer(admitted_parent_did.to_string())),
+    )
+    .await
 }
 
 async fn advance_r5_clock_effects(node: &HarnessNode, seconds: u64) -> Result<()> {
@@ -1041,19 +1267,48 @@ async fn load_subagent_notifications(node: &HarnessNode) -> Result<Vec<String>> 
 }
 
 async fn load_background_wakeup_keys(node: &HarnessNode) -> Result<Vec<String>> {
-    let query = r#"{ AgentRequest(filter: { execution_origin: { _eq: "scheduled" } }) { request_id metadata } }"#;
-    let response = node.db.node.execute(query).await;
-    let rows: Vec<AgentRequestRow> = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| row.metadata)
-        .filter(|metadata| metadata.contains("background_completion"))
-        .collect())
+    let query = format!(
+        r#"{{
+        AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{
+            request_id input
+        }}
+    }}"#,
+        escape_graphql_string(node.did())
+    );
+    let response = node.db.node.execute(&query).await;
+    if response.has_errors() {
+        bail!("load background wakeup keys failed: {:?}", response.errors);
+    }
+    let rows: Vec<AgentRequestRow> = serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .context("background wake query omitted AgentRequest")?
+            .clone(),
+    )
+    .context("decode background wake AgentRequestRow")?;
+    let mut keys = Vec::new();
+    for row in rows {
+        let Some(queue) = row.input.as_ref().and_then(|input| input.queue.as_ref()) else {
+            // Ordinary scheduled tasks do not carry queue input.
+            continue;
+        };
+        if queue.source == QueueSource::BackgroundCompletion {
+            let key = queue
+                .key
+                .as_ref()
+                .filter(|key| !key.trim().is_empty())
+                .with_context(|| {
+                    format!(
+                        "background wake request {} has no queue key",
+                        row.request_id
+                    )
+                })?;
+            keys.push(key.clone());
+        }
+    }
+    Ok(keys)
 }
 
 struct HarnessRequest {
@@ -1062,8 +1317,6 @@ struct HarnessRequest {
     agent_did: String,
     behavior_id: String,
     session_id: String,
-    lifecycle_state: RequestLifecycleState,
-    interrupt_requested_at: Option<String>,
 }
 
 impl From<AgentRequestRow> for HarnessRequest {
@@ -1074,15 +1327,7 @@ impl From<AgentRequestRow> for HarnessRequest {
             agent_did: row.agent_did.expect("AgentRequest.agent_did"),
             behavior_id: row.behavior_id.expect("AgentRequest.behavior_id"),
             session_id: row.session_id.expect("AgentRequest.session_id"),
-            lifecycle_state: row.lifecycle_state.expect("AgentRequest.lifecycle_state"),
-            interrupt_requested_at: row.interrupt_requested_at,
         }
-    }
-}
-
-impl HarnessRequest {
-    fn is_terminal(&self) -> bool {
-        self.lifecycle_state.is_terminal()
     }
 }
 
@@ -1156,7 +1401,11 @@ async fn set_child_interrupt(node: &HarnessNode, request_id: &str, when: &str) -
     exec(node, &mutation, "set child interrupt").await
 }
 
-async fn create_agent_message(node: &HarnessNode, session_id: &str, content: &str) -> Result<()> {
+async fn create_agent_message(
+    node: &HarnessNode,
+    child: &HarnessRequest,
+    content: &str,
+) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -1164,6 +1413,9 @@ async fn create_agent_message(node: &HarnessNode, session_id: &str, content: &st
                 filter: {{ message_key: {{ _eq: "{}:1" }} }},
                 add: {{
                     message_key: "{}:1",
+                    request_id: "{}",
+                    request_doc_id: "{}",
+                    agent_did: "{}",
                     session_id: "{}",
                     sequence: 1,
                     role: "assistant",
@@ -1173,9 +1425,12 @@ async fn create_agent_message(node: &HarnessNode, session_id: &str, content: &st
                 update: {{ content: "{}", timestamp: "{now}" }}
             ) {{ _docID }}
         }}"#,
-        escape_graphql_string(session_id),
-        escape_graphql_string(session_id),
-        escape_graphql_string(session_id),
+        escape_graphql_string(&child.session_id),
+        escape_graphql_string(&child.session_id),
+        escape_graphql_string(&child.request_id),
+        escape_graphql_string(&child.doc_id),
+        escape_graphql_string(&child.agent_did),
+        escape_graphql_string(&child.session_id),
         escape_graphql_string(content),
         escape_graphql_string(content)
     );
@@ -1190,6 +1445,7 @@ async fn create_agent_response(
     session_id: &str,
     content: &str,
 ) -> Result<()> {
+    let request_doc_id = load_request(node, request_id).await?.doc_id;
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -1198,6 +1454,7 @@ async fn create_agent_response(
                 add: {{
                     response_key: "{}",
                     request_id: "{}",
+                    request_doc_id: "{}",
                     agent_did: "{}",
                     behavior_id: "{}",
                     session_id: "{}",
@@ -1218,6 +1475,7 @@ async fn create_agent_response(
         escape_graphql_string(request_id),
         escape_graphql_string(request_id),
         escape_graphql_string(request_id),
+        escape_graphql_string(&request_doc_id),
         escape_graphql_string(agent_did),
         escape_graphql_string(behavior_id),
         escape_graphql_string(session_id),

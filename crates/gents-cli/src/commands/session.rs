@@ -14,7 +14,8 @@ use crate::{
     print_json, resolve_agent_did, resolve_config_access, resolve_home_dir,
 };
 
-const SESSION_FIELDS: &str = "session_id agent_name behavior_id started ended status";
+const SESSION_FIELDS: &str = "session_id agent_did requester_did behavior_id created_at closed_at \
+title tags provenance observation";
 
 pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
     match command {
@@ -85,6 +86,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
                 source_session_id: &args.from,
                 fork_at_user_turn: args.at_user_turn,
                 caller_agent_did: &agent_did,
+                caller_requester_did: args.requester_did.as_deref(),
                 target_behavior_id: args.behavior.as_deref(),
             },
         )
@@ -122,6 +124,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
             source_session_id: &args.from,
             fork_at_user_turn: args.at_user_turn,
             caller_agent_did: &agent_did,
+            caller_requester_did: args.requester_did.as_deref(),
             target_behavior_id: args.behavior.as_deref(),
         },
     )
@@ -223,15 +226,19 @@ fn sort_sessions(rows: &mut [Value]) {
 }
 
 fn print_session_table(rows: &[Value]) {
-    let headers = ["SESSION_ID", "STATUS", "REQUESTS", "STARTED"];
+    let headers = ["SESSION_ID", "STATE", "REQUESTS", "CREATED_AT"];
     let rendered = rows
         .iter()
         .map(|row| {
             [
                 string_cell(row, "session_id"),
-                string_cell(row, "status"),
+                Some(if row.get("closed_at").is_some_and(Value::is_string) {
+                    "closed".to_string()
+                } else {
+                    "open".to_string()
+                }),
                 count_cell(row, "request_count"),
-                string_cell(row, "started"),
+                string_cell(row, "created_at"),
             ]
         })
         .collect::<Vec<_>>();

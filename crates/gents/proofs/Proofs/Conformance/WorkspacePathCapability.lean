@@ -8,7 +8,7 @@ private def cap : WorkspacePathCapability := .exactPaths ["src/main.rs", "src/ne
 private def workspace : IsolatedWorkspace :=
   {workspaceId := "workspace-1", workUnitId := "work-1", repositoryId := "repo-1",
    baseSha := "immutable-base", branch := "workspace-branch", creationPolicy := .gitWorktreeDiff,
-   ownerDeploymentId := "host-1", sealHash := none, state := .ready, pathCapability := cap}
+   ownerAgentDid := "host-1", sealHash := none, state := .ready, pathCapability := cap}
 private def ready : Snapshot := ⟨workspace,none,none,0⟩
 private def bind : Binding := binding workspace "tree-1"
 private def evidence : Evidence := ⟨bind,[⟨"src/main.rs",.regular,true⟩],true,true,false,true,true⟩
@@ -93,7 +93,7 @@ private def bindingJson (b : Binding) :=
 private def receiptJson : Option Binding → String | none => "null" | some b => bindingJson b
 private def snapshotJson (s : Snapshot) :=
   "{\"workspace_id\":" ++ jsonString s.workspace.workspaceId ++
-  ",\"owner\":" ++ jsonString s.workspace.ownerDeploymentId ++
+  ",\"owner\":" ++ jsonString s.workspace.ownerAgentDid ++
   ",\"base\":" ++ jsonString s.workspace.baseSha ++
   ",\"state\":" ++ jsonString s.workspace.state.toDefraDB ++
   ",\"capability\":" ++ capJson s.workspace.pathCapability ++
@@ -121,28 +121,6 @@ private def caseJson (c : Case) :=
   ",\"operation\":" ++ jsonString (operation c.operation) ++ ",\"evidence\":" ++ evidenceJson c.evidence ++
   ",\"expected\":" ++ snapshotJson c.expected ++ ",\"disposition\":" ++ jsonString (disposition c.disposition) ++ "}"
 def casesJson := jsonArray (cases.map caseJson)
-
-structure MigrationCase where
-  name : String
-  legacySource : Bool
-  stored : Option WorkspacePathCapability
-  expected : Option WorkspacePathCapability
-  deriving DecidableEq, Repr
-
-def migrationCases : List MigrationCase :=
-  [ ⟨"legacy_missing_explicitly_migrates",true,none,some .unrestrictedCompatibility⟩
-  , ⟨"new_missing_stays_missing",false,none,none⟩
-  , ⟨"legacy_injected_exact_overwritten",true,some cap,some .unrestrictedCompatibility⟩
-  , ⟨"exact_capability_preserved",false,some cap,some cap⟩
-  , ⟨"explicit_legacy_value_preserved",false,some .unrestrictedCompatibility,some .unrestrictedCompatibility⟩ ]
-theorem migration_cases_replay : ∀ c ∈ migrationCases,
-    migrateCapability c.legacySource c.stored = c.expected := by decide
-private def optionalCapJson : Option WorkspacePathCapability → String
-  | none => "null" | some cap => capJson cap
-private def migrationCaseJson (c : MigrationCase) :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"legacy_source\":" ++ boolString c.legacySource ++
-  ",\"stored\":" ++ optionalCapJson c.stored ++ ",\"expected\":" ++ optionalCapJson c.expected ++ "}"
-def migrationCasesJson := jsonArray (migrationCases.map migrationCaseJson)
 
 structure AliasCase where
   name : String

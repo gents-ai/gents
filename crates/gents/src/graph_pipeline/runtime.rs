@@ -9,13 +9,13 @@ use identity::Did;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::config_client::{write_event_trigger_document, ConfigAccess, ConfigApplyTxn};
+use crate::config_client::{
+    apply_desired_state_plan, ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
+};
 use crate::graphql::{escape_graphql_string, validate_collection_identifier};
 
-use super::{
-    verify_graph_plan_digest, DeliveryConcurrency, DeliveryMode, GraphPlan, GroupCount,
-    PackageArtifactKind, PackagePlan, WorkspaceAuthorityCeiling,
-};
+use super::{verify_graph_plan_digest, DeliveryConcurrency, DeliveryMode, GraphPlan, PackagePlan};
 
 const TRIGGER_PREFIX: &str = "graph-trigger-";
 
@@ -127,7 +127,7 @@ pub(crate) fn graph_trigger_id(digest: &str, route: &str) -> Result<String> {
 }
 
 /// Extract the immutable revision identity from the reserved artifact ID
-/// namespace. Ordinary operator-authored Task/EventTrigger IDs return `None`.
+/// namespace. Ordinary operator-authored task and trigger IDs return `None`.
 pub(crate) fn graph_artifact_revision_digest(id: &str) -> Option<String> {
     let tail = id.strip_prefix(TRIGGER_PREFIX)?;
     let (digest, component) = tail.split_once('-')?;
@@ -157,27 +157,72 @@ pub(crate) fn graph_artifact_is_visible(
     graph_artifact_revision_digest(id).is_some_and(|digest| active_digests.contains(&digest))
 }
 
-fn verify_package_role_bindings(package: &PackagePlan, owner_did: &str) -> Result<()> {
-    if package
-        .roles
-        .values()
-        .any(|role| role.principal_did != owner_did)
-    {
-        anyhow::bail!("graph package v1 requires every logical role to bind the revision owner");
-    }
-    Ok(())
-}
-
 fn revision_visibility_authorized(status: &str, active_pointer: bool, run_pin: bool) -> bool {
     (active_pointer && status == "active") || (run_pin && matches!(status, "active" | "retired"))
 }
 
+/// Read graph activation and live-run pins in the runtime candidate's own
+/// transaction. Revision and artifact verification use that same snapshot.
+pub(crate) async fn load_runtime_graph_artifacts_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    agent_did: &str,
+) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let owner = escape_graphql_string(agent_did);
+    let response = txn
+        .execute(&format!(
+            r#"{{
+        GraphDefinition(filter: {{agent_did: {{_eq: "{owner}"}}, _or: [{{enabled: {{_eq: true}}}}, {{enabled: {{_eq: null}}}}]}}) {{
+            active_revision_digest
+        }}
+        GraphRun(filter: {{owner_did: {{_eq: "{owner}"}}, status: {{_eq: "running"}}}}) {{
+            revision_digest
+        }}
+    }}"#
+        ))
+        .await?;
+    let digests = |collection: &str, field: &str| -> Result<BTreeSet<String>> {
+        let rows = response
+            .get("data")
+            .and_then(|data| data.get(collection))
+            .and_then(Value::as_array)
+            .with_context(|| format!("{collection} query omitted rows"))?;
+        rows.iter()
+            .filter_map(|row| match row.get(field) {
+                None | Some(Value::Null) => None,
+                Some(Value::String(value)) if !value.is_empty() => Some(Ok(value.clone())),
+                _ => Some(Err(anyhow::anyhow!("{collection} has invalid {field}"))),
+            })
+            .collect()
+    };
+    let active = digests("GraphDefinition", "active_revision_digest")?;
+    let pinned = digests("GraphRun", "revision_digest")?;
+    load_visible_package_artifact_ids_in_txn(txn, agent_did, &active, &pinned).await
+}
+
 /// Resolve package-owned ordinary configuration resources through the same
-/// active-revision/nonterminal-run pin set used for Task/EventTrigger
+/// active-revision/nonterminal-run pin set used for task-trigger
 /// visibility. The plan remains the only ownership ledger; no package catalog
 /// or mutable install state is consulted at runtime.
+#[cfg(test)]
 pub(crate) async fn load_visible_package_artifact_ids(
     node: &EmbeddedNode,
+    agent_did: &str,
+    active_revision_digests: &BTreeSet<String>,
+    pinned_revision_digests: &BTreeSet<String>,
+) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    ConfigAccess::transact_local(node, None, "graph_pipeline.visible_artifacts", |txn| {
+        Box::pin(load_visible_package_artifact_ids_in_txn(
+            txn,
+            agent_did,
+            active_revision_digests,
+            pinned_revision_digests,
+        ))
+    })
+    .await
+}
+
+pub(crate) async fn load_visible_package_artifact_ids_in_txn(
+    txn: &ConfigApplyTxn<'_>,
     agent_did: &str,
     active_revision_digests: &BTreeSet<String>,
     pinned_revision_digests: &BTreeSet<String>,
@@ -192,7 +237,7 @@ pub(crate) async fn load_visible_package_artifact_ids(
         let active_pointer = active_revision_digests.contains(digest);
         let run_pin = pinned_revision_digests.contains(digest);
         match load_visible_package_artifact_ids_for_revision(
-            node,
+            txn,
             agent_did,
             digest,
             active_pointer,
@@ -218,13 +263,13 @@ pub(crate) async fn load_visible_package_artifact_ids(
 }
 
 async fn load_visible_package_artifact_ids_for_revision(
-    node: &EmbeddedNode,
+    txn: &ConfigApplyTxn<'_>,
     agent_did: &str,
     digest: &str,
     active_pointer: bool,
     run_pin: bool,
 ) -> Result<BTreeSet<String>> {
-    let response = node
+    let response = txn
         .execute(&format!(
             r#"{{
                     GraphRevision(filter: {{ digest: {{ _eq: "{}" }} }}, limit: 2) {{
@@ -233,15 +278,8 @@ async fn load_visible_package_artifact_ids_for_revision(
                 }}"#,
             escape_graphql_string(digest),
         ))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "load graph package artifact visibility failed: {:?}",
-            response.errors
-        );
-    }
-    let data = json!({ "data": response.data.unwrap_or(Value::Null) });
-    let revisions = rows(&data, "GraphRevision");
+        .await?;
+    let revisions = rows(&response, "GraphRevision");
     if revisions.len() != 1 {
         anyhow::bail!("visible GraphRevision {digest:?} is missing or ambiguous");
     }
@@ -273,24 +311,12 @@ async fn load_visible_package_artifact_ids_for_revision(
     let Some(package) = plan.package else {
         return Ok(BTreeSet::new());
     };
-    verify_package_role_bindings(&package, agent_did)?;
-    let package_ref = &package;
-    ConfigAccess::transact_local(
-        node,
-        None,
-        "graph_pipeline.verify_package_artifacts",
-        move |txn| {
-            Box::pin(async move {
-                verify_package_schemas_in_txn(txn, package_ref).await?;
-                verify_package_artifacts_in_txn(txn, package_ref).await
-            })
-        },
-    )
-    .await?;
+    verify_package_schemas_in_txn(txn, &package).await?;
+    verify_package_artifacts_in_txn(txn, &package, agent_did).await?;
     Ok(package
         .artifacts
         .into_iter()
-        .map(|artifact| artifact.physical_id)
+        .map(|artifact| artifact.logical_id)
         .collect())
 }
 
@@ -327,41 +353,31 @@ async fn verify_package_schemas_in_txn(
 async fn verify_package_artifacts_in_txn(
     txn: &ConfigApplyTxn<'_>,
     package: &PackagePlan,
+    owner_did: &str,
 ) -> Result<()> {
     for artifact in &package.artifacts {
-        let collection = match artifact.kind {
-            PackageArtifactKind::Behavior => crate::Collection::AgentBehavior,
-            PackageArtifactKind::ToolSelection => crate::Collection::ToolSelection,
-            PackageArtifactKind::ToolSurface => crate::Collection::DatastoreToolSurface,
-            PackageArtifactKind::Task => crate::Collection::Task,
-            PackageArtifactKind::Trigger => {
-                anyhow::bail!(
-                    "package artifact ledger contains a revision-derived trigger in the desired-state resource set"
-                )
-            }
-        };
         let live = crate::config_client::read_desired_state_document_in_txn(
             txn,
-            collection,
-            &artifact.physical_id,
+            artifact.collection,
+            owner_did,
+            &artifact.logical_id,
         )
         .await?
         .with_context(|| {
             format!(
-                "package artifact {:?} {:?} is missing",
-                artifact.kind, artifact.physical_id
+                "package artifact {} {owner_did:?}/{:?} is missing",
+                artifact.collection.graphql_type(),
+                artifact.logical_id
             )
         })?;
         let observed = crate::config_client::desired_state_document_digest(&live)?;
-        if observed != artifact.content_digest {
-            anyhow::bail!(
-                "package artifact {:?} {:?} drifted: expected {}, observed {}",
-                artifact.kind,
-                artifact.physical_id,
-                artifact.content_digest,
-                observed
-            );
-        }
+        anyhow::ensure!(
+            observed == artifact.content_digest,
+            "package artifact {} {owner_did:?}/{:?} drifted: expected {}, observed {observed}",
+            artifact.collection.graphql_type(),
+            artifact.logical_id,
+            artifact.content_digest
+        );
     }
     Ok(())
 }
@@ -474,11 +490,7 @@ pub(super) fn planned_workspace_authority(plan: &GraphPlan, node_id: &str) -> Op
         .as_ref()?
         .workspace_authority
         .get(&node.capability_id)?;
-    match ceiling {
-        WorkspaceAuthorityCeiling::None => None,
-        WorkspaceAuthorityCeiling::ReadOnly => Some("readOnly"),
-        WorkspaceAuthorityCeiling::ReadWrite => Some("readWrite"),
-    }
+    Some(ceiling.as_str())
 }
 
 fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
@@ -528,13 +540,18 @@ fn rows<'a>(response: &'a Value, collection: &str) -> &'a [Value] {
         .unwrap_or_default()
 }
 
-async fn query_graph_definition(txn: &ConfigApplyTxn<'_>, graph_id: &str) -> Result<Option<Value>> {
+async fn query_graph_definition(
+    txn: &ConfigApplyTxn<'_>,
+    owner_did: &str,
+    graph_id: &str,
+) -> Result<Option<Value>> {
     let query = format!(
         r#"{{
-            GraphDefinition(filter: {{ graph_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                _docID graph_id owner_did enabled active_revision_digest generation created_at updated_at
+            GraphDefinition(filter: {{ agent_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}, limit: 2) {{
+                _docID graph_id agent_did enabled active_revision_digest generation created_at updated_at
             }}
         }}"#,
+        escape_graphql_string(owner_did),
         escape_graphql_string(graph_id)
     );
     let response = txn.execute(&query).await?;
@@ -588,12 +605,14 @@ fn verified_revision_plan(revision: &Value, graph_id: &str, owner_did: &str) -> 
 
 async fn query_enabled_task_ids(
     txn: &ConfigApplyTxn<'_>,
+    owner_did: &str,
     task_ids: &[String],
 ) -> Result<BTreeSet<String>> {
     let task_ids = graphql_string_list_literal(task_ids);
+    let owner_did = escape_graphql_string(owner_did);
     let response = txn
         .execute(&format!(
-            "{{ Task(filter: {{ task_id: {{ _in: {task_ids} }}, enabled: {{ _eq: true }} }}) {{ task_id }} }}"
+            "{{ Task(filter: {{ agent_did: {{ _eq: \"{owner_did}\" }}, task_id: {{ _in: {task_ids} }}, enabled: {{ _eq: true }} }}) {{ task_id }} }}"
         ))
         .await?;
     Ok(graphql_rows_from_response(&response, "Task")
@@ -710,9 +729,9 @@ async fn materialize_in_txn(
     plan_json: &str,
     now: &str,
 ) -> Result<MaterializedRevision> {
-    match query_graph_definition(txn, &plan.graph_id).await? {
+    match query_graph_definition(txn, owner_did, &plan.graph_id).await? {
         Some(definition) => {
-            if definition.get("owner_did").and_then(Value::as_str) != Some(owner_did) {
+            if definition.get("agent_did").and_then(Value::as_str) != Some(owner_did) {
                 anyhow::bail!("graph {:?} belongs to a different principal", plan.graph_id);
             }
         }
@@ -722,7 +741,7 @@ async fn materialize_in_txn(
                 "GraphDefinition",
                 &json!({
                     "graph_id": plan.graph_id,
-                    "owner_did": owner_did,
+                    "agent_did": owner_did,
                     "enabled": true,
                     "active_revision_digest": Value::Null,
                     "generation": 0,
@@ -777,7 +796,7 @@ async fn materialize_in_txn(
         .iter()
         .map(|node| node.task_id.clone())
         .collect::<Vec<_>>();
-    let enabled_tasks = query_enabled_task_ids(txn, &task_ids).await?;
+    let enabled_tasks = query_enabled_task_ids(txn, owner_did, &task_ids).await?;
     for planned_node in &plan.nodes {
         if !enabled_tasks.contains(&planned_node.task_id) {
             anyhow::bail!(
@@ -787,25 +806,25 @@ async fn materialize_in_txn(
         }
     }
 
+    let mut trigger_documents = Vec::new();
     for entry in &plan.entries {
         let route = format!(
             "entry:{}:{}:{}",
             entry.name, entry.to.node_id, entry.to.port
         );
         let id = graph_trigger_id(&plan.digest, &route)?;
-        write_trigger(
-            txn,
+        trigger_documents.extend(planned_trigger_documents(
+            owner_did,
             &id,
             &entry.target_task_id,
             &entry.collection,
             &entry.correlation_field,
-            &DeliveryMode::PerDocument,
+            &None,
             &DeliveryConcurrency::Parallel,
             None,
             planned_workspace_authority(plan, &entry.to.node_id),
             now,
-        )
-        .await?;
+        )?);
     }
     for (index, edge) in plan.edges.iter().enumerate() {
         let route = format!(
@@ -813,8 +832,8 @@ async fn materialize_in_txn(
             edge.from.node_id, edge.from.port, edge.to.node_id, edge.to.port,
         );
         let id = graph_trigger_id(&plan.digest, &route)?;
-        write_trigger(
-            txn,
+        trigger_documents.extend(planned_trigger_documents(
+            owner_did,
             &id,
             &edge.target_task_id,
             &edge.source_collection,
@@ -824,9 +843,10 @@ async fn materialize_in_txn(
             edge.predicate.as_deref(),
             planned_workspace_authority(plan, &edge.to.node_id),
             now,
-        )
-        .await?;
+        )?);
     }
+
+    apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(trigger_documents)?).await?;
 
     let revision = query_graph_revision(txn, &plan.digest)
         .await?
@@ -852,8 +872,8 @@ async fn materialize_in_txn(
     materialization_receipt(plan)
 }
 
-async fn write_trigger(
-    txn: &ConfigApplyTxn<'_>,
+fn planned_trigger_documents(
+    owner_did: &str,
     id: &str,
     task_id: &str,
     source_collection: &str,
@@ -863,63 +883,32 @@ async fn write_trigger(
     predicate: Option<&str>,
     workspace_authority: Option<&str>,
     now: &str,
-) -> Result<()> {
+) -> Result<Vec<DesiredStateApplyDocument>> {
     validate_collection_identifier(source_collection)?;
-    let (fire_mode, expected_count, expected_count_field, group_timeout_secs) = match delivery {
-        DeliveryMode::PerDocument => ("per_document", Value::Null, Value::Null, Value::Null),
-        DeliveryMode::PerGroup {
-            expected: GroupCount::Static { count },
-            timeout_secs,
-        } => (
-            "per_group",
-            json!(count),
-            Value::Null,
-            timeout_secs.map(Value::from).unwrap_or(Value::Null),
-        ),
-        DeliveryMode::PerGroup {
-            expected: GroupCount::SourceField { field },
-            timeout_secs,
-        } => (
-            "per_group",
-            Value::Null,
-            json!(field),
-            timeout_secs.map(Value::from).unwrap_or(Value::Null),
-        ),
-    };
-    let concurrency = match concurrency {
-        DeliveryConcurrency::Parallel => "parallel",
-        DeliveryConcurrency::Serial => "serial",
-    };
-    let group_min_count = if group_timeout_secs.is_null() {
-        Value::Null
-    } else {
-        json!(1)
-    };
-    let add = json!({
-        "trigger_id": id,
-        "task_id": task_id,
-        "source_collection": source_collection,
-        "event_kind": "created",
-        "filter": predicate.map(Value::from).unwrap_or(Value::Null),
-        "enabled": true,
-        "concurrency": concurrency,
-        "correlation_field": correlation_field,
-        "fire_mode": fire_mode,
-        "expected_count": expected_count,
-        "expected_count_field": expected_count_field,
-        "group_timeout_secs": group_timeout_secs,
-        "group_min_count": group_min_count,
-        "workspace_authority": workspace_authority.map(Value::from).unwrap_or(Value::Null),
-        "created_at": now,
-        "updated_at": now,
+    let source = json!({
+        "agent_did": owner_did, "event_source_id": id,
+        "source_collection": source_collection, "event_kind": "created",
+        "filter": predicate, "correlation_field": correlation_field,
+        "group": delivery, "workspace_authority": workspace_authority,
+        "created_at": now, "updated_at": now,
     });
-    let mut update = add.clone();
-    update
-        .as_object_mut()
-        .expect("trigger object")
-        .remove("created_at");
-    write_event_trigger_document(txn, id, &add, &update).await?;
-    Ok(())
+    let trigger = json!({
+        "agent_did": owner_did, "trigger_id": id, "task_id": task_id,
+        "source": {"kind": "event", "event_source_id": id},
+        "enabled": true, "concurrency": concurrency,
+        "created_at": now, "updated_at": now,
+    });
+    Ok([
+        (crate::Collection::EventSource, source),
+        (crate::Collection::Trigger, trigger),
+    ]
+    .into_iter()
+    .map(|(collection, value)| DesiredStateApplyDocument {
+        collection,
+        add: value.clone(),
+        update: value,
+    })
+    .collect())
 }
 
 /// Compare-and-swap the one mutable pointer that makes a complete immutable
@@ -977,10 +966,10 @@ async fn activate_in_txn(
     expected_previous: Option<&str>,
     now: &str,
 ) -> Result<ActivationReceipt> {
-    let definition = query_graph_definition(txn, graph_id)
+    let definition = query_graph_definition(txn, owner_did, graph_id)
         .await?
         .context("graph must be materialized before activation")?;
-    if definition.get("owner_did").and_then(Value::as_str) != Some(owner_did) {
+    if definition.get("agent_did").and_then(Value::as_str) != Some(owner_did) {
         anyhow::bail!("graph {graph_id:?} belongs to a different principal");
     }
     let current = definition
@@ -1001,10 +990,7 @@ async fn activate_in_txn(
     {
         anyhow::bail!("candidate revision is not complete for this graph and owner");
     }
-    let plan = verified_revision_plan(&revision, graph_id, owner_did)?;
-    if let Some(package) = plan.package.as_ref() {
-        verify_package_role_bindings(package, owner_did)?;
-    }
+    verified_revision_plan(&revision, graph_id, owner_did)?;
     if current.as_deref() == Some(digest) {
         let gate = revision_gate_decision(
             revision
@@ -1100,15 +1086,15 @@ async fn activate_in_txn(
     })
 }
 
-async fn load_active_graph_plan_in_txn(
+pub(crate) async fn load_active_graph_plan_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner_did: &str,
     graph_id: &str,
 ) -> Result<Option<GraphPlan>> {
-    let definition = query_graph_definition(txn, graph_id)
+    let definition = query_graph_definition(txn, owner_did, graph_id)
         .await?
         .context("graph does not exist")?;
-    if definition.get("owner_did").and_then(Value::as_str) != Some(owner_did) {
+    if definition.get("agent_did").and_then(Value::as_str) != Some(owner_did) {
         anyhow::bail!("graph {graph_id:?} belongs to a different principal");
     }
     let Some(digest) = definition
@@ -1147,10 +1133,10 @@ async fn set_graph_enabled_in_txn(
     enabled: bool,
     now: &str,
 ) -> Result<()> {
-    let definition = query_graph_definition(txn, graph_id)
+    let definition = query_graph_definition(txn, owner_did, graph_id)
         .await?
         .context("graph does not exist")?;
-    if definition.get("owner_did").and_then(Value::as_str) != Some(owner_did) {
+    if definition.get("agent_did").and_then(Value::as_str) != Some(owner_did) {
         anyhow::bail!("graph {graph_id:?} belongs to a different principal");
     }
     if enabled {
@@ -1288,13 +1274,13 @@ async fn start_run_in_txn(
     run_id: &str,
     now: &str,
 ) -> Result<GraphRunReceipt> {
-    let definition = query_graph_definition(txn, graph_id)
+    let definition = query_graph_definition(txn, caller_did, graph_id)
         .await?
         .context("graph does not exist")?;
     let owner_did = definition
-        .get("owner_did")
+        .get("agent_did")
         .and_then(Value::as_str)
-        .context("GraphDefinition is missing owner_did")?;
+        .context("GraphDefinition is missing agent_did")?;
     if owner_did != caller_did {
         anyhow::bail!("v1 graph runs may only be started by the graph owner");
     }
@@ -1334,9 +1320,8 @@ async fn start_run_in_txn(
         anyhow::bail!("active graph revision is not runnable");
     }
     if let Some(package) = plan.package.as_ref() {
-        verify_package_role_bindings(package, owner_did)?;
         verify_package_schemas_in_txn(txn, package).await?;
-        verify_package_artifacts_in_txn(txn, package).await?;
+        verify_package_artifacts_in_txn(txn, package, owner_did).await?;
     }
     let entry = plan
         .entries
@@ -1400,7 +1385,8 @@ async fn start_run_in_txn(
 
 #[cfg(test)]
 pub(super) use tests::{
-    attribution_test_fixture, graph_test_identity, graph_test_owner, seed_signed_graph_request,
+    attribution_test_fixture, graph_test_identity, graph_test_owner, install_graph_test_tasks,
+    seed_signed_graph_request,
 };
 
 #[cfg(test)]
@@ -1481,7 +1467,6 @@ mod tests {
                 binary_version: "test".to_owned(),
                 build_commit: "test".to_owned(),
             },
-            roles: Default::default(),
             workspace_authority: Default::default(),
             predecessor_revision_digest: None,
             artifacts: vec![],
@@ -1540,6 +1525,8 @@ mod tests {
         };
         compile_graph(
             &GraphIntent {
+                agent_did: graph_test_owner().to_owned(),
+                tags: vec![],
                 graph_id: "pipeline".to_owned(),
                 nodes: vec![GraphNode {
                     node_id: "worker".to_owned(),
@@ -1576,6 +1563,9 @@ mod tests {
                 },
             },
             &[StageCapability {
+                agent_did: graph_test_owner().to_owned(),
+                tags: vec![],
+                workspace_authority: None,
                 capability_id: "worker".to_owned(),
                 revision: "v1".to_owned(),
                 task_id: format!("worker-{configuration}"),
@@ -1613,6 +1603,8 @@ mod tests {
         };
         compile_graph(
             &GraphIntent {
+                agent_did: graph_test_owner().to_owned(),
+                tags: vec![],
                 graph_id: "grouped-pipeline".to_owned(),
                 nodes: vec![
                     GraphNode {
@@ -1635,12 +1627,15 @@ mod tests {
                         node_id: "consumer".to_owned(),
                         port: "items".to_owned(),
                     },
-                    delivery: DeliveryMode::PerGroup {
-                        expected: GroupCount::SourceField {
-                            field: "expected_total".to_owned(),
-                        },
+                    delivery: Some(crate::document_config::EventGroup {
+                        expected_count: Some(
+                            crate::document_config::EventGroupCount::SourceField {
+                                source_field: "expected_total".to_owned(),
+                            },
+                        ),
                         timeout_secs: Some(60),
-                    },
+                        min_count: None,
+                    }),
                     concurrency: DeliveryConcurrency::Serial,
                     predicate: None,
                 }],
@@ -1674,6 +1669,9 @@ mod tests {
             },
             &[
                 StageCapability {
+                    agent_did: graph_test_owner().to_owned(),
+                    tags: vec![],
+                    workspace_authority: None,
                     capability_id: "producer".to_owned(),
                     revision: "v1".to_owned(),
                     task_id: "producer-task".to_owned(),
@@ -1682,6 +1680,9 @@ mod tests {
                     allowed_callers: vec![graph_test_owner().to_owned()],
                 },
                 StageCapability {
+                    agent_did: graph_test_owner().to_owned(),
+                    tags: vec![],
+                    workspace_authority: None,
                     capability_id: "consumer".to_owned(),
                     revision: "v1".to_owned(),
                     task_id: "consumer-task".to_owned(),
@@ -1715,6 +1716,8 @@ mod tests {
         };
         compile_graph(
             &GraphIntent {
+                agent_did: graph_test_owner().to_owned(),
+                tags: vec![],
                 graph_id: "result-pipeline".to_owned(),
                 nodes: vec![GraphNode {
                     node_id: "worker".to_owned(),
@@ -1751,6 +1754,9 @@ mod tests {
                 },
             },
             &[StageCapability {
+                agent_did: graph_test_owner().to_owned(),
+                tags: vec![],
+                workspace_authority: None,
                 capability_id: "worker".to_owned(),
                 revision: "v1".to_owned(),
                 task_id: "worker-result".to_owned(),
@@ -1798,56 +1804,67 @@ mod tests {
     }
 
     async fn install_plan_tasks(node: &EmbeddedNode, plan: &GraphPlan) {
-        use crate::identity::AgentIdentity;
-        let identity = graph_test_identity();
-        let behavior = node.execute(r#"{ AgentBehavior(filter: { behavior_id: { _eq: "test-behavior" } }) { _docID } }"#).await;
-        assert!(!behavior.has_errors(), "{:?}", behavior.errors);
-        if behavior.data.unwrap()["AgentBehavior"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-        {
-            let result = node.execute(&format!(r#"mutation {{ create_AgentBehavior(input: {{ behavior_id: "test-behavior", agent_did: "{}", enabled: true }}) {{ _docID }} }}"#, escape_graphql_string(identity.did()))).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
-        }
-        let now = chrono::Utc::now().to_rfc3339();
-        for task_id in plan
-            .nodes
-            .iter()
-            .map(|planned| planned.task_id.as_str())
-            .collect::<BTreeSet<_>>()
-        {
-            let response = node
-                .execute(&format!(
-                    r#"mutation {{ create_Task(input: {{
-                        task_id: "{}", name: "{}", description: "test task",
-                        behavior_id: "test-behavior", prompt_template: "test",
-                        enabled: true, created_at: "{}", updated_at: "{}"
-                    }}) {{ _docID }} }}"#,
-                    escape_graphql_string(task_id),
-                    escape_graphql_string(task_id),
-                    escape_graphql_string(&now),
-                    escape_graphql_string(&now),
-                ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-        }
+        install_graph_test_tasks(
+            node,
+            graph_test_owner(),
+            "test-behavior",
+            &plan
+                .nodes
+                .iter()
+                .map(|node| node.task_id.as_str())
+                .collect::<Vec<_>>(),
+        )
+        .await;
+    }
+
+    pub(in crate::graph_pipeline) async fn install_graph_test_tasks(
+        node: &EmbeddedNode,
+        owner: &str,
+        behavior: &str,
+        tasks: &[&str],
+    ) {
+        use crate::config_client::{
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        };
+        use crate::Collection;
+        crate::test_support::install_test_behavior(node, owner, behavior).await;
+        let mut documents = vec![];
+        documents.extend(tasks.iter().copied().collect::<BTreeSet<_>>().into_iter().map(|task_id|
+            (Collection::Task, json!({"agent_did":owner,"task_id":task_id,"behavior_id":behavior,"prompt_template":"operator approved prompt","enabled":true}))));
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .unwrap();
+        ConfigAccess::transact_local(node, None, "test.graph.tasks", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
     async fn revision_publication_and_run_start_are_transactional_and_pinned() {
+        async fn assert_visible(node: &EmbeddedNode, trigger_id: &str, expected: bool) {
+            let view = crate::agent::load_document_runtime_view(node, graph_test_owner())
+                .await
+                .unwrap();
+            assert_eq!(
+                view.triggers.contains_key(trigger_id),
+                expected,
+                "runtime visibility for {trigger_id}"
+            );
+        }
         let node = EmbeddedNode::builder().build().await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
-            gents_protocol::schemas::GRAPH_DEFINITION,
-            gents_protocol::schemas::GRAPH_REVISION,
-            gents_protocol::schemas::GRAPH_RUN,
-            gents_protocol::schemas::AGENT_REQUEST,
-            gents_protocol::schemas::GOAL,
-            gents_protocol::schemas::GOAL_CREATION_CLAIM,
-            gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
-            gents_protocol::schemas::TASK,
-            gents_protocol::schemas::AGENT_BEHAVIOR,
-            gents_protocol::schemas::EVENT_TRIGGER,
             r#"type PipelineInput {
                 graph_run_id: String @index(unique: true)
                 payload: String
@@ -1881,6 +1898,7 @@ mod tests {
         let before_row = before.data.unwrap()["GraphDefinition"][0].clone();
         assert!(before_row["active_revision_digest"].is_null());
         assert_eq!(before_row["generation"], 0);
+        assert_visible(&node, &materialized.trigger_ids[0], false).await;
 
         let activation = activate_graph_revision(
             &node,
@@ -1893,6 +1911,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(activation.generation, 1);
+        assert_visible(&node, &materialized.trigger_ids[0], true).await;
         assert_eq!(activation.previous_digest, None);
         assert_eq!(
             materialize_graph_revision(&node, None, graph_test_owner(), &first)
@@ -1933,6 +1952,7 @@ mod tests {
         .await
         .unwrap();
         disable_txn.commit().await.unwrap();
+        assert_visible(&node, &materialized.trigger_ids[0], false).await;
         assert!(start_graph_run(
             &node,
             None,
@@ -2036,6 +2056,17 @@ mod tests {
         assert_eq!(data["PipelineInput"][0]["graph_run_id"], run.run_id);
         assert_eq!(data["PipelineInput"][0]["payload"], "hello");
 
+        // Foreign active pointers and live pins must never retain this owner's
+        // artifacts after its own last run finishes.
+        let foreign = node.execute(&format!(r#"mutation {{
+            create_GraphDefinition(input: {{graph_id: "foreign-pointer", agent_did: "did:key:foreign",
+                enabled: true, active_revision_digest: "{digest}"}}) {{_docID}}
+            create_GraphRun(input: {{run_id: "foreign-pin", graph_id: "foreign-pointer",
+                owner_did: "did:key:foreign", revision_digest: "{digest}", status: "running",
+                correlation: "foreign-pin", created_at: "2026-08-25T00:00:00Z"}}) {{_docID}}
+        }}"#, digest = escape_graphql_string(&first.digest))).await;
+        assert!(!foreign.has_errors(), "{:?}", foreign.errors);
+
         let second = test_plan("second");
         install_plan_tasks(&node, &second).await;
         materialize_graph_revision(&node, None, graph_test_owner(), &second)
@@ -2067,6 +2098,8 @@ mod tests {
             Some(first.digest.as_str())
         );
         assert_eq!(switched.generation, 2);
+        // The old revision remains executable only while its real run is live.
+        assert_visible(&node, &materialized.trigger_ids[0], true).await;
 
         let now = chrono::Utc::now().to_rfc3339();
         for request_id in [
@@ -2143,6 +2176,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(cancelled.status, "cancelled");
+        assert_visible(&node, &materialized.trigger_ids[0], false).await;
         assert_eq!(cancelled.update_generation, 2);
         assert_eq!(
             cancelled.cancellation_reason.as_deref(),
@@ -2165,17 +2199,8 @@ mod tests {
     #[tokio::test]
     async fn graph_run_view_commits_exact_terminal_result_refs_and_reloads_them() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
-            gents_protocol::schemas::GRAPH_DEFINITION,
-            gents_protocol::schemas::GRAPH_REVISION,
-            gents_protocol::schemas::GRAPH_RUN,
-            gents_protocol::schemas::AGENT_REQUEST,
-            gents_protocol::schemas::GOAL,
-            gents_protocol::schemas::GOAL_CREATION_CLAIM,
-            gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
-            gents_protocol::schemas::TASK,
-            gents_protocol::schemas::AGENT_BEHAVIOR,
-            gents_protocol::schemas::EVENT_TRIGGER,
             r#"type PipelineInput {
                 graph_run_id: String @index(unique: true)
                 payload: String
@@ -2251,9 +2276,10 @@ mod tests {
                         caused_by_trigger_id: "operator-trigger",
                         caused_by_correlation: "{}", created_at: "{}"
                     }}) {{ _docID }}
-                    group: create_EventTriggerGroupState(input: {{
-                        group_key: "unrelated-group", trigger_id: "operator-trigger",
-                        trigger_config_key: "operator-trigger-v1", correlation: "{}",
+                    group: create_EventGroupState(input: {{
+                        group_key: "unrelated-group", agent_did: "did:key:worker",
+                        consumer: {{kind: "trigger", trigger_id: "operator-trigger"}},
+                        consumer_config_key: "operator-trigger-v1", correlation: "{}",
                         first_seen_at: "{}", quiesced_at: "{}",
                         quiesced_reason: "operator timeout"
                     }}) {{ _docID }}
@@ -2353,17 +2379,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grouped_delivery_lowers_to_the_existing_event_trigger_contract() {
+    async fn grouped_delivery_reuses_canonical_event_source_and_trigger_contract() {
         let node = EmbeddedNode::builder().build().await.unwrap();
-        for schema in [
-            gents_protocol::schemas::GRAPH_DEFINITION,
-            gents_protocol::schemas::GRAPH_REVISION,
-            gents_protocol::schemas::TASK,
-            gents_protocol::schemas::AGENT_BEHAVIOR,
-            gents_protocol::schemas::EVENT_TRIGGER,
-        ] {
-            node.add_schema(schema).await.unwrap();
-        }
+        crate::ensure_runtime_schemas(&node).await.unwrap();
 
         let plan = grouped_test_plan();
         install_plan_tasks(&node, &plan).await;
@@ -2371,22 +2389,37 @@ mod tests {
             .await
             .unwrap();
         let response = node
-            .execute("{ EventTrigger { fire_mode concurrency expected_count expected_count_field group_timeout_secs group_min_count } }")
+            .execute(&format!(
+                r#"{{ Trigger(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{ source concurrency }}
+                     EventSource(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{ event_source_id group }} }}"#,
+                owner = escape_graphql_string(graph_test_owner()),
+            ))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        let rows = response.data.unwrap()["EventTrigger"]
+        let data = response.data.unwrap();
+        let grouped = data["EventSource"]
             .as_array()
             .unwrap()
-            .clone();
-        let grouped = rows
             .iter()
-            .find(|row| row["fire_mode"] == "per_group")
-            .expect("group trigger");
-        assert_eq!(grouped["concurrency"], "serial");
-        assert!(grouped["expected_count"].is_null());
-        assert_eq!(grouped["expected_count_field"], "expected_total");
-        assert_eq!(grouped["group_timeout_secs"], 60);
-        assert_eq!(grouped["group_min_count"], 1);
+            .find(|row| row["group"].is_object())
+            .expect("grouped event source");
+        assert_eq!(
+            grouped["group"]["expected_count"],
+            json!({"source_field":"expected_total"})
+        );
+        assert_eq!(grouped["group"]["timeout_secs"], 60);
+        assert!(
+            grouped["group"]["min_count"].is_null(),
+            "unset retains the shared default"
+        );
+        let trigger = data["Trigger"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["source"]["event_source_id"] == grouped["event_source_id"])
+            .expect("trigger references the grouped source");
+        assert_eq!(trigger["source"]["kind"], "event");
+        assert_eq!(trigger["concurrency"], "serial");
 
         node.shutdown().await;
     }
@@ -2456,13 +2489,14 @@ mod tests {
         );
         let triggers = node
             .execute(&format!(
-                r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(graph_test_owner()),
                 escape_graphql_string(trigger),
             ))
             .await;
         assert!(!triggers.has_errors(), "{:?}", triggers.errors);
         create.caused_by_trigger_doc_id = Some(
-            triggers.data.unwrap()["EventTrigger"][0]["_docID"]
+            triggers.data.unwrap()["Trigger"][0]["_docID"]
                 .as_str()
                 .unwrap()
                 .into(),
@@ -2487,17 +2521,8 @@ mod tests {
         max_invocations: u32,
     ) -> (Arc<EmbeddedNode>, GraphRunReceipt, String) {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
-            gents_protocol::schemas::GRAPH_DEFINITION,
-            gents_protocol::schemas::GRAPH_REVISION,
-            gents_protocol::schemas::GRAPH_RUN,
-            gents_protocol::schemas::AGENT_REQUEST,
-            gents_protocol::schemas::GOAL,
-            gents_protocol::schemas::GOAL_CREATION_CLAIM,
-            gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
-            gents_protocol::schemas::TASK,
-            gents_protocol::schemas::AGENT_BEHAVIOR,
-            gents_protocol::schemas::EVENT_TRIGGER,
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
             "type PipelineResult { graph_run_id: String @index report: String }",
         ] {

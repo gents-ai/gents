@@ -1,70 +1,13 @@
-use std::fs;
-use std::path::Path;
-
-use serde_json::Value;
-
+use super::DesiredStateManifest;
 use gents::Collection;
-
-use super::{DesiredStateManifest, HasUniqueId, CALLBACK_BINDINGS_DIR, REPOSITORY_PLACEMENTS_DIR};
+use serde_json::Value;
+use std::{collections::BTreeSet, fs, path::Path};
 
 pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
-    if id.is_empty() {
-        return Err("unique id is empty; choose a filesystem-safe id".to_string());
+    if id.is_empty() || id.starts_with('.') || id.chars().any(|ch| matches!(ch, '/' | '\\' | '\0'))
+    {
+        return Err(format!("unique id '{id}' is not filesystem-safe"));
     }
-    if id == "." || id == ".." {
-        return Err(format!(
-            "unique id '{id}' contains filesystem-unsafe value; choose a filesystem-safe id"
-        ));
-    }
-    if id.starts_with('.') {
-        return Err(format!(
-            "unique id '{id}' starts with '.'; dot-prefixed handles are reserved for hidden \
-             files and are silently skipped by the loader"
-        ));
-    }
-    for ch in id.chars() {
-        if matches!(ch, '/' | '\0') {
-            return Err(format!(
-                "unique id '{id}' contains filesystem-unsafe character(s); choose a filesystem-safe id"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_handles(manifest: &DesiredStateManifest) -> Result<(), String> {
-    fn validate_vec<T: HasUniqueId>(docs: &[T], collection_name: &str) -> Result<(), String> {
-        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        let mut handles = std::collections::BTreeSet::new();
-        for doc in docs {
-            let id = doc.unique_id();
-            check_filesystem_safe_id(id)?;
-            if !seen.insert(id) {
-                return Err(format!("duplicate {collection_name} id '{id}' in manifest"));
-            }
-            if !handles.insert(super::document_handle(id)) {
-                return Err(format!(
-                    "{collection_name} IDs collide at filesystem handle '{}'",
-                    super::document_handle(id)
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    validate_vec(&manifest.agent_behaviors, "behavior_id")?;
-    validate_vec(&manifest.skills, "skill_id")?;
-    validate_vec(&manifest.datastore_tool_surfaces, "surface_id")?;
-    validate_vec(&manifest.tool_selections, "selection_id")?;
-    validate_vec(&manifest.inference_backends, "backend_id")?;
-    validate_vec(&manifest.inference_profiles, "profile_id")?;
-    validate_vec(&manifest.tool_service_registries, "service_id")?;
-    validate_vec(&manifest.projection_acp_bindings, "binding_id")?;
-    validate_vec(&manifest.tasks, "task_id")?;
-    validate_vec(&manifest.schedules, "schedule_id")?;
-    validate_vec(&manifest.event_triggers, "trigger_id")?;
-    validate_vec(&manifest.callback_bindings, "binding_id")?;
-    validate_vec(&manifest.repository_placements, "repository_id")?;
     Ok(())
 }
 
@@ -73,248 +16,187 @@ pub(crate) fn write_manifest_root(
     manifest: &DesiredStateManifest,
     force: bool,
 ) -> Result<(), String> {
-    validate_handles(manifest)?;
-    prepare_root(root, force)?;
+    write_root(root, manifest, force).map_err(|error| format!("{error:#}"))
+}
 
-    let principal_value = serde_json::to_value(&manifest.agent_principal)
-        .map_err(|e| format!("serializing agent_principal failed: {e}"))?;
-    write_json_file(
-        &root.join(
-            Collection::AgentPrincipal
-                .file_name()
-                .expect("AgentPrincipal has a top-level file"),
+fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyhow::Result<()> {
+    let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest)?;
+    gents::document_config::ConfigReferences::from_documents(
+        &manifest.agent_principal.agent_did,
+        plan.documents()
+            .iter()
+            .map(|doc| (doc.collection, doc.add.clone())),
+    )?;
+    let mut handles = BTreeSet::new();
+    for doc in plan.documents() {
+        if doc.collection == Collection::AgentPrincipal {
+            continue;
+        }
+        let id = doc.add[doc.collection.unique_field()]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("document identity missing"))?;
+        check_filesystem_safe_id(id).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            handles.insert((doc.collection, super::document_handle(id))),
+            "IDs collide at a filesystem handle in {}",
+            doc.collection
+        );
+    }
+    // Finish all structural checks before a forced replacement removes old files.
+    let mut value = serde_json::to_value(manifest)?;
+    prepare_root(root, force).map_err(anyhow::Error::msg)?;
+    for (collection, field, file) in [
+        (
+            Collection::AgentContext,
+            "system_prompt",
+            "system_prompt.md",
         ),
-        &principal_value,
-    )?;
-
-    write_per_doc_collection(
-        root,
-        Collection::AgentBehavior,
-        &manifest.agent_behaviors,
-        spill_behavior_sidecar,
-    )?;
-    write_per_doc_collection(root, Collection::Skill, &manifest.skills, no_sidecar)?;
-    write_per_doc_collection(
-        root,
-        Collection::ChainKeyBinding,
-        &manifest.chain_key_bindings,
-        no_sidecar,
-    )?;
-    write_per_doc_collection(root, Collection::EthTool, &manifest.eth_tools, no_sidecar)?;
-    write_per_doc_collection(
-        root,
-        Collection::DatastoreToolSurface,
-        &manifest.datastore_tool_surfaces,
-        no_sidecar,
-    )?;
-    write_per_doc_collection(
-        root,
-        Collection::ToolSelection,
-        &manifest.tool_selections,
-        no_sidecar,
-    )?;
-    write_per_doc_collection(
-        root,
-        Collection::InferenceBackend,
-        &manifest.inference_backends,
-        no_sidecar,
-    )?;
-    write_per_doc_collection(
-        root,
-        Collection::InferenceProfile,
-        &manifest.inference_profiles,
-        no_sidecar,
-    )?;
-    write_per_doc_collection(
-        root,
-        Collection::ToolServiceRegistry,
-        &manifest.tool_service_registries,
-        no_sidecar,
-    )?;
-    write_per_doc_collection(
-        root,
-        Collection::ProjectionAcpBinding,
-        &manifest.projection_acp_bindings,
-        no_sidecar,
-    )?;
-    write_per_doc_collection(root, Collection::Task, &manifest.tasks, spill_task_sidecar)?;
-    write_per_doc_collection(root, Collection::Schedule, &manifest.schedules, no_sidecar)?;
-    write_per_doc_collection(
-        root,
-        Collection::EventTrigger,
-        &manifest.event_triggers,
-        no_sidecar,
-    )?;
-    write_per_doc_dir(
-        root,
-        CALLBACK_BINDINGS_DIR,
-        &manifest.callback_bindings,
-        no_sidecar,
-    )?;
-    write_per_doc_dir(
-        root,
-        REPOSITORY_PLACEMENTS_DIR,
-        &manifest.repository_placements,
-        no_sidecar,
-    )?;
-
+        (Collection::Task, "prompt_template", "prompt_template.md"),
+    ] {
+        if let Some(rows) = value
+            .get_mut(collection.dir_name().expect("sidecar collection"))
+            .and_then(Value::as_array_mut)
+        {
+            for row in rows {
+                let Some(prompt) = row.get(field).and_then(Value::as_str).map(str::to_owned) else {
+                    continue;
+                };
+                let id = row[collection.unique_field()]
+                    .as_str()
+                    .expect("validated identity");
+                let relative = format!(
+                    "{}/{}/{}",
+                    collection.dir_name().unwrap(),
+                    super::document_handle(id),
+                    file
+                );
+                let path = root.join(&relative);
+                fs::create_dir_all(path.parent().expect("sidecar parent"))?;
+                fs::write(path, prompt)?;
+                row[field] = format!("./{relative}").into();
+            }
+        }
+    }
+    // Canonical root order makes exports stable without mutating authored values,
+    // permission arrays, prompt whitespace, or any nested execution ordering.
+    for collection in Collection::ALL {
+        if let Some(rows) = collection
+            .dir_name()
+            .and_then(|name| value.get_mut(name))
+            .and_then(Value::as_array_mut)
+        {
+            rows.sort_by(|a, b| {
+                a[collection.unique_field()]
+                    .as_str()
+                    .cmp(&b[collection.unique_field()].as_str())
+            });
+        }
+    }
+    let mut bytes = serde_json::to_vec_pretty(&value)?;
+    bytes.push(b'\n');
+    fs::write(root.join("pack_config.json"), bytes)?;
     Ok(())
 }
 
 fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
     if !root.exists() {
-        fs::create_dir_all(root).map_err(|e| format!("creating {} failed: {e}", root.display()))?;
-        return Ok(());
+        return fs::create_dir_all(root).map_err(|error| error.to_string());
     }
-    let is_empty = fs::read_dir(root)
-        .map_err(|e| format!("reading {} failed: {e}", root.display()))?
+    if fs::symlink_metadata(root)
+        .map_err(|error| error.to_string())?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("refusing to overwrite a symlink manifest root".into());
+    }
+    let empty = fs::read_dir(root)
+        .map_err(|error| error.to_string())?
         .next()
         .is_none();
-    if is_empty {
-        return Ok(());
-    }
-    if !force {
-        return Err(format!(
-            "manifest root is non-empty; pass --force to overwrite: {}",
-            root.display()
-        ));
-    }
-    if !root.join("agent_principal.json").exists() {
-        return Err(format!(
-            "refusing to overwrite {}: directory is non-empty and does not \
-             contain agent_principal.json (not a manifest root); remove the \
-             directory manually or target an empty one",
-            root.display()
-        ));
-    }
-    fs::remove_dir_all(root).map_err(|e| format!("clearing {} failed: {e}", root.display()))?;
-    fs::create_dir_all(root).map_err(|e| format!("creating {} failed: {e}", root.display()))?;
-    Ok(())
-}
-
-fn write_per_doc_collection<T>(
-    root: &Path,
-    collection: Collection,
-    docs: &[T],
-    mut spill: impl FnMut(&Path, &mut Value) -> Result<(), String>,
-) -> Result<(), String>
-where
-    T: serde::Serialize + HasUniqueId,
-{
-    if docs.is_empty() {
-        return Ok(());
-    }
-    let dir_name = collection
-        .dir_name()
-        .expect("write_per_doc_collection called with non-dir collection");
-    let collection_dir = root.join(dir_name);
-    fs::create_dir_all(&collection_dir)
-        .map_err(|e| format!("creating {} failed: {e}", collection_dir.display()))?;
-
-    for doc in docs {
-        let handle = doc.unique_id();
-        check_filesystem_safe_id(handle)?;
-        let doc_dir = collection_dir.join(super::document_handle(handle));
-        fs::create_dir_all(&doc_dir)
-            .map_err(|e| format!("creating {} failed: {e}", doc_dir.display()))?;
-
-        let mut body = serde_json::to_value(doc)
-            .map_err(|e| format!("serializing {} '{handle}' failed: {e}", collection))?;
-        spill(&doc_dir, &mut body)?;
-        write_json_file(&doc_dir.join("object.json"), &body)?;
-    }
-    Ok(())
-}
-
-fn write_per_doc_dir<T>(
-    root: &Path,
-    dir_name: &str,
-    docs: &[T],
-    mut spill: impl FnMut(&Path, &mut Value) -> Result<(), String>,
-) -> Result<(), String>
-where
-    T: serde::Serialize + HasUniqueId,
-{
-    if docs.is_empty() {
-        return Ok(());
-    }
-    let collection_dir = root.join(dir_name);
-    fs::create_dir_all(&collection_dir)
-        .map_err(|e| format!("creating {} failed: {e}", collection_dir.display()))?;
-
-    for doc in docs {
-        let handle = doc.unique_id();
-        check_filesystem_safe_id(handle)?;
-        let doc_dir = collection_dir.join(super::document_handle(handle));
-        fs::create_dir_all(&doc_dir)
-            .map_err(|e| format!("creating {} failed: {e}", doc_dir.display()))?;
-
-        let mut body = serde_json::to_value(doc)
-            .map_err(|e| format!("serializing {dir_name} '{handle}' failed: {e}"))?;
-        spill(&doc_dir, &mut body)?;
-        write_json_file(&doc_dir.join("object.json"), &body)?;
-    }
-    Ok(())
-}
-
-fn no_sidecar(_dir: &Path, _value: &mut Value) -> Result<(), String> {
-    Ok(())
-}
-
-fn spill_behavior_sidecar(doc_dir: &Path, body: &mut Value) -> Result<(), String> {
-    spill_string_field(doc_dir, body, "system_prompt", "system_prompt.md")?;
-    spill_string_field(
-        doc_dir,
-        body,
-        "request_context_template",
-        "request_context_template.md",
-    )
-}
-
-fn spill_task_sidecar(doc_dir: &Path, body: &mut Value) -> Result<(), String> {
-    spill_string_field(doc_dir, body, "prompt_template", "prompt.md")
-}
-
-fn spill_string_field(
-    doc_dir: &Path,
-    body: &mut Value,
-    field: &str,
-    sidecar_name: &str,
-) -> Result<(), String> {
-    let object = body
-        .as_object_mut()
-        .ok_or_else(|| "expected object body for sidecar spill, got non-object".to_string())?;
-    let raw = object.get(field).cloned();
-    match raw {
-        None => return Ok(()),
-        Some(Value::Null) => {
-            object.remove(field);
-            return Ok(());
+    if !empty {
+        if !force {
+            return Err(format!(
+                "manifest root is non-empty; pass --force to overwrite: {}",
+                root.display()
+            ));
         }
-        _ => {}
+        if !root.join("pack_config.json").is_file() {
+            return Err(format!(
+                "refusing to overwrite {}: not a manifest root",
+                root.display()
+            ));
+        }
+        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
     }
-    let Some(current) = object.get(field).and_then(Value::as_str).map(str::to_owned) else {
-        return Ok(());
-    };
-    if current.is_empty() {
-        return Ok(());
-    }
-    fs::write(doc_dir.join(sidecar_name), &current).map_err(|e| {
-        format!(
-            "writing {} failed: {e}",
-            doc_dir.join(sidecar_name).display()
-        )
-    })?;
-    object.insert(
-        field.to_string(),
-        Value::String(format!("./{sidecar_name}")),
-    );
-    Ok(())
+    fs::create_dir_all(root).map_err(|error| error.to_string())
 }
 
-fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
-    let mut bytes = serde_json::to_vec_pretty(value)
-        .map_err(|e| format!("serializing {} failed: {e}", path.display()))?;
-    bytes.push(b'\n');
-    fs::write(path, &bytes).map_err(|e| format!("writing {} failed: {e}", path.display()))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn config() -> DesiredStateManifest {
+        serde_json::from_value(serde_json::json!({"agent_principal":{"agent_did":"owner"}}))
+            .unwrap()
+    }
+    #[test]
+    fn filesystem_id_boundary_preserves_human_keys() {
+        for id in [
+            "default",
+            "workstation-1",
+            "seed_fleet_health",
+            "profile:default",
+        ] {
+            assert!(check_filesystem_safe_id(id).is_ok(), "{id}");
+        }
+        for id in ["", ".", "..", ".hidden", "a/b", "a\\b", "a\0b"] {
+            assert!(check_filesystem_safe_id(id).is_err(), "{id}");
+        }
+    }
+    #[test]
+    fn overwrite_is_explicit_confined_and_removes_stale_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("unrelated"), "keep").unwrap();
+        assert!(write_manifest_root(dir.path(), &config(), true).is_err());
+        assert!(dir.path().join("unrelated").exists());
+        fs::remove_file(dir.path().join("unrelated")).unwrap();
+        write_manifest_root(dir.path(), &config(), false).unwrap();
+        fs::write(dir.path().join("stale"), "old").unwrap();
+        assert!(write_manifest_root(dir.path(), &config(), false).is_err());
+        write_manifest_root(dir.path(), &config(), true).unwrap();
+        assert!(!dir.path().join("stale").exists());
+    }
+    #[test]
+    fn handle_collisions_and_unsafe_ids_fail_before_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest_root(dir.path(), &config(), false).unwrap();
+        let file = dir.path().join("pack_config.json");
+        let before = fs::read(&file).unwrap();
+        for ids in [vec!["a-b", "a_b"], vec!["unsafe/id"]] {
+            let mut config = config();
+            config.contexts = ids
+                .into_iter()
+                .map(|id| {
+                    serde_json::from_value(serde_json::json!({"agent_did":"owner","context_id":id}))
+                        .unwrap()
+                })
+                .collect();
+            assert!(write_manifest_root(dir.path(), &config, true).is_err());
+            assert_eq!(fs::read(&file).unwrap(), before);
+        }
+    }
+    #[test]
+    fn absent_prompt_has_no_sidecar_or_authored_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config();
+        config.contexts.push(
+            serde_json::from_value(serde_json::json!({"agent_did":"owner","context_id":"context"}))
+                .unwrap(),
+        );
+        write_manifest_root(dir.path(), &config, false).unwrap();
+        let value: Value =
+            serde_json::from_slice(&fs::read(dir.path().join("pack_config.json")).unwrap())
+                .unwrap();
+        assert!(value["contexts"][0].get("system_prompt").is_none());
+        assert!(!dir.path().join("contexts").exists());
+    }
 }

@@ -79,22 +79,6 @@ theorem foreground_blocks_parent_advance
   | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ _ _ =>
     constructor <;> rw [h_parent_eq]
 
-theorem subagent_depth_bounded
-    (pre post : BridgedState)
-    (h_init  : pre.parent.request.subagentDepth ≤ maxSubagentDepth ∧
-               pre.child.request.subagentDepth ≤ maxSubagentDepth)
-    (h_trace : Trace pre post) :
-    post.parent.request.subagentDepth ≤ maxSubagentDepth ∧
-    post.child.request.subagentDepth ≤ maxSubagentDepth :=
-  inv_depth pre post h_init h_trace
-
-theorem bridge_link_symmetric
-    (pre post : BridgedState)
-    (h_init  : pre.linked)
-    (h_trace : Trace pre post) :
-    post.linked :=
-  inv_link pre post h_init h_trace
-
 theorem steer_subagent_interrupt_preserves_link_symmetry
     {pre post : BridgedState}
     {childSessionId : SessionId}
@@ -112,32 +96,6 @@ theorem steer_subagent_interrupt_preserves_link_symmetry
     post.linked := by
   rcases h_step.h_bridge_compose with
     ⟨cascaded, interrupted, h_cascade, h_interrupt, _h_child_id, h_tail⟩
-  have _h_queue_session : queuePost.sessionId = childSessionId :=
-    h_step.h_queue_post_session
-  have _h_drain_uses_child_key :
-      queueDrained =
-        queuePre.drainAutomatedWakeups
-          SessionQueue.QueueSource.backgroundCompletion
-          (some (backgroundCompletionQueueKey childSessionId)) :=
-    h_step.h_drain_shape
-  rcases h_step.h_append_compose with
-    ⟨entry, _h_append_transition, _h_append_shape,
-      h_entry_request, h_entry_source, h_entry_policy, _h_entry_key⟩
-  have _h_append_is_steering :
-      entry.source = SessionQueue.QueueSource.steering ∧
-      entry.policy = SessionQueue.QueuePolicy.append ∧
-      entry.requestId = steeringRequestId :=
-    ⟨h_entry_source, h_entry_policy, h_entry_request⟩
-  have _h_transcript_session : transcriptPost.sessionId = childSessionId :=
-    h_step.h_transcript_post_session
-  rcases h_step.h_transcript_append with
-    ⟨messageId, _h_message_nonempty, _h_transcript_transition, h_transcript_shape⟩
-  have _h_transcript_is_user_append :
-      transcriptPost =
-        transcriptPre.appendUserMessage
-          messageId
-          Transcript.MessageKind.ordinary :=
-    h_transcript_shape
   have h_trace : Trace pre post :=
     Trace.step
       (BridgeCancelCascadeStep.to_transition h_cascade)

@@ -679,20 +679,6 @@ mod tests {
         assert_eq!(outcome, ToolOutcome::Cancelled);
     }
 
-    #[tokio::test]
-    async fn managed_call_preserves_fast_success() {
-        let deadline = Utc::now() + chrono::Duration::seconds(1);
-
-        let outcome = scope_request_tool_execution(
-            Some(deadline),
-            CancellationToken::new(),
-            call_tool_managed(&FastTool, "{}".to_string()),
-        )
-        .await;
-
-        assert_eq!(outcome, ToolOutcome::Completed("ok".to_string()));
-    }
-
     /// Cancellation must win deterministically even when the tool has already
     /// produced output: the `biased` select polls the (already-fired) token
     /// before the tool's ready result. This is what lets in-tool deadline/

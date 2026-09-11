@@ -5,14 +5,15 @@ import {
   BackendConfigPanel,
   BehaviorConfigEditor,
   SkillConfigPanel,
-  ToolSelectionConfigEditor,
+  ToolsConfigEditor,
 } from "../src/components/config";
 import type {
-  BehaviorView,
+  AgentBehavior,
+  DesktopApiAdapter,
   DeploymentView,
-  InferenceProfileView,
-  ToolSelectionView,
-  ToolServiceRegistryView,
+  InferenceProfile,
+  Tools,
+  ToolServiceRegistry,
 } from "@source-inc/gents-desktop-client";
 
 // Fence for the background-refresh edit wipe: the Tauri bridge emits
@@ -28,7 +29,7 @@ function makeDeployment(): DeploymentView {
     displayName: "test",
     defaultBehaviorId: "default",
     behaviors: [{ behaviorId: "default", displayName: "default" }],
-    conversations: [],
+    sessions: [],
     process: null,
     runtime: null,
     inbox: { hasUnread: false, count: 0 },
@@ -131,33 +132,41 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
   });
 
   it("behavior editor keeps typed values when the inference-profile set changes", () => {
-    const behavior = (): BehaviorView => ({
-      behaviorId: "default",
-      displayName: "default",
-      systemPrompt: "original prompt",
-      inferenceProfileId: "profile-a",
-      enabled: true,
-      isDefault: true,
-      skillRefs: [],
-      skillExcludes: [],
+    const behavior = (): AgentBehavior => ({
+      agent_did: "did:test:operator",
+      behavior_id: "default",
+      context_id: "context",
+      inference_profile_id: "profile-a",
     });
-    const profile = (id: string): InferenceProfileView => ({ profileId: id });
+    const profile = (id: string): InferenceProfile => ({
+      agent_did: "did:test:operator",
+      profile_id: id,
+      backend_id: "backend",
+      model_name: "model",
+    });
     const editorProps = {
-      agentDisplayName: "test",
+      api: {} as DesktopApiAdapter,
       agentDid: "did:test:operator",
-      agentEnabled: true,
-      currentDefaultBehaviorId: "default",
-      inferenceBackends: [],
+      principal: { agent_did: "did:test:operator" },
+      contexts: [
+        {
+          agent_did: "did:test:operator",
+          context_id: "context",
+          system_prompt: "original prompt",
+        },
+      ],
+      compactions: [],
       skills: [],
-      toolSelections: [],
+      tools: [],
       saving: false,
       savedStatus: null,
-      onCreateBackend: vi.fn(),
       onCreateProfile: vi.fn(),
-      onCreateToolSelection: vi.fn(),
+      onCreateTools: vi.fn(),
       onSaved: vi.fn(),
       onSaveAgentConfig: vi.fn(),
-      onSaveBehaviorConfig: vi.fn(),
+      onApplyConfigComponents: vi.fn(),
+      onDeleteBehaviorConfig: vi.fn(),
+      onDeleted: vi.fn(),
     };
     const { rerender } = render(
       <BehaviorConfigEditor
@@ -182,45 +191,36 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
   });
 
   it("tool-selection editor keeps typed values when service registrations change", () => {
-    const selection: ToolSelectionView = {
-      selectionId: "tools-a",
-      displayName: "Tools A",
-      commandAllowedArgvPrefixes: [],
-      commandForbiddenArgvPrefixes: [],
-      cliToolNames: [],
-      allowedMcpServiceIds: [],
-      backgroundableToolNames: [],
-      subagentTargets: [],
-      defraQueryCollections: [],
-      writeTools: [],
+    const selection: Tools = {
+      agent_did: "did:test:operator",
+      tools_id: "tools-a",
+      display_name: "Tools A",
     };
-    const lateService: ToolServiceRegistryView = { serviceId: "mcp-late" };
+    const lateService: ToolServiceRegistry = {
+      agent_did: "did:test:operator",
+      service_id: "mcp-late",
+    };
     const props = {
       agentDid: "did:test:operator",
-      toolSelection: selection,
+      tools: selection,
+      subagentTargets: [],
       toolCeiling: "Readwrite",
       toolRoot: "/tmp/work",
       saving: false,
       savedStatus: null,
       onSaved: vi.fn(),
-      onSaveToolSelectionConfig: vi.fn(),
-      onDeleteToolSelectionConfig: vi.fn(),
+      onApplyConfigComponents: vi.fn(),
+      onDeleteToolsConfig: vi.fn(),
       onDeleted: vi.fn(),
     };
-    const { rerender } = render(
-      <ToolSelectionConfigEditor {...props} toolServiceRegistries={[]} />,
-    );
+    const { rerender } = render(<ToolsConfigEditor {...props} toolServices={[]} />);
 
-    fireEvent.change(screen.getByTestId("tool-selection-display-name"), {
+    fireEvent.change(screen.getByTestId("tools-display-name"), {
       target: { value: "Edited Tools" },
     });
 
-    rerender(
-      <ToolSelectionConfigEditor {...props} toolServiceRegistries={[lateService]} />,
-    );
-    expect(screen.getByTestId("tool-selection-display-name")).toHaveValue(
-      "Edited Tools",
-    );
-    expect(screen.getByTestId("tool-allowed-mcp-service-mcp-late")).not.toBeChecked();
+    rerender(<ToolsConfigEditor {...props} toolServices={[lateService]} />);
+    expect(screen.getByTestId("tools-display-name")).toHaveValue("Edited Tools");
+    expect(screen.getByTestId("tools-service-mcp-late")).not.toBeChecked();
   });
 });

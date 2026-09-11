@@ -210,11 +210,11 @@ pub(super) fn assert_turn_has_agent_text(turn: &codex::Turn, expected: &str) {
     );
 }
 
-pub(super) async fn wait_for_request_metadata(
+pub(super) async fn wait_for_request_input(
     graphql: &str,
     agent_did: &str,
     content: &str,
-) -> Result<(String, String, Value)> {
+) -> Result<(String, String, gents_protocol::request_input::RequestInput)> {
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
         let query = format!(
@@ -229,7 +229,7 @@ pub(super) async fn wait_for_request_metadata(
                 ) {{
                     request_id
                     session_id
-                    metadata
+                    input
                 }}
             }}"#,
             escape_graphql_string(agent_did),
@@ -245,17 +245,17 @@ pub(super) async fn wait_for_request_metadata(
                 .get("session_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("AgentRequest row missing session_id: {row}"))?;
-            let metadata_raw = row
-                .get("metadata")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("AgentRequest row missing metadata: {row}"))?;
-            let metadata = serde_json::from_str::<Value>(metadata_raw)
-                .with_context(|| format!("decoding AgentRequest metadata: {metadata_raw}"))?;
-            return Ok((request_id.to_string(), session_id.to_string(), metadata));
+            let input = serde_json::from_value::<gents_protocol::request_input::RequestInput>(
+                row.get("input")
+                    .cloned()
+                    .ok_or_else(|| anyhow!("AgentRequest row missing input: {row}"))?,
+            )
+            .context("decoding canonical AgentRequest input")?;
+            return Ok((request_id.to_string(), session_id.to_string(), input));
         }
 
         if std::time::Instant::now() >= deadline {
-            bail!("timed out waiting for AgentRequest metadata for {agent_did}");
+            bail!("timed out waiting for AgentRequest input for {agent_did}");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }

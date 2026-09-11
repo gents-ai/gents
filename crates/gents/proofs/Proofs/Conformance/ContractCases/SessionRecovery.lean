@@ -6,39 +6,27 @@ namespace Conformance.ContractCases
 
 def recoveryContextWith
     (origin : ExecutionOrigin)
-    (backend : BackendId)
     (state : RequestState)
     (admission : AdmissionState)
-    (retryCount maxRetries deadline currentTime : Nat)
-    (isLatest : Bool) : RequestContext :=
+    (retryCount maxRetries deadline currentTime : Nat) : SessionRetry.Request :=
   { state := state
   , origin := origin
-  , backend := backend
   , admission := admission
-  , deadline := deadline
-  , claimTime := currentTime
+  , deadline := some deadline
   , currentTime := currentTime
   , retryCount := retryCount
   , maxRetries := maxRetries
-  , progressSeq := 3
-  , messageSeq := 7
-  , isLatest := isLatest
-  , persistence := .committed
   }
 
 def recoveryContext
     (state : RequestState)
     (admission : AdmissionState)
-    (retryCount maxRetries deadline currentTime : Nat)
-    (isLatest : Bool) : RequestContext :=
-  recoveryContextWith .interactive contractBackend
-    state admission retryCount maxRetries deadline currentTime isLatest
-
-def recoveryBackendAlt : BackendId :=
-  { val := "contract-backend-alt" }
+    (retryCount maxRetries deadline currentTime : Nat) : SessionRetry.Request :=
+  recoveryContextWith .interactive
+    state admission retryCount maxRetries deadline currentTime
 
 def recoveryPre
-    (failedCtx latestCtx : RequestContext)
+    (failedCtx latestCtx : SessionRetry.Request)
     (latestId : RequestId := 1)
     (requestIds : Finset RequestId := {1, 3}) : SessionState :=
   { sessionId := 10
@@ -47,7 +35,7 @@ def recoveryPre
   , ctx := fun rid =>
       if rid = 1 then failedCtx
       else if rid = 3 then latestCtx
-      else recoveryContext .pending .released 0 3 10 0 false
+      else recoveryContext .pending .released 0 3 10 0
   , latest := latestId
   }
 
@@ -80,8 +68,6 @@ def recoveryCaseFromStep
       , postNewAdmission := admissionName newPost.admission
       , preOrigin := failedPre.origin.toDefraDB
       , postNewOrigin := newPost.origin.toDefraDB
-      , preBackend := failedPre.backend.val
-      , postNewBackend := newPost.backend.val
       , failedId := failedId
       , newId := newId
       , preLatestId := pre.latest
@@ -97,9 +83,9 @@ def recoveryCaseFromStep
       , maxRetries := failedPre.maxRetries
       , preDeadlineExceeded := decide failedPre.deadlineExceeded
       , postDeadlineExceeded := decide newPost.deadlineExceeded
-      , preFailedIsLatest := failedPre.isLatest
-      , postFailedIsLatest := failedPost.isLatest
-      , postNewIsLatest := newPost.isLatest
+      , preFailedIsLatest := (failedId == pre.latest)
+      , postFailedIsLatest := (failedId == post.latest)
+      , postNewIsLatest := (newId == post.latest)
       , preRequestIds := requestIdList pre.requestIds
       , preFailedExists := decide (failedId ∈ pre.requestIds)
       , preLatestExists := decide (pre.latest ∈ pre.requestIds)
@@ -107,7 +93,6 @@ def recoveryCaseFromStep
       , oldRequestRetained := decide (failedId ∈ post.requestIds)
       , newRequestInserted := decide (newId ∈ post.requestIds)
       , originPreserved := decide (newPost.origin = failedPre.origin)
-      , backendPreserved := decide (newPost.backend = failedPre.backend)
       }
   | none =>
       { name := name
@@ -125,8 +110,6 @@ def recoveryCaseFromStep
       , postNewAdmission := ""
       , preOrigin := failedPre.origin.toDefraDB
       , postNewOrigin := ""
-      , preBackend := failedPre.backend.val
-      , postNewBackend := ""
       , failedId := failedId
       , newId := newId
       , preLatestId := pre.latest
@@ -142,7 +125,7 @@ def recoveryCaseFromStep
       , maxRetries := failedPre.maxRetries
       , preDeadlineExceeded := decide failedPre.deadlineExceeded
       , postDeadlineExceeded := false
-      , preFailedIsLatest := failedPre.isLatest
+      , preFailedIsLatest := (failedId == pre.latest)
       , postFailedIsLatest := false
       , postNewIsLatest := false
       , preRequestIds := requestIdList pre.requestIds
@@ -152,26 +135,25 @@ def recoveryCaseFromStep
       , oldRequestRetained := false
       , newRequestInserted := false
       , originPreserved := false
-      , backendPreserved := false
       }
 
 def sessionRecoveryCases : List SessionRecoveryCase :=
-  let initialFailed := recoveryContext .failed .released 0 3 10 5 true
-  let openFailed := recoveryContext .failed .released 1 3 10 5 true
+  let initialFailed := recoveryContext .failed .released 0 3 10 5
+  let openFailed := recoveryContext .failed .released 1 3 10 5
   let scheduledOpenFailed :=
-    recoveryContextWith .scheduled recoveryBackendAlt .failed .released 1 3 10 5 true
-  let lastBudgetFailed := recoveryContext .failed .released 2 3 10 5 true
-  let exhaustedFailed := recoveryContext .failed .released 3 3 10 5 true
-  let deadlineClosedFailed := recoveryContext .failed .released 1 3 10 11 true
-  let nonLatestFailed := recoveryContext .failed .released 1 3 10 5 false
-  let latestFailed := recoveryContext .failed .released 0 3 10 5 true
-  let pendingLatest := recoveryContext .pending .released 1 3 10 5 true
-  let completedLatest := recoveryContext .completed .released 1 3 10 5 true
-  let deadLatest := recoveryContext .dead .released 1 3 10 5 true
-  let supersededLatest := recoveryContext .superseded .released 1 3 10 5 true
-  let interruptedLatest := recoveryContext .interrupted .released 1 3 10 5 true
-  let inputRequiredLatest := recoveryContext .inputRequired .executing 1 3 10 5 true
-  let processingLatest := recoveryContext .processing .executing 1 3 10 5 true
+    recoveryContextWith .scheduled .failed .released 1 3 10 5
+  let lastBudgetFailed := recoveryContext .failed .released 2 3 10 5
+  let exhaustedFailed := recoveryContext .failed .released 3 3 10 5
+  let deadlineClosedFailed := recoveryContext .failed .released 1 3 10 11
+  let nonLatestFailed := recoveryContext .failed .released 1 3 10 5
+  let latestFailed := recoveryContext .failed .released 0 3 10 5
+  let pendingLatest := recoveryContext .pending .released 1 3 10 5
+  let completedLatest := recoveryContext .completed .released 1 3 10 5
+  let deadLatest := recoveryContext .dead .released 1 3 10 5
+  let supersededLatest := recoveryContext .superseded .released 1 3 10 5
+  let interruptedLatest := recoveryContext .interrupted .released 1 3 10 5
+  let inputRequiredLatest := recoveryContext .inputRequired .executing 1 3 10 5
+  let processingLatest := recoveryContext .processing .executing 1 3 10 5
   [ recoveryCaseFromStep
       "legal_initial_retry_slot"
       (recoveryPre initialFailed initialFailed 1)

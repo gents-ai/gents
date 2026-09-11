@@ -23,7 +23,8 @@ struct ArtifactOwner {
     request_id: String,
     execution_generation: String,
     workspace_id: String,
-    deployment_id: String,
+    owner_agent_did: String,
+    request_agent_did: String,
     seal_hash: String,
     identities: Vec<(PathBuf, DirectoryIdentity)>,
 }
@@ -170,9 +171,13 @@ impl ArtifactGrant {
         request: &AgentRequest,
         execution_generation: &str,
         source_root: &Path,
-        deployment_id: &str,
+        owner_agent_did: &str,
         seal_hash: &str,
     ) -> Result<Self> {
+        anyhow::ensure!(
+            Some(owner_agent_did) == request.workspace_owner_agent_did.as_deref(),
+            "artifact owner must match signed workspace scope"
+        );
         let workspace_id = request
             .workspace_id
             .as_deref()
@@ -226,7 +231,8 @@ impl ArtifactGrant {
             request_id: request.request_id.clone(),
             execution_generation: execution_generation.to_owned(),
             workspace_id: workspace_id.to_owned(),
-            deployment_id: deployment_id.to_owned(),
+            owner_agent_did: owner_agent_did.to_owned(),
+            request_agent_did: request.agent_did.clone(),
             seal_hash: seal_hash.to_owned(),
             identities,
         }));
@@ -256,21 +262,21 @@ impl ArtifactGrant {
         }
         let doc = escape_graphql_string(&owner.request_doc_id);
         let workspace = escape_graphql_string(&owner.workspace_id);
-        let deployment = escape_graphql_string(&owner.deployment_id);
+        let principal = escape_graphql_string(&owner.owner_agent_did);
         let query = format!(
             r#"{{
           AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{
             _docID request_id lifecycle_state execution_generation execution_lease_expires_at
-            workspace_id workspace_authority workspace_owner_deployment_id workspace_seal_hash
+            workspace_id workspace_owner_agent_did workspace_authority agent_did workspace_seal_hash
           }}
           WorkspaceBinding(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}) {{
-            workspace_id request_id request_doc_id authority deployment_id seal_hash lifecycle_state
+            workspace_id request_id request_doc_id authority owner_agent_did seal_hash lifecycle_state
           }}
-          IsolatedWorkspace(filter: {{ workspace_id: {{ _eq: "{workspace}" }} }}) {{
-            workspace_id owner_deployment_id lifecycle_state seal_hash
+          IsolatedWorkspace(filter: {{ workspace_id: {{ _eq: "{workspace}" }}, owner_agent_did: {{ _eq: "{principal}" }} }}) {{
+            workspace_id owner_agent_did lifecycle_state seal_hash
           }}
-          WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{workspace}" }}, deployment_id: {{ _eq: "{deployment}" }} }}) {{
-            host_path observed_tree_hash
+          WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{workspace}" }}, owner_agent_did: {{ _eq: "{principal}" }} }}) {{
+            workspace_id owner_agent_did host_path observed_tree_hash
           }}
         }}"#
         );
@@ -316,7 +322,8 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
     ) || request["execution_generation"].as_str() != Some(&owner.execution_generation)
         || request["request_id"].as_str() != Some(&owner.request_id)
         || request["workspace_id"].as_str() != Some(&owner.workspace_id)
-        || request["workspace_owner_deployment_id"].as_str() != Some(&owner.deployment_id)
+        || request["agent_did"].as_str() != Some(&owner.request_agent_did)
+        || request["workspace_owner_agent_did"].as_str() != Some(&owner.owner_agent_did)
         || request["workspace_seal_hash"].as_str() != Some(&owner.seal_hash)
         || request["workspace_authority"]
             .as_str()
@@ -342,7 +349,7 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
             row["workspace_id"].as_str() == Some(&owner.workspace_id)
                 && row["request_id"].as_str() == Some(&owner.request_id)
                 && row["request_doc_id"].as_str() == Some(&owner.request_doc_id)
-                && row["deployment_id"].as_str() == Some(&owner.deployment_id)
+                && row["owner_agent_did"].as_str() == Some(&owner.owner_agent_did)
                 && row["seal_hash"].as_str() == Some(&owner.seal_hash)
                 && row["lifecycle_state"].as_str() == Some(super::documents::BINDING_ACTIVE)
                 && row["authority"]
@@ -355,7 +362,7 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
         bail!("artifact requires one current active ReadOnly binding");
     }
     let workspace = one("IsolatedWorkspace")?;
-    if workspace["owner_deployment_id"].as_str() != Some(&owner.deployment_id)
+    if workspace["owner_agent_did"].as_str() != Some(&owner.owner_agent_did)
         || workspace["seal_hash"].as_str() != Some(&owner.seal_hash)
         || crate::toolset::normalize_workspace_lifecycle_state(
             workspace["lifecycle_state"].as_str().unwrap_or(""),
@@ -364,7 +371,9 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
         bail!("artifact workspace is no longer sealed under its admitted owner");
     }
     let placement = one("WorkspacePlacement")?;
-    if placement["host_path"].as_str().map(Path::new) != Some(owner.source_root.as_path())
+    if placement["workspace_id"].as_str() != Some(&owner.workspace_id)
+        || placement["owner_agent_did"].as_str() != Some(&owner.owner_agent_did)
+        || placement["host_path"].as_str().map(Path::new) != Some(owner.source_root.as_path())
         || placement["observed_tree_hash"].as_str() != Some(&owner.seal_hash)
     {
         bail!("artifact workspace placement or seal changed");

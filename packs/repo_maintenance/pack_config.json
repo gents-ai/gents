@@ -1,0 +1,1643 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "maintenance-execute",
+      "display_name": "Isolated maintenance executor",
+      "description": "Creates one branch worktree, performs its bounded cleanup, and records validation.",
+      "context_id": "maintenance-execute-context",
+      "inference_profile_id": "maintenance-scan-profile"
+    },
+    {
+      "behavior_id": "maintenance-execute-skip",
+      "display_name": "Zero-finding maintenance skip",
+      "description": "Records skipped execution without creating a workspace.",
+      "context_id": "maintenance-execute-skip-context",
+      "inference_profile_id": "maintenance-profile"
+    },
+    {
+      "behavior_id": "maintenance-integrate",
+      "display_name": "Typed maintenance integrator",
+      "description": "Inspects the sealed workspace; the host applies the sealed diff.",
+      "context_id": "maintenance-integrate-context",
+      "inference_profile_id": "maintenance-profile"
+    },
+    {
+      "behavior_id": "maintenance-publish",
+      "display_name": "Maintenance PR reviewer and publisher",
+      "description": "Reviews the assembled commit series, opens one PR, and drives it toward green.",
+      "context_id": "maintenance-publish-context",
+      "inference_profile_id": "maintenance-profile"
+    },
+    {
+      "behavior_id": "maintenance-recon",
+      "display_name": "Maintenance reconnaissance",
+      "description": "Partitions a repository maintenance into a closed set of areas.",
+      "context_id": "maintenance-recon-context",
+      "inference_profile_id": "maintenance-recon-profile"
+    },
+    {
+      "behavior_id": "maintenance-scan",
+      "display_name": "Maintenance area scanner",
+      "description": "Inspects one repository area and records findings.",
+      "context_id": "maintenance-scan-context",
+      "inference_profile_id": "maintenance-scan-profile"
+    },
+    {
+      "behavior_id": "maintenance-triage",
+      "display_name": "Maintenance triage",
+      "description": "Ranks verified findings and writes the final report.",
+      "context_id": "maintenance-triage-context",
+      "inference_profile_id": "maintenance-profile"
+    },
+    {
+      "behavior_id": "maintenance-verify",
+      "display_name": "Adversarial maintenance verification",
+      "description": "Refutes or confirms every candidate against freshly read code.",
+      "context_id": "maintenance-verify-context",
+      "inference_profile_id": "maintenance-verify-profile"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "maintenance-execute-context",
+      "display_name": "Isolated maintenance executor",
+      "system_prompt": "./agent_behaviors/maintenance_execute/system_prompt.md",
+      "tools_id": "maintenance-execute-tools",
+      "compaction_id": "repo-maintenance-compaction"
+    },
+    {
+      "context_id": "maintenance-execute-skip-context",
+      "display_name": "Zero-finding maintenance skip",
+      "system_prompt": "./agent_behaviors/maintenance_execute_skip/system_prompt.md",
+      "tools_id": "maintenance-execute-skip-tools",
+      "compaction_id": "repo-maintenance-compaction"
+    },
+    {
+      "context_id": "maintenance-integrate-context",
+      "display_name": "Typed maintenance integrator",
+      "system_prompt": "./agent_behaviors/maintenance_integrate/system_prompt.md",
+      "tools_id": "maintenance-integrate-tools",
+      "compaction_id": "repo-maintenance-compaction"
+    },
+    {
+      "context_id": "maintenance-publish-context",
+      "display_name": "Maintenance PR reviewer and publisher",
+      "system_prompt": "./agent_behaviors/maintenance_publish/system_prompt.md",
+      "tools_id": "maintenance-publish-tools",
+      "compaction_id": "repo-maintenance-compaction"
+    },
+    {
+      "context_id": "maintenance-recon-context",
+      "display_name": "Maintenance reconnaissance",
+      "system_prompt": "./agent_behaviors/maintenance_recon/system_prompt.md",
+      "tools_id": "maintenance-recon-tools",
+      "compaction_id": "repo-maintenance-compaction"
+    },
+    {
+      "context_id": "maintenance-scan-context",
+      "display_name": "Maintenance area scanner",
+      "system_prompt": "./agent_behaviors/maintenance_scan/system_prompt.md",
+      "tools_id": "maintenance-scan-tools",
+      "compaction_id": "repo-maintenance-compaction"
+    },
+    {
+      "context_id": "maintenance-triage-context",
+      "display_name": "Maintenance triage",
+      "system_prompt": "./agent_behaviors/maintenance_triage/system_prompt.md",
+      "tools_id": "maintenance-triage-tools",
+      "compaction_id": "repo-maintenance-compaction"
+    },
+    {
+      "context_id": "maintenance-verify-context",
+      "display_name": "Adversarial maintenance verification",
+      "system_prompt": "./agent_behaviors/maintenance_verify/system_prompt.md",
+      "tools_id": "maintenance-verify-tools",
+      "compaction_id": "repo-maintenance-compaction"
+    }
+  ],
+  "compactions": [
+    {
+      "compaction_id": "repo-maintenance-compaction",
+      "display_name": "Repo Maintenance compaction",
+      "strategy": "StripThenSummarize",
+      "threshold": 0.85
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "maintenance-execute-skip-tools",
+      "display_name": "Zero-finding skip: execution ledger only",
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "enable_defra_query": true,
+        "defra_query_collections": [
+          "MaintenanceWorkPackage",
+          "MaintenanceExecutionResult"
+        ],
+        "datastore_tool_surface_ids": [
+          "maintenance-execute-writes",
+          "maintenance-publish-writes"
+        ]
+      }
+    },
+    {
+      "tools_id": "maintenance-execute-tools",
+      "display_name": "Execute an ordered maintenance commit series in one worktree",
+      "host": {
+        "root": "${GENTS_MAINTENANCE_ROOT:-.}",
+        "files": {
+          "mode": "ReadWrite"
+        },
+        "bash": {
+          "mode": "Unrestricted",
+          "execution_mode": "unrestricted",
+          "network_mode": "enabled",
+          "background_enabled": true
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "enable_defra_query": true,
+        "defra_query_collections": [
+          "MaintenanceWorkPackage",
+          "MaintenanceExecutionResult"
+        ],
+        "datastore_tool_surface_ids": [
+          "maintenance-execute-writes"
+        ]
+      }
+    },
+    {
+      "tools_id": "maintenance-integrate-tools",
+      "display_name": "Integrator: sealed-tree inspect, no bash writes",
+      "host": {
+        "root": "${GENTS_MAINTENANCE_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        },
+        "bash": {
+          "mode": "ReadOnly",
+          "execution_mode": "read_only",
+          "network_mode": "disabled"
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      }
+    },
+    {
+      "tools_id": "maintenance-publish-tools",
+      "display_name": "Review, publish, and repair one maintenance PR",
+      "host": {
+        "root": "${GENTS_MAINTENANCE_ROOT:-.}",
+        "files": {
+          "mode": "ReadWrite"
+        },
+        "bash": {
+          "mode": "Unrestricted",
+          "execution_mode": "unrestricted",
+          "network_mode": "enabled",
+          "background_enabled": true
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "enable_defra_query": true,
+        "defra_query_collections": [
+          "MaintenanceExecutionSummary",
+          "MaintenanceExecutionResult",
+          "MaintenanceWorkPackage"
+        ],
+        "datastore_tool_surface_ids": [
+          "maintenance-publish-writes"
+        ]
+      }
+    },
+    {
+      "tools_id": "maintenance-recon-tools",
+      "display_name": "Recon: deterministic Rust pre-scan and category planning",
+      "host": {
+        "root": "${GENTS_MAINTENANCE_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        },
+        "bash": {
+          "mode": "Unrestricted",
+          "execution_mode": "unrestricted",
+          "network_mode": "enabled",
+          "background_enabled": true
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "maintenance-recon-writes"
+        ]
+      },
+      "integrations": {
+        "lsp": {
+          "config": "{\"servers\":{\"rust-analyzer\":{\"warmup_timeout_ms\":60000,\"workspace_ready_timings\":{\"initial\":45000},\"settings\":{\"rust-analyzer\":{\"checkOnSave\":false}}}}}"
+        }
+      }
+    },
+    {
+      "tools_id": "maintenance-scan-tools",
+      "display_name": "Scan: inspect repository deeply and write results",
+      "host": {
+        "root": "${GENTS_MAINTENANCE_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        },
+        "bash": {
+          "mode": "Unrestricted",
+          "execution_mode": "unrestricted",
+          "network_mode": "enabled",
+          "background_enabled": true
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "maintenance-scan-writes"
+        ]
+      },
+      "integrations": {
+        "lsp": {
+          "config": "{\"servers\":{\"rust-analyzer\":{\"warmup_timeout_ms\":60000,\"workspace_ready_timings\":{\"initial\":45000},\"settings\":{\"rust-analyzer\":{\"checkOnSave\":false}}}}}"
+        }
+      }
+    },
+    {
+      "tools_id": "maintenance-triage-tools",
+      "display_name": "Triage: rank verified findings and write report",
+      "host": {
+        "root": "${GENTS_MAINTENANCE_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "enable_defra_query": true,
+        "defra_query_collections": [
+          "MaintenanceVerdict"
+        ],
+        "datastore_tool_surface_ids": [
+          "maintenance-triage-writes"
+        ]
+      }
+    },
+    {
+      "tools_id": "maintenance-verify-tools",
+      "display_name": "Verify: inspect repository, query candidates, and write verdicts",
+      "host": {
+        "root": "${GENTS_MAINTENANCE_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        },
+        "bash": {
+          "mode": "Unrestricted",
+          "execution_mode": "unrestricted",
+          "network_mode": "enabled",
+          "background_enabled": true
+        }
+      },
+      "built_ins": {
+        "enable_context_budget": true
+      },
+      "datastore": {
+        "enable_defra_query": true,
+        "defra_query_collections": [
+          "MaintenanceCandidate"
+        ],
+        "datastore_tool_surface_ids": [
+          "maintenance-verify-writes"
+        ]
+      },
+      "integrations": {
+        "lsp": {
+          "config": "{\"servers\":{\"rust-analyzer\":{\"warmup_timeout_ms\":60000,\"workspace_ready_timings\":{\"initial\":45000},\"settings\":{\"rust-analyzer\":{\"checkOnSave\":false}}}}}"
+        }
+      }
+    }
+  ],
+  "datastore_tool_surfaces": [
+    {
+      "surface_id": "maintenance-execute-writes",
+      "display_name": "Maintenance execution ledger and completion barrier writes",
+      "entries": [
+        {
+          "tool_name": "write_maintenance_execution_result",
+          "collection": "MaintenanceExecutionResult",
+          "description": "Record the terminal outcome of one isolated branch-oriented maintenance work unit.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "package_id",
+              "required": true
+            },
+            {
+              "name": "sequence",
+              "required": true
+            },
+            {
+              "name": "branch",
+              "required": true
+            },
+            {
+              "name": "worktree_path",
+              "required": true
+            },
+            {
+              "name": "status",
+              "required": true
+            },
+            {
+              "name": "commit_sha",
+              "required": true
+            },
+            {
+              "name": "changed_paths",
+              "required": true
+            },
+            {
+              "name": "validation",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": true
+            },
+            {
+              "name": "expected_total",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_maintenance_execution_summary",
+          "collection": "MaintenanceExecutionSummary",
+          "description": "Close one ordered maintenance execution after every planned package has a terminal result.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "expected_total",
+              "required": true
+            },
+            {
+              "name": "completed_count",
+              "required": true
+            },
+            {
+              "name": "skipped_count",
+              "required": true
+            },
+            {
+              "name": "blocked_count",
+              "required": true
+            },
+            {
+              "name": "branch",
+              "required": true
+            },
+            {
+              "name": "worktree_path",
+              "required": true
+            },
+            {
+              "name": "final_commit_sha",
+              "required": true
+            },
+            {
+              "name": "status",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "maintenance-publish-writes",
+      "display_name": "Maintenance pull-request result writes",
+      "entries": [
+        {
+          "tool_name": "write_maintenance_pull_request",
+          "collection": "MaintenancePullRequest",
+          "description": "Record the single terminal draft-PR outcome for a maintenance round.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "branch",
+              "required": true
+            },
+            {
+              "name": "worktree_path",
+              "required": true
+            },
+            {
+              "name": "status",
+              "required": true
+            },
+            {
+              "name": "url",
+              "required": true
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "commit_count",
+              "required": true
+            },
+            {
+              "name": "review_rounds",
+              "required": true
+            },
+            {
+              "name": "confirmed_review_findings",
+              "required": true
+            },
+            {
+              "name": "ci_status",
+              "required": true
+            },
+            {
+              "name": "validation",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "maintenance-recon-writes",
+      "display_name": "Maintenance area writes",
+      "entries": [
+        {
+          "tool_name": "write_maintenance_area",
+          "collection": "MaintenanceArea",
+          "description": "Create one member of the closed maintenance-area set.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1,
+            "expected_count_field": "expected_total"
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "area_id",
+              "required": true
+            },
+            {
+              "name": "repository_path",
+              "fill": {
+                "source_field": "repository_path"
+              }
+            },
+            {
+              "name": "worktree_parent",
+              "fill": {
+                "source_field": "worktree_parent"
+              }
+            },
+            {
+              "name": "worktree_path",
+              "fill": {
+                "source_field": "worktree_path"
+              }
+            },
+            {
+              "name": "suggested_branch",
+              "fill": {
+                "source_field": "suggested_branch"
+              }
+            },
+            {
+              "name": "base_ref",
+              "required": true
+            },
+            {
+              "name": "pr_base",
+              "fill": {
+                "source_field": "pr_base"
+              }
+            },
+            {
+              "name": "category",
+              "required": true
+            },
+            {
+              "name": "path",
+              "required": true
+            },
+            {
+              "name": "instructions",
+              "required": true
+            },
+            {
+              "name": "baseline",
+              "required": true
+            },
+            {
+              "name": "expected_total",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "maintenance-scan-writes",
+      "display_name": "Maintenance candidate and scan-result writes",
+      "entries": [
+        {
+          "tool_name": "write_maintenance_candidate",
+          "collection": "MaintenanceCandidate",
+          "description": "Record one evidenced, behavior-preserving repository maintenance candidate for adversarial verification.",
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "finding_id",
+              "required": true
+            },
+            {
+              "name": "area_id",
+              "required": true
+            },
+            {
+              "name": "repository_path",
+              "fill": {
+                "source_field": "repository_path"
+              }
+            },
+            {
+              "name": "worktree_parent",
+              "fill": {
+                "source_field": "worktree_parent"
+              }
+            },
+            {
+              "name": "worktree_path",
+              "fill": {
+                "source_field": "worktree_path"
+              }
+            },
+            {
+              "name": "suggested_branch",
+              "fill": {
+                "source_field": "suggested_branch"
+              }
+            },
+            {
+              "name": "base_ref",
+              "fill": {
+                "source_field": "base_ref"
+              }
+            },
+            {
+              "name": "pr_base",
+              "fill": {
+                "source_field": "pr_base"
+              }
+            },
+            {
+              "name": "category",
+              "required": true
+            },
+            {
+              "name": "priority",
+              "required": true
+            },
+            {
+              "name": "confidence",
+              "required": true
+            },
+            {
+              "name": "path",
+              "required": true
+            },
+            {
+              "name": "line"
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "detail",
+              "required": true
+            },
+            {
+              "name": "evidence",
+              "required": true
+            },
+            {
+              "name": "preservation",
+              "required": true
+            },
+            {
+              "name": "validation",
+              "required": true
+            },
+            {
+              "name": "estimated_scope",
+              "required": true
+            },
+            {
+              "name": "existing_issue"
+            }
+          ]
+        },
+        {
+          "tool_name": "write_maintenance_scan_result",
+          "collection": "MaintenanceScanResult",
+          "description": "Signal that one maintenance area has finished scanning.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "area_id",
+              "required": true
+            },
+            {
+              "name": "repository_path",
+              "fill": {
+                "source_field": "repository_path"
+              }
+            },
+            {
+              "name": "worktree_parent",
+              "fill": {
+                "source_field": "worktree_parent"
+              }
+            },
+            {
+              "name": "worktree_path",
+              "fill": {
+                "source_field": "worktree_path"
+              }
+            },
+            {
+              "name": "suggested_branch",
+              "fill": {
+                "source_field": "suggested_branch"
+              }
+            },
+            {
+              "name": "base_ref",
+              "fill": {
+                "source_field": "base_ref"
+              }
+            },
+            {
+              "name": "pr_base",
+              "fill": {
+                "source_field": "pr_base"
+              }
+            },
+            {
+              "name": "expected_total",
+              "fill": {
+                "source_field": "expected_total"
+              }
+            },
+            {
+              "name": "summary",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "maintenance-triage-writes",
+      "display_name": "Triage report writes",
+      "entries": [
+        {
+          "tool_name": "write_maintenance_finding",
+          "collection": "MaintenanceFinding",
+          "description": "Promote one confirmed verification verdict into the final maintenance.",
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "finding_id",
+              "required": true
+            },
+            {
+              "name": "area_id",
+              "required": true
+            },
+            {
+              "name": "repository_path",
+              "fill": {
+                "source_field": "repository_path"
+              }
+            },
+            {
+              "name": "worktree_parent",
+              "fill": {
+                "source_field": "worktree_parent"
+              }
+            },
+            {
+              "name": "worktree_path",
+              "fill": {
+                "source_field": "worktree_path"
+              }
+            },
+            {
+              "name": "suggested_branch",
+              "fill": {
+                "source_field": "suggested_branch"
+              }
+            },
+            {
+              "name": "base_ref",
+              "fill": {
+                "source_field": "base_ref"
+              }
+            },
+            {
+              "name": "pr_base",
+              "fill": {
+                "source_field": "pr_base"
+              }
+            },
+            {
+              "name": "category",
+              "required": true
+            },
+            {
+              "name": "priority",
+              "required": true
+            },
+            {
+              "name": "confidence",
+              "required": true
+            },
+            {
+              "name": "path",
+              "required": true
+            },
+            {
+              "name": "line"
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "detail",
+              "required": true
+            },
+            {
+              "name": "verdict",
+              "required": true
+            },
+            {
+              "name": "evidence",
+              "required": true
+            },
+            {
+              "name": "preservation",
+              "required": true
+            },
+            {
+              "name": "validation",
+              "required": true
+            },
+            {
+              "name": "estimated_scope",
+              "required": true
+            },
+            {
+              "name": "existing_issue"
+            },
+            {
+              "name": "verification",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_maintenance_work_package",
+          "collection": "MaintenanceWorkPackage",
+          "description": "Group one to three compatible confirmed findings into one focused commit on the round's shared branch and worktree.",
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "package_id",
+              "required": true
+            },
+            {
+              "name": "sequence",
+              "required": true
+            },
+            {
+              "name": "previous_package_id",
+              "required": true
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "category",
+              "required": true
+            },
+            {
+              "name": "finding_ids",
+              "required": true
+            },
+            {
+              "name": "repository_path",
+              "fill": {
+                "source_field": "repository_path"
+              }
+            },
+            {
+              "name": "worktree_parent",
+              "fill": {
+                "source_field": "worktree_parent"
+              }
+            },
+            {
+              "name": "base_ref",
+              "fill": {
+                "source_field": "base_ref"
+              }
+            },
+            {
+              "name": "pr_base",
+              "fill": {
+                "source_field": "pr_base"
+              }
+            },
+            {
+              "name": "worktree_path",
+              "fill": {
+                "source_field": "worktree_path"
+              }
+            },
+            {
+              "name": "path",
+              "required": true
+            },
+            {
+              "name": "priority",
+              "required": true
+            },
+            {
+              "name": "estimated_scope",
+              "required": true
+            },
+            {
+              "name": "rationale",
+              "required": true
+            },
+            {
+              "name": "preservation",
+              "required": true
+            },
+            {
+              "name": "validation",
+              "required": true
+            },
+            {
+              "name": "suggested_branch",
+              "fill": {
+                "source_field": "suggested_branch"
+              }
+            },
+            {
+              "name": "existing_issues"
+            },
+            {
+              "name": "expected_total",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_maintenance_report",
+          "collection": "MaintenanceReport",
+          "description": "Create the single count-balanced final report for this correlated maintenance run; run_id is filled by the runtime.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "status",
+              "required": true
+            },
+            {
+              "name": "work_unit_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "repository_id",
+              "required": true
+            },
+            {
+              "name": "owned_files",
+              "required": true
+            },
+            {
+              "name": "base_sha",
+              "fill": {
+                "source_field": "base_ref"
+              }
+            },
+            {
+              "name": "branch",
+              "fill": {
+                "source_field": "suggested_branch"
+              }
+            },
+            {
+              "name": "high_priority_count",
+              "required": true
+            },
+            {
+              "name": "confirmed_count",
+              "required": true
+            },
+            {
+              "name": "refuted_count",
+              "required": true
+            },
+            {
+              "name": "work_package_count",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface_id": "maintenance-verify-writes",
+      "display_name": "Verification decision writes",
+      "entries": [
+        {
+          "tool_name": "write_maintenance_verdict",
+          "collection": "MaintenanceVerdict",
+          "description": "Persist one confirmed or refuted decision for a candidate finding.",
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "finding_id",
+              "required": true
+            },
+            {
+              "name": "area_id",
+              "required": true
+            },
+            {
+              "name": "repository_path",
+              "fill": {
+                "source_field": "repository_path"
+              }
+            },
+            {
+              "name": "worktree_parent",
+              "fill": {
+                "source_field": "worktree_parent"
+              }
+            },
+            {
+              "name": "worktree_path",
+              "fill": {
+                "source_field": "worktree_path"
+              }
+            },
+            {
+              "name": "suggested_branch",
+              "fill": {
+                "source_field": "suggested_branch"
+              }
+            },
+            {
+              "name": "base_ref",
+              "fill": {
+                "source_field": "base_ref"
+              }
+            },
+            {
+              "name": "pr_base",
+              "fill": {
+                "source_field": "pr_base"
+              }
+            },
+            {
+              "name": "category",
+              "required": true
+            },
+            {
+              "name": "priority",
+              "required": true
+            },
+            {
+              "name": "confidence",
+              "required": true
+            },
+            {
+              "name": "path",
+              "required": true
+            },
+            {
+              "name": "line"
+            },
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "detail",
+              "required": true
+            },
+            {
+              "name": "verdict",
+              "required": true
+            },
+            {
+              "name": "evidence",
+              "required": true
+            },
+            {
+              "name": "preservation",
+              "required": true
+            },
+            {
+              "name": "validation",
+              "required": true
+            },
+            {
+              "name": "estimated_scope",
+              "required": true
+            },
+            {
+              "name": "existing_issue"
+            },
+            {
+              "name": "verification",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tool_name": "write_maintenance_verification_summary",
+          "collection": "MaintenanceVerificationSummary",
+          "description": "Close the verification ledger and trigger final triage.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "fill": "correlation"
+            },
+            {
+              "name": "repository_path",
+              "fill": {
+                "source_field": "repository_path"
+              }
+            },
+            {
+              "name": "worktree_parent",
+              "fill": {
+                "source_field": "worktree_parent"
+              }
+            },
+            {
+              "name": "worktree_path",
+              "fill": {
+                "source_field": "worktree_path"
+              }
+            },
+            {
+              "name": "suggested_branch",
+              "fill": {
+                "source_field": "suggested_branch"
+              }
+            },
+            {
+              "name": "base_ref",
+              "fill": {
+                "source_field": "base_ref"
+              }
+            },
+            {
+              "name": "pr_base",
+              "fill": {
+                "source_field": "pr_base"
+              }
+            },
+            {
+              "name": "candidate_count",
+              "required": true
+            },
+            {
+              "name": "confirmed_count",
+              "required": true
+            },
+            {
+              "name": "refuted_count",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inference_backends": [
+    {
+      "backend_id": "maintenance-backend",
+      "name": "GLM maintenance coordinator backend",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "${GENTS_MAINTENANCE_COORDINATOR_ENDPOINT:-http://127.0.0.1:8080/v1}",
+      "auth": {
+        "kind": "unauthenticated"
+      },
+      "max_concurrent": 4,
+      "max_queue_depth": 100
+    },
+    {
+      "backend_id": "maintenance-scanner-backend",
+      "name": "Parallel maintenance scanner backend",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "${GENTS_MAINTENANCE_SCANNER_ENDPOINT:-http://127.0.0.1:8080/v1}",
+      "auth": {
+        "kind": "unauthenticated"
+      },
+      "max_concurrent": 8,
+      "max_queue_depth": 100
+    }
+  ],
+  "inference_profiles": [
+    {
+      "profile_id": "maintenance-profile",
+      "display_name": "Code maintenance profile",
+      "backend_id": "maintenance-backend",
+      "model_name": "${GENTS_MAINTENANCE_COORDINATOR_MODEL:-GLM-5.2}",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "sampling_id": "maintenance-profile-sampling",
+      "execution_id": "maintenance-profile-execution"
+    },
+    {
+      "profile_id": "maintenance-recon-profile",
+      "display_name": "Long-running maintenance planning profile",
+      "backend_id": "maintenance-backend",
+      "model_name": "${GENTS_MAINTENANCE_COORDINATOR_MODEL:-GLM-5.2}",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "sampling_id": "maintenance-recon-profile-sampling",
+      "execution_id": "maintenance-recon-profile-execution"
+    },
+    {
+      "profile_id": "maintenance-scan-profile",
+      "display_name": "Long-running parallel maintenance scanner profile",
+      "backend_id": "maintenance-scanner-backend",
+      "model_name": "${GENTS_MAINTENANCE_SCANNER_MODEL:-GLM-5.2}",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "sampling_id": "maintenance-scan-profile-sampling",
+      "execution_id": "maintenance-scan-profile-execution"
+    },
+    {
+      "profile_id": "maintenance-verify-profile",
+      "display_name": "Long-running adversarial verifier profile",
+      "backend_id": "maintenance-backend",
+      "model_name": "${GENTS_MAINTENANCE_COORDINATOR_MODEL:-GLM-5.2}",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "sampling_id": "maintenance-verify-profile-sampling",
+      "execution_id": "maintenance-verify-profile-execution"
+    }
+  ],
+  "inference_sampling": [
+    {
+      "sampling_id": "maintenance-profile-sampling",
+      "display_name": "Code maintenance profile sampling",
+      "temperature": 1.0,
+      "top_p": 0.95
+    },
+    {
+      "sampling_id": "maintenance-recon-profile-sampling",
+      "display_name": "Long-running maintenance planning profile sampling",
+      "temperature": 1.0,
+      "top_p": 0.95
+    },
+    {
+      "sampling_id": "maintenance-scan-profile-sampling",
+      "display_name": "Long-running parallel maintenance scanner profile sampling",
+      "temperature": 1.0,
+      "top_p": 0.95
+    },
+    {
+      "sampling_id": "maintenance-verify-profile-sampling",
+      "display_name": "Long-running adversarial verifier profile sampling",
+      "temperature": 1.0,
+      "top_p": 0.95
+    }
+  ],
+  "inference_execution": [
+    {
+      "execution_id": "maintenance-profile-execution",
+      "display_name": "Code maintenance profile execution",
+      "max_turns": 1000000,
+      "stream_batch_ms": 5000,
+      "retry_policy_id": "maintenance-profile-retry"
+    },
+    {
+      "execution_id": "maintenance-recon-profile-execution",
+      "display_name": "Long-running maintenance planning profile execution",
+      "max_turns": 1000000,
+      "stream_batch_ms": 5000,
+      "retry_policy_id": "maintenance-recon-profile-retry"
+    },
+    {
+      "execution_id": "maintenance-scan-profile-execution",
+      "display_name": "Long-running parallel maintenance scanner profile execution",
+      "max_turns": 1000000,
+      "stream_batch_ms": 5000,
+      "retry_policy_id": "maintenance-scan-profile-retry"
+    },
+    {
+      "execution_id": "maintenance-verify-profile-execution",
+      "display_name": "Long-running adversarial verifier profile execution",
+      "max_turns": 1000000,
+      "stream_batch_ms": 5000,
+      "retry_policy_id": "maintenance-verify-profile-retry"
+    }
+  ],
+  "inference_retry_policies": [
+    {
+      "retry_policy_id": "maintenance-profile-retry",
+      "display_name": "Code maintenance profile retry",
+      "max_transport_retries": 720,
+      "backoff_ms": [
+        5000,
+        30000,
+        120000
+      ],
+      "max_resample_retries": 32
+    },
+    {
+      "retry_policy_id": "maintenance-recon-profile-retry",
+      "display_name": "Long-running maintenance planning profile retry",
+      "max_transport_retries": 720,
+      "backoff_ms": [
+        5000,
+        30000,
+        120000
+      ],
+      "max_resample_retries": 32
+    },
+    {
+      "retry_policy_id": "maintenance-scan-profile-retry",
+      "display_name": "Long-running parallel maintenance scanner profile retry",
+      "max_transport_retries": 720,
+      "backoff_ms": [
+        5000,
+        30000,
+        120000
+      ],
+      "max_resample_retries": 32
+    },
+    {
+      "retry_policy_id": "maintenance-verify-profile-retry",
+      "display_name": "Long-running adversarial verifier profile retry",
+      "max_transport_retries": 720,
+      "backoff_ms": [
+        5000,
+        30000,
+        120000
+      ],
+      "max_resample_retries": 32
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "maintenance-execute-skip-task",
+      "display_name": "Record a zero-finding maintenance skip",
+      "behavior_id": "maintenance-execute-skip",
+      "prompt_template": "./tasks/maintenance_execute_skip_task/prompt.md"
+    },
+    {
+      "task_id": "maintenance-execute-task",
+      "display_name": "Execute one maintenance branch",
+      "behavior_id": "maintenance-execute",
+      "prompt_template": "./tasks/maintenance_execute_task/prompt.md"
+    },
+    {
+      "task_id": "maintenance-integrate-task",
+      "display_name": "Apply a sealed maintenance workspace",
+      "behavior_id": "maintenance-integrate",
+      "prompt_template": "./tasks/maintenance_integrate_task/prompt.md"
+    },
+    {
+      "task_id": "maintenance-publish-task",
+      "display_name": "Review and publish the maintenance PR",
+      "behavior_id": "maintenance-publish",
+      "prompt_template": "./tasks/maintenance_publish_task/prompt.md"
+    },
+    {
+      "task_id": "maintenance-recon-task",
+      "display_name": "Partition repository maintenance",
+      "behavior_id": "maintenance-recon",
+      "prompt_template": "./tasks/maintenance_recon_task/prompt.md"
+    },
+    {
+      "task_id": "maintenance-scan-task",
+      "display_name": "Scan one maintenance area",
+      "behavior_id": "maintenance-scan",
+      "prompt_template": "./tasks/maintenance_scan_task/prompt.md"
+    },
+    {
+      "task_id": "maintenance-triage-task",
+      "display_name": "Triage completed maintenance",
+      "behavior_id": "maintenance-triage",
+      "prompt_template": "./tasks/maintenance_triage_task/prompt.md"
+    },
+    {
+      "task_id": "maintenance-verify-task",
+      "display_name": "Verify completed maintenance candidates",
+      "behavior_id": "maintenance-verify",
+      "prompt_template": "./tasks/maintenance_verify_task/prompt.md"
+    }
+  ],
+  "event_sources": [
+    {
+      "event_source_id": "maintenance-execute",
+      "display_name": "maintenance-execute",
+      "source_collection": "CallbackResult",
+      "event_kind": "created",
+      "filter": "{ binding_id: { _eq: \"maintenance-execute-workspace\" } }",
+      "correlation_field": "caused_by_correlation",
+      "workspace_authority": "readWrite"
+    },
+    {
+      "event_source_id": "maintenance-execute-skip",
+      "display_name": "maintenance-execute-skip",
+      "source_collection": "MaintenanceReport",
+      "event_kind": "created",
+      "filter": "{ status: { _eq: \"skipped\" } }",
+      "correlation_field": "run_id"
+    },
+    {
+      "event_source_id": "maintenance-integrate",
+      "display_name": "maintenance-integrate",
+      "source_collection": "WorkspaceReceipt",
+      "event_kind": "created",
+      "filter": "{ kind: { _eq: \"writer\" } }",
+      "correlation_field": "caused_by_correlation",
+      "workspace_authority": "integrate"
+    },
+    {
+      "event_source_id": "maintenance-publish",
+      "display_name": "maintenance-publish",
+      "source_collection": "WorkspaceReceipt",
+      "event_kind": "created",
+      "filter": "{ kind: { _eq: \"integrator\" } }",
+      "correlation_field": "caused_by_correlation"
+    },
+    {
+      "event_source_id": "maintenance-recon",
+      "display_name": "maintenance-recon",
+      "source_collection": "MaintenanceJob",
+      "event_kind": "created",
+      "correlation_field": "run_id"
+    },
+    {
+      "event_source_id": "maintenance-scan",
+      "display_name": "maintenance-scan",
+      "source_collection": "MaintenanceArea",
+      "event_kind": "created",
+      "correlation_field": "run_id"
+    },
+    {
+      "event_source_id": "maintenance-triage",
+      "display_name": "maintenance-triage",
+      "source_collection": "MaintenanceVerificationSummary",
+      "event_kind": "created",
+      "correlation_field": "run_id"
+    },
+    {
+      "event_source_id": "maintenance-verify",
+      "display_name": "maintenance-verify",
+      "source_collection": "MaintenanceScanResult",
+      "event_kind": "created",
+      "correlation_field": "run_id",
+      "group": {
+        "expected_count": {
+          "source_field": "expected_total"
+        }
+      }
+    },
+    {
+      "event_source_id": "maintenance-execute-workspace",
+      "display_name": "maintenance-execute-workspace",
+      "source_collection": "MaintenanceReport",
+      "event_kind": "created",
+      "filter": "{ status: { _eq: \"planned\" } }"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "maintenance-execute",
+      "display_name": "maintenance-execute",
+      "task_id": "maintenance-execute-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "maintenance-execute"
+      },
+      "concurrency": "serial"
+    },
+    {
+      "trigger_id": "maintenance-execute-skip",
+      "display_name": "maintenance-execute-skip",
+      "task_id": "maintenance-execute-skip-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "maintenance-execute-skip"
+      },
+      "concurrency": "serial"
+    },
+    {
+      "trigger_id": "maintenance-integrate",
+      "display_name": "maintenance-integrate",
+      "task_id": "maintenance-integrate-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "maintenance-integrate"
+      },
+      "concurrency": "serial"
+    },
+    {
+      "trigger_id": "maintenance-publish",
+      "display_name": "maintenance-publish",
+      "task_id": "maintenance-publish-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "maintenance-publish"
+      },
+      "concurrency": "serial"
+    },
+    {
+      "trigger_id": "maintenance-recon",
+      "display_name": "maintenance-recon",
+      "task_id": "maintenance-recon-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "maintenance-recon"
+      },
+      "concurrency": "parallel"
+    },
+    {
+      "trigger_id": "maintenance-scan",
+      "display_name": "maintenance-scan",
+      "task_id": "maintenance-scan-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "maintenance-scan"
+      },
+      "concurrency": "parallel"
+    },
+    {
+      "trigger_id": "maintenance-triage",
+      "display_name": "maintenance-triage",
+      "task_id": "maintenance-triage-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "maintenance-triage"
+      },
+      "concurrency": "serial"
+    },
+    {
+      "trigger_id": "maintenance-verify",
+      "display_name": "maintenance-verify",
+      "task_id": "maintenance-verify-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "maintenance-verify"
+      },
+      "concurrency": "serial"
+    }
+  ],
+  "callbacks": [
+    {
+      "callback_id": "maintenance-execute-workspace",
+      "display_name": "maintenance-execute-workspace",
+      "handler": {
+        "kind": "built_in",
+        "emitter": "create_workspace"
+      },
+      "capabilities": [
+        "create_workspace",
+        "observe_dirty_base",
+        "clone_artifacts"
+      ]
+    }
+  ],
+  "callback_bindings": [
+    {
+      "binding_id": "maintenance-execute-workspace",
+      "event_source_id": "maintenance-execute-workspace",
+      "callback_id": "maintenance-execute-workspace",
+      "input_fields": [
+        "work_unit_id",
+        "repository_id",
+        "base_sha",
+        "branch",
+        "owned_files"
+      ]
+    }
+  ],
+  "repository_placements": [
+    {
+      "repository_id": "repo-maintenance",
+      "host_path": "."
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
@@ -21,16 +22,20 @@ import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.Contracts.Json.SessionHydration
+import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
+import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
+import Proofs.Conformance.Contracts.Json.SessionDocuments
+import Proofs.Conformance.Contracts.Json.RequestInput
 import Proofs.Conformance.Contracts.Json.AggregateBudget
 import Proofs.Conformance.Contracts.Json.RollingCompaction
 import Proofs.Conformance.Contracts.Json.ReductionEngine
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
-import Proofs.Conformance.Triggers.Groups
+import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ClientShell.Contracts
 import Proofs.ApplyReconcile.ContractCases
 import Proofs.Conformance.Deviations
@@ -57,6 +62,8 @@ def snapshotJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
+    ++ "\"child_failure_projections\":" ++ childFailureProjectionsJson ++ ","
+    ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
     ++ "\"graph_failure_attribution_traces\":"
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
     ++ "\"goal_request_head_cases\":"
@@ -93,10 +100,10 @@ def snapshotJson : String :=
       ++ toString Conformance.TriggerContracts.triggerDispatchCaseCount ++ ","
     ++ "\"trigger_dispatch_cases\":"
       ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
-    ++ "\"trigger_group_case_count\":"
-      ++ toString Conformance.TriggerGroupContracts.triggerGroupCaseCount ++ ","
-    ++ "\"trigger_group_cases\":"
-      ++ Conformance.TriggerGroupContracts.triggerGroupCasesJson ++ ","
+    ++ "\"event_group_case_count\":"
+      ++ toString Conformance.EventGroupContracts.eventGroupCaseCount ++ ","
+    ++ "\"event_group_cases\":"
+      ++ Conformance.EventGroupContracts.eventGroupCasesJson ++ ","
     ++ "\"goal_decision_cases\":"
       ++ goalDecisionCasesJson ++ ","
     ++ "\"goal_transition_cases\":"
@@ -121,6 +128,12 @@ def snapshotJson : String :=
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
       ++ enrollmentDigestCasesJson ++ ","
+    ++ "\"discovery_scope_cases\":" ++ Conformance.ConfigurationScope.discoveryCasesJson ++ ","
+    ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
+    ++ "\"configuration_scope_cases\":" ++ Conformance.ConfigurationScope.casesJson ++ ","
+    ++ "\"session_document_cases\":" ++ sessionDocumentsJson ++ ","
+    ++ "\"background_wake_row_cases\":" ++ backgroundWakeRowsCasesJson ++ ","
+    ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
@@ -221,9 +234,6 @@ def snapshotJson : String :=
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
-    ++ "\"recovery_equivalence_cases\":"
-      ++ jsonArray
-        (Recovery.recoveryEquivalenceCases.map recoveryEquivalenceCaseJson) ++ ","
     ++ "\"restart_disposition_cases\":"
       ++ jsonArray
         (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
@@ -270,9 +280,9 @@ def snapshotJson : String :=
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
     ++ "\"descendant_graph_cases\":"
       ++ descendantGraphCasesJson ++ ","
-    ++ "\"r5_cross_deployment_cases\":"
+    ++ "\"r5_cross_principal_cases\":"
       ++ jsonArray
-        (r5CrossDeploymentCases.map r5CrossDeploymentCaseJson) ++ ","
+        (r5CrossPrincipalCases.map r5CrossPrincipalCaseJson) ++ ","
     ++ "\"composed_invariant_witnesses\":"
       ++ jsonArray
         (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
@@ -289,12 +299,12 @@ def snapshotJson : String :=
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
     ++ "\"workspace_path_alias_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
-    ++ "\"workspace_capability_migration_cases\":"
-      ++ Conformance.WorkspacePathCapabilityContracts.migrationCasesJson ++ ","
     ++ "\"workspace_cases\":"
       ++ workspaceCasesJson ++ ","
     ++ "\"workspace_binding_cases\":"
       ++ workspaceBindingCasesJson ++ ","
+    ++ "\"callback_transition_case_count\":" ++ toString callbackTransitionCaseCount ++ ","
+    ++ "\"callback_transition_cases\":" ++ callbackTransitionCasesJson ++ ","
     ++ "\"callback_cases\":"
       ++ callbackCasesJson ++ ","
     ++ "\"r6_background_theorem_witnesses\":"
@@ -360,6 +370,10 @@ def snapshotJson : String :=
         (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
     ++ "\"follow_up_hooks\":"
       ++ followUpHooksJson ++ ","
+    ++ "\"event_group_capture_case_count\":" ++ toString Conformance.EventDelivery.eventGroupCaptureCaseCount ++ ","
+    ++ "\"event_group_capture_cases\":" ++ Conformance.EventDelivery.eventGroupCaptureCasesJson ++ ","
+    ++ "\"event_group_clock_case_count\":" ++ toString Conformance.EventDelivery.eventGroupClockCaseCount ++ ","
+    ++ "\"event_group_clock_cases\":" ++ Conformance.EventDelivery.eventGroupClockCasesJson ++ ","
     ++ "\"event_delivery_transition_case_count\":"
       ++ toString Conformance.EventDelivery.transitionCaseCount ++ ","
     ++ "\"event_delivery_transition_cases\":"

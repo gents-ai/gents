@@ -12,7 +12,6 @@ const PROJECTION_RUNTIME_RESOURCES: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "AgentResponse",
-    "AgentConversation",
     "AgentSession",
 ];
 

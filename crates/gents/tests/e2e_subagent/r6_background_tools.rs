@@ -182,8 +182,9 @@ async fn setup_hook(
         None,
     )
     .await;
-    crate::support::create_agent_session(
+    crate::support::create_agent_session_in_scope(
         db.node.as_ref(),
+        &agent_did,
         &session_id,
         "r6-background",
         "2026-05-14T00:00:00Z",
@@ -195,6 +196,7 @@ async fn setup_hook(
         &session_id,
         "r6-background",
         &agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -286,7 +288,7 @@ async fn fetch_background_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<se
                     session_id: {{ _eq: "{session_id}" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}
-            ) {{ _docID request_id metadata }}
+            ) {{ _docID request_id input }}
         }}"#
     );
     let response = node.execute(&query).await;

@@ -3,21 +3,21 @@ import Proofs.ToolPolicy.Meet
 namespace ToolPolicy
 
 theorem bash_meet_mode_le (a b : BashPolicy) :
-    CommandPolicy.ExecutionMode.Below (a.meet b).mode.toCommand a.mode.toCommand ∧
-    CommandPolicy.ExecutionMode.Below (a.meet b).mode.toCommand b.mode.toCommand := by
-  simp only [BashPolicy.meet, ExecMode.meet_toCommand]
+    CommandPolicy.ExecutionMode.Below (a.meet b).mode a.mode ∧
+    CommandPolicy.ExecutionMode.Below (a.meet b).mode b.mode := by
+  simp only [BashPolicy.meet]
   exact ⟨CommandPolicy.ExecutionMode.meet_below_left _ _,
     CommandPolicy.ExecutionMode.meet_below_right _ _⟩
 
 theorem bash_meet_network_le (a b : BashPolicy) :
-    (a.meet b).network.rank ≤ a.network.rank ∧
-      (a.meet b).network.rank ≤ b.network.rank := by
+    networkRank (a.meet b).network ≤ networkRank a.network ∧
+      networkRank (a.meet b).network ≤ networkRank b.network := by
   cases a with
   | mk am an af aa ar as =>
       cases b with
       | mk bm bn bf ba br bs =>
         cases an <;> cases bn <;>
-    simp [BashPolicy.meet, NetMode.rank]
+    simp [BashPolicy.meet, networkRank]
 
 theorem bash_meet_forbidden_superset (a b : BashPolicy) :
     a.forbidden ⊆ (a.meet b).forbidden ∧
@@ -64,33 +64,15 @@ theorem bash_meet_readonly_right (a b : BashPolicy) (k : String) :
   unfold BashPolicy.meet
   exact EndpointScope.meet_permits_right unitVM a.readOnly b.readOnly k
 
-theorem bash_meet_allowedPrefixMatched_left (a b : BashPolicy) (req : CmdReq) :
-    (a.meet b).allowedPrefixMatched req → a.allowedPrefixMatched req := by
-  intro h
-  cases hA : a.allowed <;> cases hB : b.allowed <;>
-    simp [BashPolicy.meet, BashPolicy.allowedPrefixMatched, EndpointScope.meet, hA, hB] at h ⊢
-  · obtain ⟨pre, ⟨hka, _hkb⟩, hp⟩ := h
-    exact ⟨pre, hka, hp⟩
-  · exact h
-
-theorem bash_meet_allowedPrefixMatched_right (a b : BashPolicy) (req : CmdReq) :
-    (a.meet b).allowedPrefixMatched req → b.allowedPrefixMatched req := by
-  intro h
-  cases hA : a.allowed <;> cases hB : b.allowed <;>
-    simp [BashPolicy.meet, BashPolicy.allowedPrefixMatched, EndpointScope.meet, hA, hB] at h ⊢
-  · obtain ⟨pre, ⟨_hka, hkb⟩, hp⟩ := h
-    exact ⟨pre, hkb, hp⟩
-  · exact h
-
 theorem bash_meet_network_gate_left (a b : BashPolicy) (req : CmdReq)
-    (h : req.wantsNetwork → (a.meet b).network.rank ≥ NetMode.rank .inherit) :
-    req.wantsNetwork → a.network.rank ≥ NetMode.rank .inherit := by
+    (h : req.wantsNetwork → networkRank (a.meet b).network ≥ networkRank .inherit) :
+    req.wantsNetwork → networkRank a.network ≥ networkRank .inherit := by
   intro hw
   exact le_trans (h hw) (bash_meet_network_le a b).1
 
 theorem bash_meet_network_gate_right (a b : BashPolicy) (req : CmdReq)
-    (h : req.wantsNetwork → (a.meet b).network.rank ≥ NetMode.rank .inherit) :
-    req.wantsNetwork → b.network.rank ≥ NetMode.rank .inherit := by
+    (h : req.wantsNetwork → networkRank (a.meet b).network ≥ networkRank .inherit) :
+    req.wantsNetwork → networkRank b.network ≥ networkRank .inherit := by
   intro hw
   exact le_trans (h hw) (bash_meet_network_le a b).2
 
@@ -106,7 +88,7 @@ theorem bash_meet_mode_gate_left (a b : BashPolicy) (req : CmdReq)
     cases b.mode <;> rfl
   rcases hr hmeet with hhead | hprefix
   · exact Or.inl (bash_meet_readonly_left a b req.cmdHead hhead)
-  · exact Or.inr (bash_meet_allowedPrefixMatched_left a b req hprefix)
+  · exact Or.inr (bash_meet_allowed_left a b req hprefix)
 
 theorem bash_meet_mode_gate_right (a b : BashPolicy) (req : CmdReq)
     (h : (a.meet b).modeGate req) :
@@ -120,7 +102,7 @@ theorem bash_meet_mode_gate_right (a b : BashPolicy) (req : CmdReq)
     cases a.mode <;> rfl
   rcases hr hmeet with hhead | hprefix
   · exact Or.inl (bash_meet_readonly_right a b req.cmdHead hhead)
-  · exact Or.inr (bash_meet_allowedPrefixMatched_right a b req hprefix)
+  · exact Or.inr (bash_meet_allowed_right a b req hprefix)
 
 theorem BashPolicy.meet_permits_left (a b : BashPolicy) (req : CmdReq) :
     (a.meet b).permits req → a.permits req := by

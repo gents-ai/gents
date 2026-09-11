@@ -423,7 +423,7 @@ pub(super) async fn project_messages(
     node: &Arc<EmbeddedNode>,
     history_observation: &mut HistoryObservation,
     message_sequence_high_water: Option<i64>,
-    request_id: &str,
+    request: &gents_protocol::row::AgentRequestRow,
     context_window_tokens: u64,
 ) -> Result<MessageProjection> {
     let sink = NodeSink { node };
@@ -431,7 +431,7 @@ pub(super) async fn project_messages(
         &sink,
         history_observation,
         message_sequence_high_water,
-        request_id,
+        request,
         context_window_tokens,
     )
     .await
@@ -443,9 +443,10 @@ async fn project_messages_with_sink<S: QuerySink>(
     sink: &S,
     history_observation: &mut HistoryObservation,
     message_sequence_high_water: Option<i64>,
-    request_id: &str,
+    request: &gents_protocol::row::AgentRequestRow,
     context_window_tokens: u64,
 ) -> Result<MessageProjection> {
+    let request_id = request.request_id.as_str();
     // Read order (fail-closed selection depends on it): discover the
     // response row (1), then load and fix the authoritative history tip
     // (2a/2b), and only then read the `AgentMessage` rows (3). The
@@ -454,9 +455,9 @@ async fn project_messages_with_sink<S: QuerySink>(
     // materialized row is already durable in the rows read after: the
     // live segment's chronology position can never associate a reset
     // with a stale row list.
-    let response = sink.execute(&latest_response_query(request_id)).await;
+    let response = sink.execute(&latest_response_query(request)?).await;
     ensure_no_errors(&response, "grok shim message response query")?;
-    let response_row = decode_response_row(&response);
+    let response_row = decode_response_row(&response, request)?;
 
     // Load and fix the history tip before any `AgentMessage` read.
     let history: Option<Vec<CompositeSnapshot>> = match response_row.as_ref() {
@@ -479,7 +480,7 @@ async fn project_messages_with_sink<S: QuerySink>(
     };
 
     let (rows, message_sequence_high_water) =
-        load_incremental_message_rows(sink, message_sequence_high_water, request_id).await?;
+        load_incremental_message_rows(sink, message_sequence_high_water, request).await?;
 
     let context_window_tokens = effective_context_window_tokens(context_window_tokens);
 
@@ -767,36 +768,61 @@ impl ResponseRow {
 /// Latest `AgentResponse` row for the request id. The runtime writes one
 /// response per request; ordering by `created_at` descending with a bound of
 /// one row keeps the query bounded even if a retry replaced the row.
-fn latest_response_query(request_id: &str) -> String {
-    format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
-            ) {{ {RESPONSE_FIELDS} }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    )
+fn request_filter(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
+    let owner = request
+        .agent_did
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow!("message request principal missing"))?;
+    let session = request
+        .session_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow!("message request session missing"))?;
+    let physical = request
+        .doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow!("message request physical identity missing"))?;
+    let scope =
+        gents::session::session_scope_filter(owner, session, request.requester_did.as_deref());
+    Ok(format!(
+        r#"{scope}, request_id: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}}"#,
+        escape_graphql_string(&request.request_id),
+        escape_graphql_string(physical)
+    ))
 }
 
-/// `AgentMessage` rows for the request id in transcript order. Ordered by
-/// `sequence` so the streamed chunks follow the durable transcript order
-/// (user echo before assistant output).
-fn request_messages_query(request_id: &str, min_sequence: i64) -> String {
-    format!(
-        r#"{{
-            AgentMessage(
-                filter: {{
-                    request_id: {{ _eq: "{request_id}" }},
-                    sequence: {{ _gte: {min_sequence} }}
-                }},
-                order: {{ sequence: ASC }},
-                limit: {MESSAGE_BATCH_LIMIT}
-            ) {{ {MESSAGE_FIELDS} }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    )
+fn validate_request_row(
+    value: &Value,
+    request: &gents_protocol::row::AgentRequestRow,
+) -> Result<()> {
+    anyhow::ensure!(
+        value["request_doc_id"].as_str() == request.doc_id.as_deref()
+            && value["request_id"].as_str() == Some(request.request_id.as_str())
+            && value["agent_did"].as_str() == request.agent_did.as_deref()
+            && value["session_id"].as_str() == request.session_id.as_deref()
+            && value.get("requester_did") == Some(&json!(request.requester_did)),
+        "message projection row has wrong request scope"
+    );
+    Ok(())
+}
+
+fn latest_response_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
+    let filter = request_filter(request)?;
+    Ok(format!(
+        r#"{{ AgentResponse(filter: {{ {filter} }}, limit: 2) {{ {RESPONSE_FIELDS} }} }}"#
+    ))
+}
+
+fn request_messages_query(
+    request: &gents_protocol::row::AgentRequestRow,
+    min_sequence: i64,
+) -> Result<String> {
+    let filter = request_filter(request)?;
+    Ok(format!(
+        r#"{{ AgentMessage(filter: {{ {filter}, sequence: {{_gte: {min_sequence}}} }}, order: {{sequence: ASC}}, limit: {MESSAGE_BATCH_LIMIT}) {{ {MESSAGE_FIELDS} }} }}"#
+    ))
 }
 
 const MESSAGE_BATCH_LIMIT: usize = 64;
@@ -807,16 +833,15 @@ const MESSAGE_BATCH_LIMIT: usize = 64;
 async fn load_incremental_message_rows<S: QuerySink>(
     sink: &S,
     committed_high_water: Option<i64>,
-    request_id: &str,
+    request: &gents_protocol::row::AgentRequestRow,
 ) -> Result<(Vec<MessageRow>, Option<i64>)> {
+    let request_id = request.request_id.as_str();
     let mut floor = committed_high_water.unwrap_or(0);
     let mut rows = Vec::new();
     let mut candidate_high_water = committed_high_water;
 
     loop {
-        let response = sink
-            .execute(&request_messages_query(request_id, floor))
-            .await;
+        let response = sink.execute(&request_messages_query(request, floor)?).await;
         ensure_no_errors(&response, "grok shim message rows query")?;
         let values = response
             .data
@@ -824,13 +849,16 @@ async fn load_incremental_message_rows<S: QuerySink>(
             .and_then(|data| data.get("AgentMessage"))
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default();
+            .ok_or_else(|| anyhow!("missing message rows"))?;
         if values.len() > MESSAGE_BATCH_LIMIT {
             return Err(anyhow!(
                 "grok shim message rows query exceeded its fixed batch limit"
             ));
         }
 
+        for value in &values {
+            validate_request_row(value, request)?;
+        }
         let batch_len = values.len();
         let batch = decode_message_rows_values(values)?;
         let mut previous = None;
@@ -869,6 +897,7 @@ async fn load_incremental_message_rows<S: QuerySink>(
 }
 
 const RESPONSE_FIELDS: &str = "
+    request_doc_id agent_did requester_did session_id
     _docID
     request_id
     status
@@ -886,6 +915,7 @@ const RESPONSE_FIELDS: &str = "
 ";
 
 const MESSAGE_FIELDS: &str = "
+    request_doc_id agent_did requester_did session_id
     message_key
     request_id
     sequence
@@ -895,24 +925,22 @@ const MESSAGE_FIELDS: &str = "
     timestamp
 ";
 
-fn decode_response_row(response: &defra_node::QueryResponse) -> Option<ResponseRow> {
-    let row = response
+fn decode_response_row(
+    response: &defra_node::QueryResponse,
+    request: &gents_protocol::row::AgentRequestRow,
+) -> Result<Option<ResponseRow>> {
+    let rows = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentResponse"))
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()?;
-    match serde_json::from_value::<ResponseRow>(row) {
-        Ok(row) => Some(row),
-        Err(error) => {
-            tracing::debug!(
-                %error,
-                "grok shim skipped an undecodable AgentResponse row"
-            );
-            None
-        }
-    }
+        .ok_or_else(|| anyhow!("missing response rows"))?;
+    anyhow::ensure!(rows.len() <= 1, "duplicate response for physical request");
+    let Some(value) = rows.first() else {
+        return Ok(None);
+    };
+    validate_request_row(value, request)?;
+    Ok(Some(serde_json::from_value(value.clone())?))
 }
 
 fn decode_message_rows_values(values: Vec<Value>) -> Result<Vec<MessageRow>> {
@@ -1759,6 +1787,11 @@ impl CompositeSnapshot {
 
 #[cfg(test)]
 mod tests {
+    fn request_fixture(id: &str) -> gents_protocol::row::AgentRequestRow {
+        serde_json::from_value(json!({"_docID":"request-doc", "request_id":id,
+            "agent_did":"owner", "session_id":"sess", "requester_did":null}))
+        .unwrap()
+    }
     use super::*;
 
     fn message_row(role: &str, sequence: i64, content: &str) -> MessageRow {
@@ -2106,13 +2139,43 @@ mod tests {
     }
 
     #[test]
+    fn response_selection_rejects_foreign_physical_scope_and_duplicates() {
+        let request = request_fixture("req-1");
+        let row = json!({"_docID":"response-doc", "request_id":"req-1",
+            "request_doc_id":"request-doc", "agent_did":"owner", "session_id":"sess", "requester_did":null});
+        assert!(decode_response_row(
+            &query_response(json!({"AgentResponse":[row.clone()]})),
+            &request
+        )
+        .unwrap()
+        .is_some());
+        for field in ["request_doc_id", "agent_did", "session_id", "requester_did"] {
+            let mut foreign = row.clone();
+            foreign[field] = json!("foreign");
+            assert!(
+                decode_response_row(
+                    &query_response(json!({"AgentResponse":[foreign]})),
+                    &request
+                )
+                .is_err(),
+                "{field}"
+            );
+        }
+        assert!(decode_response_row(
+            &query_response(json!({"AgentResponse":[row.clone(),row]})),
+            &request
+        )
+        .is_err());
+    }
+
+    #[test]
     fn queries_escape_the_request_id() {
-        let query = latest_response_query("req\"1\\x");
+        let query = latest_response_query(&request_fixture("req\"1\\x")).unwrap();
         assert!(
             !query.contains("\"req\"1\\x\""),
             "the interpolated request id must be escaped"
         );
-        let messages = request_messages_query("req\"1\\x", 0);
+        let messages = request_messages_query(&request_fixture("req\"1\\x"), 0).unwrap();
         assert!(
             !messages.contains("\"req\"1\\x\""),
             "the interpolated request id must be escaped"
@@ -2121,13 +2184,13 @@ mod tests {
 
     #[test]
     fn queries_are_request_scoped_and_bounded() {
-        let query = latest_response_query("req-1");
-        assert!(query.contains(r#"request_id: { _eq: "req-1" }"#));
-        assert!(query.contains("limit: 1"));
-        let messages = request_messages_query("req-1", 17);
-        assert!(messages.contains(r#"request_id: { _eq: "req-1" }"#));
-        assert!(messages.contains("sequence: { _gte: 17 }"));
-        assert!(messages.contains("order: { sequence: ASC }"));
+        let query = latest_response_query(&request_fixture("req-1")).unwrap();
+        assert!(query.contains(r#"request_id: {_eq: "req-1"}"#));
+        assert!(query.contains("limit: 2"));
+        let messages = request_messages_query(&request_fixture("req-1"), 17).unwrap();
+        assert!(messages.contains(r#"request_id: {_eq: "req-1"}"#));
+        assert!(messages.contains("sequence: {_gte: 17}"));
+        assert!(messages.contains("order: {sequence: ASC}"));
         assert!(messages.contains("limit: 64"));
     }
 
@@ -2180,7 +2243,7 @@ mod tests {
     impl QuerySink for EmptyRequestSink {
         async fn execute(&self, query: &str) -> defra_node::QueryResponse {
             assert!(
-                query.contains(r#"request_id: { _eq: "req-1" }"#),
+                query.contains(r#"request_id: {_eq: "req-1"}"#),
                 "every query must stay request-scoped: {query}"
             );
             if query.contains("AgentResponse(") {
@@ -2200,10 +2263,15 @@ mod tests {
     #[tokio::test]
     async fn projection_binds_context_window_tokens_to_the_bound_catalog() {
         let mut observation = HistoryObservation::default();
-        let default_projection =
-            project_messages_with_sink(&EmptyRequestSink, &mut observation, None, "req-1", 0)
-                .await
-                .expect("empty-request projection");
+        let default_projection = project_messages_with_sink(
+            &EmptyRequestSink,
+            &mut observation,
+            None,
+            &request_fixture("req-1"),
+            0,
+        )
+        .await
+        .expect("empty-request projection");
         assert_eq!(
             default_projection.context_window_tokens,
             super::super::DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -2213,10 +2281,15 @@ mod tests {
         assert!(!default_projection.terminal);
 
         let mut observation = HistoryObservation::default();
-        let bound_projection =
-            project_messages_with_sink(&EmptyRequestSink, &mut observation, None, "req-1", 524_288)
-                .await
-                .expect("empty-request projection");
+        let bound_projection = project_messages_with_sink(
+            &EmptyRequestSink,
+            &mut observation,
+            None,
+            &request_fixture("req-1"),
+            524_288,
+        )
+        .await
+        .expect("empty-request projection");
         assert_eq!(
             bound_projection.context_window_tokens, 524_288,
             "a configured window must pass through without modification"
@@ -2251,7 +2324,7 @@ mod tests {
                 json!({
                     "message_key": format!("sess:{sequence}"),
                     "session_id": "sess",
-                    "request_id": "req-1",
+                    "request_id": "req-1", "request_doc_id":"request-doc", "agent_did":"owner", "requester_did":null, "session_id":"sess",
                     "sequence": sequence,
                     "role": "assistant",
                     "content": format!("row-{sequence}{suffix}"),
@@ -2271,13 +2344,13 @@ mod tests {
             ])),
             queries: std::sync::Mutex::new(Vec::new()),
         };
-        let cold = load_incremental_message_rows(&sink, None, "req-1")
+        let cold = load_incremental_message_rows(&sink, None, &request_fixture("req-1"))
             .await
             .expect("cold pages");
         assert_eq!(cold.0.len(), 70);
         assert_eq!(cold.1, Some(70));
 
-        let unchanged = load_incremental_message_rows(&sink, cold.1, "req-1")
+        let unchanged = load_incremental_message_rows(&sink, cold.1, &request_fixture("req-1"))
             .await
             .expect("tail page");
         assert_eq!(unchanged.0.len(), 1);
@@ -2286,9 +2359,9 @@ mod tests {
 
         let queries = sink.queries.lock().expect("queries lock");
         assert_eq!(queries.len(), 3);
-        assert!(queries[0].contains("sequence: { _gte: 0 }"));
-        assert!(queries[1].contains("sequence: { _gte: 65 }"));
-        assert!(queries[2].contains("sequence: { _gte: 70 }"));
+        assert!(queries[0].contains("sequence: {_gte: 0}"));
+        assert!(queries[1].contains("sequence: {_gte: 65}"));
+        assert!(queries[2].contains("sequence: {_gte: 70}"));
         assert!(queries.iter().all(|query| query.contains("limit: 64")));
     }
 
@@ -2451,7 +2524,7 @@ mod tests {
         query_response(json!({ "AgentMessage": [ {
             "message_key": "sess:2",
             "session_id": "sess",
-            "request_id": "req-1",
+            "request_id": "req-1", "request_doc_id":"request-doc", "agent_did":"owner", "requester_did":null, "session_id":"sess",
             "sequence": 2,
             "role": "assistant",
             "content": blob,
@@ -2532,13 +2605,13 @@ mod tests {
                     return query_response(json!({ "AgentResponse": [
                         {
                             "_docID": "bae-doc",
-                            "request_id": "req-1",
+                            "request_id": "req-1", "request_doc_id":"request-doc", "agent_did":"owner", "requester_did":null, "session_id":"sess",
                             "content": "abc",
                             "status": "streaming",
                         },
                         {
                             "_docID": "bae-doc",
-                            "request_id": "req-1",
+                            "request_id": "req-1", "request_doc_id":"request-doc", "agent_did":"owner", "requester_did":null, "session_id":"sess",
                             "content": "tip-validated",
                             "status": "complete",
                             "token_count": 42,
@@ -2552,7 +2625,7 @@ mod tests {
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 return query_response(json!({ "AgentResponse": [ {
                     "_docID": "bae-doc",
-                    "request_id": "req-1",
+                    "request_id": "req-1", "request_doc_id":"request-doc", "agent_did":"owner", "requester_did":null, "session_id":"sess",
                     "status": "error",
                     "content": "discovery-only bytes",
                     "token_count": 777,
@@ -2575,9 +2648,15 @@ mod tests {
         };
         let mut observation = HistoryObservation::default();
         for poll in 1..=2 {
-            let projection = project_messages_with_sink(&sink, &mut observation, None, "req-1", 0)
-                .await
-                .expect("projection must not error");
+            let projection = project_messages_with_sink(
+                &sink,
+                &mut observation,
+                None,
+                &request_fixture("req-1"),
+                0,
+            )
+            .await
+            .expect("projection must not error");
             assert!(
                 !projection.terminal,
                 "unavailable history must never report terminal state (poll {poll})"
@@ -2611,9 +2690,10 @@ mod tests {
 
         // Recovery: the third poll proves the history and exposes the
         // validated tip exactly — its bytes, its tokens, its terminality.
-        let projection = project_messages_with_sink(&sink, &mut observation, None, "req-1", 0)
-            .await
-            .expect("projection must not error");
+        let projection =
+            project_messages_with_sink(&sink, &mut observation, None, &request_fixture("req-1"), 0)
+                .await
+                .expect("projection must not error");
         let history = projection.history.as_ref().expect("proven history");
         assert_eq!(history.len(), 2);
         assert_eq!(history.last().expect("tip").cid, "bafy-c2");
@@ -2839,7 +2919,7 @@ mod tests {
                     //    while unprovable, and superseded by the tip).
                     ScriptedStep::Reply(query_response(json!({ "AgentResponse": [ {
                         "_docID": "bae-doc",
-                        "request_id": "req-1",
+                        "request_id": "req-1", "request_doc_id":"request-doc", "agent_did":"owner", "requester_did":null, "session_id":"sess",
                         "status": "running",
                         "content": "live bytes in flight",
                     } ] }))),
@@ -2852,13 +2932,13 @@ mod tests {
                     ScriptedStep::Reply(query_response(json!({ "AgentResponse": [
                         {
                             "_docID": "bae-doc",
-                            "request_id": "req-1",
+                            "request_id": "req-1", "request_doc_id":"request-doc", "agent_did":"owner", "requester_did":null, "session_id":"sess",
                             "content": "abc",
                             "status": "streaming",
                         },
                         {
                             "_docID": "bae-doc",
-                            "request_id": "req-1",
+                            "request_id": "req-1", "request_doc_id":"request-doc", "agent_did":"owner", "requester_did":null, "session_id":"sess",
                             "content": "",
                             "status": "streaming",
                             "materialized_message_sequence": 2,
@@ -2880,9 +2960,15 @@ mod tests {
         let task_sink = Arc::clone(&sink);
         let task = tokio::spawn(async move {
             let mut observation = HistoryObservation::default();
-            project_messages_with_sink(task_sink.as_ref(), &mut observation, None, "req-1", 0)
-                .await
-                .expect("projection must not error")
+            project_messages_with_sink(
+                task_sink.as_ref(),
+                &mut observation,
+                None,
+                &request_fixture("req-1"),
+                0,
+            )
+            .await
+            .expect("projection must not error")
         });
 
         // The barrier fires only when the gated row read begins, which is
@@ -2976,7 +3062,7 @@ mod tests {
             .map(|height| {
                 json!({
                     "_docID": doc_id,
-                    "request_id": "req-1",
+                    "request_id": "req-1", "request_doc_id":"request-doc", "agent_did":"owner", "requester_did":null, "session_id":"sess",
                     "content": format!("value-{height}"),
                     "progress_seq": height,
                     "status": "streaming",

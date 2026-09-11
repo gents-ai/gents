@@ -487,8 +487,8 @@ async fn build_retry_agent_with_liveness(
     deadline_duration_secs: u64,
     stream_liveness_timeout_secs: Option<u64>,
 ) -> Gents {
-    upsert_retry_backend(db.node.as_ref(), endpoint, max_concurrent).await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    upsert_retry_backend(db.node.as_ref(), identity.did(), endpoint, max_concurrent).await;
     let mut behavior = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
@@ -516,46 +516,42 @@ async fn spawn_agent(node: &EmbeddedNode, agent: Gents, agent_did: String) -> Bo
     BootedAgent::new(shutdown_tx, handle, agent_did)
 }
 
-async fn upsert_retry_backend(node: &EmbeddedNode, endpoint: &str, max_concurrent: i64) {
-    let escaped_backend_id = escape_graphql_string(RETRY_BACKEND_ID);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let escaped_model = escape_graphql_string(RETRY_MODEL);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: {max_concurrent},
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model}"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: {max_concurrent},
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model}"],
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert retry tape backend failed: {:?}",
-        response.errors
-    );
+async fn upsert_retry_backend(
+    node: &EmbeddedNode,
+    owner: &str,
+    endpoint: &str,
+    max_concurrent: i64,
+) {
+    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    gents::ensure_agent_principal(node, owner).await.unwrap();
+    let value = serde_json::json!({"agent_did":owner,"backend_id":RETRY_BACKEND_ID,"name":RETRY_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":max_concurrent,"max_queue_depth":100});
+    let profile_id = format!("{RETRY_BEHAVIOR_ID}:inference");
+    let profile = serde_json::json!({"agent_did":owner,"profile_id":profile_id,"backend_id":RETRY_BACKEND_ID,"model_name":RETRY_MODEL});
+    let behavior = serde_json::json!({"agent_did":owner,"behavior_id":RETRY_BEHAVIOR_ID,"inference_profile_id":profile_id});
+    let plan = DesiredStateApplyPlan::new(
+        [
+            (gents::Collection::InferenceBackend, value),
+            (gents::Collection::InferenceProfile, profile),
+            (gents::Collection::AgentBehavior, behavior),
+        ]
+        .into_iter()
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect(),
+    )
+    .unwrap();
+    ConfigAccess::transact_local(node, None, "test.install_provider_backend", |txn| {
+        let plan = &plan;
+        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+    gents::backend_registry::set_backend_probe_status(node, owner, RETRY_BACKEND_ID, "healthy")
+        .await
+        .unwrap();
 }
 
 async fn fetch_timeline_request(node: &EmbeddedNode, request_id: &str) -> TimelineRequestRow {
@@ -569,7 +565,7 @@ async fn fetch_timeline_request(node: &EmbeddedNode, request_id: &str) -> Timeli
                 behavior_id
                 session_id
                 content
-                metadata
+                input
                 lifecycle_state
                 backend_id
                 failure_reason

@@ -44,8 +44,6 @@ pub async fn materialize_collections(
         collections_attempted: collections.len(),
         documents_materialized: 0,
         collections_failed: 0,
-        skipped_upstream_missing: false,
-        read_through_scans: 0,
         parked_unique_conflicts: Vec::new(),
     };
 

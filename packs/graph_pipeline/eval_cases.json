@@ -2,6 +2,7 @@
   {
     "name": "valid_single_stage",
     "intent": {
+      "agent_did": "did:key:owner",
       "graph_id": "document-review",
       "nodes": [
         {
@@ -42,6 +43,7 @@
   {
     "name": "unknown_capability_fails_closed",
     "intent": {
+      "agent_did": "did:key:owner",
       "graph_id": "document-review",
       "nodes": [
         {
@@ -82,6 +84,7 @@
   {
     "name": "missing_required_entry_is_repairable",
     "intent": {
+      "agent_did": "did:key:owner",
       "graph_id": "document-review",
       "nodes": [
         {
@@ -115,6 +118,7 @@
   {
     "name": "intent_bound_is_enforced",
     "intent": {
+      "agent_did": "did:key:owner",
       "graph_id": "document-review",
       "nodes": [
         {
@@ -155,6 +159,7 @@
   {
     "name": "valid_two_stage_route",
     "intent": {
+      "agent_did": "did:key:owner",
       "graph_id": "document-review-two-stage",
       "nodes": [
         {
@@ -172,7 +177,7 @@
         {
           "from": { "node_id": "worker", "port": "result" },
           "to": { "node_id": "reviewer", "port": "input" },
-          "delivery": { "kind": "per_document" }
+          "delivery": null
         }
       ],
       "entries": [
@@ -206,6 +211,7 @@
   {
     "name": "stale_capability_revision_is_repairable",
     "intent": {
+      "agent_did": "did:key:owner",
       "graph_id": "document-review",
       "nodes": [
         {
@@ -246,6 +252,7 @@
   {
     "name": "entry_schema_mismatch_is_repairable",
     "intent": {
+      "agent_did": "did:key:owner",
       "graph_id": "document-review",
       "nodes": [
         {
@@ -286,6 +293,7 @@
   {
     "name": "cycle_is_repairable",
     "intent": {
+      "agent_did": "did:key:owner",
       "graph_id": "document-review-cycle",
       "nodes": [
         {
@@ -303,12 +311,12 @@
         {
           "from": { "node_id": "worker", "port": "result" },
           "to": { "node_id": "reviewer", "port": "input" },
-          "delivery": { "kind": "per_document" }
+          "delivery": null
         },
         {
           "from": { "node_id": "reviewer", "port": "feedback" },
           "to": { "node_id": "worker", "port": "feedback" },
-          "delivery": { "kind": "per_document" }
+          "delivery": null
         }
       ],
       "entries": [

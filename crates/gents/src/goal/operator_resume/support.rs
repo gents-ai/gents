@@ -23,6 +23,7 @@ pub(super) struct ResumeCase {
 
 pub(super) const SESSION: &str = "contract-session";
 pub(super) const PARENT: &str = "contract-parent";
+
 pub(super) struct Fixture {
     pub node: Arc<EmbeddedNode>,
     pub identity: Arc<KeyIdentity>,
@@ -37,6 +38,12 @@ impl Fixture {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::test_support::install_test_behavior(
+            node.as_ref(),
+            identity.did(),
+            "contract-behavior",
+        )
+        .await;
         let goal = set_goal(
             &node,
             identity.did(),
@@ -61,10 +68,6 @@ impl Fixture {
         create.caused_by_correlation = Some("graph-correlation".into());
         create.caused_by_source_doc_id = Some("source".into());
         create.caused_by_trigger_context = Some(r#"{"contract":"context"}"#.into());
-        create.workspace_id = Some("contract-workspace".into());
-        create.workspace_authority = Some("readOnly".into());
-        create.workspace_owner_deployment_id = Some("contract-deployment".into());
-        create.workspace_seal_hash = Some("contract-seal".into());
         crate::sign_agent_request_create(identity.as_ref(), &mut create)
             .await
             .unwrap();
@@ -114,10 +117,7 @@ impl Fixture {
         )
         .unwrap();
         if conflicting {
-            let mut metadata: Value =
-                serde_json::from_str(create.metadata.as_deref().unwrap()).unwrap();
-            metadata["queue"]["key"] = json!("goal:foreign");
-            create.metadata = Some(metadata.to_string());
+            create.input.queue.as_mut().unwrap().key = Some("goal:foreign".into());
         }
         sign_request(&mut create, RequestSigner::Identity(self.identity.as_ref()))
             .await
@@ -157,7 +157,9 @@ impl Fixture {
                 .is_some_and(|k| k.starts_with("goal-continuation:"))
         }) {
             verify_runtime_local_control_receipt(child, self.identity.did(), PARENT).unwrap();
-            let metadata: Value = serde_json::from_str(child.metadata.as_deref().unwrap()).unwrap();
+            let input = child.input.as_ref().unwrap();
+            let queue = input.queue.as_ref().unwrap();
+            let continuation = input.goal_continuation.as_ref().unwrap();
             // Assert concrete lineage independently of prepare_goal_continuation:
             // sharing its implementation must not hide a producer deletion.
             assert_eq!(child.agent_did.as_deref(), Some(self.identity.did()));
@@ -188,21 +190,18 @@ impl Fixture {
                 child.caused_by_trigger_context.as_deref(),
                 Some(r#"{"contract":"context"}"#)
             );
-            assert_eq!(child.workspace_id.as_deref(), Some("contract-workspace"));
-            assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
-            assert_eq!(
-                child.workspace_owner_deployment_id.as_deref(),
-                Some("contract-deployment")
-            );
-            assert_eq!(child.workspace_seal_hash.as_deref(), Some("contract-seal"));
-            assert_eq!(metadata["goal"]["goal_id"], self.goal.goal_id);
-            assert_eq!(metadata["goal"]["parent_request_id"], PARENT);
             let wrapup = self.goal.parsed_status() == Some(GoalStatus::BudgetLimited);
-            assert_eq!(metadata["goal"]["wrapup"], wrapup);
-            assert_eq!(metadata["queue"]["source"], "goal");
-            assert_eq!(metadata["queue"]["policy"], "coalesce");
-            assert_eq!(metadata["queue"]["queued_after_request_id"], PARENT);
-            let seq = metadata["goal"]["continuation_sequence"].as_i64().unwrap();
+            assert_eq!(continuation.wrapup, wrapup);
+            assert_eq!(
+                queue.source,
+                gents_protocol::request_input::QueueSource::Goal
+            );
+            assert_eq!(
+                queue.policy,
+                gents_protocol::request_input::QueuePolicy::Coalesce
+            );
+            assert_eq!(queue.queued_after_request_id.as_deref(), Some(PARENT));
+            let seq = continuation.sequence;
             assert_eq!(seq, 1);
             let identity = goal_continuation_identity(&self.goal.goal_id, PARENT, 1).unwrap();
             assert_eq!(child.request_id, identity.request_id);
@@ -210,8 +209,8 @@ impl Fixture {
                 child.retry_key.as_deref(),
                 Some(identity.retry_key.as_str())
             );
-            if metadata["queue"]["key"] != "goal:foreign" {
-                assert_eq!(metadata["queue"]["key"], identity.queue_key);
+            if queue.key.as_deref() != Some("goal:foreign") {
+                assert_eq!(queue.key.as_deref(), Some(identity.queue_key.as_str()));
             }
 
             let expected = prepare_goal_continuation(
@@ -227,12 +226,9 @@ impl Fixture {
             let actual: GoalBackedRequestFingerprint =
                 serde_json::from_value(serde_json::to_value(child).unwrap()).unwrap();
             let mut comparison = expected.clone();
-            let foreign = metadata["queue"]["key"] == "goal:foreign";
+            let foreign = queue.key.as_deref() == Some("goal:foreign");
             if foreign {
-                let mut metadata: Value =
-                    serde_json::from_str(comparison.metadata.as_deref().unwrap()).unwrap();
-                metadata["queue"]["key"] = json!("goal:foreign");
-                comparison.metadata = Some(metadata.to_string());
+                comparison.input.queue.as_mut().unwrap().key = Some("goal:foreign".into());
             }
             assert_eq!(
                 actual,

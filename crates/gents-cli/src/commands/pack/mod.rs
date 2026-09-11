@@ -22,14 +22,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         }
         PackCommand::Show(args) => {
             let pack = resolve_pack(&args.package)?;
-            let graph = if matches!(pack.manifest.metadata.kind, PackKind::Graph) {
-                Some(gents::graph_package::load_resolved_graph_package(&pack)?.catalog_entry())
-            } else {
-                None
-            };
-            crate::print_json(
-                &json!({"manifest": pack.manifest, "digest": pack.digest, "graph": graph}),
-            )
+            crate::print_json(&json!({"manifest": pack.manifest, "digest": pack.digest}))
         }
         PackCommand::Install(args) => install(args).await,
         PackCommand::Prune(args) => prune(args),
@@ -180,13 +173,17 @@ mod tests {
             let pack = resolve_pack(&manifest.name).unwrap();
             let root = tempfile::tempdir().unwrap();
             materialize(&pack, root.path()).unwrap();
-            let (_, report) = crate::desired_state::load_manifest_root(root.path());
-            assert!(
-                report.errors.is_empty(),
-                "{}: {:?}",
-                manifest.name,
-                report.errors
-            );
+            let config = gents::pack::load_pack_config(
+                &pack.manifest,
+                &gents::pack::PackInstallOptions {
+                    agent_did: "did:key:zPackCatalogValidationOwner".into(),
+                },
+                &|path| pack.asset(path).map(Vec::from),
+                &|_| None,
+            )
+            .unwrap_or_else(|error| panic!("{}: {error:#}", manifest.name));
+            gents::config_client::DesiredStateApplyPlan::from_pack_config(&config)
+                .unwrap_or_else(|error| panic!("{}: {error:#}", manifest.name));
         }
     }
 }

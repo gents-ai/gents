@@ -57,16 +57,16 @@ inductive Transition : RuntimeState → RuntimeState → Prop where
       post = { pre with routerObservedGeneration := pre.active.generation } →
       Transition pre post
   | accept_request {pre post : RuntimeState} (process : ProcessState)
-      (sessionId : SessionId) (requestId : RequestId) :
-      CanAdmitRequest process pre sessionId requestId →
+      (sessionId : SessionId) (requestId : RequestId) (requested : BehaviorId) :
+      CanAdmitRequest process pre sessionId requestId requested →
       post =
         { pre with
           accepted := insert requestId pre.accepted
         , inFlight := insert requestId pre.inFlight
         , requestGeneration := Function.update pre.requestGeneration requestId pre.routerObservedGeneration
         , requestSession := Function.update pre.requestSession requestId sessionId
-        , requestBehavior := Function.update pre.requestBehavior requestId (pre.selectedBehavior sessionId)
-        , sessionBehavior := pre.bindSessionIfNeeded sessionId (pre.selectedBehavior sessionId)
+        , requestBehavior := Function.update pre.requestBehavior requestId requested
+        , sessionBehavior := pre.bindSessionIfNeeded sessionId requested
         } →
       Transition pre post
   | finish_request {pre post : RuntimeState} (requestId : RequestId) :
@@ -180,11 +180,11 @@ theorem coherent_preserved
       refine ⟨h_active, h_last, h_default, h_runnable, h_unavailable, h_generation_live,
         h_generation_ready, ?_, h_ready_live, h_live_bound, h_pending, h_request_live, h_session⟩
       exact h_ready_live _ h_ready
-  | accept_request _ sessionId requestId h_can h_post =>
+  | accept_request _ sessionId requestId requested h_can h_post =>
       cases h_post
       rcases h_can with
-        ⟨_h_unaccepted, h_fresh, _h_process_ready, _, h_router_eq,
-          _h_dispatch, _h_unavailable⟩
+        ⟨_h_unaccepted, h_fresh, ⟨_h_process_ready, _, h_router_eq,
+          _h_dispatch, _h_unavailable⟩, h_binding⟩
       refine ⟨h_active, h_last, h_default, h_runnable, h_unavailable, h_generation_live,
         h_generation_ready, h_router_live, h_ready_live, h_live_bound, h_pending, ?_, ?_⟩
       · intro rid h_rid
@@ -199,7 +199,7 @@ theorem coherent_preserved
       · intro rid h_rid
         simp at h_rid
         rcases h_rid with rfl | h_old
-        · simpa [Function.update] using bindSessionIfNeeded_selected pre sessionId
+        · simpa [Function.update] using bindSessionIfNeeded_requested pre sessionId requested h_binding
         · have h_ne : rid ≠ requestId := by
             intro h_eq
             subst h_eq
@@ -208,20 +208,20 @@ theorem coherent_preserved
           · have h_bound : pre.sessionBehavior sessionId = some (pre.requestBehavior rid) := by
               simpa [h_same] using h_session rid h_old
             have h_bind_eq :
-                pre.bindSessionIfNeeded sessionId (pre.selectedBehavior sessionId) =
+                pre.bindSessionIfNeeded sessionId requested =
                   pre.sessionBehavior :=
               bindSessionIfNeeded_eq_self_of_bound h_bound
             simpa [h_bind_eq, Function.update, h_ne, h_same]
               using h_session rid h_old
           · have h_other :
-              pre.bindSessionIfNeeded sessionId (pre.selectedBehavior sessionId)
+              pre.bindSessionIfNeeded sessionId requested
                   (pre.requestSession rid) =
                 pre.sessionBehavior (pre.requestSession rid) :=
               bindSessionIfNeeded_other
                 (s := pre)
                 (sessionId := sessionId)
                 (other := pre.requestSession rid)
-                (behaviorId := pre.selectedBehavior sessionId)
+                (behaviorId := requested)
                 h_same
             simpa [h_other, Function.update, h_ne, h_same]
               using h_session rid h_old

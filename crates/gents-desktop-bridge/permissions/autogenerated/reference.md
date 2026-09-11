@@ -362,25 +362,12 @@ Denies the desktop_codex_login_cancel command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-conversation-rename`
+`gents-desktop-bridge:allow-desktop-config-components-apply`
 
 </td>
 <td>
 
-Enables the desktop_conversation_rename command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-conversation-rename`
-
-</td>
-<td>
-
-Denies the desktop_conversation_rename command without any pre-configured scope.
+Enables the desktop_config_components_apply command without any pre-configured scope.
 
 </td>
 </tr>
@@ -388,25 +375,12 @@ Denies the desktop_conversation_rename command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-event-trigger-delete`
+`gents-desktop-bridge:deny-desktop-config-components-apply`
 
 </td>
 <td>
 
-Enables the desktop_event_trigger_delete command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-event-trigger-delete`
-
-</td>
-<td>
-
-Denies the desktop_event_trigger_delete command without any pre-configured scope.
+Denies the desktop_config_components_apply command without any pre-configured scope.
 
 </td>
 </tr>
@@ -414,12 +388,12 @@ Denies the desktop_event_trigger_delete command without any pre-configured scope
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-event-trigger-save`
+`gents-desktop-bridge:allow-desktop-config-components-patch`
 
 </td>
 <td>
 
-Enables the desktop_event_trigger_save command without any pre-configured scope.
+Enables the desktop_config_components_patch command without any pre-configured scope.
 
 </td>
 </tr>
@@ -427,12 +401,64 @@ Enables the desktop_event_trigger_save command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:deny-desktop-event-trigger-save`
+`gents-desktop-bridge:deny-desktop-config-components-patch`
 
 </td>
 <td>
 
-Denies the desktop_event_trigger_save command without any pre-configured scope.
+Denies the desktop_config_components_patch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-event-source-delete`
+
+</td>
+<td>
+
+Enables the desktop_event_source_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-event-source-delete`
+
+</td>
+<td>
+
+Denies the desktop_event_source_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-event-source-save`
+
+</td>
+<td>
+
+Enables the desktop_event_source_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-event-source-save`
+
+</td>
+<td>
+
+Denies the desktop_event_source_save command without any pre-configured scope.
 
 </td>
 </tr>
@@ -667,32 +693,6 @@ Enables the desktop_list_subagent_tree command without any pre-configured scope.
 <td>
 
 Denies the desktop_list_subagent_tree command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-list-tool-call-holds`
-
-</td>
-<td>
-
-Enables the desktop_list_tool_call_holds command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-list-tool-call-holds`
-
-</td>
-<td>
-
-Denies the desktop_list_tool_call_holds command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1324,32 +1324,6 @@ Denies the desktop_request_timeline command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-resolve-tool-call-hold`
-
-</td>
-<td>
-
-Enables the desktop_resolve_tool_call_hold command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-resolve-tool-call-hold`
-
-</td>
-<td>
-
-Denies the desktop_resolve_tool_call_hold command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-schedule-delete`
 
 </td>
@@ -1473,6 +1447,32 @@ Enables the desktop_session_live_delta command without any pre-configured scope.
 <td>
 
 Denies the desktop_session_live_delta command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-session-rename`
+
+</td>
+<td>
+
+Enables the desktop_session_rename command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-rename`
+
+</td>
+<td>
+
+Denies the desktop_session_rename command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1662,58 +1662,6 @@ Denies the desktop_task_save command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-tool-selection-delete`
-
-</td>
-<td>
-
-Enables the desktop_tool_selection_delete command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-tool-selection-delete`
-
-</td>
-<td>
-
-Denies the desktop_tool_selection_delete command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-tool-selection-save`
-
-</td>
-<td>
-
-Enables the desktop_tool_selection_save command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-tool-selection-save`
-
-</td>
-<td>
-
-Denies the desktop_tool_selection_save command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-tool-service-delete`
 
 </td>
@@ -1811,6 +1759,110 @@ Enables the desktop_tool_surface_explain command without any pre-configured scop
 <td>
 
 Denies the desktop_tool_surface_explain command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-tools-delete`
+
+</td>
+<td>
+
+Enables the desktop_tools_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-tools-delete`
+
+</td>
+<td>
+
+Denies the desktop_tools_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-tools-save`
+
+</td>
+<td>
+
+Enables the desktop_tools_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-tools-save`
+
+</td>
+<td>
+
+Denies the desktop_tools_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-trigger-delete`
+
+</td>
+<td>
+
+Enables the desktop_trigger_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-trigger-delete`
+
+</td>
+<td>
+
+Denies the desktop_trigger_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-trigger-save`
+
+</td>
+<td>
+
+Enables the desktop_trigger_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-trigger-save`
+
+</td>
+<td>
+
+Denies the desktop_trigger_save command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2052,32 +2104,6 @@ Interrupt request execution
 <tr>
 <td>
 
-`gents-desktop-bridge:holds-read`
-
-</td>
-<td>
-
-List tool-call holds
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:holds-control`
-
-</td>
-<td>
-
-Resolve tool-call holds
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:runtime-admin`
 
 </td>
@@ -2122,7 +2148,7 @@ Read redacted provider account metadata
 </td>
 <td>
 
-Task/schedule/event-trigger save and run
+Task, schedule, trigger, and event-source save and run
 
 </td>
 </tr>

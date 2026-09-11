@@ -23,11 +23,7 @@ import type {
   ToolSurfaceExplanationView,
   WorkspaceListingView,
 } from "../types.js";
-import type {
-  DesktopOperationsSnapshot,
-  HeldToolCallView,
-  ResolveHoldResult,
-} from "../types/operations.js";
+import type { DesktopOperationsSnapshot } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
 import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
@@ -133,8 +129,8 @@ export function createDesktopApiAdapter(
       invokeDesktop<void>("desktop_mailbox_dismiss", {
         request: { itemId },
       }),
-    renameConversation: (request) =>
-      invokeDesktop<void>("desktop_conversation_rename", { request }),
+    renameSession: (request) =>
+      invokeDesktop<void>("desktop_session_rename", { request }),
     resendRequest: (requestId) =>
       invokeDesktop<RequestResendResult>("desktop_request_resend", {
         requestId,
@@ -142,6 +138,14 @@ export function createDesktopApiAdapter(
     retryRequest: (requestId) =>
       invokeDesktop<ChatSendResult>("desktop_request_retry", {
         requestId,
+      }),
+    applyConfigComponents: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_config_components_apply", {
+        request,
+      }),
+    patchConfigComponents: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_config_components_patch", {
+        request,
       }),
     saveAgentConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", {
@@ -161,8 +165,16 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_schedule_delete", {
         request,
       }),
-    deleteEventTriggerConfig: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_event_trigger_delete", {
+    saveEventSourceConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_event_source_save", {
+        request,
+      }),
+    deleteEventSourceConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_event_source_delete", {
+        request,
+      }),
+    deleteTriggerConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_trigger_delete", {
         request,
       }),
     deleteBackendConfig: (request) =>
@@ -173,8 +185,8 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_delete", {
         request,
       }),
-    deleteToolSelectionConfig: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_tool_selection_delete", {
+    deleteToolsConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_tools_delete", {
         request,
       }),
     deleteToolServiceConfig: (request) =>
@@ -216,8 +228,8 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
         request,
       }),
-    saveToolSelectionConfig: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_tool_selection_save", {
+    saveToolsConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_tools_save", {
         request,
       }),
     saveToolServiceConfig: (request) =>
@@ -236,8 +248,8 @@ export function createDesktopApiAdapter(
       }),
     runSchedule: (request) =>
       invokeDesktop<TaskRunResult>("desktop_schedule_run", { request }),
-    saveEventTriggerConfig: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_event_trigger_save", {
+    saveTriggerConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_trigger_save", {
         request,
       }),
     runTask: (request) =>
@@ -266,14 +278,6 @@ export function createDesktopApiAdapter(
       }),
     interruptRequest: (request) =>
       invokeDesktop<InterruptRequestResult>("desktop_interrupt_request", {
-        request,
-      }),
-    listToolCallHolds: (agentDid) =>
-      invokeDesktop<HeldToolCallView[]>("desktop_list_tool_call_holds", {
-        request: { agentDid },
-      }),
-    resolveToolCallHold: (request) =>
-      invokeDesktop<ResolveHoldResult>("desktop_resolve_tool_call_hold", {
         request,
       }),
   };

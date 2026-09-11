@@ -169,10 +169,7 @@ fn read_stored_init_config(agent_home: &std::path::Path) -> Option<StoredInitCon
 #[path = "snapshot/runtime_tasks.rs"]
 mod runtime_tasks;
 #[cfg(test)]
-use runtime_tasks::{
-    conversation_task_tag, recent_runs_for_task_views, request_backed_conversation_summaries,
-    retain_latest_conversation_summaries, task_run_history,
-};
+use runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_history};
 use runtime_tasks::{request_matches_agent, source_matches_agent};
 
 #[path = "snapshot/runtime.rs"]

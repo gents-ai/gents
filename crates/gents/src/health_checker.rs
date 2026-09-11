@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
@@ -368,40 +368,33 @@ async fn run_health_check(
     options: &HealthCheckerOptions,
     persistence: Option<HealthPersistenceContext<'_>>,
 ) -> Result<()> {
-    let query = r#"{
-  ToolServiceRegistry(
-    filter: { status: { _eq: "online" } }
-  ) {
-    service_id
-    hostname
-    tailscale_ip
-    lan_ip
-    mcp_port
-    mcp_path
-    send_agent_did
-    updated_at
-  }
-}"#;
-
-    let resp = node.execute(query).await;
-    if resp.has_errors() {
-        anyhow::bail!("health check registry query failed: {:?}", resp.errors);
-    }
-
-    let raw_services = resp
-        .data
+    let owner = persistence
         .as_ref()
-        .and_then(|data| data.get("ToolServiceRegistry"))
-        .cloned()
-        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
-
-    let services: Vec<McpHealthCheckService> =
-        serde_json::from_value(raw_services).context("parsing ToolServiceRegistry entries")?;
+        .map(|context| context.agent_did)
+        .ok_or_else(|| anyhow::anyhow!("registry health checks require a principal scope"))?;
+    let services = crate::registry::configured_mcp_services(node, owner)
+        .await?
+        .into_iter()
+        .filter(|service| service.enabled)
+        .map(|service| McpHealthCheckService {
+            service_id: service.service_id,
+            hostname: service.hostname.unwrap_or_default(),
+            tailscale_ip: service.tailscale_ip.unwrap_or_default(),
+            lan_ip: service.lan_ip.unwrap_or_default(),
+            mcp_port: service.mcp_port.and_then(|port| u16::try_from(port).ok()),
+            mcp_path: service.mcp_path.unwrap_or_default(),
+            send_agent_did: service.send_agent_did,
+            // Configuration revisions are not service heartbeats. This probe
+            // supplies a fresh observation through the existing health owner.
+            updated_at: None,
+        })
+        .collect();
+    let mcp_pool = mcp_pool.for_agent(owner);
 
     run_health_check_cycle(
         services,
         Utc::now(),
-        mcp_pool,
+        &mcp_pool,
         health_map,
         local_hostname,
         local_subnet,
@@ -489,23 +482,6 @@ pub async fn run_health_check_cycle(
             .await;
             continue;
         }
-        if service.mcp_path.trim().is_empty() {
-            apply_probe_failure(
-                mcp_pool,
-                health_map,
-                &service_id,
-                previous_model,
-                previous_last_seen,
-                previous_endpoint,
-                previous_tool_count,
-                "registry entry missing mcp_path".to_string(),
-                now,
-                options,
-            )
-            .await;
-            continue;
-        }
-
         let endpoint = resolve_mcp_url(
             &service.hostname,
             &service.tailscale_ip,
@@ -977,14 +953,16 @@ mod registry_parsing_tests {
 #[cfg(test)]
 mod tests {
     use chrono::Duration as ChronoDuration;
+    use defra_node::EmbeddedNode;
     use rmcp::model::ListToolsResult;
+    use serde_json::Value;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use super::{
-        backoff_duration, run_health_check_cycle, step_service, HealthCheckerOptions,
-        HealthStateInternal, McpHealthCheckService, ProbeEvent, ServiceHealth, ServiceHealthMap,
-        ServiceModelInternal,
+        backoff_duration, run_health_check, run_health_check_cycle, step_service,
+        HealthCheckerOptions, HealthPersistenceContext, HealthStateInternal, McpHealthCheckService,
+        ProbeEvent, ServiceHealth, ServiceHealthMap, ServiceModelInternal,
     };
     use crate::lean_vocab_test::{lean_mcp_health_cases, LeanMcpHealthCase};
     use crate::mcp_pool::McpPool;
@@ -1249,5 +1227,141 @@ mod tests {
         .await
         .unwrap();
         assert!(health_map.get("removed-service").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn persisted_health_rows_are_principal_scoped_and_stale_rows_sweep_within_the_agent() {
+        let node = crate::oauth_credential::test_support::test_node().await;
+        let did_a = "did:key:zHealthA";
+        let did_b = "did:key:zHealthB";
+        for did in [did_a, did_b] {
+            let did = crate::graphql::escape_graphql_string(did);
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{ create_ToolServiceRegistry(input: {{
+                agent_did: "{did}", service_id: "observability-mcp", hostname: "local-host",
+                tailscale_ip: "100.64.0.1", mcp_port: 9213, mcp_path: "/mcp", enabled: true
+            }}) {{ _docID }} }}"#
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let probes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let capture = probes.clone();
+        let pool = McpPool::new_with_list_tools_handler(move |service, endpoint| {
+            let capture = capture.clone();
+            async move {
+                capture
+                    .lock()
+                    .unwrap()
+                    .push((service.to_string(), endpoint.to_string()));
+                Ok(ListToolsResult::default())
+            }
+        });
+        async fn rows(node: &EmbeddedNode) -> Vec<Value> {
+            let response = node
+                .execute(
+                    r#"{ ToolServiceHealthState {
+                _docID service_id agent_did status tool_count failure_count k_max
+                endpoint last_error_class last_error_message
+            } }"#,
+                )
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("ToolServiceHealthState"))
+                .and_then(Value::as_array)
+                .expect("selected health rows")
+                .clone()
+        }
+        let mut original_ids = Vec::new();
+        // A third cycle with fresh in-memory health must update the existing row.
+        for (index, did) in [did_a, did_b, did_a].into_iter().enumerate() {
+            run_health_check(
+                &node,
+                &pool,
+                &ServiceHealthMap::new(),
+                "local-host",
+                None,
+                &HealthCheckerOptions::default(),
+                Some(HealthPersistenceContext {
+                    node: &node,
+                    agent_did: did,
+                }),
+            )
+            .await
+            .unwrap();
+            let persisted = rows(&node).await;
+            assert_eq!(persisted.len(), if index == 0 { 1 } else { 2 });
+            for principal in [did_a, did_b]
+                .into_iter()
+                .take(if index == 0 { 1 } else { 2 })
+            {
+                let row = persisted
+                    .iter()
+                    .find(|row| row["agent_did"] == principal)
+                    .expect("principal's health row");
+                assert_eq!(row["service_id"], "observability-mcp");
+                assert_eq!(row["status"], "healthy");
+                assert_eq!(row["tool_count"], 0);
+                assert_eq!(row["failure_count"], 0);
+                assert_eq!(
+                    row["k_max"],
+                    HealthCheckerOptions::default().failure_threshold_k
+                );
+                assert_eq!(row.get("last_error_class"), Some(&Value::Null));
+                assert_eq!(row.get("last_error_message"), Some(&Value::Null));
+                let probed = probes
+                    .lock()
+                    .unwrap()
+                    .first()
+                    .cloned()
+                    .expect("probe observation");
+                assert_eq!(row["service_id"], probed.0);
+                assert_eq!(row["endpoint"], probed.1);
+            }
+            let mut ids: Vec<_> = persisted
+                .iter()
+                .map(|row| row["_docID"].as_str().expect("document id").to_string())
+                .collect();
+            ids.sort();
+            if index == 1 {
+                original_ids = ids;
+            } else if index == 2 {
+                assert_eq!(ids, original_ids, "upsert must preserve document identity");
+            }
+        }
+        assert_eq!(probes.lock().unwrap().len(), 3);
+
+        // An actual registry change makes only this principal's row stale.
+        let response = node
+            .execute(
+                r#"mutation {
+            update_ToolServiceRegistry(filter: { service_id: { _eq: "observability-mcp" }, agent_did: { _eq: "did:key:zHealthA" } },
+                input: { enabled: false }) { _docID }
+        }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        run_health_check(
+            &node,
+            &pool,
+            &ServiceHealthMap::new(),
+            "local-host",
+            None,
+            &HealthCheckerOptions::default(),
+            Some(HealthPersistenceContext {
+                node: &node,
+                agent_did: did_a,
+            }),
+        )
+        .await
+        .unwrap();
+        let remaining = rows(&node).await;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0]["agent_did"], did_b);
+        assert_eq!(remaining[0]["service_id"], "observability-mcp");
     }
 }

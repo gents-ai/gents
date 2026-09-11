@@ -29,7 +29,7 @@ async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
     let init = read_init_config(&home_dir)?
         .ok_or_else(|| anyhow::anyhow!("no initialized home at {}", home_dir.display()))?;
     let identity = load_initialized_home_identity(&home_dir, &init)?;
-    let principal_did = identity.did().to_string();
+    let agent_did = identity.did().to_string();
     let (access, _) =
         resolve_config_access(args.access.home.as_deref(), args.access.graphql.as_deref()).await?;
 
@@ -40,7 +40,10 @@ async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    if load_binding(&access, &binding_id).await?.is_some() {
+    if load_binding(&access, &agent_did, &binding_id)
+        .await?
+        .is_some()
+    {
         bail!(
             "chain key binding {:?} already exists; choose another --name",
             binding_id
@@ -52,7 +55,7 @@ async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
     let created_at = chrono::Utc::now().to_rfc3339();
     let payload = attestation_payload(
         &binding_id,
-        &principal_did,
+        &agent_did,
         &address,
         KEY_BACKEND_KEYRING,
         &created_at,
@@ -64,23 +67,27 @@ async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
 
     let doc = ChainKeyBindingDocument {
         binding_id: binding_id.clone(),
-        principal_did: principal_did.clone(),
+        agent_did: agent_did.clone(),
         address: address.clone(),
         key_backend: Some(KEY_BACKEND_KEYRING.to_string()),
         attestation: Some(encode_attestation(&signature)),
         created_at: Some(created_at),
         revoked_at: None,
+        tags: Vec::new(),
     };
-    if let Err(error) = create_binding(&access, &doc).await {
-        secret.fill(0);
-        return Err(error);
-    }
+    let created_doc_id = match create_binding(&access, &doc).await {
+        Ok(doc_id) => doc_id,
+        Err(error) => {
+            secret.fill(0);
+            return Err(error);
+        }
+    };
 
     let store = KeyringChainKeyStore;
-    let storage_key = binding_storage_key(&principal_did, &binding_id);
+    let storage_key = binding_storage_key(&agent_did, &binding_id);
     if let Err(error) = store.store_new(&storage_key, &secret) {
         secret.fill(0);
-        let cleanup = delete_binding(&access, &binding_id).await;
+        let cleanup = delete_binding(&access, &created_doc_id).await;
         return match cleanup {
             Ok(()) => Err(error).context("storing chain key in OS keyring"),
             Err(cleanup_error) => Err(error).context(format!(
@@ -94,7 +101,7 @@ async fn generate(args: ChainKeyGenerateArgs) -> Result<()> {
         "binding_id": binding_id,
         "address": address,
         "key_backend": KEY_BACKEND_KEYRING,
-        "principal_did": principal_did,
+        "agent_did": agent_did,
     }))
 }
 
@@ -103,7 +110,7 @@ async fn list(args: ChainKeyAccessArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let docs = load_bindings(&access, &principal).await?;
     print_json(&json!({
-        "principal_did": principal,
+        "agent_did": principal,
         "count": docs.len(),
         "bindings": docs.iter().map(public_binding_json).collect::<Vec<_>>(),
     }))
@@ -113,10 +120,10 @@ async fn show(args: ChainKeyShowArgs) -> Result<()> {
     let principal = resolve_agent_did(args.access.home.as_deref(), None)?;
     let (access, _) =
         resolve_config_access(args.access.home.as_deref(), args.access.graphql.as_deref()).await?;
-    let doc = load_binding(&access, &args.binding_id)
+    let doc = load_binding(&access, &principal, &args.binding_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("chain key binding {:?} not found", args.binding_id))?;
-    if doc.principal_did != principal {
+    if doc.agent_did != principal {
         bail!("chain key binding is not owned by the local principal");
     }
     print_json(&public_binding_json(&doc))
@@ -126,10 +133,10 @@ async fn revoke(args: ChainKeyShowArgs) -> Result<()> {
     let principal = resolve_agent_did(args.access.home.as_deref(), None)?;
     let (access, _) =
         resolve_config_access(args.access.home.as_deref(), args.access.graphql.as_deref()).await?;
-    let mut doc = load_binding(&access, &args.binding_id)
+    let mut doc = load_binding(&access, &principal, &args.binding_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("chain key binding {:?} not found", args.binding_id))?;
-    if doc.principal_did != principal {
+    if doc.agent_did != principal {
         bail!("chain key binding is not owned by the local principal");
     }
     let already_revoked = doc
@@ -141,51 +148,80 @@ async fn revoke(args: ChainKeyShowArgs) -> Result<()> {
         write_binding(&access, &doc).await?;
     }
     KeyringChainKeyStore
-        .delete(&binding_storage_key(&doc.principal_did, &args.binding_id))
+        .delete(&binding_storage_key(&doc.agent_did, &args.binding_id))
         .context("deleting revoked chain key from OS keyring")?;
     print_json(&json!({
         "binding_id": doc.binding_id,
         "address": doc.address,
         "revoked_at": doc.revoked_at,
+        "tags": doc.tags,
     }))
 }
 
 fn public_binding_json(doc: &ChainKeyBindingDocument) -> Value {
     json!({
         "binding_id": doc.binding_id,
-        "principal_did": doc.principal_did,
+        "agent_did": doc.agent_did,
         "address": doc.address,
         "key_backend": doc.key_backend,
         "created_at": doc.created_at,
         "revoked_at": doc.revoked_at,
+        "tags": doc.tags,
     })
 }
 
 async fn write_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> Result<()> {
     access
-        .write(
-            "cli.chain_key.binding.upsert",
-            &upsert_chain_key_binding_mutation(doc),
-        )
-        .await?;
-    Ok(())
+        .transact("cli.chain_key.binding.upsert", |txn| {
+            Box::pin(async move {
+                let rows = decode_binding_rows(
+                    &txn.execute(&chain_key_binding_by_id_query(
+                        &doc.agent_did,
+                        &doc.binding_id,
+                    )?)
+                    .await?,
+                )?;
+                anyhow::ensure!(
+                    rows.len() <= 1,
+                    "duplicate chain key binding within principal"
+                );
+                txn.execute(&upsert_chain_key_binding_mutation(doc)?)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
 }
 
-async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> Result<()> {
+async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> Result<String> {
     access
-        .write(
-            "cli.chain_key.binding.create",
-            &create_chain_key_binding_mutation(doc),
-        )
-        .await?;
-    Ok(())
+        .transact("cli.chain_key.binding.create", |txn| {
+            Box::pin(async move {
+                let rows = decode_binding_rows(
+                    &txn.execute(&chain_key_binding_by_id_query(
+                        &doc.agent_did,
+                        &doc.binding_id,
+                    )?)
+                    .await?,
+                )?;
+                anyhow::ensure!(
+                    rows.is_empty(),
+                    "chain key binding already exists for this principal"
+                );
+                let response = txn
+                    .execute(&create_chain_key_binding_mutation(doc)?)
+                    .await?;
+                gents_protocol::graphql::extract_mutation_doc_id(&response, "ChainKeyBinding")
+            })
+        })
+        .await
 }
 
-async fn delete_binding(access: &ConfigAccess, binding_id: &str) -> Result<()> {
+async fn delete_binding(access: &ConfigAccess, doc_id: &str) -> Result<()> {
     access
         .write(
             "cli.chain_key.binding.delete_incomplete",
-            &delete_chain_key_binding_mutation(binding_id),
+            &delete_chain_key_binding_mutation(doc_id),
         )
         .await?;
     Ok(())
@@ -193,26 +229,43 @@ async fn delete_binding(access: &ConfigAccess, binding_id: &str) -> Result<()> {
 
 async fn load_bindings(
     access: &ConfigAccess,
-    principal_did: &str,
+    agent_did: &str,
 ) -> Result<Vec<ChainKeyBindingDocument>> {
-    decode_binding_rows(
+    let rows = decode_binding_rows(
         &access
-            .execute(&list_chain_key_bindings_query(principal_did))
+            .execute(&list_chain_key_bindings_query(agent_did)?)
             .await?,
-    )
+    )?;
+    let mut ids = std::collections::HashSet::new();
+    for row in &rows {
+        anyhow::ensure!(
+            row.agent_did == agent_did && ids.insert(row.binding_id.clone()),
+            "invalid or duplicate chain key identity in principal list"
+        );
+    }
+    Ok(rows)
 }
 
 async fn load_binding(
     access: &ConfigAccess,
+    agent_did: &str,
     binding_id: &str,
 ) -> Result<Option<ChainKeyBindingDocument>> {
-    Ok(decode_binding_rows(
+    let mut rows = decode_binding_rows(
         &access
-            .execute(&chain_key_binding_by_id_query(binding_id))
+            .execute(&chain_key_binding_by_id_query(agent_did, binding_id)?)
             .await?,
-    )?
-    .into_iter()
-    .next())
+    )?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "duplicate chain key binding within principal"
+    );
+    anyhow::ensure!(
+        rows.iter()
+            .all(|row| row.agent_did == agent_did && row.binding_id == binding_id),
+        "chain key lookup returned mismatched scoped identity"
+    );
+    Ok(rows.pop())
 }
 
 fn decode_binding_rows(value: &Value) -> Result<Vec<ChainKeyBindingDocument>> {
@@ -220,11 +273,20 @@ fn decode_binding_rows(value: &Value) -> Result<Vec<ChainKeyBindingDocument>> {
         .pointer("/data/ChainKeyBinding")
         .or_else(|| value.get("ChainKeyBinding"))
         .cloned()
-        .unwrap_or(Value::Array(Vec::new()));
+        .context("response missing ChainKeyBinding rows")?;
     if rows.is_null() {
         return Ok(Vec::new());
     }
-    serde_json::from_value(rows).context("decoding ChainKeyBinding rows")
+    let mut rows = rows
+        .as_array()
+        .context("ChainKeyBinding rows must be an array")?
+        .clone();
+    for row in &mut rows {
+        row.as_object_mut()
+            .context("ChainKeyBinding row must be an object")?
+            .remove("_docID");
+    }
+    serde_json::from_value(Value::Array(rows)).context("decoding ChainKeyBinding rows")
 }
 
 #[cfg(test)]
@@ -235,12 +297,13 @@ mod tests {
     fn public_binding_json_omits_attestation_and_key_material() {
         let doc = ChainKeyBindingDocument {
             binding_id: "bind-1".to_string(),
-            principal_did: "did:key:zAlice".to_string(),
+            agent_did: "did:key:zAlice".to_string(),
             address: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266".to_string(),
             key_backend: Some(KEY_BACKEND_KEYRING.to_string()),
             attestation: Some("0xdeadbeef".to_string()),
             created_at: Some("2026-08-28T00:00:00Z".to_string()),
             revoked_at: None,
+            tags: Vec::new(),
         };
         let json = public_binding_json(&doc);
         let text = json.to_string();
@@ -262,7 +325,7 @@ mod tests {
                 "ChainKeyBinding": [{
                     "_docID": "bae-1",
                     "binding_id": "bind-1",
-                    "principal_did": "did:key:zAlice",
+                    "agent_did": "did:key:zAlice",
                     "address": "0xabc",
                     "key_backend": "keyring",
                     "attestation": "0xsig",

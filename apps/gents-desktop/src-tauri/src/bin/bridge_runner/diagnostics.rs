@@ -57,7 +57,7 @@ pub(crate) struct RequestDiagnostics {
     transcript_diagnostics_error: Option<String>,
     turn_state: Option<String>,
     latest_request_id: Option<String>,
-    conversation_updated_at: Option<String>,
+    session_updated_at: Option<String>,
     request: Option<RequestRowDiagnostics>,
     response: Option<ResponseRowDiagnostics>,
     matching_response_count: usize,
@@ -102,10 +102,10 @@ pub(crate) async fn build_desktop_session_snapshot(
             .desktop_core()
             .store()
             .snapshot()
-            .conversations
+            .sessions
             .iter()
-            .find(|conversation| conversation.session_id == session_id)
-            .and_then(|conversation| conversation.agent_did.clone())
+            .find(|session| session.session_id == session_id)
+            .map(|session| session.agent_did.clone())
     });
     let agent_did = resolved_agent_did.as_deref();
     let requester_scope = if let Some(agent_did) = agent_did {
@@ -231,10 +231,10 @@ async fn build_request_diagnostics(
         .collect::<Vec<_>>();
     let response = snapshot.latest_response_for_request(request_id).cloned();
     let resolved_agent_did = snapshot
-        .conversations
+        .sessions
         .iter()
-        .find(|conversation| conversation.session_id == session_id)
-        .and_then(|conversation| conversation.agent_did.clone());
+        .find(|session| session.session_id == session_id)
+        .map(|session| session.agent_did.clone());
     let requester_scope = if let Some(agent_did) = resolved_agent_did.as_deref() {
         core.peer_records()
             .await
@@ -312,11 +312,15 @@ async fn build_request_diagnostics(
             .map(turn_state_label)
             .map(str::to_string),
         latest_request_id: snapshot.latest_request_id_for_session(session_id),
-        conversation_updated_at: snapshot
-            .conversations
+        session_updated_at: snapshot
+            .sessions
             .iter()
             .find(|row| row.session_id == session_id)
-            .and_then(|row| row.updated_at.clone()),
+            .and_then(|row| {
+                row.observation
+                    .as_ref()
+                    .map(|observation| observation.last_activity_at.clone())
+            }),
         request: request.map(|row| RequestRowDiagnostics {
             lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
             failure_reason: row.failure_reason.clone(),

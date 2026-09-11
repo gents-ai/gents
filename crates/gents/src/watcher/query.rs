@@ -16,13 +16,8 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     behavior_id
                     session_id
                     content
-                    temperature
-                    top_p
-                    top_k
-                    seed
-                    max_tokens
                     max_total_tokens
-                    metadata
+                    input
                     execution_origin
                     created_at
                     deadline
@@ -40,8 +35,8 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     caused_by_correlation
                     caused_by_trigger_context
                     workspace_id
+                    workspace_owner_agent_did
                     workspace_authority
-                    workspace_owner_deployment_id
                     workspace_seal_hash
 "#;
 
@@ -94,9 +89,6 @@ impl DefraWatcher {
                 return Ok(None);
             }
         };
-        if !self.request_is_locally_claimable(&request) {
-            return Ok(None);
-        }
         Ok(Some(request))
     }
 
@@ -143,12 +135,6 @@ impl DefraWatcher {
         prioritize_aged_background_wakes(claimable_pending_rows_from_rows(rows), chrono::Utc::now())
             .into_iter()
             .map(AgentRequest::try_from)
-            .filter(|request| {
-                request
-                    .as_ref()
-                    .map(|request| self.request_is_locally_claimable(request))
-                    .unwrap_or(true)
-            })
             .collect()
     }
 
@@ -225,6 +211,7 @@ impl DefraWatcher {
         }
 
         let session_id = crate::graphql::escape_graphql_string(&request.session_id);
+        let owner = crate::graphql::escape_graphql_string(&request.agent_did);
         let row_doc_id = request.doc_id.as_str();
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let query = format!(
@@ -232,6 +219,7 @@ impl DefraWatcher {
                 AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{session_id}" }},
+                        agent_did: {{ _eq: "{owner}" }},
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
@@ -397,24 +385,23 @@ mod tests {
         active_runtime_rows, claimable_pending_rows_from_rows, prioritize_aged_background_wakes,
     };
 
-    fn versioned_wake_metadata(session_id: &str) -> String {
+    fn versioned_wake_input(session_id: &str) -> serde_json::Value {
         serde_json::json!({
             "queue": {
                 "source": "background_completion",
                 "policy": "coalesce",
                 "key": format!("background_completion:{session_id}"),
-                "queued_after_request_id": "parent"
-            },
-            "background_completion_wake_version": 1
+                "queued_after_request_id": "parent",
+                "background_completion_wake_version": 1
+            }
         })
-        .to_string()
     }
 
     fn pending_row(
         request_id: &str,
         session_id: &str,
         created_at: &str,
-        metadata: Option<String>,
+        input: Option<serde_json::Value>,
         execution_origin: &str,
     ) -> serde_json::Value {
         serde_json::json!({
@@ -424,7 +411,7 @@ mod tests {
             "behavior_id": "default",
             "session_id": session_id,
             "content": "work",
-            "metadata": metadata,
+            "input": input,
             "execution_origin": execution_origin,
             "created_at": created_at,
             "lifecycle_state": "pending"
@@ -454,7 +441,7 @@ mod tests {
                     "aged-wake",
                     "parent-session",
                     "2026-08-12T21:59:30Z",
-                    Some(versioned_wake_metadata("parent-session")),
+                    Some(versioned_wake_input("parent-session")),
                     "scheduled",
                 )
             ]
@@ -488,7 +475,7 @@ mod tests {
                     "fresh-wake",
                     "parent-session",
                     "2026-08-12T21:59:31Z",
-                    Some(versioned_wake_metadata("parent-session")),
+                    Some(versioned_wake_input("parent-session")),
                     "scheduled",
                 )
             ]

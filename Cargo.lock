@@ -3832,6 +3832,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "ts-rs",
  "unicode-normalization",
  "uuid",
  "wasmtime",
@@ -4076,6 +4077,7 @@ name = "gents-lean-contract"
 version = "0.16.4"
 dependencies = [
  "anyhow",
+ "gents-protocol",
  "serde",
  "serde_json",
 ]
@@ -4089,30 +4091,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "gents-lens-workspace-capability"
-version = "0.1.0"
-dependencies = [
- "lens_sdk",
- "serde_json",
-]
-
-[[package]]
-name = "gents-lens-workspace-receipt-capability"
-version = "0.1.0"
-dependencies = [
- "lens_sdk",
- "serde_json",
-]
-
-[[package]]
 name = "gents-migration"
 version = "0.16.4"
 dependencies = [
  "anyhow",
  "defra-node",
- "gents-lean-contract",
  "gents-lens-fixture-add-label",
- "gents-lens-workspace-capability",
  "gents-protocol",
  "hex",
  "serde",
@@ -4134,6 +4118,7 @@ dependencies = [
  "chrono",
  "ciborium",
  "gents-schemas",
+ "graphql-parser",
  "reqwest 0.12.28",
  "rig-core",
  "serde",
@@ -4141,6 +4126,7 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tracing",
+ "ts-rs",
 ]
 
 [[package]]

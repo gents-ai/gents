@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
 use gents::session::{fork, ForkError, ForkParams};
 use gents_codex_protocol as codex;
 use serde_json::{json, Value};
@@ -50,6 +49,7 @@ pub(super) async fn fork_thread_response(
             source_session_id: &params.thread_id,
             fork_at_user_turn,
             caller_agent_did: state.agent_did.as_ref(),
+            caller_requester_did: Some(state.local_requester_did()),
             target_behavior_id: None,
         },
     )
@@ -73,10 +73,13 @@ pub(super) async fn fork_thread_response(
             .map_err(internal_error)?
     };
     let thread = codex_thread_json_with_turns(&record, turns);
-    let bound_model_id =
-        load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
-            .await
-            .map_err(internal_error)?;
+    let bound_model_id = load_bound_model_selection_id_for_state(
+        state.node.as_ref(),
+        &state.agent_did,
+        &state.behavior_id,
+    )
+    .await
+    .map_err(internal_error)?;
     let response = thread_response_json(&record, thread, &bound_model_id);
     Ok((record, response))
 }
@@ -285,38 +288,44 @@ fn compare_thread_records(
 }
 
 fn thread_sort_timestamp(record: &CodexThreadRecord, sort_key: codex::ThreadSortKey) -> String {
-    let conversation = record.conversation.as_ref();
+    let session = record.session.as_ref();
     match sort_key {
-        codex::ThreadSortKey::CreatedAt => conversation
-            .and_then(|conversation| conversation.created_at.clone())
-            .or_else(|| record.projection_started.clone()),
-        codex::ThreadSortKey::UpdatedAt => conversation
-            .and_then(|conversation| conversation.updated_at.clone())
-            .or_else(|| conversation.and_then(|conversation| conversation.created_at.clone()))
-            .or_else(|| record.projection_started.clone()),
+        codex::ThreadSortKey::CreatedAt => session.map(|session| session.created_at.clone()),
+        codex::ThreadSortKey::UpdatedAt => session.map(|session| {
+            session
+                .observation
+                .as_ref()
+                .map(|observation| observation.last_activity_at.clone())
+                .unwrap_or_else(|| session.created_at.clone())
+        }),
     }
+    .or_else(|| record.projection_started.clone())
     .unwrap_or_default()
 }
 
 async fn count_user_messages(state: &ShimState, thread_id: &str) -> Result<u32> {
-    let escaped_thread_id = escape_graphql_string(thread_id);
-    let query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_thread_id}" }},
-                    role: {{ _eq: "user" }}
-                }}
-            ) {{ sequence }}
-        }}"#
+    let scope = gents::session::session_scope_filter(
+        &state.agent_did,
+        thread_id,
+        Some(state.local_requester_did()),
     );
-    let response = query_node_json(&state.node, &query).await?;
-    let count = response
+    let response = query_node_json(
+        &state.node,
+        &format!("{{AgentMessage(filter:{{{scope}}}){{role content}}}}"),
+    )
+    .await?;
+    let rows = response
         .pointer("/data/AgentMessage")
         .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    u32::try_from(count).context("user message count exceeds u32")
+        .context("thread user-turn count omitted messages")?;
+    let count = rows
+        .iter()
+        .map(gents::session::is_user_turn)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|is_user| *is_user)
+        .count();
+    u32::try_from(count).context("user turn count exceeds u32")
 }
 
 fn resolve_cwd(source_cwd: &std::path::Path, cwd: &str) -> PathBuf {
@@ -349,15 +358,18 @@ fn record_snippet(record: &CodexThreadRecord, needle: &str) -> Option<String> {
     field_snippet(&record.name, needle)
         .or_else(|| {
             record
-                .conversation
+                .session
                 .as_ref()
-                .and_then(|conversation| field_snippet(&conversation.title, needle))
+                .and_then(|session| session.title.as_ref())
+                .and_then(|title| field_snippet(&title.text, needle))
         })
         .or_else(|| {
             record
-                .conversation
+                .session
                 .as_ref()
-                .and_then(|conversation| field_snippet(&conversation.preview_text, needle))
+                .and_then(|session| session.observation.as_ref())
+                .and_then(|observation| observation.preview.as_deref())
+                .and_then(|preview| field_snippet(preview, needle))
         })
 }
 

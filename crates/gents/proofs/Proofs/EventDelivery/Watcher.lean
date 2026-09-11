@@ -21,6 +21,8 @@ theorem watcher_pending_eventually_observed
       d ∈ w'.handled :=
   D1_delivery_convergence watcherSrc w₀ d h_persisted h_unprocessed (by decide)
 
+/-- Exclusion holds while the cooldown entry is present in this epoch. Runtime
+expiry/eviction permits another delivery and is not modeled as permanent dedupe. -/
 theorem watcher_cooldown_excludes_handle
     (w : World) (d : DocId) (a : Action) (w' : World)
     (h_processed : d ∈ w.processedSet)

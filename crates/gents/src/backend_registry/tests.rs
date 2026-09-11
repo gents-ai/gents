@@ -4,58 +4,74 @@ use crate::backend_provider::BackendProviderKind;
 use crate::lean_vocab_test::lean_backend_health_admission_cases;
 use crate::OpenAiWireApi;
 
+fn base_backend() -> InferenceBackend {
+    serde_json::from_value(serde_json::json!({
+        "agent_did": "did:key:backend-owner",
+        "backend_id": "reviewers",
+        "name": "Reviewers",
+        "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:8000/v1",
+        "auth": {"kind": "unauthenticated"}
+    }))
+    .unwrap()
+}
+
 #[test]
 fn inference_backend_from_value_parses() {
-    let json = serde_json::json!({
-        "backend_id": "workstation-dual",
-        "name": "Workstation Dual GPU",
-        "provider_kind": "OpenRouter",
-        "openai_wire_api": "chat_completions",
-        "endpoint": "http://100.73.235.38:8000/v1",
-        "api_key": "raw-key",
-        "api_key_env_var": "DUAL_GPU_API_KEY",
-        "max_concurrent": 4,
-        "max_queue_depth": 9,
-        "enabled": true,
-        "models": ["openrouter/auto", "anthropic/claude-3.7-sonnet"],
-        "probe_status": "healthy",
-    });
-
-    let backend = InferenceBackend::from_value(&json).expect("should parse");
-    assert_eq!(backend.backend_id, "workstation-dual");
-    assert_eq!(backend.provider_kind, BackendProviderKind::OpenRouter);
+    let mut value = serde_json::to_value(base_backend()).unwrap();
+    value["auth"] = serde_json::json!({"kind": "api_key", "key": "raw-key"});
+    value["openai_wire_api"] = "chat_completions".into();
+    value["max_concurrent"] = 4.into();
+    value["max_queue_depth"] = 9.into();
+    value["_docID"] = "physical-backend".into();
+    value["probe_status"] = "healthy".into();
+    value["catalogs"] = serde_json::json!([]);
+    let backend = InferenceBackend::from_value(&value).unwrap();
+    assert_eq!(
+        backend.auth,
+        BackendAuth::ApiKey {
+            key: "raw-key".into()
+        }
+    );
     assert_eq!(
         backend.openai_wire_api,
         Some(OpenAiWireApi::ChatCompletions)
     );
-    assert_eq!(backend.endpoint, "http://100.73.235.38:8000/v1");
-    assert_eq!(backend.api_key.as_deref(), Some("raw-key"));
-    assert_eq!(backend.api_key_env_var.as_deref(), Some("DUAL_GPU_API_KEY"));
-    assert_eq!(backend.max_concurrent, 4);
-    assert_eq!(backend.max_queue_depth, 9);
-    assert!(backend.enabled);
-    assert_eq!(
-        backend.models,
-        vec![
-            "openrouter/auto".to_string(),
-            "anthropic/claude-3.7-sonnet".to_string()
-        ]
-    );
-    assert_eq!(backend.probe_status, "healthy");
+    assert_eq!(backend.max_concurrent, Some(4));
+    assert_eq!(backend.max_queue_depth, Some(9));
+    let config = serde_json::to_value(backend).unwrap();
+    for field in ["_docID", "probe_status", "catalogs"] {
+        assert!(config.get(field).is_none());
+    }
 }
 
 #[test]
-fn inference_backend_from_value_requires_provider_kind() {
-    let json = serde_json::json!({
-        "backend_id": "test",
-        "name": "Test",
-        "endpoint": "http://localhost:8000/v1",
-        "max_concurrent": 1,
-        "enabled": true,
-    });
+fn inference_backend_from_value_requires_provider_kind_and_explicit_auth() {
+    for field in ["provider_kind", "auth", "agent_did"] {
+        let mut value = serde_json::to_value(base_backend()).unwrap();
+        value.as_object_mut().unwrap().remove(field);
+        let error = InferenceBackend::from_value(&value).unwrap_err();
+        assert!(format!("{error:#}").contains(field), "{error:#}");
+    }
+    let mut value = serde_json::to_value(base_backend()).unwrap();
+    value["auth"] = serde_json::json!({"kind":"api_key", "key":"key", "variable":"KEY"});
+    assert!(
+        InferenceBackend::from_value(&value).is_err(),
+        "competing credential selection must fail"
+    );
+}
 
-    let error = InferenceBackend::from_value(&json).expect_err("provider kind is required");
-    assert!(error.to_string().contains("provider kind is required"));
+#[test]
+fn principal_oauth_has_one_canonical_serde_tag() {
+    assert_eq!(
+        serde_json::to_value(BackendAuth::PrincipalOAuth).unwrap(),
+        serde_json::json!({"kind": "principal_oauth"})
+    );
+    assert!(
+        serde_json::from_value::<BackendAuth>(serde_json::json!({"kind": "principal_o_auth"}))
+            .is_err(),
+        "the retired acronym-splitting spelling must not become a compatibility alias"
+    );
 }
 
 #[test]
@@ -64,27 +80,22 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
     assert_eq!(cases.len(), 7);
 
     for case in cases {
-        let backend = InferenceBackend {
-            backend_id: case.name.clone(),
-            name: case.name.clone(),
-            provider_kind: BackendProviderKind::OpenAiCompatible,
-            openai_wire_api: None,
-            endpoint: "http://localhost:8000/v1".into(),
-            api_key: None,
-            api_key_env_var: None,
-            max_concurrent: 1,
-            max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
-            enabled: case.enabled,
-            models: Vec::new(),
-            probe_status: case.probe_status.clone(),
+        let mut backend = base_backend();
+        backend.backend_id = case.name.clone();
+        backend.enabled = case.enabled;
+        let observation = InferenceBackendObservation {
+            backend_id: backend.backend_id.clone(),
+            catalogs: Vec::new(),
+            probe_status: Some(case.probe_status.clone()),
+            last_probe: None,
         };
-        let admission_config =
-            BackendAdmissionConfig::from_backend(&backend).expect("valid backend config");
+        let admission_config = BackendAdmissionConfig::from_backend(&backend, &observation)
+            .expect("valid backend config and observation");
 
         assert_eq!(
             crate::admission::document_configured_from_fields(
                 backend.enabled,
-                &backend.probe_status
+                observation.probe_status.as_deref().unwrap()
             ),
             case.expected_available,
             "{} document-configured availability drifted from Lean case",
@@ -120,10 +131,8 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
 }
 
 /// Operator-UI projection of `(enabled, probe_status)`. Drives every Lean
-/// witness through `derive_display_state` and asserts:
-///   * the derivation is total (every witness maps to a known bucket);
-///   * the `available` bucket coincides exactly with the Lean
-///     `expected_available` verdict.
+/// witness through `derive_display_state` and compares availability with Lean.
+/// An explicit input table checks the display labels, including unknown status.
 ///
 /// This is the bridge-snapshot consumer test for the
 /// `backend-health.operatorUi` row of the feature matrix — registered in
@@ -137,269 +146,424 @@ fn display_state_matches_every_lean_backend_health_admission_case() {
         "Lean witness count drifted from operator UI expectations"
     );
 
+    for (enabled, status, expected) in [
+        (false, "healthy", "disabled"),
+        (true, "healthy", "available"),
+        (true, "unhealthy", "unhealthy"),
+        (true, "stale", "stale"),
+        (true, "rate_limited", "rate-limited"),
+        (true, "circuit_open", "circuit-open"),
+        (true, "unknown", "unknown"),
+        (true, "unrecognized", "unknown"),
+    ] {
+        assert_eq!(derive_display_state(enabled, status), expected);
+    }
     for case in cases {
-        let actual = derive_display_state(case.enabled, &case.probe_status);
-        let expected = expected_display_state(case.enabled, &case.probe_status);
         assert_eq!(
-            actual, expected,
-            "case {} mapped probe_status {} to {} but expected {}",
-            case.name, case.probe_status, actual, expected
-        );
-
-        let panel_says_available = actual == "available";
-        assert_eq!(
-            panel_says_available, case.expected_available,
-            "case {} drifted from Lean availability witness",
+            derive_display_state(case.enabled, &case.probe_status) == "available",
+            case.expected_available,
+            "{}",
             case.name
         );
     }
-
-    fn expected_display_state(enabled: bool, probe_status: &str) -> &'static str {
-        if !enabled {
-            return "disabled";
-        }
-        match probe_status {
-            "healthy" => "available",
-            "unhealthy" => "unhealthy",
-            "stale" => "stale",
-            "rate_limited" => "rate-limited",
-            "circuit_open" => "circuit-open",
-            "unknown" => "unknown",
-            _ => "unknown",
-        }
-    }
-}
-
-fn backend_with_keys(api_key: Option<&str>, env_var: Option<&str>) -> InferenceBackend {
-    InferenceBackend {
-        backend_id: "test".into(),
-        name: "Test".into(),
-        provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: None,
-        endpoint: "http://localhost:8000/v1".into(),
-        api_key: api_key.map(ToOwned::to_owned),
-        api_key_env_var: env_var.map(ToOwned::to_owned),
-        max_concurrent: 1,
-        max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
-        enabled: true,
-        models: Vec::new(),
-        probe_status: "unknown".into(),
-    }
 }
 
 #[test]
-fn resolve_backend_api_key_prefers_raw_key() {
-    let backend = backend_with_keys(Some("raw-key"), Some("BACKEND_REGISTRY_TEST_KEY_UNUSED"));
+fn resolve_backend_api_key_uses_explicit_credentials() {
     assert_eq!(
-        crate::config::resolve_backend_api_key(&backend)
-            .expect("raw key resolves")
-            .as_deref(),
+        BackendAuth::ApiKey {
+            key: "raw-key".into()
+        }
+        .resolve_api_key()
+        .unwrap()
+        .as_deref(),
         Some("raw-key")
     );
-}
-
-#[test]
-fn resolve_backend_api_key_falls_back_to_env() {
-    let var = "BACKEND_REGISTRY_TEST_KEY_FALLBACK";
-    std::env::set_var(var, "env-key");
-    let backend = backend_with_keys(None, Some(var));
     assert_eq!(
-        crate::config::resolve_backend_api_key(&backend)
-            .expect("env key resolves")
-            .as_deref(),
-        Some("env-key")
-    );
-    std::env::remove_var(var);
-}
-
-#[test]
-fn resolve_backend_api_key_none_when_no_env_var_configured() {
-    let backend = backend_with_keys(None, None);
-    assert_eq!(
-        crate::config::resolve_backend_api_key(&backend)
-            .expect("no key configured is not an error"),
+        BackendAuth::Unauthenticated.resolve_api_key().unwrap(),
         None
     );
+    assert!(BackendAuth::PrincipalOAuth.resolve_api_key().is_err());
+    assert!(BackendAuth::ApiKey { key: " ".into() }
+        .resolve_api_key()
+        .is_err());
 }
 
-/// A backend whose `api_key_env_var` names an environment variable that
-/// isn't actually set must fail loudly, naming the backend — never silently
-/// probe or build with no key (#1338).
+#[test]
+fn resolve_backend_api_key_reads_selected_environment() {
+    let variable = "GENTS_BACKEND_REGISTRY_EXPLICIT_KEY";
+    std::env::set_var(variable, "env-key");
+    let auth = BackendAuth::Environment {
+        variable: variable.into(),
+    };
+    assert_eq!(auth.resolve_api_key().unwrap().as_deref(), Some("env-key"));
+    std::env::set_var(variable, " ");
+    assert!(
+        auth.resolve_api_key().is_err(),
+        "blank environment is not unauthenticated"
+    );
+    std::env::remove_var(variable);
+    assert!(
+        auth.resolve_api_key().is_err(),
+        "missing environment is not unauthenticated"
+    );
+}
+
 #[test]
 fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
-    let backend = backend_with_keys(None, Some("BACKEND_REGISTRY_TEST_KEY_MISSING_1338"));
+    let mut backend = base_backend();
+    backend.auth = BackendAuth::Environment {
+        variable: "BACKEND_REGISTRY_TEST_KEY_MISSING_1338".into(),
+    };
     let error = crate::config::resolve_backend_api_key(&backend)
-        .expect_err("a named-but-unset env var must hard error");
-    let message = error.to_string();
-    assert!(
-        message.contains(&backend.backend_id),
-        "error must name the backend: {message}"
-    );
+        .expect_err("missing selected credential must fail");
+    let message = format!("{error:#}");
+    assert!(message.contains(&backend.backend_id), "{message}");
     assert!(
         message.contains("BACKEND_REGISTRY_TEST_KEY_MISSING_1338"),
-        "error must name the environment variable: {message}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// InferenceBackend::validate (#1331) — table-driven from the historical
-// gents-cli desired-state rules (crates/gents-cli/src/desired_state/validate/agent.rs).
-// ---------------------------------------------------------------------------
-
-fn base_backend() -> InferenceBackend {
-    InferenceBackend {
-        backend_id: "reviewers".to_string(),
-        name: "Reviewers".to_string(),
-        provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: None,
-        endpoint: "http://127.0.0.1:8000/v1".to_string(),
-        api_key: None,
-        api_key_env_var: None,
-        max_concurrent: 4,
-        max_queue_depth: 8,
-        enabled: true,
-        models: vec!["d4f".to_string()],
-        probe_status: UNKNOWN_PROBE_STATUS.to_string(),
-    }
-}
-
-#[test]
-fn inference_backend_validate_accepts_a_well_formed_backend() {
-    assert!(base_backend().validate(None).is_ok());
-}
-
-#[test]
-fn inference_backend_validate_rejects_empty_backend_id() {
-    let mut backend = base_backend();
-    backend.backend_id = "  ".to_string();
-    let error = backend.validate(None).unwrap_err().to_string();
-    assert!(error.contains("backend_id must not be empty"), "{error}");
-}
-
-#[test]
-fn inference_backend_validate_rejects_empty_endpoint() {
-    let mut backend = base_backend();
-    backend.endpoint = "  ".to_string();
-    let error = backend.validate(None).unwrap_err().to_string();
-    assert!(error.contains("endpoint must not be empty"), "{error}");
-}
-
-#[test]
-fn inference_backend_validate_rejects_empty_api_key() {
-    let mut backend = base_backend();
-    backend.api_key = Some("   ".to_string());
-    let error = backend.validate(None).unwrap_err().to_string();
-    assert!(error.contains("api_key must not be empty"), "{error}");
-}
-
-#[test]
-fn inference_backend_validate_rejects_api_key_and_env_var_together() {
-    let mut backend = base_backend();
-    backend.api_key = Some("sk-live".to_string());
-    backend.api_key_env_var = Some("BACKEND_API_KEY".to_string());
-    let error = backend.validate(None).unwrap_err().to_string();
-    assert!(
-        error.contains("must not set both api_key and api_key_env_var"),
-        "{error}"
+        "{message}"
     );
 }
 
 #[test]
-fn inference_backend_validate_accepts_api_key_xor_env_var() {
-    let mut with_key = base_backend();
-    with_key.api_key = Some("sk-live".to_string());
-    assert!(with_key.validate(None).is_ok());
-
-    let mut with_env_var = base_backend();
-    with_env_var.api_key_env_var = Some("BACKEND_API_KEY".to_string());
-    assert!(with_env_var.validate(None).is_ok());
-}
-
-#[test]
-fn inference_backend_validate_rejects_non_positive_max_concurrent() {
+fn inference_backend_validation_preserves_defaults_and_rejects_invalid_values() {
+    let backend = base_backend();
+    backend.validate().unwrap();
+    assert_eq!(backend.effective_max_concurrent(), 1);
+    assert_eq!(backend.effective_max_queue_depth(), 100);
+    let mut backend = backend;
+    backend.max_queue_depth = Some(0);
+    backend
+        .validate()
+        .expect("zero explicitly disables queueing");
     for value in [0, -1] {
-        let mut backend = base_backend();
-        backend.max_concurrent = value;
-        let error = backend.validate(None).unwrap_err().to_string();
-        assert!(error.contains("max_concurrent must be positive"), "{error}");
+        backend.max_concurrent = Some(value);
+        assert!(backend.validate().is_err());
     }
-}
-
-#[test]
-fn inference_backend_validate_rejects_non_positive_max_queue_depth() {
+    backend.max_concurrent = None;
+    backend.max_queue_depth = Some(-1);
+    assert!(backend.validate().is_err());
+    backend.max_queue_depth = None;
     for value in [0, -1] {
-        let mut backend = base_backend();
-        backend.max_queue_depth = value;
-        let error = backend.validate(None).unwrap_err().to_string();
-        assert!(
-            error.contains("max_queue_depth must be positive"),
-            "{error}"
-        );
+        backend.connect_timeout_secs = Some(value);
+        assert!(backend.validate().is_err());
+        backend.connect_timeout_secs = None;
+        backend.discovery_timeout_secs = Some(value);
+        assert!(backend.validate().is_err());
+        backend.discovery_timeout_secs = None;
     }
-}
-
-#[test]
-fn inference_backend_validate_no_lockout_rejects_dropping_the_current_model() {
-    let backend = base_backend(); // models: ["d4f"]
-    let error = backend.validate(Some("gone")).unwrap_err().to_string();
-    assert!(
-        error.contains("would drop the current model \"gone\""),
-        "{error}"
-    );
-}
-
-#[test]
-fn inference_backend_validate_no_lockout_accepts_the_current_model_still_listed() {
-    let backend = base_backend(); // models: ["d4f"]
-    assert!(backend.validate(Some("d4f")).is_ok());
-}
-
-#[test]
-fn inference_backend_validate_no_lockout_is_skipped_when_models_list_is_empty() {
-    let mut backend = base_backend();
-    backend.models = Vec::new();
-    assert!(backend.validate(Some("anything")).is_ok());
-}
-
-#[test]
-fn inference_backend_validate_no_lockout_is_skipped_without_a_current_model() {
-    let backend = base_backend(); // models: ["d4f"]
-    assert!(backend.validate(None).is_ok());
 }
 
 #[test]
 fn inference_backend_validation_reports_every_violation() {
     let mut backend = base_backend();
-    backend.endpoint = "  ".to_string();
-    backend.max_concurrent = 0;
-    backend.max_queue_depth = -1;
-
-    let violations = backend.validation_violations(None);
-    assert_eq!(violations.len(), 3, "{violations:?}");
-    assert!(violations
-        .iter()
-        .any(|error| error.contains("endpoint must not be empty")));
-    assert!(violations
-        .iter()
-        .any(|error| error.contains("max_concurrent must be positive")));
-    assert!(violations
-        .iter()
-        .any(|error| error.contains("max_queue_depth must be positive")));
+    backend.agent_did = " ".into();
+    backend.backend_id = " ".into();
+    backend.endpoint = " ".into();
+    backend.max_concurrent = Some(0);
+    backend.max_queue_depth = Some(-1);
+    let violations = backend.validation_violations();
+    for field in [
+        "agent_did",
+        "backend_id",
+        "endpoint",
+        "max_concurrent",
+        "max_queue_depth",
+    ] {
+        assert!(
+            violations.iter().any(|error| error.contains(field)),
+            "{violations:?}"
+        );
+    }
 }
 
 #[test]
-fn inference_backend_validation_honors_redacted_api_key_presence() {
+fn inference_backend_validation_requires_provider_compatible_auth() {
     let mut backend = base_backend();
-    backend.api_key = None;
-    backend.api_key_env_var = Some("BACKEND_API_KEY".to_string());
+    backend.auth = BackendAuth::PrincipalOAuth;
+    assert!(backend.validate().is_err());
+    for provider in [
+        BackendProviderKind::ChatGptCodex,
+        BackendProviderKind::XaiGrokOAuth,
+        BackendProviderKind::ClaudeCliSubscription,
+    ] {
+        backend.provider_kind = provider;
+        backend.auth = BackendAuth::PrincipalOAuth;
+        backend.validate().unwrap();
+        for auth in [
+            BackendAuth::Unauthenticated,
+            BackendAuth::ApiKey { key: "key".into() },
+            BackendAuth::Environment {
+                variable: "KEY".into(),
+            },
+        ] {
+            backend.auth = auth;
+            assert!(backend.validate().is_err());
+        }
+    }
+}
 
-    assert!(backend.validate(None).is_ok());
-    let error = backend
-        .validate_with_api_key_presence(None, true)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        error.contains("must not set both api_key and api_key_env_var"),
-        "{error}"
+#[test]
+fn admission_rejects_unrelated_observation_and_defaults_capacity() {
+    let backend = base_backend();
+    let mut observation = InferenceBackendObservation {
+        backend_id: "different-backend".into(),
+        catalogs: Vec::new(),
+        probe_status: Some("healthy".into()),
+        last_probe: None,
+    };
+    assert!(BackendAdmissionConfig::from_backend(&backend, &observation).is_err());
+    observation.backend_id = backend.backend_id.clone();
+    let admission = BackendAdmissionConfig::from_backend(&backend, &observation).unwrap();
+    assert_eq!(
+        (admission.max_concurrent, admission.max_queue_depth),
+        (1, 100)
     );
+    assert!(admission.is_available());
+    observation.probe_status = None;
+    assert!(
+        !BackendAdmissionConfig::from_backend(&backend, &observation)
+            .unwrap()
+            .is_available()
+    );
+}
+
+#[tokio::test]
+async fn scoped_backend_replacement_preserves_observations_and_resets_defaults() -> Result<()> {
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    crate::ensure_runtime_schemas(&node).await?;
+    crate::ensure_agent_principal(&node, &base_backend().agent_did).await?;
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let mut backend = base_backend();
+    backend.backend_id = "reviewers\"quoted".into();
+    backend.max_concurrent = Some(4);
+    backend.max_queue_depth = Some(0);
+    backend.connect_timeout_secs = Some(3);
+    backend.discovery_timeout_secs = Some(9);
+    backend.enabled = false;
+    backend.tags = vec!["old".into()];
+    let doc_id = crate::config_client::write_inference_backend_document(&access, &backend).await?;
+    let catalogs = serde_json::json!([
+        {"agent_did":null,"observed_at":"2026-01-01T00:00:00Z","models":[{"model_name":"shared","display_name":null,"context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]},
+        {"agent_did":"did:key:invoker","observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
+    ]);
+    let observation = serde_json::json!({"catalogs":{"entries":catalogs.clone()},"probe_status":"healthy","last_probe":"2026-01-02T00:00:00Z"});
+    access
+        .write(
+            "test.backend.observation",
+            &format!(
+                r#"mutation {{ update_InferenceBackend(docID: "{}", input: {}) {{ _docID }} }}"#,
+                escape_graphql_string(&doc_id),
+                gents_protocol::graphql::graphql_input_literal(&observation)?
+            ),
+        )
+        .await?;
+    let mut other = base_backend();
+    other.agent_did = "did:key:other-owner".into();
+    other.backend_id = backend.backend_id.clone();
+    other.endpoint = "http://other.example/v1".into();
+    crate::ensure_agent_principal(&node, &other.agent_did).await?;
+    crate::config_client::write_inference_backend_document(&access, &other).await?;
+    let mut replacement = base_backend();
+    replacement.backend_id = backend.backend_id.clone();
+    let replaced_id =
+        crate::config_client::write_inference_backend_document(&access, &replacement).await?;
+    assert_eq!(replaced_id, doc_id);
+    let loaded = lookup_backend(&node, &backend.agent_did, &backend.backend_id)
+        .await?
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&loaded)?,
+        serde_json::to_value(&replacement)?
+    );
+    assert_eq!(loaded.effective_max_concurrent(), 1);
+    assert_eq!(loaded.effective_max_queue_depth(), 100);
+    let observed = lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+        .await?
+        .unwrap();
+    assert_eq!(serde_json::to_value(&observed.catalogs)?, catalogs);
+    assert_eq!(observed.probe_status.as_deref(), Some("healthy"));
+    assert_eq!(observed.last_probe.as_deref(), Some("2026-01-02T00:00:00Z"));
+    assert_eq!(
+        observed.catalog_for(None)?.unwrap().models[0].model_name,
+        "shared"
+    );
+    assert_eq!(
+        observed
+            .catalog_for(Some("did:key:invoker"))?
+            .unwrap()
+            .models[0]
+            .model_name,
+        "private"
+    );
+    assert!(observed.catalog_for(Some("did:key:stranger"))?.is_none());
+    let other_loaded = lookup_backend(&node, &other.agent_did, &other.backend_id)
+        .await?
+        .unwrap();
+    assert_eq!(other_loaded.endpoint, other.endpoint);
+    assert!(
+        lookup_backend(&node, "did:key:missing", &backend.backend_id)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Result<()> {
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    crate::ensure_runtime_schemas(&node).await?;
+    crate::ensure_agent_principal(&node, &base_backend().agent_did).await?;
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let backend = base_backend();
+    crate::config_client::write_inference_backend_document(&access, &backend).await?;
+    let mut duplicate = backend.clone();
+    duplicate.name = "A physically distinct duplicate".into();
+    let duplicate_result = access
+        .write(
+            "test.backend.duplicate",
+            &format!(
+                "mutation {{ create_InferenceBackend(input: {}) {{ _docID }} }}",
+                gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(&duplicate)?)?
+            ),
+        )
+        .await;
+    assert!(
+        duplicate_result.is_err(),
+        "the canonical unique owner/ID index must reject duplicates"
+    );
+    let loaded = lookup_backend(&node, &backend.agent_did, &backend.backend_id)
+        .await?
+        .expect("original backend remains");
+    assert_eq!(loaded.name, backend.name);
+    let records = list_all_backends(&node).await?;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].name, backend.name);
+    let response = node.execute("{ InferenceBackend { probe_status } }").await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let data = response.data.unwrap();
+    for row in data["InferenceBackend"].as_array().unwrap() {
+        assert!(row["probe_status"].is_null());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catalog() -> Result<()> {
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    crate::ensure_runtime_schemas(&node).await?;
+    crate::ensure_agent_principal(&node, &base_backend().agent_did).await?;
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let backend = base_backend();
+    crate::config_client::write_inference_backend_document(&access, &backend).await?;
+    let catalog = BackendModelCatalog {
+        agent_did: None,
+        observed_at: "2026-09-09T10:00:00Z".into(),
+        models: vec![crate::document_config::AdvertisedModel {
+            model_name: "advertised-model".into(),
+            display_name: None,
+            context_window: Some(524288),
+            max_output_tokens: None,
+            reasoning_efforts: None,
+        }],
+    };
+    record_model_catalog(&node, &backend, catalog.clone()).await?;
+    let mut wrong_scope = catalog.clone();
+    wrong_scope.agent_did = Some("did:key:other".into());
+    assert!(record_model_catalog(&node, &backend, wrong_scope)
+        .await
+        .is_err());
+    let mut older = catalog.clone();
+    older.observed_at = "2026-09-09T09:00:00Z".into();
+    older.models.clear();
+    record_model_catalog(&node, &backend, older).await?;
+    assert_eq!(
+        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+            .await?
+            .unwrap()
+            .catalogs,
+        vec![catalog.clone()]
+    );
+    let mut changed = backend.clone();
+    changed.endpoint = "http://127.0.0.1:9000/v1".into();
+    crate::config_client::write_inference_backend_document(&access, &changed).await?;
+    assert!(record_model_catalog(&node, &backend, catalog.clone())
+        .await
+        .is_err());
+    assert_eq!(
+        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+            .await?
+            .unwrap()
+            .catalogs,
+        vec![catalog]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Result<()> {
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    crate::ensure_runtime_schemas(&node).await?;
+    crate::ensure_agent_principal(&node, &base_backend().agent_did).await?;
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let backend = base_backend();
+    crate::config_client::write_inference_backend_document(&access, &backend).await?;
+    let catalog = BackendModelCatalog {
+        agent_did: None,
+        observed_at: "2026-09-09T10:00:00Z".into(),
+        models: vec![crate::document_config::AdvertisedModel {
+            model_name: "exact-model".into(),
+            display_name: None,
+            context_window: None,
+            max_output_tokens: None,
+            reasoning_efforts: Some(Vec::new()),
+        }],
+    };
+    access
+        .transact("test.catalog.transaction", |txn| {
+            let catalog = catalog.clone();
+            let backend = &backend;
+            Box::pin(async move { record_model_catalog_in_txn(txn, backend, catalog).await })
+        })
+        .await?;
+    assert_eq!(
+        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+            .await?
+            .unwrap()
+            .catalogs,
+        vec![catalog.clone()]
+    );
+    let empty = BackendModelCatalog {
+        observed_at: "2026-09-09T11:00:00Z".into(),
+        models: Vec::new(),
+        ..catalog.clone()
+    };
+    let failed: Result<()> = access
+        .transact("test.catalog.rollback", |txn| {
+            let empty = empty.clone();
+            let backend = &backend;
+            Box::pin(async move {
+                record_model_catalog_in_txn(txn, backend, empty).await?;
+                anyhow::bail!("force rollback")
+            })
+        })
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(
+        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+            .await?
+            .unwrap()
+            .catalogs,
+        vec![catalog]
+    );
+    record_model_catalog(&node, &backend, empty.clone()).await?;
+    assert_eq!(
+        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
+            .await?
+            .unwrap()
+            .catalogs,
+        vec![empty]
+    );
+    node.shutdown().await;
+    Ok(())
 }

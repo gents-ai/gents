@@ -7,6 +7,9 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
+// 7.1: additive — TaskView carries canonical task hooks and tags.
+// 7.0: breaking — canonical session and configuration vocabulary replaces
+//      conversation, tool-selection, and event-trigger command/DTO names.
 // 6.3: additive — BridgeError.endpoint carries the unreachable endpoint as a
 //      structured field for EndpointUnreachable errors, so callers stop
 //      regexing it back out of `message` (#1339).
@@ -43,7 +46,7 @@ use crate::error::BridgeErrorCode;
 // 1.1: additive — revisioned desktop_session_live_delta read and store event metadata.
 // 1.0: breaking — clients submit requests; desktop session-fork projection removed.
 // 0.8: additive — managed-server tray event inventory.
-// 0.7: additive — retry eligibility projection and agent-scoped conversation rename.
+// 0.7: additive — retry eligibility projection and agent-scoped session rename.
 // 0.6: additive — predecessor-aware desktop_request_retry command.
 // 0.5: additive — inference onboarding (probe endpoint, Codex login/cancel in
 // config-write) merged from main (#871); desktop://codex-login-url event.
@@ -51,13 +54,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "6.3";
+pub const CONTRACT_VERSION: &str = "7.1";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "56091dd558796e1dd812bb794a134de193fee7706e81aa33082f53142232f47e";
+    "ca91687078715ce91788ea04cb72e3a6d0eae8a845bfb84a7c7cf1b6acbc04da";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -133,7 +136,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_tool_surface_explain", "tool-surface-read"),
         // chat-write
         ("desktop_chat_send", "chat-write"),
-        ("desktop_conversation_rename", "chat-write"),
+        ("desktop_session_rename", "chat-write"),
         // mailbox-read / mailbox-control
         ("desktop_mailbox_list", "mailbox-read"),
         ("desktop_mailbox_start_request", "mailbox-control"),
@@ -160,25 +163,24 @@ pub fn command_inventory() -> Vec<CommandContract> {
         // interrupt-read / interrupt-control
         ("desktop_preview_interrupt_cascade", "interrupt-read"),
         ("desktop_interrupt_request", "interrupt-control"),
-        // holds-read / holds-control
-        ("desktop_list_tool_call_holds", "holds-read"),
-        ("desktop_resolve_tool_call_hold", "holds-control"),
         // config-write (save/delete/test/auth — 20 commands)
         ("desktop_agent_config_save", "config-write"),
+        ("desktop_config_components_apply", "config-write"),
+        ("desktop_config_components_patch", "config-write"),
         ("desktop_behavior_save", "config-write"),
         ("desktop_skill_save", "config-write"),
         ("desktop_skill_delete", "config-write"),
         ("desktop_task_delete", "config-write"),
         ("desktop_schedule_delete", "config-write"),
-        ("desktop_event_trigger_delete", "config-write"),
+        ("desktop_trigger_delete", "config-write"),
         ("desktop_backend_delete", "config-write"),
         ("desktop_inference_profile_delete", "config-write"),
-        ("desktop_tool_selection_delete", "config-write"),
+        ("desktop_tools_delete", "config-write"),
         ("desktop_tool_service_delete", "config-write"),
         ("desktop_behavior_delete", "config-write"),
         ("desktop_backend_save", "config-write"),
         ("desktop_inference_profile_save", "config-write"),
-        ("desktop_tool_selection_save", "config-write"),
+        ("desktop_tools_save", "config-write"),
         ("desktop_tool_service_save", "config-write"),
         ("desktop_tool_service_test", "config-write"),
         ("desktop_probe_inference_endpoint", "config-write"),
@@ -192,7 +194,9 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_task_save", "tasks"),
         ("desktop_schedule_save", "tasks"),
         ("desktop_schedule_run", "tasks"),
-        ("desktop_event_trigger_save", "tasks"),
+        ("desktop_trigger_save", "tasks"),
+        ("desktop_event_source_save", "tasks"),
+        ("desktop_event_source_delete", "config-write"),
         ("desktop_task_run", "tasks"),
         // native-e2e
         ("desktop_native_e2e_config", "native-e2e"),
@@ -232,8 +236,6 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("operations-read", "read"),
         ("interrupt-read", "read"),
         ("interrupt-control", "mutate"),
-        ("holds-read", "read"),
-        ("holds-control", "mutate"),
         // Projection section only in v1 (no dedicated IPC allow-* commands).
         ("config-read", "read"),
         ("config-write", "mutate"),
@@ -592,7 +594,7 @@ mod tests {
             ("desktop_request_timeline", "read"),
             ("desktop_tool_surface_explain", "read"),
             ("desktop_chat_send", "mutate"),
-            ("desktop_conversation_rename", "mutate"),
+            ("desktop_session_rename", "mutate"),
             ("desktop_mailbox_list", "read"),
             ("desktop_mailbox_start_request", "mutate"),
             ("desktop_mailbox_dismiss", "mutate"),
@@ -612,23 +614,23 @@ mod tests {
             ("desktop_probe_mcp_service", "read"),
             ("desktop_preview_interrupt_cascade", "read"),
             ("desktop_interrupt_request", "mutate"),
-            ("desktop_list_tool_call_holds", "read"),
-            ("desktop_resolve_tool_call_hold", "mutate"),
             ("desktop_agent_config_save", "mutate"),
+            ("desktop_config_components_apply", "mutate"),
+            ("desktop_config_components_patch", "mutate"),
             ("desktop_behavior_save", "mutate"),
             ("desktop_skill_save", "mutate"),
             ("desktop_skill_delete", "mutate"),
             ("desktop_task_delete", "mutate"),
             ("desktop_schedule_delete", "mutate"),
-            ("desktop_event_trigger_delete", "mutate"),
+            ("desktop_trigger_delete", "mutate"),
             ("desktop_backend_delete", "mutate"),
             ("desktop_inference_profile_delete", "mutate"),
-            ("desktop_tool_selection_delete", "mutate"),
+            ("desktop_tools_delete", "mutate"),
             ("desktop_tool_service_delete", "mutate"),
             ("desktop_behavior_delete", "mutate"),
             ("desktop_backend_save", "mutate"),
             ("desktop_inference_profile_save", "mutate"),
-            ("desktop_tool_selection_save", "mutate"),
+            ("desktop_tools_save", "mutate"),
             ("desktop_tool_service_save", "mutate"),
             ("desktop_tool_service_test", "mutate"),
             ("desktop_probe_inference_endpoint", "mutate"),
@@ -641,7 +643,9 @@ mod tests {
             ("desktop_task_save", "mutate"),
             ("desktop_schedule_save", "mutate"),
             ("desktop_schedule_run", "mutate"),
-            ("desktop_event_trigger_save", "mutate"),
+            ("desktop_trigger_save", "mutate"),
+            ("desktop_event_source_save", "mutate"),
+            ("desktop_event_source_delete", "mutate"),
             ("desktop_task_run", "mutate"),
             ("desktop_native_e2e_config", "read"),
             ("desktop_native_e2e_status", "mutate"),

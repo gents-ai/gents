@@ -38,17 +38,11 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             BehaviorCommand::Rm(args) => crud::config_rm(crud::BEHAVIOR_SPEC, args).await,
         },
         ConfigCommand::Tools { command } => match command {
-            ToolSelectionCommand::Set(args) => tools::tool_selection_set(args).await,
-            ToolSelectionCommand::List(args) => {
-                crud::config_list(crud::TOOL_SELECTION_SPEC, args).await
-            }
-            ToolSelectionCommand::Show(args) => {
-                crud::config_show(crud::TOOL_SELECTION_SPEC, args).await
-            }
-            ToolSelectionCommand::Rm(args) => {
-                crud::config_rm(crud::TOOL_SELECTION_SPEC, args).await
-            }
-            ToolSelectionCommand::SubagentTargetEntry(args) => {
+            ToolsConfigCommand::Set(args) => tools::tools_set(args).await,
+            ToolsConfigCommand::List(args) => crud::config_list(crud::TOOLS_SPEC, args).await,
+            ToolsConfigCommand::Show(args) => crud::config_show(crud::TOOLS_SPEC, args).await,
+            ToolsConfigCommand::Rm(args) => crud::config_rm(crud::TOOLS_SPEC, args).await,
+            ToolsConfigCommand::SubagentTargetEntry(args) => {
                 tools::subagent_target_entry_command(args)
             }
         },
@@ -86,12 +80,8 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::WorkspaceRoot { command } => match command {
             WorkspaceRootCommand::Set(args) => workspace_root::workspace_root_set(args).await,
-            WorkspaceRootCommand::List(args) => {
-                crud::config_list(crud::WORKSPACE_ROOT_SPEC, args).await
-            }
-            WorkspaceRootCommand::Show(args) => {
-                crud::config_show(crud::WORKSPACE_ROOT_SPEC, args).await
-            }
+            WorkspaceRootCommand::List(args) => workspace_root::workspace_root_list(args).await,
+            WorkspaceRootCommand::Show(args) => workspace_root::workspace_root_show(args).await,
             WorkspaceRootCommand::Rm(args) => workspace_root::workspace_root_rm(args).await,
         },
         ConfigCommand::Export(args) => export::config_export(args).await,

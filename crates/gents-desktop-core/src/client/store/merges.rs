@@ -19,11 +19,6 @@ impl ClientStore {
             incoming.behavior_readiness,
             |row| row.agent_did.clone(),
         );
-        upsert_rows_by_key(
-            &mut rows.conversations,
-            incoming.conversations,
-            conversation_merge_key,
-        );
         upsert_rows_by_key(&mut rows.requests, incoming.requests, request_merge_key);
         upsert_rows_by_key(&mut rows.mailbox_items, incoming.mailbox_items, |row| {
             row.doc_id.clone()
@@ -80,11 +75,25 @@ impl ClientStore {
             schedule_merge_key,
         );
         upsert_rows_with_sources_by_key(
-            &mut rows.event_triggers,
-            &mut rows.event_trigger_source_agent_dids,
-            incoming.event_triggers,
-            incoming.event_trigger_source_agent_dids,
-            event_trigger_merge_key,
+            &mut rows.schedule_observations,
+            &mut rows.schedule_observation_source_agent_dids,
+            incoming.schedule_observations,
+            incoming.schedule_observation_source_agent_dids,
+            schedule_observation_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.triggers,
+            &mut rows.trigger_source_agent_dids,
+            incoming.triggers,
+            incoming.trigger_source_agent_dids,
+            trigger_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.trigger_observations,
+            &mut rows.trigger_observation_source_agent_dids,
+            incoming.trigger_observations,
+            incoming.trigger_observation_source_agent_dids,
+            trigger_observation_merge_key,
         );
         upsert_rows_with_sources_by_key(
             &mut rows.skills,
@@ -93,10 +102,26 @@ impl ClientStore {
             incoming.skill_source_agent_dids,
             skill_merge_key,
         );
-        upsert_rows_by_key(
-            &mut rows.tool_selections,
-            incoming.tool_selections,
-            tool_selection_merge_key,
+        upsert_rows_with_sources_by_key(
+            &mut rows.tools,
+            &mut rows.tools_source_agent_dids,
+            incoming.tools,
+            incoming.tools_source_agent_dids,
+            |row, _| tools_merge_key(row),
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.contexts,
+            &mut rows.context_source_agent_dids,
+            incoming.contexts,
+            incoming.context_source_agent_dids,
+            context_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.compactions,
+            &mut rows.compaction_source_agent_dids,
+            incoming.compactions,
+            incoming.compaction_source_agent_dids,
+            compaction_merge_key,
         );
         upsert_rows_with_sources_by_key(
             &mut rows.inference_backends,
@@ -106,6 +131,13 @@ impl ClientStore {
             inference_backend_merge_key,
         );
         upsert_rows_with_sources_by_key(
+            &mut rows.backend_observations,
+            &mut rows.backend_observation_source_agent_dids,
+            incoming.backend_observations,
+            incoming.backend_observation_source_agent_dids,
+            backend_observation_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
             &mut rows.inference_profiles,
             &mut rows.inference_profile_source_agent_dids,
             incoming.inference_profiles,
@@ -113,11 +145,53 @@ impl ClientStore {
             inference_profile_merge_key,
         );
         upsert_rows_with_sources_by_key(
+            &mut rows.inference_sampling,
+            &mut rows.inference_sampling_source_agent_dids,
+            incoming.inference_sampling,
+            incoming.inference_sampling_source_agent_dids,
+            inference_sampling_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.inference_execution,
+            &mut rows.inference_execution_source_agent_dids,
+            incoming.inference_execution,
+            incoming.inference_execution_source_agent_dids,
+            inference_execution_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
             &mut rows.tool_service_registries,
             &mut rows.tool_service_registry_source_agent_dids,
             incoming.tool_service_registries,
             incoming.tool_service_registry_source_agent_dids,
             tool_service_registry_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.event_sources,
+            &mut rows.event_source_source_agent_dids,
+            incoming.event_sources,
+            incoming.event_source_source_agent_dids,
+            event_source_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.subagent_targets,
+            &mut rows.subagent_target_source_agent_dids,
+            incoming.subagent_targets,
+            incoming.subagent_target_source_agent_dids,
+            subagent_target_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.datastore_tool_surfaces,
+            &mut rows.datastore_tool_surface_source_agent_dids,
+            incoming.datastore_tool_surfaces,
+            incoming.datastore_tool_surface_source_agent_dids,
+            datastore_tool_surface_merge_key,
+        );
+        upsert_rows_with_sources_by_key(
+            &mut rows.chain_key_bindings,
+            &mut rows.chain_key_binding_source_agent_dids,
+            incoming.chain_key_bindings,
+            incoming.chain_key_binding_source_agent_dids,
+            chain_key_binding_merge_key,
         );
 
         ClientStore::from_rows(rows)
@@ -129,9 +203,9 @@ impl ClientStore {
     pub fn replace_agent_scope(&self, agent_did: &str, snapshot: ClientStore) -> Self {
         let mut rows = self.to_rows();
         let mut agent_session_ids = rows
-            .conversations
+            .sessions
             .iter()
-            .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+            .filter(|row| row.agent_did == agent_did)
             .map(|row| row.session_id.clone())
             .collect::<HashSet<_>>();
         agent_session_ids.extend(
@@ -143,13 +217,10 @@ impl ClientStore {
 
         rows.agent_principals
             .retain(|row| row.agent_did != agent_did);
-        rows.behaviors
-            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
+        rows.behaviors.retain(|row| row.agent_did != agent_did);
         rows.runtimes.retain(|row| row.agent_did != agent_did);
         rows.behavior_readiness
             .retain(|row| row.agent_did != agent_did);
-        rows.conversations
-            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.requests
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.mailbox_items.retain(|row| row.agent_did != agent_did);
@@ -157,8 +228,6 @@ impl ClientStore {
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.goals.retain(|row| row.agent_did != agent_did);
         rows.tool_results
-            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
-        rows.tool_selections
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
 
         retain_rows_and_sources(
@@ -177,7 +246,8 @@ impl ClientStore {
             &mut rows.sessions,
             &mut rows.session_source_agent_dids,
             |row, source| {
-                source != Some(agent_did)
+                row.agent_did != agent_did
+                    && source != Some(agent_did)
                     && !(source.is_none() && agent_session_ids.contains(&row.session_id))
             },
         );
@@ -212,41 +282,129 @@ impl ClientStore {
         retain_rows_and_sources(
             &mut rows.tasks,
             &mut rows.task_source_agent_dids,
-            |_row, source| source != Some(agent_did) && source.is_some(),
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
         );
         retain_rows_and_sources(
             &mut rows.schedules,
             &mut rows.schedule_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.schedule_observations,
+            &mut rows.schedule_observation_source_agent_dids,
             |_row, source| source != Some(agent_did) && source.is_some(),
         );
         retain_rows_and_sources(
-            &mut rows.event_triggers,
-            &mut rows.event_trigger_source_agent_dids,
+            &mut rows.triggers,
+            &mut rows.trigger_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.trigger_observations,
+            &mut rows.trigger_observation_source_agent_dids,
             |_row, source| source != Some(agent_did) && source.is_some(),
         );
         retain_rows_and_sources(
             &mut rows.skills,
             &mut rows.skill_source_agent_dids,
             |row, source| {
-                row.agent_did.as_deref() != Some(agent_did)
-                    && source != Some(agent_did)
-                    && source.is_some()
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tools,
+            &mut rows.tools_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.contexts,
+            &mut rows.context_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.compactions,
+            &mut rows.compaction_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
             },
         );
         retain_rows_and_sources(
             &mut rows.inference_backends,
             &mut rows.inference_backend_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.backend_observations,
+            &mut rows.backend_observation_source_agent_dids,
             |_row, source| source != Some(agent_did) && source.is_some(),
         );
         retain_rows_and_sources(
             &mut rows.inference_profiles,
             &mut rows.inference_profile_source_agent_dids,
-            |_row, source| source != Some(agent_did) && source.is_some(),
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_sampling,
+            &mut rows.inference_sampling_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_execution,
+            &mut rows.inference_execution_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
         );
         retain_rows_and_sources(
             &mut rows.tool_service_registries,
             &mut rows.tool_service_registry_source_agent_dids,
-            |_row, source| source != Some(agent_did) && source.is_some(),
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.event_sources,
+            &mut rows.event_source_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.subagent_targets,
+            &mut rows.subagent_target_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.datastore_tool_surfaces,
+            &mut rows.datastore_tool_surface_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.chain_key_bindings,
+            &mut rows.chain_key_binding_source_agent_dids,
+            |row, source| {
+                row.agent_did != agent_did && source != Some(agent_did) && source.is_some()
+            },
         );
 
         ClientStore::from_rows(rows).merge_snapshot(snapshot)
@@ -256,11 +414,6 @@ impl ClientStore {
         let mut rows = self.to_rows();
         let patch_rows = patch.to_rows();
 
-        upsert_rows_by_key(
-            &mut rows.conversations,
-            patch_rows.conversations,
-            conversation_merge_key,
-        );
         upsert_rows_by_key(&mut rows.requests, patch_rows.requests, request_merge_key);
         upsert_rows_by_key(
             &mut rows.responses,
@@ -313,7 +466,6 @@ impl ClientStore {
             behaviors: self.behaviors.clone(),
             runtimes: self.runtimes.clone(),
             behavior_readiness: self.behavior_readiness.clone(),
-            conversations: self.conversations.clone(),
             requests: self.requests.clone(),
             mailbox_items: self.mailbox_items.clone(),
             responses: self.responses.clone(),
@@ -330,21 +482,54 @@ impl ClientStore {
             compaction_entry_source_agent_dids: self.compaction_entry_source_agent_dids.clone(),
             tasks: self.tasks.clone(),
             schedules: self.schedules.clone(),
-            event_triggers: self.event_triggers.clone(),
+            schedule_observations: self.schedule_observations.clone(),
+            triggers: self.triggers.clone(),
+            trigger_observations: self.trigger_observations.clone(),
             task_source_agent_dids: self.task_source_agent_dids.clone(),
             schedule_source_agent_dids: self.schedule_source_agent_dids.clone(),
-            event_trigger_source_agent_dids: self.event_trigger_source_agent_dids.clone(),
+            schedule_observation_source_agent_dids: self
+                .schedule_observation_source_agent_dids
+                .clone(),
+            trigger_source_agent_dids: self.trigger_source_agent_dids.clone(),
+            trigger_observation_source_agent_dids: self
+                .trigger_observation_source_agent_dids
+                .clone(),
             skills: self.skills.clone(),
             skill_source_agent_dids: self.skill_source_agent_dids.clone(),
-            tool_selections: self.tool_selections.clone(),
+            tools: self.tools.clone(),
+            tools_source_agent_dids: self.tools_source_agent_dids.clone(),
+            contexts: self.contexts.clone(),
+            context_source_agent_dids: self.context_source_agent_dids.clone(),
+            compactions: self.compactions.clone(),
+            compaction_source_agent_dids: self.compaction_source_agent_dids.clone(),
             inference_backends: self.inference_backends.clone(),
+            backend_observations: self.backend_observations.clone(),
             inference_profiles: self.inference_profiles.clone(),
+            inference_sampling: self.inference_sampling.clone(),
+            inference_execution: self.inference_execution.clone(),
             tool_service_registries: self.tool_service_registries.clone(),
+            event_sources: self.event_sources.clone(),
+            subagent_targets: self.subagent_targets.clone(),
+            datastore_tool_surfaces: self.datastore_tool_surfaces.clone(),
+            chain_key_bindings: self.chain_key_bindings.clone(),
             inference_backend_source_agent_dids: self.inference_backend_source_agent_dids.clone(),
+            backend_observation_source_agent_dids: self
+                .backend_observation_source_agent_dids
+                .clone(),
             inference_profile_source_agent_dids: self.inference_profile_source_agent_dids.clone(),
+            inference_sampling_source_agent_dids: self.inference_sampling_source_agent_dids.clone(),
+            inference_execution_source_agent_dids: self
+                .inference_execution_source_agent_dids
+                .clone(),
             tool_service_registry_source_agent_dids: self
                 .tool_service_registry_source_agent_dids
                 .clone(),
+            event_source_source_agent_dids: self.event_source_source_agent_dids.clone(),
+            subagent_target_source_agent_dids: self.subagent_target_source_agent_dids.clone(),
+            datastore_tool_surface_source_agent_dids: self
+                .datastore_tool_surface_source_agent_dids
+                .clone(),
+            chain_key_binding_source_agent_dids: self.chain_key_binding_source_agent_dids.clone(),
         }
     }
 }

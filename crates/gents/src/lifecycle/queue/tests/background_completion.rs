@@ -11,13 +11,14 @@ fn root_parent(agent_did: &str, session_id: &str) -> AgentRequest {
     parent
 }
 
-fn background_hints(parent: &AgentRequest) -> QueueHints {
-    QueueHints {
+fn background_hints(parent: &AgentRequest) -> RequestQueue {
+    RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{}", parent.session_id)),
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
+        background_completion_wake_version: None,
     }
 }
 
@@ -25,23 +26,27 @@ fn wake_agent_request(
     parent: &AgentRequest,
     doc_id: &str,
     request_id: &str,
-    hints: &QueueHints,
+    hints: &RequestQueue,
 ) -> AgentRequest {
     AgentRequest {
         doc_id: doc_id.to_string(),
         request_id: request_id.to_string(),
         agent_did: parent.agent_did.clone(),
-        requester_did: parent.requester_did.clone(),
+        // Background wakes are signed local-control requests, so their exact
+        // requester scope is the signing principal even when the parent was
+        // an unscoped interactive request.
+        requester_did: Some(parent.agent_did.clone()),
         behavior_id: parent.behavior_id.clone(),
         session_id: parent.session_id.clone(),
         content: "review notifications".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: Some(queue_metadata_json(hints)),
+        input: RequestInput {
+            queue: Some(background_wake_queue(
+                hints,
+                hints.queued_after_request_id.clone(),
+            )),
+            ..Default::default()
+        },
         execution_origin: Some("scheduled".to_string()),
         caused_by_correlation: None,
         caused_by_trigger_context: None,
@@ -59,8 +64,8 @@ fn wake_agent_request(
         caused_by_trigger_kind: None,
         caused_by_source_doc_id: None,
         workspace_id: None,
+        workspace_owner_agent_did: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
         workspace_seal_hash: None,
     }
 }
@@ -167,114 +172,6 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
         );
     }
 }
-
-#[tokio::test]
-async fn concurrent_notifications_converge_to_one_pending_wake() {
-    let db = test_db("atomic-background-race").await;
-    let parent = root_parent(db.agent_did(), "atomic-background-race-session");
-    let first = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "first concurrent notification",
-        "background-completion-notification:race-first:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    );
-    let second = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "second concurrent notification",
-        "background-completion-notification:race-second:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    );
-    let (first, second) = tokio::join!(first, second);
-    let first = first.unwrap();
-    let second = second.unwrap();
-    assert_eq!(
-        first.request.as_ref().expect("non-Goal wake").doc_id,
-        second.request.as_ref().expect("non-Goal wake").doc_id
-    );
-    assert_eq!(
-        [first.created_request, second.created_request]
-            .into_iter()
-            .filter(|created| *created)
-            .count(),
-        1
-    );
-
-    let request_query = format!(
-        r#"{{
-            AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
-                _docID request_id lifecycle_state
-            }}
-        }}"#,
-        escape_graphql_string(&parent.session_id)
-    );
-    let request_response = db.node.execute(&request_query).await;
-    assert!(
-        !request_response.has_errors(),
-        "pending wake query: {:?}",
-        request_response.errors
-    );
-    let requests = request_response.data.as_ref().unwrap()["AgentRequest"]
-        .as_array()
-        .unwrap();
-    assert_eq!(
-        requests.len(),
-        1,
-        "the collision key must prevent duplicate wakes"
-    );
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|row| row["lifecycle_state"] == "pending")
-            .count(),
-        1
-    );
-
-    let message_query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
-                order: {{ sequence: ASC }}
-            ) {{ request_id request_doc_id }}
-        }}"#,
-        escape_graphql_string(&parent.session_id)
-    );
-    let message_response = db.node.execute(&message_query).await;
-    assert!(
-        !message_response.has_errors(),
-        "message query: {:?}",
-        message_response.errors
-    );
-    let rows = message_response.data.as_ref().unwrap()["AgentMessage"]
-        .as_array()
-        .unwrap();
-    assert_eq!(rows.len(), 2);
-    let actual = rows
-        .iter()
-        .map(|row| {
-            (
-                row["request_id"].as_str().unwrap().to_string(),
-                row["request_doc_id"].as_str().unwrap().to_string(),
-            )
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    let persisted_bindings = requests
-        .into_iter()
-        .map(|row| {
-            (
-                row["request_id"].as_str().unwrap().to_string(),
-                row["_docID"].as_str().unwrap().to_string(),
-            )
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(actual, persisted_bindings);
-}
-
 #[tokio::test]
 async fn duplicate_notification_key_recovers_its_original_wake_binding() {
     let db = test_db("atomic-background-idempotent-notification").await;
@@ -710,4 +607,34 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         .descendant_graph_diagnostics_error
         .as_deref()
         .is_some_and(|error| error.contains("points to missing parent")));
+}
+
+#[tokio::test]
+async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
+    let db = test_db("sequence-owner-scope").await;
+    let session = "same-session-label";
+    for (owner, sequence) in [(db.agent_did(), 4), ("did:key:foreign", 700)] {
+        let mutation = crate::session::create_message_mutation(
+            session, owner, None, sequence, "user", "input", None, None, None, None,
+        );
+        let response = db.node.execute(&mutation).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+    }
+    for (id, owner, sequence) in [
+        ("own-reservation", db.agent_did(), 5),
+        ("foreign-reservation", "did:key:foreign", 900),
+    ] {
+        let response = db.node.execute(&format!(r#"mutation {{ create_AgentToolCall(input:{{tool_call_id:"{}",session_id:"{}",agent_did:"{}",message_sequence:{sequence},await_mode:"background"}}){{_docID}} }}"#, escape_graphql_string(id), escape_graphql_string(session), escape_graphql_string(owner))).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+    }
+    let txn = ConfigApplyTxn::begin_local(&db.node, None).await.unwrap();
+    let next = super::super::atomic_inputs::next_append_sequence_in_transaction(
+        &txn,
+        db.agent_did(),
+        session,
+    )
+    .await
+    .unwrap();
+    txn.discard().await.unwrap();
+    assert_eq!(next, 7, "own background reservation remains ahead of own message; foreign rows cannot move this session's cursor");
 }

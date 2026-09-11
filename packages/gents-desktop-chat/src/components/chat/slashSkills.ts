@@ -1,4 +1,4 @@
-import type { BehaviorView, SkillView } from "@source-inc/gents-desktop-client";
+import type { AgentContext, SkillView } from "@source-inc/gents-desktop-client";
 
 
 export type SlashSkillSuggestion = {
@@ -8,25 +8,18 @@ export type SlashSkillSuggestion = {
   items: SkillView[];
 };
 
-export function effectiveBehaviorSkills(
+export function effectiveContextSkills(
   skills: SkillView[],
-  behavior: BehaviorView | null | undefined,
+  context: AgentContext | null | undefined,
 ): SkillView[] {
-  if (!behavior) {
+  if (!context) {
     return [];
   }
 
-  const refs = new Set(behavior.skillRefs);
-  const excludes = new Set(behavior.skillExcludes);
-  return skills.filter((skill) => {
-    const scope = skill.scope?.trim();
-    return (
-      skill.enabled !== false &&
-      !excludes.has(skill.skillId) &&
-      (scope === "principal" ||
-        (scope === "behavior" && refs.has(skill.skillId)))
-    );
-  });
+  const allowed = new Set(context.skill_ids ?? []);
+  return skills.filter(
+    (skill) => skill.enabled !== false && allowed.has(skill.skillId),
+  );
 }
 
 function lineBoundsAt(

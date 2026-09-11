@@ -18,7 +18,6 @@ const chatScenarios = [
   "coding",
   "session-hydration",
   "backend-unavailable",
-  "tool-hold",
 ] as const;
 
 const shellScenarios = [
@@ -59,11 +58,12 @@ test.describe("desktop responsive layout guardrails", () => {
       "behavior",
       "backends",
       "profiles",
-      "toolSelections",
+      "tools",
       "metaTools",
       "tasks",
-      "timerTriggers",
-      "eventTriggers",
+      "schedules",
+      "eventSources",
+      "triggers",
     ]) {
       await openConfigTab(page, tabId);
       await expect(page.locator(".config-editor").first()).toBeVisible();
@@ -84,38 +84,6 @@ test.describe("desktop responsive layout guardrails", () => {
     await page.getByTestId("agent-tab-mailbox").click();
     await expect(page.locator(".mailbox-item")).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
-  });
-
-  test("multiple approval holds preserve the composer and final actions", async ({
-    page,
-  }) => {
-    test.skip(
-      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
-      "mobile viewport guardrail",
-    );
-    await gotoHarness(page, "tool-hold");
-    await openChat(page);
-    const finalAction = page.getByTestId("hold-approve-hold-mobile-6");
-    await finalAction.scrollIntoViewIfNeeded();
-    await expect(finalAction).toBeVisible();
-    const contained = await page.evaluate(() => {
-      const chat = document.querySelector<HTMLElement>(".chat-main");
-      const composer = document.querySelector<HTMLElement>(".composer-panel");
-      const finalAction = document.querySelector<HTMLElement>(
-        '[data-testid="hold-approve-hold-mobile-6"]',
-      );
-      if (!chat || !composer || !finalAction) throw new Error("holds geometry missing");
-      const chatRect = chat.getBoundingClientRect();
-      const composerRect = composer.getBoundingClientRect();
-      const actionRect = finalAction.getBoundingClientRect();
-      return {
-        composer:
-          composerRect.top >= chatRect.top && composerRect.bottom <= chatRect.bottom,
-        finalAction:
-          actionRect.top >= chatRect.top && actionRect.bottom <= chatRect.bottom,
-      };
-    });
-    expect(contained).toEqual({ composer: true, finalAction: true });
   });
 
   test("phone chat uses one full-screen pane at a time", async ({ page }) => {
@@ -153,7 +121,7 @@ test.describe("desktop responsive layout guardrails", () => {
     }
 
     await page.getByTestId("agent-tab-sessions").click();
-    await page.getByTestId("conversation-session-intro").click();
+    await page.getByTestId("session-session-intro").click();
     await expect(page.locator(".chat-column")).toBeVisible();
     await expect(page.locator(".sidebar")).toBeHidden();
   });

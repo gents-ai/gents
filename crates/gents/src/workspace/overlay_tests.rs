@@ -24,7 +24,7 @@ fn temp_tree() -> (tempfile::TempDir, PathBuf, PathBuf) {
 fn ready_workspace() -> IsolatedWorkspaceRecord {
     IsolatedWorkspaceRecord {
         workspace_id: "ws-1".into(),
-        owner_deployment_id: "dep-1".into(),
+        owner_agent_did: "dep-1".into(),
         writer_principal: "did:key:zWriter".into(),
         integrator_principal: "did:key:zIntegrator".into(),
         lifecycle_state: "ready".into(),
@@ -36,7 +36,7 @@ fn ready_workspace() -> IsolatedWorkspaceRecord {
 fn placement(host_path: &std::path::Path) -> WorkspacePlacementRecord {
     WorkspacePlacementRecord {
         workspace_id: "ws-1".into(),
-        deployment_id: "dep-1".into(),
+        owner_agent_did: "dep-1".into(),
         host_path: host_path.to_string_lossy().into_owned(),
         observed_tree_hash: None,
     }
@@ -45,18 +45,15 @@ fn placement(host_path: &std::path::Path) -> WorkspacePlacementRecord {
 fn bind_input<'a>(
     authority: WorkspaceAuthority,
     operator_tool_root: Option<&'a std::path::Path>,
-    enabled_workspace_roots: &'a [PathBuf],
     enforced: bool,
 ) -> WorkspaceBindInput<'a> {
     WorkspaceBindInput {
         workspace_id: "ws-1",
         authority,
-        owner_deployment_id: "dep-1",
         seal_hash: None,
         request_cwd: None,
-        local_deployment_id: "dep-1",
+        agent_did: "dep-1",
         operator_tool_root,
-        enabled_workspace_roots,
         workspace_write_sandbox_enforced: enforced,
         live_tree_hash: None,
     }
@@ -124,7 +121,7 @@ fn read_write_binds_ready_placement_under_operator_root() {
     let overlay = bind_workspace_overlay(
         &ready_workspace(),
         &placement(&placement_path),
-        bind_input(WorkspaceAuthority::ReadWrite, Some(&operator), &[], true),
+        bind_input(WorkspaceAuthority::ReadWrite, Some(&operator), true),
     )
     .unwrap();
     assert_eq!(overlay.root, placement_path);
@@ -138,7 +135,7 @@ fn read_write_fails_closed_without_workspace_write_sandbox() {
     let error = bind_workspace_overlay(
         &ready_workspace(),
         &placement(&placement_path),
-        bind_input(WorkspaceAuthority::ReadWrite, Some(&operator), &[], false),
+        bind_input(WorkspaceAuthority::ReadWrite, Some(&operator), false),
     )
     .unwrap_err();
     assert!(
@@ -160,7 +157,7 @@ fn read_write_rejects_sealed_workspace() {
         &placement(&placement_path),
         WorkspaceBindInput {
             seal_hash: Some("hash-1"),
-            ..bind_input(WorkspaceAuthority::ReadWrite, Some(&operator), &[], true)
+            ..bind_input(WorkspaceAuthority::ReadWrite, Some(&operator), true)
         },
     )
     .unwrap_err();
@@ -176,7 +173,7 @@ fn read_only_binds_ready_and_sealed() {
     bind_workspace_overlay(
         &ready_workspace(),
         &placement(&placement_path),
-        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false),
+        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false),
     )
     .unwrap();
 
@@ -191,7 +188,7 @@ fn read_only_binds_ready_and_sealed() {
         WorkspaceBindInput {
             seal_hash: Some("hash-1"),
             live_tree_hash: Some("hash-1"),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
         },
     )
     .unwrap();
@@ -203,7 +200,7 @@ fn integrate_only_binds_sealed_with_matching_hash() {
     let error = bind_workspace_overlay(
         &ready_workspace(),
         &placement(&placement_path),
-        bind_input(WorkspaceAuthority::Integrate, Some(&operator), &[], false),
+        bind_input(WorkspaceAuthority::Integrate, Some(&operator), false),
     )
     .unwrap_err();
     assert!(error.to_string().contains("not bindable"), "{error:#}");
@@ -219,7 +216,7 @@ fn integrate_only_binds_sealed_with_matching_hash() {
         WorkspaceBindInput {
             seal_hash: Some("hash-1"),
             live_tree_hash: Some("hash-1"),
-            ..bind_input(WorkspaceAuthority::Integrate, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::Integrate, Some(&operator), false)
         },
     )
     .unwrap();
@@ -238,7 +235,7 @@ fn sealed_mismatch_and_missing_hash_fail_closed() {
         &hashed,
         WorkspaceBindInput {
             seal_hash: Some("hash-other"),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
         },
     )
     .unwrap_err();
@@ -256,7 +253,7 @@ fn sealed_mismatch_and_missing_hash_fail_closed() {
         &drifted,
         WorkspaceBindInput {
             seal_hash: Some("hash-1"),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
         },
     )
     .unwrap_err();
@@ -282,7 +279,7 @@ fn sealed_requires_live_tree_hash() {
         WorkspaceBindInput {
             seal_hash: Some("hash-1"),
             live_tree_hash: None,
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
         },
     )
     .unwrap_err();
@@ -306,7 +303,7 @@ fn live_tree_hash_drift_fails_closed() {
         WorkspaceBindInput {
             seal_hash: Some("hash-1"),
             live_tree_hash: Some("hash-1"),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
         },
     )
     .unwrap();
@@ -318,7 +315,7 @@ fn live_tree_hash_drift_fails_closed() {
         WorkspaceBindInput {
             seal_hash: Some("hash-1"),
             live_tree_hash: Some("drifted"),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
         },
     )
     .unwrap_err();
@@ -332,6 +329,13 @@ fn live_tree_hash_drift_fails_closed() {
 
 #[test]
 fn request_lifecycle_treats_input_required_live_and_terminals_not_live() {
+    // Pre-claim requests still hold their exclusive workspace binding.
+    assert!(super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::Pending
+    )));
+    assert!(super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::WorkspaceBindingPending
+    )));
     assert!(super::request_lifecycle_is_live(Some(
         RequestLifecycleState::Processing
     )));
@@ -367,7 +371,7 @@ fn frozen_instruction_manifest_is_copied_onto_overlay() {
     let overlay = bind_workspace_overlay(
         &workspace,
         &placement(&placement_path),
-        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false),
+        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false),
     )
     .unwrap();
     assert!(overlay.instruction_manifest.contains("base_sha"));
@@ -392,7 +396,7 @@ fn empty_bound_overlay_does_not_live_walk_writer_tree() {
     let overlay = bind_workspace_overlay(
         &ready_workspace(),
         &placement(&placement_path),
-        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false),
+        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false),
     )
     .unwrap();
     let frozen = super::frozen_instruction_manifest_from_overlay(Some(&overlay));
@@ -425,7 +429,7 @@ fn sealed_missing_observed_tree_hash_fails_closed() {
         &placement(&placement_path),
         WorkspaceBindInput {
             seal_hash: Some("hash-1"),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
         },
     )
     .unwrap_err();
@@ -445,7 +449,7 @@ fn placement_outside_operator_root_fails_closed() {
     let error = bind_workspace_overlay(
         &ready_workspace(),
         &placement(&outside_path),
-        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false),
+        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false),
     )
     .unwrap_err();
     assert!(
@@ -455,44 +459,15 @@ fn placement_outside_operator_root_fails_closed() {
 }
 
 #[test]
-fn missing_ceiling_fails_closed() {
-    let (_guard, _, placement_path) = temp_tree();
-    let error = bind_workspace_overlay(
+fn optional_operator_ceiling_does_not_require_a_host_config_document() {
+    let (_guard, _, path) = temp_tree();
+    let overlay = bind_workspace_overlay(
         &ready_workspace(),
-        &placement(&placement_path),
-        bind_input(WorkspaceAuthority::ReadOnly, None, &[], false),
+        &placement(&path),
+        bind_input(WorkspaceAuthority::ReadOnly, None, false),
     )
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("operator tool-root or enabled WorkspaceRoot"),
-        "{error:#}"
-    );
-}
-
-#[test]
-fn enabled_workspace_root_allowlist_is_required_when_present() {
-    let (_guard, operator, placement_path) = temp_tree();
-    let other = tempfile::tempdir().unwrap();
-    let other_root = std::fs::canonicalize(other.path()).unwrap();
-    let error = bind_workspace_overlay(
-        &ready_workspace(),
-        &placement(&placement_path),
-        bind_input(
-            WorkspaceAuthority::ReadOnly,
-            Some(&operator),
-            &[other_root],
-            false,
-        ),
-    )
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("not under an enabled WorkspaceRoot"),
-        "{error:#}"
-    );
+    .unwrap();
+    assert_eq!(overlay.root, path);
 }
 
 #[test]
@@ -505,7 +480,7 @@ fn persisted_cwd_must_stay_under_placement() {
         &placement(&placement_path),
         WorkspaceBindInput {
             request_cwd: Some(&nested),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
         },
     )
     .unwrap();
@@ -518,7 +493,7 @@ fn persisted_cwd_must_stay_under_placement() {
         &placement(&placement_path),
         WorkspaceBindInput {
             request_cwd: Some(&outside),
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
+            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
         },
     )
     .unwrap_err();
@@ -532,7 +507,15 @@ fn persisted_cwd_must_stay_under_placement() {
 
 #[test]
 fn workspace_authority_parse_and_write_flags() {
-    assert!(WorkspaceAuthority::parse("readWrite").is_ok());
+    for (spelling, authority) in [
+        ("readOnly", WorkspaceAuthority::ReadOnly),
+        ("readWrite", WorkspaceAuthority::ReadWrite),
+        ("integrate", WorkspaceAuthority::Integrate),
+    ] {
+        assert_eq!(WorkspaceAuthority::parse(spelling).unwrap(), authority);
+        assert_eq!(authority.as_str(), spelling);
+    }
+    assert!(WorkspaceAuthority::parse("administrator").is_err());
     assert!(WorkspaceAuthority::ReadWrite.allows_file_writes());
     assert!(!WorkspaceAuthority::ReadOnly.allows_file_writes());
     assert!(!WorkspaceAuthority::Integrate.allows_file_writes());
@@ -580,109 +563,29 @@ fn blank_workspace_id_is_unbound() {
 }
 
 #[test]
-fn identity_mismatches_fail_closed() {
-    let (_guard, operator, placement_path) = temp_tree();
+fn principal_and_placement_identity_mismatches_fail_closed() {
+    let (_guard, operator, path) = temp_tree();
     let workspace = ready_workspace();
-    let placed = placement(&placement_path);
-
-    let error = bind_workspace_overlay(
-        &workspace,
-        &placed,
-        WorkspaceBindInput {
-            local_deployment_id: "dep-other",
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
-        },
-    )
-    .unwrap_err();
-    assert!(
-        error.to_string().contains("not this host dep-other"),
-        "{error:#}"
-    );
-
-    let error = bind_workspace_overlay(
-        &workspace,
-        &placed,
-        WorkspaceBindInput {
-            owner_deployment_id: "dep-other",
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
-        },
-    )
-    .unwrap_err();
-    assert!(
-        error.to_string().contains("does not match workspace owner"),
-        "{error:#}"
-    );
-
+    let placed = placement(&path);
+    for agent_did in ["did:key:foreign", ""] {
+        assert!(bind_workspace_overlay(
+            &workspace,
+            &placed,
+            WorkspaceBindInput {
+                agent_did,
+                ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
+            }
+        )
+        .is_err());
+    }
     let mut foreign = placed.clone();
-    foreign.deployment_id = "dep-other".into();
-    let error = bind_workspace_overlay(
+    foreign.owner_agent_did = "did:key:foreign".into();
+    assert!(bind_workspace_overlay(
         &workspace,
         &foreign,
-        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false),
+        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false)
     )
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("does not match owner_deployment_id"),
-        "{error:#}"
-    );
-
-    let error = bind_workspace_overlay(
-        &workspace,
-        &placed,
-        WorkspaceBindInput {
-            owner_deployment_id: "",
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
-        },
-    )
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("workspace_owner_deployment_id is missing"),
-        "{error:#}"
-    );
-
-    let error = bind_workspace_overlay(
-        &workspace,
-        &placed,
-        WorkspaceBindInput {
-            local_deployment_id: "",
-            ..bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), &[], false)
-        },
-    )
-    .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("HostDeployment.deployment_id is missing"),
-        "{error:#}"
-    );
-}
-
-#[test]
-fn missing_or_ambiguous_host_deployment_fails_closed() {
-    let error = super::local_deployment_id_from_rows(Vec::new()).unwrap_err();
-    assert!(
-        error.to_string().contains("HostDeployment is missing"),
-        "{error:#}"
-    );
-    let error = super::local_deployment_id_from_rows(vec![
-        super::HostDeploymentRow {
-            deployment_id: Some("dep-1".into()),
-        },
-        super::HostDeploymentRow {
-            deployment_id: Some("dep-2".into()),
-        },
-    ])
-    .unwrap_err();
-    assert!(error.to_string().contains("ambiguous"), "{error:#}");
-    let id = super::local_deployment_id_from_rows(vec![super::HostDeploymentRow {
-        deployment_id: Some("dep-1".into()),
-    }])
-    .unwrap();
-    assert_eq!(id, "dep-1");
+    .is_err());
 }
 
 /// Actual Git workspace, runtime schemas, signed request and held execution lease.
@@ -738,6 +641,11 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     let identity =
         crate::identity::KeyIdentity::load_or_create(root.join("agent.key"), None).unwrap();
     let did = identity.did().to_owned();
+    let workspace_identity =
+        crate::identity::KeyIdentity::load_or_create(root.join("workspace-owner.key"), None)
+            .unwrap();
+    let workspace_owner = workspace_identity.did().to_owned();
+    assert_ne!(workspace_owner, did);
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
             .data_path(root.join("db"))
@@ -749,10 +657,10 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut documents = MemoryWorkspaceDocuments::default();
     let mut context = HostExecutorContext {
-        deployment_id: "artifact-deployment".into(),
+        owner_agent_did: workspace_owner.clone(),
         repository: RepositoryPlacementRef {
             repository_id: "artifact-repo".into(),
-            deployment_id: "artifact-deployment".into(),
+            owner_agent_did: workspace_owner.clone(),
             host_path: repo.clone(),
             enabled: true,
         },
@@ -819,8 +727,8 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
     );
     create.workspace_id = Some("artifact-workspace".into());
+    create.workspace_owner_agent_did = Some(workspace_owner.clone());
     create.workspace_authority = Some("readOnly".into());
-    create.workspace_owner_deployment_id = Some("artifact-deployment".into());
     create.workspace_seal_hash = sealed.workspace.seal_hash.clone();
     crate::request_admission::sign_agent_request_create(&identity, &mut create)
         .await
@@ -845,15 +753,16 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         300,
     );
     owner.claim().await.unwrap();
-    let workspace = super::load_isolated_workspace_record(&node, "artifact-workspace")
-        .await
-        .unwrap()
-        .unwrap();
+    let workspace =
+        super::load_isolated_workspace_record(&node, "artifact-workspace", &workspace_owner)
+            .await
+            .unwrap()
+            .unwrap();
     super::ensure_request_binding(
         &node,
         owner.request(),
         &workspace,
-        "artifact-deployment",
+        &workspace_owner,
         WorkspaceAuthority::ReadOnly,
     )
     .await
@@ -863,7 +772,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         owner.request(),
         owner.execution_generation().unwrap(),
         std::path::Path::new(&placement.host_path),
-        "artifact-deployment",
+        &workspace_owner,
         sealed.workspace.seal_hash.as_deref().unwrap(),
     )
     .await
@@ -874,6 +783,39 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         node,
         _dir: dir,
     }
+}
+
+#[tokio::test]
+async fn admission_workspace_validation_checks_scope_and_cwd_without_writes() {
+    let fx = artifact_test_fixture(&[]).await;
+    let query =
+        "{ WorkspaceBinding { binding_id request_doc_id owner_agent_did lifecycle_state } }";
+    let before = fx.node.execute(query).await;
+    assert!(!before.has_errors(), "{:?}", before.errors);
+    let request = fx.owner.request().clone();
+    super::validate_request_workspace_input(&fx.node, &request, false)
+        .await
+        .unwrap();
+    let mut escaped = request.clone();
+    escaped.input.cwd = Some(fx._dir.path().to_string_lossy().into_owned());
+    assert!(
+        super::validate_request_workspace_input(&fx.node, &escaped, false)
+            .await
+            .is_err()
+    );
+    let mut foreign = request;
+    foreign.workspace_owner_agent_did = Some("did:key:foreign".into());
+    assert!(
+        super::validate_request_workspace_input(&fx.node, &foreign, false)
+            .await
+            .is_err()
+    );
+    let after = fx.node.execute(query).await;
+    assert!(!after.has_errors(), "{:?}", after.errors);
+    assert_eq!(
+        after.data, before.data,
+        "admission must not bind or allocate an artifact grant"
+    );
 }
 
 #[tokio::test]
@@ -947,7 +889,11 @@ async fn artifact_grant_rejects_source_drift_and_allocates_disjoint_outputs() {
         fx.owner.request(),
         fx.owner.execution_generation().unwrap(),
         fx.grant.source_root(),
-        "artifact-deployment",
+        fx.owner
+            .request()
+            .workspace_owner_agent_did
+            .as_deref()
+            .unwrap(),
         fx.owner.request().workspace_seal_hash.as_deref().unwrap(),
     )
     .await
@@ -1002,7 +948,6 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
             assert!(error.to_string().contains("enforceable artifact sandbox"));
             continue;
         }
-        execute(&fx.node, r#"mutation { create_HostDeployment(input: { deployment_id: "artifact-deployment", display_name: "local", created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }) { _docID } }"#).await;
         let alternate = artifact_alternate_owner(&fx, name, binding).await;
         let (request_owner, claim_outcome) = alternate.unwrap();
         if !matches!(claim_outcome, crate::lifecycle::ClaimOutcome::Claimed) {
@@ -1046,6 +991,7 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
                 | "readwrite_not_artifact"
                 | "unsealed"
                 | "wrong_seal"
+                | "wrong_owner"
                 | "stale_incarnation"
         ) {
             assert!(
@@ -1144,7 +1090,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
     let root = std::fs::canonicalize(_dir.path()).unwrap();
     let repository = crate::workspace::RepositoryPlacementRef {
         repository_id: "artifact-repo".into(),
-        deployment_id: "artifact-deployment".into(),
+        owner_agent_did: owner.request().workspace_owner_agent_did.clone().unwrap(),
         host_path: root.join("repo"),
         enabled: true,
     };
@@ -1153,9 +1099,18 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         crate::workspace::repository_placement_upsert_mutation(&repository, &timestamp).unwrap();
     let result = node.execute(&mutation).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
-    let error = crate::workspace::cleanup_workspace(&node, "artifact-workspace", Some(&root))
-        .await
-        .unwrap_err();
+    let error = crate::workspace::cleanup_workspace(
+        &node,
+        owner
+            .request()
+            .workspace_owner_agent_did
+            .as_deref()
+            .unwrap(),
+        "artifact-workspace",
+        Some(&root),
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("Active binding"), "{error}");
     assert!(artifact_root.exists());
     owner
@@ -1168,9 +1123,18 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
     crate::workspace::release_writer_binding(&node, owner.request())
         .await
         .unwrap();
-    crate::workspace::cleanup_workspace(&node, "artifact-workspace", Some(&root))
-        .await
-        .unwrap();
+    crate::workspace::cleanup_workspace(
+        &node,
+        owner
+            .request()
+            .workspace_owner_agent_did
+            .as_deref()
+            .unwrap(),
+        "artifact-workspace",
+        Some(&root),
+    )
+    .await
+    .unwrap();
     assert!(
         !source.exists(),
         "the existing executor removes its worktree"
@@ -1205,9 +1169,15 @@ async fn artifact_alternate_owner(
     crate::lifecycle::ClaimOutcome,
 )> {
     use crate::identity::AgentIdentity;
-    let identity =
-        crate::identity::KeyIdentity::load_or_create(fx._dir.path().join("agent.key"), None)
-            .unwrap();
+    let identity = crate::identity::KeyIdentity::load_or_create(
+        fx._dir.path().join(if binding["owner_matches"] == false {
+            "foreign.key"
+        } else {
+            "agent.key"
+        }),
+        None,
+    )
+    .unwrap();
     let did = identity.did();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -1223,15 +1193,12 @@ async fn artifact_alternate_owner(
     );
     if !binding.is_null() {
         create.workspace_id = Some("artifact-workspace".into());
+        create.workspace_owner_agent_did = if binding["owner_matches"] == false {
+            Some(did.to_owned())
+        } else {
+            fx.owner.request().workspace_owner_agent_did.clone()
+        };
         create.workspace_authority = Some(binding["authority"].as_str().unwrap().into());
-        create.workspace_owner_deployment_id = Some(
-            if binding["owner_matches"] == false {
-                "foreign-deployment"
-            } else {
-                "artifact-deployment"
-            }
-            .into(),
-        );
         create.workspace_seal_hash = if binding["seal_matches"] == false {
             Some("wrong-seal".into())
         } else {
@@ -1281,7 +1248,6 @@ async fn artifact_resolver_rejects_missing_or_ready_context_before_binding() {
         let (owner, claim) = artifact_alternate_owner(&fx, name, &binding).await.unwrap();
         assert!(matches!(claim, crate::lifecycle::ClaimOutcome::Claimed));
         for mutation in [
-            r#"mutation { create_HostDeployment(input: { deployment_id: "artifact-deployment", display_name: "local", created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }) { _docID } }"#,
             r#"mutation { update_IsolatedWorkspace(filter: { workspace_id: { _eq: "artifact-workspace" } }, input: { lifecycle_state: "ready" }) { _docID } }"#,
         ] {
             let result = fx.node.execute(mutation).await;

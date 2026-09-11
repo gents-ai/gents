@@ -442,7 +442,7 @@ mod tests {
         let desired = vec![desired_row(
             "peer-a",
             "agent-config",
-            &["AgentBehavior", "ToolSelection"],
+            &["AgentBehavior", "Tools"],
             &[],
         )];
         let partial = vec![applied("peer-a", &["AgentBehavior"], &[])];
@@ -452,7 +452,7 @@ mod tests {
             "Replicate pairing missing a collection must report unhealthy"
         );
 
-        let full = vec![applied("peer-a", &["AgentBehavior", "ToolSelection"], &[])];
+        let full = vec![applied("peer-a", &["AgentBehavior", "Tools"], &[])];
         let annotated = annotate_pairing_health(desired, &full, &[]);
         assert!(
             annotated[0].subscribed,

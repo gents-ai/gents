@@ -1170,6 +1170,7 @@ mod tests {
         crate::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
+        crate::test_support::install_test_behavior(node.as_ref(), target.did(), "behavior-1").await;
 
         let mut generation_one = active_enrollment(1, "2030-01-01T00:10:00Z");
         generation_one.request.candidate_did = member.did().to_string();

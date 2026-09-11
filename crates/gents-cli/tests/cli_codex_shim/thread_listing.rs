@@ -50,54 +50,46 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         .await?;
 
     let turned_session_id = Uuid::new_v4().to_string();
-    for mutation in [
-        format!(
-            r#"mutation {{ create_AgentSession(input: {{
-                session_id: "{s}", agent_name: "{behavior_id}", agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}", started: "2026-01-01T00:00:00Z", status: "active"
-            }}) {{ _docID }} }}"#,
-            s = escape_graphql_string(&turned_session_id),
-            behavior_id = escape_graphql_string(&behavior_id),
-            agent_did = escape_graphql_string(&agent_did),
-        ),
-        format!(
-            r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{r}", agent_did: "{agent_did}", behavior_id: "{behavior_id}",
-                session_id: "{s}", metadata: "{{\"codex_shim\":{{}}}}",
-                execution_origin: "interactive", created_at: "2026-01-01T00:00:00Z"
-            }}) {{ _docID }} }}"#,
-            r = escape_graphql_string(&Uuid::new_v4().to_string()),
-            agent_did = escape_graphql_string(&agent_did),
-            behavior_id = escape_graphql_string(&behavior_id),
-            s = escape_graphql_string(&turned_session_id),
-        ),
-        format!(
-            r#"mutation {{ create_AgentConversation(input: {{
-                session_id: "{s}", agent_name: "{behavior_id}", agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}",
-                title: "Earlier Codex thread", title_source: "user",
-                status: "active", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z"
-            }}) {{ _docID }} }}"#,
-            s = escape_graphql_string(&turned_session_id),
-            behavior_id = escape_graphql_string(&behavior_id),
-            agent_did = escape_graphql_string(&agent_did),
-        ),
-    ] {
-        serve.capturing(graphql_query(&graphql, &mutation)).await?;
-    }
-
-    let zero_turn_session_id = Uuid::new_v4().to_string();
+    let turned_request_id = Uuid::new_v4().to_string();
+    let request = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{ create_AgentRequest(input: {{
+                    request_id: "{request}", agent_did: "{agent_did}",
+                    requester_did: "{agent_did}", behavior_id: "{behavior_id}",
+                    session_id: "{session}", content: "earlier turn",
+                    lifecycle_state: "completed", execution_origin: "interactive",
+                    created_at: "2026-01-01T00:00:00Z"
+                }}) {{ _docID }} }}"#,
+                request = escape_graphql_string(&turned_request_id),
+                agent_did = escape_graphql_string(&agent_did),
+                behavior_id = escape_graphql_string(&behavior_id),
+                session = escape_graphql_string(&turned_session_id),
+            ),
+        ))
+        .await?;
+    let request_doc_id = doc_id_from_create(&request, "add_AgentRequest")?;
     serve
         .capturing(graphql_query(
             &graphql,
             &format!(
                 r#"mutation {{ create_AgentSession(input: {{
-                session_id: "{s}", agent_name: "{behavior_id}", agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}", started: "2026-01-01T00:00:00Z", status: "active"
-            }}) {{ _docID }} }}"#,
-                s = escape_graphql_string(&zero_turn_session_id),
-                behavior_id = escape_graphql_string(&behavior_id),
+                    session_id: "{session}", agent_did: "{agent_did}",
+                    requester_did: "{agent_did}", behavior_id: "{behavior_id}",
+                    created_at: "2026-01-01T00:00:00Z",
+                    title: {{ text: "Earlier Codex thread", source: "user" }},
+                    observation: {{ last_activity_at: "2026-01-01T00:00:00Z",
+                        preview: "earlier turn", latest_request: {{
+                            request_doc_id: "{request_doc}", request_id: "{request}",
+                            lifecycle_state: "completed"
+                        }} }}
+                }}) {{ _docID }} }}"#,
+                session = escape_graphql_string(&turned_session_id),
                 agent_did = escape_graphql_string(&agent_did),
+                behavior_id = escape_graphql_string(&behavior_id),
+                request_doc = escape_graphql_string(&request_doc_id),
+                request = escape_graphql_string(&turned_request_id),
             ),
         ))
         .await?;
@@ -109,10 +101,10 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
             &format!(
                 r#"mutation {{ create_AgentRequest(input: {{
                     request_id: "{request}", agent_did: "{agent_did}",
+                    requester_did: "{agent_did}",
                     behavior_id: "{behavior_id}", session_id: "{session}",
                     content: "pending projection",
                     lifecycle_state: "pending", execution_origin: "interactive",
-                    metadata: "{{\"codex_shim\":{{}}}}",
                     created_at: "2026-01-01T00:00:01Z"
                 }}) {{ _docID }} }}"#,
                 request = escape_graphql_string(&Uuid::new_v4().to_string()),
@@ -180,16 +172,8 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         !listed
             .data
             .iter()
-            .any(|thread| thread.id == zero_turn_session_id),
-        "a never-turned session holds no durable Codex data and must not be surfaced \
-         after restart: {listed:?}"
-    );
-    assert!(
-        !listed
-            .data
-            .iter()
             .any(|thread| thread.id == pending_session_id),
-        "a request alone must not invent a thread before the authoritative conversation projection exists: {listed:?}"
+        "a request alone must not invent a thread before the canonical session document exists: {listed:?}"
     );
 
     let turned = listed
@@ -200,7 +184,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
     assert_eq!(
         turned.name.as_deref(),
         Some("Earlier Codex thread"),
-        "reconstructed thread name should come from the durable conversation title"
+        "reconstructed thread name should come from the durable session title"
     );
 
     Ok(())
@@ -209,7 +193,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()> {
     // Codex is a view over canonical Gents sessions. The source of the request
-    // does not create a second class of persisted conversation.
+    // does not create a second class of persisted session.
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -259,75 +243,40 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
 
     let foreign_session_id = Uuid::new_v4().to_string();
     let foreign_request_id = Uuid::new_v4().to_string();
-    serve
+    let request = serve
         .capturing(graphql_query(
             &graphql,
             &format!(
-                r#"mutation {{
-                create_AgentSession(input: {{
-                    session_id: "{session}",
-                    agent_name: "{agent_name}",
-                    agent_did: "{agent_did}",
-                    behavior_id: "{behavior_id}",
-                    started: "2026-01-01T00:00:00Z",
-                    status: "active"
-                }}) {{ _docID }}
-            }}"#,
-                session = escape_graphql_string(&foreign_session_id),
-                agent_name = escape_graphql_string(&agent_name),
-                agent_did = escape_graphql_string(&agent_did),
-                behavior_id = escape_graphql_string(&behavior_id),
-            ),
-        ))
-        .await?;
-    serve
-        .capturing(graphql_query(
-            &graphql,
-            &format!(
-                r#"mutation {{
-                create_AgentRequest(input: {{
-                    request_id: "{request}",
-                    agent_did: "{agent_did}",
-                    behavior_id: "{behavior_id}",
-                    session_id: "{session}",
-                    metadata: "{{}}",
-                    execution_origin: "cli",
-                    created_at: "2026-01-01T00:00:00Z"
-                }}) {{ _docID }}
-            }}"#,
+                r#"mutation {{ create_AgentRequest(input: {{
+                request_id: "{request}", agent_did: "{agent}", requester_did: "{agent}",
+                behavior_id: "{behavior}",
+                session_id: "{session}", content: "shared", lifecycle_state: "completed",
+                execution_origin: "cli", created_at: "2026-01-01T00:00:00Z"
+            }}) {{ _docID }} }}"#,
                 request = escape_graphql_string(&foreign_request_id),
-                agent_did = escape_graphql_string(&agent_did),
-                behavior_id = escape_graphql_string(&behavior_id),
+                agent = escape_graphql_string(&agent_did),
+                behavior = escape_graphql_string(&behavior_id),
                 session = escape_graphql_string(&foreign_session_id),
             ),
         ))
         .await?;
+    let request_doc_id = doc_id_from_create(&request, "add_AgentRequest")?;
     serve
-        .capturing(graphql_query(
-            &graphql,
-            &format!(
-                r#"mutation {{
-                create_AgentConversation(input: {{
-                    session_id: "{session}",
-                    agent_name: "{agent_name}",
-                    agent_did: "{agent_did}",
-                    behavior_id: "{behavior_id}",
-                    title: "Shared Gents session",
-                    title_source: "user",
-                    preview_text: "shared",
-                    status: "active",
-                    created_at: "2026-01-01T00:00:00Z",
-                    updated_at: "2026-01-01T00:00:00Z",
-                    latest_request_id: "{request}"
-                }}) {{ _docID }}
-            }}"#,
-                session = escape_graphql_string(&foreign_session_id),
-                request = escape_graphql_string(&foreign_request_id),
-                agent_name = escape_graphql_string(&agent_name),
-                agent_did = escape_graphql_string(&agent_did),
-                behavior_id = escape_graphql_string(&behavior_id),
-            ),
-        ))
+        .capturing(graphql_query(&graphql, &format!(
+            r#"mutation {{ create_AgentSession(input: {{
+                session_id: "{session}", agent_did: "{agent}", requester_did: "{agent}",
+                behavior_id: "{behavior}",
+                created_at: "2026-01-01T00:00:00Z",
+                title: {{ text: "Shared Gents session", source: "user" }},
+                observation: {{ last_activity_at: "2026-01-01T00:00:00Z", preview: "shared",
+                    latest_request: {{ request_doc_id: "{request_doc}", request_id: "{request}", lifecycle_state: "completed" }} }}
+            }}) {{ _docID }} }}"#,
+            session = escape_graphql_string(&foreign_session_id),
+            agent = escape_graphql_string(&agent_did),
+            behavior = escape_graphql_string(&behavior_id),
+            request_doc = escape_graphql_string(&request_doc_id),
+            request = escape_graphql_string(&foreign_request_id),
+        )))
         .await?;
 
     let (mut ws, _) = serve

@@ -50,7 +50,18 @@ pub(super) fn is_aged_background_completion_wakeup(
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     if row.execution_origin.as_deref() != Some("scheduled")
-        || !crate::lifecycle::queue::is_automated_wakeup(row.metadata.as_deref())
+        || !row
+            .input
+            .as_ref()
+            .and_then(|input| input.queue.as_ref())
+            .is_some_and(|queue| {
+                queue.source == gents_protocol::request_input::QueueSource::BackgroundCompletion
+                    && queue.policy == gents_protocol::request_input::QueuePolicy::Coalesce
+                    && queue
+                        .key
+                        .as_deref()
+                        .is_some_and(|key| !key.trim().is_empty())
+            })
     {
         return false;
     }

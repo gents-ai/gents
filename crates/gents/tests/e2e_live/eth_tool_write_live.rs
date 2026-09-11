@@ -20,23 +20,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{IntegrationTools, Tools};
 use gents::graphql::escape_graphql_string;
 use gents::{
     address_from_secret, attestation_payload, binding_storage_key, encode_attestation,
-    generate_secp256k1_secret, upsert_chain_key_binding, upsert_tool_selection, AgentIdentity,
-    ChainKeyBindingDocument, ChainKeyMaterialStore, DocumentRuntimeOptions, Gents,
-    KeyringChainKeyStore, ToolCeiling, ToolSelectionDocument, KEY_BACKEND_KEYRING,
+    generate_secp256k1_secret, upsert_chain_key_binding, AgentIdentity, ChainKeyBindingDocument,
+    ChainKeyMaterialStore, DocumentRuntimeOptions, Gents, KeyringChainKeyStore, ToolCeiling,
+    KEY_BACKEND_KEYRING,
 };
-use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
-use tokio_util::sync::CancellationToken;
 
 use crate::eth_tool_live::{
     assert_endpoint_reachable, bind_glm_backend, fetch_tool_calls, live_enabled, live_endpoint,
 };
 use crate::steward_loop_live::wait_for_request_terminal;
-use crate::support::fixtures::test_identity;
+use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::test_db;
 
@@ -84,20 +83,6 @@ struct ProvisionedKey {
 impl Drop for ProvisionedKey {
     fn drop(&mut self) {
         let _ = KeyringChainKeyStore.delete(&self.storage_key);
-    }
-}
-
-struct ApprovalPump {
-    cancel: CancellationToken,
-    handle: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl Drop for ApprovalPump {
-    fn drop(&mut self) {
-        self.cancel.cancel();
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
-        }
     }
 }
 
@@ -415,12 +400,13 @@ async fn provision_key(node: &EmbeddedNode, identity: &dyn AgentIdentity) -> Pro
         node,
         &ChainKeyBindingDocument {
             binding_id: binding_id.clone(),
-            principal_did,
+            agent_did: principal_did,
             address: address.clone(),
             key_backend: Some(KEY_BACKEND_KEYRING.to_string()),
             attestation: Some(encode_attestation(&signature)),
             created_at: Some(created_at),
             revoked_at: None,
+            tags: Vec::new(),
         },
     )
     .await
@@ -513,96 +499,6 @@ async fn create_write_eth_tool(
         "create write EthTool failed: {:?}",
         response.errors
     );
-}
-
-fn spawn_approval_pump(node: Arc<EmbeddedNode>, agent_did: String) -> ApprovalPump {
-    let cancel = CancellationToken::new();
-    let child = cancel.clone();
-    let handle = tokio::spawn(async move {
-        while !child.is_cancelled() {
-            approve_held_calls(node.as_ref(), &agent_did).await;
-            tokio::select! {
-                _ = child.cancelled() => break,
-                _ = tokio::time::sleep(Duration::from_millis(250)) => {}
-            }
-        }
-    });
-    ApprovalPump {
-        cancel,
-        handle: Some(handle),
-    }
-}
-
-async fn approve_held_calls(node: &EmbeddedNode, agent_did: &str) {
-    let escaped = escape_graphql_string(agent_did);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    lifecycle_state: {{ _eq: "awaitingApproval" }},
-                    agent_did: {{ _eq: "{escaped}" }}
-                }}
-            ) {{
-                _docID
-                tool_call_id
-                request_id
-                agent_did
-            }}
-        }}"#
-    );
-    #[derive(Deserialize)]
-    struct HeldRow {
-        #[serde(rename = "_docID")]
-        tool_call_doc_id: String,
-        tool_call_id: String,
-        request_id: Option<String>,
-        agent_did: Option<String>,
-    }
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        return;
-    }
-    let rows: Vec<HeldRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    for row in rows {
-        let approval_id = format!("approval-{}-{}", row.tool_call_id, uuid::Uuid::new_v4());
-        let approval_id = escape_graphql_string(&approval_id);
-        let tool_call_doc_id = escape_graphql_string(&row.tool_call_doc_id);
-        let tool_call_id = escape_graphql_string(&row.tool_call_id);
-        let agent = escape_graphql_string(row.agent_did.as_deref().unwrap_or(agent_did));
-        let approver = escape_graphql_string(agent_did);
-        let request_id_field = row
-            .request_id
-            .as_deref()
-            .map(escape_graphql_string)
-            .map(|request_id| format!(r#"request_id: "{request_id}","#))
-            .unwrap_or_default();
-        let created_at = chrono::Utc::now().to_rfc3339();
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentToolApproval(input: {{
-                    approval_id: "{approval_id}",
-                    tool_call_doc_id: "{tool_call_doc_id}",
-                    tool_call_id: "{tool_call_id}",
-                    {request_id_field}
-                    agent_did: "{agent}",
-                    decision: "approved",
-                    approver_did: "{approver}",
-                    reason: "eth write live e2e auto-approve",
-                    created_at: "{created_at}"
-                }}) {{ _docID }}
-            }}"#
-        );
-        let _ = node.execute(&mutation).await;
-    }
 }
 
 async fn wait_for_tool_result(
@@ -750,28 +646,23 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     )
     .await;
 
-    upsert_tool_selection(
+    configure_behavior_tools(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "eth-write-live-tools".to_string(),
+        &agent_did,
+        &behavior_id,
+        None,
+        Tools {
+            tools_id: "eth-write-live-tools".to_string(),
             agent_did: agent_did.clone(),
-            enable_file_tools: Some(false),
-            enable_bash: Some(false),
-            eth_tool_ids: Some(vec![TOOL_ID.to_string()]),
+            integrations: Some(IntegrationTools {
+                eth_tool_ids: Some(vec![TOOL_ID.to_string()]),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        Vec::new(),
     )
-    .await
-    .expect("upsert eth write tool selection");
-
-    let mut behavior = gents::load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
-    behavior.tool_selection_id = Some("eth-write-live-tools".to_string());
-    gents::upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .expect("bind eth write tool selection");
+    .await;
 
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
@@ -787,7 +678,6 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
     let _booted = BootedAgent::new(shutdown_tx, handle, agent_did.clone());
-    let _approvals = spawn_approval_pump(db.node.clone(), agent_did.clone());
 
     let transfer_id = "eth-write-live-transfer-1";
     create_runtime_request(

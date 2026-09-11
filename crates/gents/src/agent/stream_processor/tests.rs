@@ -25,6 +25,46 @@ fn user_text_message(text: &str) -> Message {
     }
 }
 
+// Preserve the created physical request identity and exact owner/requester scope.
+fn fixture_agent_request(
+    doc_id: String,
+    request_id: &str,
+    session_id: &str,
+    content: &str,
+) -> AgentRequest {
+    AgentRequest {
+        doc_id,
+        request_id: request_id.to_string(),
+        agent_did: "did:test:test".to_string(),
+        requester_did: None,
+        behavior_id: "general".to_string(),
+        session_id: session_id.to_string(),
+        content: content.to_string(),
+        max_total_tokens: None,
+        input: gents_protocol::request_input::RequestInput::default(),
+        execution_origin: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
+        subagent_depth: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
+        workspace_id: None,
+        workspace_owner_agent_did: None,
+        workspace_authority: None,
+        workspace_seal_hash: None,
+    }
+}
+
 #[tokio::test]
 async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let data_path =
@@ -58,42 +98,8 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let request = AgentRequest {
-        doc_id: request_doc_id,
-        request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
-        requester_did: None,
-        behavior_id: Some("general".to_string()),
-        session_id: session_id.clone(),
-        content: "Inspect the repo".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let request =
+        fixture_agent_request(request_doc_id, &request_id, &session_id, "Inspect the repo");
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "test-agent",
@@ -132,7 +138,7 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         .await
         .unwrap());
 
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
     assert_eq!(history.len(), 2);
@@ -413,42 +419,12 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let request = AgentRequest {
-        doc_id: request_doc_id,
-        request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
-        requester_did: None,
-        behavior_id: Some("general".to_string()),
-        session_id: session_id.clone(),
-        content: "discover available tools".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let request = fixture_agent_request(
+        request_doc_id,
+        &request_id,
+        &session_id,
+        "discover available tools",
+    );
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
@@ -524,7 +500,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .await
         .unwrap();
 
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
     let tool_results = history
@@ -594,42 +570,8 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let request = AgentRequest {
-        doc_id: request_doc_id,
-        request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
-        requester_did: None,
-        behavior_id: Some("general".to_string()),
-        session_id: session_id.clone(),
-        content: "read the source".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let request =
+        fixture_agent_request(request_doc_id, &request_id, &session_id, "read the source");
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
@@ -717,7 +659,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .await
         .unwrap();
 
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
     assert_eq!(history.len(), 4);
@@ -799,42 +741,12 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let request = AgentRequest {
-        doc_id: request_doc_id,
-        request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
-        requester_did: None,
-        behavior_id: Some("general".to_string()),
-        session_id: session_id.clone(),
-        content: "read several files".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let request = fixture_agent_request(
+        request_doc_id,
+        &request_id,
+        &session_id,
+        "read several files",
+    );
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
@@ -901,7 +813,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
             .unwrap();
     }
 
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
     assert_eq!(history.len(), 5);
@@ -962,42 +874,12 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
         .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let request = AgentRequest {
-        doc_id: request_doc_id,
-        request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
-        requester_did: None,
-        behavior_id: Some("general".to_string()),
-        session_id: session_id.clone(),
-        content: "use the echo tool".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let request = fixture_agent_request(
+        request_doc_id,
+        &request_id,
+        &session_id,
+        "use the echo tool",
+    );
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
@@ -1091,7 +973,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
 }
 
 async fn count_tool_result_messages(node: &defra_node::EmbeddedNode, session_id: &str) -> usize {
-    crate::session::load_history(node, session_id)
+    crate::session::load_history(node, session_id, "did:test:test", None)
         .await
         .unwrap()
         .iter()
@@ -1135,42 +1017,12 @@ async fn post_tool_resumed_resets_response_tail() {
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
 
-    let request = AgentRequest {
-        doc_id: request_doc_id.clone(),
-        request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
-        requester_did: None,
-        behavior_id: Some("general".to_string()),
-        session_id: session_id.clone(),
-        content: "test prompt".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let request = fixture_agent_request(
+        request_doc_id.clone(),
+        &request_id,
+        &session_id,
+        "test prompt",
+    );
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
@@ -1282,42 +1134,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
 
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
-    let request = AgentRequest {
-        doc_id: request_doc_id,
-        request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
-        requester_did: None,
-        behavior_id: Some("general".to_string()),
-        session_id: session_id.clone(),
-        content: "test prompt".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let request = fixture_agent_request(request_doc_id, &request_id, &session_id, "test prompt");
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
@@ -1371,7 +1188,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         .unwrap();
     assert_eq!(processor.streamed_text, "Hello world");
 
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
     let assistant_texts = history
@@ -1433,42 +1250,12 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let request = AgentRequest {
-        doc_id: request_doc_id,
-        request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
-        requester_did: None,
-        behavior_id: Some("general".to_string()),
-        session_id: session_id.clone(),
-        content: "describe list_hosts".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let request = fixture_agent_request(
+        request_doc_id,
+        &request_id,
+        &session_id,
+        "describe list_hosts",
+    );
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
@@ -1544,7 +1331,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
 
     // The durable history's assistant turn carries the SALVAGED object — the
     // intended call — not the raw corrupt string.
-    let history = crate::session::load_history(&node, &session_id)
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
     let arguments = history

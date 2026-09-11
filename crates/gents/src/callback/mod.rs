@@ -1,7 +1,7 @@
 //! Callback engine: first-seen source creates → journaled host actions.
 //!
-//! Bindings match document creates (EventTrigger first-seen semantics).
-//! Invocations are claimable only on `owner_deployment_id`. `CallbackResult`
+//! Bindings select shared EventSource configuration (first-seen create semantics).
+//! Invocations are claimable only on `owner_agent_did`. `CallbackResult`
 //! is created only after IsolatedWorkspace + WorkspacePlacement are durable.
 
 use std::collections::{HashMap, HashSet};
@@ -16,7 +16,6 @@ use crate::UpdateSubscriptionSource;
 
 mod claim;
 mod documents;
-mod host;
 mod run;
 mod scan;
 mod wasm;
@@ -29,10 +28,8 @@ pub(crate) use documents::{
     flush_workspace_docs, load_isolated_workspace, load_repository_placement,
     load_workspace_placement,
 };
-pub(crate) use host::ensure_local_host_deployment;
 pub(crate) use run::recover_local_invocations;
 
-pub(crate) const BUILTIN_CREATE_WORKSPACE: &str = "create_workspace";
 pub(crate) const LIFECYCLE_PENDING: &str = "pending";
 pub(crate) const LIFECYCLE_CLAIMED: &str = "claimed";
 pub(crate) const LIFECYCLE_RUNNING: &str = "running";
@@ -42,36 +39,29 @@ pub(crate) const LIFECYCLE_DENIED: &str = "denied";
 
 pub(super) struct CallbackEngine {
     node: Arc<EmbeddedNode>,
-    local_deployment_id: String,
+    agent_did: String,
     ceiling: Option<PathBuf>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::Subscription>,
     desired_collections: HashSet<String>,
     seen_docs: HashMap<String, HashSet<String>>,
     collection_id_to_name: HashMap<String, String>,
+    group_page_cursors: HashMap<String, String>,
+    group_recovery_cursor: usize,
     rescan_tick: tokio::time::Interval,
     cancel: CancellationToken,
 }
 
 pub async fn run_callback_engine(
     node: Arc<EmbeddedNode>,
-    local_deployment_id: String,
+    agent_did: String,
     ceiling: Option<PathBuf>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut engine = CallbackEngine::new(
-        node,
-        local_deployment_id.clone(),
-        ceiling.clone(),
-        cancel.clone(),
-    );
+    let mut engine = CallbackEngine::new(node, agent_did.clone(), ceiling.clone(), cancel.clone());
     engine.reconcile_bindings().await;
-    if let Err(error) = recover_local_invocations(
-        engine.node.as_ref(),
-        &local_deployment_id,
-        ceiling.as_deref(),
-    )
-    .await
+    if let Err(error) =
+        recover_local_invocations(engine.node.as_ref(), &agent_did, ceiling.as_deref()).await
     {
         tracing::warn!(%error, "callback recovery sweep failed at startup");
     }
@@ -93,7 +83,7 @@ pub async fn run_callback_engine(
                     engine.rescan_created_docs().await;
                     if let Err(error) = recover_local_invocations(
                         engine.node.as_ref(),
-                        &engine.local_deployment_id,
+                        &engine.agent_did,
                         engine.ceiling.as_deref(),
                     )
                     .await
@@ -126,7 +116,7 @@ pub async fn run_callback_engine(
             engine.rescan_created_docs().await;
             if let Err(error) = recover_local_invocations(
                 engine.node.as_ref(),
-                &engine.local_deployment_id,
+                &engine.agent_did,
                 engine.ceiling.as_deref(),
             )
             .await

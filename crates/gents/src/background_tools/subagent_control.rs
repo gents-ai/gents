@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use super::ChildEdge;
 use crate::descendant_graph::{resolve_session_descendant_edge, DescendantGraphAccess};
-use crate::graphql::{ensure_no_errors, escape_graphql_string};
+use crate::graphql::ensure_no_errors;
 use crate::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,10 +67,12 @@ pub async fn cancel_session_subagent(
     }
     let edge = ChildEdge::from_descendant(&canonical)
         .context("authorized descendant edge lacks materialized child identity")?;
-    let Some(lifecycle) = ToolCallLifecycle::load(
+    let Some(lifecycle) = ToolCallLifecycle::load_by_doc_id(
         node.clone(),
+        &edge.parent_tool_call_doc_id,
+        &edge.parent_agent_did,
         &edge.parent_session_id,
-        &edge.parent_tool_call_id,
+        edge.parent_requester_did.as_deref(),
     )
     .await?
     else {
@@ -82,6 +84,8 @@ pub async fn cancel_session_subagent(
     // A logical tool ID can collide with another persisted receipt. Never
     // let the lifecycle loader substitute a different edge after authorization.
     if lifecycle.request_id() != edge.parent_request_id
+        || lifecycle.request_doc_id() != Some(edge.parent_request_doc_id.as_str())
+        || lifecycle.tool_call_id() != edge.parent_tool_call_id
         || lifecycle.child_request_id.as_deref() != Some(edge.child_request_id.as_str())
     {
         return Ok(CancelSubagentOutcome::Unavailable {
@@ -102,6 +106,7 @@ pub async fn cancel_session_subagent(
         &node,
         &edge.child_session_id,
         &edge.child_agent_did,
+        edge.child_requester_did.as_deref(),
         reason,
     )
     .await?;
@@ -113,11 +118,18 @@ pub async fn cancel_session_subagent(
         CancelCause::UserCancelled,
     )
     .await?;
-    let active_interrupted =
-        crate::interrupt::interrupt_active_session_request(&node, &edge.child_session_id).await?;
+    let active_interrupted = crate::interrupt::interrupt_active_session_request(
+        &node,
+        &edge.child_session_id,
+        &edge.child_agent_did,
+        edge.child_requester_did.as_deref(),
+    )
+    .await?;
     let descendants_cancelled = cancel_live_subagent_descendants(
         node.clone(),
         &edge.child_session_id,
+        &edge.child_agent_did,
+        edge.child_requester_did.as_deref(),
         &local_did,
         CancelCause::UserCancelled,
     )
@@ -126,6 +138,7 @@ pub async fn cancel_session_subagent(
         &node,
         &edge.child_session_id,
         &edge.child_agent_did,
+        edge.child_requester_did.as_deref(),
         reason,
     )
     .await?;
@@ -151,14 +164,28 @@ pub async fn cancel_session_subagent(
 pub(crate) async fn cancel_live_subagent_descendants(
     node: Arc<EmbeddedNode>,
     child_session_id: &str,
+    child_agent_did: &str,
+    child_requester_did: Option<&str>,
     local_did: &str,
     cause: CancelCause,
 ) -> Result<usize> {
-    let ids = running_subagent_bridge_ids(&node, child_session_id).await?;
+    let ids = running_subagent_bridge_ids(
+        &node,
+        child_session_id,
+        child_agent_did,
+        child_requester_did,
+    )
+    .await?;
     let mut cancelled = 0;
     for id in ids {
-        if let Some(lifecycle) =
-            ToolCallLifecycle::load(node.clone(), child_session_id, &id).await?
+        if let Some(lifecycle) = ToolCallLifecycle::load_by_doc_id(
+            node.clone(),
+            &id,
+            child_agent_did,
+            child_session_id,
+            child_requester_did,
+        )
+        .await?
         {
             if cancel_bridge_lifecycle(&node, lifecycle, local_did, "descendant", cause).await? {
                 cancelled += 1;
@@ -188,8 +215,8 @@ async fn cancel_bridge_lifecycle(
     let Some(dispatch) = dispatch else {
         return Ok(false);
     };
-    if let CascadeDispatch::Local(intent) = dispatch {
-        crate::interrupt::interrupt_request(node, &intent.child_request_id).await
+    if let CascadeDispatch::Local { intent, child } = dispatch {
+        crate::interrupt::interrupt_request_by_doc_id(node, child.doc_id.as_deref().expect("verified physical cascade child"), child.agent_did.as_deref().expect("verified local child principal"), child.requester_did.as_deref()).await
             .with_context(|| format!("failed to cascade cancel_subagent {bridge_kind} bridge {tool_call_id} cancellation to child request {}", intent.child_request_id))?;
     }
     Ok(true)
@@ -197,24 +224,32 @@ async fn cancel_bridge_lifecycle(
 
 #[derive(Deserialize)]
 struct RunningSubagentBridgeRow {
-    tool_call_id: String,
+    #[serde(rename = "_docID")]
+    doc_id: String,
     child_request_id: Option<String>,
 }
 
-async fn running_subagent_bridge_ids(node: &EmbeddedNode, session_id: &str) -> Result<Vec<String>> {
-    let session_id = escape_graphql_string(session_id);
+async fn running_subagent_bridge_ids(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<String>> {
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let response = node.execute(&format!(r#"{{ AgentToolCall(
-        filter: {{ session_id: {{ _eq: "{session_id}" }}, lifecycle_state: {{ _eq: "running" }}, cancel_policy: {{ _eq: "cascade" }} }},
+        filter: {{ {scope}, lifecycle_state: {{ _eq: "running" }}, cancel_policy: {{ _eq: "cascade" }} }},
         order: [{{ started_at: ASC }}, {{ tool_call_id: ASC }}]
-    ) {{ tool_call_id child_request_id }} }}"#)).await;
+    ) {{ _docID child_request_id }} }}"#)).await;
     ensure_no_errors(&response, "query running subagent bridges")?;
-    let rows: Vec<RunningSubagentBridgeRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .map(|value| serde_json::from_value(value.clone()))
-        .transpose()?
-        .unwrap_or_default();
+    anyhow::ensure!(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .is_some(),
+        "running bridge query omitted rows"
+    );
+    let rows: Vec<RunningSubagentBridgeRow> = crate::graphql::rows(&response, "AgentToolCall")?;
     Ok(rows
         .into_iter()
         .filter(|row| {
@@ -222,6 +257,6 @@ async fn running_subagent_bridge_ids(node: &EmbeddedNode, session_id: &str) -> R
                 .as_deref()
                 .is_some_and(|id| !id.trim().is_empty())
         })
-        .map(|row| row.tool_call_id)
+        .map(|row| row.doc_id)
         .collect())
 }

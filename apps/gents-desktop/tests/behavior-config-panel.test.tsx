@@ -1,324 +1,149 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-
 import { AgentConfigEditor } from "../src/components/config/AgentConfigPanel";
 import { BehaviorConfigEditor } from "../src/components/config/BehaviorConfigPanel";
 import type {
   AgentConfigSaveRequest,
   AgentPrincipalView,
-  SkillView,
-  BehaviorSaveRequest,
-  BehaviorView,
-  InferenceBackendView,
-  InferenceProfileView,
-  ToolSelectionView,
+  AgentBehavior,
+  DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
-
-const behavior: BehaviorView = {
-  behaviorId: "did:key:z6MkAgent:default",
-  displayName: "Default",
-  systemPrompt: "You are the default agent.",
-  backendId: "default-backend",
-  modelName: "default-model",
-  toolSelectionId: "default-tools",
-  inferenceProfileId: "default-profile",
-  compactionStrategy: null,
-  compactionThreshold: null,
-  enabled: true,
-  isDefault: true,
+const behavior: AgentBehavior = {
+  agent_did: "owner",
+  behavior_id: "behavior",
+  display_name: "Default",
+  inference_profile_id: "profile",
+  context_id: "context",
 };
-
-const inferenceBackends: InferenceBackendView[] = [
-  {
-    backendId: "default-backend",
-    name: "Default Backend",
-    providerKind: "OpenAiCompatible",
-    endpoint: "http://127.0.0.1:8000/v1",
-    apiKeyConfigured: false,
-    maxConcurrent: 2,
-    maxQueueDepth: 100,
-    enabled: true,
-    models: ["default-model"],
-  },
-];
-
-const inferenceProfiles: InferenceProfileView[] = [
-  {
-    profileId: "default-profile",
-    displayName: "Default Profile",
-  },
-];
-
-const toolSelections: ToolSelectionView[] = [
-  {
-    selectionId: "default-tools",
-    displayName: "Default Tools",
-    cliToolNames: [],
-    allowedMcpServiceIds: [],
-  },
-];
-
+function editorProps() {
+  return {
+    api: { explainToolSurface: vi.fn() } as unknown as DesktopApiAdapter,
+    agentDid: "owner",
+    principal: { agent_did: "owner", default_behavior_id: "behavior" },
+    behavior,
+    contexts: [
+      {
+        agent_did: "owner",
+        context_id: "context",
+        system_prompt: "Original prompt",
+        skill_ids: ["b", "a"],
+      },
+    ],
+    compactions: [],
+    inferenceProfiles: [
+      {
+        agent_did: "owner",
+        profile_id: "profile",
+        backend_id: "backend",
+        model_name: "model",
+      },
+    ],
+    tools: [],
+    skills: [
+      { agentDid: "owner", skillId: "a", name: "A", enabled: true },
+      { agentDid: "owner", skillId: "b", name: "B", enabled: true },
+    ],
+    saving: false,
+    savedStatus: null,
+    onCreateProfile: vi.fn(),
+    onCreateTools: vi.fn(),
+    onSaved: vi.fn(),
+    onSaveAgentConfig: vi.fn().mockResolvedValue(undefined),
+    onApplyConfigComponents: vi.fn().mockResolvedValue(undefined),
+    onDeleteBehaviorConfig: vi.fn(),
+    onDeleted: vi.fn(),
+  };
+}
 describe("BehaviorConfigEditor", () => {
-  it("saves explicit compaction defaults onto the selected behavior", async () => {
-    const onSaveAgentConfig =
-      vi.fn<[(request: AgentConfigSaveRequest) => Promise<unknown>]>();
-    const onSaveBehaviorConfig = vi.fn<
-      [(request: BehaviorSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
-    const onSaved = vi.fn();
-
-    render(
-      <BehaviorConfigEditor
-        agentDid="did:key:z6MkAgent"
-        agentDisplayName="Local Agent"
-        agentEnabled
-        behavior={behavior}
-        currentDefaultBehaviorId={behavior.behaviorId}
-        inferenceBackends={inferenceBackends}
-        inferenceProfiles={inferenceProfiles}
-        savedStatus={null}
-        saving={false}
-        toolSelections={toolSelections}
-        onCreateBackend={vi.fn()}
-        onCreateProfile={vi.fn()}
-        onCreateToolSelection={vi.fn()}
-        onSaveAgentConfig={onSaveAgentConfig}
-        onSaveBehaviorConfig={onSaveBehaviorConfig}
-        onSaved={onSaved}
-      />,
-    );
-
-    expect(screen.queryByTestId("behavior-compaction-enabled")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("behavior-id")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("behavior-edit-key")).not.toBeInTheDocument();
-    expect(screen.getByTestId("behavior-compaction-strategy")).toHaveValue(
-      "StripThenSummarize",
-    );
-    expect(screen.getByTestId("behavior-compaction-threshold")).toHaveValue(0.75);
-
+  it("leaves default compaction with its canonical owner instead of copying fields onto behavior", async () => {
+    const props = editorProps();
+    render(<BehaviorConfigEditor {...props} />);
+    expect(screen.getByTestId("behavior-id")).toHaveAttribute("readonly");
+    expect(screen.queryByTestId("behavior-backend-id")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("behavior-save"));
-
-    await waitFor(() => {
-      expect(onSaveBehaviorConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentDid: "did:key:z6MkAgent",
-          behaviorId: "did:key:z6MkAgent:default",
-          compactionStrategy: "StripThenSummarize",
-          compactionThreshold: 0.75,
-        }),
-      );
-    });
-    expect(onSaveAgentConfig).not.toHaveBeenCalled();
-    expect(onSaved).toHaveBeenCalledWith("did:key:z6MkAgent:default");
+    await waitFor(() => expect(props.onApplyConfigComponents).toHaveBeenCalledTimes(1));
+    const document = props.onApplyConfigComponents.mock.calls[0][0].document;
+    expect(document.compactions).toEqual([]);
+    expect(document.agent_behaviors[0]).not.toHaveProperty("compaction_strategy");
+    expect(document.contexts[0].system_prompt).toBe("Original prompt");
   });
-
-  it("makes the behavior-to-agent default dependency explicit", async () => {
-    const opsBehavior = {
-      ...behavior,
-      behaviorId: "did:key:z6MkAgent:ops",
-      displayName: "Ops",
-      isDefault: false,
-    };
-    const onSaveAgentConfig = vi.fn<
-      [(request: AgentConfigSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
-    const onSaveBehaviorConfig = vi.fn<
-      [(request: BehaviorSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
-
+  it("makes the behavior-to-principal default dependency explicit", async () => {
+    const props = editorProps();
     render(
       <BehaviorConfigEditor
-        agentDid="did:key:z6MkAgent"
-        agentDisplayName="Local Agent"
-        agentEnabled
-        behavior={opsBehavior}
-        currentDefaultBehaviorId={behavior.behaviorId}
-        inferenceBackends={inferenceBackends}
-        inferenceProfiles={inferenceProfiles}
-        savedStatus={null}
-        saving={false}
-        toolSelections={toolSelections}
-        onCreateBackend={vi.fn()}
-        onCreateProfile={vi.fn()}
-        onCreateToolSelection={vi.fn()}
-        onSaveAgentConfig={onSaveAgentConfig}
-        onSaveBehaviorConfig={onSaveBehaviorConfig}
-        onSaved={vi.fn()}
+        {...props}
+        principal={{ agent_did: "owner", default_behavior_id: "other" }}
       />,
     );
-
     fireEvent.click(screen.getByTestId("behavior-default-for-agent"));
     fireEvent.click(screen.getByTestId("behavior-save"));
-
-    await waitFor(() => expect(onSaveBehaviorConfig).toHaveBeenCalledTimes(1));
-    expect(onSaveAgentConfig).toHaveBeenCalledWith({
-      agentDid: "did:key:z6MkAgent",
-      displayName: "Local Agent",
-      defaultBehaviorId: "did:key:z6MkAgent:ops",
-      enabled: true,
-    });
-  });
-
-  it("tracks edits with the shared unsaved chip and heals on revert", () => {
-    render(
-      <BehaviorConfigEditor
-        agentDid="did:key:z6MkAgent"
-        agentDisplayName="Local Agent"
-        agentEnabled
-        behavior={behavior}
-        currentDefaultBehaviorId={behavior.behaviorId}
-        inferenceBackends={inferenceBackends}
-        inferenceProfiles={inferenceProfiles}
-        savedStatus={null}
-        saving={false}
-        toolSelections={toolSelections}
-        onCreateBackend={vi.fn()}
-        onCreateProfile={vi.fn()}
-        onCreateToolSelection={vi.fn()}
-        onSaveAgentConfig={vi.fn()}
-        onSaveBehaviorConfig={vi.fn()}
-        onSaved={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByTestId("behavior-system-prompt"), {
-      target: { value: "You are the default agent. Be brief." },
-    });
-    expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
-    fireEvent.change(screen.getByTestId("behavior-system-prompt"), {
-      target: { value: "You are the default agent." },
-    });
-    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
-  });
-
-  it("renders save failures next to the form", async () => {
-    const onSaveBehaviorConfig = vi.fn(() => Promise.reject(new Error("acp denied")));
-
-    render(
-      <BehaviorConfigEditor
-        agentDid="did:key:z6MkAgent"
-        agentDisplayName="Local Agent"
-        agentEnabled
-        behavior={behavior}
-        currentDefaultBehaviorId={behavior.behaviorId}
-        inferenceBackends={inferenceBackends}
-        inferenceProfiles={inferenceProfiles}
-        savedStatus={null}
-        saving={false}
-        toolSelections={toolSelections}
-        onCreateBackend={vi.fn()}
-        onCreateProfile={vi.fn()}
-        onCreateToolSelection={vi.fn()}
-        onSaveAgentConfig={vi.fn()}
-        onSaveBehaviorConfig={onSaveBehaviorConfig}
-        onSaved={vi.fn()}
-      />,
-    );
-
-    fireEvent.click(screen.getByTestId("behavior-save"));
-    expect(await screen.findByText(/Save failed: acp denied/)).toBeInTheDocument();
-  });
-
-  function editorProps(overrides: Record<string, unknown> = {}) {
-    return {
-      agentDid: "did:key:z6MkAgent",
-      agentDisplayName: "Local Agent",
-      agentEnabled: true,
-      behavior,
-      currentDefaultBehaviorId: behavior.behaviorId,
-      inferenceBackends,
-      inferenceProfiles,
-      savedStatus: null,
-      saving: false,
-      toolSelections,
-      onCreateBackend: vi.fn(),
-      onCreateProfile: vi.fn(),
-      onCreateToolSelection: vi.fn(),
-      onSaveAgentConfig: vi.fn(),
-      onSaveBehaviorConfig: vi.fn(),
-      onSaved: vi.fn(),
-      ...overrides,
-    };
-  }
-
-  it("does not read a skill toggled off and back on as an edit", () => {
-    const skills: SkillView[] = [
-      { skillId: "writer", name: "Writer", scope: "behavior" },
-      { skillId: "ops", name: "Ops", scope: "behavior" },
-    ];
-    render(
-      <BehaviorConfigEditor
-        {...editorProps({
-          behavior: { ...behavior, skillRefs: ["writer"] },
-          skills,
-        })}
-      />,
-    );
-
-    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("behavior-skill-ref-writer"));
-    expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("behavior-skill-ref-writer"));
-    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("behavior-skill-ref-ops"));
-    expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
-  });
-
-  it("selects the document profile over the first profile, without dirt", () => {
-    render(
-      <BehaviorConfigEditor
-        {...editorProps({
-          inferenceProfiles: [{ profileId: "other-profile" }, ...inferenceProfiles],
-        })}
-      />,
-    );
-
-    expect(screen.getByTestId("behavior-profile-id")).toHaveValue("default-profile");
-    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
-  });
-
-  it("fails closed on a missing document profile, then restores the exact binding", async () => {
-    const remote = { ...behavior, inferenceProfileId: "profile-remote" };
-    const onSaveBehaviorConfig = vi.fn(() => Promise.resolve());
-    const { rerender } = render(
-      <BehaviorConfigEditor
-        {...editorProps({ behavior: remote, onSaveBehaviorConfig })}
-      />,
-    );
-
-    expect(screen.getByTestId("behavior-profile-id")).toHaveValue("profile-remote");
-    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByTestId("behavior-system-prompt"), {
-      target: { value: "edited while the profile is registering" },
-    });
-    fireEvent.click(screen.getByTestId("behavior-save"));
-    expect(onSaveBehaviorConfig).not.toHaveBeenCalled();
-
-    rerender(
-      <BehaviorConfigEditor
-        {...editorProps({
-          behavior: {
-            ...remote,
-            systemPrompt: "edited while the profile is registering",
-          },
-          inferenceProfiles: [...inferenceProfiles, { profileId: "profile-remote" }],
-          onSaveBehaviorConfig,
-        })}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("behavior-save"));
     await waitFor(() =>
-      expect(onSaveBehaviorConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ inferenceProfileId: "profile-remote" }),
-      ),
+      expect(props.onSaveAgentConfig).toHaveBeenCalledWith({
+        document: { agent_did: "owner", default_behavior_id: "behavior" },
+      }),
     );
-    expect(screen.getByTestId("behavior-profile-id")).toHaveValue("profile-remote");
+    expect(props.onApplyConfigComponents.mock.invocationCallOrder[0]).toBeLessThan(
+      props.onSaveAgentConfig.mock.invocationCallOrder[0],
+    );
+  });
+  it("tracks prompt edits with the unsaved chip and heals on revert", () => {
+    render(<BehaviorConfigEditor {...editorProps()} />);
+    fireEvent.change(screen.getByTestId("behavior-system-prompt"), {
+      target: { value: "Changed" },
+    });
+    expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("behavior-system-prompt"), {
+      target: { value: "Original prompt" },
+    });
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
+  });
+  it("renders save failures next to the form", async () => {
+    render(
+      <BehaviorConfigEditor
+        {...editorProps()}
+        onApplyConfigComponents={vi.fn().mockRejectedValue(new Error("save blocked"))}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("behavior-save"));
+    await screen.findByText("save blocked");
+  });
+  it("does not read a selected skill toggled off and back on as an edit", () => {
+    render(<BehaviorConfigEditor {...editorProps()} />);
+    fireEvent.click(screen.getByTestId("behavior-skill-ref-b"));
+    fireEvent.click(screen.getByTestId("behavior-skill-ref-b"));
+    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
+  });
+  it("selects the document profile over the first profile without dirt", () => {
+    const props = editorProps();
+    render(
+      <BehaviorConfigEditor
+        {...props}
+        inferenceProfiles={[
+          {
+            agent_did: "owner",
+            profile_id: "first",
+            backend_id: "backend",
+            model_name: "other",
+          },
+          ...props.inferenceProfiles,
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("behavior-profile-id")).toHaveValue("profile");
+    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
+  });
+  it("fails closed on a missing profile and restores the exact binding", () => {
+    const props = editorProps();
+    const { rerender } = render(
+      <BehaviorConfigEditor {...props} inferenceProfiles={[]} />,
+    );
+    expect(screen.getByTestId("behavior-save")).toBeDisabled();
+    expect(screen.getByTestId("behavior-profile-id")).toHaveValue("profile");
+    rerender(<BehaviorConfigEditor {...props} />);
+    expect(screen.getByTestId("behavior-save")).not.toBeDisabled();
+    expect(screen.getByTestId("behavior-profile-id")).toHaveValue("profile");
   });
 });
-
 describe("AgentConfigEditor", () => {
   const agent: AgentPrincipalView = {
     agentDid: "did:key:z6MkAgent",

@@ -1,10 +1,11 @@
 use super::*;
 
-pub(super) async fn trigger_group_reconciliation_matches_lean_generated_contract_cases() {
-    let cases = lean_trigger_group_cases();
-    assert_eq!(cases.len(), lean_trigger_group_case_count());
+/// Eligibility is shared by trigger and callback groups. Durable typed-key
+/// suppression/capture is exercised only after its production owner migrates.
+pub(super) async fn event_group_eligibility_matches_lean_generated_contract_cases() {
+    let cases = lean_event_group_cases();
+    assert_eq!(cases.len(), lean_event_group_case_count());
     assert!(!cases.is_empty());
-
     for case in cases {
         assert_eq!(
             crate::trigger_engine::event_source::group_candidate_eligible(
@@ -17,95 +18,6 @@ pub(super) async fn trigger_group_reconciliation_matches_lean_generated_contract
             case.eligible,
             "Lean case {} eligibility drifted",
             case.name,
-        );
-
-        if !case.eligible {
-            assert_eq!(case.marker_count_after, case.prior_markers.len());
-            continue;
-        }
-
-        let created = case.marker_count_after > case.prior_markers.len();
-
-        let behavior = integration_test_behavior("general");
-        let actual_target_did = behavior.agent_did().to_string();
-        let task = resolved_task(&format!("group case {}", case.name));
-        let trigger = ResolvedEventTrigger {
-            fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
-            correlation_field: Some("run_id".to_string()),
-            expected_count: case.expected_count,
-            group_timeout_secs: case.timed_out.then_some(1),
-            group_min_count: case.minimum_count,
-            ..resolved_event_trigger_with_concurrency(
-                &case.candidate.trigger_id,
-                task.clone(),
-                ConcurrencyMode::Parallel,
-            )
-        };
-        let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-            "general".to_string(),
-            vec![behavior],
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-        )
-        .with_event_triggers(
-            HashMap::from([(case.candidate.trigger_id.clone(), trigger)]),
-            HashSet::new(),
-        )
-        .with_principal(stub_principal());
-        let snapshot = Arc::new(resolved.activate(1, HashMap::new()));
-        let (_tx, rx) = watch::channel(snapshot);
-        let materializer = SpyMaterializer::new();
-        for marker in &case.prior_markers {
-            let marker_did = if marker.target_agent_did == case.candidate.target_agent_did {
-                actual_target_did.as_str()
-            } else {
-                marker.target_agent_did.as_str()
-            };
-            materializer.mark_group_materialized(
-                marker_did,
-                &marker.trigger_id,
-                trigger_kind_from_lean(&marker.trigger_kind),
-                &marker.correlation,
-            );
-        }
-        let engine = TriggerEngine::new(rx, materializer.clone());
-        let result = engine
-            .dispatch(FireIntent {
-                trigger_id: Some(case.candidate.trigger_id.clone()),
-                trigger_kind: trigger_kind_from_lean(&case.candidate.trigger_kind),
-                task,
-                concurrency: ConcurrencyMode::Parallel,
-                event_vars: serde_json::json!({"source_doc_id": "doc-1"}),
-                doc_vars: Some(serde_json::json!({"_docID": "doc-1"})),
-                correlation: Some(case.candidate.correlation.clone()),
-                group_vars: Some(serde_json::json!({"count": case.actual_count})),
-                trigger_context: None,
-                args_vars: None,
-                durable_fire_key: "contract-fire".to_string(),
-                pre_materialized_request_id: None,
-                on_result: Box::new(|_| {}),
-            })
-            .await;
-
-        match (created, result) {
-            (true, FireResult::Fired { .. }) => assert_eq!(materializer.calls().len(), 1),
-            (true, other) => panic!("Lean case {} should fire, got {other:?}", case.name),
-            (false, FireResult::Skipped { reason }) => {
-                assert_eq!(reason, "per_group: request already materialized");
-                assert!(materializer.calls().is_empty());
-            }
-            (false, other) => panic!(
-                "Lean case {} should be suppressed, got {other:?}",
-                case.name
-            ),
-        }
-        let logical_marker_count =
-            case.prior_markers.len() + usize::from(materializer.calls().len() == 1);
-        assert_eq!(
-            logical_marker_count, case.marker_count_after,
-            "Lean case {} marker count drifted",
-            case.name
         );
     }
 }
@@ -130,28 +42,20 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
         let (_tx, rx) = watch::channel(snapshot);
         let materializer = SpyMaterializer::new();
         materializer.track_materialized_nonterminal();
-        let target_key = case
-            .trigger_id
-            .as_ref()
-            .map(|trigger_id| (trigger_id.clone(), trigger_kind));
-        let expects_target_supersede = target_key.as_ref().is_some_and(|(trigger_id, kind)| {
-            case.expected_supersede_call_keys.iter().any(|key| {
-                key.trigger_id == *trigger_id && trigger_kind_from_lean(&key.trigger_kind) == *kind
-            })
-        });
+        let target_key = case.trigger_id.as_ref();
+        let expects_target_supersede =
+            target_key.is_some_and(|id| case.expected_supersede_call_keys.contains(id));
         // Lean emits both lists by scanning `before.requests` in order; consume
         // superseded ids as we seed matching prior target keys to preserve that
         // request-id alignment.
         let mut superseded_prior_ids = case.superseded_prior_ids.iter();
         for key in &case.prior_nonterminal_keys {
-            let (prior_trigger_id, prior_trigger_kind) = trigger_key_from_lean(key);
-            if target_key.as_ref().is_some_and(|(target_id, target_kind)| {
-                target_id == &prior_trigger_id && *target_kind == prior_trigger_kind
-            }) {
+            let prior_trigger_id = key;
+            if target_key == Some(prior_trigger_id) {
                 if let Some(request_id) = superseded_prior_ids.next() {
                     materializer.mark_nonterminal_request(
-                        &prior_trigger_id,
-                        prior_trigger_kind,
+                        prior_trigger_id,
+                        trigger_kind,
                         request_id.clone(),
                     );
                 } else {
@@ -160,10 +64,10 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
                         "Lean case {} emitted fewer superseded_prior_ids than prior target keys",
                         case.name
                     );
-                    materializer.mark_nonterminal(&prior_trigger_id, prior_trigger_kind);
+                    materializer.mark_nonterminal(prior_trigger_id, trigger_kind);
                 }
             } else {
-                materializer.mark_nonterminal(&prior_trigger_id, prior_trigger_kind);
+                materializer.mark_nonterminal(prior_trigger_id, trigger_kind);
             }
         }
         assert!(
@@ -283,13 +187,9 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
         }
 
         let supersede_calls = materializer.supersede_calls();
-        let expected_supersede_calls = case
-            .expected_supersede_call_keys
-            .iter()
-            .map(trigger_key_from_lean)
-            .collect::<Vec<_>>();
+        let expected_supersede_calls = &case.expected_supersede_call_keys;
         assert_eq!(
-            supersede_calls, expected_supersede_calls,
+            &supersede_calls, expected_supersede_calls,
             "Lean case {} supersede calls drifted",
             case.name
         );

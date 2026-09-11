@@ -6,13 +6,12 @@ export type { BehaviorReadinessUnknownReasonView } from "../generated/BehaviorRe
 export type { BehaviorReadinessView } from "../generated/BehaviorReadinessView.js";
 export type { BehaviorUnavailableReasonView } from "../generated/BehaviorUnavailableReasonView.js";
 export type { BehaviorView } from "../generated/BehaviorView.js";
-export type { ConversationSummary } from "../generated/ConversationSummary.js";
+export type { SessionSummary } from "../generated/SessionSummary.js";
 export type { DeploymentView } from "../generated/DeploymentView.js";
 export type { DesktopClientSnapshot } from "../generated/DesktopClientSnapshot.js";
 export type { DesktopRuntimeSnapshot as RuntimeSnapshot } from "../generated/DesktopRuntimeSnapshot.js";
-export type { EventTriggerView } from "../generated/EventTriggerView.js";
+export type { TriggerView } from "../generated/TriggerView.js";
 export type { InferenceBackendView } from "../generated/InferenceBackendView.js";
-export type { InferenceProfileView } from "../generated/InferenceProfileView.js";
 export type { MailboxItemView } from "../generated/MailboxItemView.js";
 export type { NetworkReplicatorView } from "../generated/NetworkReplicatorView.js";
 export type { NetworkSavedPeerView } from "../generated/NetworkSavedPeerView.js";
@@ -20,22 +19,24 @@ export type { NetworkStatusView } from "../generated/NetworkStatusView.js";
 export type { PairingCollectionStatusView } from "../generated/PairingCollectionStatusView.js";
 export type { RuntimeView } from "../generated/RuntimeView.js";
 export type { SyncHealthView } from "../generated/SyncHealthView.js";
-export type { ScheduleView } from "../generated/ScheduleView.js";
+export type { Schedule } from "../generated/Schedule.js";
+export type { EventSource } from "../generated/EventSource.js";
+export type { Trigger } from "../generated/Trigger.js";
 export type { SkillView } from "../generated/SkillView.js";
 export type { TaskRecentRunsView } from "../generated/TaskRecentRunsView.js";
 export type { TaskRunSummaryView } from "../generated/TaskRunSummaryView.js";
 export type { TaskView } from "../generated/TaskView.js";
-export type { ToolSelectionView } from "../generated/ToolSelectionView.js";
-export type { ToolServiceRegistryView } from "../generated/ToolServiceRegistryView.js";
 
 export type ToolSurfaceExplanationView = {
   behaviorId: string;
   enabled: boolean;
-  toolSelectionId?: string | null;
-  toolSelectionSource: string;
-  toolPolicyVersion?: string | null;
-  toolPolicySemantics: string;
+  contextId?: string | null;
+  toolsId?: string | null;
+  toolsSource: string;
   ceilingSource: string;
   mcpServicesOnline: boolean;
   surface: Record<string, unknown>;
 };
+
+export type { SessionProvenance } from "../generated/SessionProvenance.js";
+export type { SessionFork } from "../generated/SessionFork.js";

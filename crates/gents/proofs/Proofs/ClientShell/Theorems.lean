@@ -1,9 +1,5 @@
 import Proofs.ClientShell.Projection
 
-theorem projection_pure
-    (s : ShellState) (store : LocalStore) (ctx : SubmitContext) :
-    projectChat s store ctx = projectChat s store ctx := rfl
-
 theorem snapshot_preserves_selection
     (s : ShellState) (store store' : LocalStore) (h : TransportHealth)
     (ctx : SubmitContext) :
@@ -32,10 +28,10 @@ theorem select_session_latches
     (step s (.user (.selectSession sid)) store h ctx).selection.session
       = some sid := rfl
 
-theorem select_deployment_clears_session
+theorem select_principal_route_clears_session
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
     (peer : PeerId) (agent : AgentDid) (h : TransportHealth) :
-    (step s (.user (.selectDeployment peer agent)) store h ctx).selection.session
+    (step s (.user (.selectPrincipalRoute peer agent)) store h ctx).selection.session
       = none := rfl
 
 theorem selection_sticky_under_inflight
@@ -55,11 +51,6 @@ theorem start_submit_gated
   intro h_cannot
   show (if canSubmit s store ctx then _ else s) = s
   rw [h_cannot]
-  rfl
-
-theorem trustworthy_transport_irrelevant
-    (s : ShellState) (store : LocalStore) (b : Option BehaviorId) :
-    trustworthyForFollowUp s store b = trustworthyForFollowUp s store b :=
   rfl
 
 theorem selected_in_store_is_resolved
@@ -102,10 +93,10 @@ theorem mutation_submitted_selects_session
     (step s (.mutation (.submitted sid req)) store h ctx).selection.session
       = some sid := rfl
 
-theorem new_conversation_is_ephemeral
+theorem new_session_composer_clears_selection
     (s : ShellState) (store : LocalStore) (h : TransportHealth)
     (ctx : SubmitContext) :
-    (step s (.user .requestNewConversation) store h ctx).selection.session
+    (step s (.user .requestNewSession) store h ctx).selection.session
       = none := rfl
 
 theorem mutation_failed_preserves_selection

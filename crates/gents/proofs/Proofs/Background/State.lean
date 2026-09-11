@@ -2,11 +2,6 @@ import Proofs.Basic
 
 namespace Subagent
 
-inductive BackgroundedKind where
-  | Subagent
-  | Tool
-  deriving DecidableEq, Repr
-
 inductive ChildTerminal where
   | running
   | completed
@@ -17,6 +12,15 @@ inductive ChildTerminal where
   deriving DecidableEq, Repr
 
 namespace ChildTerminal
+
+def toDefraDB : ChildTerminal -> String
+  | .running => "running"
+  | .completed => "completed"
+  | .failed => "failed"
+  | .dead => "dead"
+  | .interrupted => "interrupted"
+  | .superseded => "superseded"
+
 
 def isFailure : ChildTerminal → Prop
   | .failed => True

@@ -27,14 +27,18 @@ pub(super) struct GentsToolCallProgress {
     pub(super) subagent_link: Option<LinkedSubagentThread>,
 }
 
-pub(super) fn gents_turn_progress_query(request_id: &str, session_id: &str) -> String {
+pub(super) fn gents_turn_progress_query(request_doc_id: &str, session_id: &str) -> String {
     format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }},
                 order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
+                _docID
+                agent_did
+                requester_did
+                session_id
                 request_id
                 lifecycle_state
                 failure_reason
@@ -44,11 +48,14 @@ pub(super) fn gents_turn_progress_query(request_id: &str, session_id: &str) -> S
                 valid_until
             }}
             AgentResponse(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }},
                 order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
                 _docID
+                agent_did
+                requester_did
+                request_doc_id
                 request_id
                 session_id
                 status
@@ -67,7 +74,7 @@ pub(super) fn gents_turn_progress_query(request_id: &str, session_id: &str) -> S
             AgentToolCall(
                 filter: {{
                     session_id: {{ _eq: "{session_id}" }},
-                    request_id: {{ _eq: "{request_id}" }}
+                    request_doc_id: {{ _eq: "{request_doc_id}" }}
                 }},
                 order: {{ started_at: ASC }}
             ) {{
@@ -89,7 +96,7 @@ pub(super) fn gents_turn_progress_query(request_id: &str, session_id: &str) -> S
             }}
             InferenceCall(
                 filter: {{
-                    request_id: {{ _eq: "{request_id}" }},
+                    request_doc_id: {{ _eq: "{request_doc_id}" }},
                     call_kind: {{ _in: ["inference", "compaction"] }}
                 }},
                 order: {{ call_seq: ASC }}
@@ -105,18 +112,18 @@ pub(super) fn gents_turn_progress_query(request_id: &str, session_id: &str) -> S
                 completion_tokens
             }}
         }}"#,
-        request_id = escape_graphql_string(request_id),
+        request_doc_id = escape_graphql_string(request_doc_id),
         session_id = escape_graphql_string(session_id),
     )
 }
 
-pub(super) fn gents_tool_progress_query(request_id: &str, session_id: &str) -> String {
+pub(super) fn gents_tool_progress_query(request_doc_id: &str, session_id: &str) -> String {
     format!(
         r#"{{
             AgentToolCall(
                 filter: {{
                     session_id: {{ _eq: "{session_id}" }},
-                    request_id: {{ _eq: "{request_id}" }}
+                    request_doc_id: {{ _eq: "{request_doc_id}" }}
                 }},
                 order: {{ started_at: ASC }}
             ) {{
@@ -137,7 +144,7 @@ pub(super) fn gents_tool_progress_query(request_id: &str, session_id: &str) -> S
                 latency_ms
             }}
         }}"#,
-        request_id = escape_graphql_string(request_id),
+        request_doc_id = escape_graphql_string(request_doc_id),
         session_id = escape_graphql_string(session_id),
     )
 }
@@ -290,9 +297,7 @@ pub(super) fn observed_tool_status(tool: &GentsToolCallProgress) -> ProjectionSt
         Some(ToolCallState::Failed | ToolCallState::TimedOut | ToolCallState::Cancelled) => {
             ProjectionStatus::Failed
         }
-        Some(ToolCallState::Pending | ToolCallState::AwaitingApproval | ToolCallState::Running) => {
-            ProjectionStatus::InProgress
-        }
+        Some(ToolCallState::Pending | ToolCallState::Running) => ProjectionStatus::InProgress,
         None => ProjectionStatus::Failed,
     }
 }

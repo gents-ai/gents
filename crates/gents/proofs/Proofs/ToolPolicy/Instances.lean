@@ -14,7 +14,6 @@ def rootVM : ValueMeet (Finset String) := fieldsVM
 def Surface.meet (a b : Surface) : Surface :=
   { file := a.file.meet b.file
   , bash := a.bash.meet b.bash
-  , meta := a.meta && b.meta
   , goalTools := a.goalTools && b.goalTools
   , goalCreate := a.goalCreate && b.goalCreate
   , defraQuery := a.defraQuery && b.defraQuery
@@ -25,7 +24,7 @@ def Surface.meet (a b : Surface) : Surface :=
   , spawn := a.spawn && b.spawn
   , steering := a.steering && b.steering
   , background := a.background && b.background
-  , crossDeployment := a.crossDeployment && b.crossDeployment
+  , crossPrincipal := a.crossPrincipal && b.crossPrincipal
   , skills := a.skills && b.skills
   , lsp := a.lsp && b.lsp
   , cliTools := a.cliTools.meet rootVM b.cliTools
@@ -54,65 +53,37 @@ theorem effective_file_le_behavior :
   unfold effective Surface.meet
   exact le_trans (FileCap.meet_rank_le_left _ _) (FileCap.meet_rank_le_left _ _)
 
-theorem effective_meta_le_ceiling :
-    (effective behavior ceiling runtime).meta = true → ceiling.meta = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
-
-theorem effective_meta_le_behavior :
-    (effective behavior ceiling runtime).meta = true → behavior.meta = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
-
 theorem effective_goalTools_le_ceiling :
     (effective behavior ceiling runtime).goalTools = true → ceiling.goalTools = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_goalTools_le_behavior :
     (effective behavior ceiling runtime).goalTools = true → behavior.goalTools = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_goalCreate_le_ceiling :
     (effective behavior ceiling runtime).goalCreate = true → ceiling.goalCreate = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_goalCreate_le_behavior :
     (effective behavior ceiling runtime).goalCreate = true → behavior.goalCreate = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_defraQuery_le_ceiling :
     (effective behavior ceiling runtime).defraQuery = true → ceiling.defraQuery = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_defraQuery_le_behavior :
     (effective behavior ceiling runtime).defraQuery = true → behavior.defraQuery = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_selfConfig_le_ceiling :
     (effective behavior ceiling runtime).selfConfig = true → ceiling.selfConfig = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_selfConfig_le_behavior :
     (effective behavior ceiling runtime).selfConfig = true → behavior.selfConfig = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_selfConfigCategories_subset_ceiling (k : ToolId) :
     (effective behavior ceiling runtime).selfConfigCategories.permits k →
@@ -138,111 +109,75 @@ theorem effective_selfConfigCategories_subset_behavior (k : ToolId) :
 
 theorem effective_memory_le_ceiling :
     (effective behavior ceiling runtime).memory = true → ceiling.memory = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_memory_le_behavior :
     (effective behavior ceiling runtime).memory = true → behavior.memory = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_sessionHistory_le_ceiling :
     (effective behavior ceiling runtime).sessionHistory = true → ceiling.sessionHistory = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_sessionHistory_le_behavior :
     (effective behavior ceiling runtime).sessionHistory = true → behavior.sessionHistory = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_contextBudget_le_ceiling :
     (effective behavior ceiling runtime).contextBudget = true → ceiling.contextBudget = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_contextBudget_le_behavior :
     (effective behavior ceiling runtime).contextBudget = true → behavior.contextBudget = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_spawn_le_ceiling :
     (effective behavior ceiling runtime).spawn = true → ceiling.spawn = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_spawn_le_behavior :
     (effective behavior ceiling runtime).spawn = true → behavior.spawn = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_steering_le_ceiling :
     (effective behavior ceiling runtime).steering = true → ceiling.steering = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_steering_le_behavior :
     (effective behavior ceiling runtime).steering = true → behavior.steering = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_background_le_ceiling :
     (effective behavior ceiling runtime).background = true → ceiling.background = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_background_le_behavior :
     (effective behavior ceiling runtime).background = true → behavior.background = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
-theorem effective_crossDeployment_le_ceiling :
-    (effective behavior ceiling runtime).crossDeployment = true → ceiling.crossDeployment = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+theorem effective_crossPrincipal_le_ceiling :
+    (effective behavior ceiling runtime).crossPrincipal = true → ceiling.crossPrincipal = true := by
+  exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_crossDeployment_le_behavior :
-    (effective behavior ceiling runtime).crossDeployment = true → behavior.crossDeployment = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+theorem effective_crossPrincipal_le_behavior :
+    (effective behavior ceiling runtime).crossPrincipal = true → behavior.crossPrincipal = true := by
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_skills_le_ceiling :
     (effective behavior ceiling runtime).skills = true → ceiling.skills = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_skills_le_behavior :
     (effective behavior ceiling runtime).skills = true → behavior.skills = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_lsp_le_ceiling :
     (effective behavior ceiling runtime).lsp = true → ceiling.lsp = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_right (bool_and_left h)
+  exact fun h => bool_and_right (bool_and_left h)
 
 theorem effective_lsp_le_behavior :
     (effective behavior ceiling runtime).lsp = true → behavior.lsp = true := by
-  unfold effective Surface.meet
-  intro h
-  exact bool_and_left (bool_and_left h)
+  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_mcp_subset_ceiling (k : ToolId) :
     (effective behavior ceiling runtime).mcpServices.permits k →
@@ -370,11 +305,9 @@ theorem effective_bash_permits_subset_behavior (req : CmdReq) :
 
 theorem effective_within_ceiling :
     (effective behavior ceiling runtime).file.rank ≤ ceiling.file.rank ∧
-    ((effective behavior ceiling runtime).meta = true → ceiling.meta = true) ∧
     ((effective behavior ceiling runtime).defraQuery = true → ceiling.defraQuery = true) ∧
     ((effective behavior ceiling runtime).skills = true → ceiling.skills = true) := by
   exact ⟨effective_file_le_ceiling behavior ceiling runtime,
-    effective_meta_le_ceiling behavior ceiling runtime,
     effective_defraQuery_le_ceiling behavior ceiling runtime,
     effective_skills_le_ceiling behavior ceiling runtime⟩
 
@@ -445,7 +378,7 @@ theorem FileCap.meet_comm (a b : FileCap) : a.meet b = b.meet a := by
 @[simp] theorem BashPolicy.meet_idem (p : BashPolicy) : p.meet p = p := by
   unfold BashPolicy.meet
   have hu : ∀ v : Unit, unitVM.vmeet v v = v := by intro v; cases v; rfl
-  simp [EndpointScope.meet_idem unitVM hu, Finset.union_self, Bool.and_self]
+  simp [CommandPolicy.ExecutionMode.meet_idem, EndpointScope.meet_idem unitVM hu, Finset.union_self, Bool.and_self]
 
 @[simp] theorem Surface.meet_idem (s : Surface) : s.meet s = s := by
   unfold Surface.meet

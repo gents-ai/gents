@@ -13,12 +13,3 @@ pub(super) fn require_trimmed(name: &str, value: impl AsRef<str>) -> Result<Stri
     }
     Ok(value)
 }
-
-pub(super) fn sanitize_id_list(values: Vec<String>) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty() && seen.insert(value.clone()))
-        .collect()
-}

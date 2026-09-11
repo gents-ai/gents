@@ -25,10 +25,6 @@ fn matches_hint(hint: &Option<String>, expected: &Option<String>) -> bool {
 
 fn validate_tuple(lineage: &WorkspaceLineage) -> Result<()> {
     anyhow::ensure!(
-        lineage.workspace_id.is_some() == lineage.workspace_owner_deployment_id.is_some(),
-        "graph workspace identity requires both workspace and owner"
-    );
-    anyhow::ensure!(
         lineage.workspace_id.is_some() || lineage.workspace_seal_hash.is_none(),
         "unbound graph workspace cannot carry a seal"
     );
@@ -42,8 +38,8 @@ fn explicit_matches(
 ) -> bool {
     matches_hint(&explicit.workspace_id, &source.workspace_id)
         && matches_hint(
-            &explicit.workspace_owner_deployment_id,
-            &source.workspace_owner_deployment_id,
+            &explicit.workspace_owner_agent_did,
+            &source.workspace_owner_agent_did,
         )
         && matches_hint(&explicit.workspace_seal_hash, &source.workspace_seal_hash)
         && present(explicit.workspace_authority.as_deref())
@@ -53,8 +49,8 @@ fn explicit_matches(
 fn from_row(row: &AgentRequestRow) -> WorkspaceLineage {
     WorkspaceLineage {
         workspace_id: row.workspace_id.clone(),
+        workspace_owner_agent_did: row.workspace_owner_agent_did.clone(),
         workspace_authority: row.workspace_authority.clone(),
-        workspace_owner_deployment_id: row.workspace_owner_deployment_id.clone(),
         workspace_seal_hash: row.workspace_seal_hash.clone(),
     }
 }
@@ -69,8 +65,8 @@ fn from_input(input: &Value) -> Result<WorkspaceLineage> {
     };
     Ok(WorkspaceLineage {
         workspace_id: field("workspace_id")?,
+        workspace_owner_agent_did: None,
         workspace_authority: field("workspace_authority")?,
-        workspace_owner_deployment_id: field("workspace_owner_deployment_id")?,
         workspace_seal_hash: field("workspace_seal_hash")?,
     })
 }
@@ -78,6 +74,7 @@ fn from_input(input: &Value) -> Result<WorkspaceLineage> {
 async fn stamp_from_workspace_owner(
     executor: &(impl GraphRunQuery + ?Sized),
     lineage: &mut WorkspaceLineage,
+    owner: &str,
 ) -> Result<()> {
     let Some(workspace_id) = lineage.workspace_id.as_deref() else {
         return Ok(());
@@ -85,13 +82,13 @@ async fn stamp_from_workspace_owner(
     let response = executor
         .execute_graph_query(&crate::workspace::isolated_workspace_record_query(
             workspace_id,
+            owner,
         ))
         .await?;
     let workspace = crate::workspace::decode_isolated_workspace_record_response(&response)?
         .context("isolated workspace for graph entry is missing")?;
     anyhow::ensure!(
-        lineage.workspace_owner_deployment_id.as_deref()
-            == Some(workspace.owner_deployment_id.as_str()),
+        workspace.owner_agent_did == owner,
         "graph input workspace owner mismatch"
     );
     crate::workspace::apply_workspace_lineage_stamp(lineage, &workspace)
@@ -195,7 +192,7 @@ pub(crate) async fn derive_graph_workspace(
             );
         };
         let lineage = from_row(root);
-        validate_tuple(&lineage)?;
+        lineage.require_authority_if_workspace_id()?;
         lineage
     };
     let lineage = if authority.is_none() {
@@ -218,25 +215,30 @@ pub(crate) async fn derive_graph_workspace(
 }
 
 /// Complete workspace-owner validation after the materializer has applied the
-/// existing locality predicate. Native publication calls the same finalizer.
+/// existing workspace eligibility checks. Native publication calls the same finalizer.
 pub(crate) async fn finalize_graph_workspace(
     executor: &(impl GraphRunQuery + ?Sized),
     mut resolution: GraphWorkspaceResolution,
 ) -> Result<GraphWorkspaceResolution> {
     let authority = resolution.authority.as_deref();
+    let owner = required_string(&resolution.run, "owner_did")?;
     let mut stamped = WorkspaceLineage {
         workspace_authority: resolution.authority.clone(),
         ..resolution.source.clone()
     };
     if resolution.bootstrap {
-        stamp_from_workspace_owner(executor, &mut stamped).await?;
+        stamp_from_workspace_owner(executor, &mut stamped, owner).await?;
         anyhow::ensure!(
             explicit_matches(&resolution.source, &stamped, authority),
             "graph controller workspace input conflicts with owner stamp or destination"
         );
     } else if authority.is_some() && stamped.workspace_id.is_some() {
         let inherited_seal = stamped.workspace_seal_hash.clone();
-        stamp_from_workspace_owner(executor, &mut stamped).await?;
+        let workspace_owner = stamped
+            .workspace_owner_agent_did
+            .clone()
+            .context("authenticated entry lacks workspace owner scope")?;
+        stamp_from_workspace_owner(executor, &mut stamped, &workspace_owner).await?;
         anyhow::ensure!(
             stamped.workspace_seal_hash == inherited_seal,
             "current workspace stamp differs from immutable entry seal"
@@ -289,8 +291,8 @@ pub(crate) async fn fence_root_workspace_in_txn(
     };
     let explicit = WorkspaceLineage {
         workspace_id: request.workspace_id.clone(),
+        workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
         workspace_authority: request.workspace_authority.clone(),
-        workspace_owner_deployment_id: request.workspace_owner_deployment_id.clone(),
         workspace_seal_hash: request.workspace_seal_hash.clone(),
     };
     let Some(resolved) = resolve_graph_workspace(
@@ -314,8 +316,8 @@ pub(crate) async fn fence_root_workspace_in_txn(
     };
     anyhow::ensure!(
         explicit.workspace_id == expected.workspace_id
+            && explicit.workspace_owner_agent_did == expected.workspace_owner_agent_did
             && explicit.workspace_authority == expected.workspace_authority
-            && explicit.workspace_owner_deployment_id == expected.workspace_owner_deployment_id
             && explicit.workspace_seal_hash == expected.workspace_seal_hash,
         "signed graph workspace tuple differs from resolved publication evidence"
     );

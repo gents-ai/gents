@@ -7,11 +7,13 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import type {
   CascadeCancelPreview,
+  CodexLoginResult,
   DesktopClientSnapshot,
   DesktopOperationsSnapshot,
   DesktopSessionSnapshot,
   DeploymentView,
   EnrollmentRequestView,
+  GrokLoginResult,
   InitSummary,
   InferenceBackendView,
   InterruptRequestResult,
@@ -22,16 +24,73 @@ import type {
   TaskRunResult,
   ToolServiceTestResult,
 } from "@source-inc/gents-desktop-client";
+
 import type {
-  HeldToolCallView,
-  ResolveHoldResult,
+  AgentPrincipal,
+  AgentBehavior,
+  AgentContext,
+  BehaviorView,
+  ResponseView,
+  SessionSummary,
+  SessionProvenance,
+  TriggerView,
 } from "@source-inc/gents-desktop-client";
+import type { SessionContextView } from "@source-inc/gents-desktop-client/generated/SessionContextView";
+import type { ConcurrencyMode } from "@source-inc/gents-desktop-client/generated/ConcurrencyMode";
+import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
+import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
+import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
 
 const AGENT_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_BEHAVIOR_ID = "default";
 const STARTED_AT = "2026-06-17T00:00:00.000Z";
 const THIRTY_DAYS_AGO = new Date(Date.now() - 30 * 86_400_000).toISOString();
 const TWO_HOURS_AGO = new Date(Date.now() - 2 * 3_600_000).toISOString();
+
+type HarnessSessionTimestamps = { createdAt: string | null; updatedAt: string | null };
+
+function harnessSessionContext(
+  overrides: Partial<SessionContextView> = {},
+): SessionContextView {
+  return {
+    transcriptTotalsExact: true,
+    estimatedDurableTokens: 0,
+    estimatedConversationTokens: 0,
+    contextWindow: 128_000,
+    compactionThreshold: 0.75,
+    compactionThresholdTokens: 96_000,
+    compactionStrategy: "StripThenSummarize",
+    durableMessageCount: 0,
+    providerMessageCount: 0,
+    totalCompactedMessages: 0,
+    compactions: [],
+    lastRequest: null,
+    ...overrides,
+  };
+}
+
+function harnessResponseView(overrides: Partial<ResponseView> = {}): ResponseView {
+  return {
+    status: null,
+    content: null,
+    reasoning: null,
+    errorMessage: null,
+    tokenCount: null,
+    materializedMessageSequence: null,
+    materializedAt: null,
+    interruptedAt: null,
+    completedAt: null,
+    cancelCause: null,
+    backendId: null,
+    ...overrides,
+  };
+}
+
+function harnessAssistantItem(
+  item: Omit<Extract<RenderedTimelineItem, { kind: "assistantMessage" }>, "kind">,
+): RenderedTimelineItem {
+  return { kind: "assistantMessage", ...item };
+}
 
 export type DesktopUiHarnessScenario =
   | "default"
@@ -41,7 +100,6 @@ export type DesktopUiHarnessScenario =
   | "save-error"
   | "backend-health-error"
   | "backend-unavailable"
-  | "tool-hold"
   | "mailbox-overflow"
   | "long-content"
   | "active-turn"
@@ -117,24 +175,6 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
-  let heldToolCalls: HeldToolCallView[] =
-    scenario === "tool-hold"
-      ? Array.from({ length: 6 }, (_, index) => {
-          const ordinal = index + 1;
-          return {
-            toolCallDocId: `hold-doc-mobile-${ordinal}`,
-            toolCallId: `hold-mobile-${ordinal}`,
-            requestId: `request_01JZ6Q0Y5Q7V0MOBILE_APPROVAL_BOUNDARY_WITHOUT_BREAKS_${ordinal}`,
-            sessionId: "session-intro",
-            agentDid: AGENT_DID,
-            toolName: `mcp__workstation_diagnostics__inspect_namespaced_service_without_breaks_${ordinal}`,
-            args: JSON.stringify({
-              target: `https://workstation.example/internal/service/with/a/very/long/unbroken/path/${ordinal}`,
-            }),
-            deadlineAt: "2099-08-28T23:59:59Z",
-          };
-        })
-      : [];
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
   const sessionLineage = new Map<
@@ -146,6 +186,9 @@ export function createDesktopUiHarness(
       triggerKind?: string | null;
     }
   >();
+  const sessionTimestamps = new Map<string, HarnessSessionTimestamps>([
+    ["session-intro", { createdAt: THIRTY_DAYS_AGO, updatedAt: TWO_HOURS_AGO }],
+  ]);
   let requestSeq = 1;
   let sessionSeq = 1;
   let rowCount = 42;
@@ -224,13 +267,13 @@ export function createDesktopUiHarness(
     agentDid: AGENT_DID,
     behaviorId: DEFAULT_BEHAVIOR_ID,
     title: "introduction-and-greetings",
-    createdAt: THIRTY_DAYS_AGO,
-    updatedAt: TWO_HOURS_AGO,
     previewText: greeting,
     status: activeTurn ? "processing" : "completed",
     turnState: activeTurn ? "streaming" : "completed",
     latestRequestId: "request-intro",
-    latestResponse: {
+    goal: null,
+    retryEligibility: { eligible: false, denialReason: null },
+    latestResponse: harnessResponseView({
       status: activeTurn ? "streaming" : "completed",
       content: greeting,
       tokenCount: 24,
@@ -238,33 +281,28 @@ export function createDesktopUiHarness(
       materializedAt: STARTED_AT,
       completedAt: activeTurn ? null : STARTED_AT,
       backendId: "backend-openai",
-    },
+    }),
     pendingTurn: null,
     activeResponseOverlay: null,
     context:
       scenario === "long-content"
-        ? {
+        ? harnessSessionContext({
             estimatedDurableTokens: 142_031,
             estimatedConversationTokens: 142_031,
             contextWindow: 480_000,
-            compactionThreshold: 0.75,
             compactionThresholdTokens: 360_000,
-            compactionStrategy: "StripThenSummarize",
             durableMessageCount: 8,
             providerMessageCount: 8,
-            totalCompactedMessages: 0,
-            compactions: [],
-            lastRequest: null,
-          }
-        : undefined,
+          })
+        : harnessSessionContext(),
     timelineItems: [
-      {
-        kind: "assistantMessage",
+      harnessAssistantItem({
         itemKey: "intro-assistant",
         sequence: 1,
         content: greeting,
+        reasoning: null,
         timestamp: "2026-06-03T14:05:00Z",
-      },
+      }),
       ...(activeTurn
         ? [
             {
@@ -393,15 +431,16 @@ export function createDesktopUiHarness(
       agentDid: AGENT_DID,
       behaviorId: DEFAULT_BEHAVIOR_ID,
       title: "Desktop-started session",
-      createdAt: THIRTY_DAYS_AGO,
-      updatedAt: TWO_HOURS_AGO,
       previewText: "hello from desktop",
       status: "completed",
       turnState: "completed",
       latestRequestId: "request-remote",
+      goal: null,
+      retryEligibility: { eligible: false, denialReason: null },
       latestResponse: null,
       pendingTurn: null,
       activeResponseOverlay: null,
+      context: harnessSessionContext(),
       timelineItems: [
         {
           kind: "userMessage",
@@ -438,6 +477,12 @@ export function createDesktopUiHarness(
         status: "completed",
         turnState: "completed",
         latestRequestId: `request-index-${index}`,
+        goal: null,
+        retryEligibility: { eligible: false, denialReason: null },
+        latestResponse: null,
+        activeResponseOverlay: null,
+        pendingTurn: null,
+        context: harnessSessionContext(),
         timelineItems: [],
       });
     }
@@ -446,7 +491,7 @@ export function createDesktopUiHarness(
       MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems +
       MOBILE_PERFORMANCE_FIXTURE.shortSessionTimelineItems;
   }
-  syncConversations();
+  syncSessions();
 
   function notify(reason: string, responseOnly = false) {
     updateEvents += 1;
@@ -508,11 +553,12 @@ export function createDesktopUiHarness(
       latestResponse: session.latestResponse
         ? { ...session.latestResponse, content: liveContent }
         : null,
-      activeResponseOverlay: {
+      activeResponseOverlay: harnessResponseView({
         ...session.activeResponseOverlay,
+        status: "streaming",
         content: liveContent,
         reasoning: null,
-      },
+      }),
     });
     return streamSequence;
   }
@@ -577,29 +623,48 @@ export function createDesktopUiHarness(
     return clone(next);
   }
 
-  function syncConversations() {
+  function syncSessions() {
     deployment = {
       ...deployment,
-      conversations: Array.from(sessions.values()).map((session) => ({
-        sessionId: session.sessionId,
-        title: session.title,
-        previewText: session.previewText,
-        status: session.status,
-        behaviorId: session.behaviorId,
-        latestRequestId: session.latestRequestId,
-        taskId: sessionLineage.get(session.sessionId)?.taskId ?? null,
-        taskName: sessionLineage.get(session.sessionId)?.taskName ?? null,
-        triggerId: sessionLineage.get(session.sessionId)?.triggerId ?? null,
-        triggerKind: sessionLineage.get(session.sessionId)?.triggerKind ?? null,
-        createdAt: session.createdAt ?? THIRTY_DAYS_AGO,
-        updatedAt: session.updatedAt ?? TWO_HOURS_AGO,
-        turnState: session.turnState,
-        messageCount: session.timelineItems.filter(
-          (item) => item.kind === "userMessage" || item.kind === "assistantMessage",
-        ).length,
-        toolCallCount: session.timelineItems.filter((item) => item.kind === "toolGroup")
-          .length,
-      })),
+      sessions: Array.from(sessions.values()).map((session) => {
+        const lineage = sessionLineage.get(session.sessionId);
+        const provenance: SessionProvenance | null = lineage?.taskId
+          ? {
+              task_id: lineage.taskId,
+              graph_run_id: null,
+              parent_request_doc_id: null,
+              fork: null,
+            }
+          : null;
+        const summary: SessionSummary = {
+          sessionId: session.sessionId,
+          agentDid: session.agentDid ?? AGENT_DID,
+          requesterDid: null,
+          latestRequestDocId: null,
+          closedAt: null,
+          tags: [],
+          provenance,
+          title: session.title,
+          previewText: session.previewText,
+          status: session.status,
+          behaviorId: session.behaviorId,
+          latestRequestId: session.latestRequestId,
+          taskId: lineage?.taskId ?? null,
+          taskName: lineage?.taskName ?? null,
+          triggerId: lineage?.triggerId ?? null,
+          triggerKind: lineage?.triggerKind ?? null,
+          createdAt: sessionTimestamps.get(session.sessionId)?.createdAt ?? null,
+          updatedAt: sessionTimestamps.get(session.sessionId)?.updatedAt ?? null,
+          turnState: session.turnState,
+          messageCount: session.timelineItems.filter(
+            (item) => item.kind === "userMessage" || item.kind === "assistantMessage",
+          ).length,
+          toolCallCount: session.timelineItems.filter(
+            (item) => item.kind === "toolGroup",
+          ).length,
+        };
+        return summary;
+      }),
     };
   }
 
@@ -617,6 +682,7 @@ export function createDesktopUiHarness(
     const requestId = `request-${++requestSeq}`;
     const title = prompt.trim().slice(0, 48) || "manual-task-run";
     const response = `Bombadil harness response ${requestSeq}: received "${title}".`;
+    const now = new Date().toISOString();
     const session: DesktopSessionSnapshot = {
       sessionId,
       agentDid: deployment.agentDid,
@@ -626,40 +692,44 @@ export function createDesktopUiHarness(
       status: "completed",
       turnState: "completed",
       latestRequestId: requestId,
-      latestResponse: {
+      goal: null,
+      retryEligibility: { eligible: false, denialReason: null },
+      latestResponse: harnessResponseView({
         status: "completed",
         content: response,
         tokenCount: 32,
         materializedMessageSequence: 2,
-        materializedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
+        materializedAt: now,
+        completedAt: now,
         backendId: "backend-openai",
-      },
+      }),
       pendingTurn: null,
       activeResponseOverlay: null,
+      context: harnessSessionContext(),
       timelineItems: [
         {
           kind: "userMessage",
           itemKey: `${requestId}-user`,
           sequence: 1,
           content: prompt,
-          timestamp: new Date().toISOString(),
+          timestamp: now,
         },
-        {
-          kind: "assistantMessage",
+        harnessAssistantItem({
           itemKey: `${requestId}-assistant`,
           sequence: 2,
           content: response,
-          timestamp: new Date().toISOString(),
-        },
+          reasoning: null,
+          timestamp: now,
+        }),
       ],
     };
     sessions.set(sessionId, session);
+    sessionTimestamps.set(sessionId, { createdAt: now, updatedAt: now });
     if (lineage) {
       sessionLineage.set(sessionId, lineage);
     }
     rowCount += 4;
-    syncConversations();
+    syncSessions();
     notify("store");
     return { session, requestId };
   }
@@ -730,10 +800,10 @@ export function createDesktopUiHarness(
       }
       const tree: Record<
         string,
-        { name: string; kind: "dir" | "file"; size?: number }[]
+        { name: string; kind: "dir" | "file"; size: number | null }[]
       > = {
         "": [
-          { name: "src", kind: "dir" },
+          { name: "src", kind: "dir", size: null },
           { name: "Cargo.toml", kind: "file", size: 812 },
           { name: "README.md", kind: "file", size: 2048 },
         ],
@@ -815,13 +885,18 @@ export function createDesktopUiHarness(
           "tool-surface explanation for remote agents is not yet supported",
         );
       }
+      const behavior = deployment.behaviors.find(
+        (candidate) => candidate.behaviorId === behaviorId,
+      );
+      const context = deployment.contexts.find(
+        (candidate) => candidate.context_id === behavior?.contextId,
+      );
       return {
         behaviorId,
-        enabled: true,
-        toolSelectionId: "default-tools",
-        toolSelectionSource: "document",
-        toolPolicyVersion: null,
-        toolPolicySemantics: "tool-policy/v1",
+        enabled: behavior?.enabled ?? true,
+        contextId: context?.context_id ?? null,
+        toolsId: context?.tools_id ?? null,
+        toolsSource: "context",
         ceilingSource: "init_json",
         mcpServicesOnline: true,
         surface: {
@@ -836,8 +911,11 @@ export function createDesktopUiHarness(
     async fetchNetworkStatus() {
       return {
         localPeerId: "12D3KooWBombadilLocalPeer",
+        localPeerIdError: null,
         listenAddresses: ["/ip4/127.0.0.1/tcp/9292/p2p/12D3KooWBombadilLocalPeer"],
+        listenAddressesError: null,
         connectedPeers: [deployment.peerId],
+        connectedPeersError: null,
         replicators: [
           {
             peerId: deployment.peerId,
@@ -847,6 +925,7 @@ export function createDesktopUiHarness(
             lastStatusChange: TWO_HOURS_AGO,
           },
         ],
+        replicatorsError: null,
         savedPeers: [
           {
             peerId: deployment.peerId,
@@ -1007,7 +1086,7 @@ export function createDesktopUiHarness(
           status: "completed",
           turnState: "completed",
           latestRequestId: requestId,
-          latestResponse: {
+          latestResponse: harnessResponseView({
             status: "completed",
             content: response,
             tokenCount: 32,
@@ -1015,7 +1094,7 @@ export function createDesktopUiHarness(
             materializedAt: new Date().toISOString(),
             completedAt: new Date().toISOString(),
             backendId: "backend-openai",
-          },
+          }),
           timelineItems: [
             ...existing.timelineItems,
             {
@@ -1025,18 +1104,18 @@ export function createDesktopUiHarness(
               content,
               timestamp: new Date().toISOString(),
             },
-            {
-              kind: "assistantMessage",
+            harnessAssistantItem({
               itemKey: `${requestId}-assistant`,
               sequence: nextSequence + 1,
               content: response,
+              reasoning: null,
               timestamp: new Date().toISOString(),
-            },
+            }),
           ],
         };
         sessions.set(request.sessionId, updated);
         rowCount += 4;
-        syncConversations();
+        syncSessions();
         notify("store");
         return {
           sessionId: request.sessionId,
@@ -1056,31 +1135,224 @@ export function createDesktopUiHarness(
         sessionId: session.sessionId,
         agentDid: request.agentDid,
         behaviorId: request.behaviorId || DEFAULT_BEHAVIOR_ID,
-        status: "completed",
         lifecycleState: "completed",
       };
       return result;
     },
-    async renameConversation(request) {
+    async renameSession(request) {
       const session = sessions.get(request.sessionId);
       if (session) {
         sessions.set(request.sessionId, {
           ...session,
           title: request.title.trim() || session.title,
         });
-        syncConversations();
+        syncSessions();
         notify("store");
       }
     },
-    async saveAgentConfig(request) {
+    async listMailbox() {
+      return deployment.mailboxItems;
+    },
+    async startMailboxRequest(itemId) {
+      const item = deployment.mailboxItems.find((entry) => entry.itemId === itemId);
+      if (!item) {
+        throw new Error(`mailbox item ${itemId} not found`);
+      }
+      return item;
+    },
+    async dismissMailboxItem() {
+      return undefined;
+    },
+    async applyConfigComponents(request) {
+      if (scenario === "save-error") {
+        throw new Error("Harness rejected config apply for sad-path coverage.");
+      }
       deployment = {
         ...deployment,
-        label: request.displayName.trim() || deployment.label,
+        behaviorConfigs: [
+          ...deployment.behaviorConfigs.filter(
+            (behavior) =>
+              !request.document.agent_behaviors?.some(
+                (candidate) => candidate.behavior_id === behavior.behavior_id,
+              ),
+          ),
+          ...(request.document.agent_behaviors ?? []),
+        ],
+        contexts: [
+          ...deployment.contexts.filter(
+            (context) =>
+              !request.document.contexts?.some(
+                (candidate) => candidate.context_id === context.context_id,
+              ),
+          ),
+          ...(request.document.contexts ?? []),
+        ],
+        compactions: [
+          ...deployment.compactions.filter(
+            (compaction) =>
+              !request.document.compactions?.some(
+                (candidate) => candidate.compaction_id === compaction.compaction_id,
+              ),
+          ),
+          ...(request.document.compactions ?? []),
+        ],
+        tools: [
+          ...deployment.tools.filter(
+            (entry) =>
+              !request.document.tools?.some(
+                (candidate) => candidate.tools_id === entry.tools_id,
+              ),
+          ),
+          ...(request.document.tools ?? []),
+        ],
+        subagentTargets: [
+          ...deployment.subagentTargets.filter(
+            (target) =>
+              !request.document.subagent_targets?.some(
+                (candidate) => candidate.target_id === target.target_id,
+              ),
+          ),
+          ...(request.document.subagent_targets ?? []),
+        ],
+        skills: [
+          ...deployment.skills.filter(
+            (skill) =>
+              !request.document.skills?.some(
+                (candidate) => candidate.skill_id === skill.skillId,
+              ),
+          ),
+          ...(request.document.skills ?? []).map((document) => ({
+            skillId: document.skill_id,
+            agentDid: document.agent_did,
+            name: document.name ?? null,
+            description: document.description ?? null,
+            instructions: document.instructions ?? null,
+            toolRefs: document.tool_refs ?? [],
+            displayName: document.display_name ?? null,
+            enabled: document.enabled ?? true,
+            createdAt: document.created_at ?? null,
+          })),
+        ],
+        inferenceProfiles: [
+          ...deployment.inferenceProfiles.filter(
+            (profile) =>
+              !request.document.inference_profiles?.some(
+                (candidate) => candidate.profile_id === profile.profile_id,
+              ),
+          ),
+          ...(request.document.inference_profiles ?? []),
+        ],
+        toolServiceRegistries: [
+          ...deployment.toolServiceRegistries.filter(
+            (service) =>
+              !request.document.tool_service_registries?.some(
+                (candidate) => candidate.service_id === service.service_id,
+              ),
+          ),
+          ...(request.document.tool_service_registries ?? []),
+        ],
+        tasks: [
+          ...deployment.tasks.filter(
+            (task) =>
+              !request.document.tasks?.some(
+                (candidate) => candidate.task_id === task.taskId,
+              ),
+          ),
+          ...(request.document.tasks ?? []).map((document) => ({
+            taskId: document.task_id,
+            name: document.display_name ?? null,
+            description: document.description ?? null,
+            behaviorId: document.behavior_id,
+            promptTemplate: document.prompt_template,
+            goalObjectiveTemplate: document.goal_objective_template ?? null,
+            goalTokenBudget: document.goal_token_budget ?? null,
+            enabled: document.enabled ?? true,
+            outputSchemaRef: document.output_schema_ref ?? null,
+            hooks: document.hooks ?? [],
+            tags: document.tags ?? [],
+            recentRuns: {
+              totalFires: 0,
+              lastAttemptAt: null,
+              lastStatus: null,
+              lastError: null,
+              scheduleCount: 0,
+              eventCount: 0,
+            },
+            runHistory: [],
+          })),
+        ],
+        schedules: [
+          ...deployment.schedules.filter(
+            (schedule) =>
+              !request.document.schedules?.some(
+                (candidate) => candidate.schedule_id === schedule.schedule_id,
+              ),
+          ),
+          ...(request.document.schedules ?? []),
+        ],
+        eventSources: [
+          ...deployment.eventSources.filter(
+            (source) =>
+              !request.document.event_sources?.some(
+                (candidate) => candidate.event_source_id === source.event_source_id,
+              ),
+          ),
+          ...(request.document.event_sources ?? []),
+        ],
+        triggers: [
+          ...deployment.triggers.filter(
+            (trigger) =>
+              !request.document.triggers?.some(
+                (candidate) => candidate.trigger_id === trigger.config.trigger_id,
+              ),
+          ),
+          ...(request.document.triggers ?? []).map((config) => ({
+            config,
+            nextRunAt: null,
+            lastAttemptAt: null,
+            lastFiredSourceDocId: null,
+            lastStatus: null,
+            lastError: null,
+            fireCount: 0,
+          })),
+        ],
+      };
+      notify("config");
+      return snapshot();
+    },
+    async patchConfigComponents(request) {
+      for (const patch of request.patches) {
+        if (patch.collection === "InferenceBackend") {
+          deployment = {
+            ...deployment,
+            inferenceBackends: deployment.inferenceBackends.map((backend) =>
+              backend.backendId === patch.id
+                ? { ...backend, ...patch.changes }
+                : backend,
+            ),
+          };
+        }
+      }
+      notify("config");
+      return snapshot();
+    },
+    async saveAgentConfig(request) {
+      const document: AgentPrincipal = request.document;
+      deployment = {
+        ...deployment,
+        label: document.display_name?.trim() || deployment.label,
         agentPrincipal: {
           ...deployment.agentPrincipal,
-          displayName: request.displayName.trim() || deployment.label,
-          defaultBehaviorId: request.defaultBehaviorId,
-          enabled: request.enabled ?? deployment.agentPrincipal.enabled,
+          displayName: document.display_name?.trim() || deployment.label,
+          defaultBehaviorId: document.default_behavior_id ?? null,
+          enabled: document.enabled ?? deployment.agentPrincipal.enabled,
+        },
+        principalConfig: {
+          ...document,
+          display_name: document.display_name ?? deployment.label,
+          default_behavior_id:
+            document.default_behavior_id ?? deployment.agentPrincipal.defaultBehaviorId,
+          enabled: document.enabled ?? deployment.agentPrincipal.enabled,
         },
       };
       return snapshot();
@@ -1089,21 +1361,19 @@ export function createDesktopUiHarness(
       if (scenario === "save-error") {
         throw new Error("Harness rejected behavior save for sad-path coverage.");
       }
-      const behaviorId = request.behaviorId.trim() || `behavior-${requestSeq}`;
-      const nextBehavior = {
+      const document: AgentBehavior = request.document;
+      const behaviorId = document.behavior_id.trim() || `behavior-${requestSeq}`;
+      const nextBehavior: BehaviorView = {
         behaviorId,
-        displayName: request.displayName.trim() || behaviorId,
-        systemPrompt: request.systemPrompt,
-        backendId: request.backendId,
-        modelName: null,
-        toolSelectionId: request.toolSelectionId,
-        inferenceProfileId: request.inferenceProfileId,
-        compactionStrategy: request.compactionStrategy,
-        compactionThreshold: request.compactionThreshold,
-        enabled: request.enabled ?? true,
+        agentDid: document.agent_did,
+        displayName: document.display_name?.trim() || behaviorId,
+        description: document.description ?? null,
+        contextId: document.context_id ?? null,
+        inferenceProfileId: document.inference_profile_id,
+        enabled: document.enabled ?? true,
         isDefault: behaviorId === deployment.agentPrincipal.defaultBehaviorId,
-        skillRefs: request.skillRefs,
-        skillExcludes: request.skillExcludes,
+        tags: document.tags ?? [],
+        createdAt: null,
       };
       deployment = {
         ...deployment,
@@ -1113,37 +1383,46 @@ export function createDesktopUiHarness(
           behaviorId,
           nextBehavior,
         ),
+        behaviorConfigs: upsertBy(
+          deployment.behaviorConfigs,
+          "behavior_id",
+          behaviorId,
+          {
+            ...document,
+            behavior_id: behaviorId,
+            display_name: document.display_name?.trim() || behaviorId,
+          },
+        ),
       };
       return snapshot();
     },
     async saveSkillConfig(request) {
-      const skillId = request.skillId.trim() || `skill-${requestSeq}`;
-      const name = request.name.trim() || skillId;
+      const document = request.document;
+      const skillId = document.skill_id.trim() || `skill-${requestSeq}`;
+      const name = document.name?.trim() || skillId;
       deployment = {
         ...deployment,
         skills: upsertBy(deployment.skills ?? [], "skillId", skillId, {
-          ...request,
           skillId,
-          agentDid: request.agentDid || deployment.agentDid,
-          scope: request.scope || "behavior",
+          agentDid: document.agent_did || deployment.agentDid,
           name,
-          displayName: request.displayName?.trim() || name,
-          enabled: request.enabled ?? true,
-          createdAt: STARTED_AT,
+          description: document.description ?? null,
+          instructions: document.instructions ?? null,
+          toolRefs: document.tool_refs ?? [],
+          displayName: document.display_name?.trim() || name,
+          enabled: document.enabled ?? true,
+          createdAt: document.created_at ?? STARTED_AT,
         }),
       };
       return snapshot();
     },
     async deleteTaskConfig(request) {
-      const schedules = deployment.schedules.filter(
-        (schedule) => schedule.taskId === request.taskId,
+      const triggers = deployment.triggers.filter(
+        (trigger) => trigger.config.task_id === request.taskId,
       ).length;
-      const triggers = deployment.eventTriggers.filter(
-        (trigger) => trigger.taskId === request.taskId,
-      ).length;
-      if (schedules + triggers > 0) {
+      if (triggers > 0) {
         throw new Error(
-          `task "${request.taskId}" is referenced by ${schedules} schedule(s) and ${triggers} event trigger(s); delete or detach those first`,
+          `task "${request.taskId}" is referenced by ${triggers} trigger(s); delete or detach those first`,
         );
       }
       deployment = {
@@ -1157,29 +1436,43 @@ export function createDesktopUiHarness(
       deployment = {
         ...deployment,
         schedules: deployment.schedules.filter(
-          (schedule) => schedule.scheduleId !== request.scheduleId,
+          (schedule) => schedule.schedule_id !== request.scheduleId,
         ),
       };
       notify("config");
       return snapshot();
     },
-    async deleteEventTriggerConfig(request) {
+    async deleteEventSourceConfig(request) {
       deployment = {
         ...deployment,
-        eventTriggers: deployment.eventTriggers.filter(
-          (trigger) => trigger.triggerId !== request.triggerId,
+        eventSources: deployment.eventSources.filter(
+          (source) => source.event_source_id !== request.eventSourceId,
+        ),
+      };
+      notify("config");
+      return snapshot();
+    },
+    async deleteTriggerConfig(request) {
+      deployment = {
+        ...deployment,
+        triggers: deployment.triggers.filter(
+          (trigger) => trigger.config.trigger_id !== request.triggerId,
         ),
       };
       notify("config");
       return snapshot();
     },
     async deleteBackendConfig(request) {
-      const referencing = deployment.behaviors
-        .filter((behavior) => behavior.backendId === request.backendId)
-        .map((behavior) => behavior.behaviorId);
+      const referencingBehaviors = deployment.behaviors.filter((behavior) => {
+        const profile = deployment.inferenceProfiles.find(
+          (candidate) => candidate.profile_id === behavior.inferenceProfileId,
+        );
+        return profile?.backend_id === request.backendId;
+      });
+      const referencing = referencingBehaviors.map((behavior) => behavior.behaviorId);
       if (referencing.length) {
         throw new Error(
-          `backend "${request.backendId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+          `backend "${request.backendId}" is referenced by inference profile(s) used by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
         );
       }
       deployment = {
@@ -1203,45 +1496,50 @@ export function createDesktopUiHarness(
       deployment = {
         ...deployment,
         inferenceProfiles: deployment.inferenceProfiles.filter(
-          (profile) => profile.profileId !== request.profileId,
+          (profile) => profile.profile_id !== request.profileId,
         ),
       };
       notify("config");
       return snapshot();
     },
-    async deleteToolSelectionConfig(request) {
+    async deleteToolsConfig(request) {
       const referencing = deployment.behaviors
-        .filter((behavior) => behavior.toolSelectionId === request.selectionId)
+        .filter((behavior) => {
+          const context = deployment.contexts.find(
+            (candidate) => candidate.context_id === behavior.contextId,
+          );
+          return context?.tools_id === request.toolsId;
+        })
         .map((behavior) => behavior.behaviorId);
       if (referencing.length) {
         throw new Error(
-          `tool selection "${request.selectionId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
+          `tools document "${request.toolsId}" is referenced by behavior(s) ${referencing.join(", ")}; point them elsewhere first`,
         );
       }
       deployment = {
         ...deployment,
-        toolSelections: deployment.toolSelections.filter(
-          (selection) => selection.selectionId !== request.selectionId,
-        ),
+        tools: deployment.tools.filter((entry) => entry.tools_id !== request.toolsId),
       };
       notify("config");
       return snapshot();
     },
     async deleteToolServiceConfig(request) {
-      const referencing = deployment.toolSelections
-        .filter((selection) =>
-          (selection.allowedMcpServiceIds ?? []).includes(request.serviceId),
+      const referencing = deployment.tools
+        .filter((entry) =>
+          (entry.remote?.services ?? []).some(
+            (service) => service.mcp_service_id === request.serviceId,
+          ),
         )
-        .map((selection) => selection.selectionId);
+        .map((entry) => entry.tools_id);
       if (referencing.length) {
         throw new Error(
-          `tool service "${request.serviceId}" is allowed by tool selection(s) ${referencing.join(", ")}; remove it there first`,
+          `tool service "${request.serviceId}" is selected by tools document(s) ${referencing.join(", ")}; remove it there first`,
         );
       }
       deployment = {
         ...deployment,
-        toolServices: deployment.toolServices.filter(
-          (service) => service.serviceId !== request.serviceId,
+        toolServiceRegistries: deployment.toolServiceRegistries.filter(
+          (service) => service.service_id !== request.serviceId,
         ),
       };
       notify("config");
@@ -1263,6 +1561,9 @@ export function createDesktopUiHarness(
         behaviors: deployment.behaviors.filter(
           (behavior) => behavior.behaviorId !== request.behaviorId,
         ),
+        behaviorConfigs: deployment.behaviorConfigs.filter(
+          (behavior) => behavior.behavior_id !== request.behaviorId,
+        ),
       };
       notify("config");
       return snapshot();
@@ -1272,16 +1573,18 @@ export function createDesktopUiHarness(
       deployment = {
         ...deployment,
         skills: (deployment.skills ?? []).filter((skill) => skill.skillId !== skillId),
-        behaviors: deployment.behaviors.map((behavior) => ({
-          ...behavior,
-          skillRefs: (behavior.skillRefs ?? []).filter((id) => id !== skillId),
-          skillExcludes: (behavior.skillExcludes ?? []).filter((id) => id !== skillId),
+        contexts: deployment.contexts.map((context) => ({
+          ...context,
+          skill_ids: (context.skill_ids ?? []).filter((id) => id !== skillId),
         })),
       };
       return snapshot();
     },
     async saveBackendConfig(request) {
-      const backendId = request.backendId.trim() || `backend-${requestSeq}`;
+      const document = request.document;
+      const backendId = document.backend_id.trim() || `backend-${requestSeq}`;
+      const apiKeyEnvVar =
+        document.auth.kind === "environment" ? document.auth.variable : null;
       deployment = {
         ...deployment,
         inferenceBackends: upsertBy(
@@ -1290,15 +1593,19 @@ export function createDesktopUiHarness(
           backendId,
           {
             backendId,
-            name: request.name.trim() || backendId,
-            providerKind: request.providerKind,
-            endpoint: request.endpoint,
-            apiKeyConfigured: Boolean(request.apiKey),
-            apiKeyEnvVar: request.apiKeyEnvVar,
-            maxConcurrent: request.maxConcurrent,
-            maxQueueDepth: request.maxQueueDepth,
-            enabled: request.enabled ?? true,
-            models: request.models,
+            name: document.name.trim() || backendId,
+            providerKind: document.provider_kind,
+            openaiWireApi: document.openai_wire_api ?? null,
+            endpoint: document.endpoint,
+            authKind: document.auth.kind,
+            connectTimeoutSecs: document.connect_timeout_secs ?? null,
+            discoveryTimeoutSecs: document.discovery_timeout_secs ?? null,
+            apiKeyConfigured: document.auth.kind !== "unauthenticated",
+            apiKeyEnvVar,
+            maxConcurrent: document.max_concurrent ?? null,
+            maxQueueDepth: document.max_queue_depth ?? null,
+            enabled: document.enabled ?? true,
+            models: [],
             probeStatus: "healthy",
           },
         ),
@@ -1306,55 +1613,51 @@ export function createDesktopUiHarness(
       return snapshot();
     },
     async saveInferenceProfileConfig(request) {
-      const profileId = request.profileId.trim() || `profile-${requestSeq}`;
+      const document = request.document;
+      const profileId = document.profile_id.trim() || `profile-${requestSeq}`;
       deployment = {
         ...deployment,
         inferenceProfiles: upsertBy(
           deployment.inferenceProfiles,
-          "profileId",
+          "profile_id",
           profileId,
           {
-            ...request,
-            profileId,
-            displayName: request.displayName.trim() || profileId,
+            ...document,
+            profile_id: profileId,
+            display_name: document.display_name?.trim() || profileId,
           },
         ),
       };
       return snapshot();
     },
-    async saveToolSelectionConfig(request) {
-      const selectionId = request.selectionId.trim() || `tools-${requestSeq}`;
-      const prior = deployment.toolSelections.find(
-        (selection) => selection.selectionId === selectionId,
-      );
+    async saveToolsConfig(request) {
+      const document = request.document;
+      const toolsId = document.tools_id.trim() || `tools-${requestSeq}`;
+      const prior = deployment.tools.find((entry) => entry.tools_id === toolsId);
       deployment = {
         ...deployment,
-        toolSelections: upsertBy(
-          deployment.toolSelections,
-          "selectionId",
-          selectionId,
-          {
-            ...prior,
-            ...request,
-            selectionId,
-            displayName: request.displayName.trim() || selectionId,
-          },
-        ),
+        tools: upsertBy(deployment.tools, "tools_id", toolsId, {
+          ...prior,
+          ...document,
+          tools_id: toolsId,
+          display_name: document.display_name?.trim() || toolsId,
+        }),
       };
       return snapshot();
     },
     async saveToolServiceConfig(request) {
-      const serviceId = request.serviceId.trim() || `service-${requestSeq}`;
+      const document = request.document;
+      const serviceId = document.service_id.trim() || `service-${requestSeq}`;
       deployment = {
         ...deployment,
         toolServiceRegistries: upsertBy(
           deployment.toolServiceRegistries,
-          "serviceId",
+          "service_id",
           serviceId,
           {
-            ...request,
-            serviceId,
-            displayName: request.displayName.trim() || serviceId,
+            ...document,
+            service_id: serviceId,
+            display_name: document.display_name?.trim() || serviceId,
           },
         ),
       };
@@ -1370,23 +1673,37 @@ export function createDesktopUiHarness(
         status: "ok",
         toolCount: 1,
         tools: [{ name: "whoami", description: "Returns bound caller identity" }],
+        error: null,
       };
       return result;
     },
     async saveTaskConfig(request) {
-      const taskId = request.taskId.trim() || `task-${requestSeq}`;
+      const document: Task = request.document;
+      const taskId = document.task_id.trim() || `task-${requestSeq}`;
       deployment = {
         ...deployment,
         tasks: upsertBy(deployment.tasks, "taskId", taskId, {
-          ...request,
           taskId,
-          name: request.name.trim() || taskId,
+          name: document.display_name?.trim() || taskId,
+          description: document.description ?? null,
+          behaviorId: document.behavior_id,
+          promptTemplate: document.prompt_template,
+          goalObjectiveTemplate: document.goal_objective_template ?? null,
+          goalTokenBudget: document.goal_token_budget ?? null,
+          enabled: document.enabled ?? true,
+          outputSchemaRef: document.output_schema_ref ?? null,
+          hooks: document.hooks ?? [],
+          tags: document.tags ?? [],
           recentRuns: {
             totalFires: 0,
-            scheduleCount: deployment.schedules.filter((s) => s.taskId === taskId)
-              .length,
-            eventTriggerCount: deployment.eventTriggers.filter(
-              (trigger) => trigger.taskId === taskId,
+            lastAttemptAt: null,
+            lastStatus: null,
+            lastError: null,
+            scheduleCount: 0,
+            eventCount: deployment.triggers.filter(
+              (trigger) =>
+                trigger.config.task_id === taskId &&
+                trigger.config.source.kind === "event",
             ).length,
           },
           runHistory: [],
@@ -1395,38 +1712,113 @@ export function createDesktopUiHarness(
       return snapshot();
     },
     async saveScheduleConfig(request) {
-      const scheduleId = request.scheduleId.trim() || `schedule-${requestSeq}`;
+      const document = request.document;
+      const scheduleId = document.schedule_id.trim() || `schedule-${requestSeq}`;
       deployment = {
         ...deployment,
-        schedules: upsertBy(deployment.schedules, "scheduleId", scheduleId, {
-          ...request,
-          scheduleId,
-          fireCount: 0,
+        schedules: upsertBy(deployment.schedules, "schedule_id", scheduleId, {
+          ...document,
+          schedule_id: scheduleId,
+          display_name: document.display_name?.trim() || scheduleId,
         }),
       };
       return snapshot();
     },
     async runSchedule(request) {
       const schedule = deployment.schedules.find(
-        (row) => row.scheduleId === request.scheduleId,
+        (row) => row.schedule_id === request.scheduleId,
       );
-      return runHarnessTask(schedule?.taskId ?? "scheduled-task");
+      const trigger = deployment.triggers.find(
+        (row) =>
+          row.config.source.kind === "schedule" &&
+          row.config.source.schedule_id === request.scheduleId,
+      );
+      if (!trigger) {
+        throw new Error(
+          `schedule "${request.scheduleId}" has no trigger selecting a task`,
+        );
+      }
+      void schedule;
+      return runHarnessTask(trigger.config.task_id);
     },
-    async saveEventTriggerConfig(request) {
-      const triggerId = request.triggerId.trim() || `trigger-${requestSeq}`;
+    async saveTriggerConfig(request) {
+      const document: Trigger = request.document;
+      const triggerId = document.trigger_id.trim() || `trigger-${requestSeq}`;
+      const next: TriggerView = {
+        config: { ...document, trigger_id: triggerId },
+        nextRunAt: null,
+        lastAttemptAt: null,
+        lastFiredSourceDocId: null,
+        lastStatus: null,
+        lastError: null,
+        fireCount: 0,
+      };
+      const index = deployment.triggers.findIndex(
+        (row) => row.config.trigger_id === triggerId,
+      );
       deployment = {
         ...deployment,
-        eventTriggers: upsertBy(deployment.eventTriggers, "triggerId", triggerId, {
-          ...request,
-          triggerId,
-          fireCount: 0,
-        }),
+        triggers:
+          index < 0
+            ? [...deployment.triggers, next]
+            : deployment.triggers.map((row, i) => (i === index ? next : row)),
       };
       return snapshot();
     },
     async runTask(request) {
       return runHarnessTask(request.taskId);
     },
+    async saveEventSourceConfig(request) {
+      const document = request.document;
+      const sourceId = document.event_source_id.trim() || `event-source-${requestSeq}`;
+      const next = { ...document, event_source_id: sourceId };
+      const index = deployment.eventSources.findIndex(
+        (row) => row.event_source_id === sourceId,
+      );
+      deployment = {
+        ...deployment,
+        eventSources:
+          index < 0
+            ? [...deployment.eventSources, next]
+            : deployment.eventSources.map((row, i) => (i === index ? next : row)),
+      };
+      return snapshot();
+    },
+    async probeInferenceEndpoint() {
+      return {
+        reachable: true,
+        latencyMs: 12,
+        models: ["gpt-4.1-mini"],
+        error: null,
+      };
+    },
+    async codexLogin(agentDid) {
+      const result: CodexLoginResult = {
+        docId: `credential-${agentDid}-codex`,
+        credentialId: "credential-codex",
+        agentDid,
+        provider: "codex",
+        accountId: null,
+        chatgptPlanType: null,
+        isFedramp: false,
+        accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        enabled: true,
+      };
+      return result;
+    },
+    async cancelCodexLogin() {},
+    async grokLogin(agentDid) {
+      const result: GrokLoginResult = {
+        docId: `credential-${agentDid}-grok`,
+        credentialId: "credential-grok",
+        agentDid,
+        provider: "grok",
+        accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        enabled: true,
+      };
+      return result;
+    },
+    async cancelGrokLogin() {},
     async listSubagentTree(request) {
       const tree: SubagentTreeView = {
         rootRequestId: request.rootRequestId,
@@ -1434,15 +1826,19 @@ export function createDesktopUiHarness(
         nodes: [
           {
             requestId: request.rootRequestId,
+            resolvedVia: null,
             sessionId: findSessionByRequest(request.rootRequestId)?.sessionId ?? null,
             agentDid: deployment.agentDid,
             behaviorId: deployment.agentPrincipal.defaultBehaviorId,
             lifecycleState: "completed",
-            status: "completed",
             subagentDepth: 0,
+            causedByParentRequestId: null,
+            causedByParentToolCallId: null,
+            backendId: null,
           },
         ],
         edges: [],
+        partialErrors: [],
       };
       return tree;
     },
@@ -1473,20 +1869,22 @@ export function createDesktopUiHarness(
     async listMcpServicesWithHealth() {
       const registries = deployment.toolServiceRegistries;
       const services: MCPServiceHealthView[] = registries.map((service) => ({
-        serviceId: service.serviceId,
+        serviceId: service.service_id,
         agentDid: deployment.agentDid,
-        endpoint: `${service.hostname ?? "localhost"}:${service.mcpPort ?? 7331}${
-          service.mcpPath ?? "/mcp"
+        endpoint: `${service.hostname ?? "localhost"}:${service.mcp_port ?? 7331}${
+          service.mcp_path ?? "/mcp"
         }`,
         status: "healthy",
         displayState: "healthy",
+        toolCount: null,
         failureCount: 0,
         kMax: 3,
         backoffUntil: null,
         lastProbeAt: STARTED_AT,
         lastSeen: STARTED_AT,
-        updatedAt: STARTED_AT,
+        lastErrorClass: null,
         lastErrorMessage: null,
+        updatedAt: STARTED_AT,
       }));
       return services;
     },
@@ -1548,8 +1946,14 @@ export function createDesktopUiHarness(
             : [
                 {
                   requestId: request.requestId,
-                  lifecycleState: "completed",
+                  sessionId: null,
                   behaviorId: deployment.agentPrincipal.defaultBehaviorId,
+                  lifecycleState: "completed",
+                  parentRequestId: null,
+                  parentToolCallId: null,
+                  toolName: null,
+                  awaitMode: null,
+                  cancelPolicy: null,
                 },
               ]),
         ],
@@ -1565,24 +1969,6 @@ export function createDesktopUiHarness(
         alreadyInterrupted: false,
         stalePreview: false,
         preview: null,
-      };
-      return result;
-    },
-    async listToolCallHolds() {
-      return heldToolCalls;
-    },
-    async resolveToolCallHold(request) {
-      const held = heldToolCalls.find((hold) => hold.toolCallId === request.toolCallId);
-      if (!held) {
-        throw new Error(`tool call ${request.toolCallId} is not awaiting approval`);
-      }
-      heldToolCalls = heldToolCalls.filter(
-        (hold) => hold.toolCallId !== request.toolCallId,
-      );
-      const result: ResolveHoldResult = {
-        approvalId: `approval-${request.toolCallId}-harness`,
-        toolCallId: request.toolCallId,
-        decision: request.approve ? "approved" : "denied",
       };
       return result;
     },
@@ -1615,7 +2001,6 @@ export function createDesktopUiHarness(
       sessionId: session.sessionId,
       agentDid: deployment.agentDid,
       behaviorId,
-      status: "completed",
       lifecycleState: "completed",
     };
   }
@@ -1643,7 +2028,7 @@ export function createDesktopUiHarness(
           },
           streamUpdate() {
             const sequence = appendStreamChunk();
-            syncConversations();
+            syncSessions();
             notify("store", true);
             return sequence;
           },
@@ -1652,7 +2037,7 @@ export function createDesktopUiHarness(
             for (let index = 0; index < count; index += 1) {
               sequence = appendStreamChunk();
             }
-            syncConversations();
+            syncSessions();
             notifyBurst("store", count, true);
             return sequence;
           },
@@ -1710,21 +2095,27 @@ export function createDesktopUiHarness(
         mergedCount >= 2 &&
         !timelineItems.some((item) => item.itemKey === "remote-assistant")
       ) {
-        timelineItems.push({
-          kind: "assistantMessage",
-          itemKey: "remote-assistant",
-          sequence: 2,
-          content: "history arrived from the desktop",
-          timestamp: TWO_HOURS_AGO,
-        });
+        timelineItems.push(
+          harnessAssistantItem({
+            itemKey: "remote-assistant",
+            sequence: 2,
+            content: "history arrived from the desktop",
+            reasoning: null,
+            timestamp: TWO_HOURS_AGO,
+          }),
+        );
       }
+      const lastItem = timelineItems.at(-1);
       sessions.set("session-remote", {
         ...session,
-        previewText: timelineItems.at(-1)?.content ?? session.previewText,
+        previewText:
+          lastItem && "content" in lastItem
+            ? (lastItem.content ?? session.previewText)
+            : session.previewText,
         timelineItems,
         hydration: remoteHydration("serving", mergedCount, servedCount),
       });
-      syncConversations();
+      syncSessions();
       notify("store");
     },
     complete() {
@@ -1800,18 +2191,20 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
     status: "processing",
     turnState: "streaming",
     latestRequestId: "large-request-live",
-    latestResponse: {
+    goal: null,
+    retryEligibility: { eligible: false, denialReason: null },
+    latestResponse: harnessResponseView({
       status: "streaming",
       content: "stream-start",
-      reasoning: null,
       tokenCount: 1,
-      materializedMessageSequence: null,
-      materializedAt: null,
-      completedAt: null,
       backendId: "backend-openai",
-    },
+    }),
     pendingTurn: null,
-    activeResponseOverlay: { content: "stream-start", reasoning: null },
+    activeResponseOverlay: harnessResponseView({
+      status: "streaming",
+      content: "stream-start",
+    }),
+    context: harnessSessionContext(),
     timelineItems,
   };
 }
@@ -1904,36 +2297,81 @@ function createDeployment(): DeploymentView {
       behaviorExecutorCapacity: 4,
       behaviorExecutorQueueDepth: 0,
     },
+    principalConfig: {
+      agent_did: AGENT_DID,
+      display_name: "Bombadil UI Agent",
+      default_behavior_id: DEFAULT_BEHAVIOR_ID,
+      enabled: true,
+      created_at: STARTED_AT,
+      created_by: "bombadil",
+    },
+    behaviorConfigs: [
+      {
+        behavior_id: DEFAULT_BEHAVIOR_ID,
+        agent_did: AGENT_DID,
+        display_name: "Default",
+        context_id: "context-default",
+        inference_profile_id: "profile-default",
+        enabled: true,
+        tags: [],
+        created_at: STARTED_AT,
+      },
+      {
+        behavior_id: "ops",
+        agent_did: AGENT_DID,
+        display_name: "Ops",
+        context_id: "context-ops",
+        inference_profile_id: "profile-default",
+        enabled: true,
+        tags: [],
+        created_at: STARTED_AT,
+      },
+    ],
+    contexts: [
+      {
+        context_id: "context-default",
+        agent_did: AGENT_DID,
+        display_name: "Default context",
+        system_prompt: "You are a deterministic UI-test agent.",
+        tools_id: "tools-default",
+        compaction_id: null,
+        skill_ids: ["host-diagnostics"],
+      },
+      {
+        context_id: "context-ops",
+        agent_did: AGENT_DID,
+        display_name: "Ops context",
+        system_prompt: "You inspect runtime and fleet health.",
+        tools_id: "tools-default",
+        compaction_id: null,
+        skill_ids: [],
+      },
+    ],
+    compactions: [],
     behaviors: [
       {
         behaviorId: DEFAULT_BEHAVIOR_ID,
+        agentDid: AGENT_DID,
         displayName: "Default",
-        systemPrompt: "You are a deterministic UI-test agent.",
-        backendId: "backend-openai",
-        modelName: "gpt-4.1-mini",
-        toolSelectionId: "tools-default",
+        description: null,
+        contextId: "context-default",
         inferenceProfileId: "profile-default",
-        compactionStrategy: "rolling",
-        compactionThreshold: 0.75,
         enabled: true,
         isDefault: true,
-        skillRefs: ["host-diagnostics"],
-        skillExcludes: [],
+        tags: [],
+        createdAt: STARTED_AT,
       },
       {
         behaviorId: "ops",
+        agentDid: AGENT_DID,
         displayName: "Ops",
-        systemPrompt: "You inspect runtime and fleet health.",
-        backendId: "backend-openai",
-        modelName: "gpt-4.1-mini",
-        toolSelectionId: "tools-default",
+        description: null,
+        contextId: "context-ops",
         inferenceProfileId: "profile-default",
-        compactionStrategy: "rolling",
-        compactionThreshold: 0.75,
         enabled: true,
         isDefault: false,
-        skillRefs: [],
-        skillExcludes: [],
+        tags: [],
+        createdAt: STARTED_AT,
       },
     ],
     behaviorEnvironments: [
@@ -1976,6 +2414,10 @@ function createDeployment(): DeploymentView {
         endpoint: "http://127.0.0.1:8000/v1",
         apiKeyConfigured: true,
         apiKeyEnvVar: "OPENAI_API_KEY",
+        authKind: "environment",
+        openaiWireApi: null,
+        connectTimeoutSecs: null,
+        discoveryTimeoutSecs: null,
         maxConcurrent: 4,
         maxQueueDepth: 16,
         enabled: true,
@@ -1985,71 +2427,61 @@ function createDeployment(): DeploymentView {
     ],
     inferenceProfiles: [
       {
-        profileId: "profile-default",
-        displayName: "Default profile",
-        contextWindow: 128000,
-        maxOutputTokens: 4096,
-        maxTurns: 24,
-        temperature: 0.2,
-        streamBatchMs: 100,
-        streamLivenessTimeoutSecs: 30,
-        deadlineDurationSecs: 300,
+        agent_did: AGENT_DID,
+        profile_id: "profile-default",
+        display_name: "Default profile",
+        backend_id: "backend-openai",
+        model_name: "gpt-4.1-mini",
+        context_window: 128000,
+        max_output_tokens: 4096,
+        sampling_id: null,
+        execution_id: null,
       },
     ],
-    toolSelections: [
+    tools: [
       {
-        selectionId: "tools-default",
-        agentDid: AGENT_DID,
-        displayName: "Default tools",
-        enableFileTools: true,
-        fileToolsMode: "ReadOnly",
-        fileToolRoot: "/tmp/gents-bombadil/workspace",
-        enableBash: true,
-        bashMode: "ReadOnly",
-        commandExecutionPolicy: "AllowListed",
-        commandAllowedArgvPrefixes: ["rg", "git status", "cargo test"],
-        commandForbiddenArgvPrefixes: ["rm -rf", "git reset --hard"],
-        commandNetworkMode: "Disabled",
-        cliToolNames: ["rg", "git"],
-        enableMetaTools: true,
-        allowedMcpServiceIds: ["mcp-observability"],
-        backgroundableToolNames: ["cargo test"],
-        subagentTargets: [],
-        subagentSpawnEnabled: true,
-        subagentSteeringEnabled: true,
-        subagentBackgroundEnabled: true,
-        crossDeploymentSpawnTimeoutSeconds: 30,
-        enableMemory: false,
-        enableSessionHistoryTool: true,
-        enableDefraQuery: true,
-        defraQueryCollections: ["AgentRequest", "AgentResponse"],
-        writeTools: [
-          '{"tool_name":"upsert_note","collection":"Note","description":"","fields":[]}',
-          '{"tool_name":"delete_task","collection":"Task","description":"","fields":[]}',
-        ],
-        toolPolicyVersion: "tool-policy/v1",
+        tools_id: "tools-default",
+        agent_did: AGENT_DID,
+        display_name: "Default tools",
+        host: {
+          root: "/tmp/gents-bombadil/workspace",
+          files: { mode: "ReadOnly" },
+          bash: { mode: "ReadOnly" },
+          cli: [{ name: "rg" }, { name: "git" }],
+        },
+        remote: {
+          services: [
+            {
+              mcp_service_id: "mcp-observability",
+              tool_names: ["inspect_host", "query_logs", "fleet_status"],
+              style: "discovery",
+            },
+          ],
+        },
+        built_ins: {
+          enable_goal_tools: false,
+          enable_goal_creation: false,
+        },
       },
     ],
     toolServiceRegistries: [
       {
-        serviceId: "mcp-observability",
-        displayName: "Observability MCP",
+        service_id: "mcp-observability",
+        agent_did: AGENT_DID,
+        display_name: "Observability MCP",
         description: "Fleet health MCP service",
         hostname: "localhost",
-        tailscaleIp: null,
-        lanIp: "127.0.0.1",
-        mcpPort: 7331,
-        mcpPath: "/mcp",
-        status: "healthy",
-        version: "0.1.0",
-        updatedAt: STARTED_AT,
+        tailscale_ip: null,
+        lan_ip: "127.0.0.1",
+        mcp_port: 7331,
+        mcp_path: "/mcp",
+        enabled: true,
       },
     ],
     skills: [
       {
         skillId: "host-diagnostics",
         agentDid: AGENT_DID,
-        scope: "behavior",
         name: "Host diagnostics",
         description: "Inspect host health and write a concise operational report.",
         instructions: "Inspect host health, telemetry freshness, and recent errors.",
@@ -2061,7 +2493,6 @@ function createDeployment(): DeploymentView {
       {
         skillId: "fleet-summary",
         agentDid: AGENT_DID,
-        scope: "principal",
         name: "Fleet summary",
         description: "Summarize fleet state for operator handoff.",
         instructions:
@@ -2083,33 +2514,37 @@ function createDeployment(): DeploymentView {
         goalTokenBudget: null,
         enabled: true,
         outputSchemaRef: null,
+        hooks: [],
+        tags: [],
         recentRuns: {
           totalFires: 0,
           lastAttemptAt: null,
           lastStatus: null,
           lastError: null,
           scheduleCount: 1,
-          eventTriggerCount: 0,
+          eventCount: 0,
         },
         runHistory: [],
       },
     ],
     schedules: [
       {
-        scheduleId: "host-check-every-6h",
-        taskId: "host-check",
-        intervalSecs: 21600,
-        enabled: true,
-        concurrency: "serial",
-        nextRunAt: null,
-        lastAttemptAt: null,
-        lastStatus: null,
-        lastError: null,
-        fireCount: 0,
+        agent_did: AGENT_DID,
+        schedule_id: "host-check-every-6h",
+        display_name: "Host check every 6h",
+        cadence: { kind: "interval", interval_secs: 21600 },
+        tags: [],
       },
     ],
-    eventTriggers: [],
-    conversations: [],
+    eventSources: [],
+    triggers: [],
+    inferenceSampling: [],
+    inferenceExecution: [],
+    subagentTargets: [],
+    datastoreToolSurfaces: [],
+    chainKeyBindings: [],
+    mailboxItems: [],
+    sessions: [],
   };
 }
 
@@ -2187,7 +2622,6 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "save-error":
     case "backend-health-error":
     case "backend-unavailable":
-    case "tool-hold":
     case "mailbox-overflow":
     case "long-content":
     case "active-turn":

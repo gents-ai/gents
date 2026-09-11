@@ -45,10 +45,10 @@ type AgentDirectoryEntry @branchable {
     behavior_models: [String]
     # File tool root per behavior ("" = none/host default). Aligned; null never [].
     behavior_roots: [String]
-    # Built-in preset name when the behavior's ToolSelection exactly matches
+    # Built-in preset name when the behavior's canonical Tools document matches
     # one (ignoring root); "" = custom. Aligned; null never [].
     behavior_presets: [String]
-    # Inference profile id per behavior ("" = unset legacy rows). Aligned;
+    # Inference profile id per behavior ("" = unset). Aligned;
     # null never [].
     behavior_profiles: [String]
     # Home-level pickable options for the persona composer (same on every

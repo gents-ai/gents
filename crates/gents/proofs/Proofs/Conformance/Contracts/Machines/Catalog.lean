@@ -3,7 +3,6 @@ import Proofs.Conformance.Contracts.Machines.Process
 import Proofs.Conformance.Contracts.Machines.Persistence
 import Proofs.Conformance.Contracts.Machines.StorageObservation
 import Proofs.Conformance.Contracts.Machines.RuntimeReconcile
-import Proofs.Conformance.Contracts.Machines.PairingReconcile
 import Proofs.Conformance.Contracts.Machines.SessionRecovery
 import Proofs.Conformance.Contracts.Machines.InferenceCall
 import Proofs.Conformance.Contracts.Machines.ToolCall
@@ -52,7 +51,7 @@ def vocabularies : List VocabularyContract :=
     , values := Subagent.CancelPolicy.all.map Subagent.CancelPolicy.toDefraDB
     }
   , { domain := "ChildTerminal"
-    , values := ["failed", "dead", "interrupted", "superseded"]
+    , values := childFailureNames
     }
   , { domain := "GoalStatus", values := goalStatusNames }
   , { domain := "MailboxStatus", values := Mailbox.statusVocabulary }
@@ -69,14 +68,10 @@ def stateMachines : List StateMachineContract :=
   , storageObservationMachine "StorageObservation.failClosed" .failClosed
   , storageObservationMachine "StorageObservation.failOpen" .failOpen
   , runtimeReconcileMachine
-  , pairingReconcileMachine
   , sessionRecoveryMachine
   , inferenceCallMachine
   , toolCallMachine
   , managedExecMachine
-  , awaitModeMachine
-  , cancelPolicyMachine
-  , childTerminalMachine
   , goalMachine
   , mailboxMachine
   , ethSubmissionMachine

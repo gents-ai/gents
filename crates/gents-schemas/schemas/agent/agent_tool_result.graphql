@@ -1,3 +1,11 @@
+# Oversized tool-output spill document. Tool-result observers use this spill's
+# own _docID plus the exact AgentToolCall join below, never a content/time
+# merge heuristic or a link to AgentSession. Retired: conversation_doc_id (the
+# spill writer does not populate it, and it duplicated the session link).
+#
+# Copy identity for forks: the exact call association below is required, so a
+# copied spill keeps its child call link after the fork remap; blanking the
+# field or matching by tool name/input/time is not a valid copy.
 type AgentToolResult @branchable {
     # Exact AgentToolCall document whose oversized output was spilled here.
     tool_call_doc_id: String @index @immutable
@@ -9,7 +17,7 @@ type AgentToolResult @branchable {
     output_text: String
     truncated: Boolean
     truncation_metadata: String
-    conversation_doc_id: String
     created_at: String @index
-    discarded_because_interrupted: Boolean  # NEW: true if result never reached the model
+    # True if the result never reached the model (interrupted before delivery).
+    discarded_because_interrupted: Boolean
 }

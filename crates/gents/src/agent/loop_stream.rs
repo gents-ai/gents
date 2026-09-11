@@ -75,8 +75,6 @@ use turn_threading::{add_usage_saturating, close_streaming_turn};
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-use aggregate_budget::AggregateTokenLedger;
 use aggregate_budget::{
     aggregate_post_charge_action, AggregatePostChargeAction, AggregateTokenCharge,
 };

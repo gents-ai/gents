@@ -25,9 +25,15 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
         .node()
         .execute(&format!(
             r#"{{
-                AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }}
-                AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }}
-            }}"#
+                AgentSession(filter: {{
+                    session_id: {{ _eq: "{}" }},
+                    agent_did: {{ _eq: "{}" }},
+                    requester_did: {{ _eq: "{}" }}
+                }}) {{ _docID }}
+            }}"#,
+            gents::graphql::escape_graphql_string(&session_id),
+            gents::graphql::escape_graphql_string(&agent_did),
+            gents::graphql::escape_graphql_string(&agent_did),
         ))
         .await;
     assert!(
@@ -36,7 +42,7 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
         response.errors
     );
     let data = response.data.context("projection query data")?;
-    for collection in ["AgentSession", "AgentConversation"] {
+    for collection in ["AgentSession"] {
         assert!(
             data.get(collection)
                 .and_then(serde_json::Value::as_array)
@@ -130,28 +136,19 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
+async fn resend_preserves_request_lineage_without_caller_inference_overrides() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let (runtime, core, agent_did) = start_core_with_local_route(tempdir.path()).await?;
 
     let session_id = Uuid::new_v4().to_string();
     let behavior_id = format!("{agent_did}:default");
 
-    let metadata_value = r#"{"key":"preserve-me"}"#.to_string();
-    let options = SubmitRequestOptions {
-        temperature: Some(0.7),
-        top_p: Some(0.95),
-        top_k: Some(40),
-        max_tokens: Some(1234),
-        max_total_tokens: Some(10_000),
-        metadata: Some(metadata_value.clone()),
-        ..SubmitRequestOptions::default()
-    };
+    let options = SubmitRequestOptions::default();
     let original = core
         .submit_request_with_options(
             &session_id,
             &agent_did,
-            "please preserve my overrides",
+            "please preserve this request",
             Some(&behavior_id),
             options,
         )
@@ -184,12 +181,6 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
                     session_id
                     retry_parent_request
                     retry_root_request
-                    temperature
-                    top_p
-                    top_k
-                    max_tokens
-                    max_total_tokens
-                    metadata
                 }}
             }}"#,
             resent.request_id
@@ -214,12 +205,6 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
         new_row.retry_root_request.as_deref(),
         Some(original.request_id.as_str())
     );
-    assert_eq!(new_row.temperature, Some(0.7));
-    assert_eq!(new_row.top_p, Some(0.95));
-    assert_eq!(new_row.top_k, Some(40));
-    assert_eq!(new_row.max_tokens, Some(1234));
-    assert_eq!(new_row.max_total_tokens, Some(10_000));
-    assert_eq!(new_row.metadata.as_deref(), Some(metadata_value.as_str()));
 
     core.shutdown().await?;
     runtime.shutdown().await?;

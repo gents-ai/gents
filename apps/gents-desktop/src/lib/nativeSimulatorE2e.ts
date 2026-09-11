@@ -2,21 +2,21 @@ import { invoke } from "@tauri-apps/api/core";
 import { bridgeCommand } from "@source-inc/gents-desktop-client";
 
 import {
-  conversationRowCount,
+  sessionRowCount,
   findAgentChatButton,
   findAgentDeploymentControl,
   findAssistantResponseMarker,
   findNewChatButton,
-  isConversationTurnSettled,
+  isSessionTurnSettled,
 } from "./nativeSimulatorE2eDom";
 
 export {
-  conversationRowCount,
+  sessionRowCount,
   findAgentChatButton,
   findAgentDeploymentControl,
   findAssistantResponseMarker,
   findNewChatButton,
-  isConversationTurnSettled,
+  isSessionTurnSettled,
 } from "./nativeSimulatorE2eDom";
 
 type NativeE2eConfig = {
@@ -24,7 +24,7 @@ type NativeE2eConfig = {
   serverAddress: string;
   prompt: string;
   expectedResponse: string;
-  expectEmptyConversationSlice: boolean;
+  expectEmptySessionSlice: boolean;
   correlationId: string;
   measurePerformance: boolean;
 };
@@ -36,7 +36,7 @@ type NativeE2eStatus = {
   monotonicMs?: number;
   metrics?: {
     ui: {
-      conversationRows: number;
+      sessionRows: number;
       transcriptCards: number;
       transcriptTurnBlocks: number;
       bodyBytes: number;
@@ -123,11 +123,11 @@ async function runNativeSimulatorE2e() {
     );
     await reportStatus({ stage: "session-index-visible" });
 
-    if (config.expectEmptyConversationSlice) {
-      const conversationCount = conversationRowCount(document);
-      if (conversationCount > 0) {
+    if (config.expectEmptySessionSlice) {
+      const sessionCount = sessionRowCount(document);
+      if (sessionCount > 0) {
         throw new Error(
-          `Requester-scoped enrollment leaked ${conversationCount} pre-existing conversation(s)`,
+          `Requester-scoped enrollment leaked ${sessionCount} pre-existing session(s)`,
         );
       }
     }
@@ -185,9 +185,7 @@ async function runNativeSimulatorE2e() {
     await reportStatus({ stage: "waiting-terminal" });
     await waitFor(
       () =>
-        isConversationTurnSettled(document, config.expectedResponse)
-          ? document.body
-          : null,
+        isSessionTurnSettled(document, config.expectedResponse) ? document.body : null,
       180_000,
       `${config.agentLabel} terminal turn state`,
     );
@@ -196,7 +194,7 @@ async function runNativeSimulatorE2e() {
     await waitFor(
       () => {
         const status = document.querySelector<HTMLElement>(
-          '[data-testid="conversation-loading-status"]',
+          '[data-testid="session-loading-status"]',
         );
         if (
           status?.dataset.loadingLayer === "sessionSync" &&
@@ -345,7 +343,7 @@ async function reportStatus(status: NativeE2eStatus) {
         monotonicMs: window.performance.now(),
         metrics: {
           ui: {
-            conversationRows: conversationRowCount(document),
+            sessionRows: sessionRowCount(document),
             transcriptCards: document.querySelectorAll(
               '[data-testid="transcript-panel"] .message-card',
             ).length,

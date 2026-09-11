@@ -94,10 +94,7 @@ async fn stage_resume(
     let parent_row = parents[0];
     verify_request_receipt_signature(parent_row)?;
     let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
-    let behavior = parent
-        .behavior_id
-        .clone()
-        .context("resume predecessor has no behavior binding")?;
+    let behavior = parent.behavior_id.clone();
 
     // The stable key is independent of today's sequence. Its historical child
     // is authenticated before any current-status/latest-request checks.

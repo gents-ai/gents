@@ -7,11 +7,9 @@ use gents_protocol::row::{project_behavior_readiness_summary, ProjectedBehaviorR
 use serde_json::{json, Value};
 
 use crate::cli::args::{DiagnoseArgs, P2pTransportArg};
-use crate::shared::ConfigExportBundle;
 use crate::{
     build_config_export_bundle, graphql_endpoint_available, print_json, read_init_config,
     read_runtime_state, resolve_agent_did, resolve_config_access, resolve_home_dir,
-    CONFIG_EXPORT_FORMAT,
 };
 
 use backends::diagnose_backends;
@@ -36,27 +34,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let schema_checks = diagnose_schema_presence(&access).await;
     let bundle_result = build_config_export_bundle(&access, &agent_did).await;
     let config_load_error = bundle_result.as_ref().err().map(ToString::to_string);
-    let bundle = bundle_result.unwrap_or_else(|_| ConfigExportBundle {
-        format: CONFIG_EXPORT_FORMAT.to_string(),
-        agent_did: agent_did.clone(),
-        exported_at: chrono::Utc::now().to_rfc3339(),
-        access_mode: access.mode().to_string(),
-        agent_principal: None,
-        agent_behaviors: Vec::new(),
-        skills: Vec::new(),
-        datastore_tool_surfaces: Vec::new(),
-        chain_key_bindings: Vec::new(),
-        eth_tools: Vec::new(),
-        workspace_roots: Vec::new(),
-        tool_selections: Vec::new(),
-        inference_backends: Vec::new(),
-        inference_profiles: Vec::new(),
-        tool_service_registries: Vec::new(),
-        projection_acp_bindings: Vec::new(),
-        tasks: Vec::new(),
-        schedules: Vec::new(),
-        event_triggers: Vec::new(),
-    });
+    let bundle = bundle_result.ok();
     let runtime_row = match load_runtime_row(&access, &agent_did).await {
         Ok(Some(row)) => row,
         Ok(None) => Value::Null,
@@ -120,21 +98,15 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .unwrap_or(false);
 
     let behavior_ids = bundle
-        .agent_behaviors
-        .iter()
-        .filter_map(|row| {
-            row.get("behavior_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+        .as_ref()
+        .into_iter()
+        .flat_map(|bundle| &bundle.config.agent_behaviors)
+        .map(|behavior| behavior.behavior_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let default_behavior_id = bundle
-        .agent_principal
         .as_ref()
-        .and_then(|row| row.get("default_behavior_id"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let default_behavior_check = match default_behavior_id.as_deref() {
+        .and_then(|bundle| bundle.config.agent_principal.default_behavior_id.as_deref());
+    let default_behavior_check = match default_behavior_id {
         Some(behavior_id) if behavior_ids.contains(behavior_id) => json!({
             "ok": true,
             "default_behavior_id": behavior_id,
@@ -150,7 +122,10 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
-    let backend_reports = diagnose_backends(&bundle).await;
+    let backend_reports = match bundle.as_ref() {
+        Some(bundle) => diagnose_backends(&access, bundle).await,
+        None => Vec::new(),
+    };
     let matching_runtime_state = runtime_state.as_ref().filter(|state| {
         graphql
             .as_deref()
@@ -199,7 +174,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .get("ok")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let principal_present = bundle.agent_principal.is_some();
+    let principal_present = bundle.is_some();
 
     let chatgpt_provider = gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
     let chatgpt_auth_check = match crate::commands::codex_auth_probe::load_oauth_credential(
@@ -413,15 +388,12 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                 "error": p2p_error,
             },
         },
-        "config_counts": {
-            "agent_behaviors": bundle.agent_behaviors.len(),
-            "tool_selections": bundle.tool_selections.len(),
-            "inference_backends": bundle.inference_backends.len(),
-            "inference_profiles": bundle.inference_profiles.len(),
-            "tool_service_registries": bundle.tool_service_registries.len(),
-            "tasks": bundle.tasks.len(),
-            "schedules": bundle.schedules.len(),
-        },
+        "config_counts": bundle.as_ref().map(|bundle| {
+            gents::Collection::ALL.into_iter().map(|collection| {
+                let count = bundle.docs_for_collection(collection)?.len();
+                Ok((collection.dir_name().unwrap_or("agent_principal").to_owned(), count))
+            }).collect::<Result<std::collections::BTreeMap<_, _>>>()
+        }).transpose()?,
     });
     if let Some(map) = output.as_object_mut() {
         let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);

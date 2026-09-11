@@ -26,7 +26,6 @@ mod shared;
 mod telemetry;
 
 use cli::*;
-use shared::*;
 
 use config_bundle::*;
 use config_import::*;
@@ -90,7 +89,7 @@ Update runtime documents:
   gents config behavior set ...
   gents config tools set ...";
 const INIT_AFTER_HELP: &str = "\
-Bootstrap a local home directory with one default backend, one default behavior, and a safe read-only tool selection.
+Bootstrap a local home directory with one default backend, one default behavior, and a safe read-only Tools document.
 
 Examples:
   gents init
@@ -275,10 +274,8 @@ Examples:
   gents config apply --root infra/agents/default --home /path/to/home --bind-agent-did home
   gents config backend set --graphql URL --backend-id <backend-id> --name <name> --backend-preset openrouter --max-concurrent 2
   gents config backend discover-models --backend-preset openrouter
-  gents config behavior set --graphql URL --agent-did <AGENT_DID> --backend-id <backend-id> --model-name MODEL
-  gents config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-file-tools
-  gents config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --enable-memory true
-  gents config tools set --graphql URL --agent-did <AGENT_DID> --selection-id <selection-id> --subagent-spawn-enabled true --subagent-target '<json>'";
+  gents config behavior set --graphql URL --agent-did <AGENT_DID> --context-id <context-id> --inference-profile-id <profile-id>
+  gents config tools set --graphql URL --file tools.json";
 const REQUEST_AFTER_HELP: &str = "\
 `request` is the low-level document path. Most users should prefer `gents chat`.
 
@@ -320,7 +317,7 @@ and includes warnings for confusing defaults such as empty allowlists that mean
 all, or built-in read tools that are always included today.";
 const CONFIG_EXPORT_AFTER_HELP: &str = "\
 Exports the desired configuration documents for one agent principal as a
-manifest root directory (per-document subdirectories, optional prompt sidecars).
+manifest root directory (`pack_config.json` with optional prompt sidecars).
 The output is designed to be committed to version control and applied with
 `config apply --root <dir>`.
 
@@ -334,11 +331,14 @@ pub(crate) const CONFIG_EXPORT_FORMAT: &str = "gents-config/v2";
 pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("AgentPrincipal", "agent_did"),
     ("AgentBehavior", "behavior_id"),
+    ("AgentContext", "context_id"),
     ("AgentRuntime", "agent_did"),
-    ("ToolSelection", "selection_id"),
+    ("Tools", "tools_id"),
     ("InferenceProfile", "profile_id"),
     ("InferenceBackend", "backend_id"),
-    ("AgentConversation", "session_id"),
+    ("InferenceSampling", "sampling_id"),
+    ("InferenceExecution", "execution_id"),
+    ("InferenceRetryPolicy", "retry_policy_id"),
     ("AgentRequest", "request_id"),
     ("AgentResponse", "request_id"),
     ("AgentToolResult", "agent_did"),
@@ -349,42 +349,22 @@ pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("ProjectionAcpBinding", "binding_id"),
     ("Task", "task_id"),
     ("Schedule", "schedule_id"),
+    ("Trigger", "trigger_id"),
+    ("EventSource", "event_source_id"),
     ("ToolServiceRegistry", "service_id"),
 ];
 const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
-    "ToolSelection",
+    "AgentContext",
+    "Tools",
     "InferenceBackend",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
 ];
-pub(crate) const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
-    "agent_did display_name default_behavior_id enabled created_at created_by";
-pub(crate) const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description summary system_prompt request_context_template backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
-pub(crate) const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name tool_policy_version enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes read_only_command_allowlist command_network_mode cli_tool_names enable_meta_tools enable_goal_tools enable_goal_creation allowed_mcp_service_ids required_mcp_service_ids backgroundable_tool_names approval_required_tools enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_default_await_mode subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds write_tools datastore_tool_surface_ids eth_tool_ids enable_self_config self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config";
-pub(crate) const EXPORT_DATASTORE_TOOL_SURFACE_FIELDS: &str =
-    "surface_id agent_did display_name enabled entries";
-pub(crate) const EXPORT_CHAIN_KEY_BINDING_FIELDS: &str =
-    "binding_id principal_did address key_backend attestation created_at revoked_at";
-pub(crate) const EXPORT_ETH_TOOL_FIELDS: &str =
-    "tool_id agent_did display_name enabled chain_id rpc_url query_methods calls key_binding_id";
-pub(crate) const EXPORT_SKILL_FIELDS: &str =
-    "skill_id agent_did scope name description instructions tool_refs display_name interface_json enabled created_at";
-pub(crate) const EXPORT_WORKSPACE_ROOT_FIELDS: &str = "root_path display_name enabled updated_at";
-pub(crate) const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
-    "backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
-pub(crate) const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
-    "profile_id display_name context_window max_output_tokens max_turns temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty reasoning_effort stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_max_transport retry_backoff_ms retry_max_resample retry_allow_repair retry_interactive_max";
-pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
-    "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_agent_did";
-pub(crate) const EXPORT_PROJECTION_ACP_BINDING_FIELDS: &str =
-    "binding_id agent_did behavior_id projection_id policy_id staged_policy_id previous_policy_id resource_map_json publication_status published_at enabled created_at updated_at";
-pub(crate) const EXPORT_TASK_FIELDS: &str =
-    "task_id name description behavior_id prompt_template goal_objective_template goal_token_budget enabled output_schema_ref created_at updated_at";
-pub(crate) const EXPORT_SCHEDULE_FIELDS: &str =
-    "schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency created_at updated_at";
-pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =
-    "trigger_id task_id source_collection event_kind filter correlation_field fire_mode expected_count expected_count_field group_timeout_secs group_min_count workspace_authority enabled concurrency created_at updated_at";
+pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id agent_did name description instructions tool_refs display_name interface_json enabled created_at tags";
 
 pub fn run_cli() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -649,8 +629,8 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::StoredInitConfig;
     use gents::AgentIdentity as _;
-    use serde_json::Value;
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {
@@ -712,141 +692,47 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_inference_backend_does_not_translate_unknown_capability_fields() {
-        let input = serde_json::json!({
-            "backend_id": "local",
-            "name": "Local",
-            "provider_kind": "OpenAiCompatible",
-            "endpoint": "http://127.0.0.1:11434/v1",
-            "api_key": null,
-            "api_key_env_var": null,
-            "max_concurrent": 1,
-            "max_queue_depth": 100,
-            "enabled": true,
-            "supports_tool_calls": true,
-            "supports_streaming": true,
-            "supports_structured_outputs": false,
-            "supports_json_schema": false,
-            "context_window": 32768,
-            "max_output_tokens": 4096,
-            "last_probe": "2026-04-15T00:00:00Z",
-            "models": ["test-model"],
-            "probe_status": "healthy"
-        });
-
-        let out = sanitize_import_document("InferenceBackend", &input, false).unwrap();
-        let obj = out.as_object().unwrap();
-        for field in [
-            "supports_tool_calls",
-            "supports_streaming",
-            "supports_structured_outputs",
-            "supports_json_schema",
-            "context_window",
-            "max_output_tokens",
+    fn canonical_import_rejects_observation_fields_instead_of_silently_dropping_them() {
+        let service = serde_json::json!({"agent_did":"owner","service_id":"mcp","hostname":"host"});
+        for (field, value) in [
+            ("status", serde_json::json!("offline")),
+            ("tools", serde_json::json!([{"name":"tool"}])),
+            ("version", serde_json::json!("1.2.3")),
+            ("updated_at", serde_json::json!("2026-01-01T00:00:00Z")),
         ] {
+            let mut input = service.clone();
+            input[field] = value;
             assert!(
-                obj.contains_key(field),
-                "{field} must not be silently translated"
+                gents::config_client::config_projection(
+                    gents::Collection::ToolServiceRegistry,
+                    Some(&input)
+                )
+                .is_err(),
+                "{field} is not configuration"
             );
         }
-        assert!(
-            !obj.contains_key("last_probe"),
-            "runtime health is never imported"
-        );
-        assert_eq!(obj.get("backend_id").and_then(Value::as_str), Some("local"));
     }
 
     #[test]
-    fn sanitize_tool_service_registry_does_not_invent_status_when_absent() {
-        let input = serde_json::json!({
-            "service_id": "observability-mcp",
-            "hostname": "studio-1",
-            "tailscale_ip": "100.69.4.79",
-            "mcp_port": 9201,
-            "mcp_path": "/mcp"
-        });
-        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
-        let obj = out.as_object().unwrap();
-        assert!(obj.get("status").is_none());
-    }
-
-    #[test]
-    fn sanitize_tool_service_registry_drops_runtime_status_when_null() {
-        let input = serde_json::json!({
-            "service_id": "observability-mcp",
-            "status": null,
-            "hostname": "studio-1",
-            "mcp_port": 9201,
-            "mcp_path": "/mcp"
-        });
-        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
-        let obj = out.as_object().unwrap();
-        assert!(obj.get("status").is_none());
-    }
-
-    #[test]
-    fn sanitize_tool_service_registry_drops_runtime_status_when_explicit() {
-        let input = serde_json::json!({
-            "service_id": "observability-mcp",
-            "status": "offline",
-            "mcp_port": 9201,
-            "mcp_path": "/mcp"
-        });
-        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
-        let obj = out.as_object().unwrap();
-        assert!(obj.get("status").is_none());
-    }
-
-    #[test]
-    fn sanitize_tool_service_registry_normalizes_address_fields_for_storage() {
-        let input = serde_json::json!({
-            "service_id": "observability-mcp",
-            "hostname": null,
-            "tailscale_ip": " 100.69.4.79 ",
-            "lan_ip": null,
-            "mcp_port": 9201,
-            "mcp_path": "mcp"
-        });
-        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
-        let obj = out.as_object().unwrap();
-        assert_eq!(obj.get("hostname").and_then(|v| v.as_str()), Some(""));
-        assert_eq!(obj.get("lan_ip").and_then(|v| v.as_str()), Some(""));
-        assert_eq!(
-            obj.get("tailscale_ip").and_then(|v| v.as_str()),
-            Some("100.69.4.79")
-        );
-        assert_eq!(obj.get("mcp_path").and_then(|v| v.as_str()), Some("/mcp"));
-    }
-
-    #[test]
-    fn sanitize_tool_service_registry_rejects_missing_mcp_path() {
-        let input = serde_json::json!({
-            "service_id": "observability-mcp",
-            "hostname": "studio-1",
-            "mcp_port": 9201
-        });
-        let error = sanitize_import_document("ToolServiceRegistry", &input, false)
-            .expect_err("missing MCP path must fail closed");
-        assert!(error.to_string().contains("mcp_path is required"));
-    }
-
-    #[test]
-    fn sanitize_tool_service_registry_still_strips_runtime_owned_fields() {
-        let input = serde_json::json!({
-            "service_id": "observability-mcp",
-            "mcp_port": 9201,
-            "mcp_path": "/mcp",
-            "tools": [{"name": "x", "description": "y"}],
-            "version": "1.2.3",
-            "updated_at": "2026-04-14T00:00:00Z"
-        });
-        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
-        let obj = out.as_object().unwrap();
-        assert!(obj.get("tools").is_none(), "tools should be stripped");
-        assert!(obj.get("version").is_none(), "version should be stripped");
-        assert!(
-            obj.get("updated_at").is_none(),
-            "updated_at should be stripped on create"
-        );
+    fn canonical_service_import_preserves_optional_endpoint_and_exact_values() {
+        let input = serde_json::json!({"agent_did":"owner","service_id":"mcp","hostname":"host","mcp_path":null});
+        let projected = gents::config_client::config_projection(
+            gents::Collection::ToolServiceRegistry,
+            Some(&input),
+        )
+        .unwrap()
+        .1
+        .unwrap();
+        assert_eq!(projected["hostname"], "host");
+        assert!(projected["mcp_path"].is_null());
+        assert!(projected.get("status").is_none());
+        assert_eq!(projected["agent_did"], "owner");
+        let mut missing_owner = input;
+        missing_owner.as_object_mut().unwrap().remove("agent_did");
+        assert!(gents::config_client::config_projection(
+            gents::Collection::ToolServiceRegistry,
+            Some(&missing_owner)
+        )
+        .is_err());
     }
 }

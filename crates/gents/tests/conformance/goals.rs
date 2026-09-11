@@ -171,135 +171,58 @@ fn generated_goal_create_cases_fence_authority_and_idempotency() {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct TaskGoalPublicationMirror {
-    mode: &'static str,
-    published: bool,
-    runnable_request: bool,
-    durable_goal: bool,
-    session_id: Option<String>,
-    request_id: Option<String>,
-    retry_key: Option<String>,
-}
-
-fn production_task_goal_declaration_valid(objective: Option<&str>, budget: Option<i128>) -> bool {
-    match budget {
-        Some(budget) => i64::try_from(budget).is_ok_and(|budget| {
-            gents::goal::validate_task_goal_declaration(objective, Some(budget)).is_ok()
-        }),
-        None => gents::goal::validate_task_goal_declaration(objective, None).is_ok(),
-    }
-}
-
-fn task_goal_publication_mirror(
-    agent_did: &str,
-    task_id: &str,
-    fire_key: &str,
-    objective: Option<&str>,
-    budget: Option<i128>,
-) -> TaskGoalPublicationMirror {
-    if !production_task_goal_declaration_valid(objective, budget) {
-        return TaskGoalPublicationMirror {
-            mode: "invalid",
-            published: false,
-            runnable_request: false,
-            durable_goal: false,
-            session_id: None,
-            request_id: None,
-            retry_key: None,
-        };
-    }
-    if objective.is_none() {
-        return TaskGoalPublicationMirror {
-            mode: "ordinary",
-            published: true,
-            runnable_request: true,
-            durable_goal: false,
-            session_id: None,
-            request_id: None,
-            retry_key: None,
-        };
-    }
-    let identity = gents::goal::task_goal_fire_identity(agent_did, task_id, fire_key);
-    TaskGoalPublicationMirror {
-        mode: "atomic_goal_backed",
-        published: true,
-        runnable_request: true,
-        durable_goal: true,
-        session_id: Some(identity.session_id),
-        request_id: Some(identity.request_id),
-        retry_key: Some(identity.retry_key),
-    }
-}
-
+/// Exercises declaration validation and deterministic fire identity through
+/// their production owners. No publication is performed here: atomic Goal and
+/// request visibility requires a separate transaction-backed integration fence.
 #[test]
-fn generated_task_goal_publication_cases_fence_atomic_selection() {
+fn generated_task_goal_cases_fence_declaration_and_identity() {
     let cases = lean_task_goal_publication_cases();
     assert_eq!(cases.len(), 11, "the Task goal publication matrix drifted");
     for case in cases {
-        let actual = task_goal_publication_mirror(
-            &case.agent_did,
-            &case.task_id,
-            &case.fire_key,
-            case.goal_objective.as_deref(),
-            case.goal_token_budget,
-        );
+        // Runtime goal budgets are i64, so a Lean budget beyond i64::MAX is
+        // unrepresentable and must stay invalid, exactly like the Lean
+        // `validBudget` bound.
+        let declaration_valid = match case.goal_token_budget {
+            Some(budget) => i64::try_from(budget).is_ok_and(|budget| {
+                gents::goal::validate_task_goal_declaration(
+                    case.goal_objective.as_deref(),
+                    Some(budget),
+                )
+                .is_ok()
+            }),
+            None => {
+                gents::goal::validate_task_goal_declaration(case.goal_objective.as_deref(), None)
+                    .is_ok()
+            }
+        };
         assert_eq!(
-            production_task_goal_declaration_valid(
-                case.goal_objective.as_deref(),
-                case.goal_token_budget
-            ),
-            case.declaration_valid,
-            "Lean case {} declaration validity",
+            declaration_valid, case.declaration_valid,
+            "Lean case {} disagrees with the production declaration validator",
             case.name
         );
-        assert_eq!(actual.mode, case.expected_mode, "Lean case {}", case.name);
-        assert_eq!(
-            actual.published, case.expected_published,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.runnable_request, case.expected_runnable_request,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.durable_goal, case.expected_durable_goal,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.session_id, case.expected_session_id,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.request_id, case.expected_request_id,
-            "Lean case {}",
-            case.name
-        );
-        assert_eq!(
-            actual.retry_key, case.expected_retry_key,
-            "Lean case {}",
-            case.name
-        );
-        if actual.mode == "atomic_goal_backed" && actual.runnable_request {
-            assert!(
-                actual.durable_goal,
-                "Lean case {} exposed a goal-backed request without its goal",
+
+        if declaration_valid && case.goal_objective.is_some() {
+            let identity = gents::goal::task_goal_fire_identity(
+                &case.agent_did,
+                &case.task_id,
+                &case.fire_key,
+            );
+            assert_eq!(
+                case.expected_session_id.as_deref(),
+                Some(identity.session_id.as_str()),
+                "Lean case {} session identity",
                 case.name
             );
-            assert!(
-                actual.session_id.is_some()
-                    && actual.request_id.is_some()
-                    && actual.retry_key.is_some()
+            assert_eq!(
+                case.expected_request_id.as_deref(),
+                Some(identity.request_id.as_str()),
+                "Lean case {} request identity",
+                case.name
             );
-        }
-        if !case.declaration_valid {
-            assert!(
-                !actual.published && !actual.runnable_request,
-                "Lean case {} published an invalid declaration",
+            assert_eq!(
+                case.expected_retry_key.as_deref(),
+                Some(identity.retry_key.as_str()),
+                "Lean case {} retry identity",
                 case.name
             );
         }

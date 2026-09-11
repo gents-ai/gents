@@ -17,17 +17,16 @@ import {
   ChatHeader,
   ChatTranscriptPanel,
 } from "@source-inc/gents-desktop-chat";
-import { effectiveBehaviorSkills } from "@source-inc/gents-desktop-chat";
-import { HoldsPanel } from "@source-inc/gents-desktop-operations";
-import type { ConversationLoadingStatus as ConversationLoadingStatusView } from "../lib/loadingStatus";
-import { ConversationLoadingStatus } from "./ConversationLoadingStatus";
+import { effectiveContextSkills } from "@source-inc/gents-desktop-chat";
+import type { SessionLoadingStatus as SessionLoadingStatusView } from "../lib/loadingStatus";
+import { SessionLoadingStatus } from "./SessionLoadingStatus";
 
 export type ChatWorkspaceProps = {
   api: DesktopApiAdapter;
   activeRequestId: string | null;
   activityStatus: ChatActivityStatus | null;
   selectedDeployment: DeploymentView | null;
-  selectedConversationTitle: string | null;
+  selectedSessionTitle: string | null;
   selectedBehaviorId: string | null;
   selectedSessionId: string | null;
   session: DesktopSessionSnapshot | null;
@@ -41,18 +40,18 @@ export type ChatWorkspaceProps = {
   interruptVisible: boolean;
   sending: boolean;
   turnState: string | null;
-  conversationLoadingStatus?: ConversationLoadingStatusView | null;
-  onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
+  sessionLoadingStatus?: SessionLoadingStatusView | null;
+  onRenameSessionTitle: (sessionId: string, title: string) => void | Promise<void>;
   onDraftChange: (value: string) => void;
   onConfigureInference?: () => void;
   onReconnect?: () => void | Promise<unknown>;
-  onConversationReconnect?: () => void | Promise<unknown>;
+  onSessionReconnect?: () => void | Promise<unknown>;
   reconnecting?: boolean;
   onSend: (event: FormEvent) => void;
   onRetryMessage?: (requestId: string) => void | Promise<void>;
   onLoadOlderTimeline?: () => Promise<boolean>;
   onRetryHydration?: () => void | Promise<unknown>;
-  onRetryConversation?: () => void | Promise<unknown>;
+  onRetrySession?: () => void | Promise<unknown>;
   onOpenMobileNavigation?: () => void;
   onInterruptAccepted?: () => void | Promise<void>;
 };
@@ -85,7 +84,7 @@ export function ActiveChatWorkspace({
   activeRequestId,
   activityStatus,
   selectedDeployment,
-  selectedConversationTitle,
+  selectedSessionTitle,
   selectedBehaviorId,
   selectedSessionId,
   session,
@@ -99,18 +98,18 @@ export function ActiveChatWorkspace({
   interruptVisible,
   sending,
   turnState,
-  conversationLoadingStatus = null,
-  onRenameConversationTitle,
+  sessionLoadingStatus = null,
+  onRenameSessionTitle,
   onDraftChange,
   onConfigureInference,
   onReconnect,
-  onConversationReconnect,
+  onSessionReconnect,
   reconnecting = false,
   onSend,
   onRetryMessage,
   onLoadOlderTimeline,
   onRetryHydration,
-  onRetryConversation,
+  onRetrySession,
   onOpenMobileNavigation,
   onInterruptAccepted,
 }: ActiveChatWorkspaceProps) {
@@ -124,9 +123,14 @@ export function ActiveChatWorkspace({
     ) ?? null;
   const behaviorLabel =
     activeBehavior?.displayName ?? displayBehaviorLabel(activeBehaviorId);
-  const activeBehaviorSkills = useMemo(
-    () => effectiveBehaviorSkills(selectedDeployment.skills ?? [], activeBehavior),
-    [activeBehavior, selectedDeployment.skills],
+  const activeContext = activeBehavior?.contextId
+    ? (selectedDeployment.contexts.find(
+        (context) => context.context_id === activeBehavior.contextId,
+      ) ?? null)
+    : null;
+  const activeContextSkills = useMemo(
+    () => effectiveContextSkills(selectedDeployment.skills ?? [], activeContext),
+    [activeContext, selectedDeployment.skills],
   );
   const visibleSession =
     session?.sessionId === selectedSessionId &&
@@ -195,19 +199,19 @@ export function ActiveChatWorkspace({
         context={visibleSession?.context ?? null}
         onOpenMobileNavigation={onOpenMobileNavigation}
         syncHealth={syncHealth}
-        selectedConversationTitle={selectedConversationTitle}
+        selectedSessionTitle={selectedSessionTitle}
         selectedSessionId={selectedSessionId}
-        onRenameConversationTitle={onRenameConversationTitle}
+        onRenameSessionTitle={onRenameSessionTitle}
       />
 
       <section className="chat-workspace">
         <div className="chat-main">
-          <ConversationLoadingStatus
-            status={conversationLoadingStatus}
+          <SessionLoadingStatus
+            status={sessionLoadingStatus}
             onConfigureInference={onConfigureInference}
-            onReconnect={onConversationReconnect ?? onReconnect}
+            onReconnect={onSessionReconnect ?? onReconnect}
             onRetryHydration={onRetryHydration}
-            onRetryLocal={onRetryConversation}
+            onRetryLocal={onRetrySession}
           />
           <ChatTranscriptPanel
             selectedSessionId={selectedSessionId}
@@ -217,8 +221,6 @@ export function ActiveChatWorkspace({
             retryUnavailableHint={retryUnavailableHint}
             onLoadOlder={onLoadOlderTimeline}
           />
-
-          <HoldsPanel agentDid={selectedDeployment.agentDid} api={api} hideWhenIdle />
 
           <ChatComposer
             activeRequestId={activeRequestId}
@@ -233,19 +235,17 @@ export function ActiveChatWorkspace({
             turnState={turnState}
             onDraftChange={onDraftChange}
             onConfigureInference={
-              conversationLoadingStatus?.action === "configureInference"
+              sessionLoadingStatus?.action === "configureInference"
                 ? undefined
                 : onConfigureInference
             }
             onReconnect={
-              conversationLoadingStatus?.action === "reconnect"
-                ? undefined
-                : onReconnect
+              sessionLoadingStatus?.action === "reconnect" ? undefined : onReconnect
             }
             reconnecting={reconnecting}
             onInterruptClick={onInterruptClick}
             onSend={onSend}
-            skills={activeBehaviorSkills}
+            skills={activeContextSkills}
           />
         </div>
         {interruptResultBanner ? (

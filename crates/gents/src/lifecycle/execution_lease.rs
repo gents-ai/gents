@@ -185,13 +185,6 @@ impl RequestTerminalOutcome {
         }
     }
 
-    fn conversation_status(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::Failed | Self::Interrupted | Self::Dead | Self::Superseded => "active",
-        }
-    }
-
     fn local_state(self) -> LocalLifecycleState {
         match self {
             Self::Completed => LocalLifecycleState::Completed,
@@ -502,9 +495,15 @@ async fn terminalize_execution(
                 let key = if response.is_some() { "update_AgentResponse" } else { "create_AgentResponse" };
                 anyhow::ensure!(result.data.as_ref().and_then(|v| v.get(key)).is_some_and(response_has_documents)
                     || extract_single_doc_id(&result, key).is_some(), "terminal response write matched no document");
-                let projection = session::request_conversation_status_projection_mutation(
-                    row.session_id.as_deref().context("missing request session")?, &row.request_id, effective_outcome.conversation_status(), &timestamp);
-                txn.execute_local_response(&projection).await?;
+                session::refresh_session_request_observation_in_txn(
+                    txn,
+                    row.agent_did.as_deref().context("missing agent DID")?,
+                    row.requester_did.as_deref(),
+                    row.session_id.as_deref().context("missing request session")?,
+                    request_doc_id,
+                    &row.request_id,
+                    &timestamp,
+                ).await?;
             Ok::<_, anyhow::Error>(TerminalizeResult::Won)
         })
     ).await

@@ -20,11 +20,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{FileTools, HostTools, IntegrationTools, LspTools, Tools};
 use gents::graphql::escape_graphql_string;
-use gents::{
-    load_agent_behavior, upsert_agent_behavior, upsert_tool_selection, DocumentRuntimeOptions,
-    Gents, ToolCeiling, ToolSelectionDocument,
-};
+use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
 use serde::Deserialize;
 
 use gents::AgentIdentity;
@@ -32,7 +30,7 @@ use gents::AgentIdentity;
 use crate::steward_loop_live::{
     bind_d4f_backend, wait_for_assistant_answer, wait_for_request_terminal,
 };
-use crate::support::fixtures::test_identity;
+use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::test_db;
 
@@ -81,7 +79,23 @@ fn pack_default_prompt() -> String {
 }
 
 fn pack_lsp_config() -> String {
-    pack_json_string("tool_selections/lsp_readonly/object.json", "lsp_config")
+    let relative = "pack_config.json";
+    let raw = std::fs::read_to_string(pack_dir().join(relative)).unwrap_or_else(|err| {
+        panic!("read packs/lsp_rust/{relative}: {err}");
+    });
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|err| {
+        panic!("parse packs/lsp_rust/{relative}: {err}");
+    });
+    value["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tools| tools["tools_id"] == "lsp-readonly")
+        })
+        .and_then(|tools| tools["integrations"]["lsp"]["config"].as_str())
+        .unwrap_or_else(|| panic!("packs/lsp_rust/{relative} missing lsp-readonly Tools config"))
+        .to_owned()
 }
 
 fn pack_system_prompt() -> String {
@@ -175,31 +189,34 @@ async fn lsp_live_model_uses_rust_analyzer() {
 
     let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
 
-    upsert_tool_selection(
+    configure_behavior_tools(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "lsp-live-tools".to_string(),
+        &agent_did,
+        &behavior_id,
+        Some(pack_system_prompt()),
+        Tools {
+            tools_id: "lsp-live-tools".to_string(),
             agent_did: agent_did.clone(),
-            enable_file_tools: Some(true),
-            file_tools_mode: Some("ReadOnly".to_string()),
-            file_tool_root: Some(workspace.display().to_string()),
-            enable_bash: Some(false),
-            enable_lsp: Some(true),
-            lsp_config: Some(pack_lsp_config()),
+            host: Some(HostTools {
+                root: Some(workspace.display().to_string()),
+                files: Some(FileTools {
+                    mode: FileToolMode::ReadOnly,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            integrations: Some(IntegrationTools {
+                lsp: Some(LspTools {
+                    config: Some(pack_lsp_config()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        Vec::new(),
     )
-    .await
-    .unwrap();
-    let mut behavior = load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
-    behavior.tool_selection_id = Some("lsp-live-tools".to_string());
-    behavior.system_prompt = Some(pack_system_prompt());
-    upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .expect("bind tool selection");
+    .await;
 
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),

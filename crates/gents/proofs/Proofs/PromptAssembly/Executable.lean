@@ -47,7 +47,10 @@ def filterCallsBy (resolved : Finset ToolExecution.ToolCallId) :
 def dropUnpairedCalls (msgs : List MessageRow) : List MessageRow :=
   filterCallsBy (resolvedIn msgs) msgs
 
-def sanitize (msgs : List MessageRow) : List MessageRow :=
+/-- Global-resolution proof model, valid as a runtime abstraction only under
+unique call IDs. Implement provider narrowing with `sanitizeTurn`; the content
+model has an additional calls-only projection boundary. -/
+def sanitizeGlobal (msgs : List MessageRow) : List MessageRow :=
   dropUnpairedCalls (dropOrphanedResults msgs)
 
 /-! ## Per-turn resolution
@@ -60,9 +63,9 @@ the active turn via `resolved_keys_per_turn`, mirroring the `pending_calls`
 reset in `drop_orphaned_tool_results`.
 
 The two agree exactly under `UniqueCallIds` (`filterCallsByTurn_eq_filterCallsBy`
-below), which is the hypothesis every theorem over `sanitize` already carries —
-so the per-turn model is what production implements, and the global model
-remains a sound over-approximation of it. -/
+below), which is required when transferring global soundness to the per-turn algorithm.
+Outside that fragment these algorithms differ; the global proof model is not a
+second implementation choice. -/
 
 /-- Results closing the turn that just opened: the leading run of result rows.
 A non-result row ends the turn, matching the `pending_calls` reset. -/
@@ -192,11 +195,10 @@ theorem filterCallsBy_cons_ordinary (h : row.kind = .ordinary) :
 end Reduction
 
 inductive Slot where
-  | preamble
+  | preamble (instructions : Option String)
   | summaryReminder
   | skillReminder (index : Nat)
   | conversation (index : Nat)
-  | contextPreamble
   | prompt
   deriving DecidableEq, Repr
 
@@ -207,10 +209,11 @@ def buildLayers (summaryCount conversationLen : Nat) : List Slot :=
 def injectSkills (skillCount : Nat) (layers : List Slot) : List Slot :=
   (List.range skillCount).map Slot.skillReminder ++ layers
 
-def perTurnRequest (layers : List Slot) : List Slot :=
-  Slot.preamble :: layers ++ [Slot.prompt]
+def perTurnRequest (layers : List Slot) (instructions : Option String := none) : List Slot :=
+  Slot.preamble instructions :: layers ++ [Slot.prompt]
 
-def assemble (skillCount summaryCount conversationLen : Nat) : List Slot :=
-  perTurnRequest (injectSkills skillCount (buildLayers summaryCount conversationLen))
+def assemble (skillCount summaryCount conversationLen : Nat)
+    (instructions : Option String := none) : List Slot :=
+  perTurnRequest (injectSkills skillCount (buildLayers summaryCount conversationLen)) instructions
 
 end PromptAssembly

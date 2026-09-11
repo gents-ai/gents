@@ -10,12 +10,6 @@ pub struct MaterializationStats {
     /// Collections that failed materialization (always 0 when
     /// [`crate::ensure_migrations`] returns `Ok`).
     pub collections_failed: usize,
-    /// Always `false` on pins that include `materialize_collection`
-    /// (defradb.rs ≥ #1232). Kept for report compatibility.
-    pub skipped_upstream_missing: bool,
-    /// Always `0` with eager datastore materialization. Kept for report
-    /// compatibility with the pre-#1232 GraphQL read-through path.
-    pub read_through_scans: usize,
     /// Human-readable details for collections whose eager materialization was
     /// skipped because a P2P merge parked a unique-index-conflicting document
     /// unindexed (#984). One entry per parked collection, naming the

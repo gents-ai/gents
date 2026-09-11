@@ -6,13 +6,11 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use gents::document_config::{Schedule, Task};
 use gents::identity::AgentIdentity;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::{
-    AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
-    InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
-};
+use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session_hydration::{
     decode_manifest_json, SessionHydrationDocumentKey, SessionHydrationReceipt,
     SESSION_HYDRATION_RECEIPT_VERSION,
@@ -101,9 +99,7 @@ fn ensure_peer_chat_ready_at(
         Some(_) => bail!(
             "the selected deployment route is not ready; no request was saved (wait for pairing repair or inspect pairing status)"
         ),
-        None => bail!(
-            "no saved deployment route owns agent {agent_did}; no request was saved"
-        ),
+        None => bail!("no saved deployment route owns agent {agent_did}; no request was saved"),
     }
 }
 
@@ -254,95 +250,6 @@ impl ClientCore {
         .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
         .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
         Ok(timeline)
-    }
-
-    pub async fn list_tool_call_holds(
-        &self,
-        agent_did: &str,
-    ) -> Result<Vec<gents::config_client::HeldToolCall>> {
-        let agent_did = normalize_required("agent_did", agent_did)?;
-        let access = gents::config_client::ConfigAccess::Local(self.node_arc());
-        let held = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            gents::config_client::list_held_tool_calls(&access, Some(agent_did)),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out listing tool-call holds for {agent_did}"))?
-        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
-        Ok(held)
-    }
-
-    pub async fn resolve_tool_call_hold(
-        &self,
-        agent_did: &str,
-        tool_call_id: &str,
-        approve: bool,
-        reason: Option<String>,
-    ) -> Result<String> {
-        let agent_did = normalize_required("agent_did", agent_did)?;
-        let peer_record = self
-            .peer_record_for_chat_write(&agent_did, Utc::now())
-            .await?;
-        ensure_peer_chat_ready_at(&agent_did, peer_record.as_ref(), Utc::now())?;
-        let tool_call_id = normalize_required("tool_call_id", tool_call_id)?;
-        let approval_id = match self
-            .resolve_tool_call_hold_inner(agent_did, tool_call_id, approve, reason)
-            .await
-        {
-            Ok(approval_id) => approval_id,
-            Err(error) => return Err(self.record_mutation_error("resolve tool-call hold", error)),
-        };
-        self.clear_mutation_error();
-        tracing::info!(
-            target: "gents_desktop_core::writes",
-            action = "resolve_tool_call_hold",
-            row_id = %tool_call_id,
-            approve,
-            "desktop write saved"
-        );
-        Ok(approval_id)
-    }
-
-    async fn resolve_tool_call_hold_inner(
-        &self,
-        agent_did: &str,
-        tool_call_id: &str,
-        approve: bool,
-        reason: Option<String>,
-    ) -> Result<String> {
-        let access = gents::config_client::ConfigAccess::Local(self.node_arc());
-        let held = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            gents::config_client::list_held_tool_calls(&access, Some(agent_did)),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out listing tool-call holds for {agent_did}"))?
-        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
-        let mut targets = held.iter().filter(|call| call.tool_call_id == tool_call_id);
-        let target = targets
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("tool call {tool_call_id} is not awaiting approval"))?;
-        if targets.next().is_some() {
-            anyhow::bail!(
-                "tool call {tool_call_id} is ambiguous across multiple held AgentToolCall documents"
-            );
-        }
-        let verdict = gents::config_client::ToolApprovalVerdict {
-            tool_call_doc_id: target.tool_call_doc_id.clone(),
-            tool_call_id: tool_call_id.to_string(),
-            agent_did: agent_did.to_string(),
-            request_id: target.request_id.clone(),
-            approve,
-            approver_did: self.principal().did().to_string(),
-            reason,
-        };
-        tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            gents::config_client::write_tool_approval(&access, &verdict),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("timed out writing approval decision for {tool_call_id}"))?
-        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))
     }
 
     pub async fn network_status(&self) -> NetworkStatus {
@@ -521,14 +428,14 @@ impl ClientCore {
         Ok(Some(version))
     }
 
-    pub async fn rename_conversation(
+    pub async fn rename_session(
         &self,
         agent_did: &str,
         session_id: &str,
         title: &str,
     ) -> Result<()> {
         let snapshot = self.store.snapshot();
-        let result = mutations::rename_conversation(
+        let result = mutations::rename_session(
             self.node.as_ref(),
             snapshot.as_ref(),
             agent_did,
@@ -551,44 +458,16 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("rename conversation", error)),
+            Err(error) => Err(self.record_mutation_error("rename session", error)),
         }
     }
 
     pub async fn delete_skill(&self, skill_id: &str, source_agent_did: &str) -> Result<()> {
-        let skill_id = normalize_required("skill_id", skill_id)?;
-        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let snapshot = self.store.snapshot();
-        if !snapshot.skills.iter().any(|row| {
-            row.skill_id == skill_id && row.agent_did.as_deref() == Some(source_agent_did)
-        }) {
-            bail!("no Skill document with skill_id {skill_id:?} for {source_agent_did}");
-        }
-
-        let affected_behaviors = snapshot
-            .behaviors
-            .iter()
-            .filter(|row| row.agent_did.as_deref() == Some(source_agent_did))
-            .filter_map(|row| {
-                let mut next = row.clone();
-                let refs_before = next.skill_refs.len();
-                let excludes_before = next.skill_excludes.len();
-                next.skill_refs.retain(|id| id != skill_id);
-                next.skill_excludes.retain(|id| id != skill_id);
-                (next.skill_refs.len() != refs_before
-                    || next.skill_excludes.len() != excludes_before)
-                    .then_some(next)
-            })
-            .collect::<Vec<_>>();
-
         let result = async {
             let deleted =
                 mutations::delete_skill(self.node.as_ref(), source_agent_did, skill_id).await?;
             if deleted == 0 {
                 bail!("no Skill document with skill_id {skill_id:?} for {source_agent_did}");
-            }
-            for behavior in affected_behaviors {
-                mutations::upsert_agent_behavior(self.node.as_ref(), &behavior).await?;
             }
             Ok(())
         }
@@ -613,56 +492,9 @@ impl ClientCore {
     }
 
     pub async fn delete_task(&self, task_id: &str, source_agent_did: &str) -> Result<()> {
-        let task_id = normalize_required("task_id", task_id)?;
-        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let snapshot = self.store.snapshot();
-        if !snapshot.tasks.iter().enumerate().any(|(index, row)| {
-            row.task_id == task_id
-                && row_matches_source(
-                    &snapshot.task_source_agent_dids,
-                    index,
-                    source_agent_did,
-                    false,
-                )
-        }) {
-            bail!("no Task document with task_id {task_id:?}");
-        }
-        let schedule_refs = snapshot
-            .schedules
-            .iter()
-            .enumerate()
-            .filter(|(index, row)| {
-                row.task_id.as_deref() == Some(task_id)
-                    && row_matches_source(
-                        &snapshot.schedule_source_agent_dids,
-                        *index,
-                        source_agent_did,
-                        false,
-                    )
-            })
-            .count();
-        let trigger_refs = snapshot
-            .event_triggers
-            .iter()
-            .enumerate()
-            .filter(|(index, row)| {
-                row.task_id.as_deref() == Some(task_id)
-                    && row_matches_source(
-                        &snapshot.event_trigger_source_agent_dids,
-                        *index,
-                        source_agent_did,
-                        false,
-                    )
-            })
-            .count();
-        if schedule_refs + trigger_refs > 0 {
-            bail!(
-                "task {task_id:?} is referenced by {schedule_refs} schedule(s) and {trigger_refs} event trigger(s); delete or detach those first"
-            );
-        }
-
         let result = async {
-            let deleted = mutations::delete_task(self.node.as_ref(), task_id).await?;
+            let deleted =
+                mutations::delete_task(self.node.as_ref(), source_agent_did, task_id).await?;
             if deleted == 0 {
                 bail!("no Task document with task_id {task_id:?}");
             }
@@ -689,23 +521,10 @@ impl ClientCore {
     }
 
     pub async fn delete_schedule(&self, schedule_id: &str, source_agent_did: &str) -> Result<()> {
-        let schedule_id = normalize_required("schedule_id", schedule_id)?;
-        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let snapshot = self.store.snapshot();
-        if !snapshot.schedules.iter().enumerate().any(|(index, row)| {
-            row.schedule_id == schedule_id
-                && row_matches_source(
-                    &snapshot.schedule_source_agent_dids,
-                    index,
-                    source_agent_did,
-                    false,
-                )
-        }) {
-            bail!("no Schedule document with schedule_id {schedule_id:?}");
-        }
-
         let result = async {
-            let deleted = mutations::delete_schedule(self.node.as_ref(), schedule_id).await?;
+            let deleted =
+                mutations::delete_schedule(self.node.as_ref(), source_agent_did, schedule_id)
+                    .await?;
             if deleted == 0 {
                 bail!("no Schedule document with schedule_id {schedule_id:?}");
             }
@@ -731,49 +550,26 @@ impl ClientCore {
         .await
     }
 
-    pub async fn delete_event_trigger(
-        &self,
-        trigger_id: &str,
-        source_agent_did: &str,
-    ) -> Result<()> {
-        let trigger_id = normalize_required("trigger_id", trigger_id)?;
-        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let snapshot = self.store.snapshot();
-        if !snapshot
-            .event_triggers
-            .iter()
-            .enumerate()
-            .any(|(index, row)| {
-                row.trigger_id == trigger_id
-                    && row_matches_source(
-                        &snapshot.event_trigger_source_agent_dids,
-                        index,
-                        source_agent_did,
-                        false,
-                    )
-            })
-        {
-            bail!("no EventTrigger document with trigger_id {trigger_id:?}");
-        }
-
+    pub async fn delete_trigger(&self, trigger_id: &str, source_agent_did: &str) -> Result<()> {
         let result = async {
-            let deleted = mutations::delete_event_trigger(self.node.as_ref(), trigger_id).await?;
+            let deleted =
+                mutations::delete_trigger(self.node.as_ref(), source_agent_did, trigger_id).await?;
             if deleted == 0 {
-                bail!("no EventTrigger document with trigger_id {trigger_id:?}");
+                bail!("no Trigger document with trigger_id {trigger_id:?}");
             }
             Ok(())
         }
         .await;
         self.finish_automation_delete(
             result,
-            "delete event trigger",
-            "config_event_trigger_delete",
+            "delete trigger",
+            "config_trigger_delete",
             trigger_id,
             source_agent_did,
             |rows| {
                 retain_sourced_rows(
-                    &mut rows.event_triggers,
-                    &mut rows.event_trigger_source_agent_dids,
+                    &mut rows.triggers,
+                    &mut rows.trigger_source_agent_dids,
                     source_agent_did,
                     false,
                     |row| row.trigger_id == trigger_id,
@@ -788,44 +584,13 @@ impl ClientCore {
         backend_id: &str,
         source_agent_did: &str,
     ) -> Result<()> {
-        let backend_id = normalize_required("backend_id", backend_id)?;
-        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let snapshot = self.store.snapshot();
-        if !snapshot
-            .inference_backends
-            .iter()
-            .enumerate()
-            .any(|(index, row)| {
-                row.backend_id == backend_id
-                    && row_matches_source(
-                        &snapshot.inference_backend_source_agent_dids,
-                        index,
-                        source_agent_did,
-                        false,
-                    )
-            })
-        {
-            bail!("no InferenceBackend document with backend_id {backend_id:?}");
-        }
-        let referencing = snapshot
-            .behaviors
-            .iter()
-            .filter(|row| {
-                row.agent_did.as_deref() == Some(source_agent_did)
-                    && row.backend_id.as_deref() == Some(backend_id)
-            })
-            .map(|row| row.behavior_id.clone())
-            .collect::<Vec<_>>();
-        if !referencing.is_empty() {
-            bail!(
-                "backend {backend_id:?} is referenced by behavior(s) {}; point them elsewhere first",
-                referencing.join(", ")
-            );
-        }
-
         let result = async {
-            let deleted =
-                mutations::delete_inference_backend(self.node.as_ref(), backend_id).await?;
+            let deleted = mutations::delete_inference_backend(
+                self.node.as_ref(),
+                source_agent_did,
+                backend_id,
+            )
+            .await?;
             if deleted == 0 {
                 bail!("no InferenceBackend document with backend_id {backend_id:?}");
             }
@@ -856,44 +621,13 @@ impl ClientCore {
         profile_id: &str,
         source_agent_did: &str,
     ) -> Result<()> {
-        let profile_id = normalize_required("profile_id", profile_id)?;
-        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let snapshot = self.store.snapshot();
-        if !snapshot
-            .inference_profiles
-            .iter()
-            .enumerate()
-            .any(|(index, row)| {
-                row.profile_id == profile_id
-                    && row_matches_source(
-                        &snapshot.inference_profile_source_agent_dids,
-                        index,
-                        source_agent_did,
-                        false,
-                    )
-            })
-        {
-            bail!("no InferenceProfile document with profile_id {profile_id:?}");
-        }
-        let referencing = snapshot
-            .behaviors
-            .iter()
-            .filter(|row| {
-                row.agent_did.as_deref() == Some(source_agent_did)
-                    && row.inference_profile_id.as_deref() == Some(profile_id)
-            })
-            .map(|row| row.behavior_id.clone())
-            .collect::<Vec<_>>();
-        if !referencing.is_empty() {
-            bail!(
-                "profile {profile_id:?} is referenced by behavior(s) {}; point them elsewhere first",
-                referencing.join(", ")
-            );
-        }
-
         let result = async {
-            let deleted =
-                mutations::delete_inference_profile(self.node.as_ref(), profile_id).await?;
+            let deleted = mutations::delete_inference_profile(
+                self.node.as_ref(),
+                source_agent_did,
+                profile_id,
+            )
+            .await?;
             if deleted == 0 {
                 bail!("no InferenceProfile document with profile_id {profile_id:?}");
             }
@@ -919,59 +653,25 @@ impl ClientCore {
         .await
     }
 
-    pub async fn delete_tool_selection(
-        &self,
-        selection_id: &str,
-        source_agent_did: &str,
-    ) -> Result<()> {
-        let selection_id = normalize_required("selection_id", selection_id)?;
-        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let snapshot = self.store.snapshot();
-        if !snapshot.tool_selections.iter().any(|row| {
-            row.selection_id == selection_id && row.agent_did.as_deref() == Some(source_agent_did)
-        }) {
-            bail!("no ToolSelection document with selection_id {selection_id:?}");
-        }
-        let referencing = snapshot
-            .behaviors
-            .iter()
-            .filter(|row| {
-                row.agent_did.as_deref() == Some(source_agent_did)
-                    && row.tool_selection_id.as_deref() == Some(selection_id)
-            })
-            .map(|row| row.behavior_id.clone())
-            .collect::<Vec<_>>();
-        if !referencing.is_empty() {
-            bail!(
-                "tool selection {selection_id:?} is referenced by behavior(s) {}; point them elsewhere first",
-                referencing.join(", ")
-            );
-        }
-
+    pub async fn delete_tools(&self, tools_id: &str, source_agent_did: &str) -> Result<()> {
         let result = async {
-            let deleted = mutations::delete_tool_selection(
-                self.node.as_ref(),
-                source_agent_did,
-                selection_id,
-            )
-            .await?;
+            let deleted =
+                mutations::delete_tools(self.node.as_ref(), source_agent_did, tools_id).await?;
             if deleted == 0 {
-                bail!("no ToolSelection document with selection_id {selection_id:?}");
+                bail!("no Tools document with tools_id {tools_id:?}");
             }
             Ok(())
         }
         .await;
         self.finish_automation_delete(
             result,
-            "delete tool selection",
-            "config_tool_selection_delete",
-            selection_id,
+            "delete tools",
+            "config_tools_delete",
+            tools_id,
             source_agent_did,
             |rows| {
-                rows.tool_selections.retain(|row| {
-                    row.selection_id != selection_id
-                        || row.agent_did.as_deref() != Some(source_agent_did)
-                });
+                rows.tools
+                    .retain(|row| row.tools_id != tools_id || row.agent_did != source_agent_did);
             },
         )
         .await
@@ -982,47 +682,13 @@ impl ClientCore {
         service_id: &str,
         source_agent_did: &str,
     ) -> Result<()> {
-        let service_id = normalize_required("service_id", service_id)?;
-        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let snapshot = self.store.snapshot();
-        if !snapshot
-            .tool_service_registries
-            .iter()
-            .enumerate()
-            .any(|(index, row)| {
-                row.service_id == service_id
-                    && row_matches_source(
-                        &snapshot.tool_service_registry_source_agent_dids,
-                        index,
-                        source_agent_did,
-                        false,
-                    )
-            })
-        {
-            bail!("no ToolServiceRegistry document with service_id {service_id:?}");
-        }
-        let referencing = snapshot
-            .tool_selections
-            .iter()
-            .filter(|row| {
-                row.agent_did.as_deref() == Some(source_agent_did)
-                    && row
-                        .allowed_mcp_service_ids
-                        .iter()
-                        .any(|id| id == service_id)
-            })
-            .map(|row| row.selection_id.clone())
-            .collect::<Vec<_>>();
-        if !referencing.is_empty() {
-            bail!(
-                "tool service {service_id:?} is allowed by tool selection(s) {}; remove it there first",
-                referencing.join(", ")
-            );
-        }
-
         let result = async {
-            let deleted =
-                mutations::delete_tool_service_registry(self.node.as_ref(), service_id).await?;
+            let deleted = mutations::delete_tool_service_registry(
+                self.node.as_ref(),
+                source_agent_did,
+                service_id,
+            )
+            .await?;
             if deleted == 0 {
                 bail!("no ToolServiceRegistry document with service_id {service_id:?}");
             }
@@ -1049,56 +715,6 @@ impl ClientCore {
     }
 
     pub async fn delete_behavior(&self, behavior_id: &str, source_agent_did: &str) -> Result<()> {
-        let behavior_id = normalize_required("behavior_id", behavior_id)?;
-        let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let snapshot = self.store.snapshot();
-        if !snapshot.behaviors.iter().any(|row| {
-            row.behavior_id == behavior_id && row.agent_did.as_deref() == Some(source_agent_did)
-        }) {
-            bail!("no AgentBehavior document with behavior_id {behavior_id:?}");
-        }
-        let is_default = snapshot.agent_principals.iter().any(|principal| {
-            principal.agent_did == source_agent_did
-                && principal.default_behavior_id.as_deref() == Some(behavior_id)
-        });
-        if is_default {
-            bail!(
-                "behavior {behavior_id:?} is the agent's default behavior; make another behavior the default first"
-            );
-        }
-        let referencing = snapshot
-            .tasks
-            .iter()
-            .enumerate()
-            .filter(|(index, task)| {
-                task.behavior_id.as_deref() == Some(behavior_id)
-                    && row_matches_source(
-                        &snapshot.task_source_agent_dids,
-                        *index,
-                        source_agent_did,
-                        false,
-                    )
-            })
-            .map(|(_index, task)| task.task_id.clone())
-            .collect::<Vec<_>>();
-        if !referencing.is_empty() {
-            bail!(
-                "behavior {behavior_id:?} is referenced by task(s) {}; repoint or delete those first",
-                referencing.join(", ")
-            );
-        }
-        let subagent_referencing = tool_selections_referencing_behavior(
-            &snapshot.tool_selections,
-            source_agent_did,
-            behavior_id,
-        );
-        if !subagent_referencing.is_empty() {
-            bail!(
-                "behavior {behavior_id:?} is a subagent target of tool selection(s) {}; remove it there first",
-                subagent_referencing.join(", ")
-            );
-        }
-
         let result = async {
             let deleted =
                 mutations::delete_agent_behavior(self.node.as_ref(), source_agent_did, behavior_id)
@@ -1117,8 +733,7 @@ impl ClientCore {
             source_agent_did,
             |rows| {
                 rows.behaviors.retain(|row| {
-                    row.behavior_id != behavior_id
-                        || row.agent_did.as_deref() != Some(source_agent_did)
+                    row.behavior_id != behavior_id || row.agent_did != source_agent_did
                 });
             },
         )
@@ -1371,7 +986,7 @@ impl ClientCore {
         })
     }
 
-    pub async fn save_behavior(&self, row: &AgentBehaviorRow) -> Result<()> {
+    pub async fn save_behavior(&self, row: &gents::AgentBehaviorDocument) -> Result<()> {
         let result = mutations::upsert_agent_behavior(self.node.as_ref(), row).await;
         match result {
             Ok(()) => {
@@ -1389,7 +1004,43 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_agent_principal(&self, row: &AgentPrincipalRow) -> Result<()> {
+    pub async fn patch_config_components(
+        &self,
+        agent_did: &str,
+        patches: &[(
+            gents::config_client::patch::SelfConfigTarget,
+            String,
+            gents::config_client::patch::SelfConfigPatch,
+        )],
+    ) -> Result<()> {
+        match mutations::patch_config_components(self.node.as_ref(), agent_did, patches).await {
+            Ok(()) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("patch config components", error)),
+        }
+    }
+
+    pub async fn apply_config_components(
+        &self,
+        document: &gents::document_config::PackConfig,
+    ) -> Result<()> {
+        match mutations::apply_config_components(self.node.as_ref(), document).await {
+            Ok(()) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("apply config components", error)),
+        }
+    }
+
+    pub async fn save_agent_principal(
+        &self,
+        row: &gents::document_config::AgentPrincipal,
+    ) -> Result<()> {
         let result = mutations::upsert_agent_principal(self.node.as_ref(), row).await;
         match result {
             Ok(()) => {
@@ -1407,7 +1058,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_backend(&self, row: &InferenceBackendRow) -> Result<()> {
+    pub async fn save_backend(&self, row: &gents::InferenceBackend) -> Result<()> {
         match mutations::upsert_inference_backend(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
@@ -1424,25 +1075,28 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_tool_selection(&self, row: &ToolSelectionRow) -> Result<()> {
-        let result = mutations::upsert_tool_selection(self.node.as_ref(), row).await;
+    pub async fn save_tools(&self, row: &gents::Tools) -> Result<()> {
+        let result = mutations::upsert_tools(self.node.as_ref(), row).await;
         match result {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
-                    doc_type = "tool_selection",
-                    row_id = %row.selection_id,
+                    doc_type = "tools",
+                    row_id = %row.tools_id,
                     "desktop write saved"
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("save tool selection", error)),
+            Err(error) => Err(self.record_mutation_error("save tools", error)),
         }
     }
 
-    pub async fn save_tool_service_registry(&self, row: &ToolServiceRegistryRow) -> Result<()> {
+    pub async fn save_tool_service_registry(
+        &self,
+        row: &gents::document_config::ToolServiceRegistry,
+    ) -> Result<()> {
         match mutations::upsert_tool_service_registry(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
@@ -1459,7 +1113,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_inference_profile(&self, row: &InferenceProfileRow) -> Result<()> {
+    pub async fn save_inference_profile(&self, row: &gents::InferenceProfile) -> Result<()> {
         match mutations::upsert_inference_profile(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
@@ -1476,7 +1130,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_task(&self, row: &TaskRow) -> Result<()> {
+    pub async fn save_task(&self, row: &gents::document_config::Task) -> Result<()> {
         match mutations::upsert_task(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
@@ -1493,7 +1147,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_skill(&self, row: &SkillRow) -> Result<()> {
+    pub async fn save_skill(&self, row: &gents::document_config::SkillDocument) -> Result<()> {
         match mutations::upsert_skill(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
@@ -1510,7 +1164,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_schedule(&self, row: &ScheduleRow) -> Result<()> {
+    pub async fn save_schedule(&self, row: &gents::document_config::Schedule) -> Result<()> {
         match mutations::upsert_schedule(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
@@ -1527,28 +1181,53 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_event_trigger(&self, row: &EventTriggerRow) -> Result<()> {
-        match mutations::upsert_event_trigger(self.node.as_ref(), row).await {
+    pub async fn save_trigger(&self, row: &gents::document_config::Trigger) -> Result<()> {
+        match mutations::upsert_trigger(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
-                    doc_type = "event_trigger",
+                    doc_type = "trigger",
                     row_id = %row.trigger_id,
                     "desktop write saved"
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("save event trigger", error)),
+            Err(error) => Err(self.record_mutation_error("save trigger", error)),
         }
     }
 
-    pub async fn fire_task_now(
+    pub async fn save_event_source(
         &self,
-        task_row: &TaskRow,
-        args: serde_json::Value,
-    ) -> Result<String> {
+        document: &gents::document_config::EventSource,
+    ) -> Result<()> {
+        match mutations::upsert_event_source(self.node.as_ref(), document).await {
+            Ok(()) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("save event source", error)),
+        }
+    }
+
+    pub async fn delete_event_source(&self, event_source_id: &str, agent_did: &str) -> Result<()> {
+        match mutations::delete_event_source(self.node.as_ref(), agent_did, event_source_id).await {
+            Ok(0) => Err(self.record_mutation_error(
+                "delete event source",
+                anyhow::anyhow!("no EventSource document with event_source_id {event_source_id:?}"),
+            )),
+            Ok(_) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("delete event source", error)),
+        }
+    }
+
+    pub async fn fire_task_now(&self, task_row: &Task, args: serde_json::Value) -> Result<String> {
         match mutations::fire_task_now(self.node.as_ref(), task_row, args).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
@@ -1566,7 +1245,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn fire_schedule_now(&self, row: &ScheduleRow) -> Result<String> {
+    pub async fn fire_schedule_now(&self, row: &Schedule) -> Result<String> {
         match mutations::fire_schedule_now(self.node.as_ref(), row).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
@@ -2008,44 +1687,8 @@ fn retain_rows_with_sources<T>(
 
 fn prune_deleted_skill_rows(rows: &mut ClientStoreRows, agent_did: &str, skill_id: &str) {
     retain_rows_with_sources(&mut rows.skills, &mut rows.skill_source_agent_dids, |row| {
-        !(row.skill_id == skill_id && row.agent_did.as_deref() == Some(agent_did))
+        !(row.skill_id == skill_id && row.agent_did == agent_did)
     });
-
-    for behavior in rows
-        .behaviors
-        .iter_mut()
-        .filter(|row| row.agent_did.as_deref() == Some(agent_did))
-    {
-        behavior.skill_refs.retain(|id| id != skill_id);
-        behavior.skill_excludes.retain(|id| id != skill_id);
-    }
-}
-
-fn tool_selections_referencing_behavior(
-    selections: &[ToolSelectionRow],
-    agent_did: &str,
-    behavior_id: &str,
-) -> Vec<String> {
-    let mut referencing = selections
-        .iter()
-        .filter(|selection| selection.agent_did.as_deref() == Some(agent_did))
-        .filter(|selection| {
-            selection.subagent_targets.iter().any(|entry| {
-                let Ok(target) = serde_json::from_str::<serde_json::Value>(entry) else {
-                    return false;
-                };
-                target.get("agent_did").and_then(serde_json::Value::as_str) == Some(agent_did)
-                    && target
-                        .get("behavior_id")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(behavior_id)
-            })
-        })
-        .map(|selection| selection.selection_id.clone())
-        .collect::<Vec<_>>();
-    referencing.sort();
-    referencing.dedup();
-    referencing
 }
 
 fn complete_confirmed_delete(
@@ -2264,21 +1907,14 @@ mod delete_source_tests {
         assert!(query.contains(r#"agent_did: { _eq: "did:key:agent\"escaped" }"#));
     }
 
-    fn task(task_id: &str) -> TaskRow {
-        serde_json::from_value(json!({ "task_id": task_id })).expect("task row")
-    }
-
-    fn tool_selection(
-        selection_id: &str,
-        agent_did: &str,
-        subagent_targets: Vec<String>,
-    ) -> ToolSelectionRow {
+    fn task(task_id: &str) -> Task {
         serde_json::from_value(json!({
-            "selection_id": selection_id,
-            "agent_did": agent_did,
-            "subagent_targets": subagent_targets,
+            "task_id": task_id,
+            "agent_did": "did:key:amy",
+            "behavior_id": "default",
+            "prompt_template": "run"
         }))
-        .expect("tool selection row")
+        .expect("task")
     }
 
     fn peer_record(source: Option<&str>) -> PeerRecord {
@@ -2428,35 +2064,6 @@ mod delete_source_tests {
             Some(
                 "delete task succeeded, but refreshing the source snapshot failed: replica unavailable"
             )
-        );
-    }
-
-    #[test]
-    fn subagent_behavior_references_are_scoped_to_the_owning_agent() {
-        let local_target = json!({
-            "name": "local",
-            "agent_did": "did:key:alpha",
-            "behavior_id": "research",
-        })
-        .to_string();
-        let remote_target = json!({
-            "name": "remote",
-            "agent_did": "did:key:beta",
-            "behavior_id": "research",
-        })
-        .to_string();
-        let selections = vec![
-            tool_selection("alpha-local", "did:key:alpha", vec![local_target.clone()]),
-            tool_selection("alpha-remote", "did:key:alpha", vec![remote_target]),
-            tool_selection("beta-local", "did:key:beta", vec![local_target]),
-        ];
-
-        assert_eq!(
-            tool_selections_referencing_behavior(&selections, "did:key:alpha", "research"),
-            vec!["alpha-local"]
-        );
-        assert!(
-            tool_selections_referencing_behavior(&selections, "did:key:alpha", "writer").is_empty()
         );
     }
 }

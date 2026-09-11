@@ -122,27 +122,6 @@ theorem pendingAfterDrain_preserves_uniqueCoalescedQueueKeys
             (pendingAfterDrain_mem_original h_other)
         · exact ih h_unique.2
 
-theorem coalesce_new_preserves_unique_coalesced_queueKeys
-    {pre post : SessionQueueState}
-    {entry : QueueEntry}
-    {key : QueueKey}
-    (h_unique : UniqueCoalescedQueueKeys pre.pending)
-    (_h_policy : entry.policy = .coalesce)
-    (h_key : entry.queueKey = some key)
-    (h_missing : containsCoalescedQueueKey pre.pending entry.source key = false)
-    (h_post : post = pre.appendPending entry) :
-    UniqueCoalescedQueueKeys post.pending := by
-  rw [h_post, SessionQueueState.appendPending]
-  exact uniqueCoalescedQueueKeys_append_fresh h_unique h_key h_missing
-
-theorem coalesce_existing_preserves_unique_coalesced_queueKeys
-    {pre post : SessionQueueState}
-    (h_unique : UniqueCoalescedQueueKeys pre.pending)
-    (h_post : post = pre) :
-    UniqueCoalescedQueueKeys post.pending := by
-  rw [h_post]
-  exact h_unique
-
 theorem transition_preserves_uniqueCoalescedQueueKeys
     {pre post : SessionQueueState}
     (h_trans : Transition pre post)
@@ -153,10 +132,10 @@ theorem transition_preserves_uniqueCoalescedQueueKeys
       rw [h_post, SessionQueueState.appendPending]
       exact uniqueCoalescedQueueKeys_append_append h_unique h_policy
   | coalesce_pending_new h_well_formed _ h_missing _ h_post =>
-      exact coalesce_new_preserves_unique_coalesced_queueKeys
-        h_unique h_well_formed.2.1 h_well_formed.2.2 h_missing h_post
+      rw [h_post, SessionQueueState.appendPending]
+      exact uniqueCoalescedQueueKeys_append_fresh h_unique h_well_formed.2.2 h_missing
   | coalesce_pending_existing _ _ h_post =>
-      exact coalesce_existing_preserves_unique_coalesced_queueKeys h_unique h_post
+      simpa [h_post] using h_unique
   | claim_next _ h_pending h_post =>
       rw [h_pending] at h_unique
       rw [h_post, SessionQueueState.claimHead]
@@ -178,5 +157,14 @@ theorem trace_preserves_uniqueCoalescedQueueKeys
       exact h_unique
   | step h_step _ ih =>
       exact ih (transition_preserves_uniqueCoalescedQueueKeys h_step h_unique)
+
+/-- Goal continuations share queue coalescing, but never collide with a
+background-completion key or participate in its notification drain. -/
+theorem goal_queue_is_separate_from_background :
+    let entry : QueueEntry := ⟨1, 0, .goal, .coalesce, some 7, none⟩
+    entry.coalesceWellFormed 7 ∧
+    containsCoalescedQueueKey [entry] .goal 7 = true ∧
+    containsCoalescedQueueKey [entry] .backgroundCompletion 7 = false ∧
+    entry.matchesAutomatedWakeup .backgroundCompletion (some 7) = false := by decide
 
 end SessionQueue

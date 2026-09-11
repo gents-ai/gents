@@ -105,7 +105,6 @@
 		CC50889ED03AB4275A06EF9B /* tool_service.rs */ = {isa = PBXFileReference; path = tool_service.rs; sourceTree = "<group>"; };
 		D170A1F87B919C05C065FF7B /* session.rs */ = {isa = PBXFileReference; path = session.rs; sourceTree = "<group>"; };
 		D2172BF362F6CD537098D454 /* session_timeline.rs */ = {isa = PBXFileReference; path = session_timeline.rs; sourceTree = "<group>"; };
-		D83A83F9A3605460844E4531 /* operations_holds.rs */ = {isa = PBXFileReference; path = operations_holds.rs; sourceTree = "<group>"; };
 		DD5008E68313613CEB75DF6C /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		DF999997666534D30CBC7799 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		E2C7CAFA67BC8062EEAB81A7 /* workspace.rs */ = {isa = PBXFileReference; path = workspace.rs; sourceTree = "<group>"; };
@@ -250,7 +249,6 @@
 				C27ACD102719D7FC32A7A958 /* cause_derivation.rs */,
 				802645E191828B3D41B8ED9D /* mod.rs */,
 				604316652DED14696063DFF4 /* operations_cascade.rs */,
-				D83A83F9A3605460844E4531 /* operations_holds.rs */,
 				858C2C84AB09FE17ED8D2AAA /* operations_interrupt.rs */,
 				5B5A7408B9252B2996C02FEB /* support.rs */,
 			);

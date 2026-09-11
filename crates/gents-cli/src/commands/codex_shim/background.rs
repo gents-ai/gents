@@ -26,7 +26,7 @@ use super::{ConnectionState, ShimState};
 pub(super) fn spawn_background_tool_watcher(
     connection: ConnectionState,
     state: ShimState,
-    request_id: String,
+    request_doc_id: String,
     session_id: String,
     thread_id: String,
     turn_id: String,
@@ -34,14 +34,22 @@ pub(super) fn spawn_background_tool_watcher(
     running: BTreeSet<String>,
 ) {
     let _ = spawn_background_tool_watcher_handle(
-        connection, state, request_id, session_id, thread_id, turn_id, cwd, running, None,
+        connection,
+        state,
+        request_doc_id,
+        session_id,
+        thread_id,
+        turn_id,
+        cwd,
+        running,
+        None,
     );
 }
 
 fn spawn_background_tool_watcher_handle(
     connection: ConnectionState,
     state: ShimState,
-    request_id: String,
+    request_doc_id: String,
     session_id: String,
     thread_id: String,
     turn_id: String,
@@ -63,7 +71,7 @@ fn spawn_background_tool_watcher_handle(
 
             let response = match query_node_json(
                 state.node.as_ref(),
-                &gents_tool_progress_query(&request_id, &session_id),
+                &gents_tool_progress_query(&request_doc_id, &session_id),
             )
             .await
             {
@@ -326,6 +334,7 @@ mod tests {
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     request_id: "{request_id}",
+                    request_doc_id: "{request_id}",
                     session_id: "{session_id}",
                     message_sequence: 1,
                     tool_name: "bash",

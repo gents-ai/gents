@@ -1,0 +1,173 @@
+{
+  "agent_principal": {
+    "agent_did": "did:example:pipeline-pack"
+  },
+  "agent_behaviors": [
+    {
+      "behavior_id": "exp-stage1",
+      "display_name": "Pipeline stage 1",
+      "context_id": "exp-stage1-context",
+      "inference_profile_id": "exp-profile"
+    },
+    {
+      "behavior_id": "exp-stage2",
+      "display_name": "Pipeline stage 2",
+      "context_id": "exp-stage2-context",
+      "inference_profile_id": "exp-profile"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "exp-stage1-context",
+      "display_name": "Pipeline stage 1",
+      "system_prompt": "./agent_behaviors/exp_stage1/system_prompt.md",
+      "tools_id": "exp-tools-stage1"
+    },
+    {
+      "context_id": "exp-stage2-context",
+      "display_name": "Pipeline stage 2",
+      "system_prompt": "./agent_behaviors/exp_stage2/system_prompt.md",
+      "tools_id": "exp-tools-stage2"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "exp-tools-stage1",
+      "display_name": "Stage-1: write finding only (DatastoreToolSurface)",
+      "built_ins": {
+        "enable_goal_tools": true,
+        "enable_context_budget": false
+      },
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "experiment-writes"
+        ]
+      }
+    },
+    {
+      "tools_id": "exp-tools-stage2",
+      "display_name": "Stage-2: no tools (synthesize from finding template)"
+    }
+  ],
+  "datastore_tool_surfaces": [
+    {
+      "surface_id": "experiment-writes",
+      "display_name": "Experiment finding writes",
+      "entries": [
+        {
+          "tool_name": "write_experiment_finding",
+          "collection": "ExperimentFinding",
+          "description": "Record a finding document for the next pipeline stage.",
+          "fields": [
+            {
+              "name": "job_id",
+              "required": true
+            },
+            {
+              "name": "finding_id",
+              "required": true
+            },
+            {
+              "name": "content",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "inference_backends": [
+    {
+      "backend_id": "exp-deepseek",
+      "name": "DeepSeek V4 Flash (workstation-1)",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "${GENTS_EXP_ENDPOINT:-http://127.0.0.1:8080/v1}",
+      "auth": {
+        "kind": "unauthenticated"
+      },
+      "max_concurrent": 4,
+      "max_queue_depth": 100
+    }
+  ],
+  "inference_profiles": [
+    {
+      "profile_id": "exp-profile",
+      "display_name": "Experiment default",
+      "backend_id": "exp-deepseek",
+      "model_name": "${GENTS_EXP_MODEL:-d4f}",
+      "max_output_tokens": 8192,
+      "sampling_id": "exp-profile-sampling",
+      "execution_id": "exp-profile-execution"
+    }
+  ],
+  "inference_sampling": [
+    {
+      "sampling_id": "exp-profile-sampling",
+      "display_name": "Experiment default sampling",
+      "temperature": 0.2
+    }
+  ],
+  "inference_execution": [
+    {
+      "execution_id": "exp-profile-execution",
+      "display_name": "Experiment default execution"
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "exp-stage1-task",
+      "display_name": "exp-stage1-task",
+      "behavior_id": "exp-stage1",
+      "prompt_template": "./tasks/exp_stage1_task/prompt.md",
+      "goal_objective_template": "Complete pipeline stage 1 for job {{ doc.job_id }} and persist its finding.",
+      "goal_token_budget": 50000
+    },
+    {
+      "task_id": "exp-stage2-task",
+      "display_name": "exp-stage2-task",
+      "behavior_id": "exp-stage2",
+      "prompt_template": "./tasks/exp_stage2_task/prompt.md"
+    }
+  ],
+  "event_sources": [
+    {
+      "event_source_id": "exp-stage1",
+      "display_name": "exp-stage1",
+      "source_collection": "ExperimentJob",
+      "event_kind": "created"
+    },
+    {
+      "event_source_id": "exp-stage2",
+      "display_name": "exp-stage2",
+      "source_collection": "ExperimentFinding",
+      "event_kind": "created"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "exp-stage1",
+      "display_name": "exp-stage1",
+      "task_id": "exp-stage1-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "exp-stage1"
+      },
+      "concurrency": "parallel"
+    },
+    {
+      "trigger_id": "exp-stage2",
+      "display_name": "exp-stage2",
+      "task_id": "exp-stage2-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "exp-stage2"
+      },
+      "concurrency": "parallel"
+    }
+  ]
+}

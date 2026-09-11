@@ -1,40 +1,7 @@
-//! Task 18 — conformance tests for manual task runs.
-//!
-//! # Scope
-//!
-//! These tests lock down the externally-observable contract between the
-//! shared manual-run helper (`gents::write_manual_agent_request`) and
-//! DefraDB. The helper is the single entry point both the CLI (`config task
-//! run`) and the desktop "Run Now" button use; asserting its persistence
-//! behavior here keeps both surfaces honest through one checkpoint.
-//!
-//! Covered:
-//!
-//! * `manual_run_materializes_agent_request_with_lineage` — a successful
-//!   call persists an `AgentRequest` with the manual lineage tuple
-//!   (`caused_by_trigger_id = null`, `caused_by_trigger_kind = "manual"`),
-//!   `execution_origin = "interactive"`, and `lifecycle_state = "pending"`.
-//! * `manual_run_renders_args_scope` — `args.*` template variables
-//!   substitute into the rendered prompt.
-//! * `manual_run_bypasses_serial_in_flight_check` — an in-flight manual
-//!   `AgentRequest` does NOT prevent a second manual run from materializing
-//!   (Manual concurrency is `Parallel` by construction).
-//!
-//! # Out of scope here — covered elsewhere
-//!
-//! * `ManualTriggerHandle::run_task_now` error cases (unknown task, disabled
-//!   task via empty-snapshot): `ManualTriggerHandle` and
-//!   `ActiveRuntimeSnapshot` are both `pub(crate)` in `gents`, so they
-//!   cannot be constructed from an integration-test crate. The equivalent
-//!   contract is pinned in-crate by
-//!   `src/trigger_engine/tests.rs::manual_source_run_task_now_rejects_unknown_task`
-//!   and siblings (PR 3 Task 2). A disabled task drops out of
-//!   `snapshot.active_tasks()` during resolve, so the same "not in the active
-//!   snapshot" path fires — no separate case needed.
-//! * End-to-end CLI coverage of the `config task run` command: pinned by
-//!   `crates/gents-cli/tests/cli_config_task_run.rs` (Task 9), which
-//!   drives the CLI binary against an embedded node and asserts the same
-//!   pending-lifecycle landing this file asserts at the helper surface.
+//! Observe the shared manual-request writer's persisted lineage, argument
+//! rendering, and independent submissions. ManualTriggerHandle task admission
+//! is covered in trigger_engine/tests/manual_source.rs; CLI integration lives
+//! in gents-cli/tests/suites/cli_config_task_run.rs.
 
 use gents::graphql::escape_graphql_string;
 use gents::write_manual_agent_request;
@@ -159,7 +126,7 @@ async fn manual_run_renders_args_scope() {
 }
 
 #[tokio::test]
-async fn manual_run_bypasses_serial_in_flight_check() {
+async fn manual_submissions_materialize_distinct_requests() {
     let db = test_db("manual-run-parallel").await;
 
     let first = write_manual_agent_request(
@@ -187,7 +154,7 @@ async fn manual_run_bypasses_serial_in_flight_check() {
         serde_json::json!({}),
     )
     .await
-    .expect("second manual run must materialize even with a prior in-flight manual row");
+    .expect("second manual submission should materialize");
     assert_ne!(
         first, second,
         "second manual run must produce a fresh doc_id, not alias the first"
@@ -195,19 +162,111 @@ async fn manual_run_bypasses_serial_in_flight_check() {
     assert_eq!(
         count_manual_agent_requests(db.node.as_ref()).await,
         2,
-        "Parallel concurrency: two back-to-back manual runs must yield two AgentRequest rows"
+        "two back-to-back manual submissions must yield two AgentRequest rows"
     );
 
     for (label, doc_id) in [("first", &first), ("second", &second)] {
         let row = fetch_manual_row(db.node.as_ref(), doc_id).await;
         assert!(
             row["caused_by_trigger_id"].is_null(),
-            "{label}: trigger_id must remain null under Parallel fan-out"
+            "{label}: direct manual submission must not invent a configured trigger id"
         );
         assert_eq!(
             row["caused_by_trigger_kind"].as_str(),
             Some("manual"),
-            "{label}: trigger_kind must remain \"manual\" under Parallel fan-out"
+            "{label}: trigger_kind must remain \"manual\" for direct manual submission"
         );
     }
+}
+
+/// The manual writer renders with the manual `event` scope (`fired_at`,
+/// `trigger_id: null`, `trigger_kind: "manual"`) plus the `node`/`ctx` scopes
+/// from `task_node_ctx` — the same scope shape `TriggerEngine::dispatch`
+/// renders with, just without `doc`/`group`/`args` values. A template
+/// referencing those scopes must resolve rather than error, and
+/// `event.trigger_id` must render as minijinja's `none`, proving the writer
+/// owns that event envelope shape and consumers branch on it.
+#[tokio::test]
+async fn manual_run_exposes_manual_event_and_node_scope() {
+    let db = test_db("manual-run-event-scope").await;
+
+    let doc_id = write_manual_agent_request(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        AGENT_NAME,
+        "task-event-scope",
+        "kind={{ event.trigger_kind }} id={{ event.trigger_id }} fired={{ event.fired_at }} node={{ node.node_did }}",
+        serde_json::json!({}),
+    )
+    .await
+    .expect("manual writer must resolve the manual event scope");
+
+    let row = fetch_manual_row(db.node.as_ref(), &doc_id).await;
+    let content = row["content"]
+        .as_str()
+        .expect("content must be present")
+        .to_string();
+    assert!(
+        content.starts_with("kind=manual id=none fired="),
+        "the manual event scope must expose trigger_kind=manual and a null \
+         trigger_id (rendered by minijinja as \"none\"), got: {content:?}"
+    );
+    assert!(
+        content.contains(&format!("node={}", db.node_identity.did())),
+        "the node scope must expose the local agent DID, got: {content:?}"
+    );
+}
+
+/// A manual template whose reference cannot be resolved (strict-undefined
+/// rendering, shared with `TriggerEngine::dispatch`) must fail the whole
+/// write: no partial `AgentRequest` may be left behind, because the manual
+/// writer is a synchronous boundary and a half-written pending row would be
+/// claimable by the watcher without its intended content.
+#[tokio::test]
+async fn manual_run_render_failure_materializes_no_request() {
+    let db = test_db("manual-run-render-err").await;
+
+    let error = write_manual_agent_request(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        AGENT_NAME,
+        "task-render-err",
+        "oops {{ args.missing_field }}",
+        serde_json::json!({}),
+    )
+    .await
+    .expect_err("strict-undefined args reference must fail the manual write");
+    assert!(
+        error.to_string().contains("render"),
+        "the failure reason must name the render path: {error:#}"
+    );
+
+    assert_eq!(
+        count_manual_agent_requests(db.node.as_ref()).await,
+        0,
+        "a failed manual render must not leave a claimable AgentRequest row"
+    );
+
+    let doc_id = write_manual_agent_request(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        AGENT_NAME,
+        "task-render-err",
+        "recovered {{ args.field }}",
+        serde_json::json!({"field": "value"}),
+    )
+    .await
+    .expect("a well-formed retry must materialize");
+
+    let row = fetch_manual_row(db.node.as_ref(), &doc_id).await;
+    assert_eq!(
+        row["content"].as_str(),
+        Some("recovered value"),
+        "the retry must render with the supplied args"
+    );
+    assert_eq!(
+        count_manual_agent_requests(db.node.as_ref()).await,
+        1,
+        "exactly the recovered request may exist after the failed attempt"
+    );
 }

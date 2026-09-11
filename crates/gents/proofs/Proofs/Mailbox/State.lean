@@ -141,12 +141,10 @@ structure CreateRequest where
   context : StampContext
   deriving DecidableEq, Repr
 
-/-- Collection-wide facts required by the create helper. `graphEdges` is kept
-explicitly separate so close/create can be proven not to grant graph progress. -/
+/-- Collection-wide facts required by the stamped create/idempotence owner. -/
 structure RegistryState where
   openPrefixes : Finset OwnerPrefix
   itemKeys : Finset String
-  graphEdges : Finset String
   deriving DecidableEq
 
 end Mailbox

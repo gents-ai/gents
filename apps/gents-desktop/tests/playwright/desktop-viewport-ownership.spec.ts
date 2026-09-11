@@ -178,7 +178,7 @@ test.describe("mobile viewport ownership", () => {
     ).toEqual(["transcript"]);
 
     await openChatNavigation(page);
-    await expect(page.locator(".conversation-list")).toHaveAttribute(
+    await expect(page.locator(".session-list")).toHaveAttribute(
       "data-scroll-owner",
       "section-list",
     );

@@ -69,7 +69,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   const [workspaceView, setWorkspaceView] = useState<"fleet" | "chat" | "config">(
     "fleet",
   );
-  const [mobileChatPane, setMobileChatPane] = useState<"navigation" | "conversation">(
+  const [mobileChatPane, setMobileChatPane] = useState<"navigation" | "session">(
     "navigation",
   );
   const [configReturnView, setConfigReturnView] = useState<"fleet" | "chat">("fleet");
@@ -99,7 +99,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
       });
       return;
     }
-    if (workspaceView === "chat" && mobileChatPane === "conversation") {
+    if (workspaceView === "chat" && mobileChatPane === "session") {
       setMobileChatPane("navigation");
       return;
     }
@@ -120,12 +120,12 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
       }
       requestWorkspaceNavigation(() => {
         if (view === "chat") {
-          setMobileChatPane("conversation");
+          setMobileChatPane("session");
         }
         setWorkspaceView(view);
       });
     },
-    newConversation: () => {
+    newSession: () => {
       const behaviorId =
         shell.selectedBehaviorId ??
         shell.selectedDeployment?.agentPrincipal.defaultBehaviorId ??
@@ -133,15 +133,15 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
       if (behaviorId) {
         requestWorkspaceNavigation(() => {
           setWorkspaceView("chat");
-          setMobileChatPane("conversation");
-          shell.onStartNewConversation(behaviorId);
+          setMobileChatPane("session");
+          shell.onStartNewSession(behaviorId);
         });
       }
     },
     focusComposer: () => {
       requestWorkspaceNavigation(() => {
         setWorkspaceView("chat");
-        setMobileChatPane("conversation");
+        setMobileChatPane("session");
         requestAnimationFrame(() => {
           document
             .querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')
@@ -159,7 +159,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
       }
       shell.clearPendingMailboxCause();
       // Fleet selects an agent instance first. On narrow screens the sidebar is
-      // that instance view (behaviors + conversations); opening the conversation
+      // that instance view (behaviors + sessions); opening the session
       // pane here made it impossible to reach that navigation from Fleet.
       setMobileChatPane("navigation");
       setWorkspaceView("chat");
@@ -247,8 +247,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
             onRemovePeer={shell.onRemovePeer}
             onRenamePeer={shell.onRenamePeer}
             onRepairP2P={shell.onRepairP2P}
-            onSaveBackendConfig={shell.onSaveBackendConfig}
-            onSaveBehaviorConfig={shell.onSaveBehaviorConfig}
+            onPatchConfigComponents={shell.onPatchConfigComponents}
             onProbeInferenceEndpoint={shell.onProbeInferenceEndpoint}
             onCodexLogin={shell.onCodexLogin}
             onCancelCodexLogin={shell.onCancelCodexLogin}
@@ -261,7 +260,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
             data-mobile-chat-pane={mobileChatPane}
           >
             <Sidebar
-              conversations={shell.selectedDeployment?.conversations ?? []}
+              sessions={shell.selectedDeployment?.sessions ?? []}
               mailboxItems={shell.selectedDeployment?.mailboxItems ?? []}
               deployments={shell.deployments}
               onConfigureDeployment={(agentDid) => openConfig(agentDid)}
@@ -278,21 +277,21 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               onSelectSession={shell.onSelectSession}
               onOpenSession={(sessionId) => {
                 shell.onSelectSession(sessionId);
-                setMobileChatPane("conversation");
+                setMobileChatPane("session");
               }}
               onRepairP2P={shell.onRepairP2P}
               repairingP2P={shell.repairingP2P}
               syncHealth={shell.snapshot?.client?.syncHealth ?? null}
-              onStartNewConversation={(behaviorId) => {
-                shell.onStartNewConversation(behaviorId);
-                setMobileChatPane("conversation");
+              onStartNewSession={(behaviorId) => {
+                shell.onStartNewSession(behaviorId);
+                setMobileChatPane("session");
               }}
               onOpenMailboxItem={(itemId) => {
                 void shell
                   .onOpenMailboxItem(itemId)
                   .then(() => {
                     setWorkspaceView("chat");
-                    setMobileChatPane("conversation");
+                    setMobileChatPane("session");
                     requestAnimationFrame(() => {
                       document
                         .querySelector<HTMLTextAreaElement>(
@@ -333,7 +332,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                   shell.snapshot?.client?.approxSerializedBytes ?? 0
                 }
                 canSend={shell.canSendMessage}
-                conversationLoadingStatus={shell.conversationLoadingStatus}
+                sessionLoadingStatus={shell.sessionLoadingStatus}
                 draft={shell.draft}
                 interruptVisible={shell.interruptVisible}
                 onDraftChange={shell.setDraft}
@@ -348,19 +347,17 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                     ? shell.onRepairP2P
                     : undefined
                 }
-                onConversationReconnect={
+                onSessionReconnect={
                   shell.snapshot?.client ? shell.onRepairP2P : undefined
                 }
                 reconnecting={shell.repairingP2P}
-                onRenameConversationTitle={shell.onRenameConversationTitle}
+                onRenameSessionTitle={shell.onRenameSessionTitle}
                 onSend={shell.onSendMessage}
                 onRetryMessage={shell.onRetryMessage}
                 onRetryHydration={() =>
                   shell.retrySessionHydration(shell.selectedSessionId)
                 }
-                onRetryConversation={() =>
-                  shell.refreshSession(shell.selectedSessionId)
-                }
+                onRetrySession={() => shell.refreshSession(shell.selectedSessionId)}
                 onLoadOlderTimeline={shell.loadOlderSessionTimeline}
                 rowCount={shell.snapshot?.client?.rowCount ?? 0}
                 syncHealth={shell.snapshot?.client?.syncHealth ?? null}
@@ -371,10 +368,10 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                     : null
                 }
                 selectedBehaviorId={shell.selectedBehaviorId}
-                selectedConversationTitle={
+                selectedSessionTitle={
                   shell.session
                     ? (shell.session.title ?? null)
-                    : (shell.selectedConversation?.title ?? null)
+                    : (shell.selectedSessionSummary?.title ?? null)
                 }
                 selectedDeployment={shell.selectedDeployment}
                 selectedSessionId={shell.selectedSessionId}
@@ -403,22 +400,22 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               onDeleteSkillConfig={shell.onDeleteSkillConfig}
               onDeleteTaskConfig={shell.onDeleteTaskConfig}
               onDeleteScheduleConfig={shell.onDeleteScheduleConfig}
-              onDeleteEventTriggerConfig={shell.onDeleteEventTriggerConfig}
+              onDeleteEventSourceConfig={shell.onDeleteEventSourceConfig}
+              onDeleteTriggerConfig={shell.onDeleteTriggerConfig}
               onDeleteBackendConfig={shell.onDeleteBackendConfig}
               onDeleteInferenceProfileConfig={shell.onDeleteInferenceProfileConfig}
-              onDeleteToolSelectionConfig={shell.onDeleteToolSelectionConfig}
+              onDeleteToolsConfig={shell.onDeleteToolsConfig}
               onDeleteToolServiceConfig={shell.onDeleteToolServiceConfig}
               onDeleteBehaviorConfig={shell.onDeleteBehaviorConfig}
               onSaveAgentConfig={shell.onSaveAgentConfig}
               onRunTask={shell.onRunTask}
               onSaveBackendConfig={shell.onSaveBackendConfig}
-              onSaveBehaviorConfig={shell.onSaveBehaviorConfig}
-              onSaveEventTriggerConfig={shell.onSaveEventTriggerConfig}
-              onSaveInferenceProfileConfig={shell.onSaveInferenceProfileConfig}
+              onPatchConfigComponents={shell.onPatchConfigComponents}
+              onSaveEventSourceConfig={shell.onSaveEventSourceConfig}
+              onApplyConfigComponents={shell.onApplyConfigComponents}
               onSaveScheduleConfig={shell.onSaveScheduleConfig}
               onSaveSkillConfig={shell.onSaveSkillConfig}
               onSaveTaskConfig={shell.onSaveTaskConfig}
-              onSaveToolSelectionConfig={shell.onSaveToolSelectionConfig}
               onSaveToolServiceConfig={shell.onSaveToolServiceConfig}
               onTestToolService={shell.onTestToolService}
               requestNavigation={requestConfigNavigation}
@@ -427,6 +424,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               saving={shell.savingConfig}
               selectedBehaviorId={shell.selectedBehaviorId}
               selectedDeployment={shell.selectedDeployment}
+              onSaveTriggerConfig={shell.onSaveTriggerConfig}
             />
           </section>
         )}

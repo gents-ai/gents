@@ -1,20 +1,19 @@
-type InferenceBackend {
-    backend_id: String @index(unique: true)
+type InferenceBackend @index(fields: ["agent_did", "backend_id"], unique: true) {
+    backend_id: String
+    agent_did: String @index
     name: String @index
     provider_kind: String
-    # OpenAI-style wire API override: responses or chat_completions. Null means default.
     openai_wire_api: String
-    # OpenAI-compatible API base URL, including the /v1 path segment.
     endpoint: String
-    # Optional raw API key for local or operator-managed deployments.
-    api_key: String
-    # Optional environment-variable reference for the backend API key.
-    # Raw API-key backends can use this instead of storing the key in the document.
-    api_key_env_var: String
+    auth: JSON
+    connect_timeout_secs: Int
+    discovery_timeout_secs: Int
     max_concurrent: Int
     max_queue_depth: Int
     enabled: Boolean @index
-    models: [String]
+    tags: [String!]
+    # Runtime observations are excluded from desired configuration writes.
+    catalogs: JSON
     last_probe: DateTime
     probe_status: String @index
     updated_at: DateTime @index(direction: DESC)

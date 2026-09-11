@@ -451,40 +451,52 @@
           "markdownDescription": "Denies the desktop_codex_login_cancel command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_conversation_rename command without any pre-configured scope.",
+          "description": "Enables the desktop_config_components_apply command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-desktop-conversation-rename",
-          "markdownDescription": "Enables the desktop_conversation_rename command without any pre-configured scope."
+          "const": "allow-desktop-config-components-apply",
+          "markdownDescription": "Enables the desktop_config_components_apply command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_conversation_rename command without any pre-configured scope.",
+          "description": "Denies the desktop_config_components_apply command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-desktop-conversation-rename",
-          "markdownDescription": "Denies the desktop_conversation_rename command without any pre-configured scope."
+          "const": "deny-desktop-config-components-apply",
+          "markdownDescription": "Denies the desktop_config_components_apply command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_event_trigger_delete command without any pre-configured scope.",
+          "description": "Enables the desktop_config_components_patch command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-desktop-event-trigger-delete",
-          "markdownDescription": "Enables the desktop_event_trigger_delete command without any pre-configured scope."
+          "const": "allow-desktop-config-components-patch",
+          "markdownDescription": "Enables the desktop_config_components_patch command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_event_trigger_delete command without any pre-configured scope.",
+          "description": "Denies the desktop_config_components_patch command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-desktop-event-trigger-delete",
-          "markdownDescription": "Denies the desktop_event_trigger_delete command without any pre-configured scope."
+          "const": "deny-desktop-config-components-patch",
+          "markdownDescription": "Denies the desktop_config_components_patch command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_event_trigger_save command without any pre-configured scope.",
+          "description": "Enables the desktop_event_source_delete command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-desktop-event-trigger-save",
-          "markdownDescription": "Enables the desktop_event_trigger_save command without any pre-configured scope."
+          "const": "allow-desktop-event-source-delete",
+          "markdownDescription": "Enables the desktop_event_source_delete command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_event_trigger_save command without any pre-configured scope.",
+          "description": "Denies the desktop_event_source_delete command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-desktop-event-trigger-save",
-          "markdownDescription": "Denies the desktop_event_trigger_save command without any pre-configured scope."
+          "const": "deny-desktop-event-source-delete",
+          "markdownDescription": "Denies the desktop_event_source_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_event_source_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-event-source-save",
+          "markdownDescription": "Enables the desktop_event_source_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_event_source_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-event-source-save",
+          "markdownDescription": "Denies the desktop_event_source_save command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_grok_login command without any pre-configured scope.",
@@ -593,18 +605,6 @@
           "type": "string",
           "const": "deny-desktop-list-subagent-tree",
           "markdownDescription": "Denies the desktop_list_subagent_tree command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_list_tool_call_holds command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-list-tool-call-holds",
-          "markdownDescription": "Enables the desktop_list_tool_call_holds command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_list_tool_call_holds command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-list-tool-call-holds",
-          "markdownDescription": "Denies the desktop_list_tool_call_holds command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_mailbox_dismiss command without any pre-configured scope.",
@@ -895,18 +895,6 @@
           "markdownDescription": "Denies the desktop_request_timeline command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_resolve_tool_call_hold command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-resolve-tool-call-hold",
-          "markdownDescription": "Enables the desktop_resolve_tool_call_hold command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_resolve_tool_call_hold command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-resolve-tool-call-hold",
-          "markdownDescription": "Denies the desktop_resolve_tool_call_hold command without any pre-configured scope."
-        },
-        {
           "description": "Enables the desktop_schedule_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-schedule-delete",
@@ -965,6 +953,18 @@
           "type": "string",
           "const": "deny-desktop-session-live-delta",
           "markdownDescription": "Denies the desktop_session_live_delta command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_session_rename command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-rename",
+          "markdownDescription": "Enables the desktop_session_rename command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_rename command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-rename",
+          "markdownDescription": "Denies the desktop_session_rename command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_session_snapshot command without any pre-configured scope.",
@@ -1051,30 +1051,6 @@
           "markdownDescription": "Denies the desktop_task_save command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_tool_selection_delete command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-tool-selection-delete",
-          "markdownDescription": "Enables the desktop_tool_selection_delete command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_tool_selection_delete command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-tool-selection-delete",
-          "markdownDescription": "Denies the desktop_tool_selection_delete command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_tool_selection_save command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-tool-selection-save",
-          "markdownDescription": "Enables the desktop_tool_selection_save command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_tool_selection_save command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-tool-selection-save",
-          "markdownDescription": "Denies the desktop_tool_selection_save command without any pre-configured scope."
-        },
-        {
           "description": "Enables the desktop_tool_service_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-tool-service-delete",
@@ -1121,6 +1097,54 @@
           "type": "string",
           "const": "deny-desktop-tool-surface-explain",
           "markdownDescription": "Denies the desktop_tool_surface_explain command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_tools_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-tools-delete",
+          "markdownDescription": "Enables the desktop_tools_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_tools_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-tools-delete",
+          "markdownDescription": "Denies the desktop_tools_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_tools_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-tools-save",
+          "markdownDescription": "Enables the desktop_tools_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_tools_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-tools-save",
+          "markdownDescription": "Denies the desktop_tools_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_trigger_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-trigger-delete",
+          "markdownDescription": "Enables the desktop_trigger_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_trigger_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-trigger-delete",
+          "markdownDescription": "Denies the desktop_trigger_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_trigger_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-trigger-save",
+          "markdownDescription": "Enables the desktop_trigger_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_trigger_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-trigger-save",
+          "markdownDescription": "Denies the desktop_trigger_save command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_workspace_list command without any pre-configured scope.",
@@ -1177,10 +1201,10 @@
           "markdownDescription": "Tool-surface explain (config family)\n#### This permission set includes:\n\n- `allow-desktop-tool-surface-explain`"
         },
         {
-          "description": "Chat send and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-conversation-rename`",
+          "description": "Chat send and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-session-rename`",
           "type": "string",
           "const": "chat-write",
-          "markdownDescription": "Chat send and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-conversation-rename`"
+          "markdownDescription": "Chat send and rename\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-session-rename`"
         },
         {
           "description": "Owner-scoped mailbox envelope reads\n#### This permission set includes:\n\n- `allow-desktop-mailbox-list`",
@@ -1237,28 +1261,16 @@
           "markdownDescription": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`"
         },
         {
-          "description": "List tool-call holds\n#### This permission set includes:\n\n- `allow-desktop-list-tool-call-holds`",
-          "type": "string",
-          "const": "holds-read",
-          "markdownDescription": "List tool-call holds\n#### This permission set includes:\n\n- `allow-desktop-list-tool-call-holds`"
-        },
-        {
-          "description": "Resolve tool-call holds\n#### This permission set includes:\n\n- `allow-desktop-resolve-tool-call-hold`",
-          "type": "string",
-          "const": "holds-control",
-          "markdownDescription": "Resolve tool-call holds\n#### This permission set includes:\n\n- `allow-desktop-resolve-tool-call-hold`"
-        },
-        {
           "description": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`",
           "type": "string",
           "const": "runtime-admin",
           "markdownDescription": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`"
         },
         {
-          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-provider-account-disconnect`",
+          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-provider-account-disconnect`",
           "type": "string",
           "const": "config-write",
-          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-provider-account-disconnect`"
+          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-provider-account-disconnect`"
         },
         {
           "description": "Read redacted provider account metadata\n#### This permission set includes:\n\n- `allow-desktop-provider-accounts-list`",
@@ -1267,10 +1279,10 @@
           "markdownDescription": "Read redacted provider account metadata\n#### This permission set includes:\n\n- `allow-desktop-provider-accounts-list`"
         },
         {
-          "description": "Task/schedule/event-trigger save and run\n#### This permission set includes:\n\n- `allow-desktop-task-save`\n- `allow-desktop-schedule-save`\n- `allow-desktop-schedule-run`\n- `allow-desktop-event-trigger-save`\n- `allow-desktop-task-run`",
+          "description": "Task, schedule, trigger, and event-source save and run\n#### This permission set includes:\n\n- `allow-desktop-task-save`\n- `allow-desktop-schedule-save`\n- `allow-desktop-schedule-run`\n- `allow-desktop-trigger-save`\n- `allow-desktop-event-source-save`\n- `allow-desktop-task-run`",
           "type": "string",
           "const": "tasks",
-          "markdownDescription": "Task/schedule/event-trigger save and run\n#### This permission set includes:\n\n- `allow-desktop-task-save`\n- `allow-desktop-schedule-save`\n- `allow-desktop-schedule-run`\n- `allow-desktop-event-trigger-save`\n- `allow-desktop-task-run`"
+          "markdownDescription": "Task, schedule, trigger, and event-source save and run\n#### This permission set includes:\n\n- `allow-desktop-task-save`\n- `allow-desktop-schedule-save`\n- `allow-desktop-schedule-run`\n- `allow-desktop-trigger-save`\n- `allow-desktop-event-source-save`\n- `allow-desktop-task-run`"
         },
         {
           "description": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`",
@@ -1279,10 +1291,10 @@
           "markdownDescription": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`"
         },
         {
-          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`",
+          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`",
           "type": "string",
           "const": "full",
-          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`"
+          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`"
         }
       ]
     }

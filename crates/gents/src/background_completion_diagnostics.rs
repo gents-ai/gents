@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::queue::parse_queue_hints;
 
 const WAKE_SCAN_LIMIT: usize = 1024;
 const NOTIFICATION_SCAN_LIMIT: usize = 4096;
@@ -63,31 +62,6 @@ struct NotificationRow {
     request_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct ConversationRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    session_id: String,
-    latest_request_id: String,
-    updated_at: String,
-    title: String,
-    preview_text: String,
-}
-
-impl ConversationRow {
-    fn rank(&self) -> (String, usize, String) {
-        let richness = [
-            self.title.trim(),
-            self.preview_text.trim(),
-            self.latest_request_id.trim(),
-        ]
-        .iter()
-        .filter(|field| !field.is_empty())
-        .count();
-        (self.updated_at.clone(), richness, self.doc_id.clone())
-    }
-}
-
 /// Load the durable completion-delivery state shown by operator status
 /// surfaces. Each epoch is one canonical coalescing wake plus its bounded
 /// retry descendants; notifications are considered acknowledged only after
@@ -96,76 +70,98 @@ pub async fn load_background_completion_diagnostics(
     access: &ConfigAccess,
     agent_did: &str,
 ) -> Result<BackgroundCompletionDiagnostics> {
-    let agent_did = escape_graphql_string(agent_did);
-    let response = access
-        .execute(&format!(
-            r#"{{
-                wakes: AgentRequest(filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    execution_origin: {{ _eq: "scheduled" }}
-                }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}], limit: {WAKE_SCAN_LIMIT}) {{
-                    request_id session_id retry_root_request metadata lifecycle_state
-                    failure_reason created_at claimed_at terminalized_at
-                    retry_count max_retries background_completion_input_through_sequence
-                    background_completion_notification_keys_json
-                }}
-                notifications: AgentMessage(filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    message_key: {{ _like: "background-completion-notification:%" }}
-                }}, order: {{ timestamp: DESC }}, limit: {NOTIFICATION_SCAN_LIMIT}) {{
-                    message_key request_id
-                }}
-                conversations: AgentConversation(filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }}
-                }}) {{
-                    _docID session_id latest_request_id updated_at title preview_text
-                }}
-            }}"#
-        ))
-        .await?;
-    let data = response
-        .get("data")
-        .context("background completion diagnostics has no data")?;
-    let wakes: Vec<AgentRequestRow> = serde_json::from_value(
-        data.get("wakes")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
-    )
-    .context("decoding background completion wakes")?;
-    for wake in &wakes {
-        if wake.session_id.is_none() {
-            anyhow::bail!(
-                "background completion wake {} has no session_id",
-                wake.request_id
-            );
-        }
-    }
-    let notifications: Vec<NotificationRow> = serde_json::from_value(
-        data.get("notifications")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
-    )
-    .context("decoding background completion notifications")?;
-    let conversations: Vec<ConversationRow> = serde_json::from_value(
-        data.get("conversations")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
-    )
-    .context("decoding background completion conversations")?;
-    Ok(summarize(wakes, notifications, conversations, Utc::now()))
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            wakes: AgentRequest(filter: {{
+                agent_did: {{ _eq: "{escaped_agent_did}" }},
+                execution_origin: {{ _eq: "scheduled" }}
+            }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}], limit: {WAKE_SCAN_LIMIT}) {{
+                _docID request_id session_id retry_root_request input lifecycle_state
+                failure_reason created_at claimed_at terminalized_at
+                retry_count max_retries background_completion_input_through_sequence
+                background_completion_notification_keys_json
+            }}
+            notifications: AgentMessage(filter: {{
+                agent_did: {{ _eq: "{escaped_agent_did}" }},
+                message_key: {{ _like: "background-completion-notification:%" }}
+            }}, order: {{ timestamp: DESC }}, limit: {NOTIFICATION_SCAN_LIMIT}) {{
+                message_key request_id
+            }}
+        }}"#
+    );
+    access
+        .transact("background_completion.diagnostics", |txn| {
+            let query = &query;
+            Box::pin(async move {
+                let response = txn.execute(query).await?;
+                let data = response
+                    .get("data")
+                    .context("background completion diagnostics has no data")?;
+                let wakes: Vec<AgentRequestRow> = serde_json::from_value(
+                    data.get("wakes")
+                        .cloned()
+                        .context("diagnostics omitted wakes")?,
+                )
+                .context("decoding background completion wakes")?;
+                let notifications: Vec<NotificationRow> = serde_json::from_value(
+                    data.get("notifications")
+                        .cloned()
+                        .context("diagnostics omitted notifications")?,
+                )
+                .context("decoding background completion notifications")?;
+                let mut sessions = BTreeSet::new();
+                for wake in &wakes {
+                    let session_id = wake
+                        .session_id
+                        .as_deref()
+                        .filter(|id| !id.trim().is_empty())
+                        .with_context(|| {
+                            format!(
+                                "background completion wake {} has no session_id",
+                                wake.request_id
+                            )
+                        })?;
+                    if wake
+                        .input
+                        .as_ref()
+                        .is_some_and(crate::lifecycle::is_background_completion_request)
+                    {
+                        sessions.insert(session_id);
+                    }
+                }
+                let mut heads = BTreeMap::new();
+                for session_id in sessions {
+                    // The diagnostic scan is bounded, but authority comes from all
+                    // actual scoped requests, including ordinary later user turns.
+                    if let Some(head) =
+                        crate::session::load_latest_request_in_txn(txn, agent_did, session_id, None)
+                            .await?
+                    {
+                        heads.insert(session_id.to_owned(), head.observed.request_doc_id);
+                    }
+                }
+                Ok(summarize(wakes, notifications, heads, Utc::now()))
+            })
+        })
+        .await
 }
 
 fn summarize(
     wakes: Vec<AgentRequestRow>,
     notifications: Vec<NotificationRow>,
-    conversations: Vec<ConversationRow>,
+    latest_request_by_session: BTreeMap<String, String>,
     now: DateTime<Utc>,
 ) -> BackgroundCompletionDiagnostics {
     let scanned_wakes = wakes.len();
     let scanned_notifications = notifications.len();
     let wakes = wakes
         .into_iter()
-        .filter(|wake| crate::lifecycle::is_background_completion_request(wake.metadata.as_deref()))
+        .filter(|wake| {
+            wake.input
+                .as_ref()
+                .is_some_and(crate::lifecycle::is_background_completion_request)
+        })
         .collect::<Vec<_>>();
     let roots_by_request = wakes
         .iter()
@@ -230,22 +226,6 @@ fn summarize(
             .or_default()
             .push(wake);
     }
-    let mut conversations_by_session = BTreeMap::<String, Vec<ConversationRow>>::new();
-    for conversation in conversations {
-        conversations_by_session
-            .entry(conversation.session_id.clone())
-            .or_default()
-            .push(conversation);
-    }
-    let latest_request_by_session = conversations_by_session
-        .into_iter()
-        .filter_map(|(session_id, mut rows)| {
-            rows.sort_by(|left, right| right.rank().cmp(&left.rank()));
-            rows.first()
-                .map(|row| (session_id, row.latest_request_id.clone()))
-        })
-        .collect::<BTreeMap<_, _>>();
-
     let mut diagnostics = BackgroundCompletionDiagnostics {
         scanned_wakes,
         scanned_notifications,
@@ -287,7 +267,7 @@ fn summarize(
         let latest_failed = request_failed(latest);
         let retry_is_latest = latest_request_by_session
             .get(latest.session_id.as_deref().expect("validated session_id"))
-            .is_some_and(|request_id| request_id == &latest.request_id);
+            .is_some_and(|request_doc_id| latest.doc_id.as_ref() == Some(request_doc_id));
         let next_retry = (latest_failed && retry_count < max_retries && retry_is_latest)
             .then(|| {
                 crate::background_wake_next_retry_at(latest.terminalized_at.as_deref(), retry_count)
@@ -333,8 +313,11 @@ fn summarize(
                 root_request_id: root_request_id.clone(),
                 active_request_id: latest.request_id.clone(),
                 session_id: latest.session_id.clone().expect("validated session_id"),
-                coalescing_key: parse_queue_hints(latest.metadata.as_deref())
-                    .and_then(|hints| hints.key)
+                coalescing_key: latest
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.queue.as_ref())
+                    .and_then(|queue| queue.key.clone())
                     .unwrap_or_default(),
                 state: state.to_string(),
                 attempt_count: retry_count + 1,
@@ -382,8 +365,10 @@ fn retry_root(wake: &AgentRequestRow) -> &str {
 fn wake_identity(wake: &AgentRequestRow) -> (String, String) {
     (
         wake.session_id.clone().expect("validated session_id"),
-        parse_queue_hints(wake.metadata.as_deref())
-            .and_then(|hints| hints.key)
+        wake.input
+            .as_ref()
+            .and_then(|input| input.queue.as_ref())
+            .and_then(|queue| queue.key.clone())
             .unwrap_or_default(),
     )
 }
@@ -450,7 +435,9 @@ fn non_empty(value: Option<String>) -> Option<String> {
 mod tests {
     use super::*;
 
-    const METADATA: &str = r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"parent-1","queued_after_request_id":"parent-1"},"background_completion_wake_version":1}"#;
+    fn input() -> gents_protocol::request_input::RequestInput {
+        serde_json::from_value(serde_json::json!({"queue":{"source":"background_completion","policy":"coalesce","key":"parent-1","queued_after_request_id":"parent-1","background_completion_wake_version":1}})).unwrap()
+    }
 
     fn wake(
         request_id: &str,
@@ -463,7 +450,8 @@ mod tests {
             request_id: request_id.to_string(),
             session_id: Some("session-1".to_string()),
             retry_root_request: root.map(ToOwned::to_owned),
-            metadata: Some(METADATA.to_string()),
+            input: Some(input()),
+            doc_id: Some(format!("physical-{request_id}")),
             lifecycle_state: Some(
                 RequestLifecycleState::parse(state).expect("valid test lifecycle state"),
             ),
@@ -488,15 +476,8 @@ mod tests {
         }
     }
 
-    fn conversation(latest_request_id: &str) -> ConversationRow {
-        ConversationRow {
-            doc_id: "conversation-1".to_string(),
-            session_id: "session-1".to_string(),
-            latest_request_id: latest_request_id.to_string(),
-            updated_at: "2026-08-12T00:00:06Z".to_string(),
-            title: String::new(),
-            preview_text: String::new(),
-        }
+    fn head(request_id: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([("session-1".to_owned(), format!("physical-{request_id}"))])
     }
 
     #[test]
@@ -507,7 +488,7 @@ mod tests {
         let diagnostics = summarize(
             vec![wake("wake-1", None, "failed", 0, 3)],
             vec![notification("wake-1", "child-1")],
-            vec![conversation("wake-1")],
+            head("wake-1"),
             now,
         );
 
@@ -536,7 +517,7 @@ mod tests {
                 wake("wake-2", Some("wake-1"), "completed", 1, 3),
             ],
             vec![notification("wake-1", "child-1")],
-            vec![conversation("wake-2")],
+            head("wake-2"),
             now,
         );
 
@@ -558,7 +539,7 @@ mod tests {
         let diagnostics = summarize(
             vec![wake("wake-1", None, "failed", 3, 3)],
             vec![notification("wake-1", "child-1")],
-            vec![conversation("wake-1")],
+            head("wake-1"),
             now,
         );
 
@@ -587,7 +568,7 @@ mod tests {
                 notification("wake-1", "child-1"),
                 notification("wake-2", "child-2"),
             ],
-            vec![conversation("wake-2")],
+            head("wake-2"),
             now,
         );
 
@@ -611,7 +592,7 @@ mod tests {
         let diagnostics = summarize(
             vec![wake("wake-1", None, "failed", 0, 3)],
             vec![notification("wake-1", "child-1")],
-            vec![conversation("later-interactive-request")],
+            head("later-interactive-request"),
             now,
         );
 
@@ -621,5 +602,108 @@ mod tests {
         assert_eq!(epoch.state, "retry_ineligible_not_latest");
         assert_eq!(epoch.next_retry_at, None);
         assert_eq!(epoch.pending_notification_keys.len(), 1);
+    }
+    #[test]
+    fn retry_eligibility_requires_the_exact_physical_request_head() {
+        let failed = wake("same-logical-id", None, "failed", 0, 3);
+        let authoritative_heads =
+            BTreeMap::from([("session-1".to_owned(), "different-physical-row".to_owned())]);
+        let diagnostics = summarize(
+            vec![failed],
+            vec![notification("same-logical-id", "child-1")],
+            authoritative_heads,
+            Utc::now(),
+        );
+        assert_eq!(diagnostics.epochs[0].state, "retry_ineligible_not_latest");
+        assert_eq!(diagnostics.epochs[0].next_retry_at, None);
+        assert_eq!(diagnostics.stranded_notifications, 1);
+    }
+
+    #[test]
+    fn scan_limits_remain_visible_even_when_non_wake_requests_are_filtered() {
+        let mut ordinary = wake("ordinary", None, "pending", 0, 3);
+        ordinary.input = None;
+        let diagnostics = summarize(
+            vec![ordinary; WAKE_SCAN_LIMIT],
+            vec![],
+            BTreeMap::new(),
+            Utc::now(),
+        );
+        assert_eq!(diagnostics.scanned_wakes, WAKE_SCAN_LIMIT);
+        assert!(diagnostics.scan_truncated);
+        assert!(diagnostics.epochs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn diagnostics_reads_actual_scoped_head_across_requesters_without_session_cache(
+    ) -> Result<()> {
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await?);
+        node.add_schema(gents_protocol::schemas::AGENT_REQUEST)
+            .await?;
+        node.add_schema(gents_protocol::schemas::AGENT_MESSAGE)
+            .await?;
+        let access = ConfigAccess::Local(node.clone());
+        // An escaped owner exercises the distinction between raw lookup scope
+        // and GraphQL spelling. Diagnostics read authoritative documents
+        // directly and maintain no session cache.
+        let owner = "did:test:diagnostics\"owner";
+        let mut failed = serde_json::json!({
+            "agent_did":owner, "requester_did":"requester-a", "request_id":"wake", "session_id":"shared-session",
+            "behavior_id":"behavior", "input":input(), "execution_origin":"scheduled",
+            "lifecycle_state":"failed", "created_at":"2026-08-12T00:00:00Z",
+            "terminalized_at":"2026-08-12T00:00:05Z", "retry_count":0, "max_retries":3
+        });
+        for value in [
+            failed.clone(),
+            serde_json::json!({
+                "agent_did":"foreign-owner", "requester_did":"requester-z", "request_id":"foreign-later",
+                "session_id":"shared-session", "behavior_id":"behavior", "execution_origin":"interactive",
+                "lifecycle_state":"completed", "created_at":"2026-08-14T00:00:00Z"
+            }),
+        ] {
+            access
+                .write(
+                    "test.diagnostic.request",
+                    &format!(
+                        "mutation {{ create_AgentRequest(input:{}){{_docID}} }}",
+                        gents_protocol::graphql::graphql_input_literal(&value)?
+                    ),
+                )
+                .await?;
+        }
+        access.write("test.diagnostic.notification", &format!("mutation {{ create_AgentMessage(input:{}){{_docID}} }}", gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "agent_did":owner,"session_id":"shared-session","message_key":"background-completion-notification:child:subagent",
+            "request_id":"wake","role":"user","content":"completed tool","sequence":1,"timestamp":"2026-08-12T00:00:01Z"
+        }))?)).await?;
+        let diagnostics = load_background_completion_diagnostics(&access, owner).await?;
+        assert_eq!(diagnostics.epochs.len(), 1);
+        assert_eq!(diagnostics.epochs[0].state, "retry_backoff");
+        assert!(diagnostics.epochs[0].next_retry_at.is_some());
+        assert_eq!(diagnostics.pending_notifications, 1);
+
+        failed["request_id"] = "later-user-turn".into();
+        failed["requester_did"] = "requester-b".into();
+        failed["execution_origin"] = "interactive".into();
+        failed["created_at"] = "2026-08-13T00:00:00Z".into();
+        failed["lifecycle_state"] = "completed".into();
+        failed.as_object_mut().unwrap().remove("input");
+        access
+            .write(
+                "test.diagnostic.later_turn",
+                &format!(
+                    "mutation {{ create_AgentRequest(input:{}){{_docID}} }}",
+                    gents_protocol::graphql::graphql_input_literal(&failed)?
+                ),
+            )
+            .await?;
+        let diagnostics = load_background_completion_diagnostics(&access, owner).await?;
+        assert_eq!(
+            diagnostics.scanned_wakes, 1,
+            "the ordinary head is outside the wake scan"
+        );
+        assert_eq!(diagnostics.epochs[0].state, "retry_ineligible_not_latest");
+        assert_eq!(diagnostics.epochs[0].next_retry_at, None);
+        assert_eq!(diagnostics.stranded_notifications, 1);
+        Ok(())
     }
 }

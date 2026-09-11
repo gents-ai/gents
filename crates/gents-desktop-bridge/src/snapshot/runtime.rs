@@ -8,16 +8,15 @@ use gents_protocol::row::{
 };
 
 use super::super::types::{
-    normalize_optional, turn_state_label, AgentPrincipalView, BehaviorEnvironmentView,
+    normalize_optional, AgentContext, AgentPrincipalView, BehaviorEnvironmentView,
     BehaviorReadinessSourceView, BehaviorReadinessStatusView, BehaviorReadinessUnknownReasonView,
     BehaviorReadinessView, BehaviorUnavailableReasonView, BehaviorView, ClientRouteStatusView,
-    ConversationSummary, DeploymentView, DesktopRuntimeSnapshot, EventTriggerView,
-    InferenceBackendView, InferenceProfileView, MailboxItemView, RuntimeView, ScheduleView,
-    SkillView, TaskView, ToolSelectionView, ToolServiceRegistryView,
+    DeploymentView, DesktopRuntimeSnapshot, InferenceBackendView, InferenceProfile,
+    MailboxItemView, RuntimeView, SessionSummary, SkillView, TaskRecentRunsView,
+    TaskRunSummaryView, TaskView, Tools, TriggerView,
 };
 use super::runtime_tasks::{
-    conversation_task_tag, recent_runs_for_task_views, request_backed_conversation_summaries,
-    retain_latest_conversation_summaries, source_matches_agent, task_run_history,
+    recent_runs_for_task_views, session_summaries, source_matches_agent, task_run_history,
 };
 use super::to_health_view;
 
@@ -45,11 +44,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .into_iter()
         .map(|peer| {
             let status = peer_statuses_by_id.get(&peer.peer_id);
-            let require_source_scope = peer.is_enrollment()
-                || peer
-                    .graphql
-                    .as_deref()
-                    .is_some_and(|graphql| !graphql.trim().is_empty());
             let principal = store
                 .agent_principals
                 .iter()
@@ -69,7 +63,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     agent_did: row.agent_did.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
                     default_behavior_id: normalize_optional(row.default_behavior_id.as_deref()),
-                    enabled: row.enabled,
+                    enabled: Some(row.enabled),
                     created_at: normalize_optional(row.created_at.as_deref()),
                     created_by: normalize_optional(row.created_by.as_deref()),
                 })
@@ -81,6 +75,14 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     created_at: None,
                     created_by: None,
                 });
+            let mut principal_config = principal.cloned();
+            let mut behavior_configs = store
+                .behaviors
+                .iter()
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
+                .collect::<Vec<_>>();
+            behavior_configs.sort_by(|left, right| left.behavior_id.cmp(&right.behavior_id));
             let mut default_behavior_id = store
                 .default_behavior_id_for_agent(&peer.agent_did)
                 .map(str::to_owned);
@@ -102,17 +104,14 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     behavior_id: row.behavior_id.clone(),
                     display_name: normalize_optional(row.display_name.as_deref())
                         .unwrap_or_else(|| row.behavior_id.clone()),
-                    system_prompt: normalize_optional(row.system_prompt.as_deref()),
-                    backend_id: normalize_optional(row.backend_id.as_deref()),
-                    model_name: normalize_optional(row.model_name.as_deref()),
-                    tool_selection_id: normalize_optional(row.tool_selection_id.as_deref()),
-                    inference_profile_id: normalize_optional(row.inference_profile_id.as_deref()),
-                    compaction_strategy: normalize_optional(row.compaction_strategy.as_deref()),
-                    compaction_threshold: row.compaction_threshold,
-                    enabled: row.enabled.unwrap_or(true),
+                    agent_did: row.agent_did.clone(),
+                    description: row.description.clone(),
+                    context_id: row.context_id.clone(),
+                    inference_profile_id: Some(row.inference_profile_id.clone()),
+                    enabled: row.enabled,
                     is_default: default_behavior_id.as_deref() == Some(row.behavior_id.as_str()),
-                    skill_refs: row.skill_refs.clone(),
-                    skill_excludes: row.skill_excludes.clone(),
+                    tags: row.tags.clone(),
+                    created_at: row.created_at.clone(),
                 })
                 .collect::<Vec<_>>();
             behaviors.sort_by(|left, right| {
@@ -128,28 +127,23 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let mut inference_backends = store
                 .inference_backends
                 .iter()
-                .enumerate()
-                .filter(|(index, _row)| {
-                    source_matches_agent(
-                        &store.inference_backend_source_agent_dids,
-                        *index,
-                        &peer.agent_did,
-                        false,
-                    )
-                })
-                .map(|(_index, row)| InferenceBackendView {
-                    backend_id: row.backend_id.clone(),
-                    name: normalize_optional(row.name.as_deref()),
-                    provider_kind: normalize_optional(row.provider_kind.as_deref()),
-                    openai_wire_api: normalize_optional(row.openai_wire_api.as_deref()),
-                    endpoint: normalize_optional(row.endpoint.as_deref()),
-                    api_key_configured: normalize_optional(row.api_key.as_deref()).is_some(),
-                    api_key_env_var: normalize_optional(row.api_key_env_var.as_deref()),
-                    max_concurrent: row.max_concurrent,
-                    max_queue_depth: row.max_queue_depth,
-                    enabled: row.enabled,
-                    models: row.models.clone(),
-                    probe_status: normalize_optional(row.probe_status.as_deref()),
+                .filter(|row| row.agent_did == peer.agent_did)
+                .map(|row| {
+                    let observation = store
+                        .backend_observations
+                        .iter()
+                        .enumerate()
+                        .find(|(index, observation)| {
+                            observation.backend_id == row.backend_id
+                                && source_matches_agent(
+                                    &store.backend_observation_source_agent_dids,
+                                    *index,
+                                    &row.agent_did,
+                                    true,
+                                )
+                        })
+                        .map(|(_, observation)| observation);
+                    backend_config_view(row, observation)
                 })
                 .collect::<Vec<_>>();
             inference_backends.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
@@ -158,103 +152,82 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .inference_profiles
                 .iter()
                 .enumerate()
-                .filter(|(index, _row)| {
-                    source_matches_agent(
-                        &store.inference_profile_source_agent_dids,
-                        *index,
-                        &peer.agent_did,
-                        false,
-                    )
+                .filter(|(index, row)| {
+                    row.agent_did == peer.agent_did
+                        && source_matches_agent(
+                            &store.inference_profile_source_agent_dids,
+                            *index,
+                            &peer.agent_did,
+                            false,
+                        )
                 })
-                .map(|(_index, row)| InferenceProfileView {
-                    profile_id: row.profile_id.clone(),
-                    display_name: normalize_optional(row.display_name.as_deref()),
-                    context_window: row.context_window,
-                    max_output_tokens: row.max_output_tokens,
-                    max_turns: row.max_turns,
-                    temperature: row.temperature,
-                    reasoning_effort: normalize_optional(row.reasoning_effort.as_deref()),
-                    stream_batch_ms: row.stream_batch_ms,
-                    stream_liveness_timeout_secs: row.stream_liveness_timeout_secs,
-                    deadline_duration_secs: row.deadline_duration_secs,
-                })
+                .map(|(_, row)| row.clone())
                 .collect::<Vec<_>>();
             inference_profiles.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
-
-            let mut tool_selections = store
-                .tool_selections
+            let mut inference_sampling = store
+                .inference_sampling
                 .iter()
-                .filter(|row| row.agent_did.as_deref() == Some(peer.agent_did.as_str()))
-                .map(|row| ToolSelectionView {
-                    selection_id: row.selection_id.clone(),
-                    agent_did: normalize_optional(row.agent_did.as_deref()),
-                    display_name: normalize_optional(row.display_name.as_deref()),
-                    enable_file_tools: row.enable_file_tools,
-                    file_tools_mode: normalize_optional(row.file_tools_mode.as_deref()),
-                    file_tool_root: normalize_optional(row.file_tool_root.as_deref()),
-                    enable_bash: row.enable_bash,
-                    bash_mode: normalize_optional(row.bash_mode.as_deref()),
-                    command_execution_policy: normalize_optional(
-                        row.command_execution_policy.as_deref(),
-                    ),
-                    command_allowed_argv_prefixes: row.command_allowed_argv_prefixes.clone(),
-                    command_forbidden_argv_prefixes: row.command_forbidden_argv_prefixes.clone(),
-                    command_network_mode: normalize_optional(row.command_network_mode.as_deref()),
-                    cli_tool_names: row.cli_tool_names.clone(),
-                    enable_meta_tools: row.enable_meta_tools,
-                    enable_goal_tools: row.enable_goal_tools,
-                    enable_goal_creation: row.enable_goal_creation,
-                    allowed_mcp_service_ids: row.allowed_mcp_service_ids.clone(),
-                    required_mcp_service_ids: row.required_mcp_service_ids.clone(),
-                    backgroundable_tool_names: row.backgroundable_tool_names.clone(),
-                    subagent_targets: row.subagent_targets.clone(),
-                    subagent_spawn_enabled: row.subagent_spawn_enabled,
-                    subagent_steering_enabled: row.subagent_steering_enabled,
-                    subagent_background_enabled: row.subagent_background_enabled,
-                    subagent_allow_cross_deployment: row.subagent_allow_cross_deployment,
-                    cross_deployment_spawn_timeout_seconds: row
-                        .cross_deployment_spawn_timeout_seconds,
-                    enable_memory: row.enable_memory,
-                    enable_session_history_tool: row.enable_session_history_tool,
-                    enable_context_budget: row.enable_context_budget,
-                    enable_defra_query: row.enable_defra_query,
-                    defra_query_collections: row.defra_query_collections.clone(),
-                    write_tools: row.write_tools.clone(),
-                    tool_policy_version: normalize_optional(row.tool_policy_version.as_deref()),
-                    subagent_default_await_mode: normalize_optional(
-                        row.subagent_default_await_mode.as_deref(),
-                    ),
-                })
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
                 .collect::<Vec<_>>();
-            tool_selections.sort_by(|left, right| left.selection_id.cmp(&right.selection_id));
+            inference_sampling.sort_by(|left, right| left.sampling_id.cmp(&right.sampling_id));
+            let mut inference_execution = store
+                .inference_execution
+                .iter()
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
+                .collect::<Vec<_>>();
+            inference_execution.sort_by(|left, right| left.execution_id.cmp(&right.execution_id));
+            let mut contexts = store
+                .contexts
+                .iter()
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
+                .collect::<Vec<_>>();
+            contexts.sort_by(|left, right| left.context_id.cmp(&right.context_id));
+            let mut compactions = store
+                .compactions
+                .iter()
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
+                .collect::<Vec<_>>();
+            compactions.sort_by(|left, right| left.compaction_id.cmp(&right.compaction_id));
+            let mut tools = store
+                .tools
+                .iter()
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
+                .collect::<Vec<_>>();
+            tools.sort_by(|left, right| left.tools_id.cmp(&right.tools_id));
 
             let mut tool_service_registries = store
                 .tool_service_registries
                 .iter()
-                .enumerate()
-                .filter(|(index, _row)| {
-                    source_matches_agent(
-                        &store.tool_service_registry_source_agent_dids,
-                        *index,
-                        &peer.agent_did,
-                        false,
-                    )
-                })
-                .map(|(_index, row)| ToolServiceRegistryView {
-                    service_id: row.service_id.clone(),
-                    display_name: normalize_optional(row.display_name.as_deref()),
-                    description: normalize_optional(row.description.as_deref()),
-                    hostname: normalize_optional(row.hostname.as_deref()),
-                    tailscale_ip: normalize_optional(row.tailscale_ip.as_deref()),
-                    lan_ip: normalize_optional(row.lan_ip.as_deref()),
-                    mcp_port: row.mcp_port,
-                    mcp_path: normalize_optional(row.mcp_path.as_deref()),
-                    status: normalize_optional(row.status.as_deref()),
-                    version: normalize_optional(row.version.as_deref()),
-                    updated_at: normalize_optional(row.updated_at.as_deref()),
-                })
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
                 .collect::<Vec<_>>();
             tool_service_registries.sort_by(|left, right| left.service_id.cmp(&right.service_id));
+            let mut subagent_targets = store
+                .subagent_targets
+                .iter()
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
+                .collect::<Vec<_>>();
+            subagent_targets.sort_by(|left, right| left.target_id.cmp(&right.target_id));
+            let mut datastore_tool_surfaces = store
+                .datastore_tool_surfaces
+                .iter()
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
+                .collect::<Vec<_>>();
+            datastore_tool_surfaces.sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
+            let mut chain_key_bindings = store
+                .chain_key_bindings
+                .iter()
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
+                .collect::<Vec<_>>();
+            chain_key_bindings.sort_by(|left, right| left.binding_id.cmp(&right.binding_id));
 
             let mut skills = store
                 .skills
@@ -266,18 +239,17 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         *index,
                         &peer.agent_did,
                         false,
-                    ) && row.agent_did.as_deref() == Some(peer.agent_did.as_str())
+                    ) && row.agent_did == peer.agent_did
                 })
                 .map(|(_index, row)| SkillView {
                     skill_id: row.skill_id.clone(),
-                    agent_did: normalize_optional(row.agent_did.as_deref()),
-                    scope: normalize_optional(row.scope.as_deref()),
+                    agent_did: Some(row.agent_did.clone()),
                     name: normalize_optional(row.name.as_deref()),
                     description: normalize_optional(row.description.as_deref()),
                     instructions: normalize_optional(row.instructions.as_deref()),
                     tool_refs: row.tool_refs.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
-                    enabled: row.enabled,
+                    enabled: Some(row.enabled),
                     created_at: normalize_optional(row.created_at.as_deref()),
                 })
                 .collect::<Vec<_>>();
@@ -293,181 +265,99 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         *index,
                         &peer.agent_did,
                         false,
-                    ) && row
-                        .behavior_id
-                        .as_deref()
-                        .is_some_and(|behavior_id| behavior_ids.contains(&behavior_id))
+                    ) && row.agent_did == peer.agent_did
+                        && behavior_ids.contains(&row.behavior_id.as_str())
                 })
                 .collect::<Vec<_>>();
-            let task_ids = scoped_task_rows
-                .iter()
-                .map(|(_index, task)| task.task_id.as_str())
-                .collect::<Vec<_>>();
-
             let mut schedules = store
                 .schedules
                 .iter()
-                .enumerate()
-                .filter(|(index, row)| {
-                    source_matches_agent(
-                        &store.schedule_source_agent_dids,
-                        *index,
-                        &peer.agent_did,
-                        false,
-                    ) && row
-                        .task_id
-                        .as_deref()
-                        .is_some_and(|task_id| task_ids.contains(&task_id))
-                })
-                .map(|(_index, row)| ScheduleView {
-                    schedule_id: row.schedule_id.clone(),
-                    task_id: normalize_optional(row.task_id.as_deref()),
-                    interval_secs: row.interval_secs,
-                    cron: normalize_optional(row.cron.as_deref()),
-                    timezone: normalize_optional(row.timezone.as_deref()),
-                    missed_run_policy: normalize_optional(row.missed_run_policy.as_deref()),
-                    enabled: row.enabled,
-                    concurrency: normalize_optional(row.concurrency.as_deref()),
-                    next_run_at: normalize_optional(row.next_run_at.as_deref()),
-                    last_attempt_at: normalize_optional(row.last_attempt_at.as_deref()),
-                    last_status: normalize_optional(row.last_status.as_deref()),
-                    last_error: normalize_optional(row.last_error.as_deref()),
-                    fire_count: row.fire_count,
-                })
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
                 .collect::<Vec<_>>();
             schedules.sort_by(|left, right| left.schedule_id.cmp(&right.schedule_id));
-
-            let mut event_triggers = store
-                .event_triggers
+            let mut event_sources = store
+                .event_sources
                 .iter()
-                .enumerate()
-                .filter(|(index, row)| {
-                    source_matches_agent(
-                        &store.event_trigger_source_agent_dids,
-                        *index,
-                        &peer.agent_did,
-                        false,
-                    ) && row
-                        .task_id
-                        .as_deref()
-                        .is_some_and(|task_id| task_ids.contains(&task_id))
-                })
-                .map(|(_index, row)| EventTriggerView {
-                    trigger_id: row.trigger_id.clone(),
-                    task_id: normalize_optional(row.task_id.as_deref()),
-                    source_collection: normalize_optional(row.source_collection.as_deref()),
-                    event_kind: normalize_optional(row.event_kind.as_deref()),
-                    filter: normalize_optional(row.filter.as_deref()),
-                    enabled: row.enabled,
-                    concurrency: normalize_optional(row.concurrency.as_deref()),
-                    last_attempt_at: normalize_optional(row.last_attempt_at.as_deref()),
-                    last_fired_source_doc_id: normalize_optional(
-                        row.last_fired_source_doc_id.as_deref(),
-                    ),
-                    last_status: normalize_optional(row.last_status.as_deref()),
-                    last_error: normalize_optional(row.last_error.as_deref()),
-                    fire_count: row.fire_count,
+                .filter(|row| row.agent_did == peer.agent_did)
+                .cloned()
+                .collect::<Vec<_>>();
+            event_sources.sort_by(|left, right| left.event_source_id.cmp(&right.event_source_id));
+            let mut triggers = store
+                .triggers
+                .iter()
+                .filter(|row| row.agent_did == peer.agent_did)
+                .map(|row| {
+                    let observation = store
+                        .trigger_observations
+                        .iter()
+                        .enumerate()
+                        .find(|(index, observation)| {
+                            observation.trigger_id == row.trigger_id
+                                && source_matches_agent(
+                                    &store.trigger_observation_source_agent_dids,
+                                    *index,
+                                    &row.agent_did,
+                                    true,
+                                )
+                        })
+                        .map(|(_, observation)| observation);
+                    let schedule_observation = store
+                        .schedule_observations
+                        .iter()
+                        .enumerate()
+                        .find(|(index, observation)| {
+                            observation.trigger_id == row.trigger_id
+                                && source_matches_agent(
+                                    &store.schedule_observation_source_agent_dids,
+                                    *index,
+                                    &row.agent_did,
+                                    true,
+                                )
+                        })
+                        .map(|(_, observation)| observation);
+                    TriggerView {
+                        config: row.clone(),
+                        next_run_at: schedule_observation.and_then(|item| item.next_run_at.clone()),
+                        last_attempt_at: observation.and_then(|item| item.last_attempt_at.clone()),
+                        last_fired_source_doc_id: observation
+                            .and_then(|item| item.last_fired_source_doc_id.clone()),
+                        last_status: observation.and_then(|item| item.last_status.clone()),
+                        last_error: observation.and_then(|item| item.last_error.clone()),
+                        fire_count: observation.and_then(|item| item.fire_count),
+                    }
                 })
                 .collect::<Vec<_>>();
-            event_triggers.sort_by(|left, right| left.trigger_id.cmp(&right.trigger_id));
+            triggers.sort_by(|left, right| left.config.trigger_id.cmp(&right.config.trigger_id));
 
             let mut tasks = scoped_task_rows
                 .into_iter()
-                .map(|(_index, row)| TaskView {
-                    task_id: row.task_id.clone(),
-                    name: normalize_optional(row.name.as_deref()),
-                    description: normalize_optional(row.description.as_deref()),
-                    behavior_id: normalize_optional(row.behavior_id.as_deref()),
-                    prompt_template: normalize_optional(row.prompt_template.as_deref()),
-                    goal_objective_template: normalize_optional(
-                        row.goal_objective_template.as_deref(),
-                    ),
-                    goal_token_budget: row.goal_token_budget,
-                    enabled: row.enabled,
-                    output_schema_ref: normalize_optional(row.output_schema_ref.as_deref()),
-                    recent_runs: recent_runs_for_task_views(
-                        &schedules,
-                        &event_triggers,
-                        &row.task_id,
-                    ),
-                    run_history: task_run_history(
-                        store.as_ref(),
-                        &peer.agent_did,
-                        require_source_scope,
-                        &row.task_id,
-                        &schedules,
-                        &event_triggers,
-                    ),
+                .map(|(_index, row)| {
+                    project_task_view(
+                        row,
+                        recent_runs_for_task_views(&triggers, &peer.agent_did, &row.task_id),
+                        task_run_history(store.as_ref(), &peer.agent_did, &row.task_id, &triggers),
+                    )
                 })
                 .collect::<Vec<_>>();
             tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
 
-            let mut conversations = store
-                .conversation_rows(&peer.agent_did)
-                .into_iter()
-                .map(|row| {
-                    let task_tag = conversation_task_tag(
-                        store.as_ref(),
-                        &peer.agent_did,
-                        require_source_scope,
-                        &row.session_id,
-                        &tasks,
-                        &schedules,
-                        &event_triggers,
-                    );
-                    ConversationSummary {
-                        session_id: row.session_id.clone(),
-                        title: normalize_optional(row.title.as_deref()),
-                        preview_text: normalize_optional(row.preview_text.as_deref()),
-                        status: normalize_optional(row.status.as_deref()),
-                        behavior_id: normalize_optional(row.behavior_id.as_deref()),
-                        latest_request_id: store.latest_request_id_for_session_for_agent(
-                            &row.session_id,
-                            &peer.agent_did,
-                        ),
-                        task_id: task_tag.as_ref().map(|tag| tag.task_id.clone()),
-                        task_name: task_tag.as_ref().and_then(|tag| tag.task_name.clone()),
-                        trigger_id: task_tag.as_ref().and_then(|tag| tag.trigger_id.clone()),
-                        trigger_kind: task_tag.as_ref().and_then(|tag| tag.trigger_kind.clone()),
-                        created_at: normalize_optional(row.created_at.as_deref()),
-                        updated_at: normalize_optional(row.updated_at.as_deref()),
-                        turn_state: store
-                            .latest_request_id_for_session_for_agent(
-                                &row.session_id,
-                                &peer.agent_did,
-                            )
-                            .as_deref()
-                            .and_then(|request_id| store.derive_turn_for_request(request_id))
-                            .map(turn_state_label)
-                            .map(str::to_owned),
-                        message_count: None,
-                        tool_call_count: None,
-                    }
-                })
-                .collect::<Vec<_>>();
-            conversations.extend(request_backed_conversation_summaries(
-                store.as_ref(),
+            let mut sessions = session_summaries(
+                &store.sessions,
+                &store.requests,
+                &store.responses,
                 &peer.agent_did,
-                require_source_scope,
                 &tasks,
-                &schedules,
-                &event_triggers,
-            ));
-            conversations.sort_by(|left, right| {
-                right
-                    .updated_at
-                    .cmp(&left.updated_at)
-                    .then_with(|| right.created_at.cmp(&left.created_at))
-            });
-            retain_latest_conversation_summaries(&mut conversations);
+                &triggers,
+            );
 
             let mut behavior_environments = resolve_behavior_environments(
                 &behaviors,
-                &inference_backends,
                 &inference_profiles,
-                &tool_selections,
+                &contexts,
+                &tools,
                 &skills,
-                &conversations,
+                &sessions,
             );
 
             let chat_safe = peer.is_chat_ready_at(Utc::now());
@@ -490,13 +380,23 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 behavior_environments.clear();
                 inference_backends.clear();
                 inference_profiles.clear();
-                tool_selections.clear();
+                tools.clear();
+                contexts.clear();
+                compactions.clear();
+                inference_sampling.clear();
+                inference_execution.clear();
                 tool_service_registries.clear();
                 skills.clear();
                 tasks.clear();
                 schedules.clear();
-                event_triggers.clear();
-                conversations.clear();
+                event_sources.clear();
+                triggers.clear();
+                principal_config = None;
+                behavior_configs.clear();
+                subagent_targets.clear();
+                datastore_tool_surfaces.clear();
+                chain_key_bindings.clear();
+                sessions.clear();
             }
 
             DeploymentView {
@@ -545,19 +445,29 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     .unwrap_or_default(),
                 last_error: status.and_then(|status| status.last_error.clone()),
                 agent_principal,
+                principal_config,
+                behavior_configs,
                 runtime,
                 behavior_readiness,
                 behaviors,
                 behavior_environments,
                 inference_backends,
                 inference_profiles,
-                tool_selections,
+                tools,
+                contexts,
+                compactions,
+                inference_sampling,
+                inference_execution,
                 tool_service_registries,
+                subagent_targets,
+                datastore_tool_surfaces,
+                chain_key_bindings,
                 skills,
                 tasks,
                 schedules,
-                event_triggers,
-                conversations,
+                event_sources,
+                triggers,
+                sessions,
                 mailbox_items,
             }
         })
@@ -588,6 +498,82 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),
         deployments,
+    }
+}
+
+fn project_task_view(
+    task: &gents::document_config::Task,
+    recent_runs: TaskRecentRunsView,
+    run_history: Vec<TaskRunSummaryView>,
+) -> TaskView {
+    TaskView {
+        task_id: task.task_id.clone(),
+        name: normalize_optional(task.display_name.as_deref()),
+        description: normalize_optional(task.description.as_deref()),
+        behavior_id: Some(task.behavior_id.clone()),
+        prompt_template: Some(task.prompt_template.clone()),
+        goal_objective_template: normalize_optional(task.goal_objective_template.as_deref()),
+        goal_token_budget: task.goal_token_budget,
+        hooks: task.hooks.clone(),
+        enabled: Some(task.enabled),
+        output_schema_ref: task.output_schema_ref.clone(),
+        tags: task.tags.clone(),
+        recent_runs,
+        run_history,
+    }
+}
+
+#[cfg(test)]
+mod task_view_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_task_hooks_and_tags_survive_projection() {
+        let task: gents::document_config::Task = serde_json::from_value(serde_json::json!({
+            "agent_did": "did:test:owner",
+            "task_id": "release",
+            "display_name": "Release",
+            "behavior_id": "operator",
+            "prompt_template": "Ship it",
+            "output_schema_ref": "schemas/release-result.json",
+            "hooks": [
+                {
+                    "hook_id": "prepare",
+                    "phase": "before",
+                    "command": ["sh", "-c", "./prepare.sh"],
+                    "timeout_secs": 45
+                },
+                {
+                    "hook_id": "cleanup",
+                    "phase": "finally",
+                    "command": ["./cleanup"]
+                }
+            ],
+            "tags": ["release", "operator"]
+        }))
+        .expect("canonical task");
+        let view = project_task_view(
+            &task,
+            TaskRecentRunsView {
+                total_fires: 0,
+                last_attempt_at: None,
+                last_status: None,
+                last_error: None,
+                schedule_count: 0,
+                event_count: 0,
+            },
+            Vec::new(),
+        );
+
+        assert_eq!(view.hooks, task.hooks);
+        assert_eq!(view.output_schema_ref, task.output_schema_ref);
+        assert_eq!(view.tags, ["release", "operator"]);
+        let wire = serde_json::to_value(view).expect("TaskView wire value");
+        assert_eq!(wire["hooks"][0]["hook_id"], "prepare");
+        assert_eq!(wire["hooks"][0]["phase"], "before");
+        assert_eq!(wire["hooks"][0]["timeout_secs"], 45);
+        assert_eq!(wire["hooks"][1]["phase"], "finally");
+        assert_eq!(wire["tags"], serde_json::json!(["release", "operator"]));
     }
 }
 
@@ -700,125 +686,172 @@ impl From<BehaviorReadinessUnknownReason> for BehaviorReadinessUnknownReasonView
     }
 }
 
+fn backend_config_view(
+    row: &gents::document_config::InferenceBackend,
+    observation: Option<&gents::document_config::InferenceBackendObservation>,
+) -> InferenceBackendView {
+    use gents::document_config::BackendAuth;
+    let (auth_kind, api_key_configured, api_key_env_var, catalog_scope) = match &row.auth {
+        BackendAuth::Unauthenticated => ("unauthenticated", false, None, None),
+        BackendAuth::ApiKey { .. } => ("api_key", true, None, None),
+        BackendAuth::Environment { variable } => {
+            ("environment", false, Some(variable.clone()), None)
+        }
+        BackendAuth::PrincipalOAuth => {
+            ("principal_oauth", false, None, Some(row.agent_did.as_str()))
+        }
+    };
+    let models = observation
+        .and_then(|observation| match observation.catalog_for(catalog_scope) {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                tracing::warn!(backend_id = %row.backend_id, agent_did = %row.agent_did,
+                %error, "cannot project ambiguous backend catalog");
+                None
+            }
+        })
+        .map(|catalog| {
+            catalog
+                .models
+                .iter()
+                .map(|model| model.model_name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    InferenceBackendView {
+        backend_id: row.backend_id.clone(),
+        name: Some(row.name.clone()),
+        provider_kind: Some(row.provider_kind.as_str().to_owned()),
+        openai_wire_api: row.openai_wire_api.map(|api| api.as_str().to_owned()),
+        endpoint: Some(row.endpoint.clone()),
+        auth_kind: Some(auth_kind.to_owned()),
+        connect_timeout_secs: row.connect_timeout_secs,
+        discovery_timeout_secs: row.discovery_timeout_secs,
+        api_key_configured,
+        api_key_env_var,
+        max_concurrent: row.max_concurrent,
+        max_queue_depth: row.max_queue_depth,
+        enabled: Some(row.enabled),
+        models,
+        probe_status: observation.and_then(|observation| observation.probe_status.clone()),
+    }
+}
+
 fn resolve_behavior_environments(
     behaviors: &[BehaviorView],
-    backends: &[InferenceBackendView],
-    profiles: &[InferenceProfileView],
-    tool_selections: &[ToolSelectionView],
+    profiles: &[InferenceProfile],
+    contexts: &[AgentContext],
+    tools: &[Tools],
     skills: &[SkillView],
-    conversations: &[ConversationSummary],
+    sessions: &[SessionSummary],
 ) -> Vec<BehaviorEnvironmentView> {
     behaviors
         .iter()
         .map(|behavior| {
-            let tool_selection = behavior
-                .tool_selection_id
-                .as_deref()
-                .and_then(|selection_id| {
-                    tool_selections
-                        .iter()
-                        .find(|selection| selection.selection_id == selection_id)
-                });
-            let backend = behavior.backend_id.as_deref().and_then(|backend_id| {
-                backends
-                    .iter()
-                    .find(|backend| backend.backend_id == backend_id)
+            let context = behavior.context_id.as_deref().and_then(|id| {
+                contexts.iter().find(|context| {
+                    context.agent_did == behavior.agent_did && context.context_id == id
+                })
             });
-            let profile = behavior
-                .inference_profile_id
-                .as_deref()
-                .and_then(|profile_id| {
-                    profiles
+            let selected_tools = context
+                .and_then(|context| context.tools_id.as_deref())
+                .and_then(|id| {
+                    tools
                         .iter()
-                        .find(|profile| profile.profile_id == profile_id)
+                        .find(|tools| tools.agent_did == behavior.agent_did && tools.tools_id == id)
                 });
-            let matches_behavior = |conversation: &&ConversationSummary| {
-                conversation.behavior_id.as_deref() == Some(behavior.behavior_id.as_str())
-            };
-            let matching_conversations = conversations
+            let unresolved_tools = (behavior.context_id.is_some() && context.is_none())
+                || (context.is_some_and(|context| context.tools_id.is_some())
+                    && selected_tools.is_none());
+            let profile = behavior.inference_profile_id.as_deref().and_then(|id| {
+                profiles.iter().find(|profile| {
+                    profile.agent_did == behavior.agent_did && profile.profile_id == id
+                })
+            });
+            let matching_sessions = sessions
                 .iter()
-                .filter(matches_behavior)
+                .filter(|session| {
+                    session.behavior_id.as_deref() == Some(behavior.behavior_id.as_str())
+                })
                 .collect::<Vec<_>>();
-            let skill_names = behavior
-                .skill_refs
-                .iter()
-                .filter(|skill_id| !behavior.skill_excludes.contains(skill_id))
-                .map(|skill_id| {
+            let skill_names = context
+                .into_iter()
+                .flat_map(|context| &context.skill_ids)
+                .map(|id| {
                     skills
                         .iter()
-                        .find(|skill| skill.skill_id == *skill_id)
+                        .find(|skill| {
+                            skill.agent_did.as_deref() == Some(behavior.agent_did.as_str())
+                                && skill.skill_id == *id
+                        })
                         .and_then(|skill| skill.display_name.clone().or_else(|| skill.name.clone()))
-                        .unwrap_or_else(|| skill_id.clone())
+                        .unwrap_or_else(|| id.clone())
                 })
                 .collect();
-
+            let host = selected_tools.and_then(|tools| tools.host.as_ref());
             BehaviorEnvironmentView {
                 behavior_id: behavior.behavior_id.clone(),
                 display_name: behavior.display_name.clone(),
                 enabled: behavior.enabled,
                 is_default: behavior.is_default,
-                model_name: behavior
-                    .model_name
-                    .clone()
-                    .or_else(|| backend.and_then(|backend| backend.models.first().cloned())),
+                model_name: profile.map(|profile| profile.model_name.clone()),
                 inference_profile_name: profile
                     .and_then(|profile| profile.display_name.clone())
                     .or_else(|| behavior.inference_profile_id.clone()),
-                workspace_root: tool_selection
-                    .and_then(|selection| selection.file_tool_root.clone()),
-                file_access: file_access_label(tool_selection).to_string(),
-                bash_access: bash_access_label(tool_selection).to_string(),
-                network_access: tool_selection
-                    .and_then(|selection| selection.command_network_mode.clone()),
+                workspace_root: host.and_then(|host| host.root.clone()),
+                file_access: if unresolved_tools {
+                    "unknown"
+                } else {
+                    file_access_label(selected_tools)
+                }
+                .into(),
+                bash_access: if unresolved_tools {
+                    "unknown"
+                } else {
+                    bash_access_label(selected_tools)
+                }
+                .into(),
+                network_access: host
+                    .and_then(|host| host.bash.as_ref())
+                    .and_then(|bash| bash.network_mode)
+                    .map(|mode| mode.as_str().into()),
                 skill_names,
-                session_count: matching_conversations.len(),
-                active_session_count: matching_conversations
+                session_count: matching_sessions.len(),
+                active_session_count: matching_sessions
                     .iter()
-                    .filter(|conversation| conversation_is_active(conversation))
+                    .filter(|row| session_is_active(row))
                     .count(),
             }
         })
         .collect()
 }
 
-fn file_access_label(selection: Option<&ToolSelectionView>) -> &'static str {
-    let Some(selection) = selection else {
-        return "off";
-    };
-    if selection.enable_file_tools != Some(true) {
-        return "off";
-    }
-    match selection.file_tools_mode.as_deref() {
-        None => "read-only",
-        Some(value) => match FileToolMode::parse(value) {
-            Ok(FileToolMode::Off) => "off",
-            Ok(FileToolMode::ReadOnly) => "read-only",
-            Ok(FileToolMode::ReadWrite) => "read / write",
-            Err(_) => "unknown",
-        },
+fn file_access_label(tools: Option<&Tools>) -> &'static str {
+    match tools
+        .and_then(|tools| tools.host.as_ref())
+        .and_then(|host| host.files.as_ref())
+        .map(|files| files.mode)
+    {
+        None | Some(FileToolMode::Off) => "off",
+        Some(FileToolMode::ReadOnly) => "read-only",
+        Some(FileToolMode::ReadWrite) => "read / write",
     }
 }
 
-fn bash_access_label(selection: Option<&ToolSelectionView>) -> &'static str {
-    let Some(selection) = selection else {
-        return "off";
-    };
-    if selection.enable_bash != Some(true) {
-        return "off";
-    }
-    match selection.bash_mode.as_deref() {
-        None => "read-only",
-        Some(value) => match BashMode::parse(value) {
-            Ok(BashMode::Off) => "off",
-            Ok(BashMode::ReadOnly) => "read-only",
-            Ok(BashMode::Unrestricted) => "unrestricted",
-            Err(_) => "unknown",
-        },
+fn bash_access_label(tools: Option<&Tools>) -> &'static str {
+    match tools
+        .and_then(|tools| tools.host.as_ref())
+        .and_then(|host| host.bash.as_ref())
+        .map(|bash| bash.mode)
+    {
+        None | Some(BashMode::Off) => "off",
+        Some(BashMode::ReadOnly) => "read-only",
+        Some(BashMode::Unrestricted) => "unrestricted",
     }
 }
 
-fn conversation_is_active(conversation: &ConversationSummary) -> bool {
-    let Some(state) = conversation.turn_state.as_deref() else {
+fn session_is_active(session: &SessionSummary) -> bool {
+    let Some(state) = session.turn_state.as_deref() else {
         return false;
     };
     !matches!(
@@ -886,97 +919,32 @@ mod behavior_environment_tests {
 
     fn behavior() -> BehaviorView {
         BehaviorView {
-            behavior_id: "default".to_string(),
-            display_name: "Amy".to_string(),
-            system_prompt: None,
-            backend_id: Some("backend".to_string()),
-            model_name: None,
-            tool_selection_id: Some("tools".to_string()),
-            inference_profile_id: Some("profile".to_string()),
-            compaction_strategy: None,
-            compaction_threshold: None,
+            behavior_id: "default".into(),
+            agent_did: "did:test:owner".into(),
+            display_name: "Amy".into(),
+            description: None,
+            context_id: Some("context".into()),
+            inference_profile_id: Some("profile".into()),
             enabled: true,
             is_default: true,
-            skill_refs: vec!["diagnostics".to_string(), "missing".to_string()],
-            skill_excludes: vec!["missing".to_string()],
+            tags: Vec::new(),
+            created_at: None,
         }
     }
-
-    fn backend() -> InferenceBackendView {
-        InferenceBackendView {
-            backend_id: "backend".to_string(),
-            name: Some("Local inference".to_string()),
-            provider_kind: None,
-            openai_wire_api: None,
-            endpoint: None,
-            api_key_configured: false,
-            api_key_env_var: None,
-            max_concurrent: None,
-            max_queue_depth: None,
-            enabled: Some(true),
-            models: vec!["gpt-test".to_string()],
-            probe_status: None,
-        }
+    fn context() -> AgentContext {
+        serde_json::from_value(serde_json::json!({"context_id":"context", "agent_did":"did:test:owner", "tools_id":"tools", "skill_ids":["diagnostics"]})).unwrap()
     }
-
-    fn profile() -> InferenceProfileView {
-        InferenceProfileView {
-            profile_id: "profile".to_string(),
-            display_name: Some("Long context".to_string()),
-            context_window: None,
-            max_output_tokens: None,
-            max_turns: None,
-            temperature: None,
-            reasoning_effort: None,
-            stream_batch_ms: None,
-            stream_liveness_timeout_secs: None,
-            deadline_duration_secs: None,
-        }
+    fn profile() -> InferenceProfile {
+        serde_json::from_value(serde_json::json!({"profile_id":"profile", "agent_did":"did:test:owner", "backend_id":"backend", "model_name":"gpt-test", "display_name":"Long context"})).unwrap()
     }
-
-    fn tool_selection() -> ToolSelectionView {
-        ToolSelectionView {
-            selection_id: "tools".to_string(),
-            agent_did: None,
-            display_name: Some("Workspace tools".to_string()),
-            enable_file_tools: Some(true),
-            file_tools_mode: Some("ReadWrite".to_string()),
-            file_tool_root: Some("/work/amygdala".to_string()),
-            enable_bash: Some(true),
-            bash_mode: Some("ReadOnly".to_string()),
-            command_execution_policy: None,
-            command_allowed_argv_prefixes: vec![],
-            command_forbidden_argv_prefixes: vec![],
-            command_network_mode: Some("Disabled".to_string()),
-            cli_tool_names: vec![],
-            enable_meta_tools: None,
-            enable_goal_tools: None,
-            enable_goal_creation: None,
-            allowed_mcp_service_ids: vec![],
-            required_mcp_service_ids: vec![],
-            backgroundable_tool_names: vec![],
-            subagent_targets: vec![],
-            subagent_spawn_enabled: None,
-            subagent_steering_enabled: None,
-            subagent_background_enabled: None,
-            subagent_allow_cross_deployment: None,
-            cross_deployment_spawn_timeout_seconds: None,
-            enable_memory: None,
-            enable_session_history_tool: None,
-            enable_context_budget: None,
-            enable_defra_query: None,
-            defra_query_collections: vec![],
-            write_tools: vec![],
-            tool_policy_version: Some(gents::tool_surface::TOOL_POLICY_V1.to_string()),
-            subagent_default_await_mode: None,
-        }
+    fn tools() -> Tools {
+        serde_json::from_value(serde_json::json!({"tools_id":"tools", "agent_did":"did:test:owner", "host":{"root":"/work/amygdala", "files":{"mode":"ReadWrite"}, "bash":{"mode":"ReadOnly"}}})).unwrap()
     }
 
     fn skill() -> SkillView {
         SkillView {
             skill_id: "diagnostics".to_string(),
-            agent_did: None,
-            scope: None,
+            agent_did: Some("did:test:owner".into()),
             name: Some("diagnostics".to_string()),
             description: None,
             instructions: None,
@@ -987,12 +955,18 @@ mod behavior_environment_tests {
         }
     }
 
-    fn conversation(
+    fn session(
         session_id: &str,
         behavior_id: Option<&str>,
         turn_state: Option<&str>,
-    ) -> ConversationSummary {
-        ConversationSummary {
+    ) -> SessionSummary {
+        SessionSummary {
+            agent_did: "did:test:owner".into(),
+            requester_did: None,
+            latest_request_doc_id: None,
+            closed_at: None,
+            tags: vec![],
+            provenance: None,
             session_id: session_id.to_string(),
             title: None,
             preview_text: None,
@@ -1013,18 +987,18 @@ mod behavior_environment_tests {
 
     #[test]
     fn resolves_runnable_environment_once_for_clients() {
-        let mut status_only_active = conversation("status-active", Some("default"), None);
+        let mut status_only_active = session("status-active", Some("default"), None);
         status_only_active.status = Some("active".to_string());
-        let unassigned = conversation("unassigned", None, Some("processing"));
+        let unassigned = session("unassigned", None, Some("processing"));
         let environments = resolve_behavior_environments(
             &[behavior()],
-            &[backend()],
             &[profile()],
-            &[tool_selection()],
+            &[context()],
+            &[tools()],
             &[skill()],
             &[
-                conversation("active", Some("default"), Some("processing")),
-                conversation("complete", Some("default"), Some("completed")),
+                session("active", Some("default"), Some("processing")),
+                session("complete", Some("default"), Some("completed")),
                 status_only_active,
                 unassigned,
             ],
@@ -1049,12 +1023,63 @@ mod behavior_environment_tests {
     }
 
     #[test]
-    fn invalid_tool_modes_are_visible_instead_of_misreported() {
-        let mut selection = tool_selection();
-        selection.file_tools_mode = Some("FutureFileMode".to_string());
-        selection.bash_mode = Some("FutureBashMode".to_string());
+    fn invalid_tool_modes_are_rejected_instead_of_misreported() {
+        for field in ["files", "bash"] {
+            let mut value = serde_json::to_value(tools()).unwrap();
+            value["host"][field]["mode"] = serde_json::json!("FutureMode");
+            assert!(serde_json::from_value::<Tools>(value).is_err());
+        }
+    }
 
-        assert_eq!(file_access_label(Some(&selection)), "unknown");
-        assert_eq!(bash_access_label(Some(&selection)), "unknown");
+    #[test]
+    fn missing_or_foreign_references_do_not_invent_model_or_tool_permissions() {
+        let mut foreign_profile = profile();
+        foreign_profile.agent_did = "did:test:foreign".into();
+        let mut foreign_tools = tools();
+        foreign_tools.agent_did = "did:test:foreign".into();
+        let environments = resolve_behavior_environments(
+            &[behavior()],
+            &[foreign_profile],
+            &[context()],
+            &[foreign_tools],
+            &[],
+            &[],
+        );
+        assert_eq!(environments[0].model_name, None);
+        assert_eq!(environments[0].file_access, "unknown");
+        assert_eq!(environments[0].bash_access, "unknown");
+        assert_eq!(environments[0].workspace_root, None);
+    }
+}
+
+#[cfg(test)]
+mod backend_config_view_tests {
+    use super::*;
+
+    #[test]
+    fn backend_view_never_serializes_key_and_uses_exact_oauth_catalog() {
+        let mut backend: gents::document_config::InferenceBackend =
+            serde_json::from_value(serde_json::json!({
+                "agent_did":"owner","backend_id":"backend","name":"Backend",
+                "provider_kind":"OpenAiCompatible","endpoint":"http://localhost/v1",
+                "auth":{"kind":"api_key","key":"NEVER-EXPORT-KEY"}
+            }))
+            .unwrap();
+        let view = backend_config_view(&backend, None);
+        assert!(view.api_key_configured);
+        assert!(!serde_json::to_string(&view)
+            .unwrap()
+            .contains("NEVER-EXPORT-KEY"));
+        backend.auth = gents::document_config::BackendAuth::PrincipalOAuth;
+        let observation = serde_json::from_value(serde_json::json!({
+            "backend_id":"backend","catalogs":[
+                {"agent_did":"foreign","observed_at":"now","models":[{"model_name":"foreign-model"}]},
+                {"agent_did":"owner","observed_at":"now","models":[{"model_name":"own-model"}]}
+            ]
+        })).unwrap();
+        assert_eq!(
+            backend_config_view(&backend, Some(&observation)).models,
+            ["own-model"]
+        );
     }
 }

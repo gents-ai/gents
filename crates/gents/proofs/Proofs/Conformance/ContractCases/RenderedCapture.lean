@@ -16,8 +16,10 @@ and breaks the Rust fence rather than quietly disagreeing with it.
 The rows are also not a second, unproven story about the transition order:
 `RenderedCapture.Scenario.trace_realizes` proves each scenario's computed
 `(store, stage)` pair is reachable from its `assembled` start by legal `Step`s,
-so production that reproduces these rows inherits `sent_implies_durably_captured`,
-`sent_requires_a_capture_step`, and `capture_failure_blocks_send`.
+so the scenarios exercise `sent_implies_durably_captured`,
+`sent_requires_a_capture_step`, and `capture_failure_blocks_send`. Matching these
+finite endpoints does not prove production transition ordering or universal
+refinement; the production ordering fence remains a separate obligation.
 
 `renderedCaptureKeyCases` fences the other half: that the capture key is a
 five-component tuple and that equality is componentwise. The distinctness of

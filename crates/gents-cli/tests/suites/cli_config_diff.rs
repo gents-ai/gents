@@ -2,7 +2,7 @@ use crate::support::*;
 
 use std::fs;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -69,9 +69,9 @@ async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> 
     );
     assert_eq!(
         output
-            .pointer("/counts/tool_selections/unchanged")
+            .pointer("/counts/tools/unchanged")
             .and_then(Value::as_u64),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         output
@@ -122,23 +122,15 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
         ],
     )?;
 
-    let backends_dir = root.join("inference_backends");
-    let backend_entry = fs::read_dir(&backends_dir)
-        .context("reading inference_backends dir after export")?
-        .next()
-        .ok_or_else(|| anyhow!("no inference-backend subdirs after export"))??;
-    let backend_id = backend_entry
-        .file_name()
-        .to_str()
-        .ok_or_else(|| anyhow!("non-utf8 backend dir name"))?
+    let config_path = root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let backend_id = config["inference_backends"][0]["backend_id"]
+        .as_str()
+        .context("exported backend id")?
         .to_string();
-    let backends_path = root
-        .join("inference_backends")
-        .join(crate::support::document_handle(&backend_id))
-        .join("object.json");
-    let mut backend = read_json_file(&backends_path)?;
-    backend["endpoint"] = Value::String("http://127.0.0.1:9000/v1".to_string());
-    write_json_file(&backends_path, &backend)?;
+    config["inference_backends"][0]["endpoint"] =
+        Value::String("http://127.0.0.1:9000/v1".to_string());
+    write_json_file(&config_path, &config)?;
 
     let output = run_cli_json(
         &home_dir,

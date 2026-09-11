@@ -15,6 +15,8 @@ use super::lean_vocab_test::{
 };
 
 const RECOVERY_BEHAVIOR_ID: &str = "amy-code";
+// A failed claim observation, deliberately absent from retry successor input.
+const FAILED_CLAIM_BACKEND: &str = "old-claim-backend";
 
 #[derive(Debug)]
 struct RecoveryPreState {
@@ -35,50 +37,6 @@ struct ForcedRequestState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RetryRequestIdInjection {
     new_request_id: String,
-}
-
-#[test]
-fn prepare_prompt_submission_strips_skill_selector_and_records_metadata() -> Result<()> {
-    let (content, options) = prepare_prompt_submission(
-        "/triage\ninspect the failure",
-        SubmitRequestOptions::default(),
-    )?;
-
-    assert_eq!(content, "inspect the failure");
-    assert_eq!(
-        options.metadata.as_deref(),
-        Some(r#"{"selected_skill_ids":["triage"]}"#)
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn submit_request_rejects_negative_seed_before_store_access() -> Result<()> {
-    let node = defra_node::EmbeddedNode::builder().build().await?;
-    let tempdir = tempfile::tempdir()?;
-    let signer =
-        gents::identity::KeyIdentity::load_or_create(&tempdir.path().join("request.key"), None)?;
-    let signer_did = gents::identity::AgentIdentity::did(&signer).to_string();
-    let error = submit_request(
-        &node,
-        &ClientStore::default(),
-        "session-one",
-        &signer_did,
-        &signer_did,
-        &signer,
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&signer_did),
-        "hello",
-        None,
-        SubmitRequestOptions {
-            seed: Some(-1),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(error.to_string(), "seed must be non-negative");
-    node.shutdown().await;
-    Ok(())
 }
 
 #[tokio::test]
@@ -204,23 +162,6 @@ fn retry_key_and_mutation_are_scoped_to_exact_parent_document() {
     assert!(field.contains(r#"retry_parent_request_doc_id: "parent-doc-a""#));
 }
 
-#[test]
-fn prepare_prompt_submission_merges_selected_skills_with_metadata() -> Result<()> {
-    let (content, options) = prepare_prompt_submission(
-        "/skill review inspect",
-        SubmitRequestOptions {
-            metadata: Some(r#"{"queue":{"source":"manual"}}"#.to_string()),
-            ..SubmitRequestOptions::default()
-        },
-    )?;
-
-    let metadata: serde_json::Value = serde_json::from_str(options.metadata.as_deref().unwrap())?;
-    assert_eq!(content, "inspect");
-    assert_eq!(metadata["queue"]["source"], "manual");
-    assert_eq!(metadata["selected_skill_ids"][0], "review");
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Result<()> {
     let cases = &lean_contract_snapshot().session_recovery_cases;
@@ -329,7 +270,7 @@ async fn drive_session_recovery_case_with_core(
     );
     assert_eq!(
         pre.parent.backend_id.as_deref(),
-        Some(case.pre_backend.as_str()),
+        Some(FAILED_CLAIM_BACKEND),
         "pre backend_id must match Lean witness for {}",
         case.name
     );
@@ -370,6 +311,25 @@ async fn seed_session_recovery_pre_state(
     case: &LeanSessionRecoveryCase,
 ) -> Result<RecoveryPreState> {
     let session_id = Uuid::new_v4().to_string();
+    let session = gents_protocol::session::AgentSession {
+        session_id: session_id.clone(),
+        agent_did: core.principal().did().to_owned(),
+        requester_did: Some(core.principal().did().to_owned()),
+        behavior_id: RECOVERY_BEHAVIOR_ID.to_owned(),
+        created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        closed_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: None,
+        observation: None,
+    };
+    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session)?)?;
+    execute_mutation(
+        core.node(),
+        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
+        "test.seed_recovery_session",
+    )
+    .await?;
     let failed_is_latest = case.pre_latest_id == case.failed_id;
     let should_seed_failed =
         case.pre_request_ids.contains(&case.failed_id) || !case.pre_failed_exists;
@@ -450,7 +410,7 @@ async fn seed_session_recovery_pre_state(
         );
         assert_eq!(
             parent.backend_id.as_deref(),
-            Some(case.pre_backend.as_str()),
+            Some(FAILED_CLAIM_BACKEND),
             "seeded retry parent backend_id did not refresh into the desktop store for {}",
             case.name
         );
@@ -537,25 +497,20 @@ fn synthetic_missing_retry_parent(
     AgentRequestRow {
         request_id: request_id.to_string(),
         agent_did: Some(agent_did.to_string()),
-        requester_did: None,
+        requester_did: Some(agent_did.to_owned()),
+        input: None,
         behavior_id: Some(RECOVERY_BEHAVIOR_ID.to_string()),
         session_id: Some(session_id.to_string()),
         retry_parent_request: Some(String::new()),
         retry_root_request: Some(request_id.to_string()),
         superseded_by_request: Some(String::new()),
         content: Some(format!("missing request for {}", case.name)),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
         lifecycle_state: Some(
             RequestLifecycleState::parse(&case.pre_failed_state)
                 .expect("Lean recovery case must use a canonical request state"),
         ),
-        backend_id: Some(case.pre_backend.clone()),
+        backend_id: Some(FAILED_CLAIM_BACKEND.to_owned()),
         execution_origin: Some(case.pre_origin.clone()),
         caused_by_trigger_id: None,
         caused_by_trigger_kind: None,
@@ -576,7 +531,6 @@ fn synthetic_missing_retry_parent(
         valid_until: None,
         workspace_id: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
         workspace_seal_hash: None,
         ..Default::default()
     }
@@ -638,6 +592,11 @@ async fn assert_legal_session_recovery_post_state(
 
     let new_request = fetch_request_row_for_test(core.node(), new_request_id).await?;
     assert_eq!(new_request.request_id, new_request_id);
+    assert!(
+        new_request.deadline.is_none(),
+        "retry publication must leave execution deadline assignment to claim for {}",
+        case.name
+    );
     assert_eq!(
         new_request.session_id.as_deref(),
         Some(pre.session_id.as_str())
@@ -674,12 +633,35 @@ async fn assert_legal_session_recovery_post_state(
             Some(case.post_new_origin.as_str())
         );
     }
-    if case.backend_preserved {
-        assert_eq!(
-            new_request.backend_id.as_deref(),
-            Some(case.post_new_backend.as_str())
-        );
-    }
+    assert!(
+        new_request.backend_id.is_none(),
+        "{}: successor backend is resolved by the next claim",
+        case.name
+    );
+    assert_eq!(
+        new_request.requester_did.as_deref(),
+        Some(core.principal().did()),
+        "retry preserves exact requester scope"
+    );
+    let parent_doc = pre
+        .parent
+        .doc_id
+        .as_deref()
+        .expect("persisted parent physical ID");
+    let successor_doc = new_request
+        .doc_id
+        .as_deref()
+        .expect("persisted successor physical ID");
+    assert!(!parent_doc.is_empty() && !successor_doc.is_empty());
+    assert_ne!(
+        successor_doc, parent_doc,
+        "retry publishes a new physical request"
+    );
+    assert_eq!(
+        new_request.retry_parent_request_doc_id.as_deref(),
+        Some(parent_doc),
+        "retry parent is the exact physical failed attempt"
+    );
 
     let failed_request = fetch_request_row_for_test(core.node(), &pre.failed_request_id).await?;
     assert_eq!(
@@ -692,7 +674,7 @@ async fn assert_legal_session_recovery_post_state(
     );
     assert_eq!(
         failed_request.backend_id.as_deref(),
-        Some(case.pre_backend.as_str())
+        Some(FAILED_CLAIM_BACKEND)
     );
     assert_eq!(
         failed_request.execution_origin.as_deref(),
@@ -710,9 +692,6 @@ async fn assert_legal_session_recovery_post_state(
         "new request insertion must match Lean witness for {}",
         case.name
     );
-    assert!(case.pre_failed_is_latest);
-    assert!(!case.post_failed_is_latest);
-    assert!(case.post_new_is_latest);
 
     Ok(())
 }
@@ -782,7 +761,7 @@ fn forced_retry_parent_state(case: &LeanSessionRecoveryCase) -> ForcedRequestSta
     ForcedRequestState {
         lifecycle_state: case.pre_failed_state.clone(),
         deadline: recovery_deadline_for_case(case),
-        backend_id: case.pre_backend.clone(),
+        backend_id: FAILED_CLAIM_BACKEND.to_owned(),
     }
 }
 
@@ -799,7 +778,7 @@ fn forced_latest_request_state(case: &LeanSessionRecoveryCase) -> ForcedRequestS
     ForcedRequestState {
         lifecycle_state: case.pre_latest_state.clone(),
         deadline: (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
-        backend_id: case.pre_backend.clone(),
+        backend_id: FAILED_CLAIM_BACKEND.to_owned(),
     }
 }
 
@@ -871,17 +850,14 @@ async fn fetch_request_row_for_test(
                         _docID
                         request_id
                         agent_did
+                        requester_did
                         behavior_id
                         session_id
                         content
-                        temperature
-                        top_p
-                        top_k
-                        seed
-                        max_tokens
+                        input
                         max_total_tokens
-                        metadata
                         lifecycle_state
+                        deadline
                         backend_id
                         execution_origin
                         retry_root_request
@@ -912,7 +888,7 @@ async fn latest_request_id_for_session_for_test(
                         limit: 1
                     ) {{
                         _docID request_id agent_did behavior_id session_id content
-                        temperature top_p top_k seed max_tokens max_total_tokens metadata
+                        input max_total_tokens
                         lifecycle_state backend_id execution_origin retry_root_request
                         retry_parent_request retry_parent_request_doc_id retry_count max_retries
                     }}
@@ -1071,25 +1047,27 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
     let session_id = escape_graphql_string(&session_id);
     let request_id = escape_graphql_string(&submitted.request_id);
     let response = core
-            .node()
-            .execute(&format!(
-                r#"{{
+        .node()
+        .execute(&format!(
+            r#"{{
                     AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
                         agent_did
                         requester_did
                         admission_signer_did
                     }}
-                    AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{
+                    AgentSession(filter: {{
+                        session_id: {{ _eq: "{session_id}" }},
+                        agent_did: {{ _eq: "{}" }},
+                        requester_did: {{ _eq: "{}" }}
+                    }}, limit: 1) {{
                         agent_did
                         requester_did
                     }}
-                    AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{
-                        agent_did
-                        requester_did
-                    }}
-                }}"#
-            ))
-            .await;
+                }}"#,
+            escape_graphql_string(agent_did),
+            escape_graphql_string(&requester_did),
+        ))
+        .await;
     if response.has_errors() {
         bail!(
             "querying desktop requester routes failed: {:?}",
@@ -1097,7 +1075,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
         );
     }
     let data = response.data.context("requester route query data")?;
-    for collection in ["AgentSession", "AgentConversation"] {
+    for collection in ["AgentSession"] {
         assert!(
             data.get(collection)
                 .and_then(serde_json::Value::as_array)
@@ -1228,7 +1206,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn retry_request_preserves_parent_overrides_and_metadata() -> Result<()> {
+async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
@@ -1239,61 +1217,82 @@ async fn retry_request_preserves_parent_overrides_and_metadata() -> Result<()> {
         .await?;
 
     let session_id = Uuid::new_v4().to_string();
-    let metadata = r#"{"eval":"amygdala","case":"retry"}"#.to_string();
-    let original = core
-        .submit_request_with_options(
-            &session_id,
-            core.principal().did(),
-            "retry should preserve overrides",
-            Some(RECOVERY_BEHAVIOR_ID),
-            SubmitRequestOptions {
-                temperature: Some(0.35),
-                top_p: Some(0.92),
-                top_k: Some(32),
-                seed: Some(1234),
-                max_tokens: Some(2048),
-                max_total_tokens: Some(100_000),
-                metadata: Some(metadata.clone()),
-                ..SubmitRequestOptions::default()
-            },
-        )
-        .await?;
+    let original_input = gents_protocol::request_input::RequestInput {
+        selected_skill_ids: vec!["review".into(), "triage".into()],
+        cwd: Some("/workspace/review".into()),
+        initial_title: Some(gents_protocol::session::SessionTitle {
+            text: "Inspect retry".into(),
+            source: gents_protocol::session::SessionTitleSource::User,
+        }),
+        ..Default::default()
+    };
+    let request_id = Uuid::new_v4().to_string();
+    let mut create = AgentRequestCreate::base(
+        &request_id,
+        core.principal().did(),
+        core.principal().did(),
+        RECOVERY_BEHAVIOR_ID,
+        &session_id,
+        "retry preserves its exact parent",
+        "interactive",
+        Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        test_local_admission(&core),
+    );
+    create.input = original_input.clone();
+    gents::sign_agent_request_create(core.principal(), &mut create).await?;
+    execute_mutation(
+        core.node(),
+        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+        "test.seed_typed_retry_parent",
+    )
+    .await?;
+    let original = SubmittedRequest {
+        request_id,
+        session_id: session_id.clone(),
+        agent_did: core.principal().did().to_owned(),
+        behavior_id: Some(RECOVERY_BEHAVIOR_ID.to_owned()),
+    };
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
         .await?;
     core.refresh_store().await?;
 
     let parent = request_from_store_for_test(&core, &original.request_id)?;
-    assert_eq!(parent.temperature, Some(0.35));
-    assert_eq!(parent.top_p, Some(0.92));
-    assert_eq!(parent.top_k, Some(32));
-    assert_eq!(parent.seed, Some(1234));
-    assert_eq!(parent.max_tokens, Some(2048));
-    assert_eq!(parent.max_total_tokens, Some(100_000));
-    assert_eq!(parent.metadata.as_deref(), Some(metadata.as_str()));
+    assert_eq!(
+        parent.input.as_ref(),
+        Some(&original_input),
+        "desktop hydration preserves typed input"
+    );
 
     let submitted = core.retry_request(&parent).await?;
     let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;
     let original_row = fetch_request_row_for_test(core.node(), &original.request_id).await?;
+    assert_eq!(original_row.input.as_ref(), Some(&original_input));
+    assert_eq!(
+        retried.input, original_row.input,
+        "retry must retain the exact invocation input"
+    );
     assert_eq!(
         retried.retry_parent_request.as_deref(),
         Some(original.request_id.as_str())
     );
     assert_eq!(
         retried.retry_parent_request_doc_id.as_deref(),
-        original_row.doc_id.as_deref()
+        Some(
+            original_row
+                .doc_id
+                .as_deref()
+                .expect("persisted physical parent")
+        )
     );
     assert_eq!(
         retried.retry_root_request.as_deref(),
         Some(original.request_id.as_str())
     );
-    assert_eq!(retried.temperature, Some(0.35));
-    assert_eq!(retried.top_p, Some(0.92));
-    assert_eq!(retried.top_k, Some(32));
-    assert_eq!(retried.seed, Some(1234));
-    assert_eq!(retried.max_tokens, Some(2048));
-    assert_eq!(retried.max_total_tokens, Some(100_000));
-    assert_eq!(retried.metadata.as_deref(), Some(metadata.as_str()));
+    assert!(
+        retried.backend_id.is_none(),
+        "next claim selects its backend"
+    );
 
     core.shutdown().await?;
     Ok(())
@@ -1396,4 +1395,56 @@ async fn seed_duplicate_request_id_for_test(
     );
     let mutation = format!("mutation {{\n{request_field}\n}}");
     execute_mutation(node, &mutation, "seed_duplicate_request_id_for_test").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    core.add_local_standard_peer_for_test(core.principal().did())
+        .await?;
+    let case = lean_contract_snapshot()
+        .session_recovery_cases
+        .iter()
+        .find(|case| case.legal)
+        .context("legal retry witness")?;
+    let pre = seed_session_recovery_pre_state(&core, case).await?;
+    // A newer row in another requester scope is not this interactive retry's
+    // head, even when visible locally. Background wake recovery deliberately
+    // uses the broader all-requester query instead.
+    let agent = escape_graphql_string(core.principal().did());
+    let session = escape_graphql_string(&pre.session_id);
+    let request_id = escape_graphql_string(&format!("foreign-{}", Uuid::new_v4()));
+    execute_mutation(
+        core.node(),
+        &format!(
+            r#"mutation {{ create_AgentRequest(input: {{
+        request_id: "{request_id}", agent_did: "{agent}", requester_did: "did:test:other-requester",
+        session_id: "{session}", behavior_id: "amy-code", content: "other requester",
+        lifecycle_state: "processing", execution_origin: "interactive",
+        created_at: "2099-01-01T00:00:00Z"
+    }}) {{ _docID }} }}"#
+        ),
+        "test.foreign_requester_row",
+    )
+    .await?;
+    let retried = core.retry_request(&pre.parent).await?;
+    let row = fetch_request_row_for_test(core.node(), &retried.request_id).await?;
+    assert_eq!(row.requester_did.as_deref(), Some(core.principal().did()));
+    assert_eq!(
+        row.retry_parent_request_doc_id.as_deref(),
+        Some(
+            pre.parent
+                .doc_id
+                .as_deref()
+                .expect("persisted physical parent")
+        )
+    );
+    assert!(row.backend_id.is_none());
+    core.shutdown().await?;
+    Ok(())
 }

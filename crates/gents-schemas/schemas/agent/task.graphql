@@ -1,14 +1,17 @@
-type Task @branchable {
-    task_id: String @index(unique: true)
-    name: String @index
+type Task @branchable @index(fields: ["agent_did", "task_id"], unique: true) {
+    task_id: String @index
+    agent_did: String @index
+    display_name: String
     description: String
     behavior_id: String @index
     prompt_template: String
     # Optional durable terminal condition provisioned before a task request is runnable.
     goal_objective_template: String
     goal_token_budget: Int
+    hooks: JSON
     enabled: Boolean @index
     output_schema_ref: String
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
+    tags: [String]
 }

@@ -38,7 +38,7 @@ function renderSidebar(mailboxItems: MailboxItemView[]) {
   render(
     <Sidebar
       deployments={[]}
-      conversations={[]}
+      sessions={[]}
       mailboxItems={mailboxItems}
       selectedAgentDid="did:agent"
       selectedBehaviorId="operator"
@@ -47,7 +47,7 @@ function renderSidebar(mailboxItems: MailboxItemView[]) {
       onConfigureDeployment={vi.fn()}
       onSelectBehavior={vi.fn()}
       onSelectSession={vi.fn()}
-      onStartNewConversation={vi.fn()}
+      onStartNewSession={vi.fn()}
       onOpenMailboxItem={onOpenMailboxItem}
       onDismissMailboxItem={onDismissMailboxItem}
     />,

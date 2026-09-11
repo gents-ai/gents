@@ -128,13 +128,14 @@ fn unchanged_non_utf8_git_entry_does_not_widen_changed_path_admission() {
         super::super::adapter::validate_tree_delta(&fx.repo, &base, &tree(&other, &old), &cap)
             .is_ok()
     );
-    assert!(super::super::adapter::validate_tree_delta(
-        &fx.repo,
-        &base,
-        &tree(&other, &other),
-        &cap
-    )
-    .is_err());
+    // Changing the opaque basename must fail at the UTF-8 admission boundary.
+    let error =
+        super::super::adapter::validate_tree_delta(&fx.repo, &base, &tree(&other, &other), &cap)
+            .unwrap_err();
+    assert!(
+        error.to_string().contains("non-UTF-8 Git path"),
+        "{error:#}"
+    );
 }
 
 #[test]

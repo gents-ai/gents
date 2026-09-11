@@ -33,7 +33,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         branch: "existing-branch".into(),
         creation_policy: "git_worktree_diff".into(),
         adapter: "git_worktree".into(),
-        owner_deployment_id: "recovery-host".into(),
+        owner_agent_did: did.into(),
         writer_principal: did.into(),
         integrator_principal: did.into(),
         instruction_manifest: "{}".into(),
@@ -44,7 +44,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     };
     let placement = crate::workspace::WorkspacePlacementDoc {
         workspace_id: workspace.workspace_id.clone(),
-        deployment_id: "recovery-host".into(),
+        owner_agent_did: did.into(),
         host_path: workspace_path.to_string_lossy().into_owned(),
         repository_placement_id: "repository-placement".into(),
         adapter: "git_worktree".into(),
@@ -54,9 +54,10 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         provisioning_state: "ready".into(),
         observed_tree_hash: String::new(),
     };
-    for mutation in [crate::workspace::isolated_workspace_upsert_mutation(&workspace),
+    for mutation in [
+        crate::workspace::isolated_workspace_upsert_mutation(&workspace),
         crate::workspace::workspace_placement_upsert_mutation(&placement, "2026-09-01T00:00:00Z"),
-        r#"mutation { create_HostDeployment(input: { deployment_id: "recovery-host", display_name: "local", created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }) { _docID } }"#.into()] {
+    ] {
         let result = node.execute(&mutation).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
     }
@@ -73,7 +74,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     );
     create.workspace_id = Some(workspace.workspace_id.clone());
     create.workspace_authority = Some("readOnly".into());
-    create.workspace_owner_deployment_id = Some("recovery-host".into());
+    create.workspace_owner_agent_did = Some(did.into());
     create.subagent_depth = 2;
     create.caused_by_parent_request_id = Some("grandparent-request".into());
     create.caused_by_parent_request_doc_id = Some("grandparent-request-doc".into());
@@ -84,8 +85,15 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         .unwrap();
     let result = node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
-    async fn requests(node: &EmbeddedNode) -> Vec<AgentRequest> {
-        let result = node.execute(r#"{ AgentRequest { _docID request_id agent_did requester_did behavior_id session_id content metadata created_at lifecycle_state execution_origin subagent_depth caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id caused_by_trigger_kind workspace_id workspace_authority workspace_owner_deployment_id workspace_seal_hash execution_generation execution_lease_expires_at execution_progress_seq } }"#).await;
+    async fn requests(node: &EmbeddedNode, owner: &str) -> Vec<AgentRequest> {
+        let scope =
+            crate::session::session_scope_filter(owner, "workspace-recovery-session", Some(owner));
+        let result = node
+            .execute(&format!(
+                "{{AgentRequest(filter: {{{scope}}}) {{{}}}}}",
+                crate::SIGNED_REQUEST_FIELDS
+            ))
+            .await;
         assert!(!result.has_errors(), "{:?}", result.errors);
         crate::graphql::rows::<AgentRequestRow>(&result, "AgentRequest")
             .unwrap()
@@ -93,7 +101,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             .map(|row| AgentRequest::try_from(row).unwrap())
             .collect()
     }
-    let parent = requests(&node).await.remove(0);
+    let parent = requests(&node, did).await.remove(0);
     let mut owner = RequestLifecycle::new_with_agent_did(node.clone(), "general", did, parent, 60);
     owner.claim().await.unwrap();
     let writer = crate::streaming::DefraStreamWriter::new(node.clone(), did, Duration::ZERO);
@@ -173,7 +181,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         .await
         .unwrap()
         .unwrap();
-    let children: Vec<_> = requests(&node)
+    let children: Vec<_> = requests(&node, did)
         .await
         .into_iter()
         .filter(|request| request.request_id != parent.request_id)
@@ -185,8 +193,8 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     assert_eq!(child.workspace_id, parent.workspace_id);
     assert_eq!(child.workspace_authority, parent.workspace_authority);
     assert_eq!(
-        child.workspace_owner_deployment_id,
-        parent.workspace_owner_deployment_id
+        child.workspace_owner_agent_did,
+        parent.workspace_owner_agent_did
     );
     assert_eq!(child.subagent_depth, parent.subagent_depth);
     assert_eq!(
@@ -232,7 +240,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
                 .await
                 .is_err()
         );
-        let remaining: Vec<_> = requests(&node)
+        let remaining: Vec<_> = requests(&node, did)
             .await
             .into_iter()
             .filter(|request| request.request_id != parent.request_id)

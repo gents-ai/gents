@@ -16,6 +16,7 @@ pub struct ResolvedEthQuery {
     pub tool_id: String,
     pub chain_id: u64,
     pub rpc_url: String,
+    pub rpc_timeout: std::time::Duration,
     pub methods: Vec<String>,
 }
 
@@ -49,6 +50,7 @@ impl ResolvedEthQuery {
             tool_id: doc.tool_id.clone(),
             chain_id: chain_id as u64,
             rpc_url,
+            rpc_timeout: HttpEthRpc::configured_timeout(doc.rpc_timeout_secs)?,
             methods,
         }))
     }
@@ -120,11 +122,16 @@ impl ToolDyn for EthQueryTool {
                     });
                 }
             };
-            let client = HttpEthRpc::http(&resolved.rpc_url, resolved.chain_id, &resolved.methods)
-                .map_err(|error| ToolError::ReportedFailure {
-                    class: FailureClass::Transport,
-                    text: error.to_string(),
-                })?;
+            let client = HttpEthRpc::http_with_timeout(
+                &resolved.rpc_url,
+                resolved.chain_id,
+                &resolved.methods,
+                resolved.rpc_timeout,
+            )
+            .map_err(|error| ToolError::ReportedFailure {
+                class: FailureClass::Transport,
+                text: error.to_string(),
+            })?;
             let result = client.call(&parsed.method, params).await.map_err(|error| {
                 let text = error.to_string();
                 let class = if text.contains("not in the configured query_methods")
@@ -162,7 +169,24 @@ mod tests {
             calls: None,
             key_binding_id: None,
             created_at: None,
+            rpc_timeout_secs: None,
+            tags: Vec::new(),
         }
+    }
+
+    #[test]
+    fn configured_timeout_survives_query_expansion() {
+        let mut document = doc(true, &["eth_chainId"]);
+        document.rpc_timeout_secs = Some(7);
+        assert_eq!(
+            ResolvedEthQuery::from_document(&document)
+                .unwrap()
+                .unwrap()
+                .rpc_timeout,
+            std::time::Duration::from_secs(7)
+        );
+        document.rpc_timeout_secs = Some(0);
+        assert!(ResolvedEthQuery::from_document(&document).is_err());
     }
 
     #[test]

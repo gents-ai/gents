@@ -15,7 +15,7 @@ struct ChildWorkspaceRow {
     request_id: String,
     workspace_id: Option<String>,
     workspace_authority: Option<String>,
-    workspace_owner_deployment_id: Option<String>,
+    workspace_owner_agent_did: Option<String>,
     workspace_seal_hash: Option<String>,
 }
 
@@ -35,13 +35,13 @@ struct IsolatedWorkspaceRow {
 struct WorkspacePlacementRow {
     workspace_id: String,
     host_path: Option<String>,
-    deployment_id: Option<String>,
+    owner_agent_did: Option<String>,
 }
 
 async fn seed_isolated_workspace(
     node: &EmbeddedNode,
     workspace_id: &str,
-    owner_deployment_id: &str,
+    owner_agent_did: &str,
     lifecycle_state: &str,
     seal_hash: Option<&str>,
     repository_id: &str,
@@ -61,7 +61,7 @@ async fn seed_isolated_workspace(
         branch: branch.to_string(),
         creation_policy: "git_worktree_diff".to_string(),
         adapter: "git_worktree".to_string(),
-        owner_deployment_id: owner_deployment_id.to_string(),
+        owner_agent_did: owner_agent_did.to_string(),
         writer_principal: principal_did.to_string(),
         integrator_principal: principal_did.to_string(),
         instruction_manifest: "{}".to_string(),
@@ -79,32 +79,16 @@ async fn seed_isolated_workspace(
     );
 }
 
-async fn seed_host_deployment(node: &EmbeddedNode, deployment_id: &str) {
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = format!(
-        r#"mutation {{
-            create_HostDeployment(input: {{
-                deployment_id: "{id}",
-                display_name: "local",
-                created_at: "{now}",
-                updated_at: "{now}"
-            }}) {{ _docID }}
-        }}"#,
-        id = escape_graphql_string(deployment_id),
-        now = escape_graphql_string(&now),
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create HostDeployment failed: {:?}",
-        response.errors
-    );
+async fn seed_agent_principal(node: &EmbeddedNode, agent_did: &str) {
+    gents::ensure_agent_principal(node, agent_did)
+        .await
+        .expect("ensure workspace owner principal");
 }
 
 async fn seed_repository_placement(
     node: &EmbeddedNode,
     repository_id: &str,
-    deployment_id: &str,
+    agent_did: &str,
     host_path: &Path,
 ) {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -112,14 +96,14 @@ async fn seed_repository_placement(
         r#"mutation {{
             create_RepositoryPlacement(input: {{
                 repository_id: "{repo}",
-                deployment_id: "{deploy}",
+                agent_did: "{owner}",
                 host_path: "{path}",
                 enabled: true,
                 updated_at: "{now}"
             }}) {{ _docID }}
         }}"#,
         repo = escape_graphql_string(repository_id),
-        deploy = escape_graphql_string(deployment_id),
+        owner = escape_graphql_string(agent_did),
         path = escape_graphql_string(&host_path.to_string_lossy()),
         now = escape_graphql_string(&now),
     );
@@ -134,14 +118,14 @@ async fn seed_repository_placement(
 async fn seed_workspace_placement(
     node: &EmbeddedNode,
     workspace_id: &str,
-    deployment_id: &str,
+    agent_did: &str,
     host_path: &Path,
     repository_id: &str,
 ) {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let doc = WorkspacePlacementDoc {
         workspace_id: workspace_id.to_string(),
-        deployment_id: deployment_id.to_string(),
+        owner_agent_did: agent_did.to_string(),
         host_path: host_path.to_string_lossy().into_owned(),
         repository_placement_id: repository_id.to_string(),
         adapter: "git_worktree".to_string(),
@@ -194,7 +178,7 @@ async fn seed_local_workspace(
     placement_path: &Path,
     principal_did: &str,
 ) {
-    seed_host_deployment(node, owner).await;
+    seed_agent_principal(node, owner).await;
     seed_isolated_workspace(
         node,
         workspace_id,
@@ -221,7 +205,7 @@ async fn fetch_child_workspace(node: &EmbeddedNode, child_request_id: &str) -> C
                 request_id
                 workspace_id
                 workspace_authority
-                workspace_owner_deployment_id
+                workspace_owner_agent_did
                 workspace_seal_hash
             }}
         }}"#
@@ -261,7 +245,7 @@ async fn fetch_workspace_placement(
             ) {{
                 workspace_id
                 host_path
-                deployment_id
+                owner_agent_did
             }}
         }}"#
     );
@@ -345,7 +329,7 @@ fn parent_workspace_fields(workspace_id: &str, owner: &str, authority: &str) -> 
     format!(
         r#", workspace_id: "{id}"
                 , workspace_authority: "{authority}"
-                , workspace_owner_deployment_id: "{owner}""#,
+                , workspace_owner_agent_did: "{owner}""#,
         id = escape_graphql_string(workspace_id),
         authority = escape_graphql_string(authority),
         owner = escape_graphql_string(owner),
@@ -355,7 +339,7 @@ fn parent_workspace_fields(workspace_id: &str, owner: &str, authority: &str) -> 
 #[tokio::test]
 async fn spawn_subagent_inherit_uses_parent_authority_infimum() {
     let workspace_id = "ws-inherit-infimum";
-    let owner = "deploy-inherit";
+    let owner = "did:test:workspace-inherit";
     let extra = parent_workspace_fields(workspace_id, owner, "readOnly");
     let fixture = setup_spawn_fixture_with_parent_fields(
         "spawn_ws_inherit",
@@ -390,7 +374,7 @@ async fn spawn_subagent_inherit_uses_parent_authority_infimum() {
         Some("readOnly"),
         "inherit must infimum Ready/ReadWrite default with parent ReadOnly"
     );
-    assert_eq!(child.workspace_owner_deployment_id.as_deref(), Some(owner));
+    assert_eq!(child.workspace_owner_agent_did.as_deref(), Some(owner));
     assert!(child
         .workspace_seal_hash
         .as_deref()
@@ -409,8 +393,11 @@ async fn spawn_subagent_inherit_uses_parent_authority_infimum() {
 #[tokio::test]
 async fn spawn_subagent_inherit_sealed_copies_seal_hash() {
     let workspace_id = "ws-inherit-sealed";
-    let owner = "deploy-inherit-sealed";
-    let extra = parent_workspace_fields(workspace_id, owner, "readWrite");
+    let owner = "did:test:workspace-inherit-sealed";
+    let extra = format!(
+        "{}, workspace_seal_hash: \"seal-inherit\"",
+        parent_workspace_fields(workspace_id, owner, "readWrite")
+    );
     let fixture = setup_spawn_fixture_with_parent_fields(
         "spawn_ws_inherit_sealed",
         vec![CHILD_BEHAVIOR_ID],
@@ -451,13 +438,13 @@ async fn spawn_subagent_inherit_sealed_copies_seal_hash() {
 #[tokio::test]
 async fn spawn_subagent_bind_id_stamps_existing_workspace() {
     let workspace_id = "ws-bind-ready";
-    let owner = "deploy-bind";
     let fixture = setup_spawn_fixture("spawn_ws_bind", vec![CHILD_BEHAVIOR_ID], 0, true).await;
+    let owner = fixture.agent_did.clone();
     let (placement_root, placement) = placement_dir("bind");
     seed_local_workspace(
         fixture.db.node.as_ref(),
         workspace_id,
-        owner,
+        &owner,
         "ready",
         None,
         "repo-bind",
@@ -476,14 +463,17 @@ async fn spawn_subagent_bind_id_stamps_existing_workspace() {
     .await;
     assert_eq!(child.workspace_id.as_deref(), Some(workspace_id));
     assert_eq!(child.workspace_authority.as_deref(), Some("readWrite"));
-    assert_eq!(child.workspace_owner_deployment_id.as_deref(), Some(owner));
+    assert_eq!(
+        child.workspace_owner_agent_did.as_deref(),
+        Some(owner.as_str())
+    );
     let _keep = placement_root;
 }
 
 #[tokio::test]
 async fn spawn_subagent_bind_id_infimums_parent_readonly() {
     let workspace_id = "ws-bind-readonly-parent";
-    let owner = "deploy-bind-ro";
+    let owner = "did:test:workspace-bind-ro";
     let extra = parent_workspace_fields(workspace_id, owner, "readOnly");
     let fixture = setup_spawn_fixture_with_parent_fields(
         "spawn_ws_bind_ro",
@@ -528,21 +518,21 @@ async fn spawn_subagent_bind_id_infimums_parent_readonly() {
 #[tokio::test]
 async fn spawn_subagent_bind_id_sealed_copies_seal_hash() {
     let workspace_id = "ws-bind-sealed";
-    let owner = "deploy-bind-sealed";
     let fixture =
         setup_spawn_fixture("spawn_ws_bind_sealed", vec![CHILD_BEHAVIOR_ID], 0, true).await;
+    let owner = fixture.agent_did.clone();
     let (placement_root, placement) = placement_dir("bind-sealed");
     seed_local_workspace(
         fixture.db.node.as_ref(),
         workspace_id,
-        owner,
+        &owner,
         "sealed",
         Some("seal-bind"),
         "repo-bind-sealed",
         "abc123",
         "topic",
         &placement,
-        "did:key:zWriter",
+        &fixture.agent_did,
     )
     .await;
 
@@ -561,7 +551,7 @@ async fn spawn_subagent_bind_id_sealed_copies_seal_hash() {
 #[tokio::test]
 async fn spawn_subagent_provision_creates_isolated_workspace() {
     let parent_workspace_id = "ws-provision-parent";
-    let owner = "deploy-provision";
+    let owner = "did:test:workspace-provision";
     let (root, repo, sha) = init_git_repo();
     let parent_ws = root.path().join("parent-ws");
     git(
@@ -600,7 +590,13 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
         "did:key:zWriter",
     )
     .await;
-    seed_repository_placement(fixture.db.node.as_ref(), "repo-provision", owner, &repo).await;
+    seed_repository_placement(
+        fixture.db.node.as_ref(),
+        "repo-provision",
+        &fixture.agent_did,
+        &repo,
+    )
+    .await;
     seed_workspace_root(
         fixture.db.node.as_ref(),
         &std::fs::canonicalize(root.path()).unwrap(),
@@ -621,7 +617,10 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
         .to_string();
     assert_ne!(first_id, parent_workspace_id);
     assert_eq!(first.workspace_authority.as_deref(), Some("readWrite"));
-    assert_eq!(first.workspace_owner_deployment_id.as_deref(), Some(owner));
+    assert_eq!(
+        first.workspace_owner_agent_did.as_deref(),
+        Some(fixture.agent_did.as_str())
+    );
 
     let created = fetch_isolated_workspace(fixture.db.node.as_ref(), &first_id).await;
     assert_eq!(created.workspace_id, first_id);
@@ -646,7 +645,10 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
 
     let placement = fetch_workspace_placement(fixture.db.node.as_ref(), &first_id).await;
     assert_eq!(placement.workspace_id, first_id);
-    assert_eq!(placement.deployment_id.as_deref(), Some(owner));
+    assert_eq!(
+        placement.owner_agent_did.as_deref(),
+        Some(fixture.agent_did.as_str())
+    );
     let host_path = placement
         .host_path
         .as_deref()
@@ -710,7 +712,7 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
 #[tokio::test]
 async fn spawn_subagent_provision_fails_closed_when_dest_escapes_operator_tool_root() {
     let parent_workspace_id = "ws-provision-ceiling";
-    let owner = "deploy-provision-ceiling";
+    let owner = "did:test:workspace-provision-ceiling";
     let (root, repo, sha) = init_git_repo();
     let parent_ws = root.path().join("parent-ws");
     git(

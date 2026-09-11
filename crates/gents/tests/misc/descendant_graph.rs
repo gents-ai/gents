@@ -53,7 +53,6 @@ async fn create_request_with_requester(
                     lifecycle_state: "processing",
                     backend_id: "",
                     execution_origin: "interactive",
-                    metadata: "",
                     failure_reason: "",
                     created_at: "{now}",
                     retry_count: 0,
