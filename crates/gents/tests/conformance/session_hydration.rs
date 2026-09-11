@@ -3,15 +3,16 @@
 use std::collections::BTreeSet;
 
 use gents::agent::p2p_reconcile::session_hydration::{
-    begin_hydration_request, can_retry_hydration, decide_hydration, observe_hydration_progress,
-    AppliedPairingRoute, ClientHydrationPhase, ClientHydrationProgress, HydrationCatalog,
-    HydrationDocument, HydrationRequest, HydrationVerdict, SessionHydrationDocumentKey,
+    apply_hydration_delivery, begin_hydration_request, can_retry_hydration, decide_hydration,
+    observe_hydration_progress, AppliedPairingRoute, ClientHydrationPhase, ClientHydrationProgress,
+    HydrationApplyOutcome, HydrationCatalog, HydrationDeliveryResult, HydrationDocument,
+    HydrationRequest, HydrationTerminalWriteResult, HydrationVerdict, SessionHydrationDocumentKey,
     SessionOwner, VerifiedActiveMembership,
 };
 
 use crate::lean_vocab_test::{
-    lean_session_hydration_decision_cases, lean_session_hydration_durable_cases,
-    lean_session_hydration_progress_cases,
+    lean_session_hydration_apply_cases, lean_session_hydration_decision_cases,
+    lean_session_hydration_durable_cases, lean_session_hydration_progress_cases,
 };
 
 fn request() -> HydrationRequest {
@@ -202,6 +203,64 @@ fn generated_session_hydration_cases_match_decision_core() {
                 assert!(!case.expected_admit, "{} unexpectedly rejected", case.name);
             }
         }
+    }
+}
+
+#[test]
+fn generated_session_hydration_apply_cases_match_terminal_delivery_core() {
+    let cases = lean_session_hydration_apply_cases();
+    assert_eq!(cases.len(), 6);
+    for case in cases {
+        let mut catalog = admitted_catalog();
+        if !case.admitted {
+            catalog.applied_pairing_routes.clear();
+        }
+        let verdict = decide_hydration(&request(), &catalog);
+        let delivery = if case.delivery_confirmed {
+            HydrationDeliveryResult::Confirmed
+        } else {
+            HydrationDeliveryResult::Indeterminate
+        };
+        let terminal_write = match case.terminal_write.as_str() {
+            "committed" => HydrationTerminalWriteResult::Committed,
+            "failed" => HydrationTerminalWriteResult::Failed,
+            "not_attempted" => HydrationTerminalWriteResult::NotAttempted,
+            value => panic!("unknown terminal write result {value:?}"),
+        };
+        let outcome = apply_hydration_delivery(verdict, delivery, terminal_write);
+        let (served, rejected, attempted_count, confirmed_count) = match outcome {
+            HydrationApplyOutcome::Served(documents) => {
+                (true, false, documents.len(), documents.len())
+            }
+            HydrationApplyOutcome::Rejected {
+                attempted_documents,
+                ..
+            } => (false, true, attempted_documents.len(), 0),
+            HydrationApplyOutcome::PendingAfterTerminalWriteFailure {
+                attempted_documents,
+                confirmed_documents,
+            } => (
+                false,
+                false,
+                attempted_documents.len(),
+                confirmed_documents.len(),
+            ),
+            HydrationApplyOutcome::PendingAfterIndeterminateDelivery {
+                attempted_documents,
+            } => (false, false, attempted_documents.len(), 0),
+        };
+        assert_eq!(served, case.expected_served, "{}", case.name);
+        assert_eq!(rejected, case.expected_rejected, "{}", case.name);
+        assert_eq!(
+            attempted_count, case.expected_attempted_count,
+            "{} attempted documents",
+            case.name
+        );
+        assert_eq!(
+            confirmed_count, case.expected_confirmed_count,
+            "{} confirmed documents",
+            case.name
+        );
     }
 }
 

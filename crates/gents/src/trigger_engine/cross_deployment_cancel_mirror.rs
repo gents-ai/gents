@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -16,7 +16,7 @@ use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 const TOOL_CALL_COLLECTION: &str = "AgentToolCall";
-const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
+const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub(crate) async fn run_cross_deployment_cancel_mirror(
     node: Arc<EmbeddedNode>,
@@ -33,7 +33,7 @@ pub(crate) struct CrossDeploymentCancelMirror {
     node: Arc<EmbeddedNode>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     peer_admission: Arc<dyn PeerAdmissionAuthority>,
-    subscription: events::Subscription,
+    subscription: events::DocumentChangeSubscription,
     cancel: CancellationToken,
     collection_id_to_name: HashMap<String, String>,
     mirrored: HashSet<String>,
@@ -46,7 +46,7 @@ impl CrossDeploymentCancelMirror {
         peer_admission: Arc<dyn PeerAdmissionAuthority>,
         cancel: CancellationToken,
     ) -> Self {
-        let subscription = node.subscribe(&[EventName::Update]);
+        let subscription = node.subscribe_document_changes();
         Self {
             node,
             snapshot_rx,
@@ -60,9 +60,10 @@ impl CrossDeploymentCancelMirror {
 
     pub(crate) async fn run(mut self) -> Result<()> {
         self.scan_pending_intents().await?;
-        let mut retry_tick = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut retry_tick =
+            tokio::time::interval_at(tokio::time::Instant::now() + RETRY_INTERVAL, RETRY_INTERVAL);
         loop {
-            let message = tokio::select! {
+            let batch = tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => return Ok(()),
                 _ = retry_tick.tick() => {
@@ -76,45 +77,40 @@ impl CrossDeploymentCancelMirror {
                     self.scan_pending_intents().await?;
                     continue;
                 }
-                msg = self.subscription.recv() => {
-                    match msg {
-                        Some(message) => message,
+                batch = self.subscription.recv() => {
+                    match batch {
+                        Some(batch) => batch,
                         None => anyhow::bail!("cross-deployment cancel mirror subscription channel closed"),
                     }
                 }
             };
 
-            let dropped = self.subscription.check_and_reset_dropped();
-            if dropped > 0 {
+            if batch.resync_required {
                 tracing::warn!(
-                    dropped,
-                    "cancel mirror dropped messages; scanning pending cancel intents"
+                    updates = batch.updates,
+                    "cancel mirror document-change capacity exceeded; periodic recovery will scan pending intents"
                 );
-                self.scan_pending_intents().await?;
             }
+            for change in batch.changes {
+                self.handle_document_change(&change).await;
+            }
+        }
+    }
 
-            let Some(update) = message.as_update() else {
-                continue;
-            };
-            let Some(collection_name) = self.resolve_collection_name(&update.collection_id).await
-            else {
-                continue;
-            };
-            match collection_name.as_str() {
-                TOOL_CALL_COLLECTION => {
-                    if let Err(error) = self.handle_tool_call_doc(&update.doc_id).await {
-                        tracing::warn!(
-                            doc_id = %update.doc_id,
-                            %error,
-                            "cancel mirror failed to handle AgentToolCall update"
-                        );
-                    }
-                }
-                AGENT_REQUEST_COLLECTION => {
-                    self.scan_pending_intents().await?;
-                }
-                _ => {}
-            }
+    async fn handle_document_change(&mut self, change: &events::DocumentChange) {
+        let Some(collection_name) = self.resolve_collection_name(&change.collection_id).await
+        else {
+            return;
+        };
+        if collection_name != TOOL_CALL_COLLECTION {
+            return;
+        }
+        if let Err(error) = self.handle_tool_call_doc(&change.doc_id).await {
+            tracing::warn!(
+                doc_id = %change.doc_id,
+                %error,
+                "cancel mirror failed to handle AgentToolCall update"
+            );
         }
     }
 
@@ -556,6 +552,23 @@ mod tests {
         assert!(child_interrupt_requested_at(node.as_ref()).await.is_none());
 
         write_child_request(node.as_ref()).await;
+        let request_collection_id = node
+            .get_collection("AgentRequest")
+            .unwrap()
+            .unwrap()
+            .collection_id;
+        mirror
+            .handle_document_change(&events::DocumentChange {
+                collection_id: request_collection_id,
+                doc_id: "child-request-doc".into(),
+                has_local_write: true,
+            })
+            .await;
+        assert!(
+            child_interrupt_requested_at(node.as_ref()).await.is_none(),
+            "AgentRequest lease/progress changes must not trigger a global cancel scan"
+        );
+
         mirror.scan_pending_intents().await.unwrap();
         assert_eq!(
             child_interrupt_requested_at(node.as_ref()).await.as_deref(),

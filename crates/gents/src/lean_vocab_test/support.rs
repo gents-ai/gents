@@ -85,6 +85,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_continuation_materialization_cases:
         Vec<LeanGoalContinuationMaterializationCase>,
     pub(crate) session_hydration_decision_cases: Vec<LeanSessionHydrationDecisionCase>,
+    pub(crate) session_hydration_apply_cases: Vec<LeanSessionHydrationApplyCase>,
     pub(crate) session_hydration_progress_cases: Vec<LeanSessionHydrationProgressCase>,
     pub(crate) session_hydration_durable_cases: Vec<LeanSessionHydrationDurableCase>,
     pub(crate) enrollment_cases: Vec<LeanEnrollmentCase>,
@@ -552,6 +553,18 @@ pub(crate) struct LeanSessionHydrationDecisionCase {
     pub(crate) owns_session: bool,
     pub(crate) expected_admit: bool,
     pub(crate) expected_selected_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationApplyCase {
+    pub(crate) name: String,
+    pub(crate) admitted: bool,
+    pub(crate) delivery_confirmed: bool,
+    pub(crate) terminal_write: String,
+    pub(crate) expected_served: bool,
+    pub(crate) expected_rejected: bool,
+    pub(crate) expected_attempted_count: usize,
+    pub(crate) expected_confirmed_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1529,6 +1542,10 @@ pub(crate) fn lean_goal_continuation_materialization_cases(
 pub(crate) fn lean_session_hydration_decision_cases() -> &'static [LeanSessionHydrationDecisionCase]
 {
     &lean_contract_snapshot().session_hydration_decision_cases
+}
+
+pub(crate) fn lean_session_hydration_apply_cases() -> &'static [LeanSessionHydrationApplyCase] {
+    &lean_contract_snapshot().session_hydration_apply_cases
 }
 
 pub(crate) fn lean_session_hydration_progress_cases() -> &'static [LeanSessionHydrationProgressCase]

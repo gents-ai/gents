@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 use defra_node::{CollectionVersion, EmbeddedNode};
 use tokio::sync::Mutex;
@@ -37,11 +38,24 @@ pub async fn ensure_migrations_with_registry(
     let _guard = ENSURE_LOCK.lock().await;
     let mut report = MigrationReport::default();
 
+    let started = Instant::now();
     register_baseline(node, registry, &mut report).await?;
+    let baseline_ready = Instant::now();
     apply_steps(node, registry, &mut report).await?;
+    let steps_ready = Instant::now();
     verify_managed_lineages(node, registry, &mut report).await?;
+    let lineages_ready = Instant::now();
 
-    report.materialization = materialize::materialize_all(node, registry).await?;
+    // A chain-free registry has no older document version to advance. DefraDB
+    // already maintains baseline indexes on writes and merges, so opening a
+    // current store must not start one read and one write transaction for
+    // every managed collection merely to prove that zero rows need migration.
+    // Once the registry contains a migration step, retain the eager pass: old
+    // versions can arrive over P2P after the step was originally applied.
+    if !registry.steps.is_empty() {
+        report.materialization = materialize::materialize_all(node, registry).await?;
+    }
+    let materialization_ready = Instant::now();
     report.warnings.extend(
         report
             .materialization
@@ -57,6 +71,13 @@ pub async fn ensure_migrations_with_registry(
         steps_already_current = report.steps_already_current,
         edges_repaired = report.edges_repaired,
         documents_materialized = report.materialization.documents_materialized,
+        baseline_ms = baseline_ready.duration_since(started).as_millis(),
+        steps_ms = steps_ready.duration_since(baseline_ready).as_millis(),
+        lineage_verification_ms = lineages_ready.duration_since(steps_ready).as_millis(),
+        materialization_ms = materialization_ready
+            .duration_since(lineages_ready)
+            .as_millis(),
+        elapsed_ms = materialization_ready.duration_since(started).as_millis(),
         "ensure_migrations complete"
     );
 
@@ -90,25 +111,43 @@ async fn register_baseline(
     registry: &Registry<'_>,
     report: &mut MigrationReport,
 ) -> Result<()> {
+    let mut missing = Vec::new();
     for entry in registry.baseline {
-        match node.add_schema(entry.sdl).await {
-            Ok(()) => {
-                report.baseline_registered += 1;
-                debug!(collection = entry.name, "baseline schema registered");
-            }
-            Err(error) => {
-                if error.to_string().contains("already exists") {
-                    report.baseline_already_present += 1;
-                    debug!(collection = entry.name, "baseline schema already present");
-                } else {
-                    return Err(Error::BaselineRegister {
-                        collection: entry.name.to_string(),
-                        source: error,
-                    });
-                }
-            }
+        if node
+            .get_collection(entry.name)
+            .map_err(Error::Node)?
+            .is_some()
+        {
+            report.baseline_already_present += 1;
+            debug!(collection = entry.name, "baseline schema already present");
+        } else {
+            missing.push(entry);
         }
     }
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let batch = missing
+        .iter()
+        .map(|entry| entry.sdl)
+        .collect::<Vec<_>>()
+        .join("\n");
+    node.add_schema(&batch)
+        .await
+        .map_err(|source| Error::BaselineRegister {
+            collection: missing
+                .iter()
+                .map(|entry| entry.name)
+                .collect::<Vec<_>>()
+                .join(","),
+            source,
+        })?;
+    report.baseline_registered += missing.len();
+    debug!(
+        collections = missing.len(),
+        "baseline schemas registered in one batch"
+    );
     Ok(())
 }
 

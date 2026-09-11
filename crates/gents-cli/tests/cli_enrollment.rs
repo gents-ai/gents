@@ -587,6 +587,7 @@ async fn wait_for_chat_ready_enrollment(
     agent_did: &str,
 ) -> Result<gents_desktop_core::client::PeerRecord> {
     let deadline = Instant::now() + Duration::from_secs(90);
+    let mut updates = core.sync_state_updates();
     loop {
         let now = Utc::now();
         if let Some(record) = core
@@ -601,12 +602,25 @@ async fn wait_for_chat_ready_enrollment(
             let records = core.peer_records().await;
             bail!("timed out waiting for enrolled chat-ready route; peers={records:?}");
         }
-        sleep(Duration::from_millis(250)).await;
+        match tokio::time::timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            updates.changed(),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => bail!("client sync-state channel closed"),
+            Err(_) => {
+                let records = core.peer_records().await;
+                bail!("timed out waiting for enrolled chat-ready route; peers={records:?}");
+            }
+        }
     }
 }
 
 async fn wait_for_client_behavior_readiness(core: &ClientCore, agent_did: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
+    let mut updates = core.store_change_updates();
     loop {
         let snapshot = core.store().snapshot();
         let has_behavior = snapshot
@@ -627,7 +641,22 @@ async fn wait_for_client_behavior_readiness(core: &ClientCore, agent_did: &str) 
                 snapshot.behavior_readiness.len()
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        match tokio::time::timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            updates.changed(),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => bail!("app projection channel closed"),
+            Err(_) => {
+                bail!(
+                    "timed out waiting for gossiped AgentBehavior/AgentBehaviorReadiness; behaviors={} readiness={}",
+                    snapshot.behaviors.len(),
+                    snapshot.behavior_readiness.len()
+                );
+            }
+        }
     }
 }
 

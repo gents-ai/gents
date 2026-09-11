@@ -186,7 +186,8 @@ pub trait Watcher: Send + Sync {
 pub struct DefraWatcher {
     node: Arc<EmbeddedNode>,
     agent_did: String,
-    subscription: events::Subscription,
+    request_collection_id: Option<String>,
+    subscription: events::DocumentChangeSubscription,
     processed_request_ids: HashMap<String, Instant>,
 }
 
@@ -200,10 +201,16 @@ impl DefraWatcher {
         node: Arc<EmbeddedNode>,
         agent_did: &str,
     ) -> Self {
-        let subscription = subs.subscribe_updates();
+        let subscription = subs.subscribe_document_changes();
+        let request_collection_id = node
+            .get_collection("AgentRequest")
+            .ok()
+            .flatten()
+            .map(|collection| collection.collection_id);
         Self {
             node,
             agent_did: agent_did.to_string(),
+            request_collection_id,
             subscription,
             processed_request_ids: HashMap::new(),
         }
@@ -219,8 +226,17 @@ impl EventDeliveryRuntimeContract for DefraWatcher {
     };
 }
 
-fn request_update_wakeup(message: &events::Message) -> Option<&events::Update> {
-    message.as_update()
+fn document_change_batch_wakes_request_scan(
+    batch: &events::DocumentChangeBatch,
+    request_collection_id: Option<&str>,
+) -> bool {
+    batch.resync_required
+        || request_collection_id.is_none_or(|id| {
+            batch
+                .changes
+                .iter()
+                .any(|change| change.collection_id == id)
+        })
 }
 
 impl Watcher for DefraWatcher {
@@ -251,9 +267,9 @@ impl Watcher for DefraWatcher {
                 Err(e) => return Some(Err(e)),
             }
 
-            let msg =
+            let batch =
                 match tokio::time::timeout(GOSSIP_FALLBACK_POLL, self.subscription.recv()).await {
-                    Ok(Some(msg)) => msg,
+                    Ok(Some(batch)) => batch,
                     Ok(None) => return None,
                     Err(_timeout) => {
                         tracing::trace!("gossip quiet, polling for pending requests");
@@ -261,18 +277,23 @@ impl Watcher for DefraWatcher {
                     }
                 };
 
-            let Some(update) = request_update_wakeup(&msg) else {
+            if !document_change_batch_wakes_request_scan(
+                &batch,
+                self.request_collection_id.as_deref(),
+            ) {
                 continue;
-            };
+            }
 
-            let doc_id = &update.doc_id;
-            tracing::trace!(doc_id = %doc_id, is_relay = update.is_relay, "DefraDB update event received");
-
-            let dropped = self.subscription.check_and_reset_dropped();
-            if dropped > 0 {
+            if batch.resync_required {
                 tracing::warn!(
-                    dropped = dropped,
-                    "event bus dropped messages — may have missed requests"
+                    updates = batch.updates,
+                    "request watcher document-change capacity exceeded; durable queue scan remains authoritative"
+                );
+            } else {
+                tracing::trace!(
+                    updates = batch.updates,
+                    changed_documents = batch.changes.len(),
+                    "coalesced DefraDB document changes into one request wakeup"
                 );
             }
 

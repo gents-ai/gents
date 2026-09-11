@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
 use futures::{stream, StreamExt};
 use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
@@ -38,6 +38,11 @@ use remote_topology::{apply_op, read_actual, replay_replicator_after_reconnect};
 
 pub const PAIRING_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 pub const MAX_CONCURRENT_PEER_PREPARATIONS: usize = 8;
+const PAIRING_STATE_COLLECTIONS: [&str; 3] = [
+    "PeerPairingDesired",
+    "DataPlanePairingDesired",
+    "PeerPairingApplied",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnrollmentEndpointEntry {
@@ -479,22 +484,59 @@ pub async fn run_pairing_reconciler(
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let store =
         GraphqlPairingStateStore::with_enrollment_authority(node.clone(), identity, enrollment);
-    let subscription = node.subscribe(&[EventName::Update]);
+    // Subscribe before resolving IDs so commits racing startup remain pending.
+    // Pairing intent and its applied witness are the only document state this
+    // reconciler reads directly. Enrollment authority changes materialize or
+    // remove PeerPairingDesired; lease expiry remains covered by the periodic
+    // sweep. Transcript/config writes must not trigger a global topology scan.
+    let subscription = node.subscribe_document_changes();
+    let watched_collection_ids = pairing_state_collection_ids(&node)?;
 
-    run_pairing_reconciler_loop(&admin, &store, subscription, &cancel).await;
+    run_pairing_reconciler_loop(
+        &admin,
+        &store,
+        subscription,
+        &watched_collection_ids,
+        &cancel,
+    )
+    .await;
     Ok(())
+}
+
+fn pairing_state_collection_ids(node: &EmbeddedNode) -> Result<BTreeSet<String>> {
+    PAIRING_STATE_COLLECTIONS
+        .into_iter()
+        .map(|name| {
+            node.get_collection(name)?
+                .map(|collection| collection.collection_id)
+                .with_context(|| format!("{name} schema is not installed"))
+        })
+        .collect()
+}
+
+fn document_changes_wake_pairing_reconcile(
+    batch: &events::DocumentChangeBatch,
+    watched_collection_ids: &BTreeSet<String>,
+) -> bool {
+    batch.resync_required
+        || batch
+            .changes
+            .iter()
+            .any(|change| watched_collection_ids.contains(&change.collection_id))
 }
 
 async fn run_pairing_reconciler_loop(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
-    mut subscription: events::Subscription,
+    mut subscription: events::DocumentChangeSubscription,
+    watched_collection_ids: &BTreeSet<String>,
     cancel: &CancellationToken,
 ) {
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::<String>::new();
+    let mut subscription_open = true;
 
     // A transient top-level read failure during the first sweep is no more
     // terminal than one during a recurring sweep. The interval's first tick is
@@ -529,14 +571,20 @@ async fn run_pairing_reconciler_loop(
                     return;
                 }
             }
-            message = subscription.recv() => {
-                if message.is_none() {
-                    tracing::warn!("pairing reconciler update subscription closed; continuing with periodic sweeps");
+            batch = subscription.recv(), if subscription_open => {
+                let Some(batch) = batch else {
+                    tracing::warn!("pairing reconciler document-change subscription closed; continuing with periodic sweeps");
+                    subscription_open = false;
+                    continue;
+                };
+                if !document_changes_wake_pairing_reconcile(&batch, watched_collection_ids) {
                     continue;
                 }
-                let dropped = subscription.check_and_reset_dropped();
-                if dropped > 0 {
-                    tracing::warn!(dropped, "pairing reconciler update subscription dropped messages");
+                if batch.resync_required {
+                    tracing::warn!(
+                        updates = batch.updates,
+                        "pairing reconciler document-change capacity exceeded; performing authoritative sweep"
+                    );
                 }
                 if !sweep_pairings_logged_until_cancelled(
                     admin,

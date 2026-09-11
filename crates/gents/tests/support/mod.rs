@@ -183,6 +183,7 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
                 bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
                 relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
                 discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
+                allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
                 max_concurrent_multipath_paths: None,
                 secret_key_path: None,
                 load_persisted_collections: false,

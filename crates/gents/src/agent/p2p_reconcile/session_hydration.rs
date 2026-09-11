@@ -99,6 +99,80 @@ pub enum HydrationVerdict {
     Reject(&'static str),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HydrationDeliveryResult {
+    Confirmed,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HydrationTerminalWriteResult {
+    Committed,
+    Failed,
+    NotAttempted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HydrationApplyOutcome {
+    Served(BTreeSet<HydrationDocument>),
+    Rejected {
+        detail: &'static str,
+        attempted_documents: BTreeSet<HydrationDocument>,
+    },
+    PendingAfterTerminalWriteFailure {
+        attempted_documents: BTreeSet<HydrationDocument>,
+        confirmed_documents: BTreeSet<HydrationDocument>,
+    },
+    PendingAfterIndeterminateDelivery {
+        attempted_documents: BTreeSet<HydrationDocument>,
+    },
+}
+
+/// Project admission, bounded delivery, and terminal persistence as three
+/// separate effects. A failed terminal write leaves the durable request
+/// pending. Attempted documents and confirmed-complete delivery are distinct:
+/// a transport error or timeout can follow partial, replay-safe side effects.
+pub fn apply_hydration_delivery(
+    verdict: HydrationVerdict,
+    delivery: HydrationDeliveryResult,
+    terminal_write: HydrationTerminalWriteResult,
+) -> HydrationApplyOutcome {
+    match (verdict, delivery, terminal_write) {
+        (HydrationVerdict::Admit(documents), HydrationDeliveryResult::Indeterminate, _) => {
+            HydrationApplyOutcome::PendingAfterIndeterminateDelivery {
+                attempted_documents: documents,
+            }
+        }
+        (
+            HydrationVerdict::Admit(documents),
+            HydrationDeliveryResult::Confirmed,
+            HydrationTerminalWriteResult::Committed,
+        ) => HydrationApplyOutcome::Served(documents),
+        (HydrationVerdict::Reject(detail), _, HydrationTerminalWriteResult::Committed) => {
+            HydrationApplyOutcome::Rejected {
+                detail,
+                attempted_documents: BTreeSet::new(),
+            }
+        }
+        (
+            HydrationVerdict::Admit(documents),
+            HydrationDeliveryResult::Confirmed,
+            HydrationTerminalWriteResult::Failed | HydrationTerminalWriteResult::NotAttempted,
+        ) => HydrationApplyOutcome::PendingAfterTerminalWriteFailure {
+            attempted_documents: documents.clone(),
+            confirmed_documents: documents,
+        },
+        (
+            HydrationVerdict::Reject(_),
+            _,
+            HydrationTerminalWriteResult::Failed | HydrationTerminalWriteResult::NotAttempted,
+        ) => HydrationApplyOutcome::PendingAfterTerminalWriteFailure {
+            attempted_documents: BTreeSet::new(),
+            confirmed_documents: BTreeSet::new(),
+        },
+    }
+}
+
 pub fn decide_hydration(
     request: &HydrationRequest,
     catalog: &HydrationCatalog,
