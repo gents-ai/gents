@@ -581,7 +581,13 @@ export function createDesktopUiHarness(
   }
 
   function snapshot() {
-    const deployments = !provisioned || removed ? [] : [deployment];
+    const visibleDeployment = {
+      ...deployment,
+      dialSucceeded: p2pStatus === "healthy",
+      chatSafe: p2pStatus === "healthy",
+    };
+    const deployments =
+      !provisioned || removed ? [] : [visibleDeployment];
     const health = {
       status: p2pStatus,
       connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,

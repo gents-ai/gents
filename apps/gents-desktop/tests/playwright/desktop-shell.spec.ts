@@ -57,4 +57,16 @@ test.describe("kit shell", () => {
     await expect(page.getByTestId("startup-screen")).toBeVisible();
     await expect(page.getByTestId("startup-retry")).toBeVisible();
   });
+
+  test("offline transport keeps the locally cached conversation visible", async ({
+    page,
+  }) => {
+    await gotoHarness(page, "sync-offline");
+    await page.getByText("introduction-and-greetings", { exact: true }).click();
+
+    await expect(page.getByTestId("session-screen")).toBeVisible();
+    await expect(
+      page.getByText(/seeded turn gives the transcript a stable row/),
+    ).toBeVisible();
+  });
 });
