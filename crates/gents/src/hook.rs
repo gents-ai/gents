@@ -1215,12 +1215,8 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         tool_result: &ToolResult,
         internal_call_id: &str,
     ) -> anyhow::Result<bool> {
-        DefraSessionHook::persist_stream_tool_result_progress(
-            self,
-            tool_result,
-            internal_call_id,
-        )
-        .await
+        DefraSessionHook::persist_stream_tool_result_progress(self, tool_result, internal_call_id)
+            .await
     }
 
     async fn persist_inflight_assistant_turn(&self, message: &Message) -> anyhow::Result<u32> {
