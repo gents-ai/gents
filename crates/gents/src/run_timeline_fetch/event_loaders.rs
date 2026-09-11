@@ -199,7 +199,15 @@ pub(super) async fn load_timeline_rendered_requests_for_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineRenderedRequestRow>> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    // RenderedRequest stores absent requester authority as the required empty
+    // string, while canonical session-scoped documents represent it as null.
+    let requester_did = requester_did.unwrap_or_default();
+    let scope = format!(
+        r#"agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}"#,
+        escape_graphql_string(agent_did),
+        escape_graphql_string(session_id),
+        escape_graphql_string(requester_did),
+    );
     let query = format!(
         r#"{{
             RenderedRequest(

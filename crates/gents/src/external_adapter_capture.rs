@@ -472,6 +472,7 @@ pub(crate) fn langgraph_state_history_projection(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    values.insert("request_id".to_string(), json!(mapping.request_id));
     values.insert(
         "history_checkpoint_count".to_string(),
         json!(capture
