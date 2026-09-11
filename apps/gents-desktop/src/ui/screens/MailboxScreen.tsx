@@ -45,7 +45,7 @@ export function MailboxScreen({ shell }: { shell: Shell }) {
   const deployment = shell.selectedDeployment
   const items = (deployment?.mailboxItems ?? []).filter((m) => m.status === 'open')
   return (
-    <ScrollArea className="h-full">
+    <ScrollArea className="h-full" data-testid="mailbox-screen">
       <div className="mx-auto max-w-page px-6 py-6">
         <a
           href={href({ name: 'sessions' })}

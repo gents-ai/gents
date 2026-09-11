@@ -62,7 +62,7 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
     },
   ].filter(Boolean) as { key: string; label: string; clear: () => void }[]
   return (
-    <ScrollArea className="h-full">
+    <ScrollArea className="h-full" data-testid="sessions-screen">
       <div className="mx-auto max-w-page px-6 py-6">
         <div className="flex h-10 items-center gap-2">
           <h1 className="font-heading text-lg font-medium text-heading">Sessions</h1>

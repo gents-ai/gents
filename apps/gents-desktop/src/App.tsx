@@ -93,14 +93,21 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   const agent = shell.selectedDeployment?.agentPrincipal.displayName ?? null;
   const [setup, setSetup] = useState<"unknown" | "active" | "done">("unknown");
 
+  const titlebar = (
+    <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
+  );
+
   if (shell.startupPhase && shell.startupPhase !== "ready") {
     return (
-      <StartupScreen
-        error={shell.error}
-        managedServerSupported={bridge.supportsManagedServer === true}
-        onRetry={shell.reconnect}
-        phase={shell.startupPhase}
-      />
+      <>
+        {titlebar}
+        <StartupScreen
+          error={shell.error}
+          managedServerSupported={bridge.supportsManagedServer === true}
+          onRetry={shell.reconnect}
+          phase={shell.startupPhase}
+        />
+      </>
     );
   }
 
@@ -113,61 +120,67 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   }
   if (setup === "active" || (setup === "unknown" && shell.snapshot === null)) {
     return setup === "active" ? (
-      <TooltipProvider>
-        <BehaviorColorsContext.Provider value={shell.behaviorColors}>
-          <SetupScreen
-            shell={shell}
-            onDone={() => {
-              setSetup("done");
-              void shell.refreshSnapshot();
-              navigate({ name: "session", sessionId: null });
-            }}
-          />
-        </BehaviorColorsContext.Provider>
-      </TooltipProvider>
+      <>
+        {titlebar}
+        <TooltipProvider>
+          <BehaviorColorsContext.Provider value={shell.behaviorColors}>
+            <SetupScreen
+              shell={shell}
+              onDone={() => {
+                setSetup("done");
+                void shell.refreshSnapshot();
+                navigate({ name: "session", sessionId: null });
+              }}
+            />
+          </BehaviorColorsContext.Provider>
+        </TooltipProvider>
+      </>
     ) : null;
   }
 
   return (
-    <TooltipProvider>
-      <BehaviorColorsContext.Provider value={shell.behaviorColors}>
-        <AppShell
-          route={route}
-          agentName={agent}
-          agentDid={shell.selectedAgentDid}
-          deployment={shell.selectedDeployment}
-          root={shell.snapshot?.bootstrap.initToolRoot}
-          ceiling={shell.snapshot?.bootstrap.initToolCeiling}
-          online={Boolean(shell.snapshot?.client)}
-          mailboxCount={
-            shell.selectedDeployment?.mailboxItems.filter((m) => m.status === "open")
-              .length ?? 0
-          }
-          holds={
-            new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
-          }
-          syncHealth={shell.snapshot?.client?.syncHealth}
-          error={shell.error}
-          onDismissError={shell.clearError}
-          onReconnect={shell.reconnect}
-        >
-          {route.name === "sessions" && <SessionsScreen shell={shell} />}
-          {route.name === "session" && <SessionScreen shell={shell} />}
-          {route.name === "mailbox" && <MailboxScreen shell={shell} />}
-          {route.name === "agents" && <AgentsScreen shell={shell} />}
-          {route.name === "agent" && (
-            <AgentScreen
-              shell={shell}
-              agentDid={route.agentDid}
-              section={route.section}
-              item={route.item}
-            />
-          )}
-        </AppShell>
-        <Toaster />
-        <Shortcuts shell={shell} />
-      </BehaviorColorsContext.Provider>
-    </TooltipProvider>
+    <>
+      {titlebar}
+      <TooltipProvider>
+        <BehaviorColorsContext.Provider value={shell.behaviorColors}>
+          <AppShell
+            route={route}
+            agentName={agent}
+            agentDid={shell.selectedAgentDid}
+            deployment={shell.selectedDeployment}
+            root={shell.snapshot?.bootstrap.initToolRoot}
+            ceiling={shell.snapshot?.bootstrap.initToolCeiling}
+            online={Boolean(shell.snapshot?.client)}
+            mailboxCount={
+              shell.selectedDeployment?.mailboxItems.filter((m) => m.status === "open")
+                .length ?? 0
+            }
+            holds={
+              new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
+            }
+            syncHealth={shell.snapshot?.client?.syncHealth}
+            error={shell.error}
+            onDismissError={shell.clearError}
+            onReconnect={shell.reconnect}
+          >
+            {route.name === "sessions" && <SessionsScreen shell={shell} />}
+            {route.name === "session" && <SessionScreen shell={shell} />}
+            {route.name === "mailbox" && <MailboxScreen shell={shell} />}
+            {route.name === "agents" && <AgentsScreen shell={shell} />}
+            {route.name === "agent" && (
+              <AgentScreen
+                shell={shell}
+                agentDid={route.agentDid}
+                section={route.section}
+                item={route.item}
+              />
+            )}
+          </AppShell>
+          <Toaster />
+          <Shortcuts shell={shell} />
+        </BehaviorColorsContext.Provider>
+      </TooltipProvider>
+    </>
   );
 }
 

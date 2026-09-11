@@ -346,6 +346,7 @@ export function AppShell({
           {error && (
             <div
               role="alert"
+              data-testid="error-banner"
               className="absolute inset-x-6 top-3 z-30 flex items-center gap-3 rounded-2xl border border-destructive/30 bg-raised px-4 py-2.5 shadow-md"
             >
               <CircleAlert className="size-4 shrink-0 text-destructive" />
@@ -353,7 +354,13 @@ export function AppShell({
               <Button size="sm" variant="outline" onClick={() => void onReconnect?.()}>
                 Reconnect
               </Button>
-              <Button size="icon-xs" variant="quiet" aria-label="Dismiss" onClick={onDismissError}>
+              <Button
+                size="icon-xs"
+                variant="quiet"
+                aria-label="Dismiss"
+                data-testid="error-banner-dismiss"
+                onClick={onDismissError}
+              >
                 <X />
               </Button>
             </div>

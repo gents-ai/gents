@@ -6,7 +6,7 @@
    server's admin approves, then the peer joins. A Network section at the
    foot shows this node and repairs P2P. */
 import { useState } from 'react'
-import { ChevronDown, EllipsisVertical, Inbox, Plus } from 'lucide-react'
+import { ChevronDown, EllipsisVertical, Inbox, Plus, Server, Wifi } from 'lucide-react'
 import { toast } from 'sonner'
 import type { NetworkStatusView } from '@source-inc/gents-desktop-client'
 import { Button } from '@gents/ui/components/button'
@@ -37,13 +37,14 @@ import { AgentAvatar } from './AgentAvatar'
 import { AgentHoverCard } from './HoverCards'
 import { CopyButton } from './Markdown'
 import { Fact, Group, Row } from './agent/rows'
+import { isMobileTauriShell } from '../../lib/shellPlatform'
 
 export function AgentsScreen({ shell }: { shell: Shell }) {
   const [adding, setAdding] = useState(false)
   const [renaming, setRenaming] = useState<{ peerId: string; label: string } | null>(null)
   const pending = shell.snapshot?.client?.enrollmentRequests
   return (
-    <ScrollArea className="h-full">
+    <ScrollArea className="h-full" data-testid="agents-screen">
       <div className="mx-auto max-w-2xl px-6 py-8">
         <div className="flex h-10 items-center justify-between">
           <h1 className="font-heading text-lg font-medium text-heading">Agents</h1>
@@ -176,12 +177,14 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                   <DropdownMenuContent align="end">
                     <DropdownMenuGroup>
                       <DropdownMenuItem
+                        nativeButton={false}
                         render={<a href={href({ name: 'sessions' })} />}
                         onClick={() => shell.selectAgent(d.agentDid)}
                       >
                         Open sessions
                       </DropdownMenuItem>
                       <DropdownMenuItem
+                        nativeButton={false}
                         render={<a href={config} />}
                         onClick={() => shell.selectAgent(d.agentDid)}
                       >
@@ -229,7 +232,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
   )
 }
 
-/* the desktop's status enrolment: an address, a request, the admin approves */
+/* Add a local agent (desktop) or enrol with a remote server. */
 function AddAgentDialog({
   shell,
   open,
@@ -239,19 +242,32 @@ function AddAgentDialog({
   open: boolean
   onClose: () => void
 }) {
+  const allowLocal = !isMobileTauriShell()
+  const [where, setWhere] = useState<'local' | 'remote'>(allowLocal ? 'local' : 'remote')
   const [address, setAddress] = useState('')
+  const [name, setName] = useState('Forge')
   const [busy, setBusy] = useState(false)
-  const ready = /\S/.test(address)
+  const ready = where === 'local' ? /\S/.test(name) : /\S/.test(address)
   const submit = async () => {
     setBusy(true)
     try {
-      const r = await shell.api.requestStatusEnrollment(address.trim())
-      await shell.refreshSnapshot()
-      toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`)
+      if (where === 'local') {
+        await shell.api.initLocalStandardRuntime({
+          label: name.trim() || 'Local Agent',
+          dangerouslyOverwrite: false,
+          reset: false,
+        })
+        await shell.refreshSnapshot()
+        toast('Local agent created')
+      } else {
+        const r = await shell.api.requestStatusEnrollment(address.trim())
+        await shell.refreshSnapshot()
+        toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`)
+      }
       setAddress('')
       onClose()
     } catch (e) {
-      toast(`Couldn't request enrolment: ${String(e)}`)
+      toast(where === 'local' ? `Couldn't create agent: ${String(e)}` : `Couldn't request enrolment: ${String(e)}`)
     } finally {
       setBusy(false)
     }
@@ -260,13 +276,51 @@ function AddAgentDialog({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Connect by server address</DialogTitle>
+          <DialogTitle>Add agent</DialogTitle>
           <DialogDescription>
-            Enter an agent's IP address, hostname or URL. Gents reads its status offer,
-            authenticates the server and requests enrolment. The server must approve the request
-            before chat opens.
+            {allowLocal
+              ? 'Create an agent on this Mac, or connect to one that already runs.'
+              : 'Connect to a Gents server. Its admin approves the enrolment.'}
           </DialogDescription>
         </DialogHeader>
+        {allowLocal && (
+          <div className="grid gap-2" role="radiogroup" aria-label="Where the agent lives">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={where === 'local'}
+              onClick={() => setWhere('local')}
+              className={cn(
+                'flex w-full items-center gap-3 rounded-2xl border bg-raised px-4 py-3 text-left',
+                where === 'local' ? 'border-brand ring-1 ring-brand' : 'border-border/60',
+              )}
+            >
+              <Server className="size-4 shrink-0" />
+              <span>
+                <span className="block text-sm font-medium">Local agent</span>
+                <span className="block text-xs text-muted-foreground">Create one on this Mac</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={where === 'remote'}
+              onClick={() => setWhere('remote')}
+              className={cn(
+                'flex w-full items-center gap-3 rounded-2xl border bg-raised px-4 py-3 text-left',
+                where === 'remote' ? 'border-brand ring-1 ring-brand' : 'border-border/60',
+              )}
+            >
+              <Wifi className="size-4 shrink-0" />
+              <span>
+                <span className="block text-sm font-medium">Remote connect</span>
+                <span className="block text-xs text-muted-foreground">
+                  Join a server someone else runs
+                </span>
+              </span>
+            </button>
+          </div>
+        )}
         <form
           className="grid gap-2"
           onSubmit={(e) => {
@@ -274,25 +328,50 @@ function AddAgentDialog({
             if (ready && !busy) void submit()
           }}
         >
-          <label htmlFor="enrol-address" className="text-sm">
-            Agent server
-          </label>
-          <Input
-            id="enrol-address"
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            placeholder="100.69.4.79:9191"
-            className="font-mono"
-            disabled={busy}
-            autoFocus
-          />
+          {where === 'local' ? (
+            <>
+              <label htmlFor="local-agent-name" className="text-sm">
+                Name
+              </label>
+              <Input
+                id="local-agent-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Forge"
+                disabled={busy}
+                autoFocus
+              />
+            </>
+          ) : (
+            <>
+              <label htmlFor="enrol-address" className="text-sm">
+                Agent server
+              </label>
+              <Input
+                id="enrol-address"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="100.69.4.79:9191"
+                className="font-mono"
+                disabled={busy}
+                autoFocus
+                data-testid="fleet-add-server-address"
+              />
+            </>
+          )}
         </form>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="brand" disabled={!ready || busy} onClick={() => void submit()}>
-            {busy ? <Spinner /> : null} {busy ? 'Connecting…' : 'Request enrolment'}
+          <Button
+            variant="brand"
+            disabled={!ready || busy}
+            onClick={() => void submit()}
+            data-testid={where === 'local' ? 'fleet-connect-local-submit' : 'fleet-fetch-status'}
+          >
+            {busy ? <Spinner /> : null}{' '}
+            {busy ? 'Working…' : where === 'local' ? 'Create' : 'Request enrolment'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -407,6 +486,7 @@ function Network({ shell }: { shell: Shell }) {
                   size="sm"
                   disabled={repairing}
                   onClick={() => void repair()}
+                  data-testid="fleet-repair-p2p"
                 >
                   {repairing ? <Spinner /> : null} Repair P2P
                 </Button>
