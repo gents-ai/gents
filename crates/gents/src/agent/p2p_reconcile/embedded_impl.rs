@@ -1033,7 +1033,6 @@ mod tests {
         let node = Arc::clone(&test.node);
         let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&node));
         let collection_name = "P2pReconcileThing".to_string();
-        let expected_collection_id = collection_id(&node, "P2pReconcileThing");
 
         admin
             .add_p2p_collections(std::slice::from_ref(&collection_name))
@@ -1044,7 +1043,7 @@ mod tests {
             .list_p2p_collections()
             .await
             .expect("list collections");
-        assert!(collections.contains(&expected_collection_id));
+        assert_eq!(collections, vec![collection_name]);
 
         node.shutdown().await;
     }
