@@ -1384,6 +1384,7 @@ fn resolve_server_p2p_config(
             P2pDiscoveryArg::N0 => p2p::iroh::IrohDiscoveryConfig::N0,
             P2pDiscoveryArg::Disabled => p2p::iroh::IrohDiscoveryConfig::Disabled,
         },
+        allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(secret_key_path),
         load_persisted_collections: true,
