@@ -202,7 +202,10 @@ export function AppShell({
     </SettingsMenu>
   )
   return (
-    <div className="viewport-frame grid grid-rows-[auto_1fr] bg-background text-foreground">
+    <div
+      className="viewport-frame grid grid-rows-[auto_1fr] bg-background text-foreground"
+      data-testid="app-shell"
+    >
       <header className="flex h-12 items-center gap-4 px-4">
         {/* below md the rail is gone; the menu opens the same panel as a sheet */}
         <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
@@ -235,7 +238,7 @@ export function AppShell({
           </SheetContent>
         </Sheet>
         <a
-          href="#/agents"
+          href={href({ name: 'agents' })}
           aria-label="Agents"
           className="grid size-7 place-items-center rounded-md bg-ink text-background"
         >
@@ -244,7 +247,7 @@ export function AppShell({
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
-              <BreadcrumbLink href="#/agents">Agents</BreadcrumbLink>
+              <BreadcrumbLink href={href({ name: 'agents' })}>Agents</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
@@ -280,7 +283,9 @@ export function AppShell({
                 const link = (
                   <a
                     href={
-                      agentDid ? href({ name: 'agent', agentDid, section: 'agent' }) : '#/agents'
+                      agentDid
+                        ? href({ name: 'agent', agentDid, section: 'agent' })
+                        : href({ name: 'agents' })
                     }
                     aria-label={`${agentName ?? 'Agent'} configuration`}
                     aria-current={route.name === 'agent' ? 'page' : undefined}

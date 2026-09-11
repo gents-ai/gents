@@ -1,6 +1,6 @@
 /* Adapts useDesktopShell to the prototype Shell shape so copied screens
    keep calling shell.api / applyConfig / saveBehaviorConfig. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   DesktopApiAdapter,
@@ -13,14 +13,23 @@ export type ShellBridge = DesktopShellBridge & {
   invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 };
 
-export function useShell(bridge: ShellBridge, routeSessionId: string | null) {
+export function useShell(bridge: ShellBridge, routeSessionId: string | null | undefined) {
   const d = useDesktopShell(bridge);
   const api = bridge.api;
+  const shellRef = useRef(d);
+  shellRef.current = d;
 
   useEffect(() => {
-    if (routeSessionId === d.selectedSessionId) return;
-    if (routeSessionId) d.setSelectedSessionId(routeSessionId);
-  }, [routeSessionId, d.selectedSessionId, d.setSelectedSessionId]);
+    const shell = shellRef.current;
+    if (routeSessionId === undefined) return;
+    if (routeSessionId === null) {
+      shell.onStartNewSession();
+      return;
+    }
+    if (routeSessionId !== shell.selectedSessionId) {
+      shell.setSelectedSessionId(routeSessionId);
+    }
+  }, [routeSessionId]);
 
   const applyConfig = useCallback(
     async (run: (api: DesktopApiAdapter) => Promise<DesktopClientSnapshot>) => {
@@ -33,14 +42,17 @@ export function useShell(bridge: ShellBridge, routeSessionId: string | null) {
 
   const sendMessage = useCallback(
     async (content: string, behaviorId: string | null) => {
-      if (!d.selectedAgentDid) return null;
-      return api.sendChatMessage({
-        agentDid: d.selectedAgentDid,
+      const agentDid = d.selectedAgentDid ?? d.deployments[0]?.agentDid;
+      if (!agentDid) return null;
+      const result = await api.sendChatMessage({
+        agentDid,
         behaviorId,
         sessionId: d.selectedSessionId,
         content,
         causedBySourceDocId: d.pendingMailboxCauseId ?? null,
       });
+      if (result?.sessionId) d.setSelectedSessionId(result.sessionId);
+      return result;
     },
     [api, d],
   );
@@ -49,7 +61,7 @@ export function useShell(bridge: ShellBridge, routeSessionId: string | null) {
 
   return useMemo(() => {
     const deployments = d.deployments;
-    const selectedDeployment = d.selectedDeployment;
+    const selectedDeployment = d.selectedDeployment ?? deployments[0] ?? null;
     const behaviorDescriptions = Object.fromEntries(
       (selectedDeployment?.behaviors ?? []).map((b) => [
         b.behaviorId,
@@ -63,7 +75,7 @@ export function useShell(bridge: ShellBridge, routeSessionId: string | null) {
       sending: d.sending,
       deployments,
       selectedDeployment,
-      selectedAgentDid: d.selectedAgentDid,
+      selectedAgentDid: d.selectedAgentDid ?? selectedDeployment?.agentDid ?? null,
       selectAgent: d.setSelectedAgentDid,
       selectedSessionId: d.selectedSessionId,
       selectedSession: d.session,

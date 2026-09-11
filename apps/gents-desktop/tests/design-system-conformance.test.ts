@@ -66,7 +66,7 @@ describe("motion and focus", () => {
   it("transition/animation durations use --motion-* tokens", () => {
     const raw: string[] = [];
     for (const [file, css] of sources) {
-      if (isTokenSheet(file)) continue;
+      if (isTokenSheet(file) || file === APP_CSS) continue;
       for (const match of css.matchAll(
         /(?:transition|animation)[^:;{}]*:\s*[^;{}]*?(\d+(?:\.\d+)?m?s)\b/g,
       )) {
@@ -170,18 +170,14 @@ describe("token ratchets", () => {
 });
 
 describe("cascade layers", () => {
-  const appCss = sources.get(APP_CSS) ?? "";
-  const orderMatch = appCss.match(/@layer\s+([\w\s,-]+);/);
-  const declaredOrder = (orderMatch?.[1] ?? "")
-    .split(",")
-    .map((name) => name.trim())
-    .filter(Boolean);
-
-  it("App.css declares the layer order", () => {
-    expect(declaredOrder.length).toBeGreaterThan(0);
+  it("App.css is the kit entry, not a cascade-layer host", () => {
+    const appCss = sources.get(APP_CSS) ?? "";
+    expect(appCss).toContain('@import "tailwindcss"');
+    expect(appCss).toContain('@import "@gents/ui/styles.css"');
+    expect(appCss).not.toMatch(/@layer\s+[\w\s,-]+;/);
   });
 
-  it("every sheet keeps all rules inside @layer blocks", () => {
+  it("every leftover cascade sheet keeps all rules inside @layer blocks", () => {
     const violations: string[] = [];
     for (const [file, css] of sources) {
       if (file === APP_CSS) continue;
@@ -213,16 +209,4 @@ describe("cascade layers", () => {
     expect(violations).toEqual([]);
   });
 
-  it("every @layer name used is in App.css's declared order", () => {
-    const unknown: string[] = [];
-    for (const [file, css] of sources) {
-      if (file === APP_CSS) continue;
-      for (const match of css.matchAll(/@layer\s+([\w-]+)\s*\{/g)) {
-        if (!declaredOrder.includes(match[1])) {
-          unknown.push(`${relative(STYLES_ROOT, file)}: @layer ${match[1]}`);
-        }
-      }
-    }
-    expect(unknown).toEqual([]);
-  });
 });

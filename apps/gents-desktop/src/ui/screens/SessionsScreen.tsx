@@ -151,7 +151,12 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
                 </Button>
               </div>
             )}
-            <Button variant="brand" size="sm" render={<a href="#/sessions/new" />}>
+            <Button
+              variant="brand"
+              size="sm"
+              nativeButton={false}
+              render={<a href={href({ name: 'session', sessionId: null })} />}
+            >
               New
             </Button>
           </div>
@@ -201,7 +206,12 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
                 <p className="mt-3 font-heading text-lg font-medium text-heading">
                   No sessions yet
                 </p>
-                <Button variant="brand" className="mt-5" render={<a href="#/sessions/new" />}>
+                <Button
+                  variant="brand"
+                  className="mt-5"
+                  nativeButton={false}
+                  render={<a href={href({ name: 'session', sessionId: null })} />}
+                >
                   <Plus /> New session
                 </Button>
               </div>

@@ -122,7 +122,7 @@ describe("desktop startup screen", () => {
       error: null,
     });
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
   });
 
@@ -168,7 +168,7 @@ describe("desktop startup screen", () => {
 
     await userEvent.click(screen.getByTestId("startup-retry"));
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(managedServerStatus).toHaveBeenCalledTimes(2);
   });
@@ -214,18 +214,18 @@ describe("desktop startup screen", () => {
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
       "Catalyzing dilithium converters.",
     );
-    expect(screen.queryByTestId("fleet-empty")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
 
     initial.resolve(snapshot(true, false));
     await waitFor(() => expect(startDesktopClient).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
       "Starting the secure client",
     );
-    expect(screen.queryByTestId("fleet-empty")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
 
     started.resolve(snapshot(true, true));
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-dashboard")).toBeInTheDocument();
+      expect(screen.getByTestId("app-shell")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();
   });
@@ -243,11 +243,11 @@ describe("desktop startup screen", () => {
     );
 
     expect(screen.getByTestId("startup-screen")).toBeInTheDocument();
-    expect(screen.queryByTestId("fleet-empty")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
 
     initial.resolve(snapshot(false, false));
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(startDesktopClient).not.toHaveBeenCalled();
   });
@@ -278,7 +278,7 @@ describe("desktop startup screen", () => {
 
     await userEvent.click(screen.getByTestId("startup-retry"));
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(2);
   });

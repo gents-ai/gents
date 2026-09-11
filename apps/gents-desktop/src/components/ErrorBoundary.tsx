@@ -24,21 +24,25 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     }
     const message = this.state.error.message || String(this.state.error);
     return (
-      <main className="app-shell">
+      <main className="viewport-frame grid place-items-center bg-background px-8 text-foreground">
         <article
-          className="panel centered-panel error-boundary"
+          className="grid w-full max-w-md gap-4"
           data-testid="error-boundary"
           role="alert"
         >
-          <p className="eyebrow">Desktop</p>
-          <h2>Something went wrong</h2>
-          <p className="muted">
+          <p className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+            Desktop
+          </p>
+          <h2 className="font-heading text-2xl font-medium text-heading">
+            Something went wrong
+          </h2>
+          <p className="text-sm text-muted-foreground">
             The view hit an unexpected error. Reloading usually recovers; your agents
             and data are unaffected.
           </p>
-          <details className="error-boundary-details">
+          <details>
             <summary>Error details</summary>
-            <pre>
+            <pre className="mt-2 overflow-auto font-mono text-xs">
               {this.state.error.stack || message}
               {this.state.componentStack
                 ? `\n\nComponent stack:${this.state.componentStack}`
@@ -47,7 +51,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           </details>
           <button
             autoFocus
-            className="primary-button"
+            className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
             data-testid="error-boundary-reload"
             type="button"
             onClick={() => window.location.reload()}

@@ -392,7 +392,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         >
           <div className="mx-auto flex h-12 w-full max-w-page items-center gap-3 border-b border-border/60 bg-background/95 px-6 backdrop-blur">
             <a
-              href="#/sessions"
+              href={href({ name: 'sessions' })}
               aria-label="Sessions"
               className="text-muted-foreground hover:text-foreground"
             >
@@ -430,7 +430,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           <ScrollArea className="h-full">
             <div className="mx-auto flex min-h-full w-full max-w-page flex-col px-6 pt-4">
               <a
-                href="#/sessions"
+                href={href({ name: 'sessions' })}
                 className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
               >
                 <ArrowLeft className="size-3.5" /> Sessions

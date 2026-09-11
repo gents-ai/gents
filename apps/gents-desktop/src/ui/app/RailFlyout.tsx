@@ -85,7 +85,9 @@ export function NavPanel({
     <>
       {/* the agent, in the same slot as its avatar on the rail */}
       <a
-        href={agentDid ? href({ name: 'agent', agentDid, section: 'agent' }) : '#/agents'}
+        href={
+          agentDid ? href({ name: 'agent', agentDid, section: 'agent' }) : href({ name: 'agents' })
+        }
         aria-current={route.name === 'agent' ? 'page' : undefined}
         className={cn(
           'group mr-3 mb-2 ml-[14px] flex h-7 items-center gap-3 rounded-lg text-sm transition-colors',
@@ -172,7 +174,11 @@ export function NavPanel({
       )}
       <div className="mt-auto">
         <div className="mx-3 mb-2 h-px bg-border" />
-        <Item to="#/agents" active={route.name === 'agents'} icon={<Users className="size-4" />}>
+        <Item
+          to={href({ name: 'agents' })}
+          active={route.name === 'agents'}
+          icon={<Users className="size-4" />}
+        >
           Agents
         </Item>
         {settings}

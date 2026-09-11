@@ -24,7 +24,7 @@ import { Button } from '@gents/ui/components/button'
 import { ScrollArea } from '@gents/ui/components/scroll-area'
 import { cn } from '@gents/ui/lib/utils'
 import type { Shell } from '@/hooks/useShell'
-import { navigate } from '@/lib/router'
+import { href, navigate } from '@/lib/router'
 import { toast } from 'sonner'
 import { useState } from 'react'
 import { BehaviorAvatar } from './parts'
@@ -48,7 +48,7 @@ export function MailboxScreen({ shell }: { shell: Shell }) {
     <ScrollArea className="h-full">
       <div className="mx-auto max-w-page px-6 py-6">
         <a
-          href="#/sessions"
+          href={href({ name: 'sessions' })}
           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3" /> Back
@@ -81,7 +81,12 @@ export function MailboxScreen({ shell }: { shell: Shell }) {
               <p className="mt-3 font-heading text-lg font-medium text-heading">
                 Nothing needs your attention
               </p>
-              <Button variant="brand" className="mt-5" render={<a href="#/sessions/new" />}>
+              <Button
+                variant="brand"
+                className="mt-5"
+                nativeButton={false}
+                render={<a href={href({ name: 'session', sessionId: null })} />}
+              >
                 <Plus /> New session
               </Button>
             </div>
