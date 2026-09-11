@@ -143,6 +143,15 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 
     async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
+        match self.node.get_collection(id) {
+            Ok(Some(def)) => return Ok(Some(def.name)),
+            Ok(None) => {}
+            Err(error) => {
+                return Err(RemoteP2pAdminError::LocalError(format!(
+                    "resolve_collection_name({id}) as name: {error}"
+                )))
+            }
+        }
         let names = self.node.list_collections().map_err(|error| {
             RemoteP2pAdminError::LocalError(format!("list_collections for id {id}: {error}"))
         })?;
@@ -411,6 +420,32 @@ mod tests {
             .await
             .expect("test schema");
         test
+    }
+
+    #[tokio::test]
+    async fn collection_name_resolution_accepts_names_and_ids() {
+        let test = test_node().await;
+        let definition = test
+            .node
+            .get_collection("P2pReconcileThing")
+            .expect("collection lookup")
+            .expect("collection definition");
+        let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&test.node));
+
+        assert_eq!(
+            admin
+                .resolve_collection_name("P2pReconcileThing")
+                .await
+                .expect("resolve name token"),
+            Some("P2pReconcileThing".to_string())
+        );
+        assert_eq!(
+            admin
+                .resolve_collection_name(&definition.collection_id)
+                .await
+                .expect("resolve id token"),
+            Some("P2pReconcileThing".to_string())
+        );
     }
 
     async fn runtime_test_node() -> TestNode {
