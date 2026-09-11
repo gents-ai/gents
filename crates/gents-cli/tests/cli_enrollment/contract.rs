@@ -291,6 +291,11 @@ async fn visible_turn(
         } else {
             RETURN_TO_OBSERVER_BUDGET
         };
+        let observed_return_skew_us = if client_visible >= runtime_completed {
+            (client_visible - runtime_completed).as_micros() as i128
+        } else {
+            -((runtime_completed - client_visible).as_micros() as i128)
+        };
         tracing::info!(
             local_submit_ms = local_submit_completed.as_millis(),
             submit_to_runtime_observed_ms = request_arrived.saturating_sub(local_submit_completed).as_millis(),
@@ -298,8 +303,10 @@ async fn visible_turn(
             selection_admission_ms = selection_admitted.as_millis(),
             runtime_completion_ms = runtime_completed.as_millis(),
             client_visible_ms = client_visible.as_millis(),
-            observed_return_lag_ms = client_visible.saturating_sub(runtime_completed).as_millis(),
-            "conversation phase timings (250ms observation resolution)",
+            observed_return_skew_us,
+            runtime_probe_interval_ms = 250,
+            client_database_probe_interval_ms = 25,
+            "conversation phase timings",
         );
         let lifecycle = graphql_query(graphql, &format!(r#"{{
             AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{created_at claimed_at terminalized_at}}
@@ -361,6 +368,8 @@ async fn wait_for_replicated_reply(
     request: &str,
     expected_reply: &str,
 ) -> Result<()> {
+    const DATABASE_PROBE_INTERVAL: Duration = Duration::from_millis(25);
+
     let filter = format!(
         r#"request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}"#,
         escape_graphql_string(request),
@@ -376,95 +385,130 @@ async fn wait_for_replicated_reply(
     }}"#
     );
     let visibility_started = Instant::now();
-    let mut database_ready_at = None;
-    let mut stages_seen = [false; 3];
-    loop {
-        let result = core.node().execute(&query).await;
-        anyhow::ensure!(
-            !result.has_errors(),
-            "replica query failed: {:?}",
-            result.errors
-        );
-        let data = result.data.context("replica query missing data")?;
-        let rows = |collection: &str| {
-            data.get(collection)
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        };
-        let requests = rows("AgentRequest");
-        let responses = rows("AgentResponse");
-        let messages = rows("AgentMessage");
-        let completed = requests
-            .iter()
-            .any(|row| row["lifecycle_state"] == "completed")
-            && responses.iter().any(|row| row["status"] == "complete");
-        let body = messages
-            .iter()
-            .filter(|row| row["role"] == "assistant")
-            .filter_map(|row| row["content"].as_str())
-            .map(|content| {
-                gents_protocol::transcript::present_persisted_message("assistant", content)
-                    .body_markdown
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for (index, (stage, ready)) in [
-            (
-                "request_completed",
-                requests
-                    .iter()
-                    .any(|row| row["lifecycle_state"] == "completed"),
-            ),
-            (
-                "response_complete",
-                responses.iter().any(|row| row["status"] == "complete"),
-            ),
-            ("transcript_materialized", body.contains(expected_reply)),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if ready && !stages_seen[index] {
-                stages_seen[index] = true;
-                tracing::debug!(request, stage, documents = ?[&requests, &responses, &messages][index].iter().filter_map(|row| row["_docID"].as_str()).collect::<Vec<_>>(), "replica stage document identities");
-                tracing::info!(
-                    request,
-                    stage,
-                    elapsed_ms = visibility_started.elapsed().as_millis(),
-                    "client replica delivery stage"
-                );
+    let database_visibility = async {
+        let mut stages_seen = [false; 3];
+        let mut response_ready_at = None;
+        loop {
+            let result = core.node().execute(&query).await;
+            anyhow::ensure!(
+                !result.has_errors(),
+                "replica query failed: {:?}",
+                result.errors
+            );
+            let data = result.data.context("replica query missing data")?;
+            let rows = |collection: &str| {
+                data.get(collection)
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let requests = rows("AgentRequest");
+            let responses = rows("AgentResponse");
+            let messages = rows("AgentMessage");
+            let completed = requests
+                .iter()
+                .any(|row| row["lifecycle_state"] == "completed")
+                && responses.iter().any(|row| row["status"] == "complete");
+            let response_complete = responses.iter().any(|row| row["status"] == "complete");
+            if response_complete {
+                response_ready_at.get_or_insert_with(Instant::now);
             }
+            let body = messages
+                .iter()
+                .filter(|row| row["role"] == "assistant")
+                .filter_map(|row| row["content"].as_str())
+                .map(|content| {
+                    gents_protocol::transcript::present_persisted_message("assistant", content)
+                        .body_markdown
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for (index, (stage, ready)) in [
+                (
+                    "request_completed",
+                    requests
+                        .iter()
+                        .any(|row| row["lifecycle_state"] == "completed"),
+                ),
+                ("response_complete", response_complete),
+                ("transcript_materialized", body.contains(expected_reply)),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if ready && !stages_seen[index] {
+                    stages_seen[index] = true;
+                    tracing::debug!(request, stage, documents = ?[&requests, &responses, &messages][index].iter().filter_map(|row| row["_docID"].as_str()).collect::<Vec<_>>(), "replica stage document identities");
+                    tracing::info!(
+                        request,
+                        stage,
+                        elapsed_ms = visibility_started.elapsed().as_millis(),
+                        "client replica delivery stage"
+                    );
+                }
+            }
+            anyhow::ensure!(
+                !responses.iter().any(|row| row["status"] == "error"),
+                "replicated error response: {responses:?}"
+            );
+            if completed && body.contains(expected_reply) {
+                return Ok::<_, anyhow::Error>((
+                    Instant::now(),
+                    response_ready_at.expect("completed response timestamp"),
+                ));
+            }
+            sleep(DATABASE_PROBE_INTERVAL).await;
         }
-        if completed && body.contains(expected_reply) {
-            let database_ready = *database_ready_at.get_or_insert_with(Instant::now);
-            let observer_ready = core
+    };
+    let observer_visibility = async {
+        let mut store_updates = core.store_change_updates();
+        loop {
+            if core
                 .store()
                 .snapshot()
                 .latest_response_for_request(request)
-                .is_some_and(|response| response.status.as_deref() == Some("complete"));
-            if observer_ready {
-                tracing::info!(
-                    request,
-                    database_visible_ms = database_ready
-                        .duration_since(visibility_started)
-                        .as_millis(),
-                    observer_after_database_ms = database_ready.elapsed().as_millis(),
-                    "local database and observer visibility",
-                );
-                return Ok(());
+                .is_some_and(|response| response.status.as_deref() == Some("complete"))
+            {
+                return Ok::<_, anyhow::Error>(Instant::now());
             }
-            anyhow::ensure!(
-                database_ready.elapsed() < Duration::from_millis(500),
-                "local DB has the completed reply but the observer has not projected it in 500ms"
-            );
+            store_updates
+                .changed()
+                .await
+                .context("app projection update channel closed")?;
         }
-        anyhow::ensure!(
-            !responses.iter().any(|row| row["status"] == "error"),
-            "replicated error response: {responses:?}"
-        );
-        sleep(Duration::from_millis(100)).await;
-    }
+    };
+
+    let ((conversation_database_ready, response_database_ready), observer_ready) =
+        tokio::try_join!(database_visibility, observer_visibility)?;
+    let observer_minus_response_database_us = if observer_ready >= response_database_ready {
+        observer_ready
+            .duration_since(response_database_ready)
+            .as_micros() as i128
+    } else {
+        -(response_database_ready
+            .duration_since(observer_ready)
+            .as_micros() as i128)
+    };
+    tracing::info!(
+        request,
+        response_database_visible_ms = response_database_ready
+            .duration_since(visibility_started)
+            .as_millis(),
+        conversation_database_visible_ms = conversation_database_ready
+            .duration_since(visibility_started)
+            .as_millis(),
+        observer_visible_ms = observer_ready
+            .duration_since(visibility_started)
+            .as_millis(),
+        observer_minus_response_database_us,
+        database_probe_interval_ms = DATABASE_PROBE_INTERVAL.as_millis(),
+        "independently observed local database and app projection visibility",
+    );
+    anyhow::ensure!(
+        observer_ready <= response_database_ready + Duration::from_millis(500),
+        "local DB had the completed response more than 500ms before the observer projected it"
+    );
+    Ok(())
 }
 
 async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
