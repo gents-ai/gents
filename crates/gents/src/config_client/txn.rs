@@ -319,7 +319,7 @@ where
     )
     .await
     .map_err(|_| embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT))?
-    .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
+    .map_err(|error| retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}")))?;
     rollback.set_embedded_handle(handle.clone());
     cancellation_rollback_scheduled.store(true, Ordering::Release);
     after_begin(handle.clone()).await;
@@ -333,7 +333,9 @@ async fn begin_http_owned(
     // Keep the response owner alive if the caller is cancelled while DefraDB
     // is returning the newly registered ID. Once the ID arrives, dropping the
     // detached task output schedules DELETE through `RollbackOnDrop`.
-    let (client, id) = graphql::txn_begin(&endpoint).await?;
+    let (client, id) = graphql::txn_begin(&endpoint)
+        .await
+        .map_err(retry::transaction_storage_failure)?;
     let rollback = RollbackOnDrop::Http {
         endpoint,
         id: id.clone(),
@@ -412,6 +414,10 @@ impl TransactionMode {
 
     fn retries_callback_error(self, error: &anyhow::Error) -> bool {
         matches!(self, Self::Idempotent(_)) && retry::is_transaction_storage_failure(error)
+    }
+
+    fn retries_begin_error(self, error: &anyhow::Error) -> bool {
+        self.retries_callback_error(error)
     }
 
     const fn observes_conflicts(self) -> bool {
@@ -964,7 +970,7 @@ where
             };
             let mut txn = match begin(operation, cancellation_rollback_scheduled).await {
                 Ok(txn) => txn,
-                Err(_error) if mode.retries_generic_errors() && attempt < max_attempts => {
+                Err(error) if mode.retries_begin_error(&error) && attempt < max_attempts => {
                     let backoff = retry::transaction_backoff(attempt - 1);
                     telemetry.record(AttemptReport {
                         outcome: WriteOutcome::Retrying,

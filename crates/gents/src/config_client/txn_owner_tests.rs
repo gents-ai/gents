@@ -311,6 +311,42 @@ async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate(
 }
 
 #[tokio::test(start_paused = true)]
+async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    let started = tokio::time::Instant::now();
+
+    let error = ConfigAccess::transact_local(&node, None, "test.outer_transaction", |_| {
+        Box::pin(async {
+            ConfigAccess::transact_local_idempotent(
+                &node,
+                None,
+                super::IdempotentTransactionRetry::Standard,
+                "test.inner_idempotent_write",
+                |_| Box::pin(async { Ok(()) }),
+            )
+            .await
+        })
+    })
+    .await
+    .expect_err("a nested idempotent write remains an ownership violation");
+
+    let diagnostic = format!("{error:#}");
+    assert!(
+        diagnostic.contains("test.inner_idempotent_write"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("test.outer_transaction"),
+        "{diagnostic}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "ownership rejection must not consume idempotent retry backoff"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn write_gate_timeout_names_waiter_and_current_owner() {
     let gate = Arc::new(super::MutationWriteGate::new());
     let owner = gate
