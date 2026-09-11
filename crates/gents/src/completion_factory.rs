@@ -403,7 +403,6 @@ pub(crate) async fn build_compaction_engine(
             std::sync::Arc::new(
                 crate::compaction::ProviderReductionEngine::new(model, config)
                     .with_source_input_counter(source_counter)
-                    .with_backend_id(backend_id.clone())
                     .with_summary_output_limit(inference.max_output_tokens()?),
             ),
             backend_id,

@@ -1,6 +1,6 @@
 //! The gent's owned completion loop, carved out of `gents` (G-1) so it
-//! compiles for `wasm32-wasip1`: the guest half of the H18 split (see
-//! `docs/gents-cloud-v1.md` §15.0). Everything here is provider-input
+//! compiles for `wasm32-wasip1`: the guest half of the H18 split. Everything
+//! here is provider-input
 //! assembly, retry/retract decisions, streamed-turn accumulation, tool
 //! dispatch, and message threading - no socket, no TLS, no filesystem, no
 //! DefraDB, no thread spawn. Durable effects (persisted messages, tool-call

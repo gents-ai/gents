@@ -1215,12 +1215,16 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         tool_result: &ToolResult,
         internal_call_id: &str,
     ) -> anyhow::Result<bool> {
-        self.persist_stream_tool_result_progress(tool_result, internal_call_id)
-            .await
+        DefraSessionHook::persist_stream_tool_result_progress(
+            self,
+            tool_result,
+            internal_call_id,
+        )
+        .await
     }
 
     async fn persist_inflight_assistant_turn(&self, message: &Message) -> anyhow::Result<u32> {
-        self.persist_inflight_assistant_turn(message).await
+        DefraSessionHook::persist_inflight_assistant_turn(self, message).await
     }
 
     async fn mark_current_response_materialized(&self, sequence: u32) -> anyhow::Result<()> {

@@ -21,13 +21,6 @@ pub const MAX_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 1_000;
 pub mod history;
 #[path = "compaction_summary.rs"]
 pub mod summary;
-#[cfg(test)]
-mod tests {
-    // Tests stay in gents (crates/gents/src/compaction/tests.rs), exercising
-    // this module through the crate::compaction re-export: a handful touch
-    // DefraDB and the prompt builder (session persistence, LayeredPromptBuilder)
-    // and were not worth a mechanical split. See the gents-loop crate report.
-}
 
 use history::{
     extract_file_activity, pretruncate_tool_results, split_messages_for_summary_with_counter,
@@ -390,7 +383,6 @@ pub struct ProviderReductionEngine<M: CompletionModel> {
     model: Arc<M>,
     config: crate::loop_stream::LoopConfig,
     source_input_counter: Option<Arc<crate::provider_input::ProviderInputCounter>>,
-    backend_id: Option<String>,
     summary_output_limit: Option<usize>,
     now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
 }
@@ -407,7 +399,6 @@ impl<M: CompletionModel> ProviderReductionEngine<M> {
         Self {
             model,
             source_input_counter: None,
-            backend_id: None,
             summary_output_limit: None,
             config,
             now: Arc::new(chrono::Utc::now),
@@ -417,15 +408,6 @@ impl<M: CompletionModel> ProviderReductionEngine<M> {
     pub fn with_summary_output_limit(mut self, limit: usize) -> Self {
         self.summary_output_limit = Some(limit);
         self
-    }
-
-    pub fn with_backend_id(mut self, backend_id: String) -> Self {
-        self.backend_id = Some(backend_id);
-        self
-    }
-
-    pub fn backend_id(&self) -> Option<&str> {
-        self.backend_id.as_deref()
     }
 
     pub fn with_source_input_counter(

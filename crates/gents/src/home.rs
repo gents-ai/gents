@@ -1,24 +1,5 @@
-//! A gents home's persisted `init.json` and its well-known paths.
-//!
-//! A "gents home" is a directory (`~/.gents` by default) holding
-//! `init.json` (this module's [`StoredInitConfig`]), the agent's identity
-//! key, and the embedded DefraDB data directory. This module is the
-//! single, canonical place that shape and those paths live: `gents-cli`
-//! reads and writes them here (`gents-cli/src/home_state.rs`), and any
-//! other crate that provisions a gents home from scratch -- gents-cloud's
-//! `gc-cell`, which builds one gents home per governed cell -- writes the
-//! exact same shape through the exact same functions, so the two never
-//! drift into two competing ideas of what `init.json` looks like.
-//!
-//! [`StoredInitConfig`] is generic over its `tool_package`/`tool_ceiling`
-//! fields (`ToolPackage`, `ToolCeiling`) rather than fixed to gents-cli's
-//! own `clap::ValueEnum` types, which this library crate cannot depend on:
-//! `gents-cli` instantiates it with its own CLI-facing enums (unaffected --
-//! their `Serialize`/`Deserialize` output is unchanged, so `init.json`'s
-//! on-disk shape is identical to before this module existed), while a
-//! caller with no interest in tool policy (`gc-cell`, which does not run
-//! gents' tool surface at all yet) can instantiate it with a plain
-//! `String`.
+//! Home path helpers and the persisted `init.json` shape, shared by the CLI
+//! and other provisioners.
 
 use std::fs;
 use std::path::{Path, PathBuf};

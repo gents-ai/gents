@@ -238,6 +238,10 @@ jobs:
         if: matrix.suite == 'runtime'
         run: .github/scripts/compile-rust-ci-suite.sh runtime
 
+      - name: Check gents-loop for wasm32-wasip1
+        if: matrix.suite == 'runtime'
+        run: cargo check -p gents-loop --target wasm32-wasip1
+
       - name: Run proof conformance tests
         if: matrix.suite == 'runtime'
         # DefraDB operations can exceed the platform-default worker stack.
@@ -309,6 +313,9 @@ jobs:
           # The client-authored list-sync fence (#1123/#1125) must fail the
           # PR that drifts the surface, not the post-merge main run.
           cargo test -p gents --test misc client_authored_collections_fence::
+          # DefraDB-free; the extraction's wasm claim is otherwise unenforced
+          # on PRs (full -p gents-loop is main-only below).
+          cargo test -p gents-loop --lib
 
       - name: Run PR CLI smoke tests
         if: matrix.suite == 'cli' && github.event_name == 'pull_request'
