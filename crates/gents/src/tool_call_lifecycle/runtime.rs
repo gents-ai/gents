@@ -140,9 +140,7 @@ pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
 // non-test call site in this crate needs either any more (the dispatch loop
 // that used to call them here moved to gents-loop).
 #[cfg(test)]
-pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
-    deadline_remaining, scope_request_tool_execution_with_session,
-};
+pub(crate) use gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session;
 
 #[cfg(test)]
 pub(crate) async fn scope_request_tool_execution<F, T>(

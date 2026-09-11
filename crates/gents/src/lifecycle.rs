@@ -521,7 +521,6 @@ impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,7 +15,6 @@ pub use runtime::ToolOutcome;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FailureClass {
-    ApprovalDenied,
     ArgumentInvalid,
     ServiceUnavailable,
     Transport,
@@ -25,8 +24,7 @@ pub enum FailureClass {
 }
 
 impl FailureClass {
-    pub const ALL: [Self; 7] = [
-        Self::ApprovalDenied,
+    pub const ALL: [Self; 6] = [
         Self::ArgumentInvalid,
         Self::ServiceUnavailable,
         Self::Transport,
@@ -37,7 +35,6 @@ impl FailureClass {
 
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::ApprovalDenied => "approvalDenied",
             Self::ArgumentInvalid => "argumentInvalid",
             Self::ServiceUnavailable => "serviceUnavailable",
             Self::Transport => "transport",
@@ -49,7 +46,6 @@ impl FailureClass {
 
     pub fn from_persisted(value: &str) -> Option<Self> {
         match value {
-            "approvalDenied" => Some(Self::ApprovalDenied),
             "argumentInvalid" => Some(Self::ArgumentInvalid),
             "serviceUnavailable" => Some(Self::ServiceUnavailable),
             "transport" => Some(Self::Transport),

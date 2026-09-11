@@ -399,11 +399,14 @@ pub(crate) async fn build_compaction_engine(
     let backend_id = inference.backend.backend_id.clone();
     let engine = crate::llm::backend_client::with_backend_client!(client, |client| {
         let model = std::sync::Arc::new(build_admitted_model(client, admission, &summary));
-        std::sync::Arc::new(
-            crate::compaction::ProviderReductionEngine::new(model, config)
-                .with_source_input_counter(source_counter)
-                .with_backend_id(backend_id)
-                .with_summary_output_limit(inference.max_output_tokens()?),
+        crate::compaction::backend_scoped_reduction_engine(
+            std::sync::Arc::new(
+                crate::compaction::ProviderReductionEngine::new(model, config)
+                    .with_source_input_counter(source_counter)
+                    .with_backend_id(backend_id.clone())
+                    .with_summary_output_limit(inference.max_output_tokens()?),
+            ),
+            backend_id,
         ) as std::sync::Arc<dyn crate::compaction::ReductionEngine>
     });
     Ok(Some(engine))

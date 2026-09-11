@@ -7,6 +7,10 @@
 #[path = "compaction/tests.rs"]
 mod tests;
 
+use std::sync::Arc;
+
+use futures::future::BoxFuture;
+
 pub use gents_loop::compaction::*;
 
 /// Build reduction options from canonical behavior compaction settings.
@@ -48,6 +52,44 @@ pub(crate) fn reduction_options_for_behavior(
         )?;
     }
     Ok(options)
+}
+
+struct BackendScopedReductionEngine {
+    inner: Arc<dyn ReductionEngine>,
+    backend_id: String,
+}
+
+impl ReductionEngine for BackendScopedReductionEngine {
+    fn retention_target(
+        &self,
+        configured_keep_recent: usize,
+        messages: &[crate::llm::message::Message],
+        admission: ReductionAdmission,
+    ) -> anyhow::Result<usize> {
+        self.inner
+            .retention_target(configured_keep_recent, messages, admission)
+    }
+
+    fn reduce<'a>(
+        &'a self,
+        messages: Vec<crate::llm::message::Message>,
+        context_window: usize,
+        options: &'a ReductionOptions,
+        admission: ReductionAdmission,
+    ) -> BoxFuture<'a, anyhow::Result<ReductionResult>> {
+        let work = self
+            .inner
+            .reduce(messages, context_window, options, admission);
+        let backend_id = self.backend_id.clone();
+        Box::pin(async move { crate::admission::scope_backend(&backend_id, work).await })
+    }
+}
+
+pub(crate) fn backend_scoped_reduction_engine(
+    inner: Arc<dyn ReductionEngine>,
+    backend_id: String,
+) -> Arc<dyn ReductionEngine> {
+    Arc::new(BackendScopedReductionEngine { inner, backend_id })
 }
 
 // Glue for the test suite above, which reaches these bare through
