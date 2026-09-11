@@ -35,7 +35,125 @@ enum TxnBackend<'a> {
     },
 }
 
-type MutationWriteGate = tokio::sync::Mutex<()>;
+struct MutationWriteGate {
+    lock: Arc<tokio::sync::Mutex<()>>,
+    owner: StdMutex<Option<MutationWriteOwner>>,
+    next_lease_id: AtomicU64,
+}
+
+#[derive(Clone, Copy)]
+struct MutationWriteOwner {
+    lease_id: u64,
+    operation: WriteOperation,
+    acquired_at: Instant,
+}
+
+struct MutationWriteGuard {
+    gate: Arc<MutationWriteGate>,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+    lease_id: u64,
+}
+
+impl Drop for MutationWriteGuard {
+    fn drop(&mut self) {
+        let mut owner = self
+            .gate
+            .owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if owner
+            .as_ref()
+            .is_some_and(|owner| owner.lease_id == self.lease_id)
+        {
+            *owner = None;
+        }
+    }
+}
+
+impl MutationWriteGate {
+    fn new() -> Self {
+        Self {
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+            owner: StdMutex::new(None),
+            next_lease_id: AtomicU64::new(1),
+        }
+    }
+
+    async fn acquire(self: &Arc<Self>, operation: WriteOperation) -> Result<MutationWriteGuard> {
+        ensure_not_reentrant_embedded_write(operation)?;
+        let guard = match tokio::time::timeout(
+            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+            Arc::clone(&self.lock).lock_owned(),
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(_) => {
+                let owner = *self
+                    .owner
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let (owner_operation, owner_held_ms) = owner.map_or(("unknown", 0), |owner| {
+                    (
+                        owner.operation.as_str(),
+                        u64::try_from(owner.acquired_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    )
+                });
+                tracing::error!(
+                    phase = "write-gate acquisition",
+                    waiting_operation = operation.as_str(),
+                    owner_operation,
+                    owner_held_ms,
+                    timeout_ms =
+                        u64::try_from(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT.as_millis())
+                            .unwrap_or(u64::MAX),
+                    "embedded DefraDB canonical write gate acquisition timed out"
+                );
+                return Err(retry::transaction_storage_failure(anyhow::anyhow!(
+                    "embedded transaction write-gate acquisition for {} timed out after {:?}; current owner {} held for {}ms",
+                    operation.as_str(),
+                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                    owner_operation,
+                    owner_held_ms,
+                )));
+            }
+        };
+        let lease_id = self.next_lease_id.fetch_add(1, Ordering::Relaxed);
+        *self
+            .owner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(MutationWriteOwner {
+            lease_id,
+            operation,
+            acquired_at: Instant::now(),
+        });
+        Ok(MutationWriteGuard {
+            gate: Arc::clone(self),
+            _guard: guard,
+            lease_id,
+        })
+    }
+}
+
+tokio::task_local! {
+    static ACTIVE_EMBEDDED_TRANSACTION: &'static str;
+}
+
+fn ensure_not_reentrant_embedded_write(operation: WriteOperation) -> Result<()> {
+    if let Ok(owner_operation) = ACTIVE_EMBEDDED_TRANSACTION.try_with(|owner| *owner) {
+        tracing::error!(
+            waiting_operation = operation.as_str(),
+            owner_operation,
+            "re-entrant embedded canonical write rejected"
+        );
+        anyhow::bail!(
+            "embedded canonical write {} is nested inside transaction {}; use the supplied transaction owner",
+            operation.as_str(),
+            owner_operation,
+        );
+    }
+    Ok(())
+}
 
 // Embedded DefraDB operations are local and normally complete in milliseconds.
 // Bound every phase that can retain the process-wide mutation gate so one
@@ -55,8 +173,8 @@ fn embedded_phase_timeout(phase: &str, timeout: Duration) -> anyhow::Error {
     ))
 }
 
-async fn cleanup_while_holding_write_gate<F, T>(
-    write_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+async fn cleanup_while_holding_write_gate<G, F, T>(
+    write_guard: Option<G>,
     cleanup: F,
 ) -> std::result::Result<T, tokio::time::error::Elapsed>
 where
@@ -79,7 +197,7 @@ fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
     }
 
     gates.retain(|_, gate| gate.strong_count() > 0);
-    let gate = Arc::new(tokio::sync::Mutex::new(()));
+    let gate = Arc::new(MutationWriteGate::new());
     gates.insert(node_key, Arc::downgrade(&gate));
     gate
 }
@@ -94,7 +212,7 @@ enum RollbackOnDrop {
     Embedded {
         runner: Arc<dyn query::QueryExecutor>,
         handle: Option<TransactionHandle>,
-        write_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+        write_guard: Option<MutationWriteGuard>,
         armed: bool,
     },
 }
@@ -177,7 +295,7 @@ impl Drop for RollbackOnDrop {
 
 async fn begin_embedded_owned<F, Fut>(
     runner: Arc<dyn query::QueryExecutor>,
-    write_guard: tokio::sync::OwnedMutexGuard<()>,
+    write_guard: MutationWriteGuard,
     cancellation_rollback_scheduled: Arc<AtomicBool>,
     after_begin: F,
 ) -> Result<(RollbackOnDrop, TransactionHandle)>
@@ -325,19 +443,10 @@ impl<'a> ConfigApplyTxn<'a> {
     async fn begin_local_owned(
         node: &'a EmbeddedNode,
         identity: Option<Did>,
+        operation: WriteOperation,
         cancellation_rollback_scheduled: Arc<AtomicBool>,
     ) -> Result<Self> {
-        let write_guard = tokio::time::timeout(
-            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-            mutation_write_gate(node).lock_owned(),
-        )
-        .await
-        .map_err(|_| {
-            embedded_phase_timeout(
-                "write-gate acquisition",
-                EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-            )
-        })?;
+        let write_guard = mutation_write_gate(node).acquire(operation).await?;
         let runner = node.runner().clone();
         let (rollback_on_drop, handle) = tokio::spawn(begin_embedded_owned(
             runner,
@@ -360,7 +469,13 @@ impl<'a> ConfigApplyTxn<'a> {
 
     #[cfg(test)]
     pub(crate) async fn begin_local(node: &'a EmbeddedNode, identity: Option<Did>) -> Result<Self> {
-        Self::begin_local_owned(node, identity, Arc::new(AtomicBool::new(false))).await
+        Self::begin_local_owned(
+            node,
+            identity,
+            WriteOperation::new("test.begin_local")?,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
     }
 
     async fn begin_http(
@@ -825,7 +940,9 @@ fn transact_owned<'a, T, F, B>(
 where
     T: Send + 'a,
     F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
-    B: FnMut(Arc<AtomicBool>) -> BoxFuture<'a, Result<ConfigApplyTxn<'a>>> + Send + 'a,
+    B: FnMut(WriteOperation, Arc<AtomicBool>) -> BoxFuture<'a, Result<ConfigApplyTxn<'a>>>
+        + Send
+        + 'a,
 {
     Box::pin(async move {
         let operation = WriteOperation::new(operation)?;
@@ -845,7 +962,7 @@ where
                 cancellation_rollback_scheduled: Some(Arc::clone(&cancellation_rollback_scheduled)),
                 dispatch: tracing::dispatcher::get_default(Clone::clone),
             };
-            let mut txn = match begin(cancellation_rollback_scheduled).await {
+            let mut txn = match begin(operation, cancellation_rollback_scheduled).await {
                 Ok(txn) => txn,
                 Err(_error) if mode.retries_generic_errors() && attempt < max_attempts => {
                     let backoff = retry::transaction_backoff(attempt - 1);
@@ -872,17 +989,16 @@ where
             };
             telemetry.cancelled_rollback = RollbackStatus::Scheduled;
             let callback_result = match backend {
-                WriteBackend::Embedded => {
-                    tokio::time::timeout(EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT, callback(&txn))
-                        .await
-                        .map_err(|_| {
-                            embedded_phase_timeout(
-                                "callback",
-                                EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT,
-                            )
-                        })
-                        .and_then(|result| result)
-                }
+                WriteBackend::Embedded => ACTIVE_EMBEDDED_TRANSACTION
+                    .scope(
+                        operation.as_str(),
+                        tokio::time::timeout(EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT, callback(&txn)),
+                    )
+                    .await
+                    .map_err(|_| {
+                        embedded_phase_timeout("callback", EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT)
+                    })
+                    .and_then(|result| result),
                 WriteBackend::Http => callback(&txn).await,
             };
             let attempt_result: Result<(), TransactionAttemptFailure> = match callback_result {
@@ -1001,6 +1117,7 @@ impl ConfigAccess {
 
     async fn begin_apply_txn(
         &self,
+        operation: WriteOperation,
         cancellation_rollback_scheduled: Arc<AtomicBool>,
     ) -> Result<ConfigApplyTxn<'_>> {
         match self {
@@ -1008,7 +1125,13 @@ impl ConfigAccess {
                 ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled).await
             }
             Self::Local(node) => {
-                ConfigApplyTxn::begin_local_owned(node, None, cancellation_rollback_scheduled).await
+                ConfigApplyTxn::begin_local_owned(
+                    node,
+                    None,
+                    operation,
+                    cancellation_rollback_scheduled,
+                )
+                .await
             }
         }
     }
@@ -1227,16 +1350,7 @@ impl ConfigAccess {
         mutation: &str,
         retry_policy: ExecuteRetryPolicy,
     ) -> Result<defra_node::QueryResponse> {
-        let gate = mutation_write_gate(node);
-        let _write_guard =
-            tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, gate.lock())
-                .await
-                .map_err(|_| {
-                    embedded_phase_timeout(
-                        "write-gate acquisition",
-                        EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-                    )
-                })?;
+        let _write_guard = mutation_write_gate(node).acquire(operation).await?;
         let response = tokio::time::timeout(
             EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
             node.execute_with_retry(mutation, retry_policy),
@@ -1258,7 +1372,9 @@ impl ConfigAccess {
             operation,
             backend_for_access(self),
             TransactionMode::ConflictRetry,
-            move |rollback| Box::pin(async move { self.begin_apply_txn(rollback).await }),
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
             callback,
         )
         .await
@@ -1284,7 +1400,9 @@ impl ConfigAccess {
             operation,
             backend_for_access(self),
             TransactionMode::Idempotent(retry_policy),
-            move |rollback| Box::pin(async move { self.begin_apply_txn(rollback).await }),
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
             callback,
         )
         .await
@@ -1304,7 +1422,9 @@ impl ConfigAccess {
             operation,
             backend_for_access(self),
             TransactionMode::ObserveConflict,
-            move |rollback| Box::pin(async move { self.begin_apply_txn(rollback).await }),
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
             callback,
         )
         .await
@@ -1325,10 +1445,10 @@ impl ConfigAccess {
             operation,
             WriteBackend::Embedded,
             TransactionMode::ConflictRetry,
-            move |rollback| {
+            move |operation, rollback| {
                 let identity = identity.clone();
                 Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(node, identity, rollback).await
+                    ConfigApplyTxn::begin_local_owned(node, identity, operation, rollback).await
                 })
             },
             callback,
@@ -1353,10 +1473,10 @@ impl ConfigAccess {
             operation,
             WriteBackend::Embedded,
             TransactionMode::Idempotent(retry_policy),
-            move |rollback| {
+            move |operation, rollback| {
                 let identity = identity.clone();
                 Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(node, identity, rollback).await
+                    ConfigApplyTxn::begin_local_owned(node, identity, operation, rollback).await
                 })
             },
             callback,
@@ -1379,10 +1499,10 @@ impl ConfigAccess {
             operation,
             WriteBackend::Embedded,
             TransactionMode::ObserveConflict,
-            move |rollback| {
+            move |operation, rollback| {
                 let identity = identity.clone();
                 Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(node, identity, rollback).await
+                    ConfigApplyTxn::begin_local_owned(node, identity, operation, rollback).await
                 })
             },
             callback,
