@@ -116,7 +116,7 @@ export function renderTauriAppDriverWithBridge(
     },
     async ready() {
       await waitFor(() => {
-        expect(screen.getByTestId("fleet-dashboard")).toBeInTheDocument();
+        expect(screen.getByTestId("app-shell")).toBeInTheDocument();
         if (firstPeerId) {
           expect(screen.getByTestId(`fleet-row-${firstPeerId}`)).toBeInTheDocument();
         }

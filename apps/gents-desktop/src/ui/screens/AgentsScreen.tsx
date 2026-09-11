@@ -100,7 +100,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
               >
                 <a
-                  href="#/sessions"
+                  href={href({ name: 'sessions' })}
                   onClick={() => shell.selectAgent(d.agentDid)}
                   aria-label={`${name} sessions`}
                   className="flex min-w-0 flex-1 items-center gap-3"
@@ -136,6 +136,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                   <Button
                     size="sm"
                     variant="outline"
+                    nativeButton={false}
                     render={
                       <a
                         href={href({ name: 'agent', agentDid: d.agentDid, section: 'inference' })}
@@ -148,7 +149,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 )}
                 {waiting > 0 && (
                   <a
-                    href="#/mailbox"
+                    href={href({ name: 'mailbox' })}
                     onClick={() => shell.selectAgent(d.agentDid)}
                     className="flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     title={`${waiting} item${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} your attention`}
@@ -175,7 +176,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                   <DropdownMenuContent align="end">
                     <DropdownMenuGroup>
                       <DropdownMenuItem
-                        render={<a href="#/sessions" />}
+                        render={<a href={href({ name: 'sessions' })} />}
                         onClick={() => shell.selectAgent(d.agentDid)}
                       >
                         Open sessions

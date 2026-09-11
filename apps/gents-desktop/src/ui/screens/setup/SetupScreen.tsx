@@ -82,7 +82,10 @@ function Frame({ children }: { children: React.ReactNode }) {
     setTheme(next)
   }
   return (
-    <ScrollArea className="viewport-frame relative bg-background text-foreground">
+    <ScrollArea
+      className="viewport-frame relative bg-background text-foreground"
+      data-testid="setup-screen"
+    >
       <div className="px-8">
         {/* anchored a fixed way down, not centred: a step can grow or shrink without moving its title */}
         <div className="mx-auto w-full max-w-xl pt-[22vh] pb-16">{children}</div>

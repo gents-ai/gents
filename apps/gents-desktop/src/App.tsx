@@ -25,7 +25,7 @@ import { SessionsScreen } from "./ui/screens/SessionsScreen";
 import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { useShell, type ShellBridge } from "./ui/hooks/useShell";
-import { bindNav, navigate, useRoute } from "./ui/lib/router";
+import { bindNav, interceptNavClicks, navigate, useRoute } from "./ui/lib/router";
 import { initTheme } from "./ui/theme";
 
 import "./App.css";
@@ -33,6 +33,7 @@ import "./App.css";
 function NavBinder({ children }: { children: ReactNode }) {
   const nav = useNav();
   bindNav(nav);
+  useEffect(() => interceptNavClicks(), []);
   return <BackSwipe nav={nav}>{children}</BackSwipe>;
 }
 
@@ -65,7 +66,10 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   }, []);
   const bridge = explicitBridge ?? defaultBridge;
   const route = useRoute();
-  const shell = useShell(bridge, route.name === "session" ? route.sessionId : null);
+  const shell = useShell(
+    bridge,
+    route.name === "session" ? route.sessionId : undefined,
+  );
 
   useEffect(() => {
     initTheme();
