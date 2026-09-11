@@ -56,6 +56,10 @@ pub(crate) async fn apply_desired_state_changes(
     );
     let mut documents = Vec::new();
     let mut removals = Vec::new();
+    let per_collection_sleep = std::env::var("GENTS_CONFIG_APPLY_SLEEP_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(std::time::Duration::from_millis);
     for collection in Collection::ALL {
         for document in select_apply_docs_for_collection(bundle, planned, collection)? {
             documents.push(DesiredStateApplyDocument {
@@ -72,6 +76,9 @@ pub(crate) async fn apply_desired_state_changes(
                 .iter()
                 .map(|id| (collection, bundle.agent_did.clone(), id.clone())),
         );
+        if let Some(sleep) = per_collection_sleep {
+            tokio::time::sleep(sleep).await;
+        }
     }
     let plan = DesiredStateApplyPlan::new(documents)?.with_removals(removals)?;
     apply_selected_plan(txn, &plan).await
