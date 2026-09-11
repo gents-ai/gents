@@ -1,7 +1,5 @@
 {
-  "agent_principal": {
-    "agent_did": "did:example:pipeline-pack"
-  },
+  "agent_principal": {},
   "agent_behaviors": [
     {
       "behavior_id": "exp-stage1",
