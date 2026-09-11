@@ -77,6 +77,7 @@ terminal persistence are separate effects in the Rust reconciler. -/
 inductive TerminalWriteResult where
   | committed
   | failed
+  | notAttempted
   deriving DecidableEq, Repr
 
 structure Terminal where
@@ -151,18 +152,18 @@ def applyStep (cat : Catalog) (st : State) (r : Request)
         { st with
           attempted := st.attempted ∪ docs
           confirmedDelivered := st.confirmedDelivered ∪ docs }
-    | .indeterminate =>
-      let docs := selectedDocuments cat r
-      match terminalWrite with
-      | .committed =>
+      | .notAttempted =>
         { st with
           attempted := st.attempted ∪ docs
-          terminals := insert (terminal r .rejected ∅) st.terminals }
-      | .failed => { st with attempted := st.attempted ∪ docs }
+          confirmedDelivered := st.confirmedDelivered ∪ docs }
+    | .indeterminate =>
+      let docs := selectedDocuments cat r
+      { st with attempted := st.attempted ∪ docs }
   else
     match terminalWrite with
     | .committed =>
       { st with terminals := insert (terminal r .rejected ∅) st.terminals }
     | .failed => st
+    | .notAttempted => st
 
 end SessionHydration

@@ -171,44 +171,59 @@ async fn process_one_request(
         ),
     };
 
-    let apply_outcome = apply_hydration_delivery(
-        verdict.clone(),
-        delivery_result,
-        HydrationTerminalWriteResult::Committed,
-    );
-    match apply_outcome {
-        HydrationApplyOutcome::Served(documents) => {
-            if let Err(error) = store.mark_served(row, &documents).await {
-                let failed = apply_hydration_delivery(
-                    verdict,
-                    delivery_result,
-                    HydrationTerminalWriteResult::Failed,
-                );
-                debug_assert!(matches!(
-                    failed,
-                    HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }
-                ));
-                return Err(error).context("mark session hydration served");
-            }
-            outcome.served.insert(request.request_key);
+    match (verdict, delivery_result) {
+        (HydrationVerdict::Admit(documents), HydrationDeliveryResult::Indeterminate) => {
+            let modeled = apply_hydration_delivery(
+                HydrationVerdict::Admit(documents),
+                HydrationDeliveryResult::Indeterminate,
+                HydrationTerminalWriteResult::NotAttempted,
+            );
+            debug_assert!(matches!(
+                modeled,
+                HydrationApplyOutcome::PendingAfterIndeterminateDelivery { .. }
+            ));
         }
-        HydrationApplyOutcome::Rejected { detail, .. } => {
-            if let Err(error) = store.mark_rejected(row, detail).await {
-                let failed = apply_hydration_delivery(
-                    verdict,
-                    delivery_result,
-                    HydrationTerminalWriteResult::Failed,
-                );
-                debug_assert!(matches!(
-                    failed,
-                    HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }
-                ));
-                return Err(error).context("mark session hydration rejected");
+        (HydrationVerdict::Admit(documents), HydrationDeliveryResult::Confirmed) => {
+            let terminal_write = store.mark_served(row, &documents).await;
+            let modeled = apply_hydration_delivery(
+                HydrationVerdict::Admit(documents),
+                HydrationDeliveryResult::Confirmed,
+                if terminal_write.is_ok() {
+                    HydrationTerminalWriteResult::Committed
+                } else {
+                    HydrationTerminalWriteResult::Failed
+                },
+            );
+            match (terminal_write, modeled) {
+                (Ok(()), HydrationApplyOutcome::Served(_)) => {
+                    outcome.served.insert(request.request_key);
+                }
+                (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => {
+                    return Err(error).context("mark session hydration served")
+                }
+                _ => unreachable!("hydration model diverged from served receipt commit"),
             }
-            outcome.rejected.insert(request.request_key);
         }
-        HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. } => {
-            unreachable!("the store write below determines terminal commit success")
+        (HydrationVerdict::Reject(detail), delivery_result) => {
+            let terminal_write = store.mark_rejected(row, detail).await;
+            let modeled = apply_hydration_delivery(
+                HydrationVerdict::Reject(detail),
+                delivery_result,
+                if terminal_write.is_ok() {
+                    HydrationTerminalWriteResult::Committed
+                } else {
+                    HydrationTerminalWriteResult::Failed
+                },
+            );
+            match (terminal_write, modeled) {
+                (Ok(()), HydrationApplyOutcome::Rejected { .. }) => {
+                    outcome.rejected.insert(request.request_key);
+                }
+                (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => {
+                    return Err(error).context("mark session hydration rejected")
+                }
+                _ => unreachable!("hydration model diverged from rejected receipt commit"),
+            }
         }
     }
     Ok(())
@@ -691,7 +706,6 @@ fn terminal_mutation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::p2p_reconcile::session_hydration::HYDRATION_DELIVERY_INDETERMINATE_DETAIL;
     use crate::agent::p2p_reconcile::templates::{combine_filters, equality_filter};
 
     struct MemoryStore {
@@ -967,30 +981,32 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn indeterminate_delivery_writes_a_terminal_rejection() {
+    async fn indeterminate_delivery_stays_pending_and_retries_idempotently() {
         let store = admitted_store();
         let delivery = FailingDelivery {
             attempts: std::sync::atomic::AtomicUsize::new(0),
             pushed: std::sync::Mutex::new(Vec::new()),
         };
 
-        let outcome = reconcile_hydration_tick(&store, &delivery)
-            .await
-            .expect("delivery exhaustion is a terminal hydration outcome");
-        assert!(outcome.served.is_empty());
-        assert_eq!(
-            outcome.rejected,
-            BTreeSet::from(["peer-1:session-1".into()])
-        );
+        for sweep in 1..=2 {
+            let outcome = reconcile_hydration_tick(&store, &delivery)
+                .await
+                .expect("ambiguous delivery remains pending for a later sweep");
+            assert!(outcome.served.is_empty());
+            assert!(outcome.rejected.is_empty());
+            assert!(store.served.lock().expect("served lock").is_empty());
+            assert!(store.rejected.lock().expect("rejected lock").is_empty());
+            assert_eq!(
+                delivery.attempts.load(std::sync::atomic::Ordering::SeqCst),
+                sweep * HYDRATION_DELIVERY_MAX_ATTEMPTS
+            );
+        }
         assert_eq!(
             delivery.attempts.load(std::sync::atomic::Ordering::SeqCst),
-            HYDRATION_DELIVERY_MAX_ATTEMPTS
+            2 * HYDRATION_DELIVERY_MAX_ATTEMPTS
         );
-        let rejected = store.rejected.lock().expect("rejected lock");
-        assert_eq!(rejected.len(), 1);
-        assert_eq!(rejected[0].1, HYDRATION_DELIVERY_INDETERMINATE_DETAIL);
         let attempts = delivery.pushed.lock().expect("pushed lock");
-        assert_eq!(attempts.len(), HYDRATION_DELIVERY_MAX_ATTEMPTS);
+        assert_eq!(attempts.len(), 2 * HYDRATION_DELIVERY_MAX_ATTEMPTS);
         assert!(attempts
             .windows(2)
             .all(|attempts| attempts[0] == attempts[1]));

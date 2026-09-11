@@ -221,10 +221,11 @@ fn generated_session_hydration_apply_cases_match_terminal_delivery_core() {
         } else {
             HydrationDeliveryResult::Indeterminate
         };
-        let terminal_write = if case.terminal_write_committed {
-            HydrationTerminalWriteResult::Committed
-        } else {
-            HydrationTerminalWriteResult::Failed
+        let terminal_write = match case.terminal_write.as_str() {
+            "committed" => HydrationTerminalWriteResult::Committed,
+            "failed" => HydrationTerminalWriteResult::Failed,
+            "not_attempted" => HydrationTerminalWriteResult::NotAttempted,
+            value => panic!("unknown terminal write result {value:?}"),
         };
         let outcome = apply_hydration_delivery(verdict, delivery, terminal_write);
         let (served, rejected, attempted_count, confirmed_count) = match outcome {
@@ -244,6 +245,9 @@ fn generated_session_hydration_apply_cases_match_terminal_delivery_core() {
                 attempted_documents.len(),
                 confirmed_documents.len(),
             ),
+            HydrationApplyOutcome::PendingAfterIndeterminateDelivery {
+                attempted_documents,
+            } => (false, false, attempted_documents.len(), 0),
         };
         assert_eq!(served, case.expected_served, "{}", case.name);
         assert_eq!(rejected, case.expected_rejected, "{}", case.name);

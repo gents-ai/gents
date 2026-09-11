@@ -99,21 +99,21 @@ structure SessionHydrationApplyCase where
   name : String
   admitted : Bool
   deliveryConfirmed : Bool
-  terminalWriteCommitted : Bool
+  terminalWrite : String
 
 def sessionHydrationApplyCases : List SessionHydrationApplyCase :=
   [ { name := "admitted_delivery_commits", admitted := true, deliveryConfirmed := true,
-      terminalWriteCommitted := true }
+      terminalWrite := "committed" }
   , { name := "delivered_terminal_write_fails", admitted := true, deliveryConfirmed := true,
-      terminalWriteCommitted := false }
-  , { name := "indeterminate_delivery_commits", admitted := true, deliveryConfirmed := false,
-      terminalWriteCommitted := true }
-  , { name := "indeterminate_terminal_write_fails", admitted := true, deliveryConfirmed := false,
-      terminalWriteCommitted := false }
+      terminalWrite := "failed" }
+  , { name := "delivered_terminal_write_not_attempted", admitted := true,
+      deliveryConfirmed := true, terminalWrite := "not_attempted" }
+  , { name := "indeterminate_delivery_stays_pending", admitted := true,
+      deliveryConfirmed := false, terminalWrite := "not_attempted" }
   , { name := "denied_request_rejects", admitted := false, deliveryConfirmed := true,
-      terminalWriteCommitted := true }
+      terminalWrite := "committed" }
   , { name := "denied_terminal_write_fails", admitted := false, deliveryConfirmed := true,
-      terminalWriteCommitted := false } ]
+      terminalWrite := "failed" } ]
 
 def sessionHydrationApplyCaseJson (w : SessionHydrationApplyCase) : String :=
   let decision : SessionHydrationDecisionCase :=
@@ -127,9 +127,10 @@ def sessionHydrationApplyCaseJson (w : SessionHydrationApplyCase) : String :=
   let cat := hydrationCatalog decision
   let delivery := if w.deliveryConfirmed then SessionHydration.DeliveryResult.confirmed
     else SessionHydration.DeliveryResult.indeterminate
-  let terminalWrite := if w.terminalWriteCommitted then
-      SessionHydration.TerminalWriteResult.committed
-    else SessionHydration.TerminalWriteResult.failed
+  let terminalWrite := match w.terminalWrite with
+    | "committed" => SessionHydration.TerminalWriteResult.committed
+    | "failed" => SessionHydration.TerminalWriteResult.failed
+    | _ => SessionHydration.TerminalWriteResult.notAttempted
   let initial : SessionHydration.State :=
     { attempted := ∅, confirmedDelivered := ∅, terminals := ∅ }
   let next := SessionHydration.applyStep cat initial hydrationRequest delivery terminalWrite
@@ -140,7 +141,7 @@ def sessionHydrationApplyCaseJson (w : SessionHydrationApplyCase) : String :=
     ++ "\"name\":" ++ jsonString w.name ++ ","
     ++ "\"admitted\":" ++ boolString w.admitted ++ ","
     ++ "\"delivery_confirmed\":" ++ boolString w.deliveryConfirmed ++ ","
-    ++ "\"terminal_write_committed\":" ++ boolString w.terminalWriteCommitted ++ ","
+    ++ "\"terminal_write\":" ++ jsonString w.terminalWrite ++ ","
     ++ "\"expected_served\":" ++ boolString served ++ ","
     ++ "\"expected_rejected\":" ++ boolString rejected ++ ","
     ++ "\"expected_attempted_count\":" ++ toString next.attempted.card ++ ","

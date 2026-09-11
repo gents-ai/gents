@@ -560,7 +560,7 @@ pub(crate) struct LeanSessionHydrationApplyCase {
     pub(crate) name: String,
     pub(crate) admitted: bool,
     pub(crate) delivery_confirmed: bool,
-    pub(crate) terminal_write_committed: bool,
+    pub(crate) terminal_write: String,
     pub(crate) expected_served: bool,
     pub(crate) expected_rejected: bool,
     pub(crate) expected_attempted_count: usize,
