@@ -398,7 +398,13 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             }
             let temp = tempfile::tempdir()?;
             materialize(&pack, temp.path())?;
-            let (_, report) = crate::desired_state::load_manifest_root(temp.path());
+            // Distribution packs are templates: their principal is supplied by
+            // the installation target. Validate through the same scoped loader
+            // used by apply instead of requiring a pack-authored concrete DID.
+            let (_, report) = crate::desired_state::load_manifest_root_for_owner(
+                temp.path(),
+                Some("did:key:zPackInstallValidationOwner"),
+            );
             anyhow::ensure!(
                 report.errors.is_empty(),
                 "invalid pack configuration: {:?}",
