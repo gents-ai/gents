@@ -133,7 +133,16 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     let config_root = tempdir.path().join("config");
     run_cli_text(
         &home_dir,
-        &["config", "export", "--root", config_root.to_str().unwrap()],
+        &[
+            "config",
+            "export",
+            "--root",
+            config_root.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+        ],
     )?;
     let config_path = config_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
@@ -141,7 +150,14 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     write_json_file(&config_path, &config)?;
     run_cli_json(
         &home_dir,
-        &["config", "apply", "--root", config_root.to_str().unwrap()],
+        &[
+            "config",
+            "apply",
+            "--root",
+            config_root.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+        ],
     )?;
     let tools_doc_id = doc_id_for_tools(&graphql, &tools_id).await?;
     let config_rows = graphql_query(
