@@ -2035,13 +2035,16 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
         .await
         .expect("document view");
 
+    let entries = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "entries": [finding_decl()],
+    }))
+    .unwrap();
     let create = format!(
         r#"mutation {{ create_DatastoreToolSurface(input: {{
             surface_id: "experiment-writes", agent_did: "{did}", enabled: true,
-            entries: ["{entry}"]
+            entries: {entries}
         }}) {{ _docID }} }}"#,
         did = escape_graphql_string(agent_did),
-        entry = escape_graphql_string(&serde_json::to_string(&finding_decl()).unwrap()),
     );
     let resp = node.execute(&create).await;
     assert!(

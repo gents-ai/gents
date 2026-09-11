@@ -9,6 +9,17 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
     configure_subagent_behavior(
         db.node.as_ref(),
         &agent_did,
+        GHOST_BEHAVIOR_ID,
+        "r4-ghost-child-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
+    )
+    .await;
+    configure_subagent_behavior(
+        db.node.as_ref(),
+        &agent_did,
         PARENT_BEHAVIOR_ID,
         "r4-parent-tools",
         vec![subagent_target(
@@ -30,6 +41,25 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
         PARENT_BEHAVIOR_ID,
     );
 
+    let agent_did_escaped = escape_graphql_string(&agent_did);
+    let ghost_behavior_id = escape_graphql_string(GHOST_BEHAVIOR_ID);
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                delete_AgentBehavior(filter: {{
+                    agent_did: {{ _eq: "{agent_did_escaped}" }},
+                    behavior_id: {{ _eq: "{ghost_behavior_id}" }}
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "delete ghost AgentBehavior failed: {:?}",
+        response.errors
+    );
+
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-parent");
     let parent_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
@@ -42,8 +72,9 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
         parent_deadline,
     )
     .await;
-    crate::support::create_agent_session(
+    crate::support::create_agent_session_in_scope(
         db.node.as_ref(),
+        &agent_did,
         &session_id,
         PARENT_BEHAVIOR_ID,
         "2026-05-13T00:00:00Z",

@@ -54,14 +54,13 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
             r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{}",
-                    agent_name: "{}",
+                    agent_did: "{}",
                     behavior_id: "{}",
-                    started: "2026-06-12T10:00:00Z",
-                    status: "active"
+                    created_at: "2026-06-12T10:00:00Z"
                 }}) {{ _docID }}
             }}"#,
             escape_graphql_string(&session_id),
-            escape_graphql_string(&agent_name),
+            escape_graphql_string(&agent_did),
             escape_graphql_string(&behavior_id),
         ),
         format!(

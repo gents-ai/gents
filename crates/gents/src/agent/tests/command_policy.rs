@@ -21,6 +21,25 @@ fn unrestricted_bash_mode_defaults_to_unrestricted_command_policy() {
 }
 
 #[test]
+fn document_projection_derives_background_bash_capability() {
+    let mut doc = tools_doc("Unrestricted");
+    doc.host
+        .as_mut()
+        .unwrap()
+        .bash
+        .as_mut()
+        .unwrap()
+        .background_enabled = true;
+
+    let selection = tool_selection_from_document(&doc).unwrap();
+
+    assert_eq!(
+        selection.backgroundable_tool_names,
+        ["bash_unrestricted".to_string()]
+    );
+}
+
+#[test]
 fn unrestricted_bash_mode_can_request_workspace_write_command_policy() {
     let mut doc = tools_doc("Unrestricted");
     doc.host

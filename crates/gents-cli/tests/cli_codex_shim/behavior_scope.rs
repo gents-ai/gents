@@ -51,11 +51,15 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
                 r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{session_id}",
-                    agent_name: "preexisting",
+                    agent_did: "{agent_did}",
+                    requester_did: "{agent_did}",
                     behavior_id: "{default_behavior_id}",
-                    status: "active"
+                    created_at: "2026-01-01T00:00:00Z"
                 }}) {{ _docID }}
-            }}"#
+            }}"#,
+                session_id = escape_graphql_string(&session_id),
+                agent_did = escape_graphql_string(&agent_did),
+                default_behavior_id = escape_graphql_string(&default_behavior_id),
             ),
         ))
         .await?;
@@ -106,27 +110,24 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
             &format!(
                 r#"{{
                 AgentSession(
-                    filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                    filter: {{
+                        session_id: {{ _eq: "{session_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }},
+                        requester_did: {{ _eq: "{agent_did}" }}
+                    }},
                     limit: 1
-                ) {{ agent_name behavior_id }}
-            }}"#
+                ) {{ behavior_id }}
+            }}"#,
+                session_id = escape_graphql_string(&session_id),
+                agent_did = escape_graphql_string(&agent_did),
             ),
         ))
         .await?;
-    let preserved_agent_name = resp
-        .pointer("/data/AgentSession/0/agent_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
     let preserved_behavior_id = resp
         .pointer("/data/AgentSession/0/behavior_id")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
-    assert_eq!(
-        preserved_agent_name, "preexisting",
-        "agent_name must not be clobbered by the shim's session upsert"
-    );
     assert_eq!(
         preserved_behavior_id, default_behavior_id,
         "behavior_id must remain pinned to its create-time value"
@@ -185,11 +186,15 @@ async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<(
                 r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{session_id}",
-                    agent_name: "foreign",
+                    agent_did: "{agent_did}",
+                    requester_did: "{agent_did}",
                     behavior_id: "{foreign_behavior_id}",
-                    status: "active"
+                    created_at: "2026-01-01T00:00:00Z"
                 }}) {{ _docID }}
-            }}"#
+            }}"#,
+                session_id = escape_graphql_string(&session_id),
+                agent_did = escape_graphql_string(&agent_did),
+                foreign_behavior_id = escape_graphql_string(&foreign_behavior_id),
             ),
         ))
         .await?;

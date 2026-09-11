@@ -3384,26 +3384,15 @@ mod tests {
         gents::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
-        let response = node
-            .execute(&format!(
-                r#"mutation {{
-                    create_AgentPrincipal(input: {{
-                        agent_did: "{agent_did}"
-                        display_name: "Grok shim test"
-                        default_behavior_id: "{behavior_id}"
-                        enabled: true
-                    }}) {{ _docID }}
-                    create_AgentBehavior(input: {{
-                        behavior_id: "{behavior_id}"
-                        agent_did: "{agent_did}"
-                        display_name: "Grok shim test"
-                        enabled: true
-                    }}) {{ _docID }}
-                }}"#,
-            ))
-            .await;
-        gents::graphql::ensure_no_errors(&response, "seed admitted test behavior")
-            .expect("seed admitted test behavior");
+        super::super::seed_test_behavior_configuration(
+            node.as_ref(),
+            &agent_did,
+            &behavior_id,
+            &behavior_id,
+            "GLM-5.3-NVFP4",
+            true,
+        )
+        .await;
         (tempdir, node, agent_did)
     }
 
@@ -4069,7 +4058,7 @@ mod tests {
             .iter()
             .find(|event| event["params"]["update"]["sessionUpdate"] == "user_message_chunk")
             .unwrap();
-        assert_eq!(echo["params"]["_meta"]["promptId"], "peer-human");
+        assert_eq!(echo["params"]["_meta"]["promptId"], request);
         assert_eq!(
             echo["params"]["update"]["_meta"]["hideFromScrollback"],
             false
@@ -4078,7 +4067,7 @@ mod tests {
             echo["params"]["update"]["content"]["text"],
             "Human from another client"
         );
-        for target in ["different-prompt", "peer-human"] {
+        for target in ["different-prompt", request.as_str()] {
             manager
                 .handle_cancel(
                     parse_cancel_notification(
@@ -4094,7 +4083,7 @@ mod tests {
                 interrupted.data.as_ref().unwrap()["AgentRequest"][0]["interrupt_requested_at"]
                     .as_str()
                     .is_some(),
-                target == "peer-human"
+                target == request
             );
         }
         // The runtime, not the viewer, acknowledges cancellation.
@@ -4127,7 +4116,7 @@ mod tests {
             .iter()
             .find(|event| event["params"]["update"]["sessionUpdate"] == "turn_completed")
             .unwrap();
-        assert_eq!(completed["params"]["update"]["prompt_id"], "peer-human");
+        assert_eq!(completed["params"]["update"]["prompt_id"], request);
         assert_eq!(completed["params"]["update"]["stop_reason"], "cancelled");
     }
 

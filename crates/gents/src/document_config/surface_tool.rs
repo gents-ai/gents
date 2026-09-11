@@ -1,7 +1,9 @@
 //! Surface entries are either a create tool ([`WriteToolDecl`]) or a
 //! single-collection query tool ([`QueryToolDecl`]).
 //!
-//! Stored in `DatastoreToolSurface.entries` as JSON strings. Existing create
+//! Stored in `DatastoreToolSurface.entries` as native JSON under an `entries`
+//! object envelope. The envelope keeps DefraDB from typing the top-level list
+//! as a string array instead of the schema's JSON scalar. Existing create
 //! entries have no `kind` and stay [`SurfaceToolDecl::Create`]. Query entries
 //! set `"kind": "query"`.
 
@@ -288,12 +290,38 @@ where
     if matches!(value, None | Some(Value::Null)) {
         return Ok(None);
     }
+    let value = match value {
+        Some(Value::Object(mut envelope))
+            if envelope.len() == 1 && envelope.contains_key("entries") =>
+        {
+            envelope.remove("entries").or(Some(Value::Object(envelope)))
+        }
+        value => value,
+    };
     serde_helpers::deserialize_dual_shape(
         value,
         "DatastoreToolSurface.entries must be a list of create/query tool objects or JSON strings",
     )
     .map(Some)
     .map_err(D::Error::custom)
+}
+
+pub(crate) fn serialize_optional_surface_tools<S>(
+    value: &Option<Vec<SurfaceToolDecl>>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    #[derive(Serialize)]
+    struct StoredSurfaceTools<'a> {
+        entries: &'a [SurfaceToolDecl],
+    }
+
+    match value {
+        Some(entries) => StoredSurfaceTools { entries }.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
 }
 
 pub(crate) fn validate_query_tool_declarations(

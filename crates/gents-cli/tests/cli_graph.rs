@@ -8,8 +8,8 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use support::{
-    agent_did_from_init, allocate_port, run_cli_failure_stderr, run_cli_json, run_init_json,
-    spawn_server_with_ready_json,
+    agent_did_from_init, allocate_port, run_cli_failure_stderr, run_cli_failure_stderr_with_env,
+    run_cli_json, run_cli_json_with_env, run_init_json, spawn_server_with_ready_json,
 };
 
 fn required_str<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
@@ -56,13 +56,9 @@ fn all_pack_kinds_are_available_without_a_checkout() -> Result<()> {
     let first = run_cli_json(temp.path(), &args)?;
     anyhow::ensure!(run_cli_json(temp.path(), &args)? == first);
     let installed = std::path::Path::new(required_str(&first, &["installed_assets"])?);
-    let config: Value =
-        serde_json::from_slice(&std::fs::read(installed.join("pack_config.json"))?)?;
-    anyhow::ensure!(config["datastore_tool_surfaces"]
-        .as_array()
-        .is_some_and(|surfaces| surfaces
-            .iter()
-            .any(|surface| { surface["surface_id"] == "mailbox-writes" })));
+    anyhow::ensure!(installed
+        .join("datastore_tool_surfaces/mailbox_writes/object.json")
+        .is_file());
     std::fs::write(installed.join("README.md"), "operator edit")?;
     let denial = run_cli_failure_stderr(temp.path(), &args)?;
     anyhow::ensure!(denial.contains("installed asset was modified"));
@@ -100,10 +96,9 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
 fn bundled_catalog_is_read_only_outside_a_source_checkout() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph catalog tempdir")?;
     let catalog = run_cli_json(tempdir.path(), &["pack", "show", "code_review"])?;
-    let packages = [catalog["graph"].clone()];
-    anyhow::ensure!(packages.len() == 1, "unexpected catalog output: {catalog}");
+    let package = &catalog["manifest"];
     anyhow::ensure!(
-        packages[0].get("name").and_then(Value::as_str) == Some("code_review"),
+        package.get("name").and_then(Value::as_str) == Some("code_review"),
         "catalog did not return code_review: {catalog}"
     );
     anyhow::ensure!(
@@ -117,22 +112,16 @@ fn bundled_catalog_is_read_only_outside_a_source_checkout() -> Result<()> {
 fn web_deep_research_is_in_the_bundled_catalog() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph catalog tempdir")?;
     let catalog = run_cli_json(tempdir.path(), &["pack", "show", "web_deep_research"])?;
-    let packages = [catalog["graph"].clone()];
-    anyhow::ensure!(packages.len() == 1, "unexpected catalog output: {catalog}");
+    let package = &catalog["manifest"];
     anyhow::ensure!(
-        packages[0].get("name").and_then(Value::as_str) == Some("web_deep_research"),
+        package.get("name").and_then(Value::as_str) == Some("web_deep_research"),
         "catalog did not return web_deep_research: {catalog}"
     );
     anyhow::ensure!(
-        packages[0]
-            .get("entries")
-            .and_then(Value::as_array)
-            .is_some_and(|entries| entries
-                .iter()
-                .any(|entry| { entry.get("name").and_then(Value::as_str) == Some("research") })),
-        "catalog package did not expose the research entry: {catalog}"
+        package.get("config").and_then(Value::as_str) == Some("pack_config.json"),
+        "catalog package did not expose its canonical config: {catalog}"
     );
-    let dependencies = packages[0]
+    let dependencies = package
         .get("external_dependencies")
         .and_then(Value::as_array)
         .context("catalog package did not expose external dependencies")?;
@@ -176,8 +165,9 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
         "--output",
         "json",
     ];
-    let first = run_cli_json(tempdir.path(), &install_args)?;
-    let second = run_cli_json(tempdir.path(), &install_args)?;
+    let review_env = [("GENTS_REVIEW_MODEL", "test-review-model")];
+    let first = run_cli_json_with_env(tempdir.path(), &install_args, &review_env)?;
+    let second = run_cli_json_with_env(tempdir.path(), &install_args, &review_env)?;
     anyhow::ensure!(
         first.get("install") == second.get("install"),
         "repeated install changed its durable receipt\nfirst: {first}\nsecond: {second}"
@@ -189,7 +179,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     );
 
     let wrong_actor = "did:key:z6MkvGraphPackageIntruder";
-    let denial = run_cli_failure_stderr(
+    let denial = run_cli_failure_stderr_with_env(
         tempdir.path(),
         &[
             "pack",
@@ -200,6 +190,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
             "--agent-did",
             wrong_actor,
         ],
+        &review_env,
     )?;
     anyhow::ensure!(
         denial.contains("package owner principal is missing"),

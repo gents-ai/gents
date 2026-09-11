@@ -73,7 +73,7 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
     let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
-    let git_dir = tempdir.path().join("repo");
+    let git_dir = home_dir.join("repo");
     fs::create_dir_all(&git_dir)?;
     let expected_sha = init_test_git_repo(&git_dir, "main")?;
     send_client_request(
@@ -148,9 +148,15 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
             &graphql,
             &format!(
                 r#"{{
-                    AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }}
+                    AgentSession(filter: {{
+                        session_id: {{ _eq: "{}" }},
+                        agent_did: {{ _eq: "{}" }},
+                        requester_did: {{ _eq: "{}" }}
+                    }}) {{ _docID }}
                 }}"#,
                 escape_graphql_string(&git_thread_id),
+                escape_graphql_string(&agent_did),
+                escape_graphql_string(&agent_did),
             ),
         ))
         .await?;
@@ -172,13 +178,24 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
     )
     .await?;
     let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(4)).await?;
-    let _ = read_turn_capture(&mut ws).await?;
+    let capture = read_turn_capture(&mut ws).await?;
+    assert_eq!(
+        capture.turn.status,
+        codex::TurnStatus::Completed,
+        "first turn should materialize the canonical session: {capture:?}"
+    );
     let canonical = serve
         .capturing(graphql_query(
             &graphql,
             &format!(
-                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ title }} }}"#,
+                r#"{{ AgentSession(filter: {{
+                    session_id: {{ _eq: "{}" }},
+                    agent_did: {{ _eq: "{}" }},
+                    requester_did: {{ _eq: "{}" }}
+                }}) {{ title }} }}"#,
                 escape_graphql_string(&git_thread_id),
+                escape_graphql_string(&agent_did),
+                escape_graphql_string(&agent_did),
             ),
         ))
         .await?;
@@ -186,10 +203,11 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
         canonical
             .pointer("/data/AgentSession/0/title/text")
             .and_then(Value::as_str),
-        Some("Named before first turn")
+        Some("Named before first turn"),
+        "canonical session should retain the process-local pre-turn name: {canonical}"
     );
 
-    let plain_dir = tempdir.path().join("plain");
+    let plain_dir = home_dir.join("plain");
     fs::create_dir_all(&plain_dir)?;
     send_client_request(
         &mut ws,
@@ -309,12 +327,18 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
             &graphql,
             &format!(
                 r#"{{
-                AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                AgentSession(filter: {{
+                    session_id: {{ _eq: "{}" }},
+                    agent_did: {{ _eq: "{}" }},
+                    requester_did: {{ _eq: "{}" }}
+                }}, limit: 1) {{
                     session_id
                     provenance
                 }}
             }}"#,
                 escape_graphql_string(&forked_id),
+                escape_graphql_string(&agent_did),
+                escape_graphql_string(&agent_did),
             ),
         ))
         .await?;

@@ -3845,7 +3845,7 @@ mod tests {
             "surface_id",
             "defend-patch-skip-writes",
         );
-        let collections = skip_surface["entries"]
+        let collections = skip_surface["entries"]["entries"]
             .as_array()
             .unwrap()
             .iter()

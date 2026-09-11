@@ -140,16 +140,17 @@ impl Drop for TurnStreamRegistration {
 
 pub(super) fn cancel_abandoned_steering_request(
     state: &ShimState,
-    request: &crate::SubmittedRequest,
+    request: &gents::EnqueuedAgentRequest,
 ) {
     let node = state.node.clone();
     let request = request.clone();
+    let agent_did = state.agent_did.clone();
     tokio::spawn(async move {
         if let Err(error) = gents::interrupt_request_by_doc_id(
             &node,
-            &request.request_doc_id,
-            &request.agent_did,
-            request.requester_did.as_deref(),
+            &request.doc_id,
+            agent_did.as_ref(),
+            Some(agent_did.as_ref()),
         )
         .await
         {

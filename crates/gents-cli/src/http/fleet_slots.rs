@@ -56,6 +56,7 @@ pub(crate) struct FleetBehaviorSlotUsage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct FleetBackendAdmissionCounters {
     pub(crate) backend_id: String,
+    pub(crate) agent_did: String,
     pub(crate) configured: bool,
     pub(crate) enabled: bool,
     pub(crate) probe_status: String,
@@ -72,6 +73,8 @@ pub(crate) struct FleetBackendAdmissionCounters {
 struct FleetSlotQueryEnvelope {
     #[serde(rename = "AgentBehavior", default)]
     behaviors: Vec<BehaviorRow>,
+    #[serde(rename = "InferenceProfile", default)]
+    profiles: Vec<InferenceProfileRow>,
     #[serde(rename = "InferenceBackend", default)]
     backends: Vec<BackendRow>,
     #[serde(rename = "InferenceCall", default)]
@@ -89,7 +92,7 @@ struct BehaviorRow {
     #[serde(default)]
     agent_did: String,
     #[serde(default)]
-    backend_id: Option<String>,
+    inference_profile_id: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
 }
@@ -99,12 +102,30 @@ impl BehaviorRow {
         clean_string(&self.behavior_id)
     }
 
-    fn normalized_backend_id(&self) -> String {
-        clean_optional_string(self.backend_id.as_deref())
-    }
-
     fn is_enabled(&self) -> bool {
         self.enabled.unwrap_or(true)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InferenceProfileRow {
+    #[serde(default)]
+    profile_id: String,
+    #[serde(default)]
+    agent_did: String,
+    #[serde(default)]
+    backend_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedBehaviorRow {
+    behavior: BehaviorRow,
+    backend_id: String,
+}
+
+impl ResolvedBehaviorRow {
+    fn normalized_backend_id(&self) -> String {
+        clean_string(&self.backend_id)
     }
 }
 
@@ -112,6 +133,8 @@ impl BehaviorRow {
 struct BackendRow {
     #[serde(default)]
     backend_id: String,
+    #[serde(default)]
+    agent_did: String,
     #[serde(default)]
     enabled: Option<bool>,
     #[serde(default)]
@@ -131,8 +154,8 @@ impl BackendRow {
         self.enabled.unwrap_or(false)
     }
 
-    /// Raw operator-intent `probe_status` for display only — never a truth
-    /// source for admission (that's the readiness projection; see
+    /// Runtime-observed `probe_status` for display only — never a truth source
+    /// for admission (that's the readiness projection; see
     /// `backend_admission_from_readiness`).
     fn display_probe_status(&self) -> String {
         let probe_status = clean_optional_string(self.probe_status.as_deref());
@@ -194,11 +217,17 @@ fn fleet_slot_snapshot_query() -> &'static str {
         AgentBehavior(order: { behavior_id: ASC }) {
             behavior_id
             agent_did
-            backend_id
+            inference_profile_id
             enabled
+        }
+        InferenceProfile(order: { profile_id: ASC }) {
+            profile_id
+            agent_did
+            backend_id
         }
         InferenceBackend(order: { backend_id: ASC }) {
             backend_id
+            agent_did
             enabled
             max_concurrent
             max_queue_depth
@@ -214,6 +243,7 @@ fn fleet_slot_snapshot_query() -> &'static str {
             lifecycle_state: { _eq: "processing" }
         }) {
             request_id
+            agent_did
             behavior_id
             deadline
         }
@@ -229,26 +259,59 @@ fn build_fleet_slot_snapshot(
     generated_at: DateTime<Utc>,
     envelope: FleetSlotQueryEnvelope,
 ) -> FleetSlotSnapshot {
-    let backends = envelope
-        .backends
+    let FleetSlotQueryEnvelope {
+        behaviors,
+        profiles,
+        backends,
+        calls,
+        requests,
+        behavior_readiness,
+    } = envelope;
+    let backends = backends
         .into_iter()
         .filter_map(|backend| {
+            let agent_did = clean_string(&backend.agent_did);
             let backend_id = backend.normalized_backend_id();
-            (!backend_id.is_empty()).then_some((backend_id, backend))
+            (!agent_did.is_empty() && !backend_id.is_empty())
+                .then_some(((agent_did, backend_id), backend))
         })
         .collect::<BTreeMap<_, _>>();
 
-    let behaviors = envelope
-        .behaviors
+    let profile_backends = profiles
+        .into_iter()
+        .filter_map(|profile| {
+            let agent_did = clean_string(&profile.agent_did);
+            let profile_id = clean_string(&profile.profile_id);
+            let backend_id = clean_string(&profile.backend_id);
+            (!agent_did.is_empty() && !profile_id.is_empty() && !backend_id.is_empty())
+                .then_some(((agent_did, profile_id), backend_id))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let behaviors = behaviors
         .into_iter()
         .filter_map(|behavior| {
+            let agent_did = clean_string(&behavior.agent_did);
             let behavior_id = behavior.normalized_behavior_id();
-            (!behavior_id.is_empty()).then_some((behavior_id, behavior))
+            if agent_did.is_empty() || behavior_id.is_empty() {
+                return None;
+            }
+            let profile_id = clean_optional_string(behavior.inference_profile_id.as_deref());
+            let backend_id = profile_backends
+                .get(&(agent_did.clone(), profile_id))
+                .cloned()
+                .unwrap_or_default();
+            Some((
+                (agent_did, behavior_id),
+                ResolvedBehaviorRow {
+                    behavior,
+                    backend_id,
+                },
+            ))
         })
         .collect::<BTreeMap<_, _>>();
 
-    let readiness_by_agent = envelope
-        .behavior_readiness
+    let readiness_by_agent = behavior_readiness
         .into_iter()
         .map(|row| (row.agent_did.clone(), row))
         .collect::<BTreeMap<_, _>>();
@@ -263,38 +326,41 @@ fn build_fleet_slot_snapshot(
     let backend_accepting =
         backend_admission_from_readiness(&behaviors, &readiness_by_agent, generated_at);
 
-    let mut backend_counts = BTreeMap::<String, SlotCounts>::new();
-    let mut behavior_counts = BTreeMap::<String, SlotCounts>::new();
-    let mut active_behavior_metadata = BTreeMap::<String, (String, String)>::new();
-    let mut active_backend_ids = BTreeSet::<String>::new();
+    let mut backend_counts = BTreeMap::<(String, String), SlotCounts>::new();
+    let mut behavior_counts = BTreeMap::<(String, String), SlotCounts>::new();
+    let mut active_behavior_backends = BTreeMap::<(String, String), String>::new();
+    let mut active_backend_ids = BTreeSet::<(String, String)>::new();
 
-    for call in envelope.calls {
+    for call in calls {
         let backend_id = clean_optional_string(call.backend_id.as_deref());
         let behavior_id = clean_optional_string(call.behavior_id.as_deref());
         let agent_did = clean_optional_string(call.agent_did.as_deref());
 
-        if !backend_id.is_empty() {
-            active_backend_ids.insert(backend_id.clone());
-            let counts = backend_counts.entry(backend_id.clone()).or_default();
+        if !agent_did.is_empty() && !backend_id.is_empty() {
+            let backend_key = (agent_did.clone(), backend_id.clone());
+            active_backend_ids.insert(backend_key.clone());
+            let counts = backend_counts.entry(backend_key).or_default();
             apply_call_state(&call.call_state, counts);
         }
-        if !behavior_id.is_empty() {
-            let counts = behavior_counts.entry(behavior_id.clone()).or_default();
+        if !agent_did.is_empty() && !behavior_id.is_empty() {
+            let behavior_key = (agent_did, behavior_id);
+            let counts = behavior_counts.entry(behavior_key.clone()).or_default();
             apply_call_state(&call.call_state, counts);
-            active_behavior_metadata
-                .entry(behavior_id)
-                .or_insert((agent_did, backend_id));
+            active_behavior_backends
+                .entry(behavior_key)
+                .or_insert(backend_id);
         }
     }
 
     let mut expired = FleetExpiredCounts::default();
-    for request in envelope.requests {
+    for request in requests {
         if deadline_is_expired(generated_at, request.deadline.as_deref()) {
             expired.processing_requests += 1;
+            let agent_did = clean_optional_string(request.agent_did.as_deref());
             let behavior_id = clean_optional_string(request.behavior_id.as_deref());
-            if !behavior_id.is_empty() {
+            if !agent_did.is_empty() && !behavior_id.is_empty() {
                 behavior_counts
-                    .entry(behavior_id)
+                    .entry((agent_did, behavior_id))
                     .or_default()
                     .expired_processing += 1;
             }
@@ -304,15 +370,23 @@ fn build_fleet_slot_snapshot(
     let mut backend_ids = backends.keys().cloned().collect::<BTreeSet<_>>();
     backend_ids.extend(active_backend_ids);
     let mut backend_snapshots = Vec::new();
-    for backend_id in backend_ids {
-        let configured = backends.get(&backend_id);
-        let counts = backend_counts.get(&backend_id).cloned().unwrap_or_default();
+    for (agent_did, backend_id) in backend_ids {
+        let backend_key = (agent_did.clone(), backend_id.clone());
+        let configured = backends.get(&backend_key);
+        let counts = backend_counts
+            .get(&backend_key)
+            .cloned()
+            .unwrap_or_default();
         let max_concurrent = configured
             .map(BackendRow::max_concurrent)
             .unwrap_or_default();
-        let accepting_admission = backend_accepting.get(&backend_id).copied().unwrap_or(false);
+        let accepting_admission = backend_accepting
+            .get(&backend_key)
+            .copied()
+            .unwrap_or(false);
         backend_snapshots.push(FleetBackendAdmissionCounters {
             backend_id,
+            agent_did,
             configured: configured.is_some(),
             enabled: configured.map(BackendRow::is_enabled).unwrap_or(false),
             probe_status: configured
@@ -334,33 +408,37 @@ fn build_fleet_slot_snapshot(
     }
 
     let mut behavior_ids = behaviors.keys().cloned().collect::<BTreeSet<_>>();
-    behavior_ids.extend(active_behavior_metadata.keys().cloned());
+    behavior_ids.extend(active_behavior_backends.keys().cloned());
     let mut behavior_snapshots = Vec::new();
-    for behavior_id in behavior_ids {
-        let configured = behaviors.get(&behavior_id);
-        let active_metadata = active_behavior_metadata.get(&behavior_id);
+    for (agent_did, behavior_id) in behavior_ids {
+        let behavior_key = (agent_did.clone(), behavior_id.clone());
+        let configured = behaviors.get(&behavior_key);
+        let active_backend_id = active_behavior_backends.get(&behavior_key);
         let backend_id = configured
-            .map(BehaviorRow::normalized_backend_id)
-            .or_else(|| active_metadata.map(|(_, backend_id)| backend_id.clone()))
+            .map(ResolvedBehaviorRow::normalized_backend_id)
+            .or_else(|| active_backend_id.cloned())
             .unwrap_or_default();
         let counts = behavior_counts
-            .get(&behavior_id)
+            .get(&behavior_key)
             .cloned()
             .unwrap_or_default();
-        let backend = backends.get(&backend_id);
+        let backend_key = (agent_did.clone(), backend_id.clone());
+        let backend = backends.get(&backend_key);
         let max = backend.map(BackendRow::max_concurrent).unwrap_or_default();
-        let backend_available = backend_accepting.get(&backend_id).copied().unwrap_or(false);
-        let enabled = configured.map(BehaviorRow::is_enabled).unwrap_or(false);
+        let backend_available = backend_accepting
+            .get(&backend_key)
+            .copied()
+            .unwrap_or(false);
+        let enabled = configured
+            .map(|row| row.behavior.is_enabled())
+            .unwrap_or(false);
         let backend_running = backend_counts
-            .get(&backend_id)
+            .get(&backend_key)
             .map(|counts| counts.assigned)
             .unwrap_or_default();
         behavior_snapshots.push(FleetBehaviorSlotUsage {
             behavior_id: behavior_id.clone(),
-            agent_did: configured
-                .map(|behavior| clean_string(&behavior.agent_did))
-                .or_else(|| active_metadata.map(|(agent_did, _)| agent_did.clone()))
-                .unwrap_or_default(),
+            agent_did,
             backend_id,
             configured: configured.is_some(),
             enabled,
@@ -412,19 +490,19 @@ fn build_fleet_slot_snapshot(
 /// gate or a connectivity probe. The runtime's admission owner and transport
 /// health remain authoritative for live execution and reachability.
 fn backend_admission_from_readiness(
-    behaviors: &BTreeMap<String, BehaviorRow>,
+    behaviors: &BTreeMap<(String, String), ResolvedBehaviorRow>,
     readiness_by_agent: &BTreeMap<String, AgentBehaviorReadinessRow>,
     observed_at: DateTime<Utc>,
-) -> BTreeMap<String, bool> {
-    let mut accepting = BTreeMap::<String, bool>::new();
-    for (behavior_id, behavior) in behaviors {
+) -> BTreeMap<(String, String), bool> {
+    let mut accepting = BTreeMap::<(String, String), bool>::new();
+    for ((agent_did, behavior_id), behavior) in behaviors {
         let backend_id = behavior.normalized_backend_id();
         if backend_id.is_empty() {
             continue;
         }
-        let agent_did = clean_string(&behavior.agent_did);
-        let readiness_row = readiness_by_agent.get(&agent_did);
-        let projected = project_behavior_readiness_summary(readiness_row, &agent_did, observed_at);
+        let readiness_row = readiness_by_agent.get(agent_did);
+        let projected =
+            project_behavior_readiness_summary(readiness_row, agent_did.as_str(), observed_at);
         let ready = matches!(
             &projected,
             ProjectedBehaviorReadinessSummary::Observed(summary)
@@ -433,7 +511,9 @@ fn backend_admission_from_readiness(
                         && entry.state == BehaviorReadinessState::Ready
                 })
         );
-        let entry = accepting.entry(backend_id).or_insert(false);
+        let entry = accepting
+            .entry((agent_did.clone(), backend_id))
+            .or_insert(false);
         *entry = *entry || ready;
     }
     accepting
@@ -498,23 +578,25 @@ mod tests {
 
     fn find_backend<'a>(
         snapshot: &'a FleetSlotSnapshot,
+        agent_did: &str,
         backend_id: &str,
     ) -> &'a FleetBackendAdmissionCounters {
         snapshot
             .backends
             .iter()
-            .find(|backend| backend.backend_id == backend_id)
+            .find(|backend| backend.agent_did == agent_did && backend.backend_id == backend_id)
             .unwrap()
     }
 
     fn find_behavior<'a>(
         snapshot: &'a FleetSlotSnapshot,
+        agent_did: &str,
         behavior_id: &str,
     ) -> &'a FleetBehaviorSlotUsage {
         snapshot
             .behaviors
             .iter()
-            .find(|behavior| behavior.behavior_id == behavior_id)
+            .find(|behavior| behavior.agent_did == agent_did && behavior.behavior_id == behavior_id)
             .unwrap()
     }
 
@@ -530,18 +612,31 @@ mod tests {
                     BehaviorRow {
                         behavior_id: "behavior-a".to_string(),
                         agent_did: "did:test:test".to_string(),
-                        backend_id: Some("backend-a".to_string()),
+                        inference_profile_id: Some("profile-a".to_string()),
                         enabled: Some(true),
                     },
                     BehaviorRow {
                         behavior_id: "behavior-b".to_string(),
                         agent_did: "did:test:test".to_string(),
-                        backend_id: Some("backend-a".to_string()),
+                        inference_profile_id: Some("profile-b".to_string()),
                         enabled: Some(true),
+                    },
+                ],
+                profiles: vec![
+                    InferenceProfileRow {
+                        profile_id: "profile-a".to_string(),
+                        agent_did: "did:test:test".to_string(),
+                        backend_id: "backend-a".to_string(),
+                    },
+                    InferenceProfileRow {
+                        profile_id: "profile-b".to_string(),
+                        agent_did: "did:test:test".to_string(),
+                        backend_id: "backend-a".to_string(),
                     },
                 ],
                 backends: vec![BackendRow {
                     backend_id: "backend-a".to_string(),
+                    agent_did: "did:test:test".to_string(),
                     enabled: Some(true),
                     max_concurrent: Some(2),
                     max_queue_depth: Some(4),
@@ -562,6 +657,7 @@ mod tests {
                     },
                 ],
                 requests: vec![AgentRequestRow {
+                    agent_did: Some("did:test:test".to_string()),
                     behavior_id: Some("behavior-a".to_string()),
                     deadline: Some("2026-05-20T11:59:00Z".to_string()),
                     ..empty_request_row()
@@ -621,12 +717,18 @@ mod tests {
                 behaviors: vec![BehaviorRow {
                     behavior_id: "behavior-disabled".to_string(),
                     agent_did: "did:test:test".to_string(),
-                    backend_id: Some("backend-unhealthy".to_string()),
+                    inference_profile_id: Some("profile-unhealthy".to_string()),
                     enabled: Some(false),
+                }],
+                profiles: vec![InferenceProfileRow {
+                    profile_id: "profile-unhealthy".to_string(),
+                    agent_did: "did:test:test".to_string(),
+                    backend_id: "backend-unhealthy".to_string(),
                 }],
                 backends: vec![
                     BackendRow {
                         backend_id: "backend-unhealthy".to_string(),
+                        agent_did: "did:test:test".to_string(),
                         enabled: Some(true),
                         max_concurrent: Some(3),
                         max_queue_depth: Some(4),
@@ -634,6 +736,7 @@ mod tests {
                     },
                     BackendRow {
                         backend_id: "backend-missing-flags".to_string(),
+                        agent_did: "did:test:test".to_string(),
                         enabled: None,
                         max_concurrent: Some(2),
                         max_queue_depth: Some(1),
@@ -656,16 +759,19 @@ mod tests {
                 ],
                 requests: vec![
                     AgentRequestRow {
+                        agent_did: Some("did:test:test".to_string()),
                         behavior_id: Some("behavior-disabled".to_string()),
                         deadline: Some("2026-05-20T11:59:00Z".to_string()),
                         ..empty_request_row()
                     },
                     AgentRequestRow {
+                        agent_did: Some("did:test:test".to_string()),
                         behavior_id: Some("behavior-disabled".to_string()),
                         deadline: Some("not-a-date".to_string()),
                         ..empty_request_row()
                     },
                     AgentRequestRow {
+                        agent_did: Some("did:test:test".to_string()),
                         behavior_id: Some("behavior-disabled".to_string()),
                         deadline: None,
                         ..empty_request_row()
@@ -686,7 +792,7 @@ mod tests {
         );
         assert_eq!(snapshot.expired.processing_requests, 1);
 
-        let unhealthy = find_backend(&snapshot, "backend-unhealthy");
+        let unhealthy = find_backend(&snapshot, "did:test:test", "backend-unhealthy");
         assert!(unhealthy.configured);
         assert!(unhealthy.enabled);
         assert_eq!(unhealthy.probe_status, "unhealthy");
@@ -695,21 +801,21 @@ mod tests {
         assert_eq!(unhealthy.available, 0);
         assert_eq!(unhealthy.max_concurrent, 3);
 
-        let missing_flags = find_backend(&snapshot, "backend-missing-flags");
+        let missing_flags = find_backend(&snapshot, "did:test:test", "backend-missing-flags");
         assert!(missing_flags.configured);
         assert!(!missing_flags.enabled);
         assert_eq!(missing_flags.probe_status, UNKNOWN_PROBE_STATUS);
         assert!(!missing_flags.accepting_admission);
         assert_eq!(missing_flags.available, 0);
 
-        let stale_backend = find_backend(&snapshot, "backend-stale");
+        let stale_backend = find_backend(&snapshot, "did:test:stale", "backend-stale");
         assert!(!stale_backend.configured);
         assert!(!stale_backend.enabled);
         assert_eq!(stale_backend.probe_status, UNKNOWN_PROBE_STATUS);
         assert_eq!(stale_backend.running, 1);
         assert_eq!(stale_backend.max_concurrent, 0);
 
-        let disabled = find_behavior(&snapshot, "behavior-disabled");
+        let disabled = find_behavior(&snapshot, "did:test:test", "behavior-disabled");
         assert!(disabled.configured);
         assert!(!disabled.enabled);
         assert!(!disabled.backend_available);
@@ -718,7 +824,7 @@ mod tests {
         assert_eq!(disabled.max, 3);
         assert_eq!(disabled.expired_processing, 1);
 
-        let stale_behavior = find_behavior(&snapshot, "behavior-stale");
+        let stale_behavior = find_behavior(&snapshot, "did:test:stale", "behavior-stale");
         assert!(!stale_behavior.configured);
         assert!(!stale_behavior.enabled);
         assert_eq!(stale_behavior.agent_did, "did:test:stale");
@@ -726,6 +832,104 @@ mod tests {
         assert_eq!(stale_behavior.assigned, 1);
         assert_eq!(stale_behavior.available, 0);
         assert_eq!(stale_behavior.max, 0);
+    }
+
+    #[test]
+    fn snapshot_scopes_same_ids_to_their_owning_agent() {
+        let now = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let behavior = |agent_did: &str| BehaviorRow {
+            behavior_id: "shared-behavior".to_string(),
+            agent_did: agent_did.to_string(),
+            inference_profile_id: Some("shared-profile".to_string()),
+            enabled: Some(true),
+        };
+        let profile = |agent_did: &str| InferenceProfileRow {
+            profile_id: "shared-profile".to_string(),
+            agent_did: agent_did.to_string(),
+            backend_id: "shared-backend".to_string(),
+        };
+        let backend = |agent_did: &str, max_concurrent| BackendRow {
+            backend_id: "shared-backend".to_string(),
+            agent_did: agent_did.to_string(),
+            enabled: Some(true),
+            max_concurrent: Some(max_concurrent),
+            max_queue_depth: Some(4),
+            probe_status: Some("healthy".to_string()),
+        };
+        let call = |agent_did: &str, call_state: &str| InferenceCallRow {
+            backend_id: Some("shared-backend".to_string()),
+            behavior_id: Some("shared-behavior".to_string()),
+            agent_did: Some(agent_did.to_string()),
+            call_state: call_state.to_string(),
+        };
+
+        let snapshot = build_fleet_slot_snapshot(
+            now,
+            FleetSlotQueryEnvelope {
+                behaviors: vec![behavior("did:test:a"), behavior("did:test:b")],
+                profiles: vec![profile("did:test:a"), profile("did:test:b")],
+                backends: vec![backend("did:test:a", 2), backend("did:test:b", 4)],
+                calls: vec![call("did:test:a", "running"), call("did:test:b", "queued")],
+                requests: vec![
+                    AgentRequestRow {
+                        agent_did: Some("did:test:a".to_string()),
+                        behavior_id: Some("shared-behavior".to_string()),
+                        deadline: Some("2026-05-20T11:59:00Z".to_string()),
+                        ..empty_request_row()
+                    },
+                    AgentRequestRow {
+                        agent_did: Some("did:test:b".to_string()),
+                        behavior_id: Some("shared-behavior".to_string()),
+                        deadline: Some("2026-05-20T12:01:00Z".to_string()),
+                        ..empty_request_row()
+                    },
+                ],
+                behavior_readiness: vec![
+                    readiness_row(
+                        "did:test:a",
+                        "shared-behavior",
+                        &["shared-behavior"],
+                        "2026-05-20T11:59:50Z",
+                    ),
+                    readiness_row(
+                        "did:test:b",
+                        "shared-behavior",
+                        &["shared-behavior"],
+                        "2026-05-20T11:59:50Z",
+                    ),
+                ],
+            },
+        );
+
+        let backend_a = find_backend(&snapshot, "did:test:a", "shared-backend");
+        assert_eq!(backend_a.running, 1);
+        assert_eq!(backend_a.queued, 0);
+        assert_eq!(backend_a.available, 1);
+        assert_eq!(backend_a.max_concurrent, 2);
+        let backend_b = find_backend(&snapshot, "did:test:b", "shared-backend");
+        assert_eq!(backend_b.running, 0);
+        assert_eq!(backend_b.queued, 1);
+        assert_eq!(backend_b.available, 4);
+        assert_eq!(backend_b.max_concurrent, 4);
+
+        let behavior_a = find_behavior(&snapshot, "did:test:a", "shared-behavior");
+        assert_eq!(behavior_a.assigned, 1);
+        assert_eq!(behavior_a.queued, 0);
+        assert_eq!(behavior_a.expired_processing, 1);
+        assert_eq!(behavior_a.available, 1);
+        let behavior_b = find_behavior(&snapshot, "did:test:b", "shared-behavior");
+        assert_eq!(behavior_b.assigned, 0);
+        assert_eq!(behavior_b.queued, 1);
+        assert_eq!(behavior_b.expired_processing, 0);
+        assert_eq!(behavior_b.available, 4);
+
+        assert_eq!(snapshot.expired.processing_requests, 1);
+        assert_eq!(snapshot.totals.assigned, 1);
+        assert_eq!(snapshot.totals.queued, 1);
+        assert_eq!(snapshot.totals.available, 5);
+        assert_eq!(snapshot.totals.max, 6);
     }
 
     #[test]

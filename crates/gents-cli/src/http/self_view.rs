@@ -21,9 +21,9 @@ pub(crate) struct SelfBehavior {
     pub(crate) endpoint: String,
     pub(crate) inference_profile_id: String,
     pub(crate) context_window: Option<i64>,
-    /// Compaction threshold fraction (0.0-1.0) sourced from the behavior row,
-    /// falling back to `gents::config::DEFAULT_COMPACTION_THRESHOLD` when the
-    /// row leaves it unset.
+    /// Compaction threshold fraction (0.0-1.0) resolved through the behavior's
+    /// context and compaction document. Missing optional configuration uses
+    /// the runtime default.
     pub(crate) compaction_threshold: f64,
 }
 
@@ -56,6 +56,10 @@ struct SelfViewEnvelope {
     backends: Vec<BackendRow>,
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<ProfileRow>,
+    #[serde(rename = "AgentContext", default)]
+    contexts: Vec<ContextRow>,
+    #[serde(rename = "CompactionConfig", default)]
+    compaction_configs: Vec<CompactionConfigRow>,
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<AgentRequestRow>,
 }
@@ -73,15 +77,11 @@ struct BehaviorRow {
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
-    model_name: Option<String>,
-    #[serde(default)]
-    backend_id: Option<String>,
-    #[serde(default)]
     inference_profile_id: Option<String>,
     #[serde(default)]
-    enabled: Option<bool>,
+    context_id: Option<String>,
     #[serde(default)]
-    compaction_threshold: Option<f64>,
+    enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,7 +99,27 @@ struct ProfileRow {
     #[serde(default)]
     profile_id: String,
     #[serde(default)]
+    backend_id: Option<String>,
+    #[serde(default)]
+    model_name: Option<String>,
+    #[serde(default)]
     context_window: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ContextRow {
+    #[serde(default)]
+    context_id: String,
+    #[serde(default)]
+    compaction_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CompactionConfigRow {
+    #[serde(default)]
+    compaction_id: String,
+    #[serde(default)]
+    threshold: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -119,13 +139,19 @@ pub(crate) async fn load_self_view(
     let response = post_graphql(graphql, &self_view_query(agent_did)).await?;
     let envelope = decode::<SelfViewEnvelope>(response, "self view")?;
 
-    let behaviors = build_behaviors(envelope.behaviors, envelope.backends, envelope.profiles);
+    let behaviors = build_behaviors(
+        envelope.behaviors,
+        envelope.backends,
+        envelope.profiles,
+        envelope.contexts,
+        envelope.compaction_configs,
+    );
     let session_ids = distinct_session_ids(&envelope.requests);
 
     let mut context_budget = if session_ids.is_empty() {
         ContextBudget::default()
     } else {
-        let response = post_graphql(graphql, &compaction_query(&session_ids)).await?;
+        let response = post_graphql(graphql, &compaction_query(agent_did, &session_ids)).await?;
         let envelope = decode::<CompactionEnvelope>(response, "context budget")?;
         aggregate_compaction(envelope.compactions)
     };
@@ -143,20 +169,28 @@ fn self_view_query(agent_did: &str) -> String {
         AgentBehavior(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ behavior_id: ASC }}) {{
             behavior_id
             display_name
-            model_name
-            backend_id
             inference_profile_id
+            context_id
             enabled
-            compaction_threshold
         }}
-        InferenceBackend(order: {{ backend_id: ASC }}) {{
+        InferenceBackend(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ backend_id: ASC }}) {{
             backend_id
             provider_kind
             endpoint
         }}
-        InferenceProfile(order: {{ profile_id: ASC }}) {{
+        InferenceProfile(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ profile_id: ASC }}) {{
             profile_id
+            backend_id
+            model_name
             context_window
+        }}
+        AgentContext(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+            context_id
+            compaction_id
+        }}
+        CompactionConfig(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+            compaction_id
+            threshold
         }}
         AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
             request_id
@@ -166,7 +200,8 @@ fn self_view_query(agent_did: &str) -> String {
     )
 }
 
-fn compaction_query(session_ids: &[String]) -> String {
+fn compaction_query(agent_did: &str, session_ids: &[String]) -> String {
+    let agent_did = escape_graphql_string(agent_did);
     let list = session_ids
         .iter()
         .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
@@ -174,7 +209,10 @@ fn compaction_query(session_ids: &[String]) -> String {
         .join(", ");
     format!(
         r#"{{
-        CompactionEntry(filter: {{ session_id: {{ _in: [{list}] }} }}, order: {{ created_at: DESC }}) {{
+        CompactionEntry(filter: {{ _and: [
+            {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            {{ session_id: {{ _in: [{list}] }} }}
+        ] }}, order: {{ created_at: DESC }}) {{
             created_at
             original_tokens
             compacted_tokens
@@ -196,6 +234,8 @@ fn build_behaviors(
     behaviors: Vec<BehaviorRow>,
     backends: Vec<BackendRow>,
     profiles: Vec<ProfileRow>,
+    contexts: Vec<ContextRow>,
+    compaction_configs: Vec<CompactionConfigRow>,
 ) -> Vec<SelfBehavior> {
     use std::collections::BTreeMap;
 
@@ -213,6 +253,20 @@ fn build_behaviors(
             (!profile_id.is_empty()).then_some((profile_id, profile))
         })
         .collect::<BTreeMap<_, _>>();
+    let contexts = contexts
+        .into_iter()
+        .filter_map(|context| {
+            let context_id = context.context_id.trim().to_string();
+            (!context_id.is_empty()).then_some((context_id, context))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let compaction_configs = compaction_configs
+        .into_iter()
+        .filter_map(|config| {
+            let compaction_id = config.compaction_id.trim().to_string();
+            (!compaction_id.is_empty()).then_some((compaction_id, config))
+        })
+        .collect::<BTreeMap<_, _>>();
 
     behaviors
         .into_iter()
@@ -221,18 +275,29 @@ fn build_behaviors(
             if behavior_id.is_empty() {
                 return None;
             }
-            let backend_id = behavior.backend_id.unwrap_or_default().trim().to_string();
             let inference_profile_id = behavior
                 .inference_profile_id
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            let backend = backends.get(&backend_id);
+            let context_id = behavior.context_id.as_deref().unwrap_or_default().trim();
+            let context = contexts.get(context_id);
+            let compaction = context
+                .and_then(|context| context.compaction_id.as_deref())
+                .and_then(|compaction_id| compaction_configs.get(compaction_id.trim()));
             let profile = profiles.get(&inference_profile_id);
+            let backend_id = profile
+                .and_then(|profile| profile.backend_id.as_deref())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let backend = backends.get(&backend_id);
             Some(SelfBehavior {
                 behavior_id,
                 display_name: behavior.display_name.unwrap_or_default(),
-                model_name: behavior.model_name.unwrap_or_default(),
+                model_name: profile
+                    .and_then(|profile| profile.model_name.clone())
+                    .unwrap_or_default(),
                 enabled: behavior.enabled.unwrap_or(true),
                 backend_id,
                 provider_kind: backend
@@ -243,8 +308,8 @@ fn build_behaviors(
                     .unwrap_or_default(),
                 inference_profile_id,
                 context_window: profile.and_then(|profile| profile.context_window),
-                compaction_threshold: behavior
-                    .compaction_threshold
+                compaction_threshold: compaction
+                    .and_then(|config| config.threshold)
                     .unwrap_or(gents::config::DEFAULT_COMPACTION_THRESHOLD),
             })
         })
@@ -330,9 +395,8 @@ mod tests {
             rows(json!([{
                 "behavior_id": "amy-general",
                 "display_name": "Amy General",
-                "model_name": "gpt-4",
-                "backend_id": "b1",
                 "inference_profile_id": "p1",
+                "context_id": "c1",
                 "enabled": true
             }])),
             rows(json!([{
@@ -340,7 +404,11 @@ mod tests {
                 "provider_kind": "OpenAiCompatible",
                 "endpoint": "http://host/v1"
             }])),
-            rows(json!([{ "profile_id": "p1", "context_window": 128000 }])),
+            rows(
+                json!([{ "profile_id": "p1", "backend_id": "b1", "model_name": "gpt-4", "context_window": 128000 }]),
+            ),
+            rows(json!([{ "context_id": "c1", "compaction_id": "compact-1" }])),
+            rows(json!([{ "compaction_id": "compact-1", "threshold": 0.8 }])),
         );
 
         assert_eq!(behaviors.len(), 1);
@@ -349,16 +417,15 @@ mod tests {
         assert_eq!(b.provider_kind, "OpenAiCompatible");
         assert_eq!(b.endpoint, "http://host/v1");
         assert_eq!(b.context_window, Some(128000));
-        assert_eq!(
-            b.compaction_threshold,
-            gents::config::DEFAULT_COMPACTION_THRESHOLD
-        );
+        assert_eq!(b.compaction_threshold, 0.8);
     }
 
     #[test]
     fn behavior_without_matching_backend_or_profile_has_empty_join() {
         let behaviors = build_behaviors(
-            rows(json!([{ "behavior_id": "orphan", "backend_id": "missing" }])),
+            rows(json!([{ "behavior_id": "orphan", "inference_profile_id": "missing" }])),
+            rows(json!([])),
+            rows(json!([])),
             rows(json!([])),
             rows(json!([])),
         );

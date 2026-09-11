@@ -233,7 +233,7 @@ mod canonical_tests {
         let deletes = super::super::prune::prune_safe_deletes(&desired, &live).unwrap();
         assert_eq!(
             deletes,
-            vec![gents::apply_model::DocRef {
+            vec![crate::desired_state::DocRef {
                 collection: Collection::Tools,
                 id: "unused".into()
             }]

@@ -85,8 +85,9 @@ async fn create_parent_hook(
         deadline,
     )
     .await;
-    crate::support::create_agent_session(
+    crate::support::create_agent_session_in_scope(
         db.node.as_ref(),
+        db.node_identity.did(),
         session_id,
         PARENT_BEHAVIOR_ID,
         "2026-05-14T00:00:00Z",
@@ -320,6 +321,7 @@ async fn create_child_session_queued_request(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 behavior_id: "{behavior_id}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
@@ -380,15 +382,18 @@ fn queue_metadata(
     key: Option<&str>,
     queued_after_request_id: Option<&str>,
 ) -> String {
-    json!({
+    let mut input = json!({
         "queue": {
             "source": source,
             "policy": policy,
             "key": key,
             "queued_after_request_id": queued_after_request_id
         }
-    })
-    .to_string()
+    });
+    if source == "background_completion" {
+        input["queue"]["background_completion_wake_version"] = json!(1);
+    }
+    input.to_string()
 }
 
 #[tokio::test]
@@ -555,7 +560,7 @@ async fn steer_subagent_interrupt_latches_active_child_request() {
     let hook = create_parent_hook(&db, "parent-interrupt", "session-interrupt").await;
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-interrupt", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
-    update_request_state(db.node.as_ref(), child_request_id, "processing").await;
+    update_request_state(db.node.as_ref(), child_request_id, "claimed").await;
 
     let result = steer_subagent(
         &hook,
@@ -592,12 +597,13 @@ async fn steer_subagent_interrupt_latches_active_child_request() {
 
 #[tokio::test]
 async fn steer_subagent_interrupt_drains_automated_wakeups() {
-    let (db, _source) = setup_db("r4c-steer-drain").await;
+    let (db, source) = setup_db("r4c-steer-drain").await;
     let hook = create_parent_hook(&db, "parent-drain", "session-drain").await;
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-drain", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
-    update_request_state(db.node.as_ref(), child_request_id, "processing").await;
+    drop(source);
+    update_request_state(db.node.as_ref(), child_request_id, "claimed").await;
     let wake_request_id = "r4c-steer-drain-wake";
     create_child_session_queued_request(
         db.node.as_ref(),
@@ -638,13 +644,14 @@ async fn steer_subagent_interrupt_drains_automated_wakeups() {
 
 #[tokio::test]
 async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
-    let (db, _source) = setup_db("r4c-steer-cascade").await;
+    let (db, source) = setup_db("r4c-steer-cascade").await;
     let hook = create_parent_hook(&db, "parent-cascade", "session-cascade").await;
     let parent_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-cascade", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap().to_string();
     let child_session_id = child["child_session_id"].as_str().unwrap().to_string();
-    update_request_state(db.node.as_ref(), &child_request_id, "processing").await;
+    drop(source);
+    update_request_state(db.node.as_ref(), &child_request_id, "claimed").await;
 
     let grandchild_request_id = "r4c-steer-grandchild";
     let child_request_doc_id =
@@ -653,7 +660,7 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         db.node.clone(),
         child_request_id.clone(),
         child_session_id.clone(),
-        "did:test:test".to_string(),
+        db.node_identity.did().to_string(),
         "internal-steer-descendant".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -664,7 +671,8 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         grandchild_request_id.to_string(),
         db.node_identity.did().to_string(),
     )
-    .with_request_doc_id(Some(child_request_doc_id.clone()));
+    .with_request_doc_id(Some(child_request_doc_id.clone()))
+    .with_requester_did(Some(db.node_identity.did().to_string()));
     descendant_bridge.start_running().await.unwrap();
     let descendant_bridge_doc_id = descendant_bridge
         .doc_id()
@@ -686,7 +694,7 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
     .await
     .unwrap();
 
-    let _ = steer_subagent(
+    let result = steer_subagent(
         &hook,
         "steer-cascade",
         json!({
@@ -696,6 +704,11 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         }),
     )
     .await;
+    assert_eq!(
+        result["interrupted_active_request_id"].as_str(),
+        Some(child_request_id.as_str()),
+        "{result}"
+    );
 
     assert!(
         fetch_interrupt_requested_at(db.node.as_ref(), grandchild_request_id)

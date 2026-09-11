@@ -148,6 +148,8 @@ pub struct ResolvedToolSelection {
     pub allowed_mcp_service_ids: Vec<String>,
     pub remote_tools: Option<crate::document_config::RemoteTools>,
     pub required_mcp_service_ids: Vec<String>,
+    /// Derived from canonical host and remote capability groups. This is the
+    /// single runtime allowlist for background process dispatch.
     pub backgroundable_tool_names: Vec<String>,
     pub enable_memory: bool,
     pub enable_session_history_tool: bool,
@@ -164,10 +166,6 @@ pub struct ResolvedToolSelection {
     pub lsp_config: Option<String>,
     pub eth_queries: Vec<crate::eth::ResolvedEthQuery>,
     pub eth_calls: Vec<crate::eth::ResolvedEthCall>,
-    /// Derived from canonical `Tools.remote.services[].background_tool_names`:
-    /// the generic MCP dispatch wrapper is backgroundable when any selected
-    /// service permits background execution. Not document-writable input.
-    pub remote_background_names: Vec<String>,
 }
 
 impl Default for ResolvedToolSelection {
@@ -200,7 +198,6 @@ impl Default for ResolvedToolSelection {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
-            remote_background_names: Vec::new(),
         }
     }
 }
@@ -242,7 +239,15 @@ impl ResolvedToolSelection {
         let enable_meta_tools = !remote_services.is_empty();
         let mut allowed_mcp_service_ids = Vec::with_capacity(remote_services.len());
         let mut required_mcp_service_ids = Vec::new();
-        let mut remote_background_names = Vec::new();
+        let mut backgroundable_tool_names = Vec::new();
+        if let Some(bash) = bash_group {
+            if bash.background_enabled && !matches!(bash.mode, BashMode::Off) {
+                backgroundable_tool_names.push(match bash.mode {
+                    BashMode::Unrestricted => "bash_unrestricted".to_string(),
+                    BashMode::Off | BashMode::ReadOnly => "bash".to_string(),
+                });
+            }
+        }
         for service in remote_services {
             let service_id = &service.mcp_service_id;
             if !allowed_mcp_service_ids.contains(&service_id.to_string()) {
@@ -256,9 +261,9 @@ impl ResolvedToolSelection {
             if !service.background_tool_names.is_empty() {
                 match service.style {
                     crate::document_config::RemoteToolStyle::Discovery => {
-                        remote_background_names.push("call_tool".to_string())
+                        backgroundable_tool_names.push("call_tool".to_string())
                     }
-                    crate::document_config::RemoteToolStyle::Flat => remote_background_names
+                    crate::document_config::RemoteToolStyle::Flat => backgroundable_tool_names
                         .extend(
                             service
                                 .background_tool_names
@@ -297,9 +302,7 @@ impl ResolvedToolSelection {
             allowed_mcp_service_ids,
             remote_tools: tools.remote.clone(),
             required_mcp_service_ids,
-            // Bash backgrounding stays the only native host background capability;
-            // the derived per-mode allowlist is materialized by the adapter.
-            backgroundable_tool_names: Vec::new(),
+            backgroundable_tool_names,
             enable_memory: built_ins
                 .and_then(|built| built.enable_memory)
                 .unwrap_or(false),
@@ -350,7 +353,6 @@ impl ResolvedToolSelection {
                 .map(ToOwned::to_owned),
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
-            remote_background_names,
         })
     }
 }

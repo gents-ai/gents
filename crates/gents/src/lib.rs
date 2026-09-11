@@ -9,7 +9,6 @@ extern crate self as gents;
 pub mod adapter_projection;
 pub(crate) mod admission;
 pub mod agent;
-pub mod apply_model;
 pub mod backend_health;
 pub mod backend_provider;
 pub mod backend_registry;
@@ -290,11 +289,11 @@ pub use interrupt::{fetch_interrupt_requested_at, interrupt_request, interrupt_r
 pub use lifecycle::{
     background_wake_next_retry_at, background_wake_retry_delay,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    build_signed_request, task_session_title, write_manual_agent_request,
-    write_manual_agent_request_with_conversation_title, BackgroundWakeRedriveReport,
-    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestIdentity, RequestLifecycle,
-    RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport, TerminalRepairReport,
-    TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
+    build_signed_request, enqueue_local_steering_request, task_session_title,
+    write_manual_agent_request, write_manual_agent_request_with_conversation_title,
+    BackgroundWakeRedriveReport, EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestIdentity,
+    RequestLifecycle, RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport,
+    TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
 };
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;

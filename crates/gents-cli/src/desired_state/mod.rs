@@ -23,6 +23,12 @@ pub(crate) use gents::document_config::{
     AgentPrincipal as DesiredAgentPrincipal, PackConfig as DesiredStateManifest,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DocRef {
+    pub(crate) collection: Collection,
+    pub(crate) id: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct DesiredStateCollectionDiff {
     pub(crate) create: Vec<String>,
@@ -88,7 +94,7 @@ impl DesiredStateDiffCollections {
             .get_mut(collection.dir_name().unwrap_or("agent_principal"))
             .expect("all canonical collection reports are initialized")
     }
-    pub(crate) fn record_prune_deletes(&mut self, deletes: &[gents::apply_model::DocRef]) {
+    pub(crate) fn record_prune_deletes(&mut self, deletes: &[DocRef]) {
         for doc in deletes {
             let diff = self.get_mut(doc.collection);
             diff.live_only.retain(|id| id != &doc.id);

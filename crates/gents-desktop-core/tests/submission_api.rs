@@ -25,8 +25,15 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
         .node()
         .execute(&format!(
             r#"{{
-                AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }}
-            }}"#
+                AgentSession(filter: {{
+                    session_id: {{ _eq: "{}" }},
+                    agent_did: {{ _eq: "{}" }},
+                    requester_did: {{ _eq: "{}" }}
+                }}) {{ _docID }}
+            }}"#,
+            gents::graphql::escape_graphql_string(&session_id),
+            gents::graphql::escape_graphql_string(&agent_did),
+            gents::graphql::escape_graphql_string(&agent_did),
         ))
         .await;
     assert!(

@@ -295,16 +295,16 @@ fn runtime_internal_request_branches_cannot_collapse_back_to_ambiguous_parent_au
 
     assert!(!protocol.contains("pub fn runtime_internal("));
     assert!(protocol.contains("pub fn runtime_local_child("));
-    assert!(protocol.contains("pub fn runtime_cross_deployment_child("));
+    assert!(protocol.contains("pub fn runtime_cross_principal_child("));
     assert!(!authoring.contains("require_parent_agent_match"));
     assert!(authoring.contains("SubagentAdmissionSource::LocalChild"));
     assert!(authoring.contains("SubagentAdmissionSource::CrossDeploymentChild"));
 
     let cross_verifier = verifier
-        .split("async fn verify_cross_deployment_child_source")
+        .split("async fn verify_cross_principal_child_source")
         .nth(1)
         .and_then(|tail| {
-            tail.split("async fn verify_target_cross_deployment_policy")
+            tail.split("async fn verify_target_cross_principal_policy")
                 .next()
         })
         .expect("cross-deployment verifier boundary");

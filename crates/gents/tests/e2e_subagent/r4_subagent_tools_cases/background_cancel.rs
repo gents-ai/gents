@@ -124,6 +124,15 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let request_id = fixture.request_id.clone();
+    bind_behavior_backend(
+        db.node.as_ref(),
+        "did:test:r5-remote-child",
+        CHILD_BEHAVIOR_ID,
+        "r4-remote-child-backend",
+        "http://127.0.0.1:1/v1",
+        "test-model",
+    )
+    .await;
     gents::upsert_agent_behavior(
         db.node.as_ref(),
         &gents::AgentBehaviorDocument {

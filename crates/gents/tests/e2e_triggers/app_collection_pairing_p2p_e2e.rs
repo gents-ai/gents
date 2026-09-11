@@ -1045,10 +1045,8 @@ async fn seed_preexisting_hydration_history(
                 session_id: "{HYDRATION_SESSION_ID}",
                 requester_did: "{requester_did}",
                 agent_did: "{agent_did}",
-                agent_name: "hydration-runtime",
                 behavior_id: "{behavior_id}",
-                started: "{now}",
-                status: "active"
+                created_at: "{now}"
             }}) {{ _docID }}
             message: create_AgentMessage(input: {{
                 message_key: "{HYDRATION_SESSION_ID}:1",

@@ -215,8 +215,6 @@ pub(crate) struct AcpServiceConfig {
     pub(crate) node: Arc<EmbeddedNode>,
     /// Serving agent DID (the `@immutable` `AgentSession.agent_did` value).
     pub(crate) agent_did: Arc<str>,
-    /// Serving agent display name (stamped on `AgentSession.agent_name`).
-    pub(crate) agent_name: Arc<str>,
     /// Bound behavior id (stamped on `AgentSession.behavior_id`).
     pub(crate) behavior_id: Arc<str>,
     /// Bound model the runtime serves for this behavior.
@@ -1537,10 +1535,10 @@ fn optional_session_id(params: &Value) -> Option<String> {
 
 /// Create the `AgentSession` document for `session_id` if absent.
 ///
-/// Mirrors the runtime's `request_session_projection`: update the mutable
-/// identity fields when the row exists, create when it does not. The
-/// `@immutable` fields (`agent_did`, `requester_did`) are only ever supplied
-/// on create, and — matching the runtime's claim-admission behavior — a row
+/// Mirrors the runtime's `request_session_projection`: create the canonical
+/// session when it does not exist and reopen it by clearing `closed_at`. The
+/// immutable identity fields are only ever supplied on create, and — matching
+/// the runtime's claim-admission behavior — a row
 /// bound to a different behavior id *or* a different immutable `agent_did`
 /// is an explicit error rather than a silent rewrite of session identity.
 async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) -> Result<()> {
@@ -1597,34 +1595,27 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
         }
     }
 
-    let escaped_agent_name = escape_graphql_string(&config.agent_name);
-    // Older shim-created sessions omitted requester_did. They remain
-    // readable only through exactly scoped requests, but an explicit
-    // foreign requester must never be reactivated by session/new.
     anyhow::ensure!(
-        rows.iter().all(|row| row
-            .get("requester_did")
-            .and_then(Value::as_str)
-            .is_none_or(|requester| requester == config.agent_did.as_ref())),
+        rows.iter()
+            .all(|row| row.get("requester_did").and_then(Value::as_str)
+                == Some(config.agent_did.as_ref())),
         "session belongs to a different immutable requester_did"
     );
     let escaped_agent_did = escape_graphql_string(&config.agent_did);
     let escaped_behavior_id = escape_graphql_string(&config.behavior_id);
     // DateTime fields round-trip through the "....Z" form the runtime's own
     // fixtures use; to_rfc3339() emits "+00:00" instead.
-    let started = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let escaped_started = escape_graphql_string(&started);
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let escaped_created_at = escape_graphql_string(&created_at);
     if rows.is_empty() {
         let create = format!(
             r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{escaped_session_id}",
-                    agent_name: "{escaped_agent_name}",
                     agent_did: "{escaped_agent_did}",
                     requester_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
-                    started: "{escaped_started}",
-                    status: "active"
+                    created_at: "{escaped_created_at}"
                 }}) {{ _docID }}
             }}"#
         );
@@ -1638,10 +1629,7 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
                 update_AgentSession(
                     filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                     input: {{
-                        agent_name: "{escaped_agent_name}",
-                        behavior_id: "{escaped_behavior_id}",
-                        status: "active",
-                        ended: null
+                        closed_at: null
                     }}
                 ) {{ _docID }}
             }}"#
@@ -1799,7 +1787,6 @@ mod tests {
             AcpServiceConfig {
                 node,
                 agent_did: Arc::from("did:test:grok-shim"),
-                agent_name: Arc::from("grok-shim-test"),
                 behavior_id: Arc::from("did:test:grok-shim:default"),
                 current_model: bound_model(),
                 grok_home: None,
@@ -2012,13 +1999,27 @@ mod tests {
             lifecycle_state: "completed", created_at: "2026-09-01T12:00:00Z"
         }) { _docID } }"#).await;
         ensure_no_errors(&result, "seed resume request").unwrap();
+        let request = node
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "resume-request"}}) {_docID} }"#)
+            .await;
+        ensure_no_errors(&request, "lookup resume request").unwrap();
+        let request_doc_id = request.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         for sequence in 1..=70 {
             let content = serde_json::to_string(&json!({"role":"assistant", "content":[{"type":"text", "text":format!("REPLAY_{sequence:03}\n")}]})).unwrap();
+            let message_key = gents::session::sequence_message_key(
+                "did:test:grok-shim",
+                "resume-history",
+                Some("did:test:grok-shim"),
+                sequence,
+            );
             let result = node.execute(&format!(r#"mutation {{ create_AgentMessage(input: {{
-                message_key: "resume-message-{sequence}", request_id: "resume-request", session_id: "resume-history",
+                message_key: "{}", request_id: "resume-request", request_doc_id: "{}", session_id: "resume-history",
                 agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim",
                 sequence: {sequence}, role: "assistant", content: "{}", timestamp: "2026-09-01T12:00:00Z"
-            }}) {{_docID}} }}"#, escape_graphql_string(&content))).await;
+            }}) {{_docID}} }}"#, escape_graphql_string(&message_key), escape_graphql_string(&request_doc_id), escape_graphql_string(&content))).await;
             ensure_no_errors(&result, "seed replay page").unwrap();
         }
         let dispatch = service
@@ -2108,7 +2109,7 @@ mod tests {
                 .execute(&format!(
                     r#"mutation {{ create_AgentSession(input: {{
                 session_id: "{id}", agent_did: "did:test:grok-shim", requester_did: {requester},
-                behavior_id: "did:test:grok-shim:default", status: "active"
+                behavior_id: "did:test:grok-shim:default", created_at: "2026-09-01T00:00:00Z"
             }}) {{ _docID }} }}"#
                 ))
                 .await;
@@ -2299,6 +2300,15 @@ mod tests {
     #[tokio::test]
     async fn native_child_controls_and_usage_follow_physical_lineage() {
         let (_dir, service) = test_service().await;
+        ensure_session_document(&service.config, "parent-session")
+            .await
+            .unwrap();
+        ensure_session_document(&service.config, "child-session")
+            .await
+            .unwrap();
+        ensure_session_document(&service.config, "unlinked-session")
+            .await
+            .unwrap();
         service
             .sessions
             .lock()
@@ -2306,8 +2316,10 @@ mod tests {
             .insert("parent-session".into(), AcpSessionState::new());
         let node = &service.config.node;
         let did = gents::graphql::escape_graphql_string(&service.config.agent_did);
+        let behavior = gents::graphql::escape_graphql_string(&service.config.behavior_id);
         let root = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "parent", session_id: "parent-session", agent_did: "{did}", requester_did: "{did}", lifecycle_state: "completed"
+            request_id: "parent", session_id: "parent-session", agent_did: "{did}", requester_did: "{did}",
+            behavior_id: "{behavior}", content: "parent", lifecycle_state: "completed", created_at: "2026-09-01T00:00:00Z"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&root, "root fixture").unwrap();
         let root = node
@@ -2318,9 +2330,26 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        let root_doc = gents::graphql::escape_graphql_string(&root_doc);
+        let observation = gents_protocol::graphql::graphql_input_literal(&json!({
+            "observation": {
+                "last_activity_at": "2026-09-01T00:00:00Z",
+                "latest_request": {
+                    "request_doc_id": root_doc.clone(),
+                    "request_id": "parent",
+                    "lifecycle_state": "completed"
+                }
+            }
+        }))
+        .unwrap();
+        let observed = node
+            .execute(&format!(
+                r#"mutation {{ update_AgentSession(filter: {{session_id: {{_eq: "parent-session"}}}}, input: {observation}) {{_docID}} }}"#
+            ))
+            .await;
+        ensure_no_errors(&observed, "parent session observation").unwrap();
+        let root_doc_escaped = gents::graphql::escape_graphql_string(&root_doc);
         let bridge = node.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
-            tool_call_key: "parent-session:spawn", tool_call_id: "spawn", request_id: "parent", request_doc_id: "{root_doc}",
+            tool_call_key: "parent-session:spawn", tool_call_id: "spawn", request_id: "parent", request_doc_id: "{root_doc_escaped}",
             session_id: "parent-session", agent_did: "{did}", requester_did: "{did}", tool_name: "spawn_subagent",
             child_request_id: "child", await_mode: "background", lifecycle_state: "running"
         }}) {{_docID}} }}"#)).await;
@@ -2335,15 +2364,38 @@ mod tests {
             .to_owned();
         let bridge_doc = gents::graphql::escape_graphql_string(&bridge_doc);
         let child = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "child", session_id: "child-session", agent_did: "{did}", lifecycle_state: "processing",
-            caused_by_parent_request_id: "parent", caused_by_parent_request_doc_id: "{root_doc}",
+            request_id: "child", session_id: "child-session", agent_did: "{did}", requester_did: "{did}",
+            behavior_id: "{behavior}", content: "child", lifecycle_state: "processing", created_at: "2026-09-01T00:00:01Z",
+            caused_by_parent_request_id: "parent", caused_by_parent_request_doc_id: "{root_doc_escaped}",
             caused_by_parent_tool_call_id: "spawn", caused_by_parent_tool_call_doc_id: "{bridge_doc}"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&child, "child fixture").unwrap();
-        for session in ["parent-session", "child-session"] {
+        let child = node
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "child"}}) {_docID} }"#)
+            .await;
+        let child_doc = child.data.unwrap()["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let unlinked = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
+            request_id: "unlinked", session_id: "unlinked-session", agent_did: "{did}", requester_did: "{did}",
+            behavior_id: "{behavior}", content: "unlinked", lifecycle_state: "processing", created_at: "2026-09-01T00:00:02Z"
+        }}) {{_docID}} }}"#)).await;
+        ensure_no_errors(&unlinked, "unlinked fixture").unwrap();
+        let unlinked = node
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "unlinked"}}) {_docID} }"#)
+            .await;
+        let unlinked_doc = unlinked.data.unwrap()["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for (request, request_doc, session) in [
+            ("parent", &root_doc, "parent-session"),
+            ("child", &child_doc, "child-session"),
+        ] {
             let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
                 node.clone(),
-                "child".into(),
+                request.into(),
                 session.into(),
                 service.config.agent_did.to_string(),
                 "ambiguous-process".into(),
@@ -2351,7 +2403,9 @@ mod tests {
                 "bash".into(),
                 "{}".into(),
                 chrono::Utc::now() + chrono::Duration::minutes(5),
-            );
+            )
+            .with_request_doc_id(Some(request_doc.clone()))
+            .with_requester_did(Some(service.config.agent_did.to_string()));
             lifecycle.start_running().await.unwrap();
         }
         let denied = service
@@ -2360,9 +2414,10 @@ mod tests {
                 json!({"sessionId":"parent-session", "taskId":"ambiguous-process"}),
             ))
             .await;
+        let denied = parse_response(denied.response.as_deref().unwrap());
         assert_eq!(
-            parse_response(denied.response.as_deref().unwrap())["result"]["result"]["outcome"],
-            "not_found"
+            denied["result"]["result"]["outcome"], "not_found",
+            "{denied}"
         );
         let unchanged = node.execute(r#"{ AgentToolCall(filter: {tool_call_id: {_eq: "ambiguous-process"}}) {lifecycle_state} }"#).await;
         assert!(unchanged.data.unwrap()["AgentToolCall"]
@@ -2370,10 +2425,13 @@ mod tests {
             .unwrap()
             .iter()
             .all(|row| row["lifecycle_state"] == "running"));
-        for session in ["child-session", "unlinked-session"] {
+        for (request, request_doc, session) in [
+            ("child", &child_doc, "child-session"),
+            ("unlinked", &unlinked_doc, "unlinked-session"),
+        ] {
             let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
                 node.clone(),
-                "child".into(),
+                request.into(),
                 session.into(),
                 service.config.agent_did.to_string(),
                 "child-process".into(),
@@ -2381,7 +2439,9 @@ mod tests {
                 "bash".into(),
                 "{}".into(),
                 chrono::Utc::now() + chrono::Duration::minutes(5),
-            );
+            )
+            .with_request_doc_id(Some(request_doc.clone()))
+            .with_requester_did(Some(service.config.agent_did.to_string()));
             lifecycle.start_running().await.unwrap();
         }
         for (session, outcome) in [
@@ -2403,9 +2463,6 @@ mod tests {
                 "{response}"
             );
         }
-        ensure_session_document(&service.config, "parent-session")
-            .await
-            .unwrap();
         let foreign = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
             request_id: "foreign-usage", session_id: "child-session", agent_did: "{did}", requester_did: "did:test:foreign", lifecycle_state: "completed"
         }}) {{_docID}} }}"#)).await;
@@ -2481,7 +2538,6 @@ mod tests {
         let config = AcpServiceConfig {
             node,
             agent_did: Arc::from(agent_did.as_str()),
-            agent_name: Arc::from("grok-shim-test"),
             behavior_id: Arc::from(behavior_id.as_str()),
             current_model: bound_model(),
             grok_home: None,
@@ -2489,27 +2545,15 @@ mod tests {
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
             .expect("runtime schemas");
-        let response = config
-            .node
-            .execute(&format!(
-                r#"mutation {{
-                    create_AgentPrincipal(input: {{
-                        agent_did: "{agent_did}"
-                        display_name: "Grok shim test"
-                        default_behavior_id: "{behavior_id}"
-                        enabled: true
-                    }}) {{ _docID }}
-                    create_AgentBehavior(input: {{
-                        behavior_id: "{behavior_id}"
-                        agent_did: "{agent_did}"
-                        display_name: "Grok shim test"
-                        enabled: true
-                    }}) {{ _docID }}
-                }}"#,
-            ))
-            .await;
-        gents::graphql::ensure_no_errors(&response, "seed admitted test behavior")
-            .expect("seed admitted test behavior");
+        super::super::seed_test_behavior_configuration(
+            config.node.as_ref(),
+            &agent_did,
+            &behavior_id,
+            &behavior_id,
+            &config.current_model.model_id,
+            true,
+        )
+        .await;
         let turns = Arc::new(TurnManager::new(
             config.node.clone(),
             super::super::turn::TurnManagerConfig {
@@ -2572,6 +2616,8 @@ mod tests {
         let graphql = spawn_mock_graphql(config.node.clone()).await;
         let node = config.node.clone();
         let service = test_service_with_graphql(node, graphql).await;
+        let agent_did = service.config.agent_did.to_string();
+        let behavior_id = service.config.behavior_id.to_string();
 
         // Create the session first so the prompt's session is known.
         service
@@ -2600,8 +2646,10 @@ mod tests {
         // an assistant row, then terminalization.
         let node_for_seed = config.node.clone();
         let seed_handle = tokio::spawn(async move {
+            let escaped_agent_did = gents::graphql::escape_graphql_string(&agent_did);
+            let escaped_behavior_id = gents::graphql::escape_graphql_string(&behavior_id);
             loop {
-                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { request_id } }"#;
+                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { _docID request_id } }"#;
                 let response = node_for_seed.execute(query).await;
                 let rows = response
                     .data
@@ -2616,23 +2664,39 @@ mod tests {
                         .and_then(Value::as_str)
                         .unwrap()
                         .to_string();
+                    let request_doc_id = row
+                        .get("_docID")
+                        .and_then(Value::as_str)
+                        .unwrap()
+                        .to_string();
                     let message = serde_json::to_string(
                         &gents_protocol::message::Message::assistant("live answer"),
                     )
                     .expect("serialize assistant message");
                     let escaped = gents::graphql::escape_graphql_string(&message);
                     let escaped_request = gents::graphql::escape_graphql_string(&request_id);
+                    let escaped_request_doc =
+                        gents::graphql::escape_graphql_string(&request_doc_id);
+                    let message_key = gents::session::sequence_message_key(
+                        &agent_did,
+                        "s-live",
+                        Some(&agent_did),
+                        1,
+                    );
+                    let escaped_message_key = gents::graphql::escape_graphql_string(&message_key);
                     let mutation = format!(
                         r#"mutation {{
                             create_AgentMessage(input: {{
-                                message_key: "{escaped_request}:1"
+                                message_key: "{escaped_message_key}"
                                 session_id: "s-live"
-                                agent_did: "did:test:grok-shim"
-                                requester_did: "did:test:grok-shim"
+                                agent_did: "{escaped_agent_did}"
+                                requester_did: "{escaped_agent_did}"
                                 request_id: "{escaped_request}"
+                                request_doc_id: "{escaped_request_doc}"
                                 sequence: 1
                                 role: "assistant"
                                 content: "{escaped}"
+                                timestamp: "2026-09-01T00:00:00Z"
                             }}) {{ _docID }}
                         }}"#
                     );
@@ -2650,8 +2714,10 @@ mod tests {
                             create_AgentResponse(input: {{
                                 response_key: "{escaped_request}"
                                 request_id: "{escaped_request}"
-                                agent_did: "did:test:grok-shim"
-                                behavior_id: "did:test:grok-shim:default"
+                                request_doc_id: "{escaped_request_doc}"
+                                agent_did: "{escaped_agent_did}"
+                                requester_did: "{escaped_agent_did}"
+                                behavior_id: "{escaped_behavior_id}"
                                 session_id: "s-live"
                                 content: ""
                                 reasoning: ""
@@ -3229,7 +3295,7 @@ mod tests {
         let node = service.config.node.clone();
         let query = r#"{
             AgentSession(filter: { session_id: { _eq: "grok-edge-docs" } }) {
-                session_id behavior_id agent_did status
+                session_id behavior_id agent_did requester_did created_at closed_at
             }
             AgentRequest(filter: { session_id: { _eq: "grok-edge-docs" } }) { request_id }
         }"#
@@ -3245,7 +3311,9 @@ mod tests {
         assert_eq!(sessions.len(), 1, "exactly one AgentSession document");
         assert_eq!(sessions[0]["behavior_id"], "did:test:grok-shim:default");
         assert_eq!(sessions[0]["agent_did"], "did:test:grok-shim");
-        assert_eq!(sessions[0]["status"], "active");
+        assert_eq!(sessions[0]["requester_did"], "did:test:grok-shim");
+        assert!(sessions[0]["created_at"].as_str().is_some());
+        assert!(sessions[0]["closed_at"].is_null());
         let requests = response
             .data
             .as_ref()
@@ -3388,12 +3456,11 @@ mod tests {
         let seed = r#"mutation {
             create_AgentSession(input: {
                 session_id: "grok-edge-foreign-agent",
-                agent_name: "foreign-agent",
                 agent_did: "did:test:foreign-agent",
+                requester_did: "did:test:foreign-agent",
                 behavior_id: "did:test:grok-shim:default",
-                started: "2026-08-31T22:46:45Z",
-                status: "ended",
-                ended: "2026-08-31T22:46:46Z"
+                created_at: "2026-08-31T22:46:45Z",
+                closed_at: "2026-08-31T22:46:46Z"
             }) { _docID }
         }"#
         .to_string();
@@ -3425,7 +3492,7 @@ mod tests {
         // The foreign row is untouched: never reactivated, never rewritten.
         let query = r#"{
             AgentSession(filter: { session_id: { _eq: "grok-edge-foreign-agent" } }) {
-                agent_did status
+                agent_did closed_at
             }
         }"#
         .to_string();
@@ -3439,7 +3506,7 @@ mod tests {
             .expect("AgentSession array");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0]["agent_did"], "did:test:foreign-agent");
-        assert_eq!(sessions[0]["status"], "ended");
+        assert_eq!(sessions[0]["closed_at"], "2026-08-31T22:46:46Z");
     }
 
     #[tokio::test]
@@ -4515,11 +4582,11 @@ mod tests {
         let seed = r#"mutation {
             create_AgentSession(input: {
                 session_id: "s-internal-op",
-                agent_name: "foreign-agent",
                 agent_did: "did:test:foreign-agent",
+                requester_did: "did:test:foreign-agent",
                 behavior_id: "did:test:grok-shim:default",
-                started: "2026-08-31T22:46:45Z",
-                status: "ended"
+                created_at: "2026-08-31T22:46:45Z",
+                closed_at: "2026-08-31T22:46:46Z"
             }) { _docID }
         }"#
         .to_string();

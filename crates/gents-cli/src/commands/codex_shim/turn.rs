@@ -254,14 +254,12 @@ pub(super) async fn steer_gents_turn(
     let turn_id = active_turn.turn_id.clone();
     let queued_after_request_id = active_turn.current_request_id.clone();
     let request_input = codex_steering_input(&cwd, &queued_after_request_id, &selected_skill_ids);
-    let submitted = match create_agent_request_with_retry(
-        state,
+    let submitted = match gents::enqueue_local_steering_request(
+        state.node.as_ref(),
+        &active_turn.current_request_id,
+        &active_turn.current_request_doc_id,
         &user_text,
-        Some(&params.thread_id),
-        RequestSubmitOptions {
-            input: Some(request_input),
-            ..RequestSubmitOptions::default()
-        },
+        request_input,
     )
     .await
     {

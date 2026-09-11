@@ -3,8 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::graphql::escape_graphql_string;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents::toolset::{
+    SessionHistoryRow, SessionHistorySnapshot as CanonicalSessionHistorySnapshot,
+};
 use gents_protocol::row::AgentRequestRow;
+use gents_protocol::session::AgentSession;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -17,28 +20,8 @@ const REQUEST_SCAN_LIMIT: usize = 500;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SessionHistorySnapshot {
     pub(crate) generated_at: String,
-    pub(crate) agent_did: String,
-    pub(crate) limit: usize,
-    pub(crate) request_scan_limit: usize,
-    pub(crate) sessions: Vec<SessionHistoryRow>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct SessionHistoryRow {
-    pub(crate) session_id: String,
-    pub(crate) agent_name: Option<String>,
-    pub(crate) behavior_id: Option<String>,
-    pub(crate) session_status: Option<String>,
-    pub(crate) started_at: Option<String>,
-    pub(crate) ended_at: Option<String>,
-    pub(crate) latest_request_id: Option<String>,
-    pub(crate) latest_request_lifecycle_state: Option<RequestLifecycleState>,
-    pub(crate) latest_request_created_at: Option<String>,
-    pub(crate) request_count: i64,
-    pub(crate) message_count: i64,
-    pub(crate) latest_message_at: Option<String>,
-    pub(crate) compaction_count: i64,
-    pub(crate) last_compacted_at: Option<String>,
+    #[serde(flatten)]
+    pub(crate) history: CanonicalSessionHistorySnapshot,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -55,29 +38,13 @@ struct RecentEnvelope {
 #[derive(Debug, Serialize, Deserialize)]
 struct DetailsEnvelope {
     #[serde(rename = "AgentSession", default)]
-    sessions: Vec<SessionRow>,
+    sessions: Vec<AgentSession>,
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<AgentRequestRow>,
     #[serde(rename = "AgentMessage", default)]
     messages: Vec<MessageRow>,
     #[serde(rename = "CompactionEntry", default)]
     compactions: Vec<CompactionRow>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SessionRow {
-    #[serde(default)]
-    session_id: String,
-    #[serde(default)]
-    agent_name: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    started: Option<String>,
-    #[serde(default)]
-    ended: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,13 +128,20 @@ fn session_details_query(agent_did: &str, session_ids: &[String]) -> String {
         .join(", ");
     format!(
         r#"{{
-            AgentSession(filter: {{ session_id: {{ _in: [{sessions}] }} }}) {{
+            AgentSession(filter: {{ _and: [
+                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ session_id: {{ _in: [{sessions}] }} }}
+            ] }}) {{
                 session_id
-                agent_name
+                agent_did
+                requester_did
                 behavior_id
-                started
-                ended
-                status
+                created_at
+                closed_at
+                title
+                tags
+                provenance
+                observation
             }}
             AgentRequest(
                 filter: {{ _and: [
@@ -182,11 +156,17 @@ fn session_details_query(agent_did: &str, session_ids: &[String]) -> String {
                 lifecycle_state
                 created_at
             }}
-            AgentMessage(filter: {{ session_id: {{ _in: [{sessions}] }} }}) {{
+            AgentMessage(filter: {{ _and: [
+                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ session_id: {{ _in: [{sessions}] }} }}
+            ] }}) {{
                 session_id
                 timestamp
             }}
-            CompactionEntry(filter: {{ session_id: {{ _in: [{sessions}] }} }}) {{
+            CompactionEntry(filter: {{ _and: [
+                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ session_id: {{ _in: [{sessions}] }} }}
+            ] }}) {{
                 session_id
                 created_at
             }}
@@ -245,8 +225,8 @@ fn build_session_history_snapshot(
 
     let sessions = session_ids
         .into_iter()
-        .map(|session_id| {
-            let session = sessions.get(&session_id);
+        .filter_map(|session_id| {
+            let session = sessions.get(&session_id)?;
             let requests = requests.get(&session_id).cloned().unwrap_or_default();
             let latest_request = requests.first();
             let (message_count, latest_message_at) =
@@ -254,15 +234,13 @@ fn build_session_history_snapshot(
             let (compaction_count, last_compacted_at) =
                 compactions.get(&session_id).cloned().unwrap_or_default();
 
-            SessionHistoryRow {
+            Some(SessionHistoryRow {
                 session_id: session_id.clone(),
-                agent_name: session.and_then(|row| clean(row.agent_name.as_deref())),
-                behavior_id: session
-                    .and_then(|row| clean(row.behavior_id.as_deref()))
-                    .or_else(|| latest_request.and_then(|row| clean(row.behavior_id.as_deref()))),
-                session_status: session.and_then(|row| clean(row.status.as_deref())),
-                started_at: session.and_then(|row| clean(row.started.as_deref())),
-                ended_at: session.and_then(|row| clean(row.ended.as_deref())),
+                behavior_id: clean(Some(&session.behavior_id)),
+                title: session.title.clone(),
+                tags: session.tags.clone(),
+                created_at: clean(Some(&session.created_at)),
+                closed_at: clean(session.closed_at.as_deref()),
                 latest_request_id: latest_request.and_then(|row| clean(Some(&row.request_id))),
                 latest_request_lifecycle_state: latest_request.and_then(|row| row.lifecycle_state),
                 latest_request_created_at: latest_request
@@ -272,16 +250,18 @@ fn build_session_history_snapshot(
                 latest_message_at,
                 compaction_count,
                 last_compacted_at,
-            }
+            })
         })
         .collect();
 
     SessionHistorySnapshot {
         generated_at: generated_at.to_rfc3339(),
-        agent_did,
-        limit,
-        request_scan_limit: REQUEST_SCAN_LIMIT,
-        sessions,
+        history: CanonicalSessionHistorySnapshot {
+            agent_did,
+            limit,
+            request_scan_limit: REQUEST_SCAN_LIMIT,
+            sessions,
+        },
     }
 }
 
@@ -321,6 +301,7 @@ fn clean(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
     use serde_json::json;
 
     fn envelope(value: Value) -> DetailsEnvelope {
@@ -379,17 +360,15 @@ mod tests {
                 "AgentSession": [
                     {
                         "session_id": "session-a",
-                        "agent_name": "amy",
+                        "agent_did": "did:key:zAgent",
                         "behavior_id": "behavior-a",
-                        "started": "2026-06-05T07:59:00Z",
-                        "status": "active"
+                        "created_at": "2026-06-05T07:59:00Z"
                     },
                     {
                         "session_id": "session-b",
-                        "agent_name": "amy",
+                        "agent_did": "did:key:zAgent",
                         "behavior_id": "behavior-b",
-                        "started": "2026-06-05T08:59:00Z",
-                        "status": "active"
+                        "created_at": "2026-06-05T08:59:00Z"
                     }
                 ],
                 "AgentRequest": recent,
@@ -404,29 +383,25 @@ mod tests {
             })),
         );
 
-        assert_eq!(snapshot.agent_did, "did:key:zAgent");
-        assert_eq!(snapshot.sessions.len(), 2);
-        assert_eq!(snapshot.sessions[0].session_id, "session-a");
+        assert_eq!(snapshot.history.agent_did, "did:key:zAgent");
+        assert_eq!(snapshot.history.sessions.len(), 2);
+        assert_eq!(snapshot.history.sessions[0].session_id, "session-a");
         assert_eq!(
-            snapshot.sessions[0].session_status.as_deref(),
-            Some("active")
-        );
-        assert_eq!(
-            snapshot.sessions[0].latest_request_id.as_deref(),
+            snapshot.history.sessions[0].latest_request_id.as_deref(),
             Some("req-newer")
         );
         assert_eq!(
-            snapshot.sessions[0].latest_request_lifecycle_state,
+            snapshot.history.sessions[0].latest_request_lifecycle_state,
             Some(RequestLifecycleState::Completed)
         );
-        assert_eq!(snapshot.sessions[0].request_count, 2);
-        assert_eq!(snapshot.sessions[0].message_count, 2);
-        assert_eq!(snapshot.sessions[0].compaction_count, 1);
+        assert_eq!(snapshot.history.sessions[0].request_count, 2);
+        assert_eq!(snapshot.history.sessions[0].message_count, 2);
+        assert_eq!(snapshot.history.sessions[0].compaction_count, 1);
         assert_eq!(
-            snapshot.sessions[0].last_compacted_at.as_deref(),
+            snapshot.history.sessions[0].last_compacted_at.as_deref(),
             Some("2026-06-05T10:03:00Z")
         );
-        assert_eq!(snapshot.sessions[1].session_id, "session-b");
+        assert_eq!(snapshot.history.sessions[1].session_id, "session-b");
     }
 
     #[test]

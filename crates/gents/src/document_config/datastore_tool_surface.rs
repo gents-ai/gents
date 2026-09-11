@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
-use super::surface_tool::{deserialize_optional_surface_tools, SurfaceToolDecl};
+use super::surface_tool::{
+    deserialize_optional_surface_tools, serialize_optional_surface_tools, SurfaceToolDecl,
+};
 
 /// Document-layer view of a `DatastoreToolSurface` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -26,7 +28,11 @@ pub struct DatastoreToolSurfaceDocument {
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
     /// Canonical create/query tool declarations selected through Tools.datastore.
-    #[serde(default, deserialize_with = "deserialize_optional_surface_tools")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_surface_tools",
+        serialize_with = "serialize_optional_surface_tools"
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub entries: Option<Vec<SurfaceToolDecl>>,

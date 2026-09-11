@@ -71,8 +71,9 @@ async fn create_parent_hook(
         deadline,
     )
     .await;
-    crate::support::create_agent_session(
+    crate::support::create_agent_session_in_scope(
         db.node.as_ref(),
+        db.node_identity.did(),
         session_id,
         PARENT_BEHAVIOR_ID,
         "2026-05-14T00:00:00Z",

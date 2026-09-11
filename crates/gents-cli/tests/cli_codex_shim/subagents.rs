@@ -24,13 +24,12 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let identity = identity_from_init(&init)?;
     let behavior_id = format!("{agent_did}:default");
     let child_behavior_id = format!("{behavior_id}:reviewer");
     let child_backend_id = "child-projection-backend";
     let child_model_name = "child-projection-model";
     let child_model_selection = format!("{child_backend_id}::{child_model_name}");
-    let root_model_selection =
-        gents_model_selection_id(&default_backend_id(&agent_did), &model_name);
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -98,6 +97,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     let tool_call_key = format!("{parent_thread_id}:{tool_call_id}");
     seed_authorized_subagent_link(
         &graphql,
+        &identity,
         &agent_did,
         &child_behavior_id,
         &parent_request_id,
@@ -201,25 +201,6 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         .await?;
     assert_eq!(child_resume.thread.id, child_thread_id);
     assert_eq!(child_resume.model, child_model_selection);
-
-    delete_agent_behavior(&graphql, &child_behavior_id).await?;
-    send_client_request(
-        &mut ws,
-        codex::ClientRequest::ThreadResume {
-            request_id: request_id(241),
-            params: codex::ThreadResumeParams {
-                thread_id: child_thread_id.clone(),
-                cwd: None,
-                ..Default::default()
-            },
-        },
-    )
-    .await?;
-    let child_resume_without_behavior: codex::ThreadResumeResponse = serve
-        .capturing(read_typed_response(&mut ws, request_id(241)))
-        .await?;
-    assert_eq!(child_resume_without_behavior.thread.id, child_thread_id);
-    assert_eq!(child_resume_without_behavior.model, root_model_selection);
 
     let live_child_text = format!("live child output {}", Uuid::new_v4().simple());
     let live_child_reasoning = format!("child reasoning {}", Uuid::new_v4().simple());

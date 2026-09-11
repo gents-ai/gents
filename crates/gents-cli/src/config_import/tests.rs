@@ -37,7 +37,7 @@ async fn apply_config(
                         .iter()
                         .any(|next| next.tools_id == tool.tools_id)
                 })
-                .map(|tool| gents::apply_model::DocRef {
+                .map(|tool| crate::desired_state::DocRef {
                     collection: Collection::Tools,
                     id: tool.tools_id.clone(),
                 })

@@ -22,14 +22,18 @@ fn generated_tools_id_for_agent(agent_did: &str) -> String {
 fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let skills = config["skills"]
+    let skills = config
+        .as_object_mut()
+        .context("exported config is not an object")?
+        .entry("skills")
+        .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
         .context("exported skills is not an array")?;
     for suffix in ["alpha", "zeta"] {
         let skill_id = format!("{agent_did}:skill-{suffix}");
         skills.push(serde_json::json!({
             "skill_id": skill_id,
-            "scope": "principal",
+            "agent_did": agent_did,
             "name": format!("Skill {suffix}"),
             "description": null,
             "instructions": format!("Instructions for skill {suffix}."),
@@ -409,7 +413,11 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
         .context("exported principal missing default behavior")?
         .to_string();
     let task_id = format!("post-apply-task-{}", Uuid::new_v4().simple());
-    config["tasks"]
+    config
+        .as_object_mut()
+        .context("exported config is not an object")?
+        .entry("tasks")
+        .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
         .context("tasks is not an array")?
         .push(serde_json::json!({
@@ -885,8 +893,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         &format!(
             r#"{{
                 Tools(filter: {{ tools_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    command_execution_policy
-                    backgroundable_tool_names
+                    host
                 }}
             }}"#,
             escape_graphql_string(&tools_id)
@@ -901,16 +908,15 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     };
     assert_eq!(
         tools
-            .get("command_execution_policy")
+            .pointer("/host/bash/execution_mode")
             .and_then(Value::as_str),
         expected_command_policy
     );
     assert_eq!(
         tools
-            .get("backgroundable_tool_names")
-            .and_then(Value::as_array)
-            .map(|values| { values.iter().filter_map(Value::as_str).collect::<Vec<_>>() }),
-        Some(vec!["bash_unrestricted"])
+            .pointer("/host/bash/background_enabled")
+            .and_then(Value::as_bool),
+        Some(true)
     );
 
     Ok(())

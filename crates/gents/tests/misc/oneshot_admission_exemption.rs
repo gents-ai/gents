@@ -19,7 +19,7 @@ use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::{ensure_runtime_schemas, run_openai_oneshot};
 
-use crate::support::fixtures::test_behavior;
+use crate::support::fixtures::{bind_behavior_backend, test_behavior};
 use crate::support::mock_endpoint::MockModelEndpoint;
 
 #[tokio::test]
@@ -34,6 +34,15 @@ async fn oneshot_completes_without_backend_admission_reconciliation() -> Result<
         None,
     );
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
+    bind_behavior_backend(
+        node.as_ref(),
+        behavior.agent_did(),
+        &behavior.behavior_id,
+        "backend-oneshot-exempt",
+        mock_endpoint.endpoint(),
+        "default",
+    )
+    .await;
 
     let result = run_openai_oneshot(node, &behavior, "ping").await?;
 

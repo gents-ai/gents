@@ -1462,11 +1462,11 @@ mod tests {
             package: ToolPackageArg,
             ceiling: ToolCeilingArg,
             display_name: &'static str,
-            file_tools_mode: FileToolMode,
-            bash_mode: BashMode,
+            file_tools_mode: Option<FileToolMode>,
+            bash_mode: Option<BashMode>,
             enable_goal_tools: Option<bool>,
             enable_defra_query: bool,
-            background_enabled: bool,
+            background_enabled: Option<bool>,
         }
 
         let cases = [
@@ -1474,41 +1474,41 @@ mod tests {
                 package: ToolPackageArg::Minimal,
                 ceiling: ToolCeilingArg::MetaOnly,
                 display_name: "Minimal Tools",
-                file_tools_mode: FileToolMode::Off,
-                bash_mode: BashMode::Off,
+                file_tools_mode: None,
+                bash_mode: None,
                 enable_goal_tools: None,
                 enable_defra_query: false,
-                background_enabled: false,
+                background_enabled: None,
             },
             Case {
                 package: ToolPackageArg::Introspection,
                 ceiling: ToolCeilingArg::MetaOnly,
                 display_name: "Introspection Tools",
-                file_tools_mode: FileToolMode::Off,
-                bash_mode: BashMode::Off,
+                file_tools_mode: None,
+                bash_mode: None,
                 enable_goal_tools: Some(true),
                 enable_defra_query: true,
-                background_enabled: false,
+                background_enabled: None,
             },
             Case {
                 package: ToolPackageArg::Readonly,
                 ceiling: ToolCeilingArg::Readonly,
                 display_name: "Standard Read-Only Tools",
-                file_tools_mode: FileToolMode::ReadOnly,
-                bash_mode: BashMode::ReadOnly,
+                file_tools_mode: Some(FileToolMode::ReadOnly),
+                bash_mode: Some(BashMode::ReadOnly),
                 enable_goal_tools: Some(true),
                 enable_defra_query: false,
-                background_enabled: false,
+                background_enabled: Some(false),
             },
             Case {
                 package: ToolPackageArg::Write,
                 ceiling: ToolCeilingArg::Readwrite,
                 display_name: "Standard Write Tools",
-                file_tools_mode: FileToolMode::ReadWrite,
-                bash_mode: BashMode::Unrestricted,
+                file_tools_mode: Some(FileToolMode::ReadWrite),
+                bash_mode: Some(BashMode::Unrestricted),
                 enable_goal_tools: Some(true),
                 enable_defra_query: false,
-                background_enabled: true,
+                background_enabled: Some(true),
             },
         ];
 
@@ -1527,11 +1527,11 @@ mod tests {
             assert_eq!(tools.display_name.as_deref(), Some(case.display_name));
             let host = tools.host.as_ref();
             assert_eq!(
-                host.map(|host| host.files.as_ref().map(|files| files.mode)),
-                Some(Some(case.file_tools_mode))
+                host.and_then(|host| host.files.as_ref().map(|files| files.mode)),
+                case.file_tools_mode
             );
             let bash = host.and_then(|host| host.bash.as_ref());
-            assert_eq!(bash.map(|bash| bash.mode), Some(case.bash_mode));
+            assert_eq!(bash.map(|bash| bash.mode), case.bash_mode);
             let built_ins = tools.built_ins.as_ref().unwrap();
             assert_eq!(built_ins.enable_goal_tools, case.enable_goal_tools);
             assert_eq!(built_ins.enable_memory, Some(false));
@@ -1549,7 +1549,7 @@ mod tests {
                 // Write-capable bash may run in the background; the runtime
                 // adapter materializes that as the `bash_unrestricted` entry.
                 bash.map(|bash| bash.background_enabled),
-                Some(case.background_enabled)
+                case.background_enabled
             );
         }
     }

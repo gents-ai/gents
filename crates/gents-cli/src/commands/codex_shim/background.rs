@@ -334,6 +334,7 @@ mod tests {
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     request_id: "{request_id}",
+                    request_doc_id: "{request_id}",
                     session_id: "{session_id}",
                     message_sequence: 1,
                     tool_name: "bash",

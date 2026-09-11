@@ -291,9 +291,14 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         &smoke.graphql,
         &format!(
             r#"{{
-                AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                AgentSession(filter: {{
+                    session_id: {{ _eq: "{}" }},
+                    agent_did: {{ _eq: "{}" }},
+                    requester_did: {{ _eq: "{}" }}
+                }}, limit: 1) {{
                     session_id
                     agent_did
+                    requester_did
                     behavior_id
                     closed_at
                     created_at
@@ -301,6 +306,8 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
                 }}
             }}"#,
             escape_graphql_string(&thread_id),
+            escape_graphql_string(&smoke.agent_did),
+            escape_graphql_string(&smoke.agent_did),
         ),
     )
     .await?;
@@ -311,6 +318,10 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
     );
     assert_eq!(
         session.get("agent_did").and_then(Value::as_str),
+        Some(smoke.agent_did.as_str())
+    );
+    assert_eq!(
+        session.get("requester_did").and_then(Value::as_str),
         Some(smoke.agent_did.as_str())
     );
     let expected_behavior_id = format!("{}:default", smoke.agent_did);

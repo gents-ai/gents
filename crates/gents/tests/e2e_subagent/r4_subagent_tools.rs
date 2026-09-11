@@ -20,7 +20,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::support::fixtures::{
-    configure_subagent_behavior, spawn_subagent_source, subagent_target, SubagentSourceGuard,
+    bind_behavior_backend, configure_subagent_behavior, spawn_subagent_source, subagent_target,
+    SubagentSourceGuard,
 };
 use crate::support::{first_optional_row, first_row, test_db};
 
@@ -133,6 +134,23 @@ async fn setup_spawn_fixture_with_parent_fields(
         None,
     )
     .await;
+    for behavior_id in targets
+        .iter()
+        .copied()
+        .filter(|behavior_id| *behavior_id != CHILD_BEHAVIOR_ID)
+    {
+        configure_subagent_behavior(
+            db.node.as_ref(),
+            &agent_did,
+            behavior_id,
+            &format!("{behavior_id}-tools"),
+            Vec::new(),
+            false,
+            false,
+            None,
+        )
+        .await;
+    }
     configure_subagent_behavior(
         db.node.as_ref(),
         &agent_did,
@@ -167,8 +185,9 @@ async fn setup_spawn_fixture_with_parent_fields(
         extra_parent_fields,
     )
     .await;
-    crate::support::create_agent_session(
+    crate::support::create_agent_session_in_scope(
         db.node.as_ref(),
+        &agent_did,
         &session_id,
         PARENT_BEHAVIOR_ID,
         "2026-05-13T00:00:00Z",
@@ -474,7 +493,9 @@ async fn persist_child_completion(
     child_session_id: &str,
     final_response: &str,
 ) {
+    let child_request_doc_id = crate::support::exact_request_doc_id(node, child_request_id).await;
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
     let update_request = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -498,12 +519,23 @@ async fn persist_child_completion(
     };
     let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
     let escaped_child_session_id = escape_graphql_string(child_session_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let message_key = escape_graphql_string(&gents::session::sequence_message_key(
+        agent_did,
+        child_session_id,
+        Some(agent_did),
+        1,
+    ));
     let now = chrono::Utc::now().to_rfc3339();
     let create_message = format!(
         r#"mutation {{
             create_AgentMessage(input: {{
-                message_key: "{escaped_child_session_id}:1",
+                message_key: "{message_key}",
                 session_id: "{escaped_child_session_id}",
+                agent_did: "{escaped_agent_did}",
+                requester_did: "{escaped_agent_did}",
+                request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_child_request_doc_id}",
                 sequence: 1,
                 role: "assistant",
                 content: "{escaped_message}",
@@ -518,14 +550,15 @@ async fn persist_child_completion(
         response.errors
     );
 
-    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let create_response = format!(
         r#"mutation {{
             create_AgentResponse(input: {{
                 response_key: "{escaped_child_request_id}",
                 request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_child_request_doc_id}",
                 agent_did: "{escaped_agent_did}",
+                requester_did: "{escaped_agent_did}",
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_child_session_id}",
                 content: "",
@@ -628,6 +661,7 @@ async fn create_child_session_queued_request(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
+                requester_did: "{escaped_agent_did}",
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
@@ -661,15 +695,18 @@ fn queue_metadata(
     key: Option<&str>,
     queued_after_request_id: Option<&str>,
 ) -> String {
-    json!({
+    let mut input = json!({
         "queue": {
             "source": source,
             "policy": policy,
             "key": key,
             "queued_after_request_id": queued_after_request_id
         }
-    })
-    .to_string()
+    });
+    if source == "background_completion" {
+        input["queue"]["background_completion_wake_version"] = json!(1);
+    }
+    input.to_string()
 }
 
 fn skip_reason_json(action: ToolCallHookAction) -> Value {

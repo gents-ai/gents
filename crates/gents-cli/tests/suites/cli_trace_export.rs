@@ -1455,6 +1455,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 create_AgentMessage(input: {{
                     message_key: "session-1:2",
                     session_id: "session-1",
+                    agent_did: "did:test:amy",
                     request_id: "req-1",
                     request_doc_id: "{}",
                     sequence: 2,
@@ -1475,6 +1476,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 create_AgentMessage(input: {{
                     message_key: "session-1:3",
                     session_id: "session-1",
+                    agent_did: "did:test:amy",
                     request_id: "req-1",
                     request_doc_id: "{}",
                     sequence: 3,
@@ -1495,6 +1497,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 create_AgentMessage(input: {{
                     message_key: "session-1:4",
                     session_id: "session-1",
+                    agent_did: "did:test:amy",
                     request_id: "req-1",
                     request_doc_id: "{}",
                     sequence: 4,
@@ -1514,6 +1517,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             r#"mutation {{
             create_AgentToolCall(input: {{
                 tool_call_key: "session-1:call-success",
+                agent_did: "did:test:amy",
                 request_id: "req-1",
                 request_doc_id: "{}",
                 session_id: "session-1",
@@ -1538,6 +1542,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             r#"mutation {{
             create_AgentToolCall(input: {{
                 tool_call_key: "session-1:call-fail",
+                agent_did: "did:test:amy",
                 request_id: "req-1",
                 request_doc_id: "{}",
                 session_id: "session-1",
@@ -1636,6 +1641,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentMessage(input: {{
                 message_key: "session-child:1",
                 session_id: "session-child",
+                agent_did: "did:test:reviewer",
                 request_id: "req-child",
                 request_doc_id: "{}",
                 sequence: 1,
@@ -1667,6 +1673,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "session-1:call-missing-tool",
+                    agent_did: "did:test:amy",
                     request_id: "req-1",
                     request_doc_id: "{}",
                     session_id: "session-1",
@@ -1695,6 +1702,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 create_AgentMessage(input: {{
                     message_key: "session-1:5",
                     session_id: "session-1",
+                    agent_did: "did:test:amy",
                     request_id: "req-1",
                     request_doc_id: "{}",
                     sequence: 5,
@@ -1714,6 +1722,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "session-1:call-timed-out",
+                    agent_did: "did:test:amy",
                     request_id: "req-1",
                     request_doc_id: "{}",
                     session_id: "session-1",
@@ -1801,9 +1810,10 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         &format!(
             r#"mutation {{
                 create_AgentMessage(input: {{
-                    message_key: "session-2:2",
-                    session_id: "session-2",
-                    request_id: "req-deadline",
+                message_key: "session-2:2",
+                session_id: "session-2",
+                agent_did: "did:test:amy",
+                request_id: "req-deadline",
                     request_doc_id: "{}",
                     sequence: 2,
                     role: "assistant",
@@ -1822,6 +1832,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             r#"mutation {{
             create_AgentToolCall(input: {{
                 tool_call_key: "session-2:call-deadline",
+                agent_did: "did:test:amy",
                 request_id: "req-deadline",
                 request_doc_id: "{}",
                 session_id: "session-2",
@@ -1840,9 +1851,10 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         ),
     )
     .await?;
-    for (session, request, doc, state, activity, preview) in [
+    for (session, agent, request, doc, state, activity, preview) in [
         (
             "session-1",
+            "did:test:amy",
             "req-1",
             root_request_doc_id.as_str(),
             "completed",
@@ -1851,6 +1863,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         ),
         (
             "session-child",
+            "did:test:reviewer",
             "req-child",
             child_request_doc_id.as_str(),
             "completed",
@@ -1859,6 +1872,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         ),
         (
             "session-2",
+            "did:test:amy",
             "req-deadline",
             deadline_request_doc_id.as_str(),
             "failed",
@@ -1875,11 +1889,16 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         }
         let input = gents_protocol::graphql::graphql_input_literal(&patch)?;
         let session = escape_graphql_string(session);
+        let agent = escape_graphql_string(agent);
         exec(
             node,
             &format!(
                 r#"mutation {{ update_AgentSession(
-            filter: {{ session_id: {{ _eq: "{session}" }} }}, input: {input}
+            filter: {{
+                session_id: {{ _eq: "{session}" }},
+                agent_did: {{ _eq: "{agent}" }},
+                requester_did: {{ _eq: null }}
+            }}, input: {input}
         ) {{ _docID }} }}"#
             ),
         )

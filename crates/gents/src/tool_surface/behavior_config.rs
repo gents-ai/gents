@@ -156,20 +156,6 @@ impl BehaviorToolConfig {
         resolved.query_tools = merged.query_tools;
         resolved.eth_queries = expanded.queries;
         resolved.eth_calls = expanded.calls;
-        // Derived background allowlist: bash backgrounding plus the generic MCP
-        // dispatch wrapper when a selected remote service permits background work.
-        // A background flag on an unselected (Off) bash mode grants nothing.
-        if let Some(bash) = tools.host.as_ref().and_then(|host| host.bash.as_ref()) {
-            if bash.background_enabled && !matches!(bash.mode, super::BashMode::Off) {
-                resolved.backgroundable_tool_names.push(match bash.mode {
-                    super::BashMode::Unrestricted => "bash_unrestricted".to_string(),
-                    _ => "bash".to_string(),
-                });
-            }
-        }
-        resolved
-            .backgroundable_tool_names
-            .extend(resolved.remote_background_names.drain(..));
         Self::from_selection_with_subagent_tools(
             behavior_name,
             resolved,
@@ -235,7 +221,6 @@ impl BehaviorToolConfig {
             lsp_config,
             eth_queries,
             eth_calls,
-            remote_background_names: _,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, static_policy.file);

@@ -33,6 +33,7 @@ use coalescing::{
 };
 pub use draining::drain_automated_wakeups;
 pub(crate) use draining::drain_subagent_owned_queue;
+pub use enqueue::enqueue_local_steering_request;
 pub(crate) use enqueue::enqueue_steering_request_with_message;
 pub use gents_protocol::request_input::{
     GoalContinuationInput, QueuePolicy, QueueSource, RequestInput, RequestQueue,

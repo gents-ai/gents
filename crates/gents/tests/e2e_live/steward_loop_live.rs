@@ -4,12 +4,12 @@
 //! Plan 1 proved the loop deterministically against a MOCK backend (the
 //! `event_trigger_e2e` / `write_tool_trigger_e2e` tests only assert that an
 //! `AgentRequest` *materializes*). Phase 2a qualifies the model-dependent
-//! decisions against a REAL model: `d4f` (DeepSeek-V4-Flash on workstation-1,
-//! OpenAI-compatible). Task 2a-1 (this file) builds the foundation:
+//! decisions against a real OpenAI-compatible model on workstation-1. Task
+//! 2a-1 (this file) builds the foundation:
 //!
 //!   * `bind_d4f_backend` — writes an `InferenceBackend` doc pointing at the live
-//!     d4f endpoint with `models: ["d4f"]` and points the agent's default behavior
-//!     at it (`backend_id` + `model_name = "d4f"`). Reusable by 2a-2 / 2a-3.
+//!     endpoint and points the agent's default inference profile at it. Reusable
+//!     by 2a-2 / 2a-3.
 //!   * `boot_d4f_agent` — boots a full `Gents` from those behavior documents
 //!     and waits for `process_state == "ready"`. Reusable.
 //!   * `wait_for_request_terminal` / `wait_for_assistant_answer` — drive + AWAIT a
@@ -46,12 +46,14 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{BackendAuth, InferenceBackend};
+use gents::document_config::{
+    AgentBehavior, AgentPrincipal, BackendAuth, InferenceBackend, InferenceProfile,
+};
 use gents::graphql::escape_graphql_string;
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, load_inference_profile, upsert_inference_profile, AgentIdentity,
-    BackendProviderKind, Collection, DocumentRuntimeOptions, Gents, OpenAiWireApi, ToolCeiling,
+    ensure_agent_principal, AgentIdentity, BackendProviderKind, Collection, DocumentRuntimeOptions,
+    Gents, OpenAiWireApi, ToolCeiling,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
@@ -66,16 +68,14 @@ fn d4f_enabled() -> bool {
 
 const D4F_BACKEND_ID: &str = "backend-d4f-live";
 
-/// Live backend endpoint/model for the D4F suite, overridable so it can run
-/// against whatever the workstation currently serves — the `d4f` vLLM alias
-/// comes and goes with server restarts (#1147).
+/// Live backend endpoint/model, overridable for workstation deployments.
 fn d4f_endpoint() -> String {
     std::env::var("GENTS_D4F_ENDPOINT")
-        .unwrap_or_else(|_| "http://100.73.235.38:8000/v1".to_string())
+        .unwrap_or_else(|_| "http://workstation-1:8000/v1".to_string())
 }
 
 fn d4f_model() -> String {
-    std::env::var("GENTS_D4F_MODEL").unwrap_or_else(|_| "d4f".to_string())
+    std::env::var("GENTS_D4F_MODEL").unwrap_or_else(|_| "GLM-5.3-Flash-NVFP4".to_string())
 }
 
 pub async fn bind_d4f_backend(
@@ -83,36 +83,40 @@ pub async fn bind_d4f_backend(
     identity: &dyn AgentIdentity,
 ) -> (String, String) {
     let agent_did = identity.did().to_string();
-    let bootstrap = ensure_agent_principal(node, &agent_did)
+    let mut principal = ensure_agent_principal(node, &agent_did)
         .await
         .expect("ensure principal");
-    let behavior_id = bootstrap
-        .default_behavior_id
-        .clone()
-        .expect("principal has a default behavior");
-
-    upsert_d4f_backend(node, &agent_did).await;
-
+    let behavior_id = default_behavior_id_for_agent(&agent_did);
     let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
-    let mut profile = load_inference_profile(node, &agent_did, &profile_id)
-        .await
-        .expect("load default inference profile")
-        .expect("default inference profile exists after bootstrap");
-    profile.backend_id = D4F_BACKEND_ID.to_string();
-    profile.model_name = d4f_model();
-    upsert_inference_profile(node, &profile)
-        .await
-        .expect("point default inference profile at d4f");
+    principal.default_behavior_id = Some(behavior_id.clone());
+    let backend = d4f_backend(&agent_did);
+    let profile = InferenceProfile {
+        agent_did: agent_did.clone(),
+        profile_id: profile_id.clone(),
+        backend_id: D4F_BACKEND_ID.to_string(),
+        model_name: d4f_model(),
+        ..Default::default()
+    };
+    let behavior = AgentBehavior {
+        behavior_id: behavior_id.clone(),
+        agent_did: agent_did.clone(),
+        display_name: Some("Live default behavior".to_string()),
+        description: None,
+        context_id: None,
+        inference_profile_id: profile_id,
+        enabled: true,
+        tags: Vec::new(),
+        created_at: Some(chrono::Utc::now().to_rfc3339()),
+    };
+
+    apply_d4f_documents(node, principal, backend, profile, behavior).await;
 
     debug_assert_eq!(behavior_id, default_behavior_id_for_agent(&agent_did));
     (agent_did, behavior_id)
 }
 
-async fn upsert_d4f_backend(node: &EmbeddedNode, agent_did: &str) {
-    use gents::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    let backend = InferenceBackend {
+fn d4f_backend(agent_did: &str) -> InferenceBackend {
+    InferenceBackend {
         agent_did: agent_did.to_string(),
         backend_id: D4F_BACKEND_ID.to_string(),
         name: D4F_BACKEND_ID.to_string(),
@@ -126,15 +130,39 @@ async fn upsert_d4f_backend(node: &EmbeddedNode, agent_did: &str) {
         max_queue_depth: Some(100),
         enabled: true,
         tags: Vec::new(),
+    }
+}
+
+async fn apply_d4f_documents(
+    node: &EmbeddedNode,
+    principal: AgentPrincipal,
+    backend: InferenceBackend,
+    profile: InferenceProfile,
+    behavior: AgentBehavior,
+) {
+    use gents::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    let value = serde_json::to_value(backend).expect("serialize d4f backend");
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::InferenceBackend,
-        add: value.clone(),
-        update: value,
-    }])
+    let plan = DesiredStateApplyPlan::new(
+        [
+            (Collection::AgentPrincipal, serde_json::to_value(principal)),
+            (Collection::InferenceBackend, serde_json::to_value(backend)),
+            (Collection::InferenceProfile, serde_json::to_value(profile)),
+            (Collection::AgentBehavior, serde_json::to_value(behavior)),
+        ]
+        .into_iter()
+        .map(|(collection, value)| {
+            let value = value.expect("serialize d4f configuration document");
+            DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            }
+        })
+        .collect(),
+    )
     .expect("build d4f backend plan");
-    gents::ConfigAccess::transact_local(node, None, "test.upsert_d4f_backend", |txn| {
+    gents::ConfigAccess::transact_local(node, None, "test.bind_d4f_backend", |txn| {
         let plan = &plan;
         Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
     })

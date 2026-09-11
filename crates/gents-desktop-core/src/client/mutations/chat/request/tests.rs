@@ -1055,11 +1055,17 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
                         requester_did
                         admission_signer_did
                     }}
-                    AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{
+                    AgentSession(filter: {{
+                        session_id: {{ _eq: "{session_id}" }},
+                        agent_did: {{ _eq: "{}" }},
+                        requester_did: {{ _eq: "{}" }}
+                    }}, limit: 1) {{
                         agent_did
                         requester_did
                     }}
-                }}"#
+                }}"#,
+            escape_graphql_string(agent_did),
+            escape_graphql_string(&requester_did),
         ))
         .await;
     if response.has_errors() {

@@ -26,6 +26,7 @@ use crate::lifecycle::queue::{
     drain_automated_wakeups, enqueue_steering_request_with_message, row_is_automated_wakeup,
     QueuePolicy, QueueSource, RequestQueue,
 };
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -1236,13 +1237,16 @@ pub(crate) async fn append_steering_request(
         node,
         &child_request,
         message,
-        RequestQueue {
-            source: QueueSource::Steering,
-            policy: QueuePolicy::Append,
-            key: None,
-            queued_after_request_id: None,
-            interrupted_request_id: interrupted_request_id.clone(),
-            background_completion_wake_version: None,
+        RequestInput {
+            queue: Some(RequestQueue {
+                source: QueueSource::Steering,
+                policy: QueuePolicy::Append,
+                key: None,
+                queued_after_request_id: None,
+                interrupted_request_id: interrupted_request_id.clone(),
+                background_completion_wake_version: None,
+            }),
+            ..Default::default()
         },
     )
     .await?;

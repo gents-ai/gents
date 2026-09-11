@@ -462,15 +462,21 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
 
     for mutation in [
         format!(
-            r#"mutation {{ create_AgentSession(input: {{ session_id: "self-budget-session", agent_name: "{}", behavior_id: "{}", started: "2026-06-02T09:59:00Z", status: "active" }}) {{ _docID }} }}"#,
-            escape_graphql_string(&agent_name),
+            r#"mutation {{ create_AgentSession(input: {{ session_id: "self-budget-session", agent_did: "{}", behavior_id: "{}", created_at: "2026-06-02T09:59:00Z" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&agent_did),
             escape_graphql_string(&default_behavior_id),
         ),
         format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", lifecycle_state: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
         ),
-        r#"mutation { create_AgentMessage(input: { message_key: "self-budget-session:1", session_id: "self-budget-session", sequence: 1, role: "user", content: "hello", timestamp: "2026-06-02T10:01:00Z" }) { _docID } }"#.to_string(),
-        r#"mutation { create_CompactionEntry(input: { compaction_key: "self-budget-ce", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }) { _docID } }"#.to_string(),
+        format!(
+            r#"mutation {{ create_AgentMessage(input: {{ message_key: "self-budget-session:1", agent_did: "{}", session_id: "self-budget-session", sequence: 1, role: "user", content: "hello", timestamp: "2026-06-02T10:01:00Z" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&agent_did),
+        ),
+        format!(
+            r#"mutation {{ create_CompactionEntry(input: {{ compaction_key: "self-budget-ce", agent_did: "{}", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&agent_did),
+        ),
     ] {
         graphql_query(&graphql, &mutation)
             .await
@@ -1505,28 +1511,24 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
     let mut warm_server = spawn_server(&home_dir, warm_port)?;
     wait_for_port(warm_port, &mut warm_server)?;
     wait_for_runtime_ready(&graphql_url(warm_port), &agent_did, Duration::from_secs(30)).await?;
-    run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "backend",
-            "set",
-            "--graphql",
-            &graphql_url(warm_port),
-            "--backend-id",
-            &backend_id,
-            "--name",
-            &backend_id,
-            "--provider-kind",
-            "OpenAiCompatible",
-            "--endpoint",
-            "http://127.0.0.1:9/v1",
-            "--max-concurrent",
-            "1",
-            "--probe-status",
-            "unknown",
-        ],
-    )?;
+    graphql_query(
+        &graphql_url(warm_port),
+        &format!(
+            r#"mutation {{
+                update_InferenceBackend(
+                    filter: {{
+                        agent_did: {{ _eq: "{}" }},
+                        backend_id: {{ _eq: "{}" }}
+                    }},
+                    input: {{ probe_status: "unknown", last_probe: null }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&agent_did),
+            escape_graphql_string(&backend_id),
+        ),
+    )
+    .await
+    .context("seeding an unavailable backend observation")?;
     warm_server
         .child
         .kill()

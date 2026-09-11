@@ -25,7 +25,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::support::fixtures::{bind_default_behavior_backend, spawn_subagent_source};
+use crate::support::fixtures::{bind_behavior_backend, spawn_subagent_source};
 use crate::support::{first_row, test_db};
 
 const PARENT_BEHAVIOR_ID: &str = "r4-completion-parent";
@@ -75,14 +75,32 @@ struct ResponseStateRow {
 /// `target_agent_did`), a canonical `Tools` document selecting it by
 /// `target_id`, an `AgentContext` binding that Tools doc, and an
 /// `AgentBehavior` binding `context_id` + `inference_profile_id`. Inference
-/// selection comes from `support::fixtures::bind_default_behavior_backend`,
-/// the existing shared owner; no implicit bootstrap defaults are invented.
+/// selection comes from `support::fixtures::bind_behavior_backend`, the
+/// existing shared owner; no implicit bootstrap defaults are invented.
 async fn install_canonical_behavior_bundle(node: &EmbeddedNode, agent_did: &str) {
-    // The shared owner seeds the AgentPrincipal, a default "default" behavior,
-    // and its real InferenceProfile/InferenceBackend; this fixture's behaviors
-    // bind the profile that owner created ("{behavior_id}-inference").
-    bind_default_behavior_backend(node, agent_did, BACKEND_ID, BACKEND_ENDPOINT).await;
-    let profile_id = "default-inference".to_string();
+    // Seed both explicit behavior chains through the shared fixture owner.
+    // The parent and child may share a backend, but each behavior owns an
+    // explicit profile and never relies on an inferred bootstrap default.
+    bind_behavior_backend(
+        node,
+        agent_did,
+        PARENT_BEHAVIOR_ID,
+        BACKEND_ID,
+        BACKEND_ENDPOINT,
+        "test-model",
+    )
+    .await;
+    bind_behavior_backend(
+        node,
+        agent_did,
+        CHILD_BEHAVIOR_ID,
+        BACKEND_ID,
+        BACKEND_ENDPOINT,
+        "test-model",
+    )
+    .await;
+    let parent_profile_id = format!("{PARENT_BEHAVIOR_ID}-inference");
+    let child_profile_id = format!("{CHILD_BEHAVIOR_ID}-inference");
 
     let target = SubagentTargetDocument {
         target_id: format!("{PARENT_BEHAVIOR_ID}:{CHILD_BEHAVIOR_ID}"),
@@ -121,7 +139,7 @@ async fn install_canonical_behavior_bundle(node: &EmbeddedNode, agent_did: &str)
         display_name: Some("R4 completion parent".to_string()),
         description: None,
         context_id: Some(context.context_id.clone()),
-        inference_profile_id: profile_id.clone(),
+        inference_profile_id: parent_profile_id,
         enabled: true,
         tags: Vec::new(),
         created_at: Some("2026-05-12T00:00:00Z".to_string()),
@@ -132,7 +150,7 @@ async fn install_canonical_behavior_bundle(node: &EmbeddedNode, agent_did: &str)
         display_name: Some("R4 completion child".to_string()),
         description: None,
         context_id: None,
-        inference_profile_id: profile_id,
+        inference_profile_id: child_profile_id,
         enabled: true,
         tags: Vec::new(),
         created_at: Some("2026-05-12T00:00:01Z".to_string()),
@@ -225,12 +243,8 @@ async fn create_parent_request(
     let agent_did = escape_graphql_string(agent_did);
     let now = chrono::Utc::now().to_rfc3339();
     let deadline = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
-    // RequestInput replaces the retired metadata bag; this fixture carries no
-    // invocation extras, so the canonical struct serializes empty.
-    let input = serde_json::to_string(&gents_protocol::request_input::RequestInput::default())
-        .expect("serialize canonical RequestInput");
-    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::Value::String(input))
-        .expect("render canonical RequestInput literal");
+    // RequestInput replaces the retired metadata bag. This fixture carries no
+    // invocation extras, so the optional JSON field remains absent.
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -242,7 +256,7 @@ async fn create_parent_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "parent prompt",
-                input: "{input}",
+                input: null,
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -662,14 +676,11 @@ async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<Mes
 /// legacy `metadata` bag reader is retired; missing or malformed typed input
 /// fails decoding loudly instead of silently passing the count assertions.
 async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<AgentRequestRow> {
-    let session_id = escape_graphql_string(session_id);
+    let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    execution_origin: {{ _eq: "scheduled" }}
-                }},
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
@@ -689,27 +700,20 @@ async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<Age
         "wake query failed: {:?}",
         response.errors
     );
-    let rows: Vec<AgentRequestRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .map(|value| {
-            gents::graphql::rows::<AgentRequestRow>(
-                &gents::defra_node::QueryResponse::success(value.clone()),
-                "AgentRequest",
-            )
-            .expect("decode wake AgentRequest rows")
-        })
-        .unwrap_or_default();
+    let rows = gents::graphql::rows::<AgentRequestRow>(&response, "AgentRequest")
+        .expect("decode wake AgentRequest rows");
     rows.into_iter()
         .filter(|row| {
-            row.input
-                .as_ref()
-                .and_then(|input| input.queue.as_ref())
-                .is_some_and(|queue| {
-                    queue.source == QueueSource::BackgroundCompletion
-                        && queue.policy == QueuePolicy::Coalesce
-                })
+            row.session_id.as_deref() == Some(session_id)
+                && row.execution_origin.as_deref() == Some("scheduled")
+                && row
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.queue.as_ref())
+                    .is_some_and(|queue| {
+                        queue.source == QueueSource::BackgroundCompletion
+                            && queue.policy == QueuePolicy::Coalesce
+                    })
         })
         .collect()
 }

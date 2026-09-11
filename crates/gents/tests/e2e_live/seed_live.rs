@@ -3,10 +3,10 @@
 //!
 //! The deterministic tests retain the schema, hydration, precedence, and exact
 //! body-shape contracts. This test establishes the provider-facing behavior
-//! they cannot: DeepSeek V4 Flash accepts the request produced by Gents, the
-//! request completes, and the pre-send durable capture contains the effective
-//! seed for profile defaulting, a per-request override, and a model-backed
-//! compaction continuation.
+//! they cannot: the configured live provider accepts the request produced by
+//! Gents, the request completes, and the pre-send durable capture contains the
+//! effective profile seed for ordinary inference and a model-backed compaction
+//! continuation.
 //!
 //! ```bash
 //! GENTS_D4F_LIVE=1 cargo test -p gents --test e2e_live \
@@ -33,7 +33,6 @@ use crate::support::interrupt::create_runtime_request;
 use crate::support::{create_agent_message, test_db};
 
 const PROFILE_SEED: i64 = 424_242;
-const REQUEST_SEED: i64 = 818_181;
 
 #[derive(Debug, Deserialize)]
 struct RenderedRequestRow {
@@ -61,8 +60,8 @@ async fn d4f_live_seeds_reach_the_provider() {
     let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
     configure_seed_and_compaction(db.node.as_ref(), &agent_did, &behavior_id, &profile_id).await;
 
-    // Create the requests before boot so setting an override cannot race the
-    // daemon's claim. The first inherits the profile seed; the others replace it.
+    // Create requests before boot so every provider call resolves the same
+    // profile-owned sampling document before the daemon can claim them.
     let profile_request_id = "req-d4f-profile-seed";
     create_runtime_request(
         db.node.as_ref(),
@@ -74,17 +73,16 @@ async fn d4f_live_seeds_reach_the_provider() {
     )
     .await;
 
-    let override_request_id = "req-d4f-request-seed";
+    let second_request_id = "req-d4f-second-profile-seed";
     create_runtime_request(
         db.node.as_ref(),
         &agent_did,
         &behavior_id,
-        override_request_id,
-        "session-d4f-request-seed",
-        "Reply with the single lowercase word: override",
+        second_request_id,
+        "session-d4f-second-profile-seed",
+        "Reply with the single lowercase word: second",
     )
     .await;
-    set_request_seed(db.node.as_ref(), override_request_id, REQUEST_SEED).await;
 
     let compaction_request_id = "req-d4f-compaction-seed";
     let compaction_session_id = "session-d4f-compaction-seed";
@@ -97,15 +95,14 @@ async fn d4f_live_seeds_reach_the_provider() {
         "Use the retained context and reply with the single lowercase word: compacted",
     )
     .await;
-    set_request_seed(db.node.as_ref(), compaction_request_id, REQUEST_SEED).await;
     seed_compaction_history(db.node.as_ref(), compaction_session_id).await;
 
     let agent = boot_d4f_agent(&db, identity).await.expect("boot d4f agent");
 
     for (request_id, expected_seed, expect_compaction) in [
         (profile_request_id, PROFILE_SEED, false),
-        (override_request_id, REQUEST_SEED, false),
-        (compaction_request_id, REQUEST_SEED, true),
+        (second_request_id, PROFILE_SEED, false),
+        (compaction_request_id, PROFILE_SEED, true),
     ] {
         let terminal =
             wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(120)).await;
@@ -271,24 +268,6 @@ async fn seed_compaction_history(node: &EmbeddedNode, session_id: &str) {
         )
         .await;
     }
-}
-
-async fn set_request_seed(node: &EmbeddedNode, request_id: &str, seed: i64) {
-    let request_id = escape_graphql_string(request_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                input: {{ seed: {seed} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "set request seed failed: {:?}",
-        response.errors
-    );
 }
 
 async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<RenderedRequestRow> {

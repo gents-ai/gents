@@ -166,7 +166,10 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
         r#"mutation {{
             update_InferenceBackend(
                 filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ api_key_env_var: "GENTS_TEST_559_UNSET_KEY" }}
+                input: {{ auth: {{
+                    kind: "environment",
+                    variable: "GENTS_TEST_559_UNSET_KEY"
+                }} }}
             ) {{ _docID }}
         }}"#
     );
@@ -297,7 +300,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         r#"mutation {{
             update_InferenceBackend(
                 filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ api_key_env_var: "{VAR}" }}
+                input: {{ auth: {{ kind: "environment", variable: "{VAR}" }} }}
             ) {{ _docID }}
         }}"#
     );

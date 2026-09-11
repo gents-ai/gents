@@ -281,8 +281,8 @@ pub async fn assert_runtime_init_state(
         .transpose()?
         .unwrap_or(auth);
     match (expected_api_key, expected_api_key_env_var) {
-        (Some(value), _) => assert_eq!(auth.get("api_key").and_then(Value::as_str), Some(value)),
-        (_, Some(name)) => assert_eq!(auth.get("env_var").and_then(Value::as_str), Some(name)),
+        (Some(value), _) => assert_eq!(auth.get("key").and_then(Value::as_str), Some(value)),
+        (_, Some(name)) => assert_eq!(auth.get("variable").and_then(Value::as_str), Some(name)),
         _ => assert_eq!(
             auth.get("kind").and_then(Value::as_str),
             Some("unauthenticated")

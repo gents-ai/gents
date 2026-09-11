@@ -13,11 +13,11 @@
 //! ```
 //!
 //! Endpoint/model are overridable:
-//! - `GENTS_LIVE_SUBAGENT_ENDPOINT` (default `http://100.73.235.38:8000/v1`)
-//! - `GENTS_LIVE_SUBAGENT_MODEL` (default `d4f`)
+//! - `GENTS_LIVE_SUBAGENT_ENDPOINT` (default `http://workstation-1:8000/v1`)
+//! - `GENTS_LIVE_SUBAGENT_MODEL` (default `GLM-5.3-Flash-NVFP4`)
 //!
 //! The #937 standard-path backgrounding test has its own gate and defaults to
-//! the GLM-5.2 deployment on workstation-1:
+//! the GLM-5.3 Flash deployment on workstation-1:
 //!
 //! ```bash
 //! GENTS_LIVE_BACKGROUNDING=1 \
@@ -25,8 +25,8 @@
 //!   live_standard_backgrounding_uses_real_inference -- --ignored --nocapture
 //! ```
 //!
-//! - `GENTS_LIVE_BACKGROUNDING_ENDPOINT` (default `http://100.73.235.38:8000/v1`)
-//! - `GENTS_LIVE_BACKGROUNDING_MODEL` (default `GLM-5.2`)
+//! - `GENTS_LIVE_BACKGROUNDING_ENDPOINT` (default `http://workstation-1:8000/v1`)
+//! - `GENTS_LIVE_BACKGROUNDING_MODEL` (default `GLM-5.3-Flash-NVFP4`)
 //!
 //! ## Cross-node delegation (Test 3)
 //!
@@ -63,6 +63,7 @@ use gents::{
     DescendantMaterializationState, DescendantPage, DescendantQuery, DocumentRuntimeOptions, Gents,
     OpenAiWireApi, SubagentTargetDocument, ToolCeiling,
 };
+use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
@@ -70,9 +71,9 @@ use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::{first_optional_row, test_db, test_p2p_db, TestDb};
 
-const DEFAULT_LIVE_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
-const DEFAULT_LIVE_MODEL: &str = "d4f";
-const DEFAULT_BACKGROUNDING_MODEL: &str = "GLM-5.2";
+const DEFAULT_LIVE_ENDPOINT: &str = "http://workstation-1:8000/v1";
+const DEFAULT_LIVE_MODEL: &str = "GLM-5.3-Flash-NVFP4";
+const DEFAULT_BACKGROUNDING_MODEL: &str = "GLM-5.3-Flash-NVFP4";
 const LIVE_BACKEND_ID: &str = "backend-live-subagent";
 const RESEARCHER_BEHAVIOR_ID: &str = "live-researcher";
 const FAST_WORKER_BEHAVIOR_ID: &str = "live-fast-worker";
@@ -132,11 +133,6 @@ async fn live_local_subagent_delegation() -> Result<()> {
     let agent_did = identity.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&agent_did);
 
-    // Ensure the principal + default (orchestrator) behavior documents exist.
-    // This also creates the default inference profile we reuse for both behaviors.
-    ensure_agent_principal(db.node.as_ref(), &agent_did)
-        .await
-        .expect("ensure principal");
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
     upsert_live_backend(db.node.as_ref(), &agent_did, &endpoint).await;
 
@@ -150,6 +146,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
         &profile_id,
         ORCHESTRATOR_SYSTEM_PROMPT,
         None,
+        true,
     )
     .await;
 
@@ -162,6 +159,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
         &profile_id,
         "You answer the user's question concisely and factually in one short sentence.",
         Some("Researches factual questions and returns a concise factual answer."),
+        false,
     )
     .await;
 
@@ -288,9 +286,9 @@ async fn live_local_subagent_delegation() -> Result<()> {
 
 /// Exercise both background-work lanes through the production owned loop:
 ///
-/// 1. GLM-5.2 chooses `spawn_subagent`; the configured default await mode makes
+/// 1. The model chooses `spawn_subagent`; the configured default await mode makes
 ///    the child background without an `await_mode` argument.
-/// 2. GLM-5.2 chooses `spawn_process` for `bash_unrestricted`.
+/// 2. The model chooses `spawn_process` for `bash_unrestricted`.
 /// 3. The resolved model-facing surface contains every spawn/list/read/wait/
 ///    cancel tool for both lanes.
 /// 4. In the fire-and-continue lanes the initial parent request completes while
@@ -380,9 +378,6 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
         Arc::new(test_identity("backgrounding-live-standard-path"));
     let agent_did = identity.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&agent_did);
-    ensure_agent_principal(db.node.as_ref(), &agent_did)
-        .await
-        .expect("ensure backgrounding principal");
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
     upsert_live_backend(db.node.as_ref(), &agent_did, &endpoint).await;
     configure_behavior(
@@ -393,6 +388,7 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
         &profile_id,
         &parent_system_prompt,
         None,
+        true,
     )
     .await;
     configure_behavior(
@@ -403,6 +399,7 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
         &profile_id,
         &child_system_prompt,
         Some("Runs a deliberately blocked background integration-test job."),
+        false,
     )
     .await;
     configure_standard_backgrounding_tools(
@@ -413,6 +410,10 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
     )
     .await;
 
+    // Runtime startup probes before resolving its runnable snapshot. This test
+    // inspects the resolved surfaces before `run`, so perform the same probe
+    // first rather than assuming an unobserved backend is already healthy.
+    gents::backend_registry::probe_and_promote_enabled_backends(db.node.as_ref()).await;
     let loaded_agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
@@ -921,9 +922,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     let orchestrator_behavior_id = default_behavior_id_for_agent(&did_a);
 
     // --- Node B: host the fast-worker and reviewer behaviors owned by DID-B. ---
-    ensure_agent_principal(db_b.node.as_ref(), &did_b)
-        .await
-        .expect("ensure principal B");
     let profile_b =
         default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(&did_b));
     upsert_live_backend(db_b.node.as_ref(), &did_b, &endpoint).await;
@@ -935,6 +933,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         &profile_b,
         CROSS_NODE_FAST_WORKER_SYSTEM_PROMPT,
         Some("Delegates its draft to the reviewer before returning it."),
+        true,
     )
     .await;
     configure_behavior(
@@ -945,6 +944,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         &profile_b,
         "When asked to review the capital of France, reply exactly REVIEWER_OK: Paris is the capital of France.",
         Some("Reviews the fast worker's factual answer."),
+        false,
     )
     .await;
     authorize_subagents(
@@ -967,9 +967,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     .await;
 
     // --- Node A: host the orchestrator owned by DID-A. ---
-    ensure_agent_principal(db_a.node.as_ref(), &did_a)
-        .await
-        .expect("ensure principal A");
     let profile_a = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
     upsert_live_backend(db_a.node.as_ref(), &did_a, &endpoint).await;
     configure_behavior(
@@ -980,6 +977,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         &profile_a,
         CROSS_NODE_NESTED_ORCHESTRATOR_SYSTEM_PROMPT,
         None,
+        true,
     )
     .await;
 
@@ -1378,7 +1376,12 @@ fn assert_standard_backgrounding_tool_surfaces(
         .behaviors()
         .iter()
         .find(|behavior| behavior.behavior_id == parent_behavior_id)
-        .expect("loaded orchestrator behavior");
+        .unwrap_or_else(|| {
+            panic!(
+                "loaded orchestrator behavior {parent_behavior_id}; active behaviors: {active_behavior_ids:?}; unavailable: {:?}",
+                agent.unavailable_behaviors()
+            )
+        });
     let parent_surface = parent
         .tools
         .explain_with_runtime(false, agent_did, &active_behavior_ids);
@@ -1403,8 +1406,9 @@ fn assert_standard_backgrounding_tool_surfaces(
     ] {
         assert!(
             parent_names.contains(required),
-            "backgrounding-enabled behavior did not provision {required}; resolved={:?}",
-            parent_surface.tool_names
+            "backgrounding-enabled behavior did not provision {required}; resolved={:?}; config={:?}",
+            parent_surface.tool_names,
+            parent.tools
         );
     }
     assert!(
@@ -1493,7 +1497,11 @@ async fn configure_behavior(
     inference_profile_id: &str,
     system_prompt: &str,
     description: Option<&str>,
+    default_for_principal: bool,
 ) {
+    let mut principal = ensure_agent_principal(node, agent_did)
+        .await
+        .expect("ensure live fixture principal");
     let context_id = format!("{behavior_id}:context");
     let profile = InferenceProfile {
         agent_did: agent_did.to_string(),
@@ -1524,24 +1532,28 @@ async fn configure_behavior(
         tags: Vec::new(),
         created_at: Some("2026-06-02T00:00:00Z".to_string()),
     };
-    apply_fixture_documents(
-        node,
-        vec![
-            (
-                Collection::InferenceProfile,
-                serde_json::to_value(profile).expect("serialize live inference profile"),
-            ),
-            (
-                Collection::AgentContext,
-                serde_json::to_value(context).expect("serialize live agent context"),
-            ),
-            (
-                Collection::AgentBehavior,
-                serde_json::to_value(behavior).expect("serialize live behavior"),
-            ),
-        ],
-    )
-    .await;
+    let mut documents = vec![
+        (
+            Collection::InferenceProfile,
+            serde_json::to_value(profile).expect("serialize live inference profile"),
+        ),
+        (
+            Collection::AgentContext,
+            serde_json::to_value(context).expect("serialize live agent context"),
+        ),
+        (
+            Collection::AgentBehavior,
+            serde_json::to_value(behavior).expect("serialize live behavior"),
+        ),
+    ];
+    if default_for_principal {
+        principal.default_behavior_id = Some(behavior_id.to_string());
+        documents.push((
+            Collection::AgentPrincipal,
+            serde_json::to_value(principal).expect("serialize live principal"),
+        ));
+    }
+    apply_fixture_documents(node, documents).await;
 }
 
 async fn apply_fixture_documents(
@@ -1657,7 +1669,7 @@ async fn configure_standard_backgrounding_tools(
             subagents: Some(SubagentTools {
                 target_ids: vec![parent_target.target_id.clone()],
                 spawn_enabled: Some(true),
-                steering_enabled: Some(true),
+                steering_enabled: Some(false),
                 background_enabled: Some(true),
                 default_await_mode: Some("background".to_string()),
                 allow_cross_principal: Some(false),
@@ -2413,7 +2425,7 @@ async fn wait_for_message_containing(
 #[derive(Debug, Clone, Deserialize)]
 struct WakeRequestRow {
     request_id: String,
-    metadata: Option<String>,
+    input: Option<RequestInput>,
 }
 
 async fn wait_for_background_wake(
@@ -2424,13 +2436,14 @@ async fn wait_for_background_wake(
 ) -> WakeRequestRow {
     let deadline = tokio::time::Instant::now() + timeout;
     let escaped_session_id = escape_graphql_string(session_id);
+    let expected_queue_key = format!("background_completion:{session_id}");
     loop {
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                     order: {{ created_at: ASC }}
-                ) {{ request_id metadata }}
+                ) {{ request_id input }}
             }}"#
         );
         let response = node.execute(&query).await;
@@ -2448,16 +2461,16 @@ async fn wait_for_background_wake(
             .flatten()
             .filter_map(|row| serde_json::from_value::<WakeRequestRow>(row.clone()).ok())
             .find(|row| {
-                let metadata = row
-                    .metadata
-                    .as_deref()
-                    .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
-                metadata.as_ref().is_some_and(|metadata| {
-                    metadata["queue"]["source"] == "background_completion"
-                        && metadata["queue"]["policy"] == "coalesce"
-                        && metadata["queue"]["key"] == format!("background_completion:{session_id}")
-                        && metadata["queue"]["queued_after_request_id"] == queued_after_request_id
-                })
+                row.input
+                    .as_ref()
+                    .and_then(|input| input.queue.as_ref())
+                    .is_some_and(|queue| {
+                        queue.source == QueueSource::BackgroundCompletion
+                            && queue.policy == QueuePolicy::Coalesce
+                            && queue.key.as_deref() == Some(expected_queue_key.as_str())
+                            && queue.queued_after_request_id.as_deref()
+                                == Some(queued_after_request_id)
+                    })
             });
         if let Some(wake) = wake {
             return wake;

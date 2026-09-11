@@ -103,6 +103,37 @@ async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
     .await
 }
 
+async fn seed_canonical_terminal_request(
+    db: &TestDb,
+    request_id: &str,
+    lifecycle_state: &str,
+) -> String {
+    let did = db.node_identity.did();
+    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id,
+        did,
+        did,
+        crate::support::AGENT_NAME,
+        SESSION,
+        "hello",
+        "interactive",
+        "2026-07-15T00:00:00Z",
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
+    );
+    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
+        .await
+        .expect("sign canonical terminal request");
+    let response = db.node.execute(&request.graphql_mutation().unwrap()).await;
+    assert!(
+        !response.has_errors(),
+        "create canonical terminal request: {:?}",
+        response.errors
+    );
+    let doc_id = crate::support::exact_request_doc_id(db.node.as_ref(), request_id).await;
+    set_request_lifecycle_state(db.node.as_ref(), &doc_id, lifecycle_state).await;
+    doc_id
+}
+
 #[derive(Debug, Deserialize)]
 struct ChildRow {
     #[serde(rename = "_docID")]
@@ -1204,19 +1235,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
     for terminal in ["failed", "dead"] {
         let db = test_db(&format!("goal-budget-after-{terminal}")).await;
         let parent = "parent-over-budget";
-        let parent_doc = create_request_for_agent_with_signed_fields(
-            db.node.as_ref(),
-            db.node_identity.did(),
-            parent,
-            SESSION,
-            terminal,
-            "2026-07-15T00:00:00Z",
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
+        let parent_doc = seed_canonical_terminal_request(&db, parent, terminal).await;
         let usage = format!(
             r#"mutation {{ add_InferenceCall(input: {{
                 call_id: "over-budget-failed-call",

@@ -509,17 +509,18 @@ pub async fn record_model_catalog_in_txn(
     // DefraDB represents a top-level JSON array as JsonArray, which is not a
     // Scalar(Json). Keep the array inside a JSON object so the declared scalar
     // kind and the stored value agree.
-    let catalogs = gents_protocol::graphql::graphql_input_literal(
-        &serde_json::json!({ "entries": catalogs }),
-    )?;
+    let catalogs = serde_json::json!({ "entries": catalogs });
     let doc_id = row
         .get("_docID")
         .and_then(serde_json::Value::as_str)
         .context("backend catalog target has no physical identity")?;
-    txn.execute(&format!(
-        "mutation {{ update_InferenceBackend(docID: \"{}\", input: {{ catalogs: {catalogs} }}) {{ _docID }} }}",
-        escape_graphql_string(doc_id)
-    ))
+    txn.execute_with_variables(
+        &format!(
+            "mutation($catalogs: JSON) {{ update_InferenceBackend(docID: \"{}\", input: {{ catalogs: $catalogs }}) {{ _docID }} }}",
+            escape_graphql_string(doc_id)
+        ),
+        &serde_json::json!({ "catalogs": catalogs }),
+    )
     .await?;
     Ok(())
 }

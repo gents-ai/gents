@@ -64,8 +64,7 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
             &agent_did,
             "--skill-id",
             "live-skill",
-            "--scope",
-            "principal",
+            "--enabled",
             "--name",
             &catalog_phrase,
             "--description",
@@ -74,6 +73,7 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
             "Always cite your sources.",
         ],
     )?;
+    select_default_behavior_skills(&graphql, &agent_did, &["live-skill"]).await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
 
     let (mut ws, _) = serve
@@ -211,8 +211,7 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
             &agent_did,
             "--skill-id",
             "toggle-skill",
-            "--scope",
-            "principal",
+            "--enabled",
             "--name",
             &catalog_phrase,
             "--description",
@@ -221,6 +220,7 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
             "Always cite your sources.",
         ],
     )?;
+    select_default_behavior_skills(&graphql, &agent_did, &["toggle-skill"]).await?;
     let gen1 =
         wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
 

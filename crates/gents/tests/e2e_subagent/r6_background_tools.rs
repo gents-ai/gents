@@ -182,8 +182,9 @@ async fn setup_hook(
         None,
     )
     .await;
-    crate::support::create_agent_session(
+    crate::support::create_agent_session_in_scope(
         db.node.as_ref(),
+        &agent_did,
         &session_id,
         "r6-background",
         "2026-05-14T00:00:00Z",

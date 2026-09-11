@@ -71,8 +71,9 @@ async fn create_parent_hook(
         deadline,
     )
     .await;
-    crate::support::create_agent_session(
+    crate::support::create_agent_session_in_scope(
         db.node.as_ref(),
+        db.node_identity.did(),
         session_id,
         PARENT_BEHAVIOR_ID,
         "2026-05-14T00:00:00Z",
@@ -383,7 +384,7 @@ async fn list_subagents_returns_running_children() {
     assert!(ids.contains(&child_b["child_request_id"].as_str().unwrap()));
     for entry in entries {
         assert_eq!(
-            entry["deployment_id"].as_str(),
+            entry["principal_did"].as_str(),
             Some(db.node_identity.did())
         );
         assert_eq!(entry["await_mode"].as_str(), Some("background"));
