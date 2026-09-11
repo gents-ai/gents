@@ -7,25 +7,44 @@ use super::cooldown::{take_next_eligible_pending_request, PROCESSED_REQUEST_COOL
 use super::*;
 
 #[test]
-fn local_and_relayed_updates_are_both_request_wakeups() {
-    fn update_message(is_relay: bool) -> events::Message {
-        let block = format!("request-update-{is_relay}").into_bytes();
-        let cid = defra_core::block::generate_cid_from_bytes(&block)
-            .expect("fixture bytes produce a CID");
-        events::Message::update(events::Update::new(
-            "request-doc".to_string(),
-            cid,
-            "request-collection".to_string(),
-            block,
-            false,
-            is_relay,
-        ))
-    }
+fn only_request_changes_or_resync_wake_the_durable_queue_scan() {
+    let response_only = events::DocumentChangeBatch {
+        changes: vec![events::DocumentChange {
+            collection_id: "agent-response".into(),
+            doc_id: "response-1".into(),
+            has_local_write: true,
+        }],
+        resync_required: false,
+        updates: 64,
+    };
+    assert!(!document_change_batch_wakes_request_scan(
+        &response_only,
+        Some("agent-request")
+    ));
 
-    let local = update_message(false);
-    let relayed = update_message(true);
-    assert!(!request_update_wakeup(&local).unwrap().is_relay);
-    assert!(request_update_wakeup(&relayed).unwrap().is_relay);
+    let request_change = events::DocumentChangeBatch {
+        changes: vec![events::DocumentChange {
+            collection_id: "agent-request".into(),
+            doc_id: "request-1".into(),
+            has_local_write: false,
+        }],
+        resync_required: false,
+        updates: 1,
+    };
+    assert!(document_change_batch_wakes_request_scan(
+        &request_change,
+        Some("agent-request")
+    ));
+
+    let overflow = events::DocumentChangeBatch {
+        changes: Vec::new(),
+        resync_required: true,
+        updates: 4097,
+    };
+    assert!(document_change_batch_wakes_request_scan(
+        &overflow,
+        Some("agent-request")
+    ));
 }
 
 #[test]

@@ -1155,9 +1155,16 @@ async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cle
     };
     let admin = MockAdmin::default();
     let event_bus = events::ChannelBus::new();
-    let subscription = event_bus.subscribe(&[EventName::Update]);
+    let subscription = event_bus.subscribe_document_changes();
+    let watched_collection_ids = BTreeSet::new();
     let cancel = CancellationToken::new();
-    let reconciler = run_pairing_reconciler_loop(&admin, &store, subscription, &cancel);
+    let reconciler = run_pairing_reconciler_loop(
+        &admin,
+        &store,
+        subscription,
+        &watched_collection_ids,
+        &cancel,
+    );
     tokio::pin!(reconciler);
     let retry_fence_time = tokio::time::Instant::now();
 
@@ -1209,6 +1216,33 @@ async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cle
     tokio::time::timeout(Duration::from_millis(100), &mut reconciler)
         .await
         .expect("cancellation must stop the reconciler");
+}
+
+#[test]
+fn only_pairing_document_changes_wake_topology_reconciliation() {
+    let watched = BTreeSet::from(["pairing-collection-id".to_string()]);
+    let batch = |collection_id: &str, resync_required| events::DocumentChangeBatch {
+        changes: vec![events::DocumentChange {
+            collection_id: collection_id.to_string(),
+            doc_id: "doc-1".to_string(),
+            has_local_write: false,
+        }],
+        resync_required,
+        updates: 1,
+    };
+
+    assert!(document_changes_wake_pairing_reconcile(
+        &batch("pairing-collection-id", false),
+        &watched,
+    ));
+    assert!(!document_changes_wake_pairing_reconcile(
+        &batch("AgentResponse", false),
+        &watched,
+    ));
+    assert!(document_changes_wake_pairing_reconcile(
+        &batch("AgentResponse", true),
+        &watched,
+    ));
 }
 
 #[tokio::test]

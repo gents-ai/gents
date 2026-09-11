@@ -124,6 +124,12 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
         "expected full baseline coverage, got {report1:?}"
     );
     assert_eq!(report1.steps_applied, gents_migration::DEFAULT_STEPS.len());
+    if gents_migration::DEFAULT_STEPS.is_empty() {
+        assert_eq!(
+            report1.materialization.collections_attempted, 0,
+            "a chain-free baseline has no old document versions to materialize"
+        );
+    }
 
     let report2 = ensure_migrations(node.as_ref())
         .await

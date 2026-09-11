@@ -1,6 +1,40 @@
 use super::support::*;
 use super::*;
+use crate::agent::DocumentResolveContext;
+use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::ReconcilePhase;
+use anyhow::Result;
+
+const TEST_CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
+    debounce: Duration::from_millis(20),
+    settle_retry: Duration::from_millis(10),
+    settle_window: Duration::from_millis(200),
+    idle_sleep: Duration::from_secs(60),
+};
+
+async fn run_test_control_watcher(
+    node: Arc<defra_node::EmbeddedNode>,
+    subscription: events::DocumentChangeSubscription,
+    agent_did: String,
+    resolve_context: DocumentResolveContext,
+    proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
+    runtime_status: RuntimeStatusHandle,
+    health_events_rx: mpsc::Receiver<()>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    run_control_watcher_with_timing(
+        node,
+        subscription,
+        agent_did,
+        resolve_context,
+        proposals_tx,
+        runtime_status,
+        health_events_rx,
+        shutdown,
+        TEST_CONTROL_WATCHER_TIMING,
+    )
+    .await
+}
 
 async fn update_agent_principal_enabled(
     node: &defra_node::EmbeddedNode,
@@ -24,7 +58,7 @@ async fn update_agent_principal_enabled(
     );
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -62,7 +96,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     // DefraDB subscriptions are live-only, so this deterministically guards
     // the startup ordering that prevents a post-Ready config update from
     // falling into the gap between readiness and watcher startup.
-    let subscription = node.subscribe(&[defra_node::EventName::Update]);
+    let subscription = node.subscribe_document_changes();
     let context = serde_json::json!({
         "agent_did": agent.agent_did(),
         "context_id": format!("{}:context", agent.default_behavior_id()),
@@ -89,7 +123,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     .await
     .unwrap();
 
-    let watcher_task = tokio::spawn(run_control_watcher(
+    let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
         subscription,
         agent.agent_did().to_string(),
@@ -103,7 +137,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let debouncing =
         wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
     assert_eq!(debouncing.reconcile_phase, "debouncing");
-    tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
     tokio::task::yield_now().await;
 
     let snapshot = proposal_rx.recv().await.expect("reconciled snapshot");
@@ -122,7 +156,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .set_reconcile_phase(ReconcilePhase::Idle)
         .await;
     let settled = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
-    tokio::time::advance(CONTROL_RECONCILE_SETTLE_RETRY + Duration::from_millis(1)).await;
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.settle_retry + Duration::from_millis(10)).await;
     tokio::task::yield_now().await;
     let retried = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
     assert_eq!(retried.reconcile_phase, "idle");
@@ -136,7 +170,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
 /// document changing — demoting the behavior and marking the admission
 /// config while the backend is measured unhealthy, and restoring both after
 /// a successful probe flips the veto back.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -173,9 +207,9 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
     let (health_tx, health_rx) = mpsc::channel::<()>(1);
 
-    let watcher_task = tokio::spawn(run_control_watcher(
+    let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
-        node.subscribe(&[defra_node::EventName::Update]),
+        node.subscribe_document_changes(),
         agent.agent_did().to_string(),
         resolve_context,
         proposal_tx,
@@ -199,7 +233,7 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
     let debouncing =
         wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
     assert_eq!(debouncing.reconcile_phase, "debouncing");
-    tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
     tokio::task::yield_now().await;
 
     let snapshot = proposal_rx.recv().await.expect("demotion snapshot");
@@ -232,7 +266,7 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
     health_tx.send(()).await.unwrap();
 
     wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
-    tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
     tokio::task::yield_now().await;
 
     let snapshot = proposal_rx.recv().await.expect("recovery snapshot");
@@ -252,7 +286,7 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
     watcher_task.await.unwrap().unwrap();
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn control_watcher_recovers_after_resolve_error() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -286,9 +320,9 @@ async fn control_watcher_recovers_after_resolve_error() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
-    let watcher_task = tokio::spawn(run_control_watcher(
+    let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
-        node.subscribe(&[defra_node::EventName::Update]),
+        node.subscribe_document_changes(),
         agent.agent_did().to_string(),
         resolve_context,
         proposal_tx,
@@ -301,7 +335,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     update_agent_principal_enabled(node.as_ref(), agent.agent_did(), false).await;
 
     wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
-    tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
     assert!(proposal_rx.try_recv().is_err());
     let failed_status =
         wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "idle").await;
@@ -313,7 +347,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     update_agent_principal_enabled(node.as_ref(), agent.agent_did(), true).await;
 
     wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
-    tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
     // The settle retry may already return the phase to idle after proposing
     // this fingerprint. Recovery is the queued proposal, not a transient phase.
     let snapshot = proposal_rx.recv().await.expect("recovered snapshot");
@@ -323,7 +357,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     watcher_task.await.unwrap().unwrap();
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -357,9 +391,9 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
-    let watcher_task = tokio::spawn(run_control_watcher(
+    let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
-        node.subscribe(&[defra_node::EventName::Update]),
+        node.subscribe_document_changes(),
         agent.agent_did().to_string(),
         resolve_context,
         proposal_tx,
@@ -385,7 +419,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     .unwrap();
 
     tokio::task::yield_now().await;
-    tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
     tokio::task::yield_now().await;
 
     let snapshot = proposal_rx.recv().await.expect("reconciled snapshot");
