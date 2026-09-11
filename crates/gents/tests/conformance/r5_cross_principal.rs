@@ -342,8 +342,9 @@ async fn setup_parent_hook_on_db(
         parent_agent_did,
     )
     .await;
-    crate::support::create_agent_session(
+    crate::support::create_agent_session_in_scope(
         db.node.as_ref(),
+        parent_agent_did,
         &parent_session_id,
         &parent_behavior_id,
         "2026-05-20T00:00:00Z",

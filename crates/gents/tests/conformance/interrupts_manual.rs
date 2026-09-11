@@ -345,8 +345,8 @@ async fn interrupt_request_errors_on_unknown_request_id() {
     );
     let message = err.unwrap_err().to_string();
     assert!(
-        message.contains("not found"),
-        "error must mention not found; got: {message}"
+        message.contains("missing"),
+        "error must report a missing scoped request; got: {message}"
     );
 }
 
@@ -800,6 +800,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
                 limit: 1
             ) {{
                 request_id
+                requester_did
                 session_id
                 created_at
             }}
@@ -835,17 +836,22 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         .expect("created_at present")
         .to_string();
 
-    let request = build_request(
+    let mut request = build_request(
         doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
         created_at,
     );
+    request.agent_did = db.node_identity.did().to_string();
+    request.requester_did = row
+        .get("requester_did")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        db.node_identity.did(),
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,

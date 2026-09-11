@@ -1432,6 +1432,7 @@ async fn lookup_parent_request(
                 limit: 1
             ) {{
                 request_id
+                agent_did
                 lifecycle_state
                 subagent_depth
                 workspace_id

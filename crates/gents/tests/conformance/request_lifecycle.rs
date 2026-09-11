@@ -625,8 +625,9 @@ async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str)
     assert!(!resp.has_errors(), "set deadline failed: {:?}", resp.errors);
 }
 
-/// A running subagent bridge pointing at `child_request_id`, the row
-/// `reconcile_subagent_liveness` sweeps.
+/// A foreground bridge used when a generated request-transition case only
+/// exercises child terminalization. Foreground bridges are projected by their
+/// in-memory waiter, so this fixture needs no fabricated parent edge.
 async fn create_running_subagent_bridge(
     node: &EmbeddedNode,
     session_id: &str,
@@ -650,7 +651,7 @@ async fn create_running_subagent_bridge(
                 status: "running",
                 lifecycle_state: "running",
                 cancel_policy: "cascade",
-                await_mode: "background",
+                await_mode: "foreground",
                 child_request_id: "{escaped_child}",
                 started_at: "{started_at}"
             }}) {{ _docID }}
@@ -662,6 +663,125 @@ async fn create_running_subagent_bridge(
         "create subagent bridge failed: {:?}",
         resp.errors
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_exact_running_subagent_bridge(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    parent_request_id: &str,
+    parent_request_doc_id: &str,
+    parent_session_id: &str,
+    tool_call_id: &str,
+    child_request_id: &str,
+) -> String {
+    let agent_did = escape_graphql_string(agent_did);
+    let parent_request_id = escape_graphql_string(parent_request_id);
+    let parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
+    let parent_session_id = escape_graphql_string(parent_session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let child_request_id = escape_graphql_string(child_request_id);
+    let started_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{parent_session_id}:{tool_call_id}",
+                request_id: "{parent_request_id}",
+                request_doc_id: "{parent_request_doc_id}",
+                agent_did: "{agent_did}",
+                session_id: "{parent_session_id}",
+                message_sequence: 1,
+                tool_name: "spawn_subagent",
+                tool_call_id: "{tool_call_id}",
+                args: "{{}}",
+                result: "",
+                status: "running",
+                lifecycle_state: "running",
+                cancel_policy: "cascade",
+                await_mode: "background",
+                child_request_id: "{child_request_id}",
+                spawn_target_did: "{agent_did}",
+                started_at: "{started_at}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create exact subagent bridge failed: {:?}",
+        response.errors
+    );
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{
+                agent_did: {{ _eq: "{agent_did}" }},
+                tool_call_id: {{ _eq: "{tool_call_id}" }}
+            }}, limit: 2) {{ _docID }} }}"#
+        ))
+        .await;
+    support::first_row::<support::DocIdRow>(&response, "AgentToolCall").doc_id
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_exact_expired_child(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    child_request_id: &str,
+    parent_request_id: &str,
+    parent_request_doc_id: &str,
+    parent_tool_call_id: &str,
+    parent_tool_call_doc_id: &str,
+    deadline: &str,
+) -> String {
+    let agent_did = escape_graphql_string(agent_did);
+    let child_request_id = escape_graphql_string(child_request_id);
+    let child_session_id = escape_graphql_string(&format!("session-{child_request_id}"));
+    let parent_request_id = escape_graphql_string(parent_request_id);
+    let parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
+    let parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
+    let parent_tool_call_doc_id = escape_graphql_string(parent_tool_call_doc_id);
+    let deadline = escape_graphql_string(deadline);
+    let created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{child_request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{child_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{child_request_id}",
+                superseded_by_request: "",
+                content: "expired child",
+                lifecycle_state: "claimed",
+                backend_id: "",
+                execution_origin: "interactive",
+                failure_reason: "",
+                created_at: "{created_at}",
+                claimed_at: "{created_at}",
+                deadline: "{deadline}",
+                execution_generation: "{child_request_id}",
+                execution_lease_expires_at: "{deadline}",
+                execution_progress_seq: 0,
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 1,
+                caused_by_parent_request_id: "{parent_request_id}",
+                caused_by_parent_request_doc_id: "{parent_request_doc_id}",
+                caused_by_parent_tool_call_id: "{parent_tool_call_id}",
+                caused_by_parent_tool_call_doc_id: "{parent_tool_call_doc_id}",
+                caused_by_trigger_id: "{parent_tool_call_id}",
+                caused_by_trigger_kind: "subagent"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create exact expired child failed: {:?}",
+        response.errors
+    );
+    support::exact_request_doc_id(node, &child_request_id).await
 }
 
 async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
@@ -1261,10 +1381,13 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             failure_reason: "".into(),
         }
     );
-    assert_session_observes_request(
+    assert_session_observes_request_with_authoritative_state(
         &db.node,
         &session_id,
         &(request_id),
+        // Session observations are admission/terminal projections. Streaming
+        // progress is read from the exact request and response owners above.
+        RequestLifecycleState::Claimed,
         RequestLifecycleState::Processing,
     )
     .await;
@@ -1340,6 +1463,17 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
 #[tokio::test]
 async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     let db = test_db("scheduled-materialize").await;
+    crate::support::fixtures::configure_subagent_behavior(
+        db.node.as_ref(),
+        AGENT_DID,
+        AGENT_NAME,
+        "scheduled-materialize-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
+    )
+    .await;
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
@@ -1383,11 +1517,15 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
 #[tokio::test]
 async fn scheduled_materialization_persists_trigger_lineage() {
     let db = test_db("scheduled-materialize-lineage").await;
-    crate::support::fixtures::bind_default_behavior_backend(
+    crate::support::fixtures::configure_subagent_behavior(
         db.node.as_ref(),
         AGENT_DID,
-        BACKEND_ID,
-        "http://127.0.0.1:1/v1",
+        AGENT_NAME,
+        "scheduled-materialize-lineage-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
     )
     .await;
     let lineage = TriggerLineage {
@@ -1400,7 +1538,7 @@ async fn scheduled_materialization_persists_trigger_lineage() {
 
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
-        "default",
+        AGENT_NAME,
         materialization_identity(),
         "scheduled prompt body with lineage",
         DEADLINE_SECS,
@@ -1873,6 +2011,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
     .await;
     persist_child_completion(
         db.node.as_ref(),
+        db.node_identity.did(),
         &child_a,
         &child_session_a,
         "child A complete",
@@ -1880,6 +2019,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
     .await;
     persist_child_completion(
         db.node.as_ref(),
+        db.node_identity.did(),
         &child_b,
         &child_session_b,
         "child B complete",
@@ -2258,11 +2398,15 @@ async fn child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String
 
 async fn persist_child_completion(
     node: &EmbeddedNode,
+    agent_did: &str,
     child_request_id: &str,
     child_session_id: &str,
     final_response: &str,
 ) {
+    let child_request_doc_id = crate::support::exact_request_doc_id(node, child_request_id).await;
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let update_request = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -2291,7 +2435,10 @@ async fn persist_child_completion(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{escaped_child_session_id}:1",
+                agent_did: "{escaped_agent_did}",
                 session_id: "{escaped_child_session_id}",
+                request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_child_request_doc_id}",
                 sequence: 1,
                 role: "assistant",
                 content: "{escaped_message}",
@@ -2311,7 +2458,8 @@ async fn persist_child_completion(
             create_AgentResponse(input: {{
                 response_key: "{escaped_child_request_id}",
                 request_id: "{escaped_child_request_id}",
-                agent_did: "{AGENT_DID}",
+                request_doc_id: "{escaped_child_request_doc_id}",
+                agent_did: "{escaped_agent_did}",
                 behavior_id: "queue-deadline-child",
                 session_id: "{escaped_child_session_id}",
                 content: "",
@@ -2394,28 +2542,51 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
     for agent_did in [AGENT_DID, "did:test:foreign-scope-owner"] {
         let (request_id, doc_id, session_id) = create_scoped_claim(&db, agent_did).await;
         let escaped_doc = escape_graphql_string(&doc_id);
-        let result = db.node.execute(&format!(
+        let mutation = format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}, input: {{ execution_lease_expires_at: "{expired}" }}) {{ _docID }} }}"#,
-        )).await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
+        );
+        gents::ConfigAccess::transact_local(
+            &db.node,
+            None,
+            "test.expire_terminal_repair_fixture",
+            |txn| {
+                let mutation = mutation.clone();
+                Box::pin(async move {
+                    txn.execute(&mutation).await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
 
         // Response identity is immutable: create it under the matching principal.
         let request_id = escape_graphql_string(&request_id);
         let session_id = escape_graphql_string(&session_id);
         let did = escape_graphql_string(agent_did);
-        let result = db
-            .node
-            .execute(&format!(
-                r#"mutation {{ create_AgentResponse(input: {{
+        let mutation = format!(
+            r#"mutation {{ create_AgentResponse(input: {{
                 response_key: "{request_id}", request_id: "{request_id}",
                 request_doc_id: "{escaped_doc}", agent_did: "{did}",
                 behavior_id: "test", session_id: "{session_id}",
                 content: "", status: "complete", token_count: 0, progress_seq: 0,
                 created_at: "2026-03-23T00:00:00Z", completed_at: "2026-03-23T00:01:00Z"
             }}) {{ _docID }} }}"#,
-            ))
-            .await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
+        );
+        gents::ConfigAccess::transact_local(
+            &db.node,
+            None,
+            "test.create_terminal_repair_response_fixture",
+            |txn| {
+                let mutation = mutation.clone();
+                Box::pin(async move {
+                    txn.execute(&mutation).await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
         claims.push(doc_id);
     }
     let foreign_before = fetch_request_snapshot(&db.node, &claims[1]).await;
@@ -2450,20 +2621,92 @@ async fn fetch_bridge_scope_state(node: &EmbeddedNode, tool_call_id: &str) -> St
 #[tokio::test]
 async fn subagent_liveness_sweep_ignores_foreign_did_children() {
     let db = test_db("subagent-liveness-scope-foreign").await;
-    let parent_session_id = uuid::Uuid::new_v4().to_string();
+    let local_agent_did = db.node_identity.did().to_string();
+    crate::support::fixtures::configure_subagent_behavior(
+        &db.node,
+        &local_agent_did,
+        AGENT_NAME,
+        "foreign-scope-subagent-tools",
+        Vec::new(),
+        true,
+        true,
+        None,
+    )
+    .await;
     let past = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
     let mut children = Vec::new();
-    for agent_did in [AGENT_DID, "did:test:foreign-scope-owner"] {
-        let (request_id, doc_id, _) = create_scoped_claim(&db, agent_did).await;
-        set_request_deadline(&db.node, &doc_id, &past).await;
+    for agent_did in [local_agent_did.as_str(), "did:test:foreign-scope-owner"] {
+        let parent_request_id = format!("parent-{}", uuid::Uuid::new_v4());
+        let parent_session_id = format!("session-{parent_request_id}");
+        let created_at = chrono::Utc::now().to_rfc3339();
+        crate::support::create_agent_session_in_scope(
+            &db.node,
+            agent_did,
+            &parent_session_id,
+            AGENT_NAME,
+            &created_at,
+        )
+        .await;
+        let parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
+            &db.node,
+            agent_did,
+            &parent_request_id,
+            &parent_session_id,
+            "processing",
+            &created_at,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        let parent_deadline = escape_graphql_string(
+            &(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
+        );
+        let parent_doc_id_escaped = escape_graphql_string(&parent_doc_id);
+        let response = db
+            .node
+            .execute(&format!(
+                r#"mutation {{ update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{parent_doc_id_escaped}" }} }},
+                    input: {{ deadline: "{parent_deadline}" }}
+                ) {{ _docID }} }}"#
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "setting parent deadline failed: {:?}",
+            response.errors
+        );
+        let request_id = format!("child-{}", uuid::Uuid::new_v4());
         let bridge_id = format!("bridge-{request_id}");
-        create_running_subagent_bridge(&db.node, &parent_session_id, &bridge_id, &request_id).await;
-        children.push((doc_id, bridge_id));
+        let bridge_doc_id = create_exact_running_subagent_bridge(
+            &db.node,
+            agent_did,
+            &parent_request_id,
+            &parent_doc_id,
+            &parent_session_id,
+            &bridge_id,
+            &request_id,
+        )
+        .await;
+        let child_doc_id = create_exact_expired_child(
+            &db.node,
+            agent_did,
+            &request_id,
+            &parent_request_id,
+            &parent_doc_id,
+            &bridge_id,
+            &bridge_doc_id,
+            &past,
+        )
+        .await;
+        children.push((child_doc_id, bridge_id));
     }
     // The bridge scan sees both children; the real child-principal guard must
     // exclude the foreign claim while terminalizing and projecting the control.
     let foreign_before = fetch_request_snapshot(&db.node, &children[1].0).await;
-    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, &local_agent_did)
         .await
         .unwrap();
     assert_eq!(report.expired_children_terminalized, 1);
@@ -2494,6 +2737,19 @@ async fn assert_session_observes_request(
     request_id: &str,
     expected: RequestLifecycleState,
 ) {
+    assert_session_observes_request_with_authoritative_state(
+        node, session_id, request_id, expected, expected,
+    )
+    .await;
+}
+
+async fn assert_session_observes_request_with_authoritative_state(
+    node: &EmbeddedNode,
+    session_id: &str,
+    request_id: &str,
+    expected_observation: RequestLifecycleState,
+    expected_authoritative: RequestLifecycleState,
+) {
     let session = fetch_session_snapshot(node, session_id)
         .await
         .expect("canonical session");
@@ -2510,7 +2766,7 @@ async fn assert_session_observes_request(
         .latest_request
         .expect("latest request");
     assert_eq!(latest.request_id, request_id);
-    assert_eq!(latest.lifecycle_state, expected);
+    assert_eq!(latest.lifecycle_state, expected_observation);
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let response = node
@@ -2536,7 +2792,10 @@ async fn assert_session_observes_request(
         rows[0]["_docID"].as_str(),
         Some(latest.request_doc_id.as_str())
     );
-    assert_eq!(rows[0]["lifecycle_state"].as_str(), Some(expected.as_str()));
+    assert_eq!(
+        rows[0]["lifecycle_state"].as_str(),
+        Some(expected_authoritative.as_str())
+    );
     assert_eq!(
         rows[0]["agent_did"].as_str(),
         Some(session.agent_did.as_str()),

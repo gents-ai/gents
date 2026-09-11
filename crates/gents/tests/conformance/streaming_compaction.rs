@@ -627,7 +627,9 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
             let sequence = case.materialize_sequence.expect("finalize action input");
             mark_materialized(
                 db.node.clone(),
+                &session_id,
                 &request_id,
+                &request_doc_id,
                 u32::try_from(sequence).expect("materialization sequence fits runtime"),
             )
             .await;
@@ -926,17 +928,16 @@ async fn seed_terminal_response_shape(
     support::first_row::<DocIdRow>(&resp, "AgentResponse").doc_id
 }
 
-async fn mark_materialized(node: std::sync::Arc<EmbeddedNode>, request_id: &str, sequence: u32) {
-    support::create_agent_session(
-        node.as_ref(),
-        "streaming-materialized-session",
-        AGENT_NAME,
-        "2026-05-01T00:00:00Z",
-    )
-    .await;
+async fn mark_materialized(
+    node: std::sync::Arc<EmbeddedNode>,
+    session_id: &str,
+    request_id: &str,
+    request_doc_id: &str,
+    sequence: u32,
+) {
     let hook = DefraSessionHook::resume_with_identity_policy(
         node,
-        "streaming-materialized-session",
+        session_id,
         AGENT_NAME,
         AGENT_DID,
         None,
@@ -944,9 +945,12 @@ async fn mark_materialized(node: std::sync::Arc<EmbeddedNode>, request_id: &str,
     )
     .await
     .expect("resume materialization hook");
-    hook.set_active_request_lineage(Some(request_id.to_string()), None)
-        .await
-        .expect("bind persisted request lineage");
+    hook.set_active_request_binding(
+        Some(request_id.to_string()),
+        Some(request_doc_id.to_string()),
+        None,
+    )
+    .await;
     hook.mark_current_response_materialized(sequence)
         .await
         .expect("mark response materialized");
@@ -1007,7 +1011,15 @@ async fn boot_streaming_interrupt_flow_agent(
     endpoint: &str,
 ) -> BootedAgent {
     let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity(test_name));
-    upsert_interrupt_flow_backend(db.node.as_ref(), endpoint).await;
+    support::fixtures::bind_behavior_backend(
+        db.node.as_ref(),
+        identity.did(),
+        AGENT_NAME,
+        INTERRUPT_FLOW_BACKEND_ID,
+        endpoint,
+        INTERRUPT_FLOW_MODEL,
+    )
+    .await;
 
     let agent = gents::Gents::builder()
         .node(db.node.clone())
@@ -1036,7 +1048,15 @@ async fn boot_streaming_idle_timeout_agent(
     endpoint: &str,
 ) -> BootedAgent {
     let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity(test_name));
-    upsert_idle_timeout_backend(db.node.as_ref(), endpoint).await;
+    support::fixtures::bind_behavior_backend(
+        db.node.as_ref(),
+        identity.did(),
+        AGENT_NAME,
+        IDLE_TIMEOUT_BACKEND_ID,
+        endpoint,
+        IDLE_TIMEOUT_MODEL,
+    )
+    .await;
 
     let agent = gents::Gents::builder()
         .node(db.node.clone())
@@ -1059,67 +1079,6 @@ async fn boot_streaming_idle_timeout_agent(
     wait_for_runtime_ready_realtime(db.node.as_ref(), &agent_did).await;
 
     BootedAgent::new(shutdown_tx, handle, agent_did)
-}
-
-async fn upsert_interrupt_flow_backend(node: &EmbeddedNode, endpoint: &str) {
-    upsert_streaming_backend(
-        node,
-        INTERRUPT_FLOW_BACKEND_ID,
-        endpoint,
-        INTERRUPT_FLOW_MODEL,
-    )
-    .await;
-}
-
-async fn upsert_idle_timeout_backend(node: &EmbeddedNode, endpoint: &str) {
-    upsert_streaming_backend(node, IDLE_TIMEOUT_BACKEND_ID, endpoint, IDLE_TIMEOUT_MODEL).await;
-}
-
-async fn upsert_streaming_backend(
-    node: &EmbeddedNode,
-    backend_id: &str,
-    endpoint: &str,
-    model_name: &str,
-) {
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let escaped_model_name = escape_graphql_string(model_name);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 1,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: 1,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert streaming backend {backend_id} failed: {:?}",
-        response.errors
-    );
 }
 
 async fn wait_for_runtime_ready_realtime(node: &EmbeddedNode, agent_did: &str) {

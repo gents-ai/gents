@@ -47,15 +47,24 @@ pub(super) fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts(
             "Fleet slot case {} emitted mismatched projection row arrays",
             case.name
         );
-        assert!(
-            matches!(
-                case.admission_state.as_str(),
-                "waiting" | "acquired" | "executing" | "released"
-            ),
-            "Fleet slot case {} must carry an admission phase of an existing claimed request, got {:?}",
-            case.name,
-            case.admission_state
-        );
+        if case.property == "admission_contribution" {
+            assert!(
+                matches!(
+                    case.admission_state.as_str(),
+                    "waiting" | "acquired" | "executing" | "released"
+                ),
+                "Fleet admission case {} must carry an admission phase of an existing claimed request, got {:?}",
+                case.name,
+                case.admission_state
+            );
+        } else {
+            assert_eq!(
+                case.property, "fleet_reconstructed_running_bound",
+                "Fleet slot case {} has an unknown property",
+                case.name
+            );
+            assert!(case.admission_state.is_empty(), "{}", case.name);
+        }
 
         let reconstructed = reconstructed_running_slot_count(
             slot_rows_from_contract(&case.row_backend_ids, &case.row_states),

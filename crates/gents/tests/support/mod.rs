@@ -459,18 +459,36 @@ pub async fn create_response_with_content_and_status(
 ) -> String {
     let response_key = escape_graphql_string(response_key);
     let request_id = escape_graphql_string(request_id);
-    let request_lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#)).await;
+    let request_lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{ _docID agent_did requester_did behavior_id }} }}"#)).await;
     assert!(!request_lookup.has_errors(), "{:?}", request_lookup.errors);
-    let request_doc_id = request_lookup
+    let request_rows = request_lookup
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
         .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(serde_json::Value::as_str)
-        .map(|id| format!(r#"request_doc_id: "{}","#, escape_graphql_string(id)))
-        .unwrap_or_default();
+        .expect("AgentRequest rows");
+    assert_eq!(
+        request_rows.len(),
+        1,
+        "response fixture requires one request"
+    );
+    let request_row = &request_rows[0];
+    let request_doc_id =
+        escape_graphql_string(request_row["_docID"].as_str().expect("request document id"));
+    let agent_did = escape_graphql_string(
+        request_row["agent_did"]
+            .as_str()
+            .expect("request agent DID"),
+    );
+    let behavior_id = escape_graphql_string(
+        request_row["behavior_id"]
+            .as_str()
+            .expect("request behavior"),
+    );
+    let requester_did = request_row["requester_did"]
+        .as_str()
+        .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
+        .unwrap_or_else(|| "requester_did: null,".to_string());
     let session_id = escape_graphql_string(session_id);
     let content = escape_graphql_string(content);
     let completed_at = if matches!(status, "complete" | "error") {
@@ -483,9 +501,10 @@ pub async fn create_response_with_content_and_status(
             create_AgentResponse(input: {{
                 response_key: "{response_key}",
                 request_id: "{request_id}",
-                {request_doc_id}
-                agent_did: "{AGENT_DID}",
-                behavior_id: "{AGENT_NAME}",
+                request_doc_id: "{request_doc_id}",
+                agent_did: "{agent_did}",
+                {requester_did}
+                behavior_id: "{behavior_id}",
                 session_id: "{session_id}",
                 content: "{content}",
                 status: "{status}",
@@ -710,6 +729,18 @@ pub fn session_document(
     }
 }
 
+pub fn session_document_in_scope(
+    agent_did: &str,
+    session_id: &str,
+    behavior_id: &str,
+    created_at: &str,
+) -> gents_protocol::session::AgentSession {
+    gents_protocol::session::AgentSession {
+        agent_did: agent_did.into(),
+        ..session_document(session_id, behavior_id, created_at)
+    }
+}
+
 pub async fn create_agent_session(
     node: &EmbeddedNode,
     session_id: &str,
@@ -717,6 +748,20 @@ pub async fn create_agent_session(
     created_at: &str,
 ) {
     create_session_document(node, &session_document(session_id, behavior_id, created_at)).await;
+}
+
+pub async fn create_agent_session_in_scope(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    session_id: &str,
+    behavior_id: &str,
+    created_at: &str,
+) {
+    create_session_document(
+        node,
+        &session_document_in_scope(agent_did, session_id, behavior_id, created_at),
+    )
+    .await;
 }
 
 pub async fn create_agent_message(

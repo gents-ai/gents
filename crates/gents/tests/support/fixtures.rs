@@ -423,47 +423,129 @@ pub async fn bind_default_behavior_backend(
     backend_id: &str,
     endpoint: &str,
 ) {
+    bind_behavior_backend_chain(node, agent_did, None, backend_id, endpoint, "default").await;
+}
+
+/// Publish the canonical principal → behavior → inference profile → backend
+/// chain used by daemon integration fixtures with an explicit behavior id.
+pub async fn bind_behavior_backend(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    backend_id: &str,
+    endpoint: &str,
+    model_name: &str,
+) {
+    bind_behavior_backend_chain(
+        node,
+        agent_did,
+        Some(behavior_id),
+        backend_id,
+        endpoint,
+        model_name,
+    )
+    .await;
+}
+
+async fn bind_behavior_backend_chain(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: Option<&str>,
+    backend_id: &str,
+    endpoint: &str,
+    model_name: &str,
+) {
     ensure_agent_principal(node, agent_did).await.unwrap();
-    gents::config_client::ConfigAccess::transact_local(node, None, "test.bind_default_inference", |txn| {
-        Box::pin(async move {
-            use gents::config_client::{read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan};
-            use gents::Collection;
-            let (_, mut principal) = read(txn, Collection::AgentPrincipal, agent_did, agent_did)
-                .await?.expect("principal");
-            let behavior_id = principal["default_behavior_id"].as_str().unwrap_or("default").to_owned();
-            principal["default_behavior_id"] = behavior_id.clone().into();
-            let mut behavior = read(txn, Collection::AgentBehavior, agent_did, &behavior_id).await?
-                .map(|(_, value)| value).unwrap_or_else(|| serde_json::json!({
-                    "agent_did": agent_did, "behavior_id": behavior_id
-                }));
-            let profile_id = behavior["inference_profile_id"].as_str().map(str::to_owned)
-                .unwrap_or_else(|| format!("{behavior_id}-inference"));
-            behavior["inference_profile_id"] = profile_id.clone().into();
-            let mut profile = read(txn, Collection::InferenceProfile, agent_did, &profile_id).await?
-                .map(|(_, value)| value).unwrap_or_else(|| serde_json::json!({
-                    "agent_did": agent_did, "profile_id": profile_id, "model_name": "default"
-                }));
-            profile["backend_id"] = backend_id.into();
-            let mut backend = read(txn, Collection::InferenceBackend, agent_did, backend_id).await?
-                .map(|(_, value)| value).unwrap_or_else(|| serde_json::json!({
-                    "agent_did": agent_did, "backend_id": backend_id, "name": backend_id,
-                    "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
-                    "auth": {"kind": "unauthenticated"}
-                }));
-            backend["endpoint"] = endpoint.into();
-            backend["max_concurrent"] = 1.into();
-            backend["enabled"] = true.into();
-            let plan = DesiredStateApplyPlan::new([
-                (Collection::AgentPrincipal, principal),
-                (Collection::InferenceBackend, backend),
-                (Collection::InferenceProfile, profile),
-                (Collection::AgentBehavior, behavior),
-            ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {
-                collection, add: value.clone(), update: value,
-            }).collect())?;
-            gents::config_client::apply_desired_state_plan(txn, &plan).await
-        })
-    }).await.unwrap();
+    gents::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "test.bind_behavior_inference",
+        |txn| {
+            Box::pin(async move {
+                use gents::config_client::{
+                    read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
+                    DesiredStateApplyPlan,
+                };
+                use gents::Collection;
+
+                let (_, mut principal) =
+                    read(txn, Collection::AgentPrincipal, agent_did, agent_did)
+                        .await?
+                        .expect("principal");
+                let behavior_id = behavior_id
+                    .map(str::to_owned)
+                    .or_else(|| principal["default_behavior_id"].as_str().map(str::to_owned))
+                    .unwrap_or_else(|| gents::default_behavior_id_for_agent(agent_did));
+                principal["default_behavior_id"] = behavior_id.clone().into();
+
+                let mut behavior = read(txn, Collection::AgentBehavior, agent_did, &behavior_id)
+                    .await?
+                    .map(|(_, value)| value)
+                    .unwrap_or_else(|| {
+                        serde_json::json!({
+                            "agent_did": agent_did,
+                            "behavior_id": behavior_id,
+                            "enabled": true
+                        })
+                    });
+                let profile_id = behavior["inference_profile_id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("{behavior_id}-inference"));
+                behavior["inference_profile_id"] = profile_id.clone().into();
+                behavior["enabled"] = true.into();
+
+                let mut profile = read(txn, Collection::InferenceProfile, agent_did, &profile_id)
+                    .await?
+                    .map(|(_, value)| value)
+                    .unwrap_or_else(|| {
+                        serde_json::json!({
+                            "agent_did": agent_did,
+                            "profile_id": profile_id
+                        })
+                    });
+                profile["backend_id"] = backend_id.into();
+                profile["model_name"] = model_name.into();
+
+                let mut backend = read(txn, Collection::InferenceBackend, agent_did, backend_id)
+                    .await?
+                    .map(|(_, value)| value)
+                    .unwrap_or_else(|| {
+                        serde_json::json!({
+                            "agent_did": agent_did,
+                            "backend_id": backend_id,
+                            "name": backend_id,
+                            "provider_kind": "OpenAiCompatible",
+                            "openai_wire_api": "chat_completions",
+                            "auth": {"kind": "unauthenticated"}
+                        })
+                    });
+                backend["endpoint"] = endpoint.into();
+                backend["max_concurrent"] = 1.into();
+                backend["max_queue_depth"] = 100.into();
+                backend["enabled"] = true.into();
+
+                let plan = DesiredStateApplyPlan::new(
+                    [
+                        (Collection::AgentPrincipal, principal),
+                        (Collection::InferenceBackend, backend),
+                        (Collection::InferenceProfile, profile),
+                        (Collection::AgentBehavior, behavior),
+                    ]
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+                )?;
+                gents::config_client::apply_desired_state_plan(txn, &plan).await
+            })
+        },
+    )
+    .await
+    .unwrap();
     gents::backend_registry::set_backend_probe_status(node, agent_did, backend_id, "healthy")
         .await
         .unwrap();

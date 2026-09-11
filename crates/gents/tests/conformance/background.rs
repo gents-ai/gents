@@ -87,8 +87,9 @@ async fn setup_background_tool_hook(
         None,
     )
     .await;
-    support::create_agent_session(
+    support::create_agent_session_in_scope(
         db.node.as_ref(),
+        &agent_did,
         &session_id,
         "r6-background-theorem",
         "2026-05-19T00:00:00Z",
@@ -170,8 +171,9 @@ async fn setup_background_spawn_fixture(
         parent_deadline,
     )
     .await;
-    support::create_agent_session(
+    support::create_agent_session_in_scope(
         db.node.as_ref(),
+        &agent_did,
         &session_id,
         BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
         "2026-05-19T00:00:00Z",
@@ -359,11 +361,6 @@ async fn fetch_background_theorem_child_request_optional(
                 behavior_id
                 session_id
                 content
-                temperature
-                top_p
-                top_k
-                seed
-                max_tokens
                 input
                 execution_origin
                 created_at
@@ -930,8 +927,13 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
         reserve.errors
     );
 
-    persist_bridge_step_child_completion(db.node.as_ref(), &child_request_id, &child_session_id)
-        .await;
+    persist_bridge_step_child_completion(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        &child_request_id,
+        &child_session_id,
+    )
+    .await;
 
     let outcome = project_background_subagent_completion(
         db.node.clone(),
@@ -1801,6 +1803,7 @@ async fn drive_bridge_step_projection_case(case: &lean_vocab_test::LeanBridgeSte
         "completed" => {
             persist_bridge_step_child_completion(
                 db.node.as_ref(),
+                db.node_identity.did(),
                 &child_request_id,
                 &child_session_id,
             )
@@ -1992,10 +1995,12 @@ async fn fetch_bridge_step_tool_state(node: &EmbeddedNode, tool_call_id: &str) -
 
 async fn persist_bridge_step_child_completion(
     node: &EmbeddedNode,
+    agent_did: &str,
     child_request_id: &str,
     child_session_id: &str,
 ) {
     set_request_lifecycle_state_by_request_id(node, child_request_id, "completed").await;
+    let child_request_doc_id = crate::support::exact_request_doc_id(node, child_request_id).await;
 
     let assistant = Message::Assistant {
         id: None,
@@ -2006,12 +2011,17 @@ async fn persist_bridge_step_child_completion(
     let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
     let escaped_child_session_id = escape_graphql_string(child_session_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let now = chrono::Utc::now().to_rfc3339();
     let create_message = format!(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{escaped_child_session_id}:1",
+                agent_did: "{escaped_agent_did}",
                 session_id: "{escaped_child_session_id}",
+                request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_child_request_doc_id}",
                 sequence: 1,
                 role: "assistant",
                 content: "{escaped_message}",
@@ -2031,7 +2041,8 @@ async fn persist_bridge_step_child_completion(
             create_AgentResponse(input: {{
                 response_key: "{escaped_child_request_id}",
                 request_id: "{escaped_child_request_id}",
-                agent_did: "{AGENT_DID}",
+                request_doc_id: "{escaped_child_request_doc_id}",
+                agent_did: "{escaped_agent_did}",
                 behavior_id: "bridge-step-child",
                 session_id: "{escaped_child_session_id}",
                 content: "",
@@ -2098,6 +2109,11 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
             None,
         )
         .await;
+        let mut session_doc =
+            session_document(session, crate::support::AGENT_NAME, "2026-07-15T00:00:00Z");
+        session_doc.agent_did = did.to_owned();
+        session_doc.requester_did = redrive.then(|| did.to_owned());
+        create_session_document(&db.node, &session_doc).await;
         if let Some(status) = status {
             set_goal(
                 &db.node,
@@ -2148,7 +2164,7 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
             let escaped_failed_wake = escape_graphql_string(&failed_wake);
             let escaped_source_deadline = escape_graphql_string(&source_deadline);
             let response = db.node.execute(&format!(r#"mutation {{
-                create_AgentRequest(input: {{ request_id: "{escaped_failed_wake}", agent_did: "{}",
+                create_AgentRequest(input: {{ request_id: "{escaped_failed_wake}", agent_did: "{}", requester_did: "{}",
                     behavior_id: "{}", session_id: "{session}", content: "background input",
                     input: {input}, execution_origin: "scheduled", lifecycle_state: "failed",
                     failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",
@@ -2157,23 +2173,24 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
                     backend_id: "{}", subagent_depth: {source_depth}, deadline: "{escaped_source_deadline}",
                     caused_by_parent_request_id: "{escaped_parent}",
                     caused_by_parent_request_doc_id: "{escaped_parent_doc}"
-                }}) {{ _docID }} }}"#, escape_graphql_string(did),
+                }}) {{ _docID }} }}"#, escape_graphql_string(did), escape_graphql_string(did),
                 crate::support::AGENT_NAME, crate::support::BACKEND_ID)).await;
             assert!(!response.has_errors(), "{:?}", response.errors);
-            // Observation is deliberately absent: authoritative request rows,
-            // not a conversation/cache head, must govern recovery eligibility.
-            let mut session_doc =
-                session_document(session, crate::support::AGENT_NAME, "2026-07-15T00:00:00Z");
-            session_doc.agent_did = did.to_owned();
-            create_session_document(&db.node, &session_doc).await;
+            crate::support::seed_session_observation_from_request(
+                &db.node,
+                session,
+                &failed_wake,
+                "background input",
+            )
+            .await;
             let first = gents::RequestLifecycle::redrive_failed_background_wakeups(&db.node, did)
                 .await
                 .unwrap();
             assert_eq!(
                 first.redriven > 0,
                 case.redrive_allowed.unwrap(),
-                "{}",
-                case.name
+                "{}: {first:?}",
+                case.name,
             );
             assert_eq!(first.failed, 0);
             let second = gents::RequestLifecycle::redrive_failed_background_wakeups(&db.node, did)
@@ -2278,7 +2295,8 @@ async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6Background
                 "bash".into(),
                 "{}".into(),
                 chrono::Utc::now() + chrono::Duration::minutes(5),
-            );
+            )
+            .with_request_doc_id(Some(parent_doc.clone()));
             tool.start_running().await.unwrap();
             assert!(tool
                 .bridge_complete("durable native output".into())
@@ -2378,6 +2396,14 @@ async fn cross_agent_process_controls_preserve_the_owners_running_job() {
     let args = json!({ "tool_call_id": tool_call_id }).to_string();
     let foreign_did = "did:key:foreign-process-agent";
     assert_ne!(db.node_identity.did(), foreign_did);
+    support::create_agent_session_in_scope(
+        db.node.as_ref(),
+        foreign_did,
+        &session_id,
+        "r6-background-theorem",
+        "2026-05-19T00:00:00Z",
+    )
+    .await;
     let foreign = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         &session_id,

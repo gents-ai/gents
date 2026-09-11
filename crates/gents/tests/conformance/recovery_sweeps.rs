@@ -152,29 +152,76 @@ async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase
 
 async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let agent_did = db.node_identity.did().to_string();
     let parent_request_id = format!("{}-parent", case.name);
     let parent_session_id = format!("{}-parent-session", case.name);
-    create_request(
+    crate::support::fixtures::configure_subagent_behavior(
         &db.node,
+        &agent_did,
+        AGENT_NAME,
+        &format!("{}-tools", case.name),
+        Vec::new(),
+        true,
+        true,
+        None,
+    )
+    .await;
+    crate::support::create_agent_session_in_scope(
+        &db.node,
+        &agent_did,
+        &parent_session_id,
+        AGENT_NAME,
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    let parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
+        &db.node,
+        &agent_did,
         &parent_request_id,
         &parent_session_id,
         "processing",
         RECOVERY_CREATED_AT,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    set_request_deadline(
+        &db.node,
+        &parent_doc_id,
+        &(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
     )
     .await;
 
     let child_request_id = format!("{}-child", case.name);
     let child_session_id = format!("{child_request_id}-session");
-    let child_doc_id = create_request(
+    let tool_call_id = format!("{}-bridge", case.name);
+    let bridge_doc_id = start_running_background_bridge(
+        db.node.clone(),
+        &agent_did,
+        &parent_request_id,
+        &parent_doc_id,
+        &parent_session_id,
+        &tool_call_id,
+        1,
+        &child_request_id,
+    )
+    .await;
+    let child_doc_id = create_linked_pending_child(
         &db.node,
+        &agent_did,
         &child_request_id,
         &child_session_id,
-        "pending",
-        RECOVERY_CREATED_AT,
+        &parent_request_id,
+        Some(&parent_doc_id),
+        &tool_call_id,
+        Some(&bridge_doc_id),
     )
     .await;
     let _child_owner = own_child_fixture(
         &db.node,
+        &agent_did,
         &child_doc_id,
         &child_request_id,
         &child_session_id,
@@ -188,18 +235,7 @@ async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoveryS
     )
     .await;
 
-    let tool_call_id = format!("{}-bridge", case.name);
-    start_running_background_bridge(
-        db.node.clone(),
-        &parent_request_id,
-        &parent_session_id,
-        &tool_call_id,
-        1,
-        &child_request_id,
-    )
-    .await;
-
-    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(
@@ -228,7 +264,7 @@ async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoveryS
         case.name
     );
 
-    let second = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+    let second = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, &agent_did)
         .await
         .unwrap();
     assert!(
@@ -254,53 +290,67 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
 
     let tool_call_id = format!("{}-bridge", case.name);
     let child_request_id = format!("{}-child", case.name);
-    create_linked_pending_child(
-        &db.node,
-        &child_request_id,
-        &format!("{child_request_id}-session"),
-        &parent_request_id,
-        &tool_call_id,
-    )
-    .await;
-    start_running_background_bridge(
+    let bridge_doc_id = start_running_background_bridge(
         db.node.clone(),
+        AGENT_DID,
         &parent_request_id,
+        &parent_doc_id,
         &parent_session_id,
         &tool_call_id,
         1,
         &child_request_id,
+    )
+    .await;
+    create_linked_pending_child(
+        &db.node,
+        AGENT_DID,
+        &child_request_id,
+        &format!("{child_request_id}-session"),
+        &parent_request_id,
+        Some(&parent_doc_id),
+        &tool_call_id,
+        Some(&bridge_doc_id),
     )
     .await;
 
     let bystander_request_id = format!("{}-wake", case.name);
     create_linked_pending_child(
         &db.node,
+        AGENT_DID,
         &bystander_request_id,
         &parent_session_id,
         &parent_request_id,
+        None,
         &tool_call_id,
+        None,
     )
     .await;
 
     let remote_parent_request_id = format!("{}-remote-parent", case.name);
-    create_remote_terminal_parent(&db.node, &remote_parent_request_id).await;
+    let remote_parent_doc_id =
+        create_remote_terminal_parent(&db.node, &remote_parent_request_id).await;
     let remote_tool_call_id = format!("{}-remote-bridge", case.name);
     let remote_child_request_id = format!("{}-remote-child", case.name);
-    create_linked_pending_child(
-        &db.node,
-        &remote_child_request_id,
-        &format!("{remote_child_request_id}-session"),
-        &remote_parent_request_id,
-        &remote_tool_call_id,
-    )
-    .await;
-    start_running_background_bridge(
+    let remote_bridge_doc_id = start_running_background_bridge(
         db.node.clone(),
+        AGENT_DID,
         &remote_parent_request_id,
+        &remote_parent_doc_id,
         &format!("{remote_parent_request_id}-session"),
         &remote_tool_call_id,
         1,
         &remote_child_request_id,
+    )
+    .await;
+    create_linked_pending_child(
+        &db.node,
+        AGENT_DID,
+        &remote_child_request_id,
+        &format!("{remote_child_request_id}-session"),
+        &remote_parent_request_id,
+        Some(&remote_parent_doc_id),
+        &remote_tool_call_id,
+        Some(&remote_bridge_doc_id),
     )
     .await;
 
@@ -385,7 +435,15 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
         },
     )
     .await;
-    let _owner = own_child_fixture(&db.node, &request_doc_id, request_id, session_id, true).await;
+    let _owner = own_child_fixture(
+        &db.node,
+        AGENT_DID,
+        &request_doc_id,
+        request_id,
+        session_id,
+        true,
+    )
+    .await;
     seed_expired_execution_tuple(&db.node, &request_doc_id).await;
     insert_inference_call(&db.node, request_id, "running").await;
 
@@ -469,7 +527,8 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         .await;
         // Retain the fixture owner: dropping it would relinquish the lease,
         // unlike the hard process loss represented by these persisted rows.
-        let _owner = own_child_fixture(&db.node, &doc_id, &request_id, &session_id, true).await;
+        let _owner =
+            own_child_fixture(&db.node, AGENT_DID, &doc_id, &request_id, &session_id, true).await;
         insert_inference_call(&db.node, &request_id, initial_call_state).await;
         let startup = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
         startup.tool_calls.expect("startup tool recovery");
@@ -555,32 +614,79 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
 
 pub(super) async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero() {
     let db = test_db("recovery-465-convergence").await;
+    let agent_did = db.node_identity.did().to_string();
+    crate::support::fixtures::configure_subagent_behavior(
+        &db.node,
+        &agent_did,
+        AGENT_NAME,
+        "recovery-465-subagent-tools",
+        Vec::new(),
+        true,
+        true,
+        None,
+    )
+    .await;
 
     let parent_request_id = "convergence-465-parent";
     let parent_session_id = "convergence-465-parent-session";
-    create_request(
+    crate::support::create_agent_session_in_scope(
         &db.node,
+        &agent_did,
+        parent_session_id,
+        AGENT_NAME,
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    let parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
+        &db.node,
+        &agent_did,
         parent_request_id,
         parent_session_id,
         "processing",
         RECOVERY_CREATED_AT,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    set_request_deadline(
+        &db.node,
+        &parent_doc_id,
+        &(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
     )
     .await;
 
     let mut child_owners = Vec::new();
     for index in 1..=2 {
         let child_request_id = format!("convergence-465-child-{index}");
-        let child_doc_id = create_request(
+        let bridge_id = format!("convergence-465-bridge-{index}");
+        let bridge_doc_id = start_running_background_bridge(
+            db.node.clone(),
+            &agent_did,
+            parent_request_id,
+            &parent_doc_id,
+            parent_session_id,
+            &bridge_id,
+            index,
+            &child_request_id,
+        )
+        .await;
+        let child_doc_id = create_linked_pending_child(
             &db.node,
+            &agent_did,
             &child_request_id,
             &format!("{child_request_id}-session"),
-            "pending",
-            RECOVERY_CREATED_AT,
+            parent_request_id,
+            Some(&parent_doc_id),
+            &bridge_id,
+            Some(&bridge_doc_id),
         )
         .await;
         child_owners.push(
             own_child_fixture(
                 &db.node,
+                &agent_did,
                 &child_doc_id,
                 &child_request_id,
                 &format!("{child_request_id}-session"),
@@ -594,43 +700,52 @@ pub(super) async fn subagent_liveness_reconciliation_converges_expired_processin
             &(chrono::Utc::now() - chrono::Duration::seconds(5)).to_rfc3339(),
         )
         .await;
-        start_running_background_bridge(
-            db.node.clone(),
-            parent_request_id,
-            parent_session_id,
-            &format!("convergence-465-bridge-{index}"),
-            index,
-            &child_request_id,
-        )
-        .await;
     }
 
     let terminal_parent_request_id = "convergence-465-done-parent";
-    let terminal_parent_doc_id = create_request(
+    crate::support::create_agent_session_in_scope(
         &db.node,
+        &agent_did,
+        "convergence-465-done-parent-session",
+        AGENT_NAME,
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    let terminal_parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
+        &db.node,
+        &agent_did,
         terminal_parent_request_id,
         "convergence-465-done-parent-session",
         "processing",
         RECOVERY_CREATED_AT,
+        None,
+        None,
+        None,
+        None,
     )
     .await;
     set_request_lifecycle_state(&db.node, &terminal_parent_doc_id, "completed").await;
     let queued_child_request_id = "convergence-465-queued-child";
-    create_linked_pending_child(
-        &db.node,
-        queued_child_request_id,
-        "convergence-465-queued-child-session",
-        terminal_parent_request_id,
-        "convergence-465-done-bridge",
-    )
-    .await;
-    start_running_background_bridge(
+    let done_bridge_doc_id = start_running_background_bridge(
         db.node.clone(),
+        &agent_did,
         terminal_parent_request_id,
+        &terminal_parent_doc_id,
         "convergence-465-done-parent-session",
         "convergence-465-done-bridge",
         1,
         queued_child_request_id,
+    )
+    .await;
+    create_linked_pending_child(
+        &db.node,
+        &agent_did,
+        queued_child_request_id,
+        "convergence-465-queued-child-session",
+        terminal_parent_request_id,
+        Some(&terminal_parent_doc_id),
+        "convergence-465-done-bridge",
+        Some(&done_bridge_doc_id),
     )
     .await;
 
@@ -640,7 +755,7 @@ pub(super) async fn subagent_liveness_reconciliation_converges_expired_processin
         "wedge precondition: expired processing children visible to status"
     );
 
-    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(report.expired_children_terminalized, 2);
@@ -708,7 +823,7 @@ async fn count_expired_active_requests(node: &EmbeddedNode) -> usize {
         .count()
 }
 
-async fn create_remote_terminal_parent(node: &EmbeddedNode, request_id: &str) {
+async fn create_remote_terminal_parent(node: &EmbeddedNode, request_id: &str) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let mutation = format!(
         r#"mutation {{
@@ -736,21 +851,24 @@ async fn create_remote_terminal_parent(node: &EmbeddedNode, request_id: &str) {
         "create remote terminal parent failed: {:?}",
         resp.errors
     );
+    crate::support::exact_request_doc_id(node, request_id).await
 }
 
 async fn start_running_background_bridge(
     node: Arc<EmbeddedNode>,
+    agent_did: &str,
     parent_request_id: &str,
+    parent_request_doc_id: &str,
     parent_session_id: &str,
     tool_call_id: &str,
     sequence: u32,
     child_request_id: &str,
-) {
+) -> String {
     let mut bridge = ToolCallLifecycle::new_subagent(
-        node,
+        node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        agent_did.to_string(),
         tool_call_id.to_string(),
         sequence,
         "spawn_subagent".to_string(),
@@ -759,9 +877,11 @@ async fn start_running_background_bridge(
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
-        "did:test:target".to_string(),
+        agent_did.to_string(),
     );
+    bridge = bridge.with_request_doc_id(Some(parent_request_doc_id.to_string()));
     bridge.start_running().await.unwrap();
+    bridge.doc_id().expect("bridge document id").to_string()
 }
 
 async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str) {
@@ -785,20 +905,40 @@ async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str)
 
 async fn create_linked_pending_child(
     node: &EmbeddedNode,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     parent_request_id: &str,
+    parent_request_doc_id: Option<&str>,
     parent_tool_call_id: &str,
-) {
+    parent_tool_call_doc_id: Option<&str>,
+) -> String {
+    crate::support::create_agent_session_in_scope(
+        node,
+        agent_did,
+        session_id,
+        AGENT_NAME,
+        RECOVERY_CREATED_AT,
+    )
+    .await;
     let escaped_request_id = escape_graphql_string(request_id);
+    let agent_did = escape_graphql_string(agent_did);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_parent_request_id = escape_graphql_string(parent_request_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
+    let parent_request_doc_id = parent_request_doc_id
+        .map(escape_graphql_string)
+        .map(|value| format!(r#"caused_by_parent_request_doc_id: "{value}","#))
+        .unwrap_or_default();
+    let parent_tool_call_doc_id = parent_tool_call_doc_id
+        .map(escape_graphql_string)
+        .map(|value| format!(r#"caused_by_parent_tool_call_doc_id: "{value}","#))
+        .unwrap_or_default();
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
-                agent_did: "{AGENT_DID}",
+                agent_did: "{agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
@@ -813,7 +953,9 @@ async fn create_linked_pending_child(
                 max_retries: 3,
                 subagent_depth: 1,
                 caused_by_parent_request_id: "{escaped_parent_request_id}",
-                caused_by_parent_tool_call_id: "{escaped_parent_tool_call_id}"
+                {parent_request_doc_id}
+                caused_by_parent_tool_call_id: "{escaped_parent_tool_call_id}",
+                {parent_tool_call_doc_id}
             }}) {{ _docID }}
         }}"#
     );
@@ -823,6 +965,7 @@ async fn create_linked_pending_child(
         "create linked pending child failed: {:?}",
         resp.errors
     );
+    crate::support::exact_request_doc_id(node, request_id).await
 }
 
 async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
@@ -980,6 +1123,17 @@ async fn drive_response_recovery_case(case: &lean_vocab_test::LeanRecoverySweepC
 async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
     let agent_did = db.node_identity.did().to_string();
+    crate::support::fixtures::configure_subagent_behavior(
+        &db.node,
+        &agent_did,
+        AGENT_NAME,
+        &format!("{}-tools", case.name),
+        Vec::new(),
+        true,
+        true,
+        None,
+    )
+    .await;
     let parent_request_id = format!("{}-parent", case.name);
     let parent_session_id = format!("{}-parent-session", case.name);
     let tool_call_id = format!("{}-tool", case.name);
@@ -1219,6 +1373,14 @@ async fn seed_tool_parent_and_row(
     tool_call_id: &str,
     agent_did: &str,
 ) {
+    crate::support::create_agent_session_in_scope(
+        &node,
+        agent_did,
+        parent_session_id,
+        AGENT_NAME,
+        RECOVERY_CREATED_AT,
+    )
+    .await;
     let parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
         &node,
         agent_did,
@@ -1233,11 +1395,13 @@ async fn seed_tool_parent_and_row(
     )
     .await;
     let future_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    set_request_deadline(&node, &parent_doc_id, &future_deadline.to_rfc3339()).await;
     let past_deadline = chrono::Utc::now() - chrono::Duration::seconds(5);
     let is_orphan_case = case.sweep_id == "tool_call_lifecycle_reconcile_orphaned_background_tools";
     let parent_observed = case.parent_live == Some(true)
         || case.parent_interrupted == Some(true)
         || case.parent_terminal == Some(true);
+    let mut child_fixture = None;
     let mut lifecycle = if is_orphan_case {
         ToolCallLifecycle::new_background_tool(
             node.clone(),
@@ -1282,7 +1446,7 @@ async fn seed_tool_parent_and_row(
                     "tool_running_child_interrupted_to_cancelled" => "interrupted",
                     _ => unreachable!(),
                 };
-                seed_child_request(&node, &child_request_id, child_state).await;
+                child_fixture = Some((child_request_id.clone(), child_state));
                 ToolCallLifecycle::new_subagent(
                     node.clone(),
                     parent_request_id.to_string(),
@@ -1296,7 +1460,7 @@ async fn seed_tool_parent_and_row(
                     AwaitMode::Foreground,
                     CancelPolicy::Cascade,
                     child_request_id,
-                    "did:test:target".to_string(),
+                    agent_did.to_string(),
                 )
             }
             "detached_bridge_child_completed_to_completed"
@@ -1311,7 +1475,7 @@ async fn seed_tool_parent_and_row(
                     "detached_bridge_child_interrupted_to_cancelled" => "interrupted",
                     _ => "processing",
                 };
-                seed_child_request(&node, &child_request_id, child_state).await;
+                child_fixture = Some((child_request_id.clone(), child_state));
                 if case.name == "detached_bridge_terminal_parent_to_failed" {
                     set_request_lifecycle_state(&node, &parent_doc_id, "failed").await;
                 }
@@ -1332,7 +1496,7 @@ async fn seed_tool_parent_and_row(
                     AwaitMode::Background,
                     CancelPolicy::Detach,
                     child_request_id,
-                    "did:test:target".to_string(),
+                    agent_did.to_string(),
                 )
             }
             "tool_running_deadline_exceeded_to_timed_out" => ToolCallLifecycle::new(
@@ -1379,7 +1543,7 @@ async fn seed_tool_parent_and_row(
             "live_detached_bridge_parent_failed_to_failed" => {
                 set_request_lifecycle_state(&node, &parent_doc_id, "failed").await;
                 let child_request_id = format!("{tool_call_id}-detached-child");
-                seed_child_request(&node, &child_request_id, "processing").await;
+                child_fixture = Some((child_request_id.clone(), "processing"));
                 ToolCallLifecycle::new_subagent(
                     node.clone(),
                     parent_request_id.to_string(),
@@ -1393,7 +1557,7 @@ async fn seed_tool_parent_and_row(
                     AwaitMode::Background,
                     CancelPolicy::Detach,
                     child_request_id,
-                    "did:test:target".to_string(),
+                    agent_did.to_string(),
                 )
             }
             "tool_running_unclaimed_cross_principal_spawn_to_failed" => {
@@ -1417,7 +1581,21 @@ async fn seed_tool_parent_and_row(
             other => panic!("unhandled tool recovery case {other}"),
         }
     };
+    lifecycle = lifecycle.with_request_doc_id(Some(parent_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
+    if let Some((child_request_id, child_state)) = child_fixture {
+        seed_linked_child_request(
+            &node,
+            agent_did,
+            &child_request_id,
+            child_state,
+            parent_request_id,
+            &parent_doc_id,
+            tool_call_id,
+            lifecycle.doc_id().expect("bridge document id"),
+        )
+        .await;
+    }
 
     if case.name == "tool_running_unclaimed_cross_principal_spawn_to_failed"
         || case.unclaimed_expired == Some(true)
@@ -1443,65 +1621,62 @@ async fn seed_tool_parent_and_row(
     }
 }
 
-async fn seed_child_request(node: &EmbeddedNode, request_id: &str, lifecycle_state: &str) {
-    let session_id = format!("{request_id}-session");
-    match lifecycle_state {
-        "completed" => {
-            create_request(
-                node,
-                request_id,
-                &session_id,
-                "completed",
-                RECOVERY_CREATED_AT,
-            )
-            .await;
-            create_response_with_content_and_status(
-                node,
-                request_id,
-                request_id,
-                &session_id,
-                "child final answer",
-                "complete",
-            )
-            .await;
+#[allow(clippy::too_many_arguments)]
+async fn seed_linked_child_request(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    lifecycle_state: &str,
+    parent_request_id: &str,
+    parent_request_doc_id: &str,
+    parent_tool_call_id: &str,
+    parent_tool_call_doc_id: &str,
+) {
+    gents::tool_call_lifecycle::create_subagent_request_with_request_id(
+        node,
+        request_id.to_string(),
+        parent_request_id.to_string(),
+        parent_request_doc_id.to_string(),
+        parent_tool_call_id.to_string(),
+        parent_tool_call_doc_id.to_string(),
+        0,
+        agent_did.to_string(),
+        AGENT_NAME.to_string(),
+        "recovery child prompt".to_string(),
+        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
+    )
+    .await
+    .expect("create physically linked recovery child");
+
+    let child_doc_id = crate::support::exact_request_doc_id(node, request_id).await;
+    set_request_lifecycle_state(node, &child_doc_id, lifecycle_state).await;
+    if lifecycle_state == "completed" {
+        #[derive(Deserialize)]
+        struct ChildSessionRow {
+            session_id: String,
         }
-        "failed" => {
-            create_request(node, request_id, &session_id, "failed", RECOVERY_CREATED_AT).await;
-        }
-        "interrupted" => {
-            let doc_id = create_request(
-                node,
-                request_id,
-                &session_id,
-                "processing",
-                RECOVERY_CREATED_AT,
-            )
+        let child_doc_id_escaped = escape_graphql_string(&child_doc_id);
+        let response = node
+            .execute(&format!(
+                r#"{{
+                    AgentRequest(
+                        filter: {{ _docID: {{ _eq: "{child_doc_id_escaped}" }} }},
+                        limit: 1
+                    ) {{ session_id }}
+                }}"#
+            ))
             .await;
-            set_request_lifecycle_state(node, &doc_id, "interrupted").await;
-        }
-        "dead" => {
-            let doc_id = create_request(
-                node,
-                request_id,
-                &session_id,
-                "processing",
-                RECOVERY_CREATED_AT,
-            )
-            .await;
-            set_request_lifecycle_state(node, &doc_id, "dead").await;
-        }
-        "processing" => {
-            create_request(
-                node,
-                request_id,
-                &session_id,
-                "processing",
-                RECOVERY_CREATED_AT,
-            )
-            .await;
-        }
-        other => panic!("unsupported child lifecycle state {other}"),
-    };
+        let child_session_id = first_row::<ChildSessionRow>(&response, "AgentRequest").session_id;
+        create_response_with_content_and_status(
+            node,
+            request_id,
+            request_id,
+            &child_session_id,
+            "child final answer",
+            "complete",
+        )
+        .await;
+    }
 }
 
 async fn set_tool_unclaimed_deadline(node: &EmbeddedNode, tool_call_id: &str, at: &str) {
@@ -1742,7 +1917,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
 
     // Parent per the Lean observation vocabulary. `missing` seeds no parent
     // row at all: the bridge's request_id resolves to nothing.
-    if case.parent_observation != "missing" {
+    let parent_doc_id = if case.parent_observation != "missing" {
         let parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
             &db.node,
             &agent_did,
@@ -1769,7 +1944,10 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             }
             other => panic!("unhandled parent observation {other}"),
         }
-    }
+        Some(parent_doc_id)
+    } else {
+        None
+    };
 
     let deadline = if case.deadline_expired {
         chrono::Utc::now() - chrono::Duration::seconds(5)
@@ -1787,11 +1965,14 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
         other => panic!("unhandled cancel policy {other}"),
     };
 
+    let mut linked_child_request_id = None;
     let mut lifecycle = if case.child_linked {
         // Non-terminal child: rows reaching the classifier have no durable
         // child terminal (child precedence is covered by the sweep cases).
         let child_request_id = format!("{tool_call_id}-child");
-        seed_child_request(&db.node, &child_request_id, "processing").await;
+        if parent_doc_id.is_some() {
+            linked_child_request_id = Some(child_request_id.clone());
+        }
         ToolCallLifecycle::new_subagent(
             db.node.clone(),
             parent_request_id.clone(),
@@ -1805,7 +1986,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             await_mode,
             cancel_policy,
             child_request_id,
-            "did:test:target".to_string(),
+            agent_did.clone(),
         )
     } else if await_mode == AwaitMode::Background {
         assert_eq!(
@@ -1836,7 +2017,25 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             deadline,
         )
     };
+    if let Some(parent_doc_id) = parent_doc_id.as_ref() {
+        lifecycle = lifecycle.with_request_doc_id(Some(parent_doc_id.clone()));
+    }
     lifecycle.start_running().await.unwrap();
+    if let Some(child_request_id) = linked_child_request_id.as_ref() {
+        seed_linked_child_request(
+            &db.node,
+            &agent_did,
+            child_request_id,
+            "processing",
+            &parent_request_id,
+            parent_doc_id
+                .as_deref()
+                .expect("linked child parent document"),
+            &tool_call_id,
+            lifecycle.doc_id().expect("linked bridge document"),
+        )
+        .await;
+    }
     if case.unclaimed_expired {
         set_tool_unclaimed_deadline(&db.node, &tool_call_id, "2020-01-01T00:00:00Z").await;
     }
@@ -2043,21 +2242,23 @@ async fn load_restart_wake_rows(
 
 async fn own_child_fixture(
     node: &Arc<defra_node::EmbeddedNode>,
+    agent_did: &str,
     doc_id: &str,
     request_id: &str,
     session_id: &str,
     processing: bool,
 ) -> RequestLifecycle {
-    let request = build_request(
+    let mut request = build_request(
         doc_id.to_owned(),
         request_id.to_owned(),
         session_id.to_owned(),
         RECOVERY_CREATED_AT.to_owned(),
     );
+    request.agent_did = agent_did.to_owned();
     let mut owner = RequestLifecycle::new_with_agent_did(
         node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        agent_did,
         request,
         DEADLINE_SECS,
     );
@@ -2112,22 +2313,6 @@ async fn recovery_cascade_writes_remote_intent_for_foreign_child() {
         RECOVERY_CREATED_AT,
     )
     .await;
-    // The child row EXISTS but is owned by the remote principal: the recovery
-    // owner must neither latch nor terminalize it.
-    let _foreign_child = crate::support::create_request_for_agent_with_signed_fields(
-        &db.node,
-        foreign_did,
-        child_request_id,
-        &format!("{child_request_id}-session"),
-        "processing",
-        RECOVERY_CREATED_AT,
-        None,
-        None,
-        None,
-        None,
-    )
-    .await;
-
     let mut bridge = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
@@ -2143,7 +2328,23 @@ async fn recovery_cascade_writes_remote_intent_for_foreign_child() {
         child_request_id.to_string(),
         foreign_did.to_string(),
     );
+    bridge = bridge.with_request_doc_id(Some(parent_doc_id.clone()));
     bridge.start_running().await.unwrap();
+    let bridge_doc_id = bridge.doc_id().expect("bridge document id").to_string();
+    // The physically linked child exists under the remote principal: recovery
+    // may publish cancellation intent on the local bridge but cannot mutate it.
+    let foreign_child_doc_id = create_linked_pending_child(
+        &db.node,
+        foreign_did,
+        child_request_id,
+        &format!("{child_request_id}-session"),
+        parent_request_id,
+        Some(&parent_doc_id),
+        tool_call_id,
+        Some(&bridge_doc_id),
+    )
+    .await;
+    set_request_lifecycle_state(&db.node, &foreign_child_doc_id, "processing").await;
     set_request_lifecycle_state(&db.node, &parent_doc_id, "interrupted").await;
 
     let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
