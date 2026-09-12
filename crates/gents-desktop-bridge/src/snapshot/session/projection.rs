@@ -106,7 +106,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 .flatten()
         });
     let retry_eligibility = project_retry_eligibility(latest_request);
-    let turn_state = latest_request_id
+    let request_turn_state = latest_request_id
         .as_deref()
         .and_then(|request_id| {
             agent_did.map_or_else(
@@ -121,6 +121,27 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 None
             }
         });
+    // AgentSession's observation is the canonical index projection of the
+    // exact latest AgentRequest identity. A desktop replica can still hold an
+    // older request row while operator GraphQL has already advanced both the
+    // request and session. Let the exact observation advance (never regress)
+    // the detailed turn projection until the request row catches up.
+    let observed_turn_state = session_row
+        .and_then(|session| session.observation.as_ref())
+        .and_then(|observation| observation.latest_request.as_ref())
+        .filter(|observation| latest_request_id.as_deref() == Some(observation.request_id.as_str()))
+        .and_then(|observation| {
+            gents_protocol::client_protocol::derive_persisted_attempt(
+                observation.lifecycle_state.as_str(),
+                false,
+                None,
+            )
+        });
+    let turn_state = match (request_turn_state, observed_turn_state) {
+        (Some(request), Some(observed)) if observed.rank() > request.rank() => Some(observed),
+        (Some(request), _) => Some(request),
+        (None, observed) => observed,
+    };
     let turn_state_label = turn_state.map(turn_state_label).map(str::to_owned);
     let latest_response = latest_request_id
         .as_deref()

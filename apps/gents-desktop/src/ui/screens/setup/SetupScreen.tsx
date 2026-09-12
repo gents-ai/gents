@@ -543,6 +543,7 @@ export function SetupScreen({
     });
     await api.saveInferenceProfileConfig({
       document: {
+        ...existingProfile,
         agent_did: deployment.agentDid,
         profile_id: profileId,
         display_name: spec.name,

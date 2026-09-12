@@ -2,6 +2,53 @@ use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[test]
+fn session_observation_advances_an_exact_stale_request_to_terminal() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![AgentSession {
+            session_id: "session-1".to_string(),
+            agent_did: "did:test:amy".to_string(),
+            requester_did: None,
+            behavior_id: "amy-default".to_string(),
+            created_at: "2026-04-21T12:00:00Z".to_string(),
+            closed_at: None,
+            title: None,
+            tags: Vec::new(),
+            provenance: None,
+            observation: Some(SessionObservation {
+                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
+                preview: Some("done".to_string()),
+                latest_request: Some(SessionRequestObservation {
+                    request_doc_id: "req-1".to_string(),
+                    request_id: "req-1".to_string(),
+                    lifecycle_state: RequestLifecycleState::Completed,
+                }),
+            }),
+        }],
+        requests: vec![AgentRequestRow {
+            doc_id: Some("req-1".to_string()),
+            request_id: "req-1".to_string(),
+            agent_did: Some("did:test:amy".to_string()),
+            behavior_id: Some("amy-default".to_string()),
+            session_id: Some("session-1".to_string()),
+            content: Some("do the work".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
+            execution_origin: Some("interactive".to_string()),
+            created_at: Some("2026-04-21T12:00:00Z".to_string()),
+            claimed_at: Some("2026-04-21T12:00:01Z".to_string()),
+            retry_count: Some(0),
+            max_retries: Some(3),
+            ..Default::default()
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
+        .expect("session snapshot");
+
+    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
+}
+
+#[test]
 fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is_stale() {
     let store = ClientStore::from_rows(ClientStoreRows {
         sessions: vec![AgentSession {

@@ -32,6 +32,13 @@ pub async fn desktop_session_snapshot(
             .find(|session| session.session_id == session_id)
             .map(|session| session.agent_did.clone())
     });
+    let request_id = request_id.or_else(|| {
+        let store = core.store().snapshot();
+        agent_did.as_deref().map_or_else(
+            || store.latest_request_id_for_session(&session_id),
+            |agent_did| store.latest_request_id_for_session_for_agent(&session_id, agent_did),
+        )
+    });
 
     if let Some(agent_did) = agent_did.as_deref() {
         if let Err(error) = core
@@ -210,6 +217,26 @@ pub async fn desktop_session_live_delta(
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
+    let agent_did = agent_did.or_else(|| {
+        core.store()
+            .snapshot()
+            .sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .map(|session| session.agent_did.clone())
+    });
+    // The live cursor is owned by the desktop replica. A local-standard
+    // agent's operator GraphQL is a different DefraDB node, so a delta from
+    // the replica can remain permanently "processing" after the agent has
+    // committed its response and tool calls. Returning no delta promotes the
+    // controller to its bounded full-session read, which refreshes the exact
+    // request and transcript from the operator endpoint.
+    if agent_did
+        .as_deref()
+        .is_some_and(|agent_did| core.operator_graphql(agent_did).is_some())
+    {
+        return Ok(None);
+    }
     Ok(Some(build_session_live_delta(
         core.as_ref(),
         &session_id,

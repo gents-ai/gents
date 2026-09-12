@@ -360,6 +360,7 @@ export function useDesktopShell({
     canSendMessage,
     chatWorkflow: shellProjection.workflow,
     activeRequestId: shellProjection.activeRequestId,
+    selectedTrackedRequestId,
     turnState: shellProjection.turnState,
     interruptVisible:
       shellProjection.workflow.kind === "awaitingObservation" ||

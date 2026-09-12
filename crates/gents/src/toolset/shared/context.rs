@@ -88,7 +88,12 @@ impl ToolContext {
     }
 
     pub(crate) fn new(root: PathBuf, create_missing: bool) -> Result<Self> {
-        Self::new_with_base(root, std::env::current_dir().ok(), create_missing)
+        // A configured tool root is also the unbound default cwd. The host
+        // process may have been launched from any descendant (for example,
+        // Tauri starts under `apps/.../src-tauri`); inheriting that directory
+        // would make identical Tools documents behave differently by launcher.
+        // Request workspace scope still replaces this base in `effective_base`.
+        Self::new_with_base(root, None, create_missing)
     }
 
     pub(crate) fn new_with_base(
