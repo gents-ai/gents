@@ -1,30 +1,57 @@
-@layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, backend-health, holds, mcp-health, utilities, trace, workspace;
+@import "tailwindcss";
+@import "@gents/ui/styles.css";
+@source "./**/*.{ts,tsx}";
 
-@import "@fontsource-variable/inter";
-@import "@fontsource-variable/funnel-display";
-@import "@source-inc/gents-desktop-tokens/semantic.css";
-@import "@source-inc/gents-desktop-ui/styles.css";
-@import "./styles/base.css";
-@import "./styles/primitives/layout.css";
-@import "./styles/primitives/controls.css";
-@import "./styles/primitives/forms.css";
-@import "./styles/primitives/data.css";
-@import "./styles/shell.css";
-@import "./styles/session-hydration.css";
-@import "./styles/sync-health.css";
-@import "./styles/sidebar/base.css";
-@import "./styles/sidebar/connected-peer.css";
-@import "./styles/sidebar/lists.css";
-@import "./styles/sidebar/behavior.css";
-@import "./styles/sidebar/peer-card.css";
-@import "./styles/sidebar/nav.css";
-@import "./styles/sidebar/sessions.css";
-@import "@source-inc/gents-desktop-chat/styles.css";
-@import "@source-inc/gents-desktop-fleet/styles.css";
-@import "@source-inc/gents-desktop-fleet/local-runtime.css";
-@import "@source-inc/gents-desktop-operations/styles.css";
-@import "./styles/config/workspace.css";
-@import "./styles/config/agent-behavior.css";
-@import "./styles/config/documents.css";
-@import "./styles/config/forms.css";
-@import "./styles/tokens.css";
+html,
+body,
+#root {
+  margin: 0;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Overlay titlebar (macOS Tauri): drag strip + clearance so traffic lights
+   do not sit on the mark. applyShellPlatform sets data-shell="mac". */
+.titlebar-drag-region {
+  display: none;
+}
+
+:root[data-shell="mac"] {
+  --titlebar-height: 34px;
+  --titlebar-clearance: 44px;
+}
+
+:root[data-shell="mac"] .titlebar-drag-region {
+  display: block;
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 40;
+  height: var(--titlebar-height);
+}
+
+:root[data-shell="mac"] .viewport-frame {
+  padding-top: calc(var(--safe-area-top, 0px) + var(--titlebar-clearance));
+}
+
+.startup-ellipsis::after {
+  content: "";
+  animation: startup-ellipsis 1.2s steps(4, end) infinite;
+}
+
+@keyframes startup-ellipsis {
+  0% {
+    content: "";
+  }
+  25% {
+    content: ".";
+  }
+  50% {
+    content: "..";
+  }
+  75% {
+    content: "...";
+  }
+}

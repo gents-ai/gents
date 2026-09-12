@@ -1,5 +1,6 @@
 //! Runtime-owned P2P pairing reconcile seam.
 
+mod collection_resolution;
 pub mod diff;
 pub mod embedded_impl;
 pub mod endpoint;
@@ -19,6 +20,7 @@ pub mod session_hydration_reconcile;
 pub mod templates;
 pub mod trait_def;
 
+pub use collection_resolution::{resolve_embedded_collection_id, resolve_embedded_collection_name};
 pub use diff::{
     compute_owned_pairing_diff, compute_pairing_diff, owned_pairing_live_matches, DiffOp,
     PairingActual, PairingApplied, PairingDesired,

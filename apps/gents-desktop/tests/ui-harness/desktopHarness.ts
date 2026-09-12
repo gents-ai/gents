@@ -193,6 +193,13 @@ export function createDesktopUiHarness(
   let sessionSeq = 1;
   let rowCount = 42;
   let deployment = createDeployment();
+  if (scenario === "empty-fleet") {
+    deployment = {
+      ...deployment,
+      inferenceBackends: [],
+      inferenceProfiles: [],
+    };
+  }
   if (scenario === "backend-unavailable") {
     deployment = {
       ...deployment,
@@ -245,6 +252,7 @@ export function createDesktopUiHarness(
     };
   }
   let removed = false;
+  let provisioned = scenario !== "empty-fleet";
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
@@ -425,6 +433,15 @@ export function createDesktopUiHarness(
         : []),
     ],
   });
+  if (scenario === "empty-fleet") {
+    sessions.clear();
+    deployment = {
+      ...deployment,
+      sessions: [],
+      inferenceBackends: [],
+      inferenceProfiles: [],
+    };
+  }
   if (scenario === "session-hydration") {
     sessions.set("session-remote", {
       sessionId: "session-remote",
@@ -564,7 +581,12 @@ export function createDesktopUiHarness(
   }
 
   function snapshot() {
-    const deployments = scenario === "empty-fleet" || removed ? [] : [deployment];
+    const visibleDeployment = {
+      ...deployment,
+      dialSucceeded: p2pStatus === "healthy",
+      chatSafe: p2pStatus === "healthy",
+    };
+    const deployments = !provisioned || removed ? [] : [visibleDeployment];
     const health = {
       status: p2pStatus,
       connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
@@ -589,19 +611,18 @@ export function createDesktopUiHarness(
         desktopHomeExists: true,
         peerDirectoryExists: true,
         clientStateExists: true,
-        savedPeers:
-          scenario === "empty-fleet"
-            ? []
-            : [
-                {
-                  peerId: deployment.peerId,
-                  label: deployment.label,
-                  agentDid: deployment.agentDid,
-                  addr: deployment.addr,
-                  graphql: deployment.graphql,
-                  source: deployment.source,
-                },
-              ],
+        savedPeers: !provisioned
+          ? []
+          : [
+              {
+                peerId: deployment.peerId,
+                label: deployment.label,
+                agentDid: deployment.agentDid,
+                addr: deployment.addr,
+                graphql: deployment.graphql,
+                source: deployment.source,
+              },
+            ],
       },
       client: {
         localPeerId: "peer-bombadil-local",
@@ -748,6 +769,12 @@ export function createDesktopUiHarness(
     },
     async initLocalStandardRuntime(request) {
       const label = request.label.trim() || "Bombadil UI Agent";
+      provisioned = true;
+      deployment = {
+        ...deployment,
+        label,
+        agentPrincipal: { ...deployment.agentPrincipal, displayName: label },
+      };
       const summary: InitSummary = {
         status: "ready",
         source: "bombadil-harness",
@@ -1819,6 +1846,17 @@ export function createDesktopUiHarness(
       return result;
     },
     async cancelGrokLogin() {},
+    async claudeLogin(agentDid) {
+      return {
+        docId: `credential-${agentDid}-claude`,
+        credentialId: "credential-claude",
+        agentDid,
+        provider: "claude-subscription",
+        accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        enabled: true,
+      };
+    },
+    async cancelClaudeLogin() {},
     async listSubagentTree(request) {
       const tree: SubagentTreeView = {
         rootRequestId: request.rootRequestId,

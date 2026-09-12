@@ -245,6 +245,14 @@
       "permissionSet": "config-write"
     },
     {
+      "name": "desktop_claude_login",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_claude_login_cancel",
+      "permissionSet": "config-write"
+    },
+    {
       "name": "desktop_provider_accounts_list",
       "permissionSet": "provider-accounts-read"
     },
@@ -289,7 +297,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "7.1",
+  "contractVersion": "7.2",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -314,6 +322,7 @@
     "desktop://client-updated",
     "desktop://codex-login-url",
     "desktop://grok-login-url",
+    "desktop://claude-login-url",
     "desktop://managed-server-updated",
     "desktop://managed-server-tray-stop"
   ],
@@ -416,5 +425,5 @@
       "name": "full"
     }
   ],
-  "wireSchemaHash": "ca91687078715ce91788ea04cb72e3a6d0eae8a845bfb84a7c7cf1b6acbc04da"
+  "wireSchemaHash": "7f69a350858dc1eb2ee4fd69c0a9d1b772f0f33326cb3bbbd15018be107413f2"
 }

@@ -11,7 +11,10 @@ use tokio::time::timeout;
 use crate::defra_node::EmbeddedNode;
 
 use super::templates::{to_replication_filters, PairingFilters};
-use super::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
+use super::{
+    resolve_embedded_collection_id, resolve_embedded_collection_name, RemoteP2pAdmin,
+    RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+};
 
 const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -133,33 +136,11 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 
     async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
-        match self.node.get_collection(name) {
-            Ok(Some(def)) => Ok(Some(def.collection_id)),
-            Ok(None) => Ok(None),
-            Err(error) => Err(RemoteP2pAdminError::LocalError(format!(
-                "resolve_collection_id({name}): {error}"
-            ))),
-        }
+        resolve_embedded_collection_id(&self.node, name)
     }
 
     async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
-        let names = self.node.list_collections().map_err(|error| {
-            RemoteP2pAdminError::LocalError(format!("list_collections for id {id}: {error}"))
-        })?;
-        for name in names {
-            match self.node.get_collection(&name) {
-                Ok(Some(def)) if def.collection_id == id => return Ok(Some(def.name)),
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        collection_name = %name,
-                        %error,
-                        "resolve_collection_name failed to fetch a collection definition"
-                    );
-                }
-            }
-        }
-        Ok(None)
+        resolve_embedded_collection_name(&self.node, id)
     }
 
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
@@ -411,6 +392,32 @@ mod tests {
             .await
             .expect("test schema");
         test
+    }
+
+    #[tokio::test]
+    async fn collection_name_resolution_accepts_names_and_ids() {
+        let test = test_node().await;
+        let definition = test
+            .node
+            .get_collection("P2pReconcileThing")
+            .expect("collection lookup")
+            .expect("collection definition");
+        let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&test.node));
+
+        assert_eq!(
+            admin
+                .resolve_collection_name("P2pReconcileThing")
+                .await
+                .expect("resolve name token"),
+            Some("P2pReconcileThing".to_string())
+        );
+        assert_eq!(
+            admin
+                .resolve_collection_name(&definition.collection_id)
+                .await
+                .expect("resolve id token"),
+            Some("P2pReconcileThing".to_string())
+        );
     }
 
     async fn runtime_test_node() -> TestNode {

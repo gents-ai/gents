@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
@@ -36,6 +36,7 @@ function ContextMeter({
 }: {
   context: DesktopSessionSnapshot["context"];
 }) {
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
   const lastRequest = context.lastRequest;
   const used = Math.max(
     0,
@@ -43,7 +44,7 @@ function ContextMeter({
   );
   const durable = Math.max(0, context.estimatedDurableTokens);
   const conversation = Math.max(0, context.estimatedConversationTokens);
-  const window = Math.max(
+  const contextWindow = Math.max(
     1,
     lastRequest?.contextWindow ?? context.contextWindow,
   );
@@ -51,9 +52,11 @@ function ContextMeter({
     0,
     lastRequest?.compactionThresholdTokens ?? context.compactionThresholdTokens,
   );
-  const usedPercent = Math.min(100, (used / window) * 100);
-  const thresholdPercent = Math.min(100, (threshold / window) * 100);
-  const displayedThresholdPercent = Math.round((threshold / window) * 100);
+  const usedPercent = Math.min(100, (used / contextWindow) * 100);
+  const thresholdPercent = Math.min(100, (threshold / contextWindow) * 100);
+  const displayedThresholdPercent = Math.round(
+    (threshold / contextWindow) * 100,
+  );
   const projectedAway = Math.max(0, durable - conversation);
   const projectedAwayPercent = durable
     ? Math.round((projectedAway / durable) * 100)
@@ -62,10 +65,10 @@ function ContextMeter({
   const transcriptTotalsExact = context.transcriptTotalsExact !== false;
   const title = lastRequest
     ? `Last assembled provider input: ${used.toLocaleString()} of ` +
-      `${window.toLocaleString()} tokens. Compaction decision: ` +
+      `${contextWindow.toLocaleString()} tokens. Compaction decision: ` +
       `${lastRequest.compactionReason}.`
     : `${transcriptTotalsExact ? "Estimated" : "At least"} durable conversation context: ${used.toLocaleString()} of ` +
-      `${window.toLocaleString()} tokens. Compaction threshold: ` +
+      `${contextWindow.toLocaleString()} tokens. Compaction threshold: ` +
       `${threshold.toLocaleString()} tokens.`;
   const compactionDecision = lastRequest
     ? ({
@@ -76,10 +79,32 @@ function ContextMeter({
       }[lastRequest.compactionReason] ?? lastRequest.compactionReason)
     : null;
 
+  function closeContextMeter() {
+    const details = detailsRef.current;
+    if (!details) return;
+    details.open = false;
+    details.querySelector<HTMLElement>("summary")?.focus();
+  }
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && detailsRef.current?.open) {
+        event.preventDefault();
+        closeContextMeter();
+      }
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, []);
+
   return (
-    <details className="context-meter" data-testid="context-meter">
+    <details
+      className="context-meter"
+      data-testid="context-meter"
+      ref={detailsRef}
+    >
       <summary className="chip" title={title}>
-        Context ≈{formatTokens(used)} / {formatTokens(window)}
+        Context ≈{formatTokens(used)} / {formatTokens(contextWindow)}
       </summary>
       <div
         className="context-meter-popover mobile-viewport-popover"
@@ -90,12 +115,21 @@ function ContextMeter({
             {lastRequest ? "Last provider request" : "Conversation context"}
           </strong>
           <span>{used.toLocaleString()} estimated tokens</span>
+          <button
+            aria-label="Close context details"
+            className="icon-button context-meter-close"
+            data-testid="context-meter-close"
+            onClick={closeContextMeter}
+            type="button"
+          >
+            Close
+          </button>
         </div>
         <div
-          aria-label={`${used.toLocaleString()} of ${window.toLocaleString()} context tokens`}
-          aria-valuemax={window}
+          aria-label={`${used.toLocaleString()} of ${contextWindow.toLocaleString()} context tokens`}
+          aria-valuemax={contextWindow}
           aria-valuemin={0}
-          aria-valuenow={Math.min(used, window)}
+          aria-valuenow={Math.min(used, contextWindow)}
           className="context-meter-track"
           role="progressbar"
         >
@@ -162,7 +196,7 @@ function ContextMeter({
           </div>
           <div>
             <dt>Context window</dt>
-            <dd>{window.toLocaleString()}</dd>
+            <dd>{contextWindow.toLocaleString()}</dd>
           </div>
           <div>
             <dt>Compacts at</dt>

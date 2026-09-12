@@ -62,6 +62,8 @@ pub struct DesktopBridge {
     /// Cancel handle for an in-flight ChatGPT/Codex login server, so a closed
     /// browser can be aborted instead of hanging the callback wait.
     pub codex_login_cancel: Option<gents_chatgpt_login::ShutdownHandle>,
+    /// Cancel handle for an in-flight Claude subscription login server.
+    pub claude_login_cancel: Option<gents_claude_login::ShutdownHandle>,
     /// Cancel flag for an in-flight Grok device-code login poll.
     pub grok_login_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Shared progress for an in-flight client start. The sender is owned by
@@ -77,6 +79,7 @@ impl DesktopAppState {
                 core: None,
                 updates_task: None,
                 codex_login_cancel: None,
+                claude_login_cancel: None,
                 grok_login_cancel: None,
                 start_inflight: None,
             }),

@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -41,8 +41,24 @@ function expectReasoningBeforeAnswer() {
   expect(reasoning?.nextElementSibling).toBe(answer);
 }
 
+function allowTranscriptMotion() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
+
 describe("session context visibility", () => {
-  it("shows current provider-view pressure, threshold, and compaction history", () => {
+  it("shows current provider-view pressure and closes its details", () => {
     render(
       <ChatHeader
         behaviorLabel="mobile"
@@ -106,10 +122,27 @@ describe("session context visibility", () => {
     expect(screen.getByText("198,288 (58%)")).toBeInTheDocument();
     expect(screen.getByText("1 durable compaction")).toBeInTheDocument();
     expect(screen.getByText("263,000 → 22,000 tokens")).toBeInTheDocument();
+
+    const meter = screen.getByTestId("context-meter") as HTMLDetailsElement;
+    const summary = meter.querySelector("summary") as HTMLElement;
+    meter.open = true;
+    fireEvent.click(screen.getByTestId("context-meter-close"));
+    expect(meter.open).toBe(false);
+    expect(summary).toHaveFocus();
+
+    meter.open = true;
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(meter.open).toBe(false);
+    expect(summary).toHaveFocus();
   });
 });
 
 describe("assistant reasoning order", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   it("renders completed reasoning before the assistant answer", () => {
     render(
       <MessageList
@@ -143,6 +176,170 @@ describe("assistant reasoning order", () => {
 
     expectReasoningBeforeAnswer();
   });
+
+  it("reveals a newly appended completed answer without animating loaded history", () => {
+    allowTranscriptMotion();
+    vi.useFakeTimers();
+    const history: RenderedTimelineItem[] = [
+      {
+        kind: "assistantMessage",
+        itemKey: "assistant-history",
+        content: "This historical answer is immediately readable.",
+      },
+    ];
+    const { rerender } = render(
+      <StrictMode>
+        <MessageList timelineIdentity="session-1" timelineItems={history} />
+      </StrictMode>,
+    );
+    expect(
+      screen.getByText("This historical answer is immediately readable."),
+    ).toBeInTheDocument();
+
+    rerender(
+      <StrictMode>
+        <MessageList
+          timelineIdentity="session-1"
+          timelineItems={[
+            ...history,
+            {
+              kind: "assistantMessage",
+              itemKey: "assistant-new",
+              content: "This newly synchronized answer arrived as one database update.",
+            },
+          ]}
+        />
+      </StrictMode>,
+    );
+
+    expect(
+      screen.queryByText(
+        "This newly synchronized answer arrived as one database update.",
+      ),
+    ).not.toBeInTheDocument();
+    for (let tick = 0; tick < 16; tick += 1) {
+      act(() => vi.advanceTimersByTime(32));
+    }
+    expect(
+      screen.getByText(
+        "This newly synchronized answer arrived as one database update.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps revealing while live response updates arrive faster than a reveal tick", () => {
+    allowTranscriptMotion();
+    vi.useFakeTimers();
+    const chunks = [
+      "0123456789abcdef",
+      "0123456789abcdef one response chunk",
+      "0123456789abcdef one response chunk and another chunk",
+      "0123456789abcdef one response chunk and another chunk with a final tail",
+    ];
+    const liveItem = (content: string): RenderedTimelineItem => ({
+      kind: "liveAssistant",
+      itemKey: "live-assistant",
+      content,
+      reasoning: null,
+    });
+    const { container, rerender } = render(
+      <MessageList timelineItems={[liveItem(chunks[0])]} />,
+    );
+
+    for (const chunk of chunks.slice(1)) {
+      rerender(<MessageList timelineItems={[liveItem(chunk)]} />);
+      act(() => vi.advanceTimersByTime(16));
+    }
+
+    const visibleText = () =>
+      container.querySelector(".message-content")?.textContent ?? "";
+    expect(visibleText().length).toBeGreaterThan(chunks[0].length);
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(visibleText()).toContain(chunks.at(-1));
+  });
+
+  it("keeps an explicit responding indicator beside live answer text", () => {
+    render(
+      <MessageList
+        timelineItems={[
+          {
+            kind: "liveAssistant",
+            itemKey: "live-1",
+            content: "Answer in progress",
+            reasoning: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Responding");
+  });
+
+  it("does not restart reveal when a live overlay becomes a durable message", () => {
+    vi.useFakeTimers();
+    const answer = "The same response moves from the live overlay into history.";
+    const { rerender } = render(
+      <MessageList
+        timelineIdentity="session-1"
+        timelineItems={[
+          {
+            kind: "liveAssistant",
+            itemKey: "live-assistant",
+            content: answer,
+            reasoning: null,
+          },
+        ]}
+      />,
+    );
+
+    rerender(
+      <MessageList
+        timelineIdentity="session-1"
+        timelineItems={[
+          {
+            kind: "assistantMessage",
+            itemKey: "message-7",
+            content: answer,
+            reasoning: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(answer)).toBeInTheDocument();
+  });
+
+  it("does not animate history when selecting another session", () => {
+    const { rerender } = render(
+      <MessageList
+        timelineIdentity="session-1"
+        timelineItems={[
+          {
+            kind: "assistantMessage",
+            itemKey: "message-1",
+            content: "First session history",
+          },
+        ]}
+      />,
+    );
+
+    rerender(
+      <MessageList
+        timelineIdentity="session-2"
+        timelineItems={[
+          {
+            kind: "assistantMessage",
+            itemKey: "message-2",
+            content: "Second session history is immediately readable.",
+          },
+        ]}
+      />,
+    );
+
+    expect(
+      screen.getByText("Second session history is immediately readable."),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("ChatTranscriptPanel states", () => {
@@ -151,6 +348,7 @@ describe("ChatTranscriptPanel states", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });

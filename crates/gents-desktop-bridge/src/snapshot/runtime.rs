@@ -58,7 +58,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 })
                 .map(MailboxItemView::from)
                 .collect::<Vec<_>>();
-            let mut agent_principal = principal
+            let agent_principal = principal
                 .map(|row| AgentPrincipalView {
                     agent_did: row.agent_did.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
@@ -75,7 +75,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     created_at: None,
                     created_by: None,
                 });
-            let mut principal_config = principal.cloned();
+            let principal_config = principal.cloned();
             let mut behavior_configs = store
                 .behaviors
                 .iter()
@@ -83,10 +83,10 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .cloned()
                 .collect::<Vec<_>>();
             behavior_configs.sort_by(|left, right| left.behavior_id.cmp(&right.behavior_id));
-            let mut default_behavior_id = store
+            let default_behavior_id = store
                 .default_behavior_id_for_agent(&peer.agent_did)
                 .map(str::to_owned);
-            let mut runtime = store
+            let runtime = store
                 .latest_runtime(&peer.agent_did)
                 .map(|row| RuntimeView {
                     reconcile_phase: normalize_optional(row.reconcile_phase.as_deref()),
@@ -342,7 +342,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .collect::<Vec<_>>();
             tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
 
-            let mut sessions = session_summaries(
+            let sessions = session_summaries(
                 &store.sessions,
                 &store.requests,
                 &store.responses,
@@ -351,7 +351,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 &triggers,
             );
 
-            let mut behavior_environments = resolve_behavior_environments(
+            let behavior_environments = resolve_behavior_environments(
                 &behaviors,
                 &inference_profiles,
                 &contexts,
@@ -361,43 +361,18 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             );
 
             let chat_safe = peer.is_chat_ready_at(Utc::now());
-            let behavior_readiness = redact_unpaired_behavior_readiness(
-                project_behavior_readiness(
-                    store.behavior_readiness(&peer.agent_did),
-                    &peer.agent_did,
-                    behaviors
-                        .iter()
-                        .map(|behavior| behavior.behavior_id.as_str()),
-                    default_behavior_id.as_deref(),
-                ),
-                chat_safe,
+            // Pairing readiness controls admission of new remote work. It does
+            // not control visibility of rows already authorized and present in
+            // the local database. Keeping this projection stable is what lets
+            // the mobile UI remain useful while the transport reconnects.
+            let behavior_readiness = project_behavior_readiness(
+                store.behavior_readiness(&peer.agent_did),
+                &peer.agent_did,
+                behaviors
+                    .iter()
+                    .map(|behavior| behavior.behavior_id.as_str()),
+                default_behavior_id.as_deref(),
             );
-            if !chat_safe {
-                default_behavior_id = None;
-                agent_principal.default_behavior_id = None;
-                runtime = None;
-                behaviors.clear();
-                behavior_environments.clear();
-                inference_backends.clear();
-                inference_profiles.clear();
-                tools.clear();
-                contexts.clear();
-                compactions.clear();
-                inference_sampling.clear();
-                inference_execution.clear();
-                tool_service_registries.clear();
-                skills.clear();
-                tasks.clear();
-                schedules.clear();
-                event_sources.clear();
-                triggers.clear();
-                principal_config = None;
-                behavior_configs.clear();
-                subagent_targets.clear();
-                datastore_tool_surfaces.clear();
-                chain_key_bindings.clear();
-                sessions.clear();
-            }
 
             DeploymentView {
                 peer_id: peer.peer_id,
@@ -622,13 +597,6 @@ pub(crate) fn project_behavior_readiness<'a>(
             })
             .collect(),
     }
-}
-
-fn redact_unpaired_behavior_readiness(
-    readiness: BehaviorReadinessView,
-    pairing_ready: bool,
-) -> BehaviorReadinessView {
-    pairing_ready.then_some(readiness).unwrap_or_default()
 }
 
 impl From<gents_protocol::row::BehaviorReadinessUnavailableReason>
@@ -893,23 +861,6 @@ mod behavior_readiness_conformance_tests {
                 reason: BehaviorReadinessUnknownReasonView::ReadinessMalformed
             }
         ));
-    }
-
-    #[test]
-    fn unpaired_deployment_redacts_a_retained_current_readiness_snapshot() {
-        let retained = BehaviorReadinessView {
-            source: BehaviorReadinessSourceView::Current,
-            active_generation: Some(7),
-            router_generation: Some(7),
-            updated_at: Some("2026-08-29T00:00:00Z".to_string()),
-            behaviors: vec![BehaviorReadinessStatusView::Ready {
-                behavior_id: "private-default".to_string(),
-            }],
-        };
-
-        let redacted = redact_unpaired_behavior_readiness(retained, false);
-
-        assert_eq!(redacted, BehaviorReadinessView::default());
     }
 }
 

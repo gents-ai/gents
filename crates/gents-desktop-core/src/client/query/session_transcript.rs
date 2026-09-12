@@ -1,5 +1,20 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum TranscriptAccess<'a> {
+    Local(&'a EmbeddedNode),
+    Config(&'a gents::config_client::ConfigAccess),
+}
+
+impl TranscriptAccess<'_> {
+    async fn execute(self, query: &str, operation: &str) -> Result<Value> {
+        match self {
+            Self::Local(node) => execute_local_graphql_query(node, query, operation).await,
+            Self::Config(access) => execute_access_graphql_query(access, query, operation).await,
+        }
+    }
+}
+
 pub(super) fn tool_group_cursor_sequence(cursor: &str) -> Option<i64> {
     cursor
         .strip_prefix("tools-")
@@ -7,7 +22,7 @@ pub(super) fn tool_group_cursor_sequence(cursor: &str) -> Option<i64> {
 }
 
 async fn resolve_transcript_cursor_sequence(
-    node: &EmbeddedNode,
+    access: TranscriptAccess<'_>,
     session_id: &str,
     agent_did: Option<&str>,
     requester_did: Option<&str>,
@@ -35,7 +50,7 @@ async fn resolve_transcript_cursor_sequence(
   ) {{ sequence: message_sequence }}
 }}"#
         );
-        let data = execute_local_graphql_query(node, &query, "session tool cursor").await?;
+        let data = access.execute(&query, "session tool cursor").await?;
         let rows: Vec<TranscriptCursorRow> = parse_query_rows(&data, AGENT_MESSAGE_NAME)?;
         let tool_rows: Vec<TranscriptCursorRow> = parse_query_rows(&data, AGENT_TOOL_CALL_NAME)?;
         if rows
@@ -57,11 +72,8 @@ async fn resolve_transcript_cursor_sequence(
         .map(escape_graphql_string)
         .map(|requester_did| format!(", requester_did: {{ _eq: \"{requester_did}\" }}"))
         .unwrap_or_default();
-    let rows: Vec<TranscriptCursorRow> = load_rows(
-        node,
-        AGENT_MESSAGE_NAME,
-        &format!(
-            r#"query {{
+    let query = format!(
+        r#"query {{
   AgentMessage(
     filter: {{
       session_id: {{ _eq: "{session_id}" }},
@@ -70,9 +82,9 @@ async fn resolve_transcript_cursor_sequence(
     limit: 1
   ) {{ sequence }}
 }}"#
-        ),
-    )
-    .await?;
+    );
+    let data = access.execute(&query, "session message cursor").await?;
+    let rows: Vec<TranscriptCursorRow> = parse_query_rows(&data, AGENT_MESSAGE_NAME)?;
     rows.first()
         .and_then(|row| row.sequence)
         .ok_or_else(|| anyhow!("session transcript cursor is no longer present: {cursor}"))
@@ -91,6 +103,44 @@ pub async fn load_session_transcript_page(
     before_item_key: Option<&str>,
     requested_limit: Option<usize>,
 ) -> Result<SessionTranscriptQueryPage> {
+    load_session_transcript_page_with_access(
+        TranscriptAccess::Local(node),
+        session_id,
+        agent_did,
+        requester_did,
+        before_item_key,
+        requested_limit,
+    )
+    .await
+}
+
+pub async fn load_session_transcript_page_on(
+    access: &gents::config_client::ConfigAccess,
+    session_id: &str,
+    agent_did: Option<&str>,
+    requester_did: Option<&str>,
+    before_item_key: Option<&str>,
+    requested_limit: Option<usize>,
+) -> Result<SessionTranscriptQueryPage> {
+    load_session_transcript_page_with_access(
+        TranscriptAccess::Config(access),
+        session_id,
+        agent_did,
+        requester_did,
+        before_item_key,
+        requested_limit,
+    )
+    .await
+}
+
+async fn load_session_transcript_page_with_access(
+    access: TranscriptAccess<'_>,
+    session_id: &str,
+    agent_did: Option<&str>,
+    requester_did: Option<&str>,
+    before_item_key: Option<&str>,
+    requested_limit: Option<usize>,
+) -> Result<SessionTranscriptQueryPage> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
         bail!("session transcript query requires a session id");
@@ -102,8 +152,14 @@ pub async fn load_session_transcript_page(
     let tool_call_query_limit = SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET.saturating_add(1);
     let before_sequence = match before_item_key {
         Some(cursor) => Some(
-            resolve_transcript_cursor_sequence(node, session_id, agent_did, requester_did, cursor)
-                .await?,
+            resolve_transcript_cursor_sequence(
+                access,
+                session_id,
+                agent_did,
+                requester_did,
+                cursor,
+            )
+            .await?,
         ),
         None => None,
     };
@@ -140,8 +196,9 @@ pub async fn load_session_transcript_page(
     // Messages and tool calls must come from one DefraDB query evaluation. A
     // pair of sequential reads can observe a new tool group without the
     // message window that owns it when the live tip advances between reads.
-    let transcript_data =
-        execute_local_graphql_query(node, &transcript_query, "session transcript page").await?;
+    let transcript_data = access
+        .execute(&transcript_query, "session transcript page")
+        .await?;
     let queried_messages: Vec<AgentMessageRow> =
         parse_query_rows(&transcript_data, AGENT_MESSAGE_NAME)?;
     let queried_tool_calls: Vec<AgentToolCallRow> =
@@ -259,6 +316,36 @@ pub async fn load_session_context_store(
     agent_did: Option<&str>,
     requester_did: Option<&str>,
 ) -> Result<ClientStore> {
+    load_session_context_store_with_access(
+        TranscriptAccess::Local(node),
+        session_id,
+        agent_did,
+        requester_did,
+    )
+    .await
+}
+
+pub async fn load_session_context_store_on(
+    access: &gents::config_client::ConfigAccess,
+    session_id: &str,
+    agent_did: Option<&str>,
+    requester_did: Option<&str>,
+) -> Result<ClientStore> {
+    load_session_context_store_with_access(
+        TranscriptAccess::Config(access),
+        session_id,
+        agent_did,
+        requester_did,
+    )
+    .await
+}
+
+async fn load_session_context_store_with_access(
+    access: TranscriptAccess<'_>,
+    session_id: &str,
+    agent_did: Option<&str>,
+    requester_did: Option<&str>,
+) -> Result<ClientStore> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
         bail!("session context query requires a session id");
@@ -285,7 +372,7 @@ pub async fn load_session_context_store(
 }}"#
     );
     let started = std::time::Instant::now();
-    let data = execute_local_graphql_query(node, &query, "session context").await?;
+    let data = access.execute(&query, "session context").await?;
     let messages: Vec<AgentMessageRow> = parse_query_rows(&data, AGENT_MESSAGE_NAME)?;
     let compaction_entries: Vec<CompactionEntryRow> =
         parse_query_rows(&data, COMPACTION_ENTRY_NAME)?;

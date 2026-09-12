@@ -131,9 +131,10 @@ export function useDesktopClientLifecycle({
         try {
           localServerAvailable.current = await restoreManagedServer(api);
         } catch (error) {
+          // A legacy or broken ~/.gents must not block first-run setup or
+          // already-saved remote peers. Surface the error after the shell is up.
+          localServerAvailable.current = false;
           setError(String(error));
-          setStartupPhase("managed-server-error");
-          return;
         }
       }
       setStartupPhase("loading-configuration");

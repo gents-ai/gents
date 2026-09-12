@@ -79,7 +79,7 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
     let node = EmbeddedNode::builder().build().await.unwrap();
     let node_ref = &node;
     let runner = node.runner().clone();
-    let gate = Arc::new(tokio::sync::Mutex::new(()));
+    let gate = Arc::new(super::MutationWriteGate::new());
     let gate_for_assert = Arc::clone(&gate);
     let registered = Arc::new(Mutex::new(None));
     let registered_for_begin = Arc::clone(&registered);
@@ -96,14 +96,14 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
             "test.cancel_after_embedded_begin",
             crate::config_client::write_telemetry::WriteBackend::Embedded,
             super::TransactionMode::ConflictRetry,
-            move |rollback_scheduled| {
+            move |operation, rollback_scheduled| {
                 let runner = Arc::clone(&runner);
                 let gate = Arc::clone(&gate);
                 let registered = Arc::clone(&registered_for_begin);
                 let registered_notify = Arc::clone(&registered_notify_for_begin);
                 let release = Arc::clone(&release_for_begin);
                 Box::pin(async move {
-                    let write_guard = gate.lock_owned().await;
+                    let write_guard = gate.acquire(operation).await?;
                     let (rollback_on_drop, handle) = tokio::spawn(super::begin_embedded_owned(
                         runner,
                         write_guard,
@@ -142,9 +142,18 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
     drop(transaction);
     release.notify_one();
 
-    let next_guard = tokio::time::timeout(Duration::from_secs(2), gate_for_assert.lock_owned())
-        .await
-        .expect("rollback finishes before releasing the write gate");
+    let next_guard = tokio::time::timeout(
+        Duration::from_secs(2),
+        gate_for_assert.acquire(
+            crate::config_client::write_telemetry::WriteOperation::new(
+                "test.write_after_cancelled_begin",
+            )
+            .expect("valid test write operation"),
+        ),
+    )
+    .await
+    .expect("rollback finishes before releasing the write gate")
+    .expect("write gate acquisition succeeds");
     drop(next_guard);
     let error = node
         .runner()
@@ -170,7 +179,7 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
 async fn cancellation_before_begin_reports_no_scheduled_rollback() {
     let node = EmbeddedNode::builder().build().await.unwrap();
     let gate = super::mutation_write_gate(&node);
-    let held = gate.lock().await;
+    let held = gate.lock.lock().await;
     let telemetry = EventCapture::default();
     let events = Arc::clone(&telemetry.events);
     let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
@@ -249,6 +258,131 @@ async fn stalled_callback_releases_the_embedded_write_gate() {
         "committed"
     );
     node.shutdown().await;
+}
+
+#[tokio::test]
+async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema("type NestedWriteProbe { value: String }")
+        .await
+        .unwrap();
+
+    let error = ConfigAccess::transact_local(&node, None, "test.outer_transaction", |_| {
+        Box::pin(async {
+            ConfigAccess::write_local(
+                &node,
+                "test.inner_write",
+                r#"mutation { create_NestedWriteProbe(input: {value: "nested"}) { _docID } }"#,
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await
+    .expect_err("a canonical write cannot recursively acquire its transaction's gate");
+    let diagnostic = format!("{error:#}");
+    assert!(diagnostic.contains("test.inner_write"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("test.outer_transaction"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("use the supplied transaction owner"),
+        "{diagnostic}"
+    );
+    assert!(
+        !super::retry::is_transaction_storage_failure(&error),
+        "an application ownership violation is not a retryable storage failure"
+    );
+
+    ConfigAccess::write_local(
+        &node,
+        "test.write_after_nested_rejection",
+        r#"mutation { create_NestedWriteProbe(input: {value: "committed"}) { _docID } }"#,
+    )
+    .await
+    .expect("rejecting the nested write releases the outer transaction gate");
+    let response = node.execute("{ NestedWriteProbe { value } }").await;
+    assert_eq!(
+        response.data.unwrap()["NestedWriteProbe"][0]["value"],
+        "committed"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    let started = tokio::time::Instant::now();
+
+    let error = ConfigAccess::transact_local(&node, None, "test.outer_transaction", |_| {
+        Box::pin(async {
+            ConfigAccess::transact_local_idempotent(
+                &node,
+                None,
+                super::IdempotentTransactionRetry::Standard,
+                "test.inner_idempotent_write",
+                |_| Box::pin(async { Ok(()) }),
+            )
+            .await
+        })
+    })
+    .await
+    .expect_err("a nested idempotent write remains an ownership violation");
+
+    let diagnostic = format!("{error:#}");
+    assert!(
+        diagnostic.contains("test.inner_idempotent_write"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("test.outer_transaction"),
+        "{diagnostic}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "ownership rejection must not consume idempotent retry backoff"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn write_gate_timeout_names_waiter_and_current_owner() {
+    let gate = Arc::new(super::MutationWriteGate::new());
+    let owner = gate
+        .acquire(
+            crate::config_client::write_telemetry::WriteOperation::new("test.current_owner")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut waiting = Box::pin(
+        gate.acquire(
+            crate::config_client::write_telemetry::WriteOperation::new("test.waiting_operation")
+                .unwrap(),
+        ),
+    );
+
+    tokio::select! {
+        _ = &mut waiting => panic!("waiter completed while the owner holds the gate"),
+        _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+    }
+    tokio::time::advance(super::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT).await;
+    let error = match waiting.as_mut().await {
+        Ok(_) => panic!("waiting operation acquired a gate that is still owned"),
+        Err(error) => error,
+    };
+    let diagnostic = format!("{error:#}");
+    assert!(
+        diagnostic.contains("test.waiting_operation"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("test.current_owner"), "{diagnostic}");
+    assert!(
+        super::retry::is_transaction_storage_failure(&error),
+        "gate wait timeouts use the standard storage-failure retry classification"
+    );
+    drop(owner);
 }
 
 #[tokio::test(start_paused = true)]

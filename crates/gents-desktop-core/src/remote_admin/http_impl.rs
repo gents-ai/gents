@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use defra_node::EmbeddedNode;
 use gents::agent::p2p_reconcile::{
-    to_replication_filters, PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError,
-    RemoteP2pAdminResult, RemoteReplicator,
+    resolve_embedded_collection_id, resolve_embedded_collection_name, to_replication_filters,
+    PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
 
 use crate::client::PrincipalIdentity;
@@ -283,36 +283,14 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         let Some(node) = self.local_resolver.as_ref() else {
             return Ok(None);
         };
-        match node.get_collection(name) {
-            Ok(Some(def)) => Ok(Some(def.collection_id)),
-            Ok(None) => Ok(None),
-            Err(error) => Err(RemoteP2pAdminError::LocalError(format!(
-                "resolve_collection_id({name}): {error}"
-            ))),
-        }
+        resolve_embedded_collection_id(node, name)
     }
 
     async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
         let Some(node) = self.local_resolver.as_ref() else {
             return Ok(None);
         };
-        let names = node.list_collections().map_err(|error| {
-            RemoteP2pAdminError::LocalError(format!("list_collections for id {id}: {error}"))
-        })?;
-        for name in names {
-            match node.get_collection(&name) {
-                Ok(Some(def)) if def.collection_id == id => return Ok(Some(def.name)),
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        collection_name = %name,
-                        %error,
-                        "resolve_collection_name failed to fetch a collection definition"
-                    );
-                }
-            }
-        }
-        Ok(None)
+        resolve_embedded_collection_name(node, id)
     }
 
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
@@ -1011,6 +989,42 @@ mod tests {
         let admin = admin_for(&server);
         let cols = admin.list_p2p_collections().await.expect("list");
         assert_eq!(cols, vec!["c1".to_string(), "c2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn local_collection_resolver_accepts_names_and_ids() {
+        let server = MockServer::start().await;
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path())
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        node.add_schema("type DesktopResolveThing { name: String }")
+            .await
+            .expect("test schema");
+        let definition = node
+            .get_collection("DesktopResolveThing")
+            .expect("collection lookup")
+            .expect("collection definition");
+        let admin = admin_for(&server).with_local_resolver(node);
+
+        assert_eq!(
+            admin
+                .resolve_collection_name("DesktopResolveThing")
+                .await
+                .expect("resolve name token"),
+            Some("DesktopResolveThing".to_string())
+        );
+        assert_eq!(
+            admin
+                .resolve_collection_name(&definition.collection_id)
+                .await
+                .expect("resolve id token"),
+            Some("DesktopResolveThing".to_string())
+        );
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@ import {
   MarkdownContent,
   MessageTime,
   ReasoningDisclosure,
+  RevealedMarkdownContent,
   normalizeTranscriptText,
 } from "./MarkdownContent.js";
 
@@ -68,10 +69,12 @@ export function UserMessageItem({ item }: { item: UserMessage }) {
 
 export function AssistantMessageItem({
   item,
+  animateReveal = false,
   responseCancelCause,
   responseMaterializedSequence,
 }: {
   item: AssistantMessage;
+  animateReveal?: boolean;
   responseCancelCause?: DerivedCancelCauseView | null;
   responseMaterializedSequence?: number | null;
 }) {
@@ -103,7 +106,7 @@ export function AssistantMessageItem({
         <ReasoningDisclosure value={reasoning} />
         {content ? (
           <div className="message-content">
-            <MarkdownContent value={content} />
+            <RevealedMarkdownContent animate={animateReveal} value={content} />
           </div>
         ) : null}
       </article>
@@ -151,6 +154,10 @@ export function LiveAssistantItem({
     <article className="message-card" data-testid="assistant-message">
       <div className="message-role">
         assistant
+        <span className="assistant-live-status" role="status">
+          <span className="assistant-live-dot" aria-hidden="true" />
+          {content ? "Responding" : "Thinking"}
+        </span>
         {responseCancelCause != null ? (
           <CancelCauseBadge
             cause={responseCancelCause}
@@ -161,7 +168,7 @@ export function LiveAssistantItem({
       <ReasoningDisclosure value={reasoning} />
       {content ? (
         <div className="message-content">
-          <MarkdownContent value={content} />
+          <RevealedMarkdownContent animate value={content} />
         </div>
       ) : null}
     </article>

@@ -14,10 +14,12 @@ import { ToolGroup } from "./ToolGroup.js";
 
 export const TimelineItem = memo(function TimelineItem({
   item,
+  animateAssistantReveal,
   responseCancelCause,
   responseMaterializedSequence,
 }: {
   item: RenderedTimelineItem;
+  animateAssistantReveal?: boolean;
   responseCancelCause?: DerivedCancelCauseView | null;
   responseMaterializedSequence?: number | null;
 }) {
@@ -28,6 +30,7 @@ export const TimelineItem = memo(function TimelineItem({
       return (
         <AssistantMessageItem
           item={item}
+          animateReveal={animateAssistantReveal}
           responseCancelCause={responseCancelCause}
           responseMaterializedSequence={responseMaterializedSequence}
         />

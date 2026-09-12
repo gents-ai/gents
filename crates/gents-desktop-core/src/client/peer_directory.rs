@@ -51,6 +51,21 @@ impl PeerRecord {
         self.source.as_deref() == Some("enrollment")
     }
 
+    /// HTTP GraphQL the desktop uses as the operator control plane for a
+    /// hosted local runtime. Client P2P routes do not carry `AgentPrincipal`
+    /// or `InferenceBackend`, so first-run config has to be read and written
+    /// here. Test fixtures that pass a dummy `/graphql` URL are ignored.
+    pub fn operator_graphql(&self) -> Option<&str> {
+        if self.source.as_deref() != Some("local-standard") {
+            return None;
+        }
+        let graphql = self.graphql.as_deref()?.trim();
+        graphql
+            .contains("/api/v0/graphql")
+            .then_some(graphql)
+            .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+    }
+
     /// Whether this exact durable route generation may authorize a chat write
     /// at `now`.
     ///
