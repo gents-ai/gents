@@ -1,0 +1,54 @@
+[package]
+name = "gents-loop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The gent's owned completion loop, carved to compile for wasm32-wasip1 (G-1)"
+
+# `native` turns on rig-core's own `reqwest`/`rustls` features, which is the
+# only way to reach `rig::providers::*` (gated wholesale behind `reqwest`
+# upstream — a coarser cut than "just the network client"; splitting it
+# finer is an upstream ask, not this crate's to make). `gents::provider_input`
+# needs those provider wire DTOs for byte-exact token accounting and enables
+# this feature; the guest's own accounting (`#[cfg(not(feature = "native"))]`
+# in `provider_input.rs`) approximates from the core `CompletionRequest`
+# instead. Not a default feature: `cargo check --target wasm32-wasip1` with
+# no flags must stay green.
+[features]
+native = ["rig-core/reqwest", "rig-core/rustls"]
+typescript = ["dep:ts-rs"]
+
+[dependencies]
+ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
+anyhow = { workspace = true }
+async-stream = "0.3"
+async-trait = "0.1"
+bytes = { workspace = true }
+chrono = { workspace = true }
+futures = "0.3"
+# Not `workspace = true`: Cargo's workspace-dependency inheritance can only
+# ever add features on top of what `[workspace.dependencies]` requests, never
+# remove one (an explicit `default-features = false` here is silently
+# ignored when inherited, confirmed by building this crate for
+# wasm32-wasip1 and finding reqwest's wasm-bindgen backend in the graph).
+# An independent version requirement sidesteps inheritance entirely; the
+# root `[patch.crates-io]` still redirects it to the sibling fork.
+gents-protocol = { path = "../gents-protocol", default-features = false }
+rand = { workspace = true }
+rig-core = { version = "0.35.0", default-features = false }
+schemars = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+# Not `workspace = true`: the workspace's tokio pins `features = ["full"]`,
+# unsupported on wasm32-wasip1 (only sync, macros, io-util, rt, time exist
+# there), and workspace-inherited features only ever union, never subtract.
+tokio = { version = "1", default-features = false, features = ["sync", "macros", "io-util", "rt", "time"] }
+tokio-util = "0.7"
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["sync", "macros", "io-util", "rt", "time", "test-util"] }

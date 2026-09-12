@@ -1,8 +1,8 @@
 use super::*;
 
-pub(crate) async fn run_loop_to_text<M>(
+pub async fn run_loop_to_text<M, H>(
     model: M,
-    hook: Option<DefraSessionHook>,
+    hook: Option<H>,
     prompt: Message,
     history: Vec<Message>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
@@ -11,6 +11,7 @@ pub(crate) async fn run_loop_to_text<M>(
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
+    H: SessionHook + Clone + 'static,
 {
     let stream = run_loop_stream(model, hook.clone(), prompt, history, tools, config);
     futures::pin_mut!(stream);
@@ -124,9 +125,9 @@ where
 /// chokepoint to Rig's `Agent` orchestration. Rig's schema is attached to every
 /// provider request, while the owned loop validates before accepting a final
 /// turn and applies its normal bounded recovery policy on malformed output.
-pub(crate) async fn run_loop_to_typed<M, T>(
+pub async fn run_loop_to_typed<M, H, T>(
     model: M,
-    hook: Option<DefraSessionHook>,
+    hook: Option<H>,
     prompt: Message,
     history: Vec<Message>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
@@ -135,6 +136,7 @@ pub(crate) async fn run_loop_to_typed<M, T>(
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
+    H: SessionHook + Clone + 'static,
     T: DeserializeOwned + schemars::JsonSchema + 'static,
 {
     config.structured_output = Some(StructuredOutputConfig::for_type::<T>());

@@ -71,7 +71,10 @@ Plumbing and tooling need no proof change when they preserve semantics. The
   DefraDB status, `ClientSyncStateOwner` combines facts, and
   `project_sync_health` derives product state. Keep runtime readiness separate
   and do not add UI-local sync heuristics.
-- Rig is a provider client behind `llm::rig_compat` and `provider_input`.
+- Rig is a provider client behind `gents_loop::rig_compat` and
+  `gents_loop::provider_input`, re-exported as `llm::rig_compat` and
+  `provider_input` for callers here. Rig's own types stay inside those two
+  and the loop that drives them (`gents_loop::loop_stream`).
   Persisted messages remain native. DefraDB is the pinned public dependency in
   the workspace `Cargo.toml`; investigate node, schema, identity, and
   transaction behavior there. Claude subscriptions use Anthropic Messages HTTP

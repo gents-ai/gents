@@ -3,8 +3,12 @@ use std::sync::{Arc, Mutex};
 use rig::agent::StreamingError;
 use rig::completion::{CompletionError, CompletionRequest, Usage};
 
+// pub, not pub(super): gents' own loop_stream test suite (crates/gents/src/
+// agent/loop_stream/tests/budgeting.rs) drives these directly, and a
+// pub(super) item in this crate is invisible to a dependent crate's own test
+// build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AggregateTokenCharge {
+pub enum AggregateTokenCharge {
     Missing,
     Within,
     Exhausted,
@@ -12,13 +16,13 @@ pub(super) enum AggregateTokenCharge {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AggregatePostChargeAction {
+pub enum AggregatePostChargeAction {
     Continue,
     Succeed,
     Fail,
 }
 
-pub(super) fn aggregate_post_charge_action(
+pub fn aggregate_post_charge_action(
     charge: AggregateTokenCharge,
     terminal_valid: bool,
 ) -> AggregatePostChargeAction {
@@ -34,18 +38,17 @@ pub(super) fn aggregate_post_charge_action(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AggregateTokenLedger {
-    pub(crate) limit: u64,
-    pub(crate) used: u64,
+pub struct AggregateTokenLedger {
+    pub limit: u64,
+    pub used: u64,
 }
 
-pub(crate) const AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX: &str =
-    "aggregate_token_budget_exhausted: ";
+pub const AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX: &str = "aggregate_token_budget_exhausted: ";
 
 /// Recover only the typed request-budget failure from an anyhow context
 /// chain. Matching the underlying `StreamingError` rather than arbitrary text
 /// prevents provider/model content from forging Harbor's scoreable outcome.
-pub(crate) fn aggregate_token_budget_exhaustion_message(error: &anyhow::Error) -> Option<String> {
+pub fn aggregate_token_budget_exhaustion_message(error: &anyhow::Error) -> Option<String> {
     error.chain().find_map(|cause| {
         let streaming_error = cause.downcast_ref::<StreamingError>()?;
         let StreamingError::Completion(CompletionError::ProviderError(reason)) = streaming_error
@@ -64,25 +67,25 @@ pub(crate) fn aggregate_token_budget_exhaustion_message(error: &anyhow::Error) -
 /// numeric limit would mint a fresh allowance. Sharing this handle makes all
 /// provider calls compete for and charge the same request-wide budget.
 #[derive(Debug, Clone)]
-pub(crate) struct AggregateTokenBudget {
+pub struct AggregateTokenBudget {
     ledger: Arc<Mutex<AggregateTokenLedger>>,
 }
 
 impl AggregateTokenBudget {
-    pub(crate) fn new(limit: u64) -> Self {
+    pub fn new(limit: u64) -> Self {
         Self::with_prior_usage(limit, 0)
     }
 
     /// Mint a ledger that already reflects durable `InferenceCall` usage for
     /// this physical request (`request_doc_id`). Crash redrive and mid-request
     /// restart must not reset `used` to zero or the budget can be exceeded.
-    pub(crate) fn with_prior_usage(limit: u64, used: u64) -> Self {
+    pub fn with_prior_usage(limit: u64, used: u64) -> Self {
         Self {
             ledger: Arc::new(Mutex::new(AggregateTokenLedger { limit, used })),
         }
     }
 
-    pub(crate) fn snapshot(&self) -> Result<AggregateTokenLedger, StreamingError> {
+    pub fn snapshot(&self) -> Result<AggregateTokenLedger, StreamingError> {
         self.ledger.lock().map(|ledger| *ledger).map_err(|_| {
             StreamingError::Completion(CompletionError::ProviderError(
                 "aggregate_token_ledger_unavailable: request budget lock was poisoned".to_string(),
@@ -105,19 +108,21 @@ impl AggregateTokenBudget {
 }
 
 impl AggregateTokenLedger {
-    pub(crate) fn remaining(self) -> u64 {
+    pub fn remaining(self) -> u64 {
         self.limit.saturating_sub(self.used)
     }
 
-    pub(crate) fn effective_output_tokens(self, input_tokens: u64, configured_max: u64) -> u64 {
+    pub fn effective_output_tokens(self, input_tokens: u64, configured_max: u64) -> u64 {
         configured_max.min(self.remaining().saturating_sub(input_tokens))
     }
 
-    pub(crate) fn can_dispatch(self, input_tokens: u64, configured_max: u64) -> bool {
+    pub fn can_dispatch(self, input_tokens: u64, configured_max: u64) -> bool {
         self.effective_output_tokens(input_tokens, configured_max) > 0
     }
 
-    pub(super) fn charge_reported(&mut self, usage: Option<Usage>) -> AggregateTokenCharge {
+    // pub, not pub(super): gents' own budgeting tests exercise the ledger's
+    // charge arithmetic directly (same visibility reasoning as above).
+    pub fn charge_reported(&mut self, usage: Option<Usage>) -> AggregateTokenCharge {
         let Some(usage) = usage else {
             return AggregateTokenCharge::Missing;
         };

@@ -705,12 +705,19 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Every non-test Rust source under `crates/gents/src`.
+/// Every non-test Rust source of the two crates the completion path lives
+/// in.
+///
+/// `gents-loop` is walked as well as `gents`: the owned loop moved there,
+/// and a scan that only looked here would report an empty seam and call it
+/// clean, which is the one answer these tests must never give.
 fn production_sources() -> Vec<(String, String)> {
     let root = repo_root();
-    let src = root.join("crates/gents/src");
     let mut out = Vec::new();
-    let mut stack = vec![src.clone()];
+    let mut stack = vec![
+        root.join("crates/gents/src"),
+        root.join("crates/gents-loop/src"),
+    ];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()))
@@ -729,13 +736,19 @@ fn production_sources() -> Vec<(String, String)> {
                 .to_string_lossy()
                 .replace('\\', "/");
             // Test-only sources are not production call sites. Test code in
-            // this crate lives in separate `tests.rs` files rather than inline
-            // `#[cfg(test)]` modules, so excluding by path is sufficient — and
-            // unlike truncating at the first `#[cfg(test)]`, it does not also
+            // these crates lives in separate files rather than inline
+            // `#[cfg(test)]` modules, so excluding by path is sufficient, and
+            // unlike truncating at the first `#[cfg(test)]` it does not also
             // discard the file's real body (those markers sit at the top of
             // `loop_stream.rs` and `compaction.rs`, declaring `mod tests;`).
+            // `gents` spells them `tests.rs`, `gents-loop` spells them
+            // `<module>_tests.rs`; both are excluded, or the loop's own tests
+            // would read as production call sites.
+            let file_name = relative.rsplit('/').next().unwrap_or("");
             if relative.ends_with("/tests.rs")
                 || relative.contains("/tests/")
+                || file_name.ends_with("_tests.rs")
+                || file_name.ends_with("_test.rs")
                 || relative.contains("test_support")
                 || relative.contains("lean_vocab_test")
             {
@@ -764,8 +777,8 @@ fn files_containing(needles: &[&str]) -> BTreeSet<String> {
 #[test]
 fn provider_invocations_are_confined_to_the_owned_loop_seam() {
     let expected = BTreeSet::from([
-        // Builds the request and sends it — the one owned-loop seam.
-        "crates/gents/src/agent/loop_stream.rs".to_string(),
+        // Builds the request and sends it: the one owned-loop seam.
+        "crates/gents-loop/src/loop_stream.rs".to_string(),
         // Wraps a model to apply admission control; receives an
         // already-assembled request from the owned loop.
         "crates/gents/src/admission/client.rs".to_string(),
@@ -784,20 +797,29 @@ fn provider_invocations_are_confined_to_the_owned_loop_seam() {
 fn owned_loop_entry_points_are_registered() {
     let expected = BTreeSet::from([
         // Text and typed helpers wrap `run_loop_stream`.
-        "crates/gents/src/agent/loop_stream/one_shot.rs".to_string(),
-        // Daemon request execution — the main path.
+        "crates/gents-loop/src/loop_stream/one_shot.rs".to_string(),
+        // Daemon request execution: the main path.
         "crates/gents/src/agent/daemon/inference.rs".to_string(),
         // Conversation title generation.
         "crates/gents/src/agent/daemon/title.rs".to_string(),
         // Compaction summarization.
-        "crates/gents/src/compaction.rs".to_string(),
+        "crates/gents-loop/src/compaction.rs".to_string(),
         // One-shot CLI runs.
         "crates/gents/src/oneshot.rs".to_string(),
     ]);
+    // Both spellings of each call. The loop's entry points are generic over
+    // the session hook now, so a caller that has to name the hook writes
+    // `run_loop_to_text::<M, DefraSessionHook>(...)` and a needle ending in
+    // `(` would miss it. Missing an entry point here is the failure that
+    // matters: it reads as "no new completion path", which is exactly what
+    // this test exists to disprove.
     let found = files_containing(&[
         "run_loop_stream(",
+        "run_loop_stream::<",
         "run_loop_to_text(",
+        "run_loop_to_text::<",
         "run_loop_to_typed(",
+        "run_loop_to_typed::<",
     ]);
     assert_eq!(
         found, expected,

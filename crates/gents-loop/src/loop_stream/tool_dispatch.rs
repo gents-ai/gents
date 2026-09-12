@@ -1,24 +1,27 @@
 use super::*;
 
-pub(super) fn value_to_json_string(value: &serde_json::Value) -> String {
+// pub, not pub(super): gents' own tool-execution tests exercise this
+// formatting helper directly (a pub(super) item in this crate is invisible to
+// a dependent crate's own test build).
+pub fn value_to_json_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(string) => string.clone(),
         other => other.to_string(),
     }
 }
 
-pub(crate) async fn dispatch_tool(
+pub async fn dispatch_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
     args: String,
-    live_output: Option<crate::background_tools::LiveToolOutputWriter>,
+    live_output: Option<crate::live_output::LiveToolOutputWriter>,
     session_id: Option<String>,
 ) -> ToolOutcome {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
         // An unresolved name is a typed dispatch failure, not completed output.
         return ToolOutcome::from_dispatch(
             name,
-            Err(crate::llm::tool::ToolError::ReportedFailure {
+            Err(crate::tool::ToolError::ReportedFailure {
                 class: crate::tool_call_lifecycle::FailureClass::ArgumentInvalid,
                 text: format!("error: unknown tool '{name}'"),
             }),

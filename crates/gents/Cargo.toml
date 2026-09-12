@@ -16,7 +16,7 @@ default = [
     "defra-node/wasmtime-runtime",
 ]
 agent-memory = []
-typescript = ["dep:ts-rs"]
+typescript = ["dep:ts-rs", "gents-loop/typescript"]
 # Gates the e2e_live test binary out of default builds: every test in it is
 # live-inference-gated, so default runs paid a ~160MB link to execute nothing.
 live-e2e = []
@@ -45,6 +45,7 @@ crypto.workspace = true
 defra-core.workspace = true
 defra-p2p-adapter.workspace = true
 gents-fs-runner = { path = "../gents-fs-runner" }
+gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
 gents-migration = { path = "../gents-migration" }
 defra-node.workspace = true

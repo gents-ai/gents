@@ -66,7 +66,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // exceed Tokio's default worker stack before this task is spawned.
         tokio::spawn(Box::pin(async move {
             if let Err(error) = admission::scope_request(admission_context, async move {
-                crate::rendered_request::scope::scope_request_if_configured(
+                crate::rendered_request::scope_request_if_configured(
                     capture_context,
                     capture_factory.as_ref(),
                     maybe_generate_conversation_title(
@@ -158,7 +158,7 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
         match admission::scope_call(CallKind::OneOff, attempt, async move {
             tokio::time::timeout(
                 Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS),
-                crate::agent::loop_stream::run_loop_to_text(
+                crate::agent::loop_stream::run_loop_to_text::<M, crate::hook::DefraSessionHook>(
                     model,
                     None,
                     crate::llm::message::Message::user(prompt),

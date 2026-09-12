@@ -3796,6 +3796,7 @@ dependencies = [
  "gents-callback-fixture-create-workspace",
  "gents-fs-runner",
  "gents-lean-contract",
+ "gents-loop",
  "gents-migration",
  "gents-protocol",
  "hmac",
@@ -4088,6 +4089,31 @@ version = "0.1.0"
 dependencies = [
  "lens_sdk",
  "serde_json",
+]
+
+[[package]]
+name = "gents-loop"
+version = "0.16.4"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "gents-protocol",
+ "rand 0.9.2",
+ "rig-core",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml 0.8.2",
+ "tracing",
+ "ts-rs",
 ]
 
 [[package]]
@@ -8407,7 +8433,7 @@ dependencies = [
 [[package]]
 name = "rig-core"
 version = "0.35.0"
-source = "git+https://github.com/sourcenetwork/rig?rev=1ebeeaee3b569bb6e242e000c11df1ed2c0cca90#1ebeeaee3b569bb6e242e000c11df1ed2c0cca90"
+source = "git+https://github.com/vertexclique/rig?rev=36a4c7fa5dcc450659d88556f3b4ba2be8b6a079#36a4c7fa5dcc450659d88556f3b4ba2be8b6a079"
 dependencies = [
  "as-any",
  "async-stream",

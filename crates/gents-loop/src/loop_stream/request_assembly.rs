@@ -7,10 +7,7 @@ use super::*;
 /// workspace context. Its local ordering is fenced by
 /// `assembles_context_immediately_before_prompt`; the generated Lean layer
 /// cases exercise the canonical prompt tail without it.
-pub(crate) fn assemble_new_messages(
-    context_message: Option<Message>,
-    prompt: Message,
-) -> Vec<Message> {
+pub fn assemble_new_messages(context_message: Option<Message>, prompt: Message) -> Vec<Message> {
     let mut new_messages: Vec<Message> = Vec::with_capacity(2);
     if let Some(context_message) = context_message {
         new_messages.push(context_message);
@@ -19,7 +16,7 @@ pub(crate) fn assemble_new_messages(
     new_messages
 }
 
-pub(crate) fn is_request_context_message(message: &Message) -> bool {
+pub fn is_request_context_message(message: &Message) -> bool {
     let Message::User { content } = message else {
         return false;
     };
@@ -49,7 +46,7 @@ pub(crate) fn is_request_context_message(message: &Message) -> bool {
 #[error("provider_input_repair_removed_complete_prompt")]
 struct ProviderInputRepairError;
 
-pub(crate) fn repair_provider_input(
+pub fn repair_provider_input(
     history: &mut Vec<Message>,
     new_messages: &mut Vec<Message>,
 ) -> Result<(), StreamingError> {
@@ -79,7 +76,7 @@ fn repair_messages(messages: &mut [Message]) {
             let AssistantContent::ToolCall(tool_call) = item else {
                 continue;
             };
-            let mut repaired = crate::llm::tool::normalize_tool_call_arguments(
+            let mut repaired = crate::tool::normalize_tool_call_arguments(
                 "repair",
                 &tool_call.function.name,
                 &tool_call.function.arguments,
@@ -125,7 +122,7 @@ fn sanitize_provider_arg_string(text: &str) -> String {
 /// Project the complete request through the selected provider wire DTO. Both
 /// mid-turn `Repair` rebuild paths recompute this projection before dispatch so
 /// the clamp and persisted accounting describe the actual repaired wire shape.
-pub(crate) fn completion_request_input_components(
+pub fn completion_request_input_components(
     request: &CompletionRequest,
     counter: &crate::provider_input::ProviderInputCounter,
 ) -> Result<crate::provider_input::ProviderInputProjection, StreamingError> {
@@ -239,7 +236,7 @@ pub(super) fn context_accounting_for_request(
 /// the context remaining after its fully assembled provider input. Compaction
 /// protects the configured input threshold; this clamp independently preserves
 /// `input + output <= context` on every dispatch.
-pub(crate) fn clamp_request_output_budget(
+pub fn clamp_request_output_budget(
     request: &mut CompletionRequest,
     config: &LoopConfig,
     input_tokens: usize,
@@ -275,7 +272,7 @@ pub(crate) fn clamp_request_output_budget(
 /// Final context-window legality guard. This belongs after reconstruction and
 /// recount but before capture: an input at/above context or a configured zero
 /// output ceiling is locally non-dispatchable, never clamped to one.
-pub(crate) fn ensure_context_can_dispatch(
+pub fn ensure_context_can_dispatch(
     request: &CompletionRequest,
     config: &LoopConfig,
     input_tokens: usize,
@@ -300,6 +297,7 @@ pub(crate) fn ensure_context_can_dispatch(
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn build_budgeted_request<M: CompletionModel>(
     model: &M,
     history: &mut Vec<Message>,

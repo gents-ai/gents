@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::llm::message::{Message, ToolResult};
 use crate::llm::tool::ToolDyn;
 use crate::llm::{HookAction, ToolCallHookAction};
 use chrono::{DateTime, Utc};
@@ -1134,6 +1135,111 @@ impl DefraSessionHook {
                 PolicyDecision::Terminate(_) => Err(e),
             },
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl gents_loop::session_hook::SessionHook for DefraSessionHook {
+    async fn on_completion_call_with_context(
+        &self,
+        prompt: &Message,
+        history: &[Message],
+        context: Option<&Message>,
+    ) -> HookAction {
+        DefraSessionHook::on_completion_call_with_context(self, prompt, history, context).await
+    }
+
+    async fn on_tool_call(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> ToolCallHookAction {
+        DefraSessionHook::on_tool_call(self, tool_name, tool_call_id, internal_call_id, args).await
+    }
+
+    async fn on_tool_result(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+        outcome: &gents_loop::tool_call_lifecycle::ToolOutcome,
+    ) -> HookAction {
+        DefraSessionHook::on_tool_result(
+            self,
+            tool_name,
+            tool_call_id,
+            internal_call_id,
+            args,
+            outcome,
+        )
+        .await
+    }
+
+    async fn foreground_live_output_writer(
+        &self,
+        internal_call_id: &str,
+    ) -> gents_loop::live_output::LiveToolOutputWriter {
+        DefraSessionHook::foreground_live_output_writer(self, internal_call_id).await
+    }
+
+    async fn session_id(&self) -> Option<String> {
+        DefraSessionHook::session_id(self).await
+    }
+
+    fn apply_persistence_policy(
+        &self,
+        result: anyhow::Result<()>,
+        context: &str,
+    ) -> anyhow::Result<()> {
+        DefraSessionHook::apply_persistence_policy(self, result, context)
+    }
+
+    async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
+        DefraSessionHook::persist_message(self, message).await
+    }
+
+    async fn persist_stream_tool_result_message(
+        &self,
+        tool_result: &ToolResult,
+        internal_call_id: &str,
+    ) -> anyhow::Result<()> {
+        DefraSessionHook::persist_stream_tool_result_message(self, tool_result, internal_call_id)
+            .await
+    }
+
+    async fn persist_stream_tool_result_progress(
+        &self,
+        tool_result: &ToolResult,
+        internal_call_id: &str,
+    ) -> anyhow::Result<bool> {
+        DefraSessionHook::persist_stream_tool_result_progress(self, tool_result, internal_call_id)
+            .await
+    }
+
+    async fn persist_inflight_assistant_turn(&self, message: &Message) -> anyhow::Result<u32> {
+        DefraSessionHook::persist_inflight_assistant_turn(self, message).await
+    }
+
+    async fn mark_current_response_materialized(&self, sequence: u32) -> anyhow::Result<()> {
+        DefraSessionHook::mark_current_response_materialized(self, sequence).await
+    }
+
+    async fn register_stream_tool_call_identity(
+        &self,
+        internal_call_id: &str,
+        result_id: &str,
+        call_id: Option<&str>,
+    ) {
+        DefraSessionHook::register_stream_tool_call_identity(
+            self,
+            internal_call_id,
+            result_id,
+            call_id,
+        )
+        .await
     }
 }
 
