@@ -189,6 +189,7 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
             <li key={c.sessionId}>
               <a
                 href={href({ name: "session", sessionId: c.sessionId })}
+                data-testid={`session-${c.sessionId}`}
                 className="-mx-3 grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 rounded-lg px-3 py-3.5 hover:bg-accent"
               >
                 <SessionStatus turnState={c.turnState} held={held.has(c.sessionId)} />

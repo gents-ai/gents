@@ -593,11 +593,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
 
               {session?.goal && <Goal goal={session.goal} />}
               <div ref={headerEnd} aria-hidden="true" />
-              <div className="mt-6 grid gap-5">
+              <div className="mt-6 grid gap-5" data-testid="transcript-panel">
                 {session?.timelinePage?.hasOlder && (
                   <Button
                     variant="ghost"
                     size="sm"
+                    data-testid="transcript-load-older"
                     className="justify-self-center text-muted-foreground"
                     disabled={loadingOlder}
                     onClick={loadOlder}

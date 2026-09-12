@@ -68,19 +68,15 @@ export function findAssistantResponseMarker(
 ): HTMLElement | null {
   return (
     Array.from(
-      root.querySelectorAll<HTMLElement>('[data-testid="assistant-message"]'),
-    ).find((message) =>
-      message
-        .querySelector<HTMLElement>(".message-content")
-        ?.textContent?.includes(expectedResponse),
-    ) ?? null
+      root.querySelectorAll<HTMLElement>(
+        '[data-slot="assistant-message"], [data-testid="assistant-message"]',
+      ),
+    ).find((message) => message.textContent?.includes(expectedResponse)) ?? null
   );
 }
 
 export function sessionRowCount(root: ParentNode): number {
-  return root.querySelectorAll(
-    '.session-list .session-row > button[data-testid^="session-"]',
-  ).length;
+  return root.querySelectorAll('[data-testid^="session-session-"]').length;
 }
 
 export function isSessionTurnSettled(

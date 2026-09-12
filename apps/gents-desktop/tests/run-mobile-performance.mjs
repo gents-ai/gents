@@ -179,16 +179,22 @@ async function runSample(browserInstance, sampleIndex) {
     ),
   );
 
+  await page
+    .locator('[data-testid^="session-session-"]')
+    .first()
+    .waitFor({ state: "visible" });
+  await settleRender(page);
   scenarios.push(
-    await measureScenario(page, cdp, "paired_launch_to_session_index", async () => {
-      await page
-        .locator('[data-testid="fleet-detail-name-peer-bombadil-local"]')
-        .click();
-      await page
-        .locator('[data-testid^="session-session-"]')
-        .first()
-        .waitFor({ state: "visible" });
-    }),
+    await captureInitialScenario(
+      page,
+      cdp,
+      "paired_launch_to_session_index",
+      monotonicElapsedMs(navigationStartedAt),
+      {
+        cold: sampleIndex === 1,
+        boundary: "navigation start -> first visible local session row",
+      },
+    ),
   );
 
   scenarios.push(
@@ -356,14 +362,12 @@ async function browserMetrics(page, cdp) {
 
 async function domSnapshot(page) {
   return page.evaluate(() => ({
-    sessionRows: document.querySelectorAll(
-      '.session-list button[data-testid^="session-session-"]',
-    ).length,
+    sessionRows: document.querySelectorAll('[data-testid^="session-session-"]').length,
     transcriptMessageCards: document.querySelectorAll(
-      '[data-testid="transcript-panel"] .message-card',
+      '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"]',
     ).length,
     transcriptTurnBlocks: document.querySelectorAll(
-      '[data-testid="transcript-panel"] .turn-block',
+      '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
     ).length,
     serializedBodyBytes: new TextEncoder().encode(document.body.innerHTML).byteLength,
   }));
@@ -587,8 +591,11 @@ function collectEnvironment(browserVersion) {
 }
 
 async function openMobileNavigation(page) {
-  const navigation = page.locator('[data-testid="mobile-chat-navigation"]');
-  if (await navigation.isVisible()) await navigation.click();
+  await page
+    .getByTestId("session-screen")
+    .getByRole("link", { name: "Sessions", exact: true })
+    .first()
+    .click();
   await page
     .locator('[data-testid="session-session-large"]')
     .waitFor({ state: "visible" });

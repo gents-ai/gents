@@ -115,6 +115,14 @@ describe("findAssistantResponseMarker", () => {
 
     expect(findAssistantResponseMarker(document, "UNIQUE_MARKER")).not.toBeNull();
   });
+
+  it("finds responses rendered by the design-kit conversation primitive", () => {
+    document.body.innerHTML = `
+      <div data-slot="assistant-message">UNIQUE_MARKER</div>
+    `;
+
+    expect(findAssistantResponseMarker(document, "UNIQUE_MARKER")).not.toBeNull();
+  });
 });
 
 describe("isSessionTurnSettled", () => {
@@ -148,14 +156,8 @@ describe("sessionRowCount", () => {
   it("counts session rows without mistaking filters for sessions", () => {
     document.body.innerHTML = `
       <input data-testid="session-search" />
-      <div class="session-list">
-        <span class="session-row">
-          <button data-testid="session-session-1">first</button>
-        </span>
-        <span class="session-row">
-          <button data-testid="session-session-2">second</button>
-        </span>
-      </div>
+      <a data-testid="session-session-1">first</a>
+      <a data-testid="session-session-2">second</a>
     `;
 
     expect(sessionRowCount(document)).toBe(2);
