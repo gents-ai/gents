@@ -1,4 +1,11 @@
-import { isValidElement, memo, useRef, type ReactNode } from "react";
+import {
+  isValidElement,
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -49,6 +56,64 @@ export const MarkdownContent = memo(function MarkdownContent({
     </div>
   );
 });
+
+const REVEAL_TICK_MS = 32;
+const REVEAL_MAX_TICKS = 12;
+const REVEAL_MIN_CHARS = 16;
+
+function prefersReducedMotion() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+/**
+ * Smooth a newly observed response burst without delaying ordinary token
+ * streaming or replaying animation for transcript history.
+ */
+export function RevealedMarkdownContent({
+  value,
+  animate,
+}: {
+  value: string;
+  animate: boolean;
+}) {
+  const animateRef = useRef(animate && !prefersReducedMotion());
+  if (animate) animateRef.current = !prefersReducedMotion();
+  const [visibleLength, setVisibleLength] = useState(() =>
+    animateRef.current
+      ? Math.min(REVEAL_MIN_CHARS, value.length)
+      : value.length,
+  );
+
+  useEffect(() => {
+    if (!animateRef.current) {
+      setVisibleLength(value.length);
+      return;
+    }
+    if (visibleLength >= value.length) return;
+
+    const remaining = value.length - visibleLength;
+    const step = Math.max(
+      REVEAL_MIN_CHARS,
+      Math.ceil(remaining / REVEAL_MAX_TICKS),
+    );
+    const timer = window.setTimeout(
+      () =>
+        setVisibleLength((current) => Math.min(value.length, current + step)),
+      REVEAL_TICK_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [value, visibleLength]);
+
+  return (
+    <div aria-busy={visibleLength < value.length ? "true" : undefined}>
+      <MarkdownContent value={value.slice(0, visibleLength)} />
+    </div>
+  );
+}
 
 export function normalizeTranscriptText(value?: string | null) {
   return value?.trim() ?? "";

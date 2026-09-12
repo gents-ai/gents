@@ -115,6 +115,24 @@
     animation: thinking-pulse var(--motion-pulse) ease-in-out infinite;
   }
 
+  .assistant-live-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-accent);
+    font-size: var(--text-2xs);
+    letter-spacing: normal;
+    text-transform: none;
+  }
+
+  .assistant-live-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: var(--radius-pill);
+    background: var(--color-accent);
+    animation: thinking-pulse var(--motion-pulse) ease-in-out infinite;
+  }
+
   .message-content {
     word-break: break-word;
     overflow-wrap: anywhere;
@@ -254,6 +272,26 @@
 }
 
 @layer transcript {
+  .assistant-activity {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .assistant-activity-copy {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .assistant-activity-copy strong {
+    color: var(--color-text);
+  }
+
+  .assistant-activity-copy span {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
   .thinking-card .thinking-dots {
     display: inline-flex;
     gap: var(--space-2);
@@ -285,6 +323,13 @@
     30% {
       opacity: 1;
       transform: translateY(-2px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .thinking-dots span,
+    .assistant-live-dot {
+      animation: none;
     }
   }
 

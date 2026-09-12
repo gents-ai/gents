@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -155,6 +155,135 @@ describe("assistant reasoning order", () => {
 
     expectReasoningBeforeAnswer();
   });
+
+  it("reveals a newly appended completed answer without animating loaded history", () => {
+    vi.useFakeTimers();
+    const history: RenderedTimelineItem[] = [
+      {
+        kind: "assistantMessage",
+        itemKey: "assistant-history",
+        content: "This historical answer is immediately readable.",
+      },
+    ];
+    const { rerender } = render(
+      <MessageList timelineIdentity="session-1" timelineItems={history} />,
+    );
+    expect(
+      screen.getByText("This historical answer is immediately readable."),
+    ).toBeInTheDocument();
+
+    rerender(
+      <MessageList
+        timelineIdentity="session-1"
+        timelineItems={[
+          ...history,
+          {
+            kind: "assistantMessage",
+            itemKey: "assistant-new",
+            content: "This newly synchronized answer arrived as one database update.",
+          },
+        ]}
+      />,
+    );
+
+    expect(
+      screen.queryByText(
+        "This newly synchronized answer arrived as one database update.",
+      ),
+    ).not.toBeInTheDocument();
+    for (let tick = 0; tick < 16; tick += 1) {
+      act(() => vi.advanceTimersByTime(32));
+    }
+    expect(
+      screen.getByText(
+        "This newly synchronized answer arrived as one database update.",
+      ),
+    ).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("keeps an explicit responding indicator beside live answer text", () => {
+    render(
+      <MessageList
+        timelineItems={[
+          {
+            kind: "liveAssistant",
+            itemKey: "live-1",
+            content: "Answer in progress",
+            reasoning: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Responding");
+  });
+
+  it("does not restart reveal when a live overlay becomes a durable message", () => {
+    vi.useFakeTimers();
+    const answer = "The same response moves from the live overlay into history.";
+    const { rerender } = render(
+      <MessageList
+        timelineIdentity="session-1"
+        timelineItems={[
+          {
+            kind: "liveAssistant",
+            itemKey: "live-assistant",
+            content: answer,
+            reasoning: null,
+          },
+        ]}
+      />,
+    );
+
+    rerender(
+      <MessageList
+        timelineIdentity="session-1"
+        timelineItems={[
+          {
+            kind: "assistantMessage",
+            itemKey: "message-7",
+            content: answer,
+            reasoning: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(answer)).toBeInTheDocument();
+  });
+
+  it("does not animate history when selecting another session", () => {
+    const { rerender } = render(
+      <MessageList
+        timelineIdentity="session-1"
+        timelineItems={[
+          {
+            kind: "assistantMessage",
+            itemKey: "message-1",
+            content: "First session history",
+          },
+        ]}
+      />,
+    );
+
+    rerender(
+      <MessageList
+        timelineIdentity="session-2"
+        timelineItems={[
+          {
+            kind: "assistantMessage",
+            itemKey: "message-2",
+            content: "Second session history is immediately readable.",
+          },
+        ]}
+      />,
+    );
+
+    expect(
+      screen.getByText("Second session history is immediately readable."),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("ChatTranscriptPanel states", () => {
@@ -163,6 +292,7 @@ describe("ChatTranscriptPanel states", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
