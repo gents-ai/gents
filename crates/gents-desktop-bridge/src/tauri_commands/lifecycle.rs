@@ -114,6 +114,7 @@ pub async fn desktop_client_start<R: Runtime>(
     // command cannot leave the store open while a second start races it.
     // Never hold the std::sync::Mutex across an await (future must be Send).
     if let Some(core) = current_core(&state) {
+        super::managed_server::start_running_managed_pairing(&state, Arc::clone(&core)).await;
         return build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
             .await
             .map_err(BridgeError::untyped);
@@ -129,6 +130,8 @@ pub async fn desktop_client_start<R: Runtime>(
             "desktop client start completed without installing a live client",
         )
     })?;
+
+    super::managed_server::start_running_managed_pairing(&state, Arc::clone(&core)).await;
 
     build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
         .await

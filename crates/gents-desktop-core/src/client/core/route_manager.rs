@@ -104,7 +104,7 @@ impl ClientRouteManager {
             .find(|record| record.peer_id == peer_id)
             .cloned()
             .with_context(|| format!("peer {peer_id} not found"))?;
-        if record.source.as_deref() == Some("local-standard") {
+        if record.is_managed_runtime() {
             anyhow::bail!("the local runtime deployment cannot be removed");
         }
         let removed = sync_state

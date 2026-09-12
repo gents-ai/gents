@@ -248,6 +248,7 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
     let client =
         ClientCore::start_with_paths_and_options(client_paths, ClientCoreOptions::local_only())
             .await?;
+    client.add_local_standard_peer_for_test(&agent_did).await?;
     Ok((runtime, client, agent_did))
 }
 

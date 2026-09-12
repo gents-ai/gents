@@ -1046,7 +1046,7 @@ impl ClientCore {
             .into_iter()
             .find(|record| record.agent_did == agent_did);
         match record {
-            Some(record) if record.source.as_deref() == Some("local-standard") => record
+            Some(record) if record.operator_graphql().is_some() => record
                 .operator_graphql()
                 .map(str::to_owned)
                 .map(ConfigAccess::Graphql)
@@ -2065,8 +2065,10 @@ mod delete_source_tests {
     }
 
     #[test]
-    fn local_standard_is_explicitly_exempt_from_route_readiness() {
-        let peer = peer_record(Some("local-standard"));
+    fn local_standard_waits_for_background_pairing_before_chat() {
+        let mut peer = peer_record(Some("local-standard"));
+        assert!(ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).is_err());
+        peer.pairing_ready = true;
         ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).unwrap();
     }
 

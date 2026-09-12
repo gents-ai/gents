@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use gents_protocol::enrollment::{
+    EnrollmentOperatorAction, DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{oneshot, watch};
@@ -174,6 +177,31 @@ pub async fn start_server(config: ServerConfig) -> Result<RunningServer> {
         shutdown_tx,
         thread,
     })
+}
+
+/// Approve the desktop client enrollment using the identity owned by a
+/// co-hosted managed runtime. The signed durable enrollment documents remain
+/// the route authority; this helper only drives the existing operator API.
+pub async fn approve_managed_client_enrollment(
+    home: &Path,
+    graphql: &str,
+    request_id: &str,
+) -> Result<()> {
+    let request_id = request_id.trim();
+    anyhow::ensure!(
+        !request_id.is_empty(),
+        "managed enrollment request id is empty"
+    );
+    crate::commands::p2p::enrollment_admin::submit_enrollment_decision(
+        home,
+        graphql,
+        request_id,
+        EnrollmentOperatorAction::Approve,
+        DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+    )
+    .await
+    .context("approving desktop enrollment on managed runtime")?;
+    Ok(())
 }
 
 async fn join_server_thread(thread: std::thread::JoinHandle<Result<()>>) -> Result<()> {

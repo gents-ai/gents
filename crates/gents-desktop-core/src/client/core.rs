@@ -369,9 +369,13 @@ impl ClientCore {
         &self.p2p
     }
 
-    #[cfg(test)]
-    pub(crate) async fn add_local_standard_peer_for_test(&self, agent_did: &str) -> Result<()> {
-        self.sync_state
+    /// Test-fixture seam for exercising local mutation semantics independently
+    /// of the enrollment integration suite. Product callers must establish
+    /// readiness through the signed route owner.
+    #[doc(hidden)]
+    pub async fn add_local_standard_peer_for_test(&self, agent_did: &str) -> Result<()> {
+        let record = self
+            .sync_state
             .upsert_local_standard_peer(
                 "Test Local Runtime",
                 "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
@@ -380,6 +384,7 @@ impl ClientCore {
                 "/tmp/test-agent-home",
             )
             .await?;
+        self.sync_state.set_pairing_ready(&record, true).await?;
         Ok(())
     }
 
