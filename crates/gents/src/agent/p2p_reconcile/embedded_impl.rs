@@ -11,7 +11,10 @@ use tokio::time::timeout;
 use crate::defra_node::EmbeddedNode;
 
 use super::templates::{to_replication_filters, PairingFilters};
-use super::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
+use super::{
+    resolve_embedded_collection_id, resolve_embedded_collection_name, RemoteP2pAdmin,
+    RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+};
 
 const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -133,42 +136,11 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 
     async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
-        match self.node.get_collection(name) {
-            Ok(Some(def)) => Ok(Some(def.collection_id)),
-            Ok(None) => Ok(None),
-            Err(error) => Err(RemoteP2pAdminError::LocalError(format!(
-                "resolve_collection_id({name}): {error}"
-            ))),
-        }
+        resolve_embedded_collection_id(&self.node, name)
     }
 
     async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
-        match self.node.get_collection(id) {
-            Ok(Some(def)) => return Ok(Some(def.name)),
-            Ok(None) => {}
-            Err(error) => {
-                return Err(RemoteP2pAdminError::LocalError(format!(
-                    "resolve_collection_name({id}) as name: {error}"
-                )))
-            }
-        }
-        let names = self.node.list_collections().map_err(|error| {
-            RemoteP2pAdminError::LocalError(format!("list_collections for id {id}: {error}"))
-        })?;
-        for name in names {
-            match self.node.get_collection(&name) {
-                Ok(Some(def)) if def.collection_id == id => return Ok(Some(def.name)),
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        collection_name = %name,
-                        %error,
-                        "resolve_collection_name failed to fetch a collection definition"
-                    );
-                }
-            }
-        }
-        Ok(None)
+        resolve_embedded_collection_name(&self.node, id)
     }
 
     async fn add_p2p_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
