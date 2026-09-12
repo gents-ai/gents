@@ -240,7 +240,9 @@ jobs:
 
       - name: Check gents-loop for wasm32-wasip1
         if: matrix.suite == 'runtime'
-        run: cargo check -p gents-loop --target wasm32-wasip1
+        run: |
+          rustup target add wasm32-wasip1
+          cargo check -p gents-loop --target wasm32-wasip1
 
       - name: Run proof conformance tests
         if: matrix.suite == 'runtime'

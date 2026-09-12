@@ -32,9 +32,10 @@ cd "$workspace_root"
 unset RUSTUP_TOOLCHAIN
 rustup toolchain install --no-self-update
 # rustup's no-name install branch honors the manifest but does not forward
-# CLI target options; add the runtime WASM targets explicitly under this lock.
-# wasm32-unknown-unknown: lens/callback fixtures. wasm32-wasip1: gents-loop guest.
-rustup target add wasm32-unknown-unknown wasm32-wasip1
+# CLI target options; add the runtime's WASM target explicitly under this lock.
+# wasm32-wasip1 stays off this shared install: `cargo tree --target all` on
+# the support shard would then resolve gents-cli for wasip1 and fail --locked.
+rustup target add wasm32-unknown-unknown
 active_toolchain="$(rustup show active-toolchain)"
 active_toolchain="${active_toolchain%% *}"
 if [[ -z "$active_toolchain" || "$active_toolchain" == *$'\n'* ]]; then
