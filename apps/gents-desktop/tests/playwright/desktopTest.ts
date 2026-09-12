@@ -108,7 +108,10 @@ export async function openConfig(page: Page) {
     await configLink.first().click();
   } else {
     await page.getByRole("button", { name: "Menu" }).click();
-    await page.getByRole("link", { name: /configuration|Configure/i }).first().click();
+    await page
+      .getByRole("link", { name: /configuration|Configure/i })
+      .first()
+      .click();
   }
   await expect(page.getByTestId("agent-screen")).toBeVisible();
 }

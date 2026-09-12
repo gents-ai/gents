@@ -1,28 +1,36 @@
-import type { DeploymentView, InferenceProfile } from '@source-inc/gents-desktop-client'
-import type { Shell } from '@/hooks/useShell'
-import { navigate } from '@/lib/router'
-import { ChoiceRow, FactRow, NumberRow, TextRow } from './editors'
-import { newId, useDraft } from './draft'
-import { DeleteButton, ListDetail } from './ListDetail'
-import { Group } from './rows'
+import type {
+  DeploymentView,
+  InferenceProfile,
+} from "@source-inc/gents-desktop-client";
+import type { Shell } from "@/hooks/useShell";
+import { navigate } from "@/lib/router";
+import { ChoiceRow, FactRow, NumberRow, TextRow } from "./editors";
+import { newId, useDraft } from "./draft";
+import { DeleteButton, ListDetail } from "./ListDetail";
+import { Group } from "./rows";
 
 function Editor({
   shell,
   deployment,
   profile,
 }: {
-  shell: Shell
-  deployment: DeploymentView
-  profile: InferenceProfile
+  shell: Shell;
+  deployment: DeploymentView;
+  profile: InferenceProfile;
 }) {
-  const base = { name: 'agent' as const, agentDid: deployment.agentDid, section: 'profiles' }
+  const base = {
+    name: "agent" as const,
+    agentDid: deployment.agentDid,
+    section: "profiles",
+  };
   const saved = {
-    displayName: profile.display_name ?? '',
+    displayName: profile.display_name ?? "",
     backendId: profile.backend_id,
     modelName: profile.model_name,
-    maxOutputTokens: profile.max_output_tokens != null ? String(profile.max_output_tokens) : '',
-    reasoningEffort: profile.reasoning_effort ?? '',
-  }
+    maxOutputTokens:
+      profile.max_output_tokens != null ? String(profile.max_output_tokens) : "",
+    reasoningEffort: profile.reasoning_effort ?? "",
+  };
   const d = useDraft(saved, (next) =>
     shell.applyConfig((api) =>
       api.saveInferenceProfileConfig({
@@ -32,12 +40,13 @@ function Editor({
           backend_id: next.backendId,
           model_name: next.modelName,
           max_output_tokens: next.maxOutputTokens ? Number(next.maxOutputTokens) : null,
-          reasoning_effort: (next.reasoningEffort || null) as InferenceProfile['reasoning_effort'],
+          reasoning_effort: (next.reasoningEffort ||
+            null) as InferenceProfile["reasoning_effort"],
         },
       }),
     ),
-  )
-  const id = (f: string) => `${profile.profile_id}-${f}`
+  );
+  const id = (f: string) => `${profile.profile_id}-${f}`;
   return (
     <>
       <Group title={profile.display_name ?? profile.profile_id}>
@@ -45,36 +54,36 @@ function Editor({
           {profile.profile_id}
         </FactRow>
         <TextRow
-          id={id('name')}
+          id={id("name")}
           label="Display name"
           value={d.draft.displayName}
-          onChange={(v) => d.set('displayName', v)}
+          onChange={(v) => d.set("displayName", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
         <ChoiceRow
-          id={id('backend')}
+          id={id("backend")}
           label="Backend"
           value={d.draft.backendId}
-          onChange={(v) => d.choose('backendId', v)}
+          onChange={(v) => d.choose("backendId", v)}
           items={deployment.inferenceBackends.map((b) => ({
             value: b.backendId,
             label: b.name ?? b.backendId,
           }))}
         />
         <TextRow
-          id={id('model')}
+          id={id("model")}
           label="Model"
           value={d.draft.modelName}
-          onChange={(v) => d.set('modelName', v)}
+          onChange={(v) => d.set("modelName", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
         <NumberRow
-          id={id('maxout')}
+          id={id("maxout")}
           label="Max output tokens"
           value={d.draft.maxOutputTokens}
-          onChange={(v) => d.set('maxOutputTokens', v)}
+          onChange={(v) => d.set("maxOutputTokens", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
@@ -92,7 +101,7 @@ function Editor({
         }
       />
     </>
-  )
+  );
 }
 
 export function ProfilesPanel({
@@ -100,11 +109,15 @@ export function ProfilesPanel({
   deployment,
   item,
 }: {
-  shell: Shell
-  deployment: DeploymentView
-  item?: string
+  shell: Shell;
+  deployment: DeploymentView;
+  item?: string;
 }) {
-  const base = { name: 'agent' as const, agentDid: deployment.agentDid, section: 'profiles' }
+  const base = {
+    name: "agent" as const,
+    agentDid: deployment.agentDid,
+    section: "profiles",
+  };
   return (
     <ListDetail
       base={base}
@@ -117,29 +130,29 @@ export function ProfilesPanel({
       createLabel="New profile"
       empty="No inference profiles."
       onCreate={async () => {
-        const profile_id = newId('profile')
-        const backend = deployment.inferenceBackends[0]
-        if (!backend) throw new Error('Add a backend first')
+        const profile_id = newId("profile");
+        const backend = deployment.inferenceBackends[0];
+        if (!backend) throw new Error("Add a backend first");
         await shell.applyConfig((api) =>
           api.saveInferenceProfileConfig({
             document: {
               agent_did: deployment.agentDid,
               profile_id,
-              display_name: 'New profile',
+              display_name: "New profile",
               backend_id: backend.backendId,
-              model_name: backend.models[0] ?? 'model',
+              model_name: backend.models[0] ?? "model",
             },
           }),
-        )
+        );
         navigate({
-          name: 'agent',
+          name: "agent",
           agentDid: deployment.agentDid,
-          section: 'profiles',
+          section: "profiles",
           item: profile_id,
-        })
+        });
       }}
       detail={(id) => {
-        const profile = deployment.inferenceProfiles.find((p) => p.profile_id === id)!
+        const profile = deployment.inferenceProfiles.find((p) => p.profile_id === id)!;
         return (
           <Editor
             key={JSON.stringify(profile)}
@@ -147,8 +160,8 @@ export function ProfilesPanel({
             deployment={deployment}
             profile={profile}
           />
-        )
+        );
       }}
     />
-  )
+  );
 }

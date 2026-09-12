@@ -18,37 +18,38 @@ import {
   OctagonPause,
   Plus,
   X,
-} from 'lucide-react'
-import type { MailboxItemView } from '@source-inc/gents-desktop-client'
-import { Button } from '@gents/ui/components/button'
-import { ScrollArea } from '@gents/ui/components/scroll-area'
-import { cn } from '@gents/ui/lib/utils'
-import type { Shell } from '@/hooks/useShell'
-import { href, navigate } from '@/lib/router'
-import { toast } from 'sonner'
-import { useState } from 'react'
-import { BehaviorAvatar } from './parts'
-import { BehaviorHoverCard } from './HoverCards'
-import { behaviorName } from './behavior'
-import { when } from './time'
+} from "lucide-react";
+import type { MailboxItemView } from "@source-inc/gents-desktop-client";
+import { Button } from "@gents/ui/components/button";
+import { ScrollArea } from "@gents/ui/components/scroll-area";
+import { cn } from "@gents/ui/lib/utils";
+import type { Shell } from "@/hooks/useShell";
+import { href, navigate } from "@/lib/router";
+import { toast } from "sonner";
+import { useState } from "react";
+import { BehaviorAvatar } from "./parts";
+import { BehaviorHoverCard } from "./HoverCards";
+import { behaviorName } from "./behavior";
+import { when } from "./time";
 
 /* the kind glyph on the rail, and its word */
-const KIND: Record<string, { icon: typeof CircleHelp; label: string; tone?: string }> = {
-  ask: { icon: CircleHelp, label: 'Question' },
-  gate: { icon: OctagonPause, label: 'Gate' },
-  finished: { icon: CircleCheck, label: 'Finished' },
-  failed: { icon: CircleX, label: 'Failed', tone: 'text-destructive' },
-  flag: { icon: Flag, label: 'Flag' },
-}
+const KIND: Record<string, { icon: typeof CircleHelp; label: string; tone?: string }> =
+  {
+    ask: { icon: CircleHelp, label: "Question" },
+    gate: { icon: OctagonPause, label: "Gate" },
+    finished: { icon: CircleCheck, label: "Finished" },
+    failed: { icon: CircleX, label: "Failed", tone: "text-destructive" },
+    flag: { icon: Flag, label: "Flag" },
+  };
 
 export function MailboxScreen({ shell }: { shell: Shell }) {
-  const deployment = shell.selectedDeployment
-  const items = (deployment?.mailboxItems ?? []).filter((m) => m.status === 'open')
+  const deployment = shell.selectedDeployment;
+  const items = (deployment?.mailboxItems ?? []).filter((m) => m.status === "open");
   return (
     <ScrollArea className="h-full" data-testid="mailbox-screen">
       <div className="mx-auto max-w-page px-6 py-6">
         <a
-          href={href({ name: 'sessions' })}
+          href={href({ name: "sessions" })}
           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3" /> Back
@@ -85,7 +86,7 @@ export function MailboxScreen({ shell }: { shell: Shell }) {
                 variant="brand"
                 className="mt-5"
                 nativeButton={false}
-                render={<a href={href({ name: 'session', sessionId: null })} />}
+                render={<a href={href({ name: "session", sessionId: null })} />}
               >
                 <Plus /> New session
               </Button>
@@ -94,7 +95,7 @@ export function MailboxScreen({ shell }: { shell: Shell }) {
         )}
       </div>
     </ScrollArea>
-  )
+  );
 }
 
 function Item({
@@ -102,40 +103,45 @@ function Item({
   shell,
   behavior,
 }: {
-  item: MailboxItemView
-  shell: Shell
-  behavior: string
+  item: MailboxItemView;
+  shell: Shell;
+  behavior: string;
 }) {
-  const kind = KIND[m.kind] ?? { icon: CircleHelp, label: m.kind }
-  const Icon = kind.icon
+  const kind = KIND[m.kind] ?? { icon: CircleHelp, label: m.kind };
+  const Icon = kind.icon;
   /* ack: there is nothing to do but read it, so the arrow opens its source;
      anything else opens a conversation on it (the desktop's "Open compose") */
-  const acknowledge = m.action === 'ack'
+  const acknowledge = m.action === "ack";
   const open = async () => {
     if (acknowledge) {
-      if (m.sessionId) navigate({ name: 'session', sessionId: m.sessionId })
-      return
+      if (m.sessionId) navigate({ name: "session", sessionId: m.sessionId });
+      return;
     }
     try {
-      const item = await shell.openMailboxItem(m.itemId)
+      const item = await shell.openMailboxItem(m.itemId);
       navigate(
         item.sessionId
-          ? { name: 'session', sessionId: item.sessionId }
-          : { name: 'session', sessionId: null },
-      )
+          ? { name: "session", sessionId: item.sessionId }
+          : { name: "session", sessionId: null },
+      );
     } catch (e) {
-      toast(`Couldn't open: ${String(e)}`)
+      toast(`Couldn't open: ${String(e)}`);
     }
-  }
-  const [openedAt] = useState(() => Date.now())
-  const deadline = m.deadlineAt ? Date.parse(m.deadlineAt) : null
-  const overdue = deadline !== null && deadline < openedAt
-  const due = deadline === null ? null : overdue ? 'overdue' : `due in ${span(deadline - openedAt)}`
+  };
+  const [openedAt] = useState(() => Date.now());
+  const deadline = m.deadlineAt ? Date.parse(m.deadlineAt) : null;
+  const overdue = deadline !== null && deadline < openedAt;
+  const due =
+    deadline === null
+      ? null
+      : overdue
+        ? "overdue"
+        : `due in ${span(deadline - openedAt)}`;
   return (
     <li className="relative">
       <span
         className={cn(
-          'absolute top-3 -left-10 grid size-6 place-items-center rounded-full bg-background text-muted-foreground',
+          "absolute top-3 -left-10 grid size-6 place-items-center rounded-full bg-background text-muted-foreground",
           kind.tone,
         )}
         title={kind.label}
@@ -144,7 +150,10 @@ function Item({
       </span>
       <article className="rounded-2xl border border-border/60 bg-raised px-4 pt-3 pb-5">
         <div className="flex items-start gap-3">
-          <BehaviorHoverCard deployment={shell.selectedDeployment} behaviorId={m.targetBehaviorId}>
+          <BehaviorHoverCard
+            deployment={shell.selectedDeployment}
+            behaviorId={m.targetBehaviorId}
+          >
             <BehaviorAvatar
               name={behavior}
               behaviorId={m.targetBehaviorId}
@@ -156,15 +165,21 @@ function Item({
               <h2 className="min-w-0 flex-1 truncate font-heading text-sm font-medium text-heading">
                 {m.title}
               </h2>
-              <span className="shrink-0 text-xs text-muted-foreground">{when(m.createdAt)}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {when(m.createdAt)}
+              </span>
             </div>
-            {m.summary && <p className="mt-0.5 text-sm text-muted-foreground">{m.summary}</p>}
+            {m.summary && (
+              <p className="mt-0.5 text-sm text-muted-foreground">{m.summary}</p>
+            )}
             <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
               {kind.label.toLowerCase()} · {m.sourceKind} · {m.sourceId}
-              {m.action === 'write_document' && m.expectedCollection
+              {m.action === "write_document" && m.expectedCollection
                 ? ` · expects ${m.expectedCollection}`
-                : ''}
-              {due && <span className={cn(overdue && 'text-destructive')}> · {due}</span>}
+                : ""}
+              {due && (
+                <span className={cn(overdue && "text-destructive")}> · {due}</span>
+              )}
             </p>
             {m.payload && (
               <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-surface px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-foreground">
@@ -178,9 +193,13 @@ function Item({
               variant="ghost"
               className="-mr-1 self-center"
               aria-label={
-                acknowledge ? 'Open source' : m.sessionId ? 'Open compose' : 'Start a conversation'
+                acknowledge
+                  ? "Open source"
+                  : m.sessionId
+                    ? "Open compose"
+                    : "Start a conversation"
               }
-              title={acknowledge ? 'Open source' : 'Open compose'}
+              title={acknowledge ? "Open source" : "Open compose"}
               onClick={() => void open()}
             >
               <ArrowRight />
@@ -197,21 +216,21 @@ function Item({
         <X className="size-3" /> Dismiss
       </Button>
     </li>
-  )
+  );
 }
 
 const pretty = (value: string) => {
   try {
-    return JSON.stringify(JSON.parse(value), null, 2)
+    return JSON.stringify(JSON.parse(value), null, 2);
   } catch {
-    return value
+    return value;
   }
-}
+};
 
 /* a span ahead, as a person would say it */
 const span = (ms: number) => {
-  const mins = Math.max(1, Math.round(ms / 60_000))
-  if (mins < 60) return `${mins}m`
-  if (mins < 1_440) return `${Math.round(mins / 60)}h`
-  return `${Math.round(mins / 1_440)}d`
-}
+  const mins = Math.max(1, Math.round(ms / 60_000));
+  if (mins < 60) return `${mins}m`;
+  if (mins < 1_440) return `${Math.round(mins / 60)}h`;
+  return `${Math.round(mins / 1_440)}d`;
+};

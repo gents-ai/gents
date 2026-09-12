@@ -1,8 +1,8 @@
 /* Something that waits on a person: a raised card with a title, a line of
    detail and the actions. Used for held tool calls in a session and for
    items in the mailbox. */
-import type { ReactNode } from 'react'
-import { Button } from '@gents/ui/components/button'
+import type { ReactNode } from "react";
+import { Button } from "@gents/ui/components/button";
 
 export function HoldCard({
   title,
@@ -11,11 +11,11 @@ export function HoldCard({
   onDeny,
   children,
 }: {
-  title: ReactNode
-  detail?: ReactNode
-  onApprove?: () => void
-  onDeny?: () => void
-  children?: ReactNode
+  title: ReactNode;
+  detail?: ReactNode;
+  onApprove?: () => void;
+  onDeny?: () => void;
+  children?: ReactNode;
 }) {
   return (
     <div className="rounded-2xl border border-border/60 bg-raised px-4 py-3">
@@ -35,5 +35,5 @@ export function HoldCard({
         {children}
       </div>
     </div>
-  )
+  );
 }

@@ -2,9 +2,17 @@
    breadcrumb and settings; a rail with the agent, new session, mailbox and
    sessions; the content slot on the ground. Chrome and canvas share the
    ground; content that needs a surface brings its own. */
-import type { ReactElement, ReactNode } from 'react'
-import { CircleAlert, Inbox, Menu, Plus, ScrollText, SlidersHorizontal, X } from 'lucide-react'
-import { useState } from 'react'
+import type { ReactElement, ReactNode } from "react";
+import {
+  CircleAlert,
+  Inbox,
+  Menu,
+  Plus,
+  ScrollText,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
+import { useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,7 +22,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@gents/ui/components/dropdown-menu'
+} from "@gents/ui/components/dropdown-menu";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -22,21 +30,26 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from '@gents/ui/components/breadcrumb'
-import { Button } from '@gents/ui/components/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@gents/ui/components/tooltip'
-import { cn } from '@gents/ui/lib/utils'
-import { href, type Route } from '@/lib/router'
-import { applyTheme, themePreference, type ThemePreference } from '@/theme'
-import { navPreference, saveNavPreference, type NavMode } from '@/nav'
-import { useMediaQuery } from '@/lib/media'
-import { AgentAvatar } from '@/screens/AgentAvatar'
-import { AgentHoverCard } from '@/screens/HoverCards'
-import type { DeploymentView, SyncHealthView } from '@source-inc/gents-desktop-client'
-import { Mark } from './Mark'
-import { SyncHealth } from './SyncHealth'
-import { NavPanel, RailFlyout } from './RailFlyout'
-import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@gents/ui/components/sheet'
+} from "@gents/ui/components/breadcrumb";
+import { Button } from "@gents/ui/components/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
+import { cn } from "@gents/ui/lib/utils";
+import { href, type Route } from "@/lib/router";
+import { applyTheme, themePreference, type ThemePreference } from "@/theme";
+import { navPreference, saveNavPreference, type NavMode } from "@/nav";
+import { useMediaQuery } from "@/lib/media";
+import { AgentAvatar } from "@/screens/AgentAvatar";
+import { AgentHoverCard } from "@/screens/HoverCards";
+import type { DeploymentView, SyncHealthView } from "@source-inc/gents-desktop-client";
+import { Mark } from "./Mark";
+import { SyncHealth } from "./SyncHealth";
+import { NavPanel, RailFlyout } from "./RailFlyout";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+} from "@gents/ui/components/sheet";
 
 function RailItem({
   label,
@@ -45,11 +58,11 @@ function RailItem({
   to,
   children,
 }: {
-  label: string
-  active?: boolean
-  count?: number
-  to: Route
-  children: ReactNode
+  label: string;
+  active?: boolean;
+  count?: number;
+  to: Route;
+  children: ReactNode;
 }) {
   return (
     <Tooltip>
@@ -58,10 +71,10 @@ function RailItem({
           <a
             href={href(to)}
             aria-label={label}
-            aria-current={active ? 'page' : undefined}
+            aria-current={active ? "page" : undefined}
             className={cn(
-              'relative grid size-8 place-items-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:text-foreground',
-              active && 'border-border/60 bg-raised text-ink shadow-xs',
+              "relative grid size-8 place-items-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:text-foreground",
+              active && "border-border/60 bg-raised text-ink shadow-xs",
             )}
           />
         }
@@ -75,7 +88,7 @@ function RailItem({
       </TooltipTrigger>
       <TooltipContent side="right">{label}</TooltipContent>
     </Tooltip>
-  )
+  );
 }
 
 /* global settings live behind the sliders: for now, the theme */
@@ -86,25 +99,28 @@ function SettingsMenu({
   trigger,
   children,
 }: {
-  nav: NavMode
-  onNav: (mode: NavMode) => void
+  nav: NavMode;
+  onNav: (mode: NavMode) => void;
   /** the side nav choices only make sense where there is a side nav */
-  showNav: boolean
-  trigger: ReactElement
-  children: ReactNode
+  showNav: boolean;
+  trigger: ReactElement;
+  children: ReactNode;
 }) {
-  const [theme, setTheme] = useState<ThemePreference>(themePreference)
+  const [theme, setTheme] = useState<ThemePreference>(themePreference);
   const choose = (next: ThemePreference) => {
-    applyTheme(next)
-    setTheme(next)
-  }
+    applyTheme(next);
+    setTheme(next);
+  };
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={trigger}>{children}</DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="top">
         <DropdownMenuGroup>
           <DropdownMenuLabel>Theme</DropdownMenuLabel>
-          <DropdownMenuRadioGroup value={theme} onValueChange={(v) => choose(v as ThemePreference)}>
+          <DropdownMenuRadioGroup
+            value={theme}
+            onValueChange={(v) => choose(v as ThemePreference)}
+          >
             <DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>
             <DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
@@ -114,17 +130,26 @@ function SettingsMenu({
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuLabel>Side nav</DropdownMenuLabel>
-              <DropdownMenuRadioGroup value={nav} onValueChange={(v) => onNav(v as NavMode)}>
-                <DropdownMenuRadioItem value="hover">Show on hover</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="expanded">Always expanded</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="collapsed">Collapsed</DropdownMenuRadioItem>
+              <DropdownMenuRadioGroup
+                value={nav}
+                onValueChange={(v) => onNav(v as NavMode)}
+              >
+                <DropdownMenuRadioItem value="hover">
+                  Show on hover
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="expanded">
+                  Always expanded
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="collapsed">
+                  Collapsed
+                </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuGroup>
           </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
-  )
+  );
 }
 
 export function AppShell({
@@ -143,29 +168,29 @@ export function AppShell({
   onReconnect,
   children,
 }: {
-  route: Route
-  agentName: string | null
-  agentDid: string | null
-  deployment: DeploymentView | null
-  root?: string | null
-  ceiling?: string | null
-  online: boolean
-  mailboxCount: number
-  holds?: Set<string>
-  syncHealth?: SyncHealthView | null
+  route: Route;
+  agentName: string | null;
+  agentDid: string | null;
+  deployment: DeploymentView | null;
+  root?: string | null;
+  ceiling?: string | null;
+  online: boolean;
+  mailboxCount: number;
+  holds?: Set<string>;
+  syncHealth?: SyncHealthView | null;
   /** a shell error, shown as a banner over the canvas until dismissed */
-  error?: string | null
-  onDismissError?: () => void
-  onReconnect?: () => Promise<void>
-  children: ReactNode
+  error?: string | null;
+  onDismissError?: () => void;
+  onReconnect?: () => Promise<void>;
+  children: ReactNode;
 }) {
-  const [nav, setNav] = useState<NavMode>(navPreference)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const wide = useMediaQuery('(min-width: 768px)')
+  const [nav, setNav] = useState<NavMode>(navPreference);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const wide = useMediaQuery("(min-width: 768px)");
   const onNav = (mode: NavMode) => {
-    saveNavPreference(mode)
-    setNav(mode)
-  }
+    saveNavPreference(mode);
+    setNav(mode);
+  };
   /* settings live at the foot of the nav: an icon on the rail, a row in the panel */
   const railSettings = (
     <SettingsMenu
@@ -182,7 +207,7 @@ export function AppShell({
     >
       <SlidersHorizontal className="size-4" />
     </SettingsMenu>
-  )
+  );
   const panelSettings = (
     <SettingsMenu
       nav={nav}
@@ -200,7 +225,7 @@ export function AppShell({
       </span>
       <span className="min-w-0 flex-1 truncate">Settings</span>
     </SettingsMenu>
-  )
+  );
   return (
     <div
       className="viewport-frame grid grid-rows-[auto_1fr] bg-background text-foreground"
@@ -211,7 +236,12 @@ export function AppShell({
         <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
           <SheetTrigger
             render={
-              <Button variant="ghost" size="icon-sm" className="md:hidden" aria-label="Menu" />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="md:hidden"
+                aria-label="Menu"
+              />
             }
           >
             <Menu />
@@ -221,7 +251,7 @@ export function AppShell({
             className="flex w-72 flex-col gap-2 border-border/60 bg-raised pt-4 pb-2"
             onClickCapture={(e) => {
               /* a link in the panel navigates; the sheet goes with it */
-              if ((e.target as HTMLElement).closest('a[href]')) setMenuOpen(false)
+              if ((e.target as HTMLElement).closest("a[href]")) setMenuOpen(false);
             }}
           >
             <SheetTitle className="sr-only">Navigation</SheetTitle>
@@ -238,7 +268,7 @@ export function AppShell({
           </SheetContent>
         </Sheet>
         <a
-          href={href({ name: 'agents' })}
+          href={href({ name: "agents" })}
           aria-label="Agents"
           className="grid size-7 place-items-center rounded-md bg-ink text-background"
         >
@@ -247,11 +277,11 @@ export function AppShell({
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
-              <BreadcrumbLink href={href({ name: 'agents' })}>Agents</BreadcrumbLink>
+              <BreadcrumbLink href={href({ name: "agents" })}>Agents</BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbPage>{agentName ?? '…'}</BreadcrumbPage>
+              <BreadcrumbPage>{agentName ?? "…"}</BreadcrumbPage>
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
@@ -260,9 +290,11 @@ export function AppShell({
       </header>
       <div
         className={cn(
-          'grid min-h-0',
-          'grid-cols-[1fr]',
-          nav === 'expanded' ? 'md:grid-cols-[16.5rem_1fr]' : 'md:grid-cols-[3.5rem_1fr]',
+          "grid min-h-0",
+          "grid-cols-[1fr]",
+          nav === "expanded"
+            ? "md:grid-cols-[16.5rem_1fr]"
+            : "md:grid-cols-[3.5rem_1fr]",
         )}
       >
         <div className="hidden min-h-0 md:block">
@@ -284,56 +316,56 @@ export function AppShell({
                   <a
                     href={
                       agentDid
-                        ? href({ name: 'agent', agentDid, section: 'agent' })
-                        : href({ name: 'agents' })
+                        ? href({ name: "agent", agentDid, section: "agent" })
+                        : href({ name: "agents" })
                     }
-                    aria-label={`${agentName ?? 'Agent'} configuration`}
-                    aria-current={route.name === 'agent' ? 'page' : undefined}
+                    aria-label={`${agentName ?? "Agent"} configuration`}
+                    aria-current={route.name === "agent" ? "page" : undefined}
                     className={cn(
-                      'relative mb-2 block size-7 rounded-full ring-1 ring-border ring-offset-2 ring-offset-background transition-shadow hover:ring-muted-foreground',
-                      route.name === 'agent' && 'ring-2 ring-ink',
+                      "relative mb-2 block size-7 rounded-full ring-1 ring-border ring-offset-2 ring-offset-background transition-shadow hover:ring-muted-foreground",
+                      route.name === "agent" && "ring-2 ring-ink",
                     )}
                   >
-                    <AgentAvatar name={agentName ?? 'Agent'} className="size-7" />
+                    <AgentAvatar name={agentName ?? "Agent"} className="size-7" />
                     <span
                       className={cn(
-                        'absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-background',
-                        online ? 'bg-brand' : 'bg-border',
+                        "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-background",
+                        online ? "bg-brand" : "bg-border",
                       )}
                       aria-hidden="true"
                     />
                   </a>
-                )
+                );
                 return deployment ? (
                   <AgentHoverCard deployment={deployment} root={root} ceiling={ceiling}>
                     {link}
                   </AgentHoverCard>
                 ) : (
                   link
-                )
+                );
               })()}
               <div className="mb-1 h-px w-5 bg-border" />
               <RailItem
                 label="New session"
-                to={{ name: 'session', sessionId: null }}
-                active={route.name === 'session' && route.sessionId === null}
+                to={{ name: "session", sessionId: null }}
+                active={route.name === "session" && route.sessionId === null}
               >
                 <Plus className="size-4" />
               </RailItem>
               <RailItem
                 label="Mailbox"
-                to={{ name: 'mailbox' }}
-                active={route.name === 'mailbox'}
+                to={{ name: "mailbox" }}
+                active={route.name === "mailbox"}
                 count={mailboxCount}
               >
                 <Inbox className="size-4" />
               </RailItem>
               <RailItem
                 label="Sessions"
-                to={{ name: 'sessions' }}
+                to={{ name: "sessions" }}
                 active={
-                  route.name === 'sessions' ||
-                  (route.name === 'session' && route.sessionId !== null)
+                  route.name === "sessions" ||
+                  (route.name === "session" && route.sessionId !== null)
                 }
               >
                 <ScrollText className="size-4" />
@@ -369,5 +401,5 @@ export function AppShell({
         </main>
       </div>
     </div>
-  )
+  );
 }

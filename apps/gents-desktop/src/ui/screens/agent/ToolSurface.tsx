@@ -1,52 +1,54 @@
 /* What this behaviour actually gets: the bridge's tool surface
    explanation (selection ∩ ceiling, with reasons), loaded when opened
    and refreshed on demand, as the desktop's BehaviorToolSurface does. */
-import { useState } from 'react'
-import { ChevronDown, RefreshCw } from 'lucide-react'
-import type { ToolSurfaceExplanationView } from '@source-inc/gents-desktop-client'
-import { Badge } from '@gents/ui/components/badge'
-import { Button } from '@gents/ui/components/button'
-import { Spinner } from '@gents/ui/components/spinner'
-import { cn } from '@gents/ui/lib/utils'
-import type { Shell } from '@/hooks/useShell'
-import { Group, Row } from './rows'
+import { useState } from "react";
+import { ChevronDown, RefreshCw } from "lucide-react";
+import type { ToolSurfaceExplanationView } from "@source-inc/gents-desktop-client";
+import { Badge } from "@gents/ui/components/badge";
+import { Button } from "@gents/ui/components/button";
+import { Spinner } from "@gents/ui/components/spinner";
+import { cn } from "@gents/ui/lib/utils";
+import type { Shell } from "@/hooks/useShell";
+import { Group, Row } from "./rows";
 
 const strings = (v: unknown): string[] =>
-  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x) : []
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x) : [];
 const groups = (v: unknown): [string, string[]][] =>
-  v && typeof v === 'object'
+  v && typeof v === "object"
     ? Object.entries(v as Record<string, unknown>).map(([k, r]) => [k, strings(r)])
-    : []
+    : [];
 
 export function ToolSurface({
   shell,
   agentDid,
   behaviorId,
 }: {
-  shell: Shell
-  agentDid: string
-  behaviorId: string
+  shell: Shell;
+  agentDid: string;
+  behaviorId: string;
 }) {
-  const [open, setOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [explanation, setExplanation] = useState<ToolSurfaceExplanationView | null>(null)
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [explanation, setExplanation] = useState<ToolSurfaceExplanationView | null>(
+    null,
+  );
   const load = async () => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
+    setError(null);
     try {
-      setExplanation(await shell.api.explainToolSurface(agentDid, behaviorId))
+      setExplanation(await shell.api.explainToolSurface(agentDid, behaviorId));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
   const toggle = () => {
-    if (!open && !explanation && !loading) void load()
-    setOpen(!open)
-  }
-  const s = explanation?.surface ?? {}
+    if (!open && !explanation && !loading) void load();
+    setOpen(!open);
+  };
+  const s = explanation?.surface ?? {};
   return (
     <Group
       title="Resolved tools"
@@ -64,8 +66,10 @@ export function ToolSurface({
             </Button>
           )}
           <Button variant="outline" size="sm" aria-expanded={open} onClick={toggle}>
-            {open ? 'Hide' : 'Show'}
-            <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} />
+            {open ? "Hide" : "Show"}
+            <ChevronDown
+              className={cn("size-3.5 transition-transform", open && "rotate-180")}
+            />
           </Button>
         </span>
       }
@@ -87,8 +91,8 @@ export function ToolSurface({
         <>
           <Row label="Policy">
             <span className="font-mono text-xs text-muted-foreground">
-              ceiling: {explanation.ceilingSource} · tools: {explanation.toolsSource} · MCP{' '}
-              {explanation.mcpServicesOnline ? 'online' : 'offline'}
+              ceiling: {explanation.ceilingSource} · tools: {explanation.toolsSource} ·
+              MCP {explanation.mcpServicesOnline ? "online" : "offline"}
             </span>
           </Row>
           <Row
@@ -96,7 +100,7 @@ export function ToolSurface({
             description={
               strings(s.tool_names).length
                 ? undefined
-                : 'None: the intersection with the ceiling is empty.'
+                : "None: the intersection with the ceiling is empty."
             }
           >
             <span className="flex max-w-xl flex-wrap justify-end gap-1">
@@ -119,19 +123,21 @@ export function ToolSurface({
           )}
           {strings(
             (s.warnings as unknown[] | undefined)?.map((w) =>
-              w && typeof w === 'object'
-                ? String((w as { message?: unknown }).message ?? '')
+              w && typeof w === "object"
+                ? String((w as { message?: unknown }).message ?? "")
                 : String(w),
             ),
           ).map((m) => (
             <Row key={m} label="Warning">
-              <span className="max-w-xl text-right text-xs text-muted-foreground">{m}</span>
+              <span className="max-w-xl text-right text-xs text-muted-foreground">
+                {m}
+              </span>
             </Row>
           ))}
         </>
       )}
     </Group>
-  )
+  );
 }
 
 function Reasons({ groups: list }: { groups: [string, string[]][] }) {
@@ -146,5 +152,5 @@ function Reasons({ groups: list }: { groups: [string, string[]][] }) {
         )),
       )}
     </ul>
-  )
+  );
 }

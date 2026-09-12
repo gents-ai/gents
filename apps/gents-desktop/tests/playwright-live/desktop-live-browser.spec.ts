@@ -84,11 +84,16 @@ test.describe("desktop live browser smoke", () => {
           (completedSession.timelinePage?.toolCallQueryLimit ?? 0),
       );
 
-      await expect(page.getByText(/Bombadil harness response|desktop live browser smoke/i).first()).toBeVisible({
+      await expect(
+        page.getByText(/Bombadil harness response|desktop live browser smoke/i).first(),
+      ).toBeVisible({
         timeout: 30_000,
       });
 
-      await page.getByRole("link", { name: /configuration/i }).first().click();
+      await page
+        .getByRole("link", { name: /configuration/i })
+        .first()
+        .click();
       await expect(page.getByTestId("agent-screen")).toBeVisible();
 
       diagnostics = await liveRunner.fetchRequestDiagnostics(

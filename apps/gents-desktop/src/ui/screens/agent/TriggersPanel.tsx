@@ -1,29 +1,36 @@
-import type { DeploymentView, TriggerView } from '@source-inc/gents-desktop-client'
-import type { Shell } from '@/hooks/useShell'
-import { navigate } from '@/lib/router'
-import { ChoiceRow, FactRow, SwitchRow, TextRow } from './editors'
-import { newId, useDraft } from './draft'
-import { DeleteButton, ListDetail } from './ListDetail'
-import { Group } from './rows'
+import type { DeploymentView, TriggerView } from "@source-inc/gents-desktop-client";
+import type { Shell } from "@/hooks/useShell";
+import { navigate } from "@/lib/router";
+import { ChoiceRow, FactRow, SwitchRow, TextRow } from "./editors";
+import { newId, useDraft } from "./draft";
+import { DeleteButton, ListDetail } from "./ListDetail";
+import { Group } from "./rows";
 
 function Editor({
   shell,
   deployment,
   trigger,
 }: {
-  shell: Shell
-  deployment: DeploymentView
-  trigger: TriggerView
+  shell: Shell;
+  deployment: DeploymentView;
+  trigger: TriggerView;
 }) {
-  const cfg = trigger.config
-  const base = { name: 'agent' as const, agentDid: deployment.agentDid, section: 'triggers' }
+  const cfg = trigger.config;
+  const base = {
+    name: "agent" as const,
+    agentDid: deployment.agentDid,
+    section: "triggers",
+  };
   const saved = {
-    displayName: cfg.display_name ?? '',
+    displayName: cfg.display_name ?? "",
     taskId: cfg.task_id,
     enabled: cfg.enabled ?? true,
     sourceKind: cfg.source.kind,
-    sourceId: cfg.source.kind === 'schedule' ? cfg.source.schedule_id : cfg.source.event_source_id,
-  }
+    sourceId:
+      cfg.source.kind === "schedule"
+        ? cfg.source.schedule_id
+        : cfg.source.event_source_id,
+  };
   const d = useDraft(saved, (next) =>
     shell.applyConfig((api) =>
       api.saveTriggerConfig({
@@ -33,14 +40,14 @@ function Editor({
           task_id: next.taskId,
           enabled: next.enabled,
           source:
-            next.sourceKind === 'schedule'
-              ? { kind: 'schedule', schedule_id: next.sourceId }
-              : { kind: 'event', event_source_id: next.sourceId },
+            next.sourceKind === "schedule"
+              ? { kind: "schedule", schedule_id: next.sourceId }
+              : { kind: "event", event_source_id: next.sourceId },
         },
       }),
     ),
-  )
-  const id = (f: string) => `${cfg.trigger_id}-${f}`
+  );
+  const id = (f: string) => `${cfg.trigger_id}-${f}`;
   return (
     <>
       <Group title={cfg.display_name ?? cfg.trigger_id}>
@@ -48,40 +55,40 @@ function Editor({
           {cfg.trigger_id}
         </FactRow>
         <TextRow
-          id={id('name')}
+          id={id("name")}
           label="Display name"
           value={d.draft.displayName}
-          onChange={(v) => d.set('displayName', v)}
+          onChange={(v) => d.set("displayName", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
         <ChoiceRow
-          id={id('task')}
+          id={id("task")}
           label="Task"
           value={d.draft.taskId}
-          onChange={(v) => d.choose('taskId', v)}
+          onChange={(v) => d.choose("taskId", v)}
           items={deployment.tasks.map((t) => ({
             value: t.taskId,
             label: t.name ?? t.taskId,
           }))}
         />
         <ChoiceRow
-          id={id('kind')}
+          id={id("kind")}
           label="Source"
           value={d.draft.sourceKind}
-          onChange={(v) => d.choose('sourceKind', v as 'schedule' | 'event')}
+          onChange={(v) => d.choose("sourceKind", v as "schedule" | "event")}
           items={[
-            { value: 'schedule', label: 'Schedule' },
-            { value: 'event', label: 'Event source' },
+            { value: "schedule", label: "Schedule" },
+            { value: "event", label: "Event source" },
           ]}
         />
         <ChoiceRow
-          id={id('sid')}
-          label={d.draft.sourceKind === 'schedule' ? 'Schedule' : 'Event source'}
+          id={id("sid")}
+          label={d.draft.sourceKind === "schedule" ? "Schedule" : "Event source"}
           value={d.draft.sourceId}
-          onChange={(v) => d.choose('sourceId', v)}
+          onChange={(v) => d.choose("sourceId", v)}
           items={
-            d.draft.sourceKind === 'schedule'
+            d.draft.sourceKind === "schedule"
               ? deployment.schedules.map((s) => ({
                   value: s.schedule_id,
                   label: s.display_name ?? s.schedule_id,
@@ -93,10 +100,10 @@ function Editor({
           }
         />
         <SwitchRow
-          id={id('enabled')}
+          id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose('enabled', v)}
+          onChange={(v) => d.choose("enabled", v)}
         />
       </Group>
       <DeleteButton
@@ -104,12 +111,15 @@ function Editor({
         base={base}
         onDelete={() =>
           shell.applyConfig((api) =>
-            api.deleteTriggerConfig({ triggerId: cfg.trigger_id, agentDid: deployment.agentDid }),
+            api.deleteTriggerConfig({
+              triggerId: cfg.trigger_id,
+              agentDid: deployment.agentDid,
+            }),
           )
         }
       />
     </>
-  )
+  );
 }
 
 export function TriggersPanel({
@@ -117,11 +127,15 @@ export function TriggersPanel({
   deployment,
   item,
 }: {
-  shell: Shell
-  deployment: DeploymentView
-  item?: string
+  shell: Shell;
+  deployment: DeploymentView;
+  item?: string;
 }) {
-  const base = { name: 'agent' as const, agentDid: deployment.agentDid, section: 'triggers' }
+  const base = {
+    name: "agent" as const,
+    agentDid: deployment.agentDid,
+    section: "triggers",
+  };
   return (
     <ListDetail
       base={base}
@@ -134,31 +148,31 @@ export function TriggersPanel({
       createLabel="New trigger"
       empty="No triggers. A trigger fires a task from a schedule or event source."
       onCreate={async () => {
-        const trigger_id = newId('trig')
-        const task = deployment.tasks[0]
-        const schedule = deployment.schedules[0]
-        if (!task || !schedule) throw new Error('Add a task and schedule first')
+        const trigger_id = newId("trig");
+        const task = deployment.tasks[0];
+        const schedule = deployment.schedules[0];
+        if (!task || !schedule) throw new Error("Add a task and schedule first");
         await shell.applyConfig((api) =>
           api.saveTriggerConfig({
             document: {
               agent_did: deployment.agentDid,
               trigger_id,
-              display_name: 'New trigger',
+              display_name: "New trigger",
               task_id: task.taskId,
-              source: { kind: 'schedule', schedule_id: schedule.schedule_id },
+              source: { kind: "schedule", schedule_id: schedule.schedule_id },
               enabled: true,
             },
           }),
-        )
+        );
         navigate({
-          name: 'agent',
+          name: "agent",
           agentDid: deployment.agentDid,
-          section: 'triggers',
+          section: "triggers",
           item: trigger_id,
-        })
+        });
       }}
       detail={(id) => {
-        const trigger = deployment.triggers.find((t) => t.config.trigger_id === id)!
+        const trigger = deployment.triggers.find((t) => t.config.trigger_id === id)!;
         return (
           <Editor
             key={JSON.stringify(trigger)}
@@ -166,8 +180,8 @@ export function TriggersPanel({
             deployment={deployment}
             trigger={trigger}
           />
-        )
+        );
       }}
     />
-  )
+  );
 }

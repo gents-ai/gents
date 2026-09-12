@@ -586,8 +586,7 @@ export function createDesktopUiHarness(
       dialSucceeded: p2pStatus === "healthy",
       chatSafe: p2pStatus === "healthy",
     };
-    const deployments =
-      !provisioned || removed ? [] : [visibleDeployment];
+    const deployments = !provisioned || removed ? [] : [visibleDeployment];
     const health = {
       status: p2pStatus,
       connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,

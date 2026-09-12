@@ -52,7 +52,10 @@ export function StartupScreen({
           <p className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
             System startup
           </p>
-          <h2 id="startup-title" className="font-heading text-2xl font-medium text-heading">
+          <h2
+            id="startup-title"
+            className="font-heading text-2xl font-medium text-heading"
+          >
             {status.title}
           </h2>
           <p aria-live="polite" className="text-sm font-medium">

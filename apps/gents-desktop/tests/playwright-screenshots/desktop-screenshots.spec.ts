@@ -43,7 +43,11 @@ test.describe("desktop stable screenshot states", () => {
     await gotoHarness(page);
     await openConfig(page);
     await expect(page.getByTestId("agent-screen")).toBeVisible();
-    await captureReviewScreenshot("agent configuration", "default", "stable-agent-config");
+    await captureReviewScreenshot(
+      "agent configuration",
+      "default",
+      "stable-agent-config",
+    );
 
     await gotoHarness(page, "empty-fleet");
     await expect(page.getByTestId("setup-screen")).toBeVisible();
@@ -53,10 +57,7 @@ test.describe("desktop stable screenshot states", () => {
     await writeFile(
       path,
       screenshots
-        .map(
-          (entry) =>
-            `- ${entry.state} (${entry.scenario}): ${entry.attachmentName}`,
-        )
+        .map((entry) => `- ${entry.state} (${entry.scenario}): ${entry.attachmentName}`)
         .join("\n") + "\n",
     );
     await testInfo.attach("desktop-screenshot-review.md", {

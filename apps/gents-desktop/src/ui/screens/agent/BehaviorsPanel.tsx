@@ -1,30 +1,34 @@
 /* Behaviours pick a context and an inference profile. Prompt, tools and
    skills live on AgentContext (see ContextsPanel). */
-import type { DeploymentView, BehaviorView } from '@source-inc/gents-desktop-client'
-import type { Shell } from '@/hooks/useShell'
-import { ChoiceRow, FactRow, SwitchRow, TextRow } from './editors'
-import { useDraft } from './draft'
-import { DeleteButton, ListDetail } from './ListDetail'
-import { Group } from './rows'
-import { createBehavior } from './createBehavior'
+import type { DeploymentView, BehaviorView } from "@source-inc/gents-desktop-client";
+import type { Shell } from "@/hooks/useShell";
+import { ChoiceRow, FactRow, SwitchRow, TextRow } from "./editors";
+import { useDraft } from "./draft";
+import { DeleteButton, ListDetail } from "./ListDetail";
+import { Group } from "./rows";
+import { createBehavior } from "./createBehavior";
 
 function Editor({
   shell,
   deployment,
   behavior,
 }: {
-  shell: Shell
-  deployment: DeploymentView
-  behavior: BehaviorView
+  shell: Shell;
+  deployment: DeploymentView;
+  behavior: BehaviorView;
 }) {
-  const base = { name: 'agent' as const, agentDid: deployment.agentDid, section: 'behaviors' }
+  const base = {
+    name: "agent" as const,
+    agentDid: deployment.agentDid,
+    section: "behaviors",
+  };
   const saved = {
     displayName: behavior.displayName,
-    description: behavior.description ?? '',
-    contextId: behavior.contextId ?? '',
-    inferenceProfileId: behavior.inferenceProfileId ?? '',
+    description: behavior.description ?? "",
+    contextId: behavior.contextId ?? "",
+    inferenceProfileId: behavior.inferenceProfileId ?? "",
     enabled: behavior.enabled,
-  }
+  };
   const d = useDraft(saved, (next) =>
     shell.applyConfig((api) =>
       api.saveBehaviorConfig({
@@ -41,8 +45,8 @@ function Editor({
         },
       }),
     ),
-  )
-  const id = (f: string) => `${behavior.behaviorId}-${f}`
+  );
+  const id = (f: string) => `${behavior.behaviorId}-${f}`;
   return (
     <>
       <Group title={behavior.displayName}>
@@ -50,47 +54,47 @@ function Editor({
           {behavior.behaviorId}
         </FactRow>
         <TextRow
-          id={id('name')}
+          id={id("name")}
           label="Display name"
           value={d.draft.displayName}
-          onChange={(v) => d.set('displayName', v)}
+          onChange={(v) => d.set("displayName", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
         <TextRow
-          id={id('description')}
+          id={id("description")}
           label="Description"
           value={d.draft.description}
-          onChange={(v) => d.set('description', v)}
+          onChange={(v) => d.set("description", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
         <ChoiceRow
-          id={id('context')}
+          id={id("context")}
           label="Context"
           description="System prompt, tools and skills."
           value={d.draft.contextId}
-          onChange={(v) => d.choose('contextId', v)}
+          onChange={(v) => d.choose("contextId", v)}
           items={deployment.contexts.map((c) => ({
             value: c.context_id,
             label: c.display_name ?? c.context_id,
           }))}
         />
         <ChoiceRow
-          id={id('profile')}
+          id={id("profile")}
           label="Inference profile"
           value={d.draft.inferenceProfileId}
-          onChange={(v) => d.choose('inferenceProfileId', v)}
+          onChange={(v) => d.choose("inferenceProfileId", v)}
           items={deployment.inferenceProfiles.map((p) => ({
             value: p.profile_id,
             label: p.display_name ?? p.profile_id,
           }))}
         />
         <SwitchRow
-          id={id('enabled')}
+          id={id("enabled")}
           label="Enabled"
           checked={d.draft.enabled}
-          onChange={(v) => d.choose('enabled', v)}
+          onChange={(v) => d.choose("enabled", v)}
         />
       </Group>
       <DeleteButton
@@ -106,7 +110,7 @@ function Editor({
         }
       />
     </>
-  )
+  );
 }
 
 export function BehaviorsPanel({
@@ -114,11 +118,15 @@ export function BehaviorsPanel({
   deployment,
   behaviorId,
 }: {
-  shell: Shell
-  deployment: DeploymentView
-  behaviorId?: string
+  shell: Shell;
+  deployment: DeploymentView;
+  behaviorId?: string;
 }) {
-  const base = { name: 'agent' as const, agentDid: deployment.agentDid, section: 'behaviors' }
+  const base = {
+    name: "agent" as const,
+    agentDid: deployment.agentDid,
+    section: "behaviors",
+  };
   return (
     <ListDetail
       base={base}
@@ -126,13 +134,13 @@ export function BehaviorsPanel({
       rows={deployment.behaviors.map((b) => ({
         id: b.behaviorId,
         title: b.displayName,
-        meta: b.isDefault ? 'default' : b.enabled ? 'enabled' : 'disabled',
+        meta: b.isDefault ? "default" : b.enabled ? "enabled" : "disabled",
       }))}
       createLabel="New behaviour"
       empty="No behaviours yet."
       onCreate={() => createBehavior(shell, deployment)}
       detail={(id) => {
-        const behavior = deployment.behaviors.find((b) => b.behaviorId === id)!
+        const behavior = deployment.behaviors.find((b) => b.behaviorId === id)!;
         return (
           <Editor
             key={JSON.stringify(behavior)}
@@ -140,8 +148,8 @@ export function BehaviorsPanel({
             deployment={deployment}
             behavior={behavior}
           />
-        )
+        );
       }}
     />
-  )
+  );
 }

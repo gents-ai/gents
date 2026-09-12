@@ -1,5 +1,5 @@
 /* the settings-group pattern from the kit, with the pieces this screen repeats */
-import type { ReactNode } from 'react'
+import type { ReactNode } from "react";
 import {
   FieldContent,
   FieldDescription,
@@ -8,16 +8,16 @@ import {
   FieldRow,
   FieldRows,
   FieldSet,
-} from '@gents/ui/components/field'
+} from "@gents/ui/components/field";
 
 export function Group({
   title,
   children,
   action,
 }: {
-  title: string
-  children: ReactNode
-  action?: ReactNode
+  title: string;
+  children: ReactNode;
+  action?: ReactNode;
 }) {
   return (
     <FieldSet className="mb-8">
@@ -27,7 +27,7 @@ export function Group({
       </div>
       <FieldRows>{children}</FieldRows>
     </FieldSet>
-  )
+  );
 }
 
 export function Row({
@@ -36,10 +36,10 @@ export function Row({
   htmlFor,
   children,
 }: {
-  label: ReactNode
-  description?: ReactNode
-  htmlFor?: string
-  children?: ReactNode
+  label: ReactNode;
+  description?: ReactNode;
+  htmlFor?: string;
+  children?: ReactNode;
 }) {
   return (
     <FieldRow className="max-md:flex-col max-md:items-stretch max-md:gap-3">
@@ -49,16 +49,22 @@ export function Row({
       </FieldContent>
       {children}
     </FieldRow>
-  )
+  );
 }
 
 /* a read-only value, in mono when it is an identifier */
-export function Fact({ children, mono = false }: { children: ReactNode; mono?: boolean }) {
+export function Fact({
+  children,
+  mono = false,
+}: {
+  children: ReactNode;
+  mono?: boolean;
+}) {
   return (
     <span
-      className={`max-w-[28rem] truncate text-sm text-muted-foreground max-md:max-w-full max-md:break-all max-md:whitespace-normal ${mono ? 'font-mono text-xs' : ''}`}
+      className={`max-w-[28rem] truncate text-sm text-muted-foreground max-md:max-w-full max-md:break-all max-md:whitespace-normal ${mono ? "font-mono text-xs" : ""}`}
     >
-      {children ?? '—'}
+      {children ?? "—"}
     </span>
-  )
+  );
 }

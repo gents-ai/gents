@@ -2,20 +2,20 @@
    routed by item id, as the desktop app's config tabs are (list on the
    left, editor beside it; here the list is the page and a row opens the
    editor). */
-import type { ReactNode } from 'react'
-import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
-import { Badge } from '@gents/ui/components/badge'
-import { Button } from '@gents/ui/components/button'
-import { href, navigate, type Route } from '@/lib/router'
+import type { ReactNode } from "react";
+import { ArrowLeft, Plus, Trash2 } from "lucide-react";
+import { Badge } from "@gents/ui/components/badge";
+import { Button } from "@gents/ui/components/button";
+import { href, navigate, type Route } from "@/lib/router";
 
 export type ListRow = {
-  id: string
-  title: string
-  meta?: string
-  badge?: string
-  badgeTone?: 'default' | 'bad'
-  icon?: ReactNode
-}
+  id: string;
+  title: string;
+  meta?: string;
+  badge?: string;
+  badgeTone?: "default" | "bad";
+  icon?: ReactNode;
+};
 
 export function ListDetail({
   base,
@@ -26,14 +26,14 @@ export function ListDetail({
   empty,
   detail,
 }: {
-  base: Extract<Route, { name: 'agent' }>
-  item?: string
-  rows: ListRow[]
-  onCreate?: () => void | Promise<void>
-  createLabel: string
-  empty: string
+  base: Extract<Route, { name: "agent" }>;
+  item?: string;
+  rows: ListRow[];
+  onCreate?: () => void | Promise<void>;
+  createLabel: string;
+  empty: string;
   /* renders the open document's editor */
-  detail: (id: string) => ReactNode
+  detail: (id: string) => ReactNode;
 }) {
   if (item && rows.some((r) => r.id === item)) {
     return (
@@ -46,7 +46,7 @@ export function ListDetail({
         </a>
         {detail(item)}
       </div>
-    )
+    );
   }
   return (
     <div>
@@ -70,11 +70,13 @@ export function ListDetail({
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{r.title}</p>
                 {r.meta && (
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">{r.meta}</p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {r.meta}
+                  </p>
                 )}
               </div>
               {r.badge && (
-                <Badge variant={r.badgeTone === 'bad' ? 'destructive' : 'secondary'}>
+                <Badge variant={r.badgeTone === "bad" ? "destructive" : "secondary"}>
                   {r.badge}
                 </Badge>
               )}
@@ -82,11 +84,13 @@ export function ListDetail({
           </li>
         ))}
         {rows.length === 0 && (
-          <li className="px-4 py-8 text-center text-sm text-muted-foreground">{empty}</li>
+          <li className="px-4 py-8 text-center text-sm text-muted-foreground">
+            {empty}
+          </li>
         )}
       </ul>
     </div>
-  )
+  );
 }
 
 /* the delete control at the end of an editor, confirmed by a second click */
@@ -95,9 +99,9 @@ export function DeleteButton({
   onDelete,
   base,
 }: {
-  label: string
-  onDelete: () => Promise<unknown>
-  base: Extract<Route, { name: 'agent' }>
+  label: string;
+  onDelete: () => Promise<unknown>;
+  base: Extract<Route, { name: "agent" }>;
 }) {
   return (
     <div className="mt-2 flex justify-end">
@@ -105,13 +109,13 @@ export function DeleteButton({
         variant="quiet"
         size="sm"
         onClick={async () => {
-          if (!confirm(`Delete ${label}? This cannot be undone.`)) return
-          await onDelete()
-          navigate({ ...base, item: undefined })
+          if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
+          await onDelete();
+          navigate({ ...base, item: undefined });
         }}
       >
         <Trash2 /> Delete
       </Button>
     </div>
-  )
+  );
 }

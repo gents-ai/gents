@@ -11,7 +11,9 @@ import {
 } from "./desktopTest";
 
 test.describe("kit shell", () => {
-  test("default harness lands on sessions with one primary surface", async ({ page }) => {
+  test("default harness lands on sessions with one primary surface", async ({
+    page,
+  }) => {
     await gotoHarness(page);
     await expect(page.getByTestId("app-shell")).toBeVisible();
     await expect(page.getByTestId("sessions-screen")).toBeVisible();

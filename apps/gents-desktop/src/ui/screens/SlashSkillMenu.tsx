@@ -1,17 +1,17 @@
 /* the skill list the composer shows above its textarea while a "/" line is being typed */
-import type { SkillView } from '@source-inc/gents-desktop-client'
-import { cn } from '@gents/ui/lib/utils'
+import type { SkillView } from "@source-inc/gents-desktop-client";
+import { cn } from "@gents/ui/lib/utils";
 
 export function SlashSkillMenu({
   items,
   active,
   onPick,
 }: {
-  items: SkillView[]
-  active: number
-  onPick: (skillId: string) => void
+  items: SkillView[];
+  active: number;
+  onPick: (skillId: string) => void;
 }) {
-  if (!items.length) return null
+  if (!items.length) return null;
   return (
     <ul
       role="listbox"
@@ -27,12 +27,14 @@ export function SlashSkillMenu({
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => onPick(s.skillId)}
             className={cn(
-              'flex w-full items-baseline gap-3 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-accent',
-              i === active && 'bg-muted',
+              "flex w-full items-baseline gap-3 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-accent",
+              i === active && "bg-muted",
             )}
           >
-            <span className="font-mono text-xs text-muted-foreground">/{s.skillId}</span>
-            <span className="min-w-0 truncate">{s.displayName ?? s.name ?? ''}</span>
+            <span className="font-mono text-xs text-muted-foreground">
+              /{s.skillId}
+            </span>
+            <span className="min-w-0 truncate">{s.displayName ?? s.name ?? ""}</span>
             {s.description && (
               <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">
                 {s.description}
@@ -42,5 +44,5 @@ export function SlashSkillMenu({
         </li>
       ))}
     </ul>
-  )
+  );
 }

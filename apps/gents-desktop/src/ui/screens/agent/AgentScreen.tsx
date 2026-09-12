@@ -1,8 +1,12 @@
 /* Agent configuration: the Settings screen from the Branding file. A
    sidebar of groups (the desktop app's config tabs, grouped) beside a
    page of field rows. Sections are routes, so a tab is linkable. */
-import { SidebarGroup, SidebarItem, SidebarNav } from '@gents/ui/components/sidebar-nav'
-import { ScrollArea } from '@gents/ui/components/scroll-area'
+import {
+  SidebarGroup,
+  SidebarItem,
+  SidebarNav,
+} from "@gents/ui/components/sidebar-nav";
+import { ScrollArea } from "@gents/ui/components/scroll-area";
 import {
   Select,
   SelectContent,
@@ -11,22 +15,22 @@ import {
   SelectLabel,
   SelectTrigger,
   SelectValue,
-} from '@gents/ui/components/select'
-import type { Shell } from '@/hooks/useShell'
-import { href, navigate } from '@/lib/router'
-import { AgentPanel } from './AgentPanel'
-import { BehaviorsPanel } from './BehaviorsPanel'
-import { ProfilesPanel } from './ProfilesPanel'
-import { InferencePanel } from './InferencePanel'
-import { SchedulesPanel } from './SchedulesPanel'
-import { SkillsPanel } from './SkillsPanel'
-import { TasksPanel } from './TasksPanel'
-import { ContextsPanel } from './ContextsPanel'
-import { EventSourcesPanel } from './EventSourcesPanel'
-import { ToolsPanel } from './ToolsPanel'
-import { ToolServicesPanel } from './ToolServicesPanel'
-import { TriggersPanel } from './TriggersPanel'
-import { SECTIONS, type SectionId } from './sections'
+} from "@gents/ui/components/select";
+import type { Shell } from "@/hooks/useShell";
+import { href, navigate } from "@/lib/router";
+import { AgentPanel } from "./AgentPanel";
+import { BehaviorsPanel } from "./BehaviorsPanel";
+import { ProfilesPanel } from "./ProfilesPanel";
+import { InferencePanel } from "./InferencePanel";
+import { SchedulesPanel } from "./SchedulesPanel";
+import { SkillsPanel } from "./SkillsPanel";
+import { TasksPanel } from "./TasksPanel";
+import { ContextsPanel } from "./ContextsPanel";
+import { EventSourcesPanel } from "./EventSourcesPanel";
+import { ToolsPanel } from "./ToolsPanel";
+import { ToolServicesPanel } from "./ToolServicesPanel";
+import { TriggersPanel } from "./TriggersPanel";
+import { SECTIONS, type SectionId } from "./sections";
 
 export function AgentScreen({
   shell,
@@ -34,16 +38,18 @@ export function AgentScreen({
   section,
   item,
 }: {
-  shell: Shell
-  agentDid: string
-  section: string
-  item?: string
+  shell: Shell;
+  agentDid: string;
+  section: string;
+  item?: string;
 }) {
-  const deployment = shell.deployments.find((d) => d.agentDid === agentDid) ?? null
+  const deployment = shell.deployments.find((d) => d.agentDid === agentDid) ?? null;
   if (!deployment) {
     return (
-      <p className="p-8 text-sm text-muted-foreground">No agent with that DID on this desktop.</p>
-    )
+      <p className="p-8 text-sm text-muted-foreground">
+        No agent with that DID on this desktop.
+      </p>
+    );
   }
   const counts: Partial<Record<SectionId, number>> = {
     behaviors: deployment.behaviors.length,
@@ -52,13 +58,13 @@ export function AgentScreen({
     inference: deployment.inferenceBackends.length,
     profiles: deployment.inferenceProfiles.length,
     tools: deployment.tools.length,
-    'tool-services': deployment.toolServiceRegistries.length,
+    "tool-services": deployment.toolServiceRegistries.length,
     tasks: deployment.tasks.length,
     schedules: deployment.schedules.length,
-    'event-sources': deployment.eventSources.length,
+    "event-sources": deployment.eventSources.length,
     triggers: deployment.triggers.length,
-  }
-  const groups = [...new Set(SECTIONS.map((s) => s.group))]
+  };
+  const groups = [...new Set(SECTIONS.map((s) => s.group))];
   return (
     <div
       className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] md:grid-cols-[20rem_minmax(0,1fr)]"
@@ -72,7 +78,7 @@ export function AgentScreen({
               {SECTIONS.filter((s) => s.group === group).map((s) => (
                 <SidebarItem
                   key={s.id}
-                  href={href({ name: 'agent', agentDid, section: s.id })}
+                  href={href({ name: "agent", agentDid, section: s.id })}
                   icon={<s.icon />}
                   active={section === s.id}
                   count={counts[s.id]}
@@ -90,7 +96,9 @@ export function AgentScreen({
           <Select
             items={SECTIONS.map((s) => ({ value: s.id, label: s.label }))}
             value={section}
-            onValueChange={(v) => v && navigate({ name: 'agent', agentDid, section: v })}
+            onValueChange={(v) =>
+              v && navigate({ name: "agent", agentDid, section: v })
+            }
           >
             <SelectTrigger aria-label="Section" className="w-full">
               <SelectValue />
@@ -118,44 +126,48 @@ export function AgentScreen({
           </Select>
         </div>
         <div className="mx-auto max-w-page px-4 py-6 md:px-8 md:py-8">
-          {section === 'agent' && (
+          {section === "agent" && (
             <AgentPanel
               key={JSON.stringify(deployment.agentPrincipal)}
               shell={shell}
               deployment={deployment}
             />
           )}
-          {section === 'behaviors' && (
+          {section === "behaviors" && (
             <BehaviorsPanel shell={shell} deployment={deployment} behaviorId={item} />
           )}
-          {section === 'contexts' && (
+          {section === "contexts" && (
             <ContextsPanel shell={shell} deployment={deployment} item={item} />
           )}
-          {section === 'skills' && (
+          {section === "skills" && (
             <SkillsPanel shell={shell} deployment={deployment} item={item} />
           )}
-          {section === 'inference' && (
+          {section === "inference" && (
             <InferencePanel shell={shell} deployment={deployment} item={item} />
           )}
-          {section === 'profiles' && (
+          {section === "profiles" && (
             <ProfilesPanel shell={shell} deployment={deployment} item={item} />
           )}
-          {section === 'tools' && <ToolsPanel shell={shell} deployment={deployment} item={item} />}
-          {section === 'tool-services' && (
+          {section === "tools" && (
+            <ToolsPanel shell={shell} deployment={deployment} item={item} />
+          )}
+          {section === "tool-services" && (
             <ToolServicesPanel shell={shell} deployment={deployment} item={item} />
           )}
-          {section === 'tasks' && <TasksPanel shell={shell} deployment={deployment} item={item} />}
-          {section === 'schedules' && (
+          {section === "tasks" && (
+            <TasksPanel shell={shell} deployment={deployment} item={item} />
+          )}
+          {section === "schedules" && (
             <SchedulesPanel shell={shell} deployment={deployment} item={item} />
           )}
-          {section === 'event-sources' && (
+          {section === "event-sources" && (
             <EventSourcesPanel shell={shell} deployment={deployment} item={item} />
           )}
-          {section === 'triggers' && (
+          {section === "triggers" && (
             <TriggersPanel shell={shell} deployment={deployment} item={item} />
           )}
         </div>
       </ScrollArea>
     </div>
-  )
+  );
 }
