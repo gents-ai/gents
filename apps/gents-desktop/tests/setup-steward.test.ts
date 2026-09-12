@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { deployment } from "./config-panel-wiring/fixtures";
-import {
-  SETUP_STEWARD_PROMPT,
-  setupStewardPatches,
-} from "../src/ui/lib/setupSteward";
+import { SETUP_STEWARD_PROMPT, setupStewardPatches } from "../src/ui/lib/setupSteward";
 
 describe("setup steward patches", () => {
   it("wires the default behavior, context prompt, and self-config tools", () => {
