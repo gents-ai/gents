@@ -80,6 +80,7 @@ export function BehaviorPicker({
         <ChevronDown className="ml-6 size-3.5 text-muted-foreground" />
       </PopoverTrigger>
       <PopoverContent
+        aria-label="Choose behavior"
         align="start"
         className="w-[min(40rem,calc(100vw-4rem))] p-0"
         onKeyDown={(e) => {

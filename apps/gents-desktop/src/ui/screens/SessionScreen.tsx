@@ -95,7 +95,12 @@ function SessionContext({ context }: { context: DesktopSessionSnapshot["context"
           </Button>
         }
       />
-      <PopoverContent align="start" className="w-80" data-testid="context-details">
+      <PopoverContent
+        aria-label="Session context details"
+        align="start"
+        className="w-80"
+        data-testid="context-details"
+      >
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <p className="font-heading text-sm font-medium text-heading">
@@ -824,7 +829,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         </Sheet>
       )}
       <AlertDialog open={forked !== null} onOpenChange={(o) => !o && setForked(null)}>
-        <AlertDialogContent>
+        <AlertDialogContent aria-modal="true">
           <AlertDialogHeader>
             <AlertDialogTitle>Forked</AlertDialogTitle>
             <AlertDialogDescription>

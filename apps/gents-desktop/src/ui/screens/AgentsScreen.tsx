@@ -307,7 +307,7 @@ function AddAgentDialog({
   };
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      <DialogContent aria-modal="true">
         <DialogHeader>
           <DialogTitle>Add agent</DialogTitle>
           <DialogDescription>
@@ -446,7 +446,7 @@ function RenameDialog({
   };
   return (
     <Dialog open={target !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      <DialogContent aria-modal="true">
         <DialogHeader>
           <DialogTitle>Rename deployment</DialogTitle>
           <DialogDescription>

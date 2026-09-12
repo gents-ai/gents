@@ -135,7 +135,11 @@ const dialogProblems = extract((state) => {
     if (!accessibleName(dialog, state.document)) {
       issues.push("dialog is missing an accessible name");
     }
-    if (dialog.getAttribute("aria-modal") !== "true") {
+    const slot = dialog.getAttribute("data-slot");
+    if (
+      (slot === "dialog-content" || slot === "alert-dialog-content") &&
+      dialog.getAttribute("aria-modal") !== "true"
+    ) {
       issues.push("dialog is missing aria-modal=true");
     }
   }

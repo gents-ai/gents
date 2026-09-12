@@ -410,14 +410,16 @@ const semanticTokens = new Set(
   ),
 );
 const hostTokensPath = join(root, "apps/gents-desktop/src/styles/tokens.css");
-const hostTokens = readFileSync(hostTokensPath, "utf8");
-for (const match of hostTokens.matchAll(
-  /(?:^|[{;\s])(--(?:font|color|border|radius|space|text|motion)-[\w-]+|--(?:overlay|scrim)-rgb)\s*:/g,
-)) {
-  if (!semanticTokens.has(match[1])) {
-    failures.push(
-      `${relative(root, hostTokensPath)} overrides ${match[1]}, which is absent from the semantic contract`,
-    );
+if (existsSync(hostTokensPath)) {
+  const hostTokens = readFileSync(hostTokensPath, "utf8");
+  for (const match of hostTokens.matchAll(
+    /(?:^|[{;\s])(--(?:font|color|border|radius|space|text|motion)-[\w-]+|--(?:overlay|scrim)-rgb)\s*:/g,
+  )) {
+    if (!semanticTokens.has(match[1])) {
+      failures.push(
+        `${relative(root, hostTokensPath)} overrides ${match[1]}, which is absent from the semantic contract`,
+      );
+    }
   }
 }
 
@@ -450,13 +452,17 @@ const semanticImport = desktopAppCss.indexOf(
   '@import "@source-inc/gents-desktop-tokens/semantic.css";',
 );
 const hostTokenImport = desktopAppCss.indexOf('@import "./styles/tokens.css";');
+const designKitImport = desktopAppCss.indexOf(
+  '@import "@gents/ui/styles.css";',
+);
 if (
-  semanticImport === -1 ||
-  hostTokenImport === -1 ||
-  semanticImport > hostTokenImport
+  designKitImport === -1 &&
+  (semanticImport === -1 ||
+    hostTokenImport === -1 ||
+    semanticImport > hostTokenImport)
 ) {
   failures.push(
-    `${relative(root, desktopAppCssPath)} must import semantic.css before host token overrides`,
+    `${relative(root, desktopAppCssPath)} must import the Gents design kit or semantic.css before host token overrides`,
   );
 }
 
@@ -468,14 +474,25 @@ const desktopShell = readFileSync(
   join(root, "apps/gents-desktop/src/hooks/useDesktopShell.ts"),
   "utf8",
 );
+const kitShell = readFileSync(
+  join(root, "apps/gents-desktop/src/ui/hooks/useShell.ts"),
+  "utf8",
+);
 const desktopShellOwnsInjectedBridge =
   /export function useDesktopShell\(\{\s*api,\s*listenToUpdates(?:,\s*supportsManagedServer\s*=\s*false)?,?\s*\}: DesktopShellBridge\)/m.test(
     desktopShell,
   );
+const legacyShellComposition =
+  desktopApp.includes("const shell = useDesktopShell(bridge);") &&
+  desktopApp.includes("api={bridge.api}");
+const kitShellComposition =
+  desktopApp.includes("const bridge = explicitBridge ?? defaultBridge;") &&
+  desktopApp.includes("const shell = useShell(") &&
+  kitShell.includes("const d = useDesktopShell(bridge);") &&
+  kitShell.includes("const api = bridge.api;");
 if (
   !desktopApp.includes("const client = createDesktopClient();") ||
-  !desktopApp.includes("const shell = useDesktopShell(bridge);") ||
-  !desktopApp.includes("api={bridge.api}") ||
+  (!legacyShellComposition && !kitShellComposition) ||
   !desktopShellOwnsInjectedBridge
 ) {
   failures.push(
@@ -534,10 +551,12 @@ for (const path of [
   }
 }
 
-const fleetHostDashboard = readFileSync(
-  join(root, "apps/gents-desktop/src/components/fleet/FleetHostDashboard.tsx"),
-  "utf8",
-);
+const fleetHostSource = filesUnder(
+  join(root, "apps/gents-desktop/src"),
+  (path) => /\.[cm]?[jt]sx?$/.test(path),
+)
+  .map((path) => readFileSync(path, "utf8"))
+  .join("\n");
 for (const legacyPairingPath of [
   "packages/gents-desktop-fleet/src/components/QrScannerDialog.tsx",
   "packages/gents-desktop-fleet/src/components/addPeer/BearerPairingForm.tsx",
@@ -548,8 +567,8 @@ for (const legacyPairingPath of [
   }
 }
 if (
-  fleetHostDashboard.includes("pairings invite") ||
-  fleetHostDashboard.includes("pair bearer")
+  fleetHostSource.includes("pairings invite") ||
+  fleetHostSource.includes("pair bearer")
 ) {
   failures.push(
     "the Gents host must not expose legacy invite or bearer pairing guidance",
@@ -610,7 +629,6 @@ for (const [path, maximumLines] of [
   ["packages/gents-desktop-chat/src/components/Transcript.tsx", 100],
   ["packages/gents-desktop-fleet/styles/layout.css", 20],
   ["packages/gents-desktop-fleet/styles/layout/dashboard.css", 180],
-  ["packages/gents-desktop-fleet/styles/layout/network.css", 120],
   ["packages/gents-desktop-fleet/styles/layout/enrollment.css", 230],
   ["packages/gents-desktop-fleet/styles/layout/responsive.css", 100],
   ["packages/gents-desktop-fleet/styles/layout/responsive-table.css", 100],

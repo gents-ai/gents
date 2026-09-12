@@ -80,7 +80,7 @@ export function CascadeDialog({
     (preview?.willInterrupt.length ?? 0) + (preview?.willDetach.length ?? 0);
   return (
     <AlertDialog open={requestId !== null} onOpenChange={(o) => !o && onClose()}>
-      <AlertDialogContent>
+      <AlertDialogContent aria-modal="true">
         <AlertDialogHeader>
           <AlertDialogTitle>Stop this request and its children?</AlertDialogTitle>
           <AlertDialogDescription>

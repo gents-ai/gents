@@ -48,7 +48,7 @@ export function SyncHealth({
         )}
         {status.shortLabel}
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-96">
+      <PopoverContent aria-label="Database sync details" align="end" className="w-96">
         <p className="font-heading text-sm font-medium text-heading">Database sync</p>
         <p className="mt-0.5 text-sm text-muted-foreground">{status.detail}</p>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">

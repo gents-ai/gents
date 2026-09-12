@@ -64,7 +64,11 @@ export function Shortcuts({ shell }: { shell: Shell }) {
   }, [agentDid]);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="sm:max-w-sm" data-testid="shortcuts-help">
+      <DialogContent
+        aria-modal="true"
+        className="sm:max-w-sm"
+        data-testid="shortcuts-help"
+      >
         <DialogHeader>
           <DialogTitle>Keyboard shortcuts</DialogTitle>
           <DialogDescription>
