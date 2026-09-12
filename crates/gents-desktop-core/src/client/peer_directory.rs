@@ -51,12 +51,27 @@ impl PeerRecord {
         self.source.as_deref() == Some("enrollment")
     }
 
+    /// The managed runtime keeps its operator endpoint alongside the signed
+    /// enrollment route. Enrollment owns data-plane authority; these fields
+    /// only identify the co-hosted configuration control plane.
+    pub fn is_managed_runtime(&self) -> bool {
+        self.local_agent_home
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            && self.graphql.as_deref().is_some_and(|value| {
+                let value = value.trim();
+                value.starts_with("http://") || value.starts_with("https://")
+            })
+    }
+
     /// HTTP GraphQL the desktop uses as the operator control plane for a
     /// hosted local runtime. Client P2P routes do not carry `AgentPrincipal`
     /// or `InferenceBackend`, so first-run config has to be read and written
     /// here. Test fixtures that pass a dummy `/graphql` URL are ignored.
     pub fn operator_graphql(&self) -> Option<&str> {
-        if self.source.as_deref() != Some("local-standard") {
+        if self.source.as_deref() != Some("local-standard")
+            && !(self.is_enrollment() && self.is_managed_runtime())
+        {
             return None;
         }
         let graphql = self.graphql.as_deref()?.trim();
@@ -74,7 +89,7 @@ impl PeerRecord {
     /// generation at the instant a write is admitted.
     pub fn is_chat_ready_at(&self, now: DateTime<Utc>) -> bool {
         if self.source.as_deref() == Some("local-standard") {
-            return true;
+            return self.pairing_ready;
         }
         self.is_enrollment()
             && self.pairing_ready
@@ -257,15 +272,22 @@ impl PeerDirectory {
         let mut record = candidate
             .peers
             .iter()
-            .find(|existing| existing.source.as_deref() == Some("local-standard"))
+            .find(|existing| {
+                existing.source.as_deref() == Some("local-standard")
+                    || (existing.is_enrollment()
+                        && existing.agent_did == agent_did
+                        && existing.local_agent_home.as_deref() == Some(agent_home))
+            })
             .cloned()
             .unwrap_or_else(|| PeerRecord::local_standard(label, addr, agent_did, graphql));
         record.label = label.to_string();
-        record.addr = addr.to_string();
         record.agent_did = agent_did.to_string();
-        record.source = Some("local-standard".to_string());
         record.graphql = Some(graphql.to_string());
         record.local_agent_home = Some(agent_home.to_string());
+        if !record.is_enrollment() {
+            record.addr = addr.to_string();
+            record.source = Some("local-standard".to_string());
+        }
 
         let record = candidate.apply_upsert(record);
         self.commit(candidate).await?;
@@ -301,9 +323,21 @@ impl PeerDirectory {
             normalize_non_empty("authorization_expires_at", authorization_expires_at)?;
 
         let mut candidate = self.clone();
+        let managed = candidate
+            .peers
+            .iter()
+            .find(|record| {
+                record.source.as_deref() == Some("local-standard")
+                    && record.agent_did == agent_did
+                    && record.is_managed_runtime()
+            })
+            .cloned();
         if let Some(conflict) = candidate.peers.iter().find(|record| {
             (record.peer_id == peer_id || record.agent_did == agent_did)
                 && record.source.as_deref() != Some("enrollment")
+                && managed
+                    .as_ref()
+                    .is_none_or(|managed| managed.peer_id != record.peer_id)
         }) {
             anyhow::bail!(
                 "authenticated enrollment conflicts with {}-owned peer {}",
@@ -319,7 +353,8 @@ impl PeerDirectory {
                 record.source.as_deref() == Some("enrollment")
                     && (record.peer_id == peer_id || record.agent_did == agent_did)
             })
-            .cloned();
+            .cloned()
+            .or_else(|| managed.clone());
         let mut record = existing.clone().unwrap_or(PeerRecord {
             peer_id: peer_id.to_string(),
             label: label.to_string(),
@@ -367,7 +402,16 @@ impl PeerDirectory {
         record.enrollment_admin_did = Some(admin_did.to_string());
         record.enrollment_authorization_sequence = Some(authorization_sequence);
         record.enrollment_authorization_expires_at = Some(authorization_expires_at.to_string());
-        record.graphql = None;
+        if managed.is_none() && !record.is_managed_runtime() {
+            record.graphql = None;
+            record.local_agent_home = None;
+        }
+
+        if let Some(managed) = managed {
+            candidate
+                .peers
+                .retain(|candidate| candidate.peer_id != managed.peer_id);
+        }
 
         // Status polling observes the same signed authorization on every
         // supervisor tick. Preserve the durable generation (including its
@@ -497,13 +541,13 @@ impl PeerDirectory {
     }
 
     /// Route readiness is an observation, not durable authority across a
-    /// process restart. Every non-local deployment must re-establish its live
-    /// authority and both route legs before chat writes reopen.
+    /// process restart. Every deployment must re-establish its live authority
+    /// and both route legs before chat writes reopen.
     pub(in crate::client) async fn clear_ephemeral_pairing_readiness(&mut self) -> Result<()> {
         let mut candidate = self.clone();
         let mut changed = false;
         for record in &mut candidate.peers {
-            if record.source.as_deref() != Some("local-standard") && record.pairing_ready {
+            if record.pairing_ready {
                 record.pairing_ready = false;
                 record.updated_at = Utc::now().to_rfc3339();
                 changed = true;
@@ -847,6 +891,58 @@ mod tests {
         drop(directory);
         let reloaded = load_peer_records(&path).await.unwrap();
         assert_eq!(reloaded, vec![rotated]);
+    }
+
+    #[tokio::test]
+    async fn managed_runtime_upgrades_to_one_enrolled_peer_and_keeps_operator_access() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let managed = directory
+            .upsert_local_standard_peer(
+                "Mandrake",
+                "iroh://bootstrap-ticket",
+                "did:key:agent",
+                "http://127.0.0.1:9291/api/v0/graphql",
+                "/tmp/managed-agent",
+            )
+            .await
+            .unwrap();
+        assert!(!managed.is_chat_ready_at(Utc::now()));
+
+        let enrolled = directory
+            .upsert_enrollment_peer(
+                "server-transport-peer",
+                "Ignored enrollment label",
+                "iroh://signed-ticket",
+                "did:key:agent",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                1,
+                "2099-09-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(directory.records().len(), 1);
+        assert_eq!(enrolled.peer_id, "server-transport-peer");
+        assert_eq!(enrolled.label, "Mandrake");
+        assert!(enrolled.is_enrollment());
+        assert!(enrolled.is_managed_runtime());
+        assert_eq!(
+            enrolled.operator_graphql(),
+            Some("http://127.0.0.1:9291/api/v0/graphql")
+        );
+        assert_eq!(
+            enrolled.local_agent_home.as_deref(),
+            Some("/tmp/managed-agent")
+        );
+        assert!(!enrolled.pairing_ready);
+
+        let reloaded = load_peer_records(&path).await.unwrap();
+        assert_eq!(reloaded, vec![enrolled]);
     }
 
     #[tokio::test]

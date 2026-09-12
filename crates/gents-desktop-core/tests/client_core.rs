@@ -451,6 +451,7 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
     drop(core);
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+    core.add_local_standard_peer_for_test(&agent_did).await?;
     assert_eq!(
         core.local_peer_id(),
         peer_id_before_restart,
@@ -553,14 +554,7 @@ async fn hydration_request_status(core: &ClientCore, request_key: &str) -> Resul
 }
 
 async fn persist_local_route(core: &ClientCore, agent_did: &str) -> Result<()> {
-    core.persist_local_standard_peer(
-        "Hydration test runtime",
-        "endpoint:hydration-test",
-        agent_did,
-        "http://127.0.0.1:9191/api/v0/graphql",
-        "/tmp/test-agent-home",
-    )
-    .await?;
+    core.add_local_standard_peer_for_test(agent_did).await?;
     Ok(())
 }
 

@@ -12,7 +12,6 @@ use defra_node::EmbeddedNode;
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Notify};
 use tracing::field::{Field, Visit};
-use tracing::instrument::WithSubscriber;
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
@@ -90,47 +89,45 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
     let telemetry = EventCapture::default();
     let events = Arc::clone(&telemetry.events);
     let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
+    let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
-    let mut transaction = Box::pin(
-        super::transact_owned(
-            "test.cancel_after_embedded_begin",
-            crate::config_client::write_telemetry::WriteBackend::Embedded,
-            super::TransactionMode::ConflictRetry,
-            move |operation, rollback_scheduled| {
-                let runner = Arc::clone(&runner);
-                let gate = Arc::clone(&gate);
-                let registered = Arc::clone(&registered_for_begin);
-                let registered_notify = Arc::clone(&registered_notify_for_begin);
-                let release = Arc::clone(&release_for_begin);
-                Box::pin(async move {
-                    let write_guard = gate.acquire(operation).await?;
-                    let (rollback_on_drop, handle) = tokio::spawn(super::begin_embedded_owned(
-                        runner,
-                        write_guard,
-                        rollback_scheduled,
-                        move |handle| async move {
-                            *lock(&registered) = Some(handle);
-                            registered_notify.notify_one();
-                            release.notified().await;
-                        },
-                    ))
-                    .await
-                    .expect("detached begin task")?;
-                    Ok(ConfigApplyTxn {
-                        backend: TxnBackend::Embedded {
-                            node: node_ref,
-                            handle,
-                            identity: None,
-                        },
-                        rollback_on_drop: Some(rollback_on_drop),
-                        affected_documents: std::sync::atomic::AtomicU64::new(0),
-                    })
+    let mut transaction = Box::pin(super::transact_owned(
+        "test.cancel_after_embedded_begin",
+        crate::config_client::write_telemetry::WriteBackend::Embedded,
+        super::TransactionMode::ConflictRetry,
+        move |operation, rollback_scheduled| {
+            let runner = Arc::clone(&runner);
+            let gate = Arc::clone(&gate);
+            let registered = Arc::clone(&registered_for_begin);
+            let registered_notify = Arc::clone(&registered_notify_for_begin);
+            let release = Arc::clone(&release_for_begin);
+            Box::pin(async move {
+                let write_guard = gate.acquire(operation).await?;
+                let (rollback_on_drop, handle) = tokio::spawn(super::begin_embedded_owned(
+                    runner,
+                    write_guard,
+                    rollback_scheduled,
+                    move |handle| async move {
+                        *lock(&registered) = Some(handle);
+                        registered_notify.notify_one();
+                        release.notified().await;
+                    },
+                ))
+                .await
+                .expect("detached begin task")?;
+                Ok(ConfigApplyTxn {
+                    backend: TxnBackend::Embedded {
+                        node: node_ref,
+                        handle,
+                        identity: None,
+                    },
+                    rollback_on_drop: Some(rollback_on_drop),
+                    affected_documents: std::sync::atomic::AtomicU64::new(0),
                 })
-            },
-            |_| Box::pin(async { Ok::<_, anyhow::Error>(()) }),
-        )
-        .with_subscriber(subscriber),
-    );
+            })
+        },
+        |_| Box::pin(async { Ok::<_, anyhow::Error>(()) }),
+    ));
 
     tokio::select! {
         () = registered_notify.notified() => {}
@@ -183,12 +180,13 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
     let telemetry = EventCapture::default();
     let events = Arc::clone(&telemetry.events);
     let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
-    let mut transaction = Box::pin(
-        ConfigAccess::transact_local(&node, None, "test.cancel_before_begin", |_| {
-            Box::pin(async { Ok::<_, anyhow::Error>(()) })
-        })
-        .with_subscriber(subscriber),
-    );
+    let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
+    let mut transaction = Box::pin(ConfigAccess::transact_local(
+        &node,
+        None,
+        "test.cancel_before_begin",
+        |_| Box::pin(async { Ok::<_, anyhow::Error>(()) }),
+    ));
 
     tokio::time::timeout(Duration::from_millis(10), &mut transaction)
         .await

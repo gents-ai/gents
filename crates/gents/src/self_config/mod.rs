@@ -732,6 +732,9 @@ pub struct ConfigurePersonaParams {
     /// Exact owner-scoped inference profile ID.
     #[serde(default)]
     pub profile_id: Option<String>,
+    /// Promote the applied persona to this principal's default behavior.
+    #[serde(default)]
+    pub make_default: bool,
 }
 
 /// How long [`ConfigurePersonaTool`] polls a freshly-authored
@@ -776,6 +779,8 @@ struct PersonaRequestRowOut {
     #[serde(default)]
     profile_id: Option<String>,
     #[serde(default)]
+    make_default: Option<bool>,
+    #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
     status: Option<String>,
@@ -807,6 +812,7 @@ async fn load_persona_request_row(
                 root
                 preset
                 profile_id
+                make_default
                 created_at
                 status
                 status_detail
@@ -961,6 +967,7 @@ async fn persona_mutate(
         root: args.root.clone(),
         preset: args.preset.clone(),
         profile_id: resolved_profile_id,
+        make_default: args.make_default,
         created_at: now,
         local_signature: Vec::new(),
     };
@@ -986,7 +993,7 @@ impl Tool for ConfigurePersonaTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: CONFIGURE_PERSONA_TOOL_NAME.to_string(),
-            description: "List, create, clone, edit, or disable sibling personas through signed PersonaConfigRequest admission. Choose an existing inference profile. Document IDs are exact and scoped to this principal. Clone copies source permissions; choosing a preset requests a new persona instead. Pending requests return their key for later inspection.".to_owned(),
+            description: "List, create, clone, edit, or disable sibling personas through signed PersonaConfigRequest admission. Choose an existing inference profile. A create/edit may atomically make the applied behavior this principal's default. Document IDs are exact and scoped to this principal. Clone copies source permissions; choosing a preset requests a new persona instead. Pending requests return their key for later inspection.".to_owned(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -1017,6 +1024,11 @@ impl Tool for ConfigurePersonaTool {
                     "profile_id": {
                         "type": "string",
                         "description": "Exact inference profile_id owned by this principal.",
+                    },
+                    "make_default": {
+                        "type": "boolean",
+                        "description": "For create/edit, atomically promote the applied behavior to this principal's default. Must be false for disable.",
+                        "default": false,
                     },
                 },
                 "required": ["action"],

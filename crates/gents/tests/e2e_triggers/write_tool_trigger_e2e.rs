@@ -21,6 +21,11 @@ const TARGET_PATHS: &str = "infra/hosts/studio-1/host.md";
 const PROMPT_TEMPLATE: &str =
     "drift={{ doc.drift_sig }} summary={{ doc.summary }} paths={{ doc.target_paths }}";
 
+// Both cases start a full runtime and wait on the same process-wide DefraDB
+// update machinery. Running them together under the already parallel trigger
+// suite can starve one startup past its bounded readiness deadline.
+static WRITE_TOOL_TRIGGER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn register_action_request_schema(node: &EmbeddedNode) {
     let sdl = r#"
         type ActionRequest {
@@ -348,6 +353,7 @@ fn request_action_decl() -> WriteToolDecl {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_field_template_renders_all_referenced_doc_fields() {
+    let _guard = WRITE_TOOL_TRIGGER_LOCK.lock().await;
     let db = test_db("write-tool-trigger-multifield").await;
     register_action_request_schema(db.node.as_ref()).await;
 
@@ -385,6 +391,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn declared_write_tool_call_fires_event_trigger() {
+    let _guard = WRITE_TOOL_TRIGGER_LOCK.lock().await;
     let db = test_db("write-tool-trigger-tooldriven").await;
     register_action_request_schema(db.node.as_ref()).await;
 

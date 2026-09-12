@@ -58,18 +58,18 @@ For long-running commands such as builds, test suites, installs, servers, and lo
 
 const SETUP_STEWARD_SYSTEM_PROMPT: &str = r#"You are the first-run setup steward for Gents, a local agent runtime. Your job is to help this user get a working agent for the work they actually want to do.
 
-You have self-configuration tools: get_my_config to inspect the current setup, and configure_behavior, configure_tools, and configure_profile to change it. Committed changes apply to later requests, not this turn.
+You have self-configuration tools. Use get_my_config to inspect this Setup behavior and configure_persona to list, create, clone, edit, or disable separate working behaviors. configure_behavior, configure_tools, and configure_profile only change this Setup behavior, so do not use them to turn Setup into the user's working agent. Committed changes apply to later requests, not this turn.
 
 Start by asking what they want to do — coding in a specific repo, research, operations, or just chatting. Then:
 1. Call get_my_config before changing anything.
-2. Walk them through the smallest changes that fit that work: a behavior, tool permissions (files, bash), and the workspace root.
+2. Walk them through the smallest separate behavior that fits that work: its name, tool permission preset, inference profile, and workspace root.
 3. Explain each change in plain language before you apply it.
-4. Never disable your own self-config tools.
+4. Keep this Setup behavior intact and never disable its self-config tools.
 5. You can read local files to inspect a repo they name. You cannot write files or run write-capable shell until they ask you to grant those tools.
 
-For coding work, configure this behavior and context as a focused coding agent, set Tools.host.root to the exact absolute repo path, select ReadWrite files and Unrestricted bash with workspace_write execution on macOS, and keep self_config enabled. Tell the user the committed configuration applies starting with their next request, then use that next request to test the configured behavior.
+For coding work, call configure_persona with action "list" first so you use an exact available profile ID and see the allowed roots. Then call configure_persona with action "create", a focused coding name, preset "write", the exact absolute repo path when it is listed as allowed (otherwise omit root so the managed user-home root remains in force), that profile ID, and make_default true. This creates a new behavior with ReadWrite files and Unrestricted bash while leaving Setup unchanged. Tell the user the new behavior is now the default and applies starting with their next new session, then use that new session to test it.
 
-If they just want to talk, stay on this Setup behavior and help from here."#;
+If they just want to talk, create a separate readonly conversational behavior and make it the default; keep Setup available for later reconfiguration."#;
 
 const YOLO_WARNING: &str = "\
 WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
@@ -746,13 +746,7 @@ async fn initialize_runtime_home(
         args.defra_query_collections.clone(),
     );
     if args.setup_steward {
-        tools.self_config = Some(SelfConfigTools {
-            enable_self_config: Some(true),
-            self_config_categories: None,
-            self_config_no_lockout: Some(true),
-            self_config_dry_run: Some(true),
-            timeout_secs: None,
-        });
+        tools.self_config = Some(setup_steward_self_config());
     }
     let context = AgentContext {
         context_id: default_context_id_for_behavior(&default_behavior_id),
@@ -870,6 +864,21 @@ async fn initialize_runtime_home(
         created_principal: existing_principal.is_none(),
         created_default_behavior: existing_default_behavior.is_none(),
     })
+}
+
+fn setup_steward_self_config() -> SelfConfigTools {
+    SelfConfigTools {
+        enable_self_config: Some(true),
+        self_config_categories: Some(vec![
+            "behavior".to_string(),
+            "tools".to_string(),
+            "profile".to_string(),
+            "persona".to_string(),
+        ]),
+        self_config_no_lockout: Some(true),
+        self_config_dry_run: Some(true),
+        timeout_secs: None,
+    }
 }
 
 /// Serialize a canonical config document into a complete-replacement plan
@@ -1481,6 +1490,10 @@ mod tests {
 
     #[test]
     fn setup_steward_starts_readonly_under_an_unrestricted_process_ceiling() {
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("leaving Setup unchanged"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("make_default true"));
+        assert!(!SETUP_STEWARD_SYSTEM_PROMPT
+            .contains("configure this behavior and context as a focused coding agent"));
         let selected = initial_tools_package(ToolPackageArg::Yolo, true);
         assert_eq!(selected, ToolPackageArg::Readonly);
         assert_eq!(
@@ -1501,6 +1514,15 @@ mod tests {
         assert_eq!(host.root.as_deref(), Some("/"));
         assert_eq!(host.files.unwrap().mode, FileToolMode::ReadOnly);
         assert_eq!(host.bash.unwrap().mode, BashMode::ReadOnly);
+        assert_eq!(
+            setup_steward_self_config().self_config_categories,
+            Some(vec![
+                "behavior".to_string(),
+                "tools".to_string(),
+                "profile".to_string(),
+                "persona".to_string(),
+            ])
+        );
     }
 
     /// Drift fence between init's tool packages and the directory persona

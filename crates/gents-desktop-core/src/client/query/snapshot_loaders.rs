@@ -112,10 +112,30 @@ async fn load_operator_config(access: &gents::config_client::ConfigAccess) -> Re
             &format!("query {{ InferenceBackend {{ {INFERENCE_BACKEND_FIELDS} }} }}"),
         )
         .await?,
+        backend_observations: load_rows_from_access(
+            access,
+            "InferenceBackend",
+            &format!(
+                "query {{ InferenceBackend {{ {INFERENCE_BACKEND_OBSERVATION_FIELDS} }} }}"
+            ),
+        )
+        .await?,
         inference_profiles: load_rows_from_access(
             access,
             "InferenceProfile",
             &format!("query {{ InferenceProfile {{ {INFERENCE_PROFILE_FIELDS} }} }}"),
+        )
+        .await?,
+        inference_sampling: load_rows_from_access(
+            access,
+            "InferenceSampling",
+            &format!("query {{ InferenceSampling {{ {INFERENCE_SAMPLING_FIELDS} }} }}"),
+        )
+        .await?,
+        inference_execution: load_rows_from_access(
+            access,
+            "InferenceExecution",
+            &format!("query {{ InferenceExecution {{ {INFERENCE_EXECUTION_FIELDS} }} }}"),
         )
         .await?,
         sessions: load_rows_from_access(

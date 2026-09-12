@@ -14,6 +14,25 @@ fn replace_agent_rows<T>(
     );
 }
 
+fn replace_agent_rows_with_sources<T>(
+    dest: &mut Vec<T>,
+    sources: &mut Vec<Option<String>>,
+    incoming: Vec<T>,
+    agent_did: &str,
+    row_agent: impl Fn(&T) -> &str,
+) {
+    retain_rows_and_sources(dest, sources, |row, _source| row_agent(row) != agent_did);
+    let incoming = incoming
+        .into_iter()
+        .filter(|row| row_agent(row) == agent_did)
+        .collect::<Vec<_>>();
+    sources.extend(std::iter::repeat_n(
+        Some(agent_did.to_string()),
+        incoming.len(),
+    ));
+    dest.extend(incoming);
+}
+
 impl ClientStore {
     /// Replace this agent's operator-owned config and runtime readiness with
     /// rows loaded from the runtime GraphQL endpoint. Local-only leftovers
@@ -40,27 +59,90 @@ impl ClientStore {
             agent_did,
             |row| row.agent_did.as_str(),
         );
-        replace_agent_rows(&mut rows.contexts, remote.contexts, agent_did, |row| {
-            row.agent_did.as_str()
-        });
-        replace_agent_rows(&mut rows.tools, remote.tools, agent_did, |row| {
-            row.agent_did.as_str()
-        });
-        replace_agent_rows(
+        replace_agent_rows_with_sources(
+            &mut rows.contexts,
+            &mut rows.context_source_agent_dids,
+            remote.contexts,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.tools,
+            &mut rows.tools_source_agent_dids,
+            remote.tools,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        let replaced_backend_ids = rows
+            .inference_backends
+            .iter()
+            .filter(|row| row.agent_did == agent_did)
+            .map(|row| row.backend_id.clone())
+            .chain(
+                remote
+                    .inference_backends
+                    .iter()
+                    .filter(|row| row.agent_did == agent_did)
+                    .map(|row| row.backend_id.clone()),
+            )
+            .collect::<HashSet<_>>();
+        let incoming_backend_ids = remote
+            .inference_backends
+            .iter()
+            .filter(|row| row.agent_did == agent_did)
+            .map(|row| row.backend_id.clone())
+            .collect::<HashSet<_>>();
+        replace_agent_rows_with_sources(
             &mut rows.inference_backends,
+            &mut rows.inference_backend_source_agent_dids,
             remote.inference_backends,
             agent_did,
             |row| row.agent_did.as_str(),
         );
-        replace_agent_rows(
+        retain_rows_and_sources(
+            &mut rows.backend_observations,
+            &mut rows.backend_observation_source_agent_dids,
+            |row, _source| !replaced_backend_ids.contains(&row.backend_id),
+        );
+        let backend_observations = remote
+            .backend_observations
+            .into_iter()
+            .filter(|row| incoming_backend_ids.contains(&row.backend_id))
+            .collect::<Vec<_>>();
+        rows.backend_observation_source_agent_dids
+            .extend(std::iter::repeat_n(
+                Some(agent_did.to_string()),
+                backend_observations.len(),
+            ));
+        rows.backend_observations.extend(backend_observations);
+        replace_agent_rows_with_sources(
             &mut rows.inference_profiles,
+            &mut rows.inference_profile_source_agent_dids,
             remote.inference_profiles,
             agent_did,
             |row| row.agent_did.as_str(),
         );
-        replace_agent_rows(&mut rows.sessions, remote.sessions, agent_did, |row| {
-            row.agent_did.as_str()
-        });
+        replace_agent_rows_with_sources(
+            &mut rows.inference_sampling,
+            &mut rows.inference_sampling_source_agent_dids,
+            remote.inference_sampling,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.inference_execution,
+            &mut rows.inference_execution_source_agent_dids,
+            remote.inference_execution,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.sessions,
+            &mut rows.session_source_agent_dids,
+            remote.sessions,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
         replace_agent_rows(&mut rows.requests, remote.requests, agent_did, |row| {
             row.agent_did.as_deref().unwrap_or_default()
         });
@@ -483,6 +565,29 @@ impl ClientStore {
         let mut rows = self.to_rows();
         let patch_rows = patch.to_rows();
 
+        // Operator GraphQL supplies the canonical agent scope after a local
+        // submit may already have installed an unscoped optimistic row. Let
+        // the scoped document replace that placeholder; keeping both makes
+        // agent-aware turn lookup select the older processing row first.
+        let scoped_request_ids = patch_rows
+            .requests
+            .iter()
+            .filter(|row| row.agent_did.is_some())
+            .map(|row| row.request_id.clone())
+            .collect::<HashSet<_>>();
+        rows.requests.retain(|row| {
+            row.agent_did.is_some() || !scoped_request_ids.contains(row.request_id.as_str())
+        });
+        let scoped_response_keys = patch_rows
+            .responses
+            .iter()
+            .filter(|row| row.agent_did.is_some())
+            .map(|row| row.response_key.clone())
+            .collect::<HashSet<_>>();
+        rows.responses.retain(|row| {
+            row.agent_did.is_some() || !scoped_response_keys.contains(row.response_key.as_str())
+        });
+
         upsert_rows_by_key(&mut rows.requests, patch_rows.requests, request_merge_key);
         upsert_rows_by_key(
             &mut rows.responses,
@@ -606,7 +711,9 @@ impl ClientStore {
 #[cfg(test)]
 mod overlay_tests {
     use super::*;
-    use gents::document_config::{AgentBehavior, AgentPrincipal};
+    use gents::document_config::{
+        AgentBehavior, AgentPrincipal, InferenceBackend, InferenceBackendObservation,
+    };
     use gents_protocol::row::{AgentBehaviorReadinessRow, AgentRuntimeRow};
 
     #[test]
@@ -619,6 +726,8 @@ mod overlay_tests {
             behaviors: vec![behavior("did:test:local", "ghost")],
             runtimes: vec![runtime("did:test:local", "desktop")],
             behavior_readiness: vec![readiness("did:test:local", "desktop")],
+            inference_backends: vec![backend("did:test:local", "Desktop backend")],
+            backend_observations: vec![backend_observation("stale")],
             ..ClientStoreRows::default()
         });
         let remote = ClientStore::from_rows(ClientStoreRows {
@@ -626,6 +735,8 @@ mod overlay_tests {
             behaviors: vec![behavior("did:test:local", "Default")],
             runtimes: vec![runtime("did:test:local", "agent")],
             behavior_readiness: vec![readiness("did:test:local", "agent")],
+            inference_backends: vec![backend("did:test:local", "Agent backend")],
+            backend_observations: vec![backend_observation("healthy")],
             ..ClientStoreRows::default()
         });
         let overlayed = local.overlay_agent_operator_config("did:test:local", &remote);
@@ -656,6 +767,15 @@ mod overlay_tests {
             Some("agent")
         );
         assert_eq!(overlayed.behavior_readiness[0].snapshot_json, "agent");
+        assert_eq!(overlayed.inference_backends[0].name, "Agent backend");
+        assert_eq!(
+            overlayed.backend_observation_source_agent_dids[0].as_deref(),
+            Some("did:test:local")
+        );
+        assert_eq!(
+            overlayed.backend_observations[0].probe_status.as_deref(),
+            Some("healthy")
+        );
     }
 
     fn principal(agent_did: &str, display_name: &str) -> AgentPrincipal {
@@ -701,5 +821,82 @@ mod overlay_tests {
             snapshot_json: snapshot_json.to_string(),
             updated_at: "2026-09-12T00:00:00Z".to_string(),
         }
+    }
+
+    fn backend(agent_did: &str, name: &str) -> InferenceBackend {
+        serde_json::from_value(serde_json::json!({
+            "agent_did": agent_did,
+            "backend_id": "backend",
+            "name": name,
+            "provider_kind": "OpenAiCompatible",
+            "openai_wire_api": "chat_completions",
+            "endpoint": "http://localhost:8000/v1",
+            "auth": {"kind": "unauthenticated"},
+            "enabled": true,
+        }))
+        .expect("backend")
+    }
+
+    fn backend_observation(probe_status: &str) -> InferenceBackendObservation {
+        InferenceBackendObservation {
+            backend_id: "backend".to_string(),
+            catalogs: Vec::new(),
+            probe_status: Some(probe_status.to_string()),
+            last_probe: None,
+        }
+    }
+
+    #[test]
+    fn scoped_chat_patch_replaces_unscoped_optimistic_rows() {
+        let local = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![request(None, "processing")],
+            responses: vec![response(None, "streaming")],
+            ..ClientStoreRows::default()
+        });
+        let remote = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![request(Some("did:test:agent"), "completed")],
+            responses: vec![response(Some("did:test:agent"), "complete")],
+            ..ClientStoreRows::default()
+        });
+
+        let merged = local.merge_chat_patch(remote);
+
+        assert_eq!(merged.requests.len(), 1);
+        assert_eq!(merged.responses.len(), 1);
+        assert_eq!(
+            merged.requests[0].agent_did.as_deref(),
+            Some("did:test:agent")
+        );
+        assert!(merged.requests[0].is_terminal());
+        assert_eq!(
+            merged.responses[0].agent_did.as_deref(),
+            Some("did:test:agent")
+        );
+        assert_eq!(merged.responses[0].status.as_deref(), Some("complete"));
+    }
+
+    fn request(agent_did: Option<&str>, lifecycle_state: &str) -> AgentRequestRow {
+        serde_json::from_value(serde_json::json!({
+            "request_id": "request",
+            "agent_did": agent_did,
+            "session_id": "session",
+            "content": "hello",
+            "lifecycle_state": lifecycle_state,
+            "created_at": "2026-09-12T00:00:00Z",
+        }))
+        .expect("request")
+    }
+
+    fn response(agent_did: Option<&str>, status: &str) -> AgentResponseRow {
+        serde_json::from_value(serde_json::json!({
+            "response_key": "request",
+            "request_id": "request",
+            "agent_did": agent_did,
+            "session_id": "session",
+            "content": "hello",
+            "status": status,
+            "created_at": "2026-09-12T00:00:00Z",
+        }))
+        .expect("response")
     }
 }

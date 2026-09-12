@@ -83,6 +83,29 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
     }
 }
 
+fn request_patch_is_current(
+    current: &ClientStore,
+    patch: &ClientStore,
+    agent_did: &str,
+    request_id: &str,
+) -> bool {
+    let request_value = |store: &ClientStore| {
+        store
+            .requests
+            .iter()
+            .find(|row| row.request_id == request_id && row.agent_did.as_deref() == Some(agent_did))
+            .and_then(|row| serde_json::to_value(row).ok())
+    };
+    let response_value = |store: &ClientStore| {
+        store
+            .latest_response_for_request_for_agent(request_id, agent_did)
+            .and_then(|row| serde_json::to_value(row).ok())
+    };
+
+    request_value(current).is_some_and(|current| request_value(patch) == Some(current))
+        && response_value(current) == response_value(patch)
+}
+
 fn behavior_id_for_write(requested_behavior_id: Option<&str>) -> Option<String> {
     requested_behavior_id
         .map(str::trim)
@@ -414,7 +437,14 @@ impl ClientCore {
         let cache_key = format!("{source}\0{agent_did}\0{request_id}");
         {
             let mut signatures = self.request_patch_signatures.lock().await;
-            if signatures.get(&cache_key) == Some(&signature) {
+            if signatures.get(&cache_key) == Some(&signature)
+                && request_patch_is_current(
+                    self.store.snapshot().as_ref(),
+                    &patch,
+                    agent_did,
+                    request_id,
+                )
+            {
                 return Ok(None);
             }
             if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
@@ -1016,7 +1046,7 @@ impl ClientCore {
             .into_iter()
             .find(|record| record.agent_did == agent_did);
         match record {
-            Some(record) if record.source.as_deref() == Some("local-standard") => record
+            Some(record) if record.operator_graphql().is_some() => record
                 .operator_graphql()
                 .map(str::to_owned)
                 .map(ConfigAccess::Graphql)
@@ -2035,8 +2065,10 @@ mod delete_source_tests {
     }
 
     #[test]
-    fn local_standard_is_explicitly_exempt_from_route_readiness() {
-        let peer = peer_record(Some("local-standard"));
+    fn local_standard_waits_for_background_pairing_before_chat() {
+        let mut peer = peer_record(Some("local-standard"));
+        assert!(ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).is_err());
+        peer.pairing_ready = true;
         ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).unwrap();
     }
 

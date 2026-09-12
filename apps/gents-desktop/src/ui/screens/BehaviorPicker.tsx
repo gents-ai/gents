@@ -14,6 +14,7 @@ import type { Shell } from "@/hooks/useShell";
 import { createBehavior } from "./agent/createBehavior";
 import { BehaviorAvatar } from "./parts";
 import { behaviorReadiness } from "@/lib/send-status";
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
 /* the access modes at a glance, short enough for one line */
 const short = (mode: string | null | undefined) =>
@@ -32,10 +33,13 @@ export function BehaviorPicker({
   behaviorId: string | null;
   onChange: (behaviorId: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   /* search is hidden until asked for: the icon in the footer, or typing */
   const [searching, setSearching] = useState(false);
+  const popover = useExclusivePopover(() => {
+    setQuery("");
+    setSearching(false);
+  });
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (searching) input.current?.focus();
@@ -55,16 +59,7 @@ export function BehaviorPicker({
       describe(b.behaviorId).toLowerCase().includes(q),
   );
   return (
-    <Popover
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) {
-          setQuery("");
-          setSearching(false);
-        }
-      }}
-    >
+    <Popover open={popover.open} onOpenChange={popover.onOpenChange}>
       <PopoverTrigger
         render={
           <Button variant="ghost" size="sm" className="gap-2 px-1.5 font-normal" />
@@ -142,7 +137,7 @@ export function BehaviorPicker({
                     aria-selected={selected}
                     onClick={() => {
                       onChange(b.behaviorId);
-                      setOpen(false);
+                      popover.onOpenChange(false);
                     }}
                     className={cn(
                       "grid w-full grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-lg px-2 py-2 text-left hover:bg-accent",

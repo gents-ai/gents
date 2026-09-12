@@ -9,12 +9,14 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
 export function SyncHealth({
   syncHealth,
 }: {
   syncHealth: SyncHealthView | null | undefined;
 }) {
+  const popover = useExclusivePopover();
   const status = projectSyncOperationalStatus(syncHealth);
   const d = syncHealthDiagnostics(syncHealth);
   const dot =
@@ -35,7 +37,7 @@ export function SyncHealth({
     ["Quarantined DAGs", d.quarantinedDagCount ?? "—"],
   ];
   return (
-    <Popover>
+    <Popover open={popover.open} onOpenChange={popover.onOpenChange}>
       <PopoverTrigger
         aria-label={`${status.shortLabel}. Show sync diagnostics.`}
         title={status.detail}

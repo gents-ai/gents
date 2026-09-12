@@ -88,7 +88,10 @@ export function useShell(
       selectBehavior: d.setSelectedBehaviorId,
       selectedSessionId: d.selectedSessionId,
       selectedSession: d.session,
-      selectedTrackedRequestId: d.activeRequestId ?? null,
+      // `activeRequestId` is the newest durable request even after it has
+      // completed. The tracking cursor is the one that retires at terminality
+      // and therefore owns the composer/interrupt state.
+      selectedTrackedRequestId: d.selectedTrackedRequestId ?? null,
       sessionLoad: d.sessionLoad,
       conversationLoading: d.sessionLoadingStatus,
       clearError: d.onDismissError,

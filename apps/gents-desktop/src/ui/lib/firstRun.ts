@@ -27,6 +27,20 @@ export function backendIsConfigured(backend: InferenceBackendView): boolean {
   return backend.probeStatus === "ok" || backend.probeStatus === "healthy";
 }
 
+export function shouldRebindSetupDefault(
+  deployment: DeploymentView,
+  addingExtra: boolean,
+): boolean {
+  if (!addingExtra) return true;
+  const defaultBehavior = deployment.behaviors.find(
+    (behavior) => behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
+  );
+  const defaultProfile = deployment.inferenceProfiles.find(
+    (profile) => profile.profile_id === defaultBehavior?.inferenceProfileId,
+  );
+  return defaultProfile?.backend_id === `${deployment.agentDid}:backend`;
+}
+
 export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
   const deployments = snapshot.client?.deployments ?? [];
   if (deployments.length === 0) return true;
