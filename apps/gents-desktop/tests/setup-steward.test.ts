@@ -41,6 +41,7 @@ describe("setup steward patches", () => {
       changes: {
         self_config: {
           enable_self_config: true,
+          self_config_categories: ["behavior", "tools", "profile", "persona"],
           self_config_no_lockout: true,
         },
       },

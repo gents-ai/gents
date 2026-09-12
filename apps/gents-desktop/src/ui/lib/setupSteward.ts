@@ -60,6 +60,7 @@ export function setupStewardPatches(
       changes: {
         self_config: {
           enable_self_config: true,
+          self_config_categories: ["behavior", "tools", "profile", "persona"],
           self_config_no_lockout: true,
           self_config_dry_run: true,
         },

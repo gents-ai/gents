@@ -746,13 +746,7 @@ async fn initialize_runtime_home(
         args.defra_query_collections.clone(),
     );
     if args.setup_steward {
-        tools.self_config = Some(SelfConfigTools {
-            enable_self_config: Some(true),
-            self_config_categories: None,
-            self_config_no_lockout: Some(true),
-            self_config_dry_run: Some(true),
-            timeout_secs: None,
-        });
+        tools.self_config = Some(setup_steward_self_config());
     }
     let context = AgentContext {
         context_id: default_context_id_for_behavior(&default_behavior_id),
@@ -870,6 +864,21 @@ async fn initialize_runtime_home(
         created_principal: existing_principal.is_none(),
         created_default_behavior: existing_default_behavior.is_none(),
     })
+}
+
+fn setup_steward_self_config() -> SelfConfigTools {
+    SelfConfigTools {
+        enable_self_config: Some(true),
+        self_config_categories: Some(vec![
+            "behavior".to_string(),
+            "tools".to_string(),
+            "profile".to_string(),
+            "persona".to_string(),
+        ]),
+        self_config_no_lockout: Some(true),
+        self_config_dry_run: Some(true),
+        timeout_secs: None,
+    }
 }
 
 /// Serialize a canonical config document into a complete-replacement plan
@@ -1505,6 +1514,15 @@ mod tests {
         assert_eq!(host.root.as_deref(), Some("/"));
         assert_eq!(host.files.unwrap().mode, FileToolMode::ReadOnly);
         assert_eq!(host.bash.unwrap().mode, BashMode::ReadOnly);
+        assert_eq!(
+            setup_steward_self_config().self_config_categories,
+            Some(vec![
+                "behavior".to_string(),
+                "tools".to_string(),
+                "profile".to_string(),
+                "persona".to_string(),
+            ])
+        );
     }
 
     /// Drift fence between init's tool packages and the directory persona

@@ -40,7 +40,7 @@ import {
   type LoadingStepState,
 } from "../../../lib/loadingStatus";
 import type { Shell } from "@/hooks/useShell";
-import { backendIsConfigured } from "@/lib/firstRun";
+import { backendIsConfigured, shouldRebindSetupDefault } from "@/lib/firstRun";
 import { setupStewardPatches } from "@/lib/setupSteward";
 import { isMobileTauriShell } from "../../../lib/shellPlatform";
 import { AgentAvatar } from "@/screens/AgentAvatar";
@@ -551,24 +551,29 @@ export function SetupScreen({
         model_name: spec.models[0] ?? "model",
       },
     });
-    if (!addingExtra) {
-      const defaultBehaviorId = deployment.agentPrincipal.defaultBehaviorId;
-      for (const b of deployment.behaviors) {
-        if (!b.inferenceProfileId || b.behaviorId === defaultBehaviorId) {
-          await api.saveBehaviorConfig({
-            document: {
-              behavior_id: b.behaviorId,
-              agent_did: deployment.agentDid,
-              display_name: b.displayName,
-              description: b.description,
-              context_id: b.contextId,
-              inference_profile_id: profileId,
-              enabled: b.enabled,
-              tags: b.tags,
-              created_at: b.createdAt,
-            },
-          });
-        }
+    const defaultBehaviorId = deployment.agentPrincipal.defaultBehaviorId;
+    // A healthy process may make init's generated local placeholder look
+    // configured. The first provider still replaces that placeholder, while
+    // adding another provider later must not change the user's chosen default.
+    const shouldRebindDefault = shouldRebindSetupDefault(deployment, addingExtra);
+    for (const b of deployment.behaviors) {
+      if (
+        !b.inferenceProfileId ||
+        (b.behaviorId === defaultBehaviorId && shouldRebindDefault)
+      ) {
+        await api.saveBehaviorConfig({
+          document: {
+            behavior_id: b.behaviorId,
+            agent_did: deployment.agentDid,
+            display_name: b.displayName,
+            description: b.description,
+            context_id: b.contextId,
+            inference_profile_id: profileId,
+            enabled: b.enabled,
+            tags: b.tags,
+            created_at: b.createdAt,
+          },
+        });
       }
     }
     const next = await api.fetchDesktopSnapshot();
