@@ -7,14 +7,23 @@ CAP_DEFAULT="$ROOT/apps/gents-desktop/src-tauri/capabilities/default.json"
 CAP_E2E="$ROOT/apps/gents-desktop/src-tauri/capabilities/native-e2e.json"
 MANIFEST="$ROOT/apps/gents-desktop/src-tauri/gen/schemas/capabilities.json"
 
-if ! grep -q '"capabilities": \["default"\]' "$CONF"; then
-  echo "error: production tauri.conf.json must enumerate capabilities: [\"default\"] only"
-  exit 1
-fi
-if grep -q 'native-e2e' "$CONF"; then
-  echo "error: production tauri.conf.json must not reference native-e2e"
-  exit 1
-fi
+python3 - "$CONF" <<'PY'
+import json, sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text())
+actual = data.get("app", {}).get("security", {}).get("capabilities", [])
+expected = {"default", "desktop-runtime-admin"}
+if not isinstance(actual, list) or set(actual) != expected or len(actual) != len(expected):
+    print(
+        "error: production tauri.conf.json must enumerate exactly "
+        '["default", "desktop-runtime-admin"]'
+    )
+    sys.exit(1)
+if "native-e2e" in actual:
+    print("error: production tauri.conf.json must not reference native-e2e")
+    sys.exit(1)
+PY
 if ! grep -q 'native-e2e' "$E2E_CONF"; then
   echo "error: tauri.e2e.conf.json must grant native-e2e overlay"
   exit 1

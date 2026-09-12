@@ -201,7 +201,9 @@ impl ClientCore {
             .request_authority(agent_did, peer_record.as_ref())
             .await?;
         let behavior_id = behavior_id_for_write(behavior_id);
-        let write_access = self.operator_graphql(agent_did).map(ConfigAccess::Graphql);
+        // Chat documents originate in the client's replica and converge over
+        // DefraDB. The local-runtime HTTP endpoint is a configuration control
+        // plane; bypassing the replica here breaks the durable client contract.
         match mutations::submit_request(
             self.node.as_ref(),
             snapshot.as_ref(),
@@ -213,7 +215,6 @@ impl ClientCore {
             content,
             behavior_id.as_deref(),
             options,
-            write_access.as_ref(),
         )
         .await
         {

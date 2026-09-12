@@ -60,7 +60,6 @@ pub async fn submit_request(
     content: &str,
     behavior_id: Option<&str>,
     options: SubmitRequestOptions,
-    write_access: Option<&ConfigAccess>,
 ) -> Result<SubmittedRequest> {
     let session_id = normalize_required("session_id", session_id)?;
     let agent_did = normalize_required("agent_did", agent_did)?;
@@ -140,11 +139,7 @@ pub async fn submit_request(
     )
     .await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    if let Some(access) = write_access {
-        access.write("submit_request", &mutation).await?;
-    } else {
-        execute_mutation(node, &mutation, "submit_request").await?;
-    }
+    execute_mutation(node, &mutation, "submit_request").await?;
 
     Ok(SubmittedRequest {
         request_id,
@@ -740,7 +735,6 @@ pub async fn resend_request(
             input: stale.input.unwrap_or_default(),
             caused_by_source_doc_id: None,
         },
-        None,
     )
     .await
 }
