@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   BootstrapSummary,
-  DesktopApiAdapter,
   DeploymentView,
   EnrollmentRequestView,
   P2PHealth,
@@ -30,8 +29,6 @@ export type FleetDashboardProps = {
   onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
   onRepairP2P: () => Promise<unknown>;
   brand?: ReactNode;
-  /** Retained for source compatibility; Fleet no longer renders raw network diagnostics. */
-  api?: DesktopApiAdapter;
   copy?: FleetCopy;
   headerLeadingActions?: ReactNode;
   localRuntimeSetup?: ReactNode;

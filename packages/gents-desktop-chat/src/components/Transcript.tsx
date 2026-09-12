@@ -2,7 +2,7 @@ import type {
   DerivedCancelCauseView,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
-import { memo, useRef } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 
 import {
   AssistantCancelCauseTurn,
@@ -27,18 +27,24 @@ export const MessageList = memo(function MessageList({
     kind: RenderedTimelineItem["kind"];
   } | null>(null);
   const tail = timelineItems[timelineItems.length - 1] ?? null;
-  const previousTail = previousTailRef.current;
-  const revealAssistantItemKey =
-    tail?.kind === "assistantMessage" &&
-    previousTail != null &&
-    previousTail.identity === timelineIdentity &&
-    previousTail.itemKey !== tail.itemKey &&
-    previousTail.kind !== "liveAssistant"
-      ? tail.itemKey
+  const [revealAssistantItemKey, setRevealAssistantItemKey] = useState<
+    string | null
+  >(null);
+  useLayoutEffect(() => {
+    const previousTail = previousTailRef.current;
+    setRevealAssistantItemKey(
+      tail?.kind === "assistantMessage" &&
+        previousTail != null &&
+        previousTail.identity === timelineIdentity &&
+        previousTail.itemKey !== tail.itemKey &&
+        previousTail.kind !== "liveAssistant"
+        ? tail.itemKey
+        : null,
+    );
+    previousTailRef.current = tail
+      ? { identity: timelineIdentity, itemKey: tail.itemKey, kind: tail.kind }
       : null;
-  previousTailRef.current = tail
-    ? { identity: timelineIdentity, itemKey: tail.itemKey, kind: tail.kind }
-    : null;
+  }, [tail?.itemKey, tail?.kind, timelineIdentity]);
 
   const shouldRenderStandaloneCancelCause =
     responseCancelCause != null &&

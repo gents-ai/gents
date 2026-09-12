@@ -245,7 +245,6 @@ export function App() {
         <h2>Fleet package</h2>
         <FleetDashboard
           addingPeer={busy}
-          api={bridge.api}
           brand={
             <div className="fixture-brand" data-testid="fixture-brand">
               <strong>Indigo Relay</strong>

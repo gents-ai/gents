@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -39,6 +39,22 @@ function expectReasoningBeforeAnswer() {
   const answer = assistant.querySelector(".message-content");
   expect(reasoning).not.toBeNull();
   expect(reasoning?.nextElementSibling).toBe(answer);
+}
+
+function allowTranscriptMotion() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
 }
 
 describe("session context visibility", () => {
@@ -122,6 +138,11 @@ describe("session context visibility", () => {
 });
 
 describe("assistant reasoning order", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   it("renders completed reasoning before the assistant answer", () => {
     render(
       <MessageList
@@ -157,6 +178,7 @@ describe("assistant reasoning order", () => {
   });
 
   it("reveals a newly appended completed answer without animating loaded history", () => {
+    allowTranscriptMotion();
     vi.useFakeTimers();
     const history: RenderedTimelineItem[] = [
       {
@@ -166,24 +188,28 @@ describe("assistant reasoning order", () => {
       },
     ];
     const { rerender } = render(
-      <MessageList timelineIdentity="session-1" timelineItems={history} />,
+      <StrictMode>
+        <MessageList timelineIdentity="session-1" timelineItems={history} />
+      </StrictMode>,
     );
     expect(
       screen.getByText("This historical answer is immediately readable."),
     ).toBeInTheDocument();
 
     rerender(
-      <MessageList
-        timelineIdentity="session-1"
-        timelineItems={[
-          ...history,
-          {
-            kind: "assistantMessage",
-            itemKey: "assistant-new",
-            content: "This newly synchronized answer arrived as one database update.",
-          },
-        ]}
-      />,
+      <StrictMode>
+        <MessageList
+          timelineIdentity="session-1"
+          timelineItems={[
+            ...history,
+            {
+              kind: "assistantMessage",
+              itemKey: "assistant-new",
+              content: "This newly synchronized answer arrived as one database update.",
+            },
+          ]}
+        />
+      </StrictMode>,
     );
 
     expect(
@@ -199,7 +225,37 @@ describe("assistant reasoning order", () => {
         "This newly synchronized answer arrived as one database update.",
       ),
     ).toBeInTheDocument();
-    vi.useRealTimers();
+  });
+
+  it("keeps revealing while live response updates arrive faster than a reveal tick", () => {
+    allowTranscriptMotion();
+    vi.useFakeTimers();
+    const chunks = [
+      "0123456789abcdef",
+      "0123456789abcdef one response chunk",
+      "0123456789abcdef one response chunk and another chunk",
+      "0123456789abcdef one response chunk and another chunk with a final tail",
+    ];
+    const liveItem = (content: string): RenderedTimelineItem => ({
+      kind: "liveAssistant",
+      itemKey: "live-assistant",
+      content,
+      reasoning: null,
+    });
+    const { container, rerender } = render(
+      <MessageList timelineItems={[liveItem(chunks[0])]} />,
+    );
+
+    for (const chunk of chunks.slice(1)) {
+      rerender(<MessageList timelineItems={[liveItem(chunk)]} />);
+      act(() => vi.advanceTimersByTime(16));
+    }
+
+    const visibleText = () =>
+      container.querySelector(".message-content")?.textContent ?? "";
+    expect(visibleText().length).toBeGreaterThan(chunks[0].length);
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(visibleText()).toContain(chunks.at(-1));
   });
 
   it("keeps an explicit responding indicator beside live answer text", () => {

@@ -2,6 +2,7 @@ import {
   isValidElement,
   memo,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -80,33 +81,69 @@ export function RevealedMarkdownContent({
   value: string;
   animate: boolean;
 }) {
-  const animateRef = useRef(animate && !prefersReducedMotion());
-  if (animate) animateRef.current = !prefersReducedMotion();
-  const [visibleLength, setVisibleLength] = useState(() =>
-    animateRef.current
-      ? Math.min(REVEAL_MIN_CHARS, value.length)
-      : value.length,
-  );
+  const shouldAnimate = animate && !prefersReducedMotion();
+  const targetLengthRef = useRef(value.length);
+  const animationActiveRef = useRef(shouldAnimate);
+  const initialVisibleLength = shouldAnimate
+    ? Math.min(REVEAL_MIN_CHARS, value.length)
+    : value.length;
+  const visibleLengthRef = useRef(initialVisibleLength);
+  const revealTimerRef = useRef<number | null>(null);
+  const [visibleLength, setVisibleLength] = useState(initialVisibleLength);
+
+  const startReveal = () => {
+    if (revealTimerRef.current != null) return;
+    revealTimerRef.current = window.setTimeout(function tick() {
+      revealTimerRef.current = null;
+      const current = visibleLengthRef.current;
+      const targetLength = targetLengthRef.current;
+      if (current >= targetLength) return;
+
+      const remaining = targetLength - current;
+      const step = Math.max(
+        REVEAL_MIN_CHARS,
+        Math.ceil(remaining / REVEAL_MAX_TICKS),
+      );
+      const next = Math.min(targetLength, current + step);
+      visibleLengthRef.current = next;
+      setVisibleLength(next);
+      if (next < targetLengthRef.current) {
+        revealTimerRef.current = window.setTimeout(tick, REVEAL_TICK_MS);
+      }
+    }, REVEAL_TICK_MS);
+  };
+
+  useLayoutEffect(() => {
+    targetLengthRef.current = value.length;
+    if (!shouldAnimate) {
+      if (revealTimerRef.current != null) {
+        window.clearTimeout(revealTimerRef.current);
+        revealTimerRef.current = null;
+      }
+      visibleLengthRef.current = value.length;
+      setVisibleLength(value.length);
+    } else if (!animationActiveRef.current) {
+      const next = Math.min(REVEAL_MIN_CHARS, value.length);
+      visibleLengthRef.current = next;
+      setVisibleLength(next);
+      startReveal();
+    } else {
+      const next = Math.min(visibleLengthRef.current, value.length);
+      visibleLengthRef.current = next;
+      setVisibleLength(next);
+      if (next < value.length) startReveal();
+    }
+    animationActiveRef.current = shouldAnimate;
+  }, [shouldAnimate, value]);
 
   useEffect(() => {
-    if (!animateRef.current) {
-      setVisibleLength(value.length);
-      return;
-    }
-    if (visibleLength >= value.length) return;
-
-    const remaining = value.length - visibleLength;
-    const step = Math.max(
-      REVEAL_MIN_CHARS,
-      Math.ceil(remaining / REVEAL_MAX_TICKS),
-    );
-    const timer = window.setTimeout(
-      () =>
-        setVisibleLength((current) => Math.min(value.length, current + step)),
-      REVEAL_TICK_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [value, visibleLength]);
+    return () => {
+      if (revealTimerRef.current != null) {
+        window.clearTimeout(revealTimerRef.current);
+        revealTimerRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div aria-busy={visibleLength < value.length ? "true" : undefined}>
