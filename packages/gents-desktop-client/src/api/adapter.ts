@@ -216,6 +216,13 @@ export function createDesktopApiAdapter(
         },
       ),
     cancelGrokLogin: () => invokeDesktop<void>("desktop_grok_login_cancel"),
+    claudeLogin: (agentDid, provider) =>
+      invokeDesktop<
+        import("../generated/ClaudeLoginResult.js").ClaudeLoginResult
+      >("desktop_claude_login", {
+        request: { agentDid, provider: provider ?? null },
+      }),
+    cancelClaudeLogin: () => invokeDesktop<void>("desktop_claude_login_cancel"),
     listProviderAccounts: (agentDid) =>
       invokeDesktop<ProviderAccountView[]>("desktop_provider_accounts_list", {
         request: { agentDid },

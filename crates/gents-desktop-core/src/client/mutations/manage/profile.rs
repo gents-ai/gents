@@ -7,6 +7,20 @@ use gents::config_client::{
 };
 use gents::InferenceProfile;
 
+pub async fn upsert_inference_profile_on(
+    access: &ConfigAccess,
+    document: &InferenceProfile,
+) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::InferenceProfile,
+        add: value.clone(),
+        update: value,
+    }])?;
+    super::apply_plan(access, "desktop.profile.save", plan).await
+}
+
+#[cfg(test)]
 pub async fn upsert_inference_profile(
     node: &EmbeddedNode,
     document: &InferenceProfile,

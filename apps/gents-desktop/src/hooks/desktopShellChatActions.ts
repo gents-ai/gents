@@ -22,6 +22,7 @@ type ChatActionParams = {
   ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
   selectedDeployment: DeploymentView | null;
+  deployments: DeploymentView[];
   selectedSessionId: string | null;
   pendingMailboxCauseId: string | null;
   setDraft: Dispatch<SetStateAction<string>>;
@@ -45,6 +46,7 @@ export function createDesktopShellChatActions({
   refreshSession,
   refreshSnapshot,
   selectedDeployment,
+  deployments,
   selectedSessionId,
   pendingMailboxCauseId,
   setDraft,
@@ -60,7 +62,8 @@ export function createDesktopShellChatActions({
   retryShellProjection,
 }: ChatActionParams) {
   async function submitContent(content: string): Promise<boolean> {
-    if (!selectedDeployment || !content.trim()) {
+    const deployment = selectedDeployment ?? deployments[0] ?? null;
+    if (!deployment || !content.trim()) {
       return false;
     }
 
@@ -74,14 +77,14 @@ export function createDesktopShellChatActions({
 
     setLocalWorkflow({
       kind: "submittingRequest",
-      agentDid: selectedDeployment.agentDid,
+      agentDid: deployment.agentDid,
       sessionId: selectedSessionId,
     });
     setSending(true);
     setError(null);
     try {
       const result = await api.sendChatMessage({
-        agentDid: selectedDeployment.agentDid,
+        agentDid: deployment.agentDid,
         behaviorId: behaviorReadiness.behaviorId,
         sessionId: selectedSessionId,
         content,
@@ -100,7 +103,7 @@ export function createDesktopShellChatActions({
       });
       setLocalWorkflow({
         kind: "awaitingObservation",
-        agentDid: selectedDeployment.agentDid,
+        agentDid: deployment.agentDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
@@ -193,19 +196,22 @@ export function createDesktopShellChatActions({
   }
 
   function onStartNewSession(behaviorId?: string | null) {
-    if (!selectedDeployment) {
+    const deployment = selectedDeployment ?? deployments[0] ?? null;
+    if (!deployment) {
       return;
     }
     setPendingMailboxCauseId(null);
-    if (
+    const nextBehaviorId =
       behaviorId &&
-      selectedDeployment.behaviors.some(
-        (behavior) => behavior.behaviorId === behaviorId,
-      )
-    ) {
-      setSelectedBehaviorId(behaviorId);
+      deployment.behaviors.some((behavior) => behavior.behaviorId === behaviorId)
+        ? behaviorId
+        : (deployment.behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
+          deployment.behaviors[0]?.behaviorId ??
+          null);
+    if (nextBehaviorId) {
+      setSelectedBehaviorId(nextBehaviorId);
     }
-    newSessionAgentRef.current = selectedDeployment.agentDid;
+    newSessionAgentRef.current = deployment.agentDid;
     setSelectedSessionId(null);
     setSession(null);
     setLocalWorkflow({ kind: "ready" });

@@ -23,7 +23,7 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default"]
+      "capabilities": ["default", "desktop-runtime-admin"]
     }
   },
   "bundle": {

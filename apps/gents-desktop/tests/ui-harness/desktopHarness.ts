@@ -606,19 +606,18 @@ export function createDesktopUiHarness(
         desktopHomeExists: true,
         peerDirectoryExists: true,
         clientStateExists: true,
-        savedPeers:
-          !provisioned
-            ? []
-            : [
-                {
-                  peerId: deployment.peerId,
-                  label: deployment.label,
-                  agentDid: deployment.agentDid,
-                  addr: deployment.addr,
-                  graphql: deployment.graphql,
-                  source: deployment.source,
-                },
-              ],
+        savedPeers: !provisioned
+          ? []
+          : [
+              {
+                peerId: deployment.peerId,
+                label: deployment.label,
+                agentDid: deployment.agentDid,
+                addr: deployment.addr,
+                graphql: deployment.graphql,
+                source: deployment.source,
+              },
+            ],
       },
       client: {
         localPeerId: "peer-bombadil-local",
@@ -1842,6 +1841,17 @@ export function createDesktopUiHarness(
       return result;
     },
     async cancelGrokLogin() {},
+    async claudeLogin(agentDid) {
+      return {
+        docId: `credential-${agentDid}-claude`,
+        credentialId: "credential-claude",
+        agentDid,
+        provider: "claude-subscription",
+        accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        enabled: true,
+      };
+    },
+    async cancelClaudeLogin() {},
     async listSubagentTree(request) {
       const tree: SubagentTreeView = {
         rootRequestId: request.rootRequestId,

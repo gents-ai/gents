@@ -7,6 +7,20 @@ use gents::config_client::{
 };
 use gents::AgentBehaviorDocument;
 
+pub async fn upsert_agent_behavior_on(
+    access: &ConfigAccess,
+    document: &AgentBehaviorDocument,
+) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::AgentBehavior,
+        add: value.clone(),
+        update: value,
+    }])?;
+    super::apply_plan(access, "desktop.behavior.save", plan).await
+}
+
+#[cfg(test)]
 pub async fn upsert_agent_behavior(
     node: &EmbeddedNode,
     document: &AgentBehaviorDocument,

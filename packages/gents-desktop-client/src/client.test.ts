@@ -39,6 +39,7 @@ describe("desktop bridge contract", () => {
       "4.2",
       "5.1",
       "6.0",
+      "7.1",
       "5",
       "5.0.0",
       " 5.0",
@@ -52,9 +53,7 @@ describe("desktop bridge contract", () => {
 
   it("keeps package release identity exact", () => {
     expect(() =>
-      assertExactBridgeContract(
-        contract(BRIDGE_CONTRACT_VERSION, "0.13.0"),
-      ),
+      assertExactBridgeContract(contract(BRIDGE_CONTRACT_VERSION, "0.13.0")),
     ).toThrow("Gents desktop package mismatch");
   });
 

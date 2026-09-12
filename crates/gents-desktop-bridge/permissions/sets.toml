@@ -158,6 +158,8 @@ permissions = [
   "allow-desktop-codex-login-cancel",
   "allow-desktop-grok-login",
   "allow-desktop-grok-login-cancel",
+  "allow-desktop-claude-login",
+  "allow-desktop-claude-login-cancel",
   "allow-desktop-provider-account-disconnect",
 ]
 
