@@ -61,6 +61,7 @@ import { ToolBody } from "./tool-views";
 import { toolSummary } from "./tool-summary";
 import { sendStatus } from "@/lib/send-status";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
 const stepStatus = (kind: string): ToolStepStatus =>
   kind === "completed" || kind === "failed" || kind === "cancelled" || kind === "error"
@@ -76,7 +77,7 @@ function formatTokens(value: number) {
 }
 
 function SessionContext({ context }: { context: DesktopSessionSnapshot["context"] }) {
-  const [open, setOpen] = useState(false);
+  const popover = useExclusivePopover();
   const used = Math.max(0, context.estimatedConversationTokens);
   const window = Math.max(
     1,
@@ -87,7 +88,7 @@ function SessionContext({ context }: { context: DesktopSessionSnapshot["context"
     context.lastRequest?.compactionThresholdTokens ?? context.compactionThresholdTokens,
   );
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={popover.open} onOpenChange={popover.onOpenChange}>
       <PopoverTrigger
         render={
           <Button variant="quiet" size="sm" data-testid="context-meter">
@@ -114,7 +115,7 @@ function SessionContext({ context }: { context: DesktopSessionSnapshot["context"
             variant="ghost"
             size="icon-xs"
             aria-label="Close context details"
-            onClick={() => setOpen(false)}
+            onClick={() => popover.onOpenChange(false)}
           >
             <X />
           </Button>
