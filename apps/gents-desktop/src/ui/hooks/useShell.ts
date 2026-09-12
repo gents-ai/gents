@@ -13,7 +13,10 @@ export type ShellBridge = DesktopShellBridge & {
   invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 };
 
-export function useShell(bridge: ShellBridge, routeSessionId: string | null | undefined) {
+export function useShell(
+  bridge: ShellBridge,
+  routeSessionId: string | null | undefined,
+) {
   const d = useDesktopShell(bridge);
   const api = bridge.api;
   const shellRef = useRef(d);
@@ -44,6 +47,7 @@ export function useShell(bridge: ShellBridge, routeSessionId: string | null | un
     async (content: string, behaviorId: string | null) => {
       const agentDid = d.selectedAgentDid ?? d.deployments[0]?.agentDid;
       if (!agentDid) return null;
+      if (behaviorId) d.setSelectedBehaviorId(behaviorId);
       const result = await api.sendChatMessage({
         agentDid,
         behaviorId,
@@ -51,7 +55,11 @@ export function useShell(bridge: ShellBridge, routeSessionId: string | null | un
         content,
         causedBySourceDocId: d.pendingMailboxCauseId ?? null,
       });
-      if (result?.sessionId) d.setSelectedSessionId(result.sessionId);
+      if (result?.sessionId) {
+        d.setSelectedSessionId(result.sessionId);
+        await d.refreshSession(result.sessionId);
+        await d.refreshSnapshot();
+      }
       return result;
     },
     [api, d],
@@ -77,6 +85,7 @@ export function useShell(bridge: ShellBridge, routeSessionId: string | null | un
       selectedDeployment,
       selectedAgentDid: d.selectedAgentDid ?? selectedDeployment?.agentDid ?? null,
       selectAgent: d.setSelectedAgentDid,
+      selectBehavior: d.setSelectedBehaviorId,
       selectedSessionId: d.selectedSessionId,
       selectedSession: d.session,
       selectedTrackedRequestId: d.activeRequestId ?? null,
@@ -117,6 +126,8 @@ export function useShell(bridge: ShellBridge, routeSessionId: string | null | un
       retrySessionHydration: d.retrySessionHydration,
       loadOlderSessionTimeline: d.loadOlderSessionTimeline,
       refreshSnapshot: d.refreshSnapshot,
+      refreshSession: d.refreshSession,
+      onInitLocalRuntime: d.onInitLocalRuntime,
       startupPhase: d.startupPhase,
     };
   }, [api, applyConfig, behaviorColors, d, sendMessage]);

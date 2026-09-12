@@ -672,6 +672,12 @@ pub(crate) struct InitArgs {
     pub(crate) tool_package: Option<ToolPackageArg>,
     #[arg(
         long,
+        default_value_t = false,
+        help = "Seed the default behavior as a first-run setup steward with self-config tools"
+    )]
+    pub(crate) setup_steward: bool,
+    #[arg(
+        long,
         help = "Root directory for local file/bash tools. Defaults to the current working directory"
     )]
     pub(crate) tool_root: Option<PathBuf>,

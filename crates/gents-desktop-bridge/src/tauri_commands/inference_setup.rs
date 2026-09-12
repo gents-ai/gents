@@ -11,7 +11,7 @@
 use std::time::Duration;
 
 use gents::chatgpt_codex::normalize_provider;
-use gents::oauth_credential::{list_oauth_credentials, upsert_oauth_credential, OAuthCredential};
+use gents::oauth_credential::{list_oauth_credentials, OAuthCredential};
 use gents_chatgpt_login::{run_login_server, LoginOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -180,8 +180,10 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
         tokens.refresh_token,
         chrono::Utc::now(),
     );
-    let node = core.node_arc();
-    let doc_id = upsert_oauth_credential(&node, &credential)
+    let access = core
+        .operator_access(&agent_did)
+        .map_err(|error| BridgeError::untyped(format!("storing ChatGPT credential: {error}")))?;
+    let doc_id = gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
         .await
         .map_err(|error| BridgeError::untyped(format!("storing ChatGPT credential: {error}")))?;
 
@@ -328,7 +330,10 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
         .find(|entry| entry.credential_id == request.credential_id)
         .ok_or_else(|| BridgeError::untyped("provider account not found"))?;
     credential.enabled = false;
-    upsert_oauth_credential(core.node(), &credential)
+    let access = core
+        .operator_access(request.agent_did.trim())
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let _ = app.emit(
@@ -347,7 +352,6 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    use gents::oauth_credential::upsert_oauth_credential;
     use gents::xai_grok_oauth::normalize_provider as normalize_xai_provider;
     use gents::xai_oauth_login::{
         credential_from_login_tokens, run_device_code_login_with_url_callback,
@@ -379,6 +383,9 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
                     url: url.to_string(),
                 },
             );
+            if let Err(error) = webbrowser::open(url) {
+                tracing::warn!(%error, "could not open the Grok login URL in a browser");
+            }
         }),
     )
     .await;
@@ -405,8 +412,10 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
 
     let credential =
         credential_from_login_tokens(&agent_did, &provider, &tokens, chrono::Utc::now());
-    let node = core.node_arc();
-    let doc_id = upsert_oauth_credential(&node, &credential)
+    let access = core
+        .operator_access(&agent_did)
+        .map_err(|error| BridgeError::untyped(format!("storing Grok credential: {error}")))?;
+    let doc_id = gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
         .await
         .map_err(|error| BridgeError::untyped(format!("storing Grok credential: {error}")))?;
 
@@ -464,6 +473,136 @@ pub(crate) fn desktop_grok_login_cancel(
     };
     if let Some(flag) = flag {
         flag.store(true, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeLoginRequest {
+    pub agent_did: String,
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
+/// Redacted credential metadata for the webview (tokens never cross the bridge).
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeLoginResult {
+    pub doc_id: String,
+    pub credential_id: String,
+    pub agent_did: String,
+    pub provider: String,
+    pub access_token_expires_at: String,
+    pub enabled: bool,
+}
+
+impl ClaudeLoginResult {
+    fn redacted(doc_id: String, credential: &OAuthCredential) -> Self {
+        Self {
+            doc_id,
+            credential_id: credential.credential_id.clone(),
+            agent_did: credential.agent_did.clone(),
+            provider: credential.provider.clone(),
+            access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
+            enabled: credential.enabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeLoginUrl {
+    pub url: String,
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_claude_login<R: Runtime>(
+    app: AppHandle<R>,
+    request: ClaudeLoginRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<ClaudeLoginResult, BridgeError> {
+    use gents::claude_oauth::{
+        credential_from_login_tokens, normalize_provider, ClaudeLoginTokens,
+    };
+    use gents_claude_login::{run_loopback_login, LoginOptions};
+
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::untyped("desktop client is not running"));
+    };
+    let agent_did = request.agent_did.trim().to_string();
+    if agent_did.is_empty() {
+        return Err(BridgeError::untyped("agent_did is required"));
+    }
+    let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
+
+    let server = run_loopback_login(LoginOptions::default())
+        .map_err(|error| BridgeError::untyped(format!("starting Claude login server: {error}")))?;
+    let _ = app.emit(
+        crate::contract::CLAUDE_LOGIN_URL_EVENT,
+        ClaudeLoginUrl {
+            url: server.auth_url.clone(),
+        },
+    );
+
+    let cancel = server.cancel_handle();
+    {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        bridge.claude_login_cancel = Some(cancel.clone());
+    }
+    let wait = tokio::time::timeout(CODEX_LOGIN_TIMEOUT, server.block_until_done()).await;
+    {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        bridge.claude_login_cancel = None;
+    }
+    let tokens = match wait {
+        Ok(result) => result.map_err(|error| {
+            BridgeError::untyped(format!("Claude browser login failed: {error}"))
+        })?,
+        Err(_elapsed) => {
+            cancel.shutdown();
+            return Err(BridgeError::untyped(
+                "Claude sign-in timed out waiting for the browser",
+            ));
+        }
+    };
+
+    let login_tokens = ClaudeLoginTokens {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_in: tokens.expires_in,
+        scope: tokens.scope,
+    };
+    let credential =
+        credential_from_login_tokens(&agent_did, &provider, &login_tokens, chrono::Utc::now());
+    let access = core
+        .operator_access(&agent_did)
+        .map_err(|error| BridgeError::untyped(format!("storing Claude credential: {error}")))?;
+    let doc_id = gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
+        .await
+        .map_err(|error| BridgeError::untyped(format!("storing Claude credential: {error}")))?;
+
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent::coarse("config"),
+    );
+
+    Ok(ClaudeLoginResult::redacted(doc_id, &credential))
+}
+
+#[tauri::command]
+pub(crate) fn desktop_claude_login_cancel(
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    let handle = {
+        let mut bridge = state
+            .bridge
+            .lock()
+            .map_err(|_| BridgeError::untyped("desktop bridge lock poisoned"))?;
+        bridge.claude_login_cancel.take()
+    };
+    if let Some(handle) = handle {
+        handle.shutdown();
     }
     Ok(())
 }

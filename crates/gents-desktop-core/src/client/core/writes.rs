@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use gents::config_client::ConfigAccess;
 use gents::document_config::{Schedule, Task};
 use gents::identity::AgentIdentity;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
@@ -20,7 +21,7 @@ use serde::Deserialize;
 use super::super::mutations::{self, PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
-use super::super::query::load_chat_patch;
+use super::super::query::{load_chat_patch, load_chat_patch_on};
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
@@ -200,6 +201,7 @@ impl ClientCore {
             .request_authority(agent_did, peer_record.as_ref())
             .await?;
         let behavior_id = behavior_id_for_write(behavior_id);
+        let write_access = self.operator_graphql(agent_did).map(ConfigAccess::Graphql);
         match mutations::submit_request(
             self.node.as_ref(),
             snapshot.as_ref(),
@@ -211,6 +213,7 @@ impl ClientCore {
             content,
             behavior_id.as_deref(),
             options,
+            write_access.as_ref(),
         )
         .await
         {
@@ -389,16 +392,25 @@ impl ClientCore {
             return Ok(None);
         }
 
-        let patch = load_chat_patch(self.node.as_ref(), request_id).await?;
+        let (patch, source) = match self.operator_graphql(agent_did) {
+            Some(graphql) => {
+                let access = ConfigAccess::Graphql(graphql);
+                (load_chat_patch_on(&access, request_id).await?, "operator")
+            }
+            None => (
+                load_chat_patch(self.node.as_ref(), request_id).await?,
+                "local",
+            ),
+        };
         let rows = patch.row_count();
         if rows == 0 {
             return Ok(None);
         }
-        // This patch came from the embedded replica, just like the observer's
-        // baseline snapshot. Keep its source untagged so both paths address a
-        // durable document by the same identity.
+        // The patch addresses durable documents by their canonical keys. Keep
+        // it untagged so the local observer and operator GraphQL path converge
+        // on the same in-memory rows.
         let signature = chat_patch_signature(&patch);
-        let cache_key = format!("local\0{agent_did}\0{request_id}");
+        let cache_key = format!("{source}\0{agent_did}\0{request_id}");
         {
             let mut signatures = self.request_patch_signatures.lock().await;
             if signatures.get(&cache_key) == Some(&signature) {
@@ -423,7 +435,8 @@ impl ClientCore {
             rows,
             bytes,
             terminal,
-            "desktop selected local request patch merged"
+            source,
+            "desktop selected request patch merged"
         );
         Ok(Some(version))
     }
@@ -986,8 +999,34 @@ impl ClientCore {
         })
     }
 
+    pub fn operator_graphql(&self, agent_did: &str) -> Option<String> {
+        self.sync_state
+            .records()
+            .iter()
+            .find(|record| record.agent_did == agent_did)
+            .and_then(PeerRecord::operator_graphql)
+            .map(str::to_owned)
+    }
+
+    pub fn operator_access(&self, agent_did: &str) -> Result<ConfigAccess> {
+        let record = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.agent_did == agent_did);
+        match record {
+            Some(record) if record.source.as_deref() == Some("local-standard") => record
+                .operator_graphql()
+                .map(str::to_owned)
+                .map(ConfigAccess::Graphql)
+                .context("local standard runtime has no operator GraphQL endpoint"),
+            _ => Ok(ConfigAccess::Local(self.node_arc())),
+        }
+    }
+
     pub async fn save_behavior(&self, row: &gents::AgentBehaviorDocument) -> Result<()> {
-        let result = mutations::upsert_agent_behavior(self.node.as_ref(), row).await;
+        let access = self.operator_access(&row.agent_did)?;
+        let result = mutations::upsert_agent_behavior_on(&access, row).await;
         match result {
             Ok(()) => {
                 self.refresh_store().await?;
@@ -1013,7 +1052,8 @@ impl ClientCore {
             gents::config_client::patch::SelfConfigPatch,
         )],
     ) -> Result<()> {
-        match mutations::patch_config_components(self.node.as_ref(), agent_did, patches).await {
+        let access = self.operator_access(agent_did)?;
+        match mutations::patch_config_components_on(&access, agent_did, patches).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1041,7 +1081,8 @@ impl ClientCore {
         &self,
         row: &gents::document_config::AgentPrincipal,
     ) -> Result<()> {
-        let result = mutations::upsert_agent_principal(self.node.as_ref(), row).await;
+        let access = self.operator_access(&row.agent_did)?;
+        let result = mutations::upsert_agent_principal_on(&access, row).await;
         match result {
             Ok(()) => {
                 self.refresh_store().await?;
@@ -1059,7 +1100,8 @@ impl ClientCore {
     }
 
     pub async fn save_backend(&self, row: &gents::InferenceBackend) -> Result<()> {
-        match mutations::upsert_inference_backend(self.node.as_ref(), row).await {
+        let access = self.operator_access(&row.agent_did)?;
+        match mutations::upsert_inference_backend_on(&access, row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1114,7 +1156,8 @@ impl ClientCore {
     }
 
     pub async fn save_inference_profile(&self, row: &gents::InferenceProfile) -> Result<()> {
-        match mutations::upsert_inference_profile(self.node.as_ref(), row).await {
+        let access = self.operator_access(&row.agent_did)?;
+        match mutations::upsert_inference_profile_on(&access, row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();

@@ -232,6 +232,58 @@ Denies the desktop_chat_send command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-claude-login`
+
+</td>
+<td>
+
+Enables the desktop_claude_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-claude-login`
+
+</td>
+<td>
+
+Denies the desktop_claude_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-claude-login-cancel`
+
+</td>
+<td>
+
+Enables the desktop_claude_login_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-claude-login-cancel`
+
+</td>
+<td>
+
+Denies the desktop_claude_login_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-client-shutdown`
 
 </td>

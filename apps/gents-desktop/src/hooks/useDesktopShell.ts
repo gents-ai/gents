@@ -288,6 +288,7 @@ export function useDesktopShell({
     refreshSession,
     refreshSnapshot,
     selectedDeployment,
+    deployments,
     selectedSessionId,
     pendingMailboxCauseId,
     setDraft,

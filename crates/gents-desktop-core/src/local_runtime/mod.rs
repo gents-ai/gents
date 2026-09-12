@@ -151,6 +151,9 @@ struct GraphqlResponse {
 }
 
 pub fn default_agent_home() -> Result<PathBuf> {
+    if let Some(home) = std::env::var_os("GENTS_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home));
+    }
     let home = dirs::home_dir().context("unable to resolve home directory")?;
     Ok(home.join(".gents"))
 }

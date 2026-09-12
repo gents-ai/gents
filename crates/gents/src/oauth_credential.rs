@@ -349,6 +349,15 @@ pub async fn upsert_oauth_credential(
     gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
 }
 
+pub async fn upsert_oauth_credential_on(
+    access: &crate::config_client::ConfigAccess,
+    credential: &OAuthCredential,
+) -> Result<String> {
+    let mutation = oauth_credential_upsert_mutation(credential);
+    let response = access.write("oauth_credential.upsert", &mutation).await?;
+    gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+}
+
 pub fn oauth_credentials_from_response(response: &Value) -> Vec<Result<OAuthCredential>> {
     gents_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
         .into_iter()

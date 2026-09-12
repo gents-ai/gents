@@ -23,9 +23,10 @@ use crate::contract::BridgeContract;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
-    CodexLoginRequest, CodexLoginResult, CodexLoginUrl, GrokLoginRequest, GrokLoginResult,
-    GrokLoginUrl, InferenceProbeRequest, InferenceProbeResult, ProviderAccountDisconnectRequest,
-    ProviderAccountView, ProviderAccountsRequest,
+    ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
+    CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl, InferenceProbeRequest,
+    InferenceProbeResult, ProviderAccountDisconnectRequest, ProviderAccountView,
+    ProviderAccountsRequest,
 };
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
@@ -219,6 +220,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         InferenceProbeRequest,
         CodexLoginRequest,
         GrokLoginRequest,
+        ClaudeLoginRequest,
         ProviderAccountsRequest,
         ProviderAccountDisconnectRequest,
     );
@@ -261,6 +263,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         CodexLoginUrl,
         GrokLoginResult,
         GrokLoginUrl,
+        ClaudeLoginResult,
+        ClaudeLoginUrl,
         ProviderAccountView,
     );
 
@@ -357,6 +361,9 @@ fn all_bridge_visible_contract_roots_are_generated() {
         "GrokLoginRequest.ts",
         "GrokLoginResult.ts",
         "GrokLoginUrl.ts",
+        "ClaudeLoginRequest.ts",
+        "ClaudeLoginResult.ts",
+        "ClaudeLoginUrl.ts",
     ] {
         assert!(
             files.contains(inference_wire_type),

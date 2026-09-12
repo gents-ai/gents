@@ -83,10 +83,10 @@ pub async fn desktop_managed_server_start<R: Runtime>(
     }
     emit_status(&app, &state).await;
 
-    let tool_root = agent_home
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| agent_home.clone());
+    // The managed desktop binary is the host authority for local work. First
+    // run gives that binary a full filesystem ceiling; the selected Tools
+    // document still decides which capabilities a behavior actually receives.
+    let tool_root = PathBuf::from(std::path::MAIN_SEPARATOR.to_string());
     let result: anyhow::Result<_> = async {
         gents_server::server_host::ensure_standard_home(
             gents_server::server_host::ProvisionOptions {
@@ -96,18 +96,35 @@ pub async fn desktop_managed_server_start<R: Runtime>(
             },
         )
         .await?;
-        let server = gents_server::server_host::start_server(
-            gents_server::server_host::ServerConfig::standard(agent_home.clone()),
-        )
-        .await?;
+        let mut config = gents_server::server_host::ServerConfig::standard(agent_home.clone());
+        config.http_port = first_free_http_port(config.http_port)?;
+        let server = gents_server::server_host::start_server(config).await?;
 
         // Iroh shareable addresses include the process's ephemeral QUIC port.
         // Refresh the persisted local peer after every managed-server start so
         // desktop client startup never dials the previous process's endpoint.
+        // The start result is the readiness authority; re-querying the new HTTP
+        // server here races its auxiliary P2P endpoints and can drop an otherwise
+        // healthy server handle during first-run startup.
         let _client_lifecycle = state.client_lifecycle.lock().await;
         if let Some(core) = current_core(&state) {
-            core.refresh_local_standard_peer(&agent_home, agent_name)
-                .await?;
+            let ready = server.ready();
+            let p2p_address = ready
+                .p2p_listen_addresses
+                .iter()
+                .find(|address| address.starts_with("endpoint"))
+                .or_else(|| ready.p2p_listen_addresses.first())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("managed Gents server readiness omitted a P2P listen address")
+                })?;
+            core.persist_local_standard_peer(
+                agent_name,
+                p2p_address,
+                &ready.agent_did,
+                &ready.graphql,
+                &agent_home.display().to_string(),
+            )
+            .await?;
         } else {
             init_standard_local_runtime(DesktopInitOptions {
                 agent_home,
@@ -137,6 +154,7 @@ pub async fn desktop_managed_server_start<R: Runtime>(
         }
         Err(error) => {
             let message = format!("{error:#}");
+            tracing::warn!(error = %message, "managed Gents server start failed");
             let mut managed = state.managed_server.lock().await;
             managed.starting = false;
             managed.last_error = Some(message.clone());
@@ -167,9 +185,16 @@ async fn matching_external_server(
         .get("agent_did")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if gents_server::server_host::initialized_home(agent_home) {
-        let initialized_did = read_initialized_did(agent_home).await;
-        ensure_matching_identity(initialized_did.as_deref(), live_did, config.http_port)?;
+    // A process on the default port is only *our* managed server when this
+    // home is already initialized as that identity. A fresh first-run home
+    // must not adopt a neighbor's `gents server` and then fail reading
+    // init.json; identity mismatch also means we should bind another port.
+    if !gents_server::server_host::initialized_home(agent_home) {
+        return Ok(None);
+    }
+    let initialized_did = read_initialized_did(agent_home).await;
+    if ensure_matching_identity(initialized_did.as_deref(), live_did, config.http_port).is_err() {
+        return Ok(None);
     }
     Ok(Some(ManagedServerStatus {
         state: ManagedServerState::External,
@@ -277,6 +302,34 @@ async fn read_initialized_did(agent_home: &std::path::Path) -> Option<String> {
         })
 }
 
+fn first_free_http_port(preferred: u16) -> anyhow::Result<u16> {
+    let extras = [9291_u16, 9391, 9491, 9591, 9691, 9791, 9891];
+    for port in
+        std::iter::once(preferred).chain(extras.into_iter().filter(|port| *port != preferred))
+    {
+        if port_is_free(port) {
+            return Ok(port);
+        }
+    }
+    anyhow::bail!(
+        "no free local port for the hosted agent (tried {preferred} and 9291–9891). Stop the other Gents server occupying those ports and try again."
+    )
+}
+
+fn port_is_free(port: u16) -> bool {
+    // SO_REUSEADDR lets a second bind to 127.0.0.1 succeed while another
+    // process already listens on *:port. Probe with connect first.
+    if std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::time::Duration::from_millis(150),
+    )
+    .is_ok()
+    {
+        return false;
+    }
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
 fn ensure_matching_identity(
     initialized_did: Option<&str>,
     live_did: &str,
@@ -373,5 +426,13 @@ mod tests {
         assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
         assert!(error.message.contains("port 9191"));
         ensure_matching_identity(Some("did:key:local"), "did:key:local", 9191).unwrap();
+    }
+
+    #[test]
+    fn first_free_http_port_skips_a_bound_preferred_port() {
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral bind");
+        let preferred = occupied.local_addr().expect("local addr").port();
+        let chosen = first_free_http_port(preferred).expect("fallback port");
+        assert_ne!(chosen, preferred);
     }
 }

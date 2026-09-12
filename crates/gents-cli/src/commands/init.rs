@@ -10,7 +10,7 @@ use gents::config_client::{
 };
 use gents::document_config::{
     AgentBehavior, AgentContext, BackendAuth, BashTools, BuiltInTools, DatastoreTools, FileTools,
-    HostTools, InferenceBackend, Tools,
+    HostTools, InferenceBackend, SelfConfigTools, Tools,
 };
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior, load_agent_behavior,
@@ -55,6 +55,21 @@ Work like a strong command-line operator:
 You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome.
 
 For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
+
+const SETUP_STEWARD_SYSTEM_PROMPT: &str = r#"You are the first-run setup steward for Gents, a local agent runtime. Your job is to help this user get a working agent for the work they actually want to do.
+
+You have self-configuration tools: get_my_config to inspect the current setup, and configure_behavior, configure_tools, and configure_profile to change it. Committed changes apply to later requests, not this turn.
+
+Start by asking what they want to do — coding in a specific repo, research, operations, or just chatting. Then:
+1. Call get_my_config before changing anything.
+2. Walk them through the smallest changes that fit that work: a behavior, tool permissions (files, bash), and the workspace root.
+3. Explain each change in plain language before you apply it.
+4. Never disable your own self-config tools.
+5. You can read local files to inspect a repo they name. You cannot write files or run write-capable shell until they ask you to grant those tools.
+
+For coding work, configure this behavior and context as a focused coding agent, set Tools.host.root to the exact absolute repo path, select ReadWrite files and Unrestricted bash with workspace_write execution on macOS, and keep self_config enabled. Tell the user the committed configuration applies starting with their next request, then use that next request to test the configured behavior.
+
+If they just want to talk, stay on this Setup behavior and help from here."#;
 
 const YOLO_WARNING: &str = "\
 WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
@@ -716,21 +731,43 @@ async fn initialize_runtime_home(
         args.enable_defra_query,
         args.disable_defra_query,
     );
-    let tools = tools_for_package(
+    // Setup is a configurator, not the coding behavior itself. Keep its
+    // initially selected host tools read-only even when the process ceiling is
+    // unrestricted; self-configuration can grant a later request exactly the
+    // workspace capabilities the user asks for.
+    let selected_tool_package = initial_tools_package(tool_package, args.setup_steward);
+    let mut tools = tools_for_package(
         agent_did,
         &tools_id,
-        tool_package,
+        selected_tool_package,
         tool_root.clone(),
         args.enable_memory,
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
+    if args.setup_steward {
+        tools.self_config = Some(SelfConfigTools {
+            enable_self_config: Some(true),
+            self_config_categories: None,
+            self_config_no_lockout: Some(true),
+            self_config_dry_run: Some(true),
+            timeout_secs: None,
+        });
+    }
     let context = AgentContext {
         context_id: default_context_id_for_behavior(&default_behavior_id),
         agent_did: agent_did.to_string(),
-        display_name: Some("Default".to_string()),
+        display_name: Some(if args.setup_steward {
+            "Setup".to_string()
+        } else {
+            "Default".to_string()
+        }),
         description: None,
-        system_prompt: Some(standard_system_prompt(tool_package).to_string()),
+        system_prompt: Some(if args.setup_steward {
+            SETUP_STEWARD_SYSTEM_PROMPT.to_string()
+        } else {
+            standard_system_prompt(tool_package).to_string()
+        }),
         tools_id: Some(tools_id.clone()),
         compaction_id: None,
         skill_ids: Vec::new(),
@@ -749,8 +786,16 @@ async fn initialize_runtime_home(
     let behavior = AgentBehavior {
         behavior_id: default_behavior_id.clone(),
         agent_did: agent_did.to_string(),
-        display_name: Some("Default".to_string()),
-        description: None,
+        display_name: Some(if args.setup_steward {
+            "Setup".to_string()
+        } else {
+            "Default".to_string()
+        }),
+        description: if args.setup_steward {
+            Some("Walks you through configuring Gents for the work you want to do.".to_string())
+        } else {
+            None
+        },
         context_id: Some(context.context_id.clone()),
         inference_profile_id: inference_profile_id.clone(),
         enabled: true,
@@ -936,6 +981,14 @@ fn tools_for_package(
         integrations: None,
         self_config: None,
         tags: Vec::new(),
+    }
+}
+
+fn initial_tools_package(process_package: ToolPackageArg, setup_steward: bool) -> ToolPackageArg {
+    if setup_steward {
+        ToolPackageArg::Readonly
+    } else {
+        process_package
     }
 }
 
@@ -1385,6 +1438,7 @@ mod tests {
             write_tools: false,
             yolo: false,
             tool_package: None,
+            setup_steward: false,
             tool_root: None,
             enable_memory: false,
             disable_defra_query: false,
@@ -1405,6 +1459,10 @@ mod tests {
             vec!["AgentRequest".to_string(), "AgentResponse".to_string()],
         );
 
+        assert!(
+            tools.self_config.is_none(),
+            "readonly init leaves self-config off unless --setup-steward"
+        );
         let built_ins = tools.built_ins.as_ref().unwrap();
         assert_eq!(built_ins.enable_memory, Some(true));
         let datastore = tools.datastore.as_ref().unwrap();
@@ -1419,6 +1477,30 @@ mod tests {
         let host = tools.host.as_ref().unwrap();
         assert_eq!(host.files.as_ref().unwrap().mode, FileToolMode::ReadOnly);
         assert_eq!(host.bash.as_ref().unwrap().mode, BashMode::ReadOnly);
+    }
+
+    #[test]
+    fn setup_steward_starts_readonly_under_an_unrestricted_process_ceiling() {
+        let selected = initial_tools_package(ToolPackageArg::Yolo, true);
+        assert_eq!(selected, ToolPackageArg::Readonly);
+        assert_eq!(
+            tool_ceiling_for_package(ToolPackageArg::Yolo),
+            ToolCeilingArg::Readwrite
+        );
+
+        let tools = tools_for_package(
+            "did:key:z-init",
+            "setup-tools",
+            selected,
+            Some(PathBuf::from("/")),
+            false,
+            false,
+            Vec::new(),
+        );
+        let host = tools.host.expect("setup host tools");
+        assert_eq!(host.root.as_deref(), Some("/"));
+        assert_eq!(host.files.unwrap().mode, FileToolMode::ReadOnly);
+        assert_eq!(host.bash.unwrap().mode, BashMode::ReadOnly);
     }
 
     /// Drift fence between init's tool packages and the directory persona

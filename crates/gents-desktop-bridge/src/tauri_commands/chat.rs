@@ -67,21 +67,59 @@ pub async fn desktop_session_snapshot(
     } else {
         None
     };
-    let page_read = gents_desktop_core::client::load_session_transcript_page(
-        core.node(),
-        &session_id,
-        agent_did.as_deref(),
-        requester_scope.as_deref(),
-        timeline_before_item_key.as_deref(),
-        timeline_limit,
-    );
+    let operator_access = agent_did
+        .as_deref()
+        .and_then(|agent_did| core.operator_graphql(agent_did))
+        .map(gents::config_client::ConfigAccess::Graphql);
+    let page_read = async {
+        match operator_access.as_ref() {
+            Some(access) => {
+                gents_desktop_core::client::load_session_transcript_page_on(
+                    access,
+                    &session_id,
+                    agent_did.as_deref(),
+                    requester_scope.as_deref(),
+                    timeline_before_item_key.as_deref(),
+                    timeline_limit,
+                )
+                .await
+            }
+            None => {
+                gents_desktop_core::client::load_session_transcript_page(
+                    core.node(),
+                    &session_id,
+                    agent_did.as_deref(),
+                    requester_scope.as_deref(),
+                    timeline_before_item_key.as_deref(),
+                    timeline_limit,
+                )
+                .await
+            }
+        }
+    };
     let (transcript_page, context_store) = if timeline_before_item_key.is_none() {
-        let context_read = gents_desktop_core::client::load_session_context_store(
-            core.node(),
-            &session_id,
-            agent_did.as_deref(),
-            requester_scope.as_deref(),
-        );
+        let context_read = async {
+            match operator_access.as_ref() {
+                Some(access) => {
+                    gents_desktop_core::client::load_session_context_store_on(
+                        access,
+                        &session_id,
+                        agent_did.as_deref(),
+                        requester_scope.as_deref(),
+                    )
+                    .await
+                }
+                None => {
+                    gents_desktop_core::client::load_session_context_store(
+                        core.node(),
+                        &session_id,
+                        agent_did.as_deref(),
+                        requester_scope.as_deref(),
+                    )
+                    .await
+                }
+            }
+        };
         let (page, context) = tokio::join!(page_read, context_read);
         let page = page.map_err(|error| BridgeError::untyped(error.to_string()))?;
         let context = match context {

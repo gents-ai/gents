@@ -1,6 +1,75 @@
 use super::*;
 
+fn replace_agent_rows<T>(
+    dest: &mut Vec<T>,
+    incoming: Vec<T>,
+    agent_did: &str,
+    row_agent: impl Fn(&T) -> &str,
+) {
+    dest.retain(|row| row_agent(row) != agent_did);
+    dest.extend(
+        incoming
+            .into_iter()
+            .filter(|row| row_agent(row) == agent_did),
+    );
+}
+
 impl ClientStore {
+    /// Replace this agent's operator-owned config and runtime readiness with
+    /// rows loaded from the runtime GraphQL endpoint. Local-only leftovers
+    /// (wizard writes that never reached the agent) are dropped so the desktop
+    /// matches the process that will actually run inference.
+    pub fn overlay_agent_operator_config(&self, agent_did: &str, incoming: &ClientStore) -> Self {
+        let mut rows = self.to_rows();
+        let remote = incoming.to_rows();
+        replace_agent_rows(
+            &mut rows.agent_principals,
+            remote.agent_principals,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows(&mut rows.behaviors, remote.behaviors, agent_did, |row| {
+            row.agent_did.as_str()
+        });
+        replace_agent_rows(&mut rows.runtimes, remote.runtimes, agent_did, |row| {
+            row.agent_did.as_str()
+        });
+        replace_agent_rows(
+            &mut rows.behavior_readiness,
+            remote.behavior_readiness,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows(&mut rows.contexts, remote.contexts, agent_did, |row| {
+            row.agent_did.as_str()
+        });
+        replace_agent_rows(&mut rows.tools, remote.tools, agent_did, |row| {
+            row.agent_did.as_str()
+        });
+        replace_agent_rows(
+            &mut rows.inference_backends,
+            remote.inference_backends,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows(
+            &mut rows.inference_profiles,
+            remote.inference_profiles,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows(&mut rows.sessions, remote.sessions, agent_did, |row| {
+            row.agent_did.as_str()
+        });
+        replace_agent_rows(&mut rows.requests, remote.requests, agent_did, |row| {
+            row.agent_did.as_deref().unwrap_or_default()
+        });
+        replace_agent_rows(&mut rows.responses, remote.responses, agent_did, |row| {
+            row.agent_did.as_deref().unwrap_or_default()
+        });
+        Self::from_rows(rows)
+    }
+
     pub fn merge_snapshot(&self, snapshot: ClientStore) -> Self {
         let mut rows = self.to_rows();
         let incoming = snapshot.to_rows();
@@ -530,6 +599,107 @@ impl ClientStore {
                 .datastore_tool_surface_source_agent_dids
                 .clone(),
             chain_key_binding_source_agent_dids: self.chain_key_binding_source_agent_dids.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+    use gents::document_config::{AgentBehavior, AgentPrincipal};
+    use gents_protocol::row::{AgentBehaviorReadinessRow, AgentRuntimeRow};
+
+    #[test]
+    fn overlay_replaces_this_agent_and_keeps_others() {
+        let local = ClientStore::from_rows(ClientStoreRows {
+            agent_principals: vec![
+                principal("did:test:local", "Desktop leftover"),
+                principal("did:test:other", "Other"),
+            ],
+            behaviors: vec![behavior("did:test:local", "ghost")],
+            runtimes: vec![runtime("did:test:local", "desktop")],
+            behavior_readiness: vec![readiness("did:test:local", "desktop")],
+            ..ClientStoreRows::default()
+        });
+        let remote = ClientStore::from_rows(ClientStoreRows {
+            agent_principals: vec![principal("did:test:local", "Mandrake")],
+            behaviors: vec![behavior("did:test:local", "Default")],
+            runtimes: vec![runtime("did:test:local", "agent")],
+            behavior_readiness: vec![readiness("did:test:local", "agent")],
+            ..ClientStoreRows::default()
+        });
+        let overlayed = local.overlay_agent_operator_config("did:test:local", &remote);
+        assert_eq!(overlayed.agent_principals.len(), 2);
+        assert_eq!(
+            overlayed
+                .agent_principals
+                .iter()
+                .find(|row| row.agent_did == "did:test:local")
+                .and_then(|row| row.display_name.as_deref()),
+            Some("Mandrake")
+        );
+        assert_eq!(
+            overlayed
+                .agent_principals
+                .iter()
+                .find(|row| row.agent_did == "did:test:other")
+                .and_then(|row| row.display_name.as_deref()),
+            Some("Other")
+        );
+        assert_eq!(overlayed.behaviors.len(), 1);
+        assert_eq!(
+            overlayed.behaviors[0].display_name.as_deref(),
+            Some("Default")
+        );
+        assert_eq!(
+            overlayed.runtimes[0].reconcile_phase.as_deref(),
+            Some("agent")
+        );
+        assert_eq!(overlayed.behavior_readiness[0].snapshot_json, "agent");
+    }
+
+    fn principal(agent_did: &str, display_name: &str) -> AgentPrincipal {
+        AgentPrincipal {
+            agent_did: agent_did.to_string(),
+            display_name: Some(display_name.to_string()),
+            default_behavior_id: None,
+            enabled: true,
+            created_at: None,
+            created_by: None,
+            tags: Vec::new(),
+        }
+    }
+
+    fn behavior(agent_did: &str, display_name: &str) -> AgentBehavior {
+        serde_json::from_value(serde_json::json!({
+            "agent_did": agent_did,
+            "behavior_id": format!("{agent_did}:default"),
+            "display_name": display_name,
+            "enabled": true,
+            "inference_profile_id": format!("{agent_did}:profile"),
+        }))
+        .expect("behavior")
+    }
+
+    fn runtime(agent_did: &str, reconcile_phase: &str) -> AgentRuntimeRow {
+        AgentRuntimeRow {
+            agent_did: agent_did.to_string(),
+            reconcile_phase: Some(reconcile_phase.to_string()),
+            behavior_executor_capacity: None,
+            behavior_executor_queue_depth: None,
+            behavior_executor_status_json: None,
+            last_reconcile_result: None,
+            last_reconcile_error: None,
+            last_reconcile_completed_at: None,
+            updated_at: None,
+        }
+    }
+
+    fn readiness(agent_did: &str, snapshot_json: &str) -> AgentBehaviorReadinessRow {
+        AgentBehaviorReadinessRow {
+            agent_did: agent_did.to_string(),
+            snapshot_json: snapshot_json.to_string(),
+            updated_at: "2026-09-12T00:00:00Z".to_string(),
         }
     }
 }

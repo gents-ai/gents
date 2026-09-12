@@ -40,7 +40,8 @@ pub(crate) use document_patches::{
 #[cfg(test)]
 use session_transcript::tool_group_cursor_sequence;
 pub use session_transcript::{
-    load_session_context_store, load_session_diagnostics_store, load_session_transcript_page,
+    load_session_context_store, load_session_context_store_on, load_session_diagnostics_store,
+    load_session_transcript_page, load_session_transcript_page_on,
 };
 pub(crate) use snapshot_loaders::*;
 
@@ -137,6 +138,37 @@ pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<Cl
     chat_patch_from_data(&data)
 }
 
+pub async fn load_chat_patch_on(
+    access: &gents::config_client::ConfigAccess,
+    request_id: &str,
+) -> Result<ClientStore> {
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        return Ok(ClientStore::default());
+    }
+
+    let lookup_query = local_request_lookup_query(request_id);
+    let lookup_data = execute_access_graphql_query(access, &lookup_query, "request lookup").await?;
+    let request_rows: Vec<AgentRequestRow> = parse_query_rows(&lookup_data, "AgentRequest")?;
+    let Some(session_id) = request_rows
+        .first()
+        .and_then(|row| row.session_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(ClientStore::from_rows(ClientStoreRows {
+            requests: request_rows,
+            responses: parse_query_rows(&lookup_data, "AgentResponse")?,
+            ..ClientStoreRows::default()
+        }));
+    };
+
+    let patch_query = remote_chat_patch_query(&session_id);
+    let data = execute_access_graphql_query(access, &patch_query, "chat patch").await?;
+    chat_patch_from_data(&data)
+}
+
 fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
         requests: parse_query_rows(&data, "AgentRequest")?,
@@ -168,31 +200,38 @@ where
     let data = response
         .data
         .with_context(|| format!("query for {root} returned no data"))?;
-    let rows = data
-        .get(root)
-        .ok_or_else(|| anyhow!("query for {root} missing root field"))?;
+    parse_query_rows(&data, root)
+}
 
-    match rows {
-        Value::Null => Ok(Vec::new()),
-        Value::Array(rows) => {
-            let mut parsed = Vec::with_capacity(rows.len());
-            for row in rows {
-                match serde_json::from_value(row.clone()) {
-                    Ok(row) => parsed.push(row),
-                    Err(error) => tracing::warn!(
-                        target: "gents_desktop_core::query",
-                        root,
-                        error = %error,
-                        "skipping malformed observed row"
-                    ),
-                }
-            }
-            Ok(parsed)
+pub(super) async fn load_rows_from_access<T>(
+    access: &gents::config_client::ConfigAccess,
+    root: &str,
+    query: &str,
+) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let data = execute_access_graphql_query(access, query, &format!("query for {root}")).await?;
+    parse_query_rows(&data, root)
+}
+
+pub(super) async fn execute_access_graphql_query(
+    access: &gents::config_client::ConfigAccess,
+    query: &str,
+    operation: &str,
+) -> Result<Value> {
+    let body = access
+        .execute(query)
+        .await
+        .with_context(|| operation.to_string())?;
+    if let Some(errors) = body.get("errors") {
+        if errors.as_array().is_some_and(|rows| !rows.is_empty()) {
+            anyhow::bail!("{operation} returned errors: {errors}");
         }
-        other => Err(anyhow!(
-            "query for {root} returned non-array payload: {other}"
-        )),
     }
+    body.get("data")
+        .cloned()
+        .with_context(|| format!("{operation} returned no data"))
 }
 
 pub(super) fn parse_query_rows<T>(data: &Value, root: &str) -> Result<Vec<T>>

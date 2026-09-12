@@ -14,6 +14,7 @@ import type {
   CascadeCancelPreview,
   ChatSendResult,
   CodexLoginResult,
+  ClaudeLoginResult,
   GrokLoginResult,
   DesktopClientSnapshot,
   EnrollmentRequestView,
@@ -193,6 +194,11 @@ export type DesktopApiAdapter = {
     provider?: string | null,
   ) => Promise<GrokLoginResult>;
   cancelGrokLogin: () => Promise<void>;
+  claudeLogin: (
+    agentDid: string,
+    provider?: string | null,
+  ) => Promise<ClaudeLoginResult>;
+  cancelClaudeLogin: () => Promise<void>;
   listProviderAccounts?: (agentDid: string) => Promise<ProviderAccountView[]>;
   disconnectProviderAccount?: (
     agentDid: string,

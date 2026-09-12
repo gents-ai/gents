@@ -25,6 +25,7 @@ import { SessionsScreen } from "./ui/screens/SessionsScreen";
 import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { useShell, type ShellBridge } from "./ui/hooks/useShell";
+import { isLocalAgent, needsFirstRunSetup } from "./ui/lib/firstRun";
 import { bindNav, interceptNavClicks, navigate, useRoute } from "./ui/lib/router";
 import { initTheme } from "./ui/theme";
 
@@ -97,6 +98,39 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
   );
 
+  /* First-run owns its own starting page. Do not swap it for the global
+     startup screen or the wizard remounts at welcome after the server is up. */
+  if (setup === "active") {
+    const hasLocalAgent = shell.deployments.some(isLocalAgent);
+    return (
+      <>
+        {titlebar}
+        <TooltipProvider>
+          <BehaviorColorsContext.Provider value={shell.behaviorColors}>
+            <SetupScreen
+              shell={shell}
+              initialStep={hasLocalAgent ? "inference" : "welcome"}
+              onDone={(snapshot) => {
+                setSetup("done");
+                const deployment = snapshot.client?.deployments[0];
+                if (deployment) {
+                  shell.selectAgent(deployment.agentDid);
+                  const behavior =
+                    deployment.behaviors.find((row) => row.isDefault) ??
+                    deployment.behaviors[0];
+                  if (behavior) shell.selectBehavior(behavior.behaviorId);
+                }
+                void shell.refreshSnapshot().then(() => {
+                  navigate({ name: "session", sessionId: null });
+                });
+              }}
+            />
+          </BehaviorColorsContext.Provider>
+        </TooltipProvider>
+      </>
+    );
+  }
+
   if (shell.startupPhase && shell.startupPhase !== "ready") {
     return (
       <>
@@ -114,28 +148,13 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   if (
     setup === "unknown" &&
     shell.snapshot !== null &&
-    shell.deployments.length === 0
+    needsFirstRunSetup(shell.snapshot)
   ) {
     setSetup("active");
+    return null;
   }
-  if (setup === "active" || (setup === "unknown" && shell.snapshot === null)) {
-    return setup === "active" ? (
-      <>
-        {titlebar}
-        <TooltipProvider>
-          <BehaviorColorsContext.Provider value={shell.behaviorColors}>
-            <SetupScreen
-              shell={shell}
-              onDone={() => {
-                setSetup("done");
-                void shell.refreshSnapshot();
-                navigate({ name: "session", sessionId: null });
-              }}
-            />
-          </BehaviorColorsContext.Provider>
-        </TooltipProvider>
-      </>
-    ) : null;
+  if (setup === "unknown" && shell.snapshot === null) {
+    return null;
   }
 
   return (

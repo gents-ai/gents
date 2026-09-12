@@ -5,11 +5,11 @@
    the desktop's status enrolment: a server address, a request the
    server's admin approves, then the peer joins. A Network section at the
    foot shows this node and repairs P2P. */
-import { useState } from 'react'
-import { ChevronDown, EllipsisVertical, Inbox, Plus, Server, Wifi } from 'lucide-react'
-import { toast } from 'sonner'
-import type { NetworkStatusView } from '@source-inc/gents-desktop-client'
-import { Button } from '@gents/ui/components/button'
+import { useState } from "react";
+import { ChevronDown, EllipsisVertical, Inbox, Plus, Server, Wifi } from "lucide-react";
+import { toast } from "sonner";
+import type { NetworkStatusView } from "@source-inc/gents-desktop-client";
+import { Button } from "@gents/ui/components/button";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +17,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@gents/ui/components/dialog'
+} from "@gents/ui/components/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,24 +25,26 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@gents/ui/components/dropdown-menu'
-import { Input } from '@gents/ui/components/input'
-import { Spinner } from '@gents/ui/components/spinner'
-import { cn } from '@gents/ui/lib/utils'
-import { ScrollArea } from '@gents/ui/components/scroll-area'
-import type { Shell } from '@/hooks/useShell'
-import { href } from '@/lib/router'
-import { isLive } from '@/lib/live'
-import { AgentAvatar } from './AgentAvatar'
-import { AgentHoverCard } from './HoverCards'
-import { CopyButton } from './Markdown'
-import { Fact, Group, Row } from './agent/rows'
-import { isMobileTauriShell } from '../../lib/shellPlatform'
+} from "@gents/ui/components/dropdown-menu";
+import { Input } from "@gents/ui/components/input";
+import { Spinner } from "@gents/ui/components/spinner";
+import { cn } from "@gents/ui/lib/utils";
+import { ScrollArea } from "@gents/ui/components/scroll-area";
+import type { Shell } from "@/hooks/useShell";
+import { href } from "@/lib/router";
+import { isLive } from "@/lib/live";
+import { AgentAvatar } from "./AgentAvatar";
+import { AgentHoverCard } from "./HoverCards";
+import { CopyButton } from "./Markdown";
+import { Fact, Group, Row } from "./agent/rows";
+import { isMobileTauriShell } from "../../lib/shellPlatform";
 
 export function AgentsScreen({ shell }: { shell: Shell }) {
-  const [adding, setAdding] = useState(false)
-  const [renaming, setRenaming] = useState<{ peerId: string; label: string } | null>(null)
-  const pending = shell.snapshot?.client?.enrollmentRequests
+  const [adding, setAdding] = useState(false);
+  const [renaming, setRenaming] = useState<{ peerId: string; label: string } | null>(
+    null,
+  );
+  const pending = shell.snapshot?.client?.enrollmentRequests;
   return (
     <ScrollArea className="h-full" data-testid="agents-screen">
       <div className="mx-auto max-w-2xl px-6 py-8">
@@ -54,8 +56,8 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
         </div>
         {pending === null && (
           <p className="mt-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 text-sm text-muted-foreground">
-            Waiting for the signed enrolment state. New enrolment is disabled until the database can
-            be read.
+            Waiting for the signed enrolment state. New enrolment is disabled until the
+            database can be read.
           </p>
         )}
         {pending && pending.length > 0 && (
@@ -68,8 +70,8 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 <Spinner className="text-foreground" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium">
-                    {r.state === 'approved'
-                      ? 'Approval received · finishing secure route'
+                    {r.state === "approved"
+                      ? "Approval received · finishing secure route"
                       : `Waiting for ${r.serverLabel ?? r.serverPeer} to accept`}
                   </p>
                   <p className="truncate font-mono text-[11px] text-muted-foreground">
@@ -82,26 +84,36 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
         )}
         <ul className="mt-4 grid gap-3">
           {shell.deployments.map((d) => {
-            const name = d.agentPrincipal.displayName ?? d.label
-            const online = d.dialSucceeded
-            const live = d.sessions.filter((c) => isLive(c.turnState)).length
-            const waiting = d.mailboxItems.filter((m) => m.status === 'open').length
-            const config = href({ name: 'agent', agentDid: d.agentDid, section: 'agent' })
+            const name = d.agentPrincipal.displayName ?? d.label;
+            const online = d.dialSucceeded;
+            const live = d.sessions.filter((c) => isLive(c.turnState)).length;
+            const waiting = d.mailboxItems.filter((m) => m.status === "open").length;
+            const config = href({
+              name: "agent",
+              agentDid: d.agentDid,
+              section: "agent",
+            });
             const check = async () => {
               try {
-                const r = (await shell.api.fetchPeerStatus(d.peerId)) as { reachable?: boolean }
-                toast(r?.reachable ? `${d.label} is reachable` : `${d.label} is not reachable`)
+                const r = (await shell.api.fetchPeerStatus(d.peerId)) as {
+                  reachable?: boolean;
+                };
+                toast(
+                  r?.reachable
+                    ? `${d.label} is reachable`
+                    : `${d.label} is not reachable`,
+                );
               } catch (e) {
-                toast(`Status check failed: ${String(e)}`)
+                toast(`Status check failed: ${String(e)}`);
               }
-            }
+            };
             return (
               <li
                 key={d.agentDid}
                 className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
               >
                 <a
-                  href={href({ name: 'sessions' })}
+                  href={href({ name: "sessions" })}
                   onClick={() => shell.selectAgent(d.agentDid)}
                   aria-label={`${name} sessions`}
                   className="flex min-w-0 flex-1 items-center gap-3"
@@ -117,30 +129,38 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                   </AgentHoverCard>
                   <span
                     className={cn(
-                      'size-2 shrink-0 rounded-full',
-                      online ? 'bg-brand' : 'bg-destructive',
+                      "size-2 shrink-0 rounded-full",
+                      online ? "bg-brand" : "bg-destructive",
                     )}
-                    aria-label={online ? 'online' : 'offline'}
+                    aria-label={online ? "online" : "offline"}
                     role="img"
                   />
                   <span className="truncate font-heading text-base font-medium text-heading">
                     {name}
                   </span>
                   {d.label !== name && (
-                    <span className="truncate text-xs text-muted-foreground">{d.label}</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {d.label}
+                    </span>
                   )}
                   {!online && d.lastError && (
-                    <span className="truncate text-xs text-muted-foreground">{d.lastError}</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {d.lastError}
+                    </span>
                   )}
                 </a>
-                {d.source === 'local' && d.inferenceBackends.length === 0 && (
+                {d.source === "local" && d.inferenceBackends.length === 0 && (
                   <Button
                     size="sm"
                     variant="outline"
                     nativeButton={false}
                     render={
                       <a
-                        href={href({ name: 'agent', agentDid: d.agentDid, section: 'inference' })}
+                        href={href({
+                          name: "agent",
+                          agentDid: d.agentDid,
+                          section: "inference",
+                        })}
                       />
                     }
                     title={`Configure inference for ${d.label}`}
@@ -150,10 +170,10 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 )}
                 {waiting > 0 && (
                   <a
-                    href={href({ name: 'mailbox' })}
+                    href={href({ name: "mailbox" })}
                     onClick={() => shell.selectAgent(d.agentDid)}
                     className="flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    title={`${waiting} item${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} your attention`}
+                    title={`${waiting} item${waiting === 1 ? "" : "s"} need${waiting === 1 ? "s" : ""} your attention`}
                   >
                     <Inbox className="size-4" /> {waiting}
                   </a>
@@ -169,7 +189,11 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     render={
-                      <Button variant="quiet" size="icon-sm" aria-label={`${name} actions`} />
+                      <Button
+                        variant="quiet"
+                        size="icon-sm"
+                        aria-label={`${name} actions`}
+                      />
                     }
                   >
                     <EllipsisVertical />
@@ -178,7 +202,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                     <DropdownMenuGroup>
                       <DropdownMenuItem
                         nativeButton={false}
-                        render={<a href={href({ name: 'sessions' })} />}
+                        render={<a href={href({ name: "sessions" })} />}
                         onClick={() => shell.selectAgent(d.agentDid)}
                       >
                         Open sessions
@@ -191,13 +215,17 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                         Configure
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        onClick={() => setRenaming({ peerId: d.peerId, label: d.label })}
+                        onClick={() =>
+                          setRenaming({ peerId: d.peerId, label: d.label })
+                        }
                       >
                         Rename
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => void check()}>Check peer</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void check()}>
+                        Check peer
+                      </DropdownMenuItem>
                     </DropdownMenuGroup>
-                    {d.source !== 'local' && (
+                    {d.source !== "local" && (
                       <>
                         <DropdownMenuSeparator />
                         <DropdownMenuGroup>
@@ -205,7 +233,9 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                             variant="destructive"
                             onClick={() => {
                               if (confirm(`Remove ${d.label} from this desktop?`))
-                                void shell.removePeer(d.peerId).then(() => toast('Peer removed'))
+                                void shell
+                                  .removePeer(d.peerId)
+                                  .then(() => toast("Peer removed"));
                             }}
                           >
                             Remove peer
@@ -216,20 +246,20 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </li>
-            )
+            );
           })}
         </ul>
         <Network shell={shell} />
       </div>
       <AddAgentDialog shell={shell} open={adding} onClose={() => setAdding(false)} />
       <RenameDialog
-        key={renaming?.peerId ?? 'none'}
+        key={renaming?.peerId ?? "none"}
         shell={shell}
         target={renaming}
         onClose={() => setRenaming(null)}
       />
     </ScrollArea>
-  )
+  );
 }
 
 /* Add a local agent (desktop) or enrol with a remote server. */
@@ -238,40 +268,48 @@ function AddAgentDialog({
   open,
   onClose,
 }: {
-  shell: Shell
-  open: boolean
-  onClose: () => void
+  shell: Shell;
+  open: boolean;
+  onClose: () => void;
 }) {
-  const allowLocal = !isMobileTauriShell()
-  const [where, setWhere] = useState<'local' | 'remote'>(allowLocal ? 'local' : 'remote')
-  const [address, setAddress] = useState('')
-  const [name, setName] = useState('Forge')
-  const [busy, setBusy] = useState(false)
-  const ready = where === 'local' ? /\S/.test(name) : /\S/.test(address)
+  const allowLocal = !isMobileTauriShell();
+  const [where, setWhere] = useState<"local" | "remote">(
+    allowLocal ? "local" : "remote",
+  );
+  const [address, setAddress] = useState("");
+  const [name, setName] = useState("Forge");
+  const [busy, setBusy] = useState(false);
+  const ready = where === "local" ? /\S/.test(name) : /\S/.test(address);
   const submit = async () => {
-    setBusy(true)
+    setBusy(true);
     try {
-      if (where === 'local') {
-        await shell.api.initLocalStandardRuntime({
-          label: name.trim() || 'Local Agent',
-          dangerouslyOverwrite: false,
-          reset: false,
-        })
-        await shell.refreshSnapshot()
-        toast('Local agent created')
+      if (where === "local") {
+        const agentName = name.trim() || "Local Agent";
+        if (shell.api.startManagedServer) {
+          await shell.api.startManagedServer(agentName);
+        }
+        await shell.onInitLocalRuntime(agentName);
+        if (shell.api.commitManagedServerAutoStart) {
+          await shell.api.commitManagedServerAutoStart(agentName);
+        }
+        toast("Local agent created");
       } else {
-        const r = await shell.api.requestStatusEnrollment(address.trim())
-        await shell.refreshSnapshot()
-        toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`)
+        const r = await shell.api.requestStatusEnrollment(address.trim());
+        await shell.refreshSnapshot();
+        toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`);
       }
-      setAddress('')
-      onClose()
+      setAddress("");
+      onClose();
     } catch (e) {
-      toast(where === 'local' ? `Couldn't create agent: ${String(e)}` : `Couldn't request enrolment: ${String(e)}`)
+      toast(
+        where === "local"
+          ? `Couldn't create agent: ${String(e)}`
+          : `Couldn't request enrolment: ${String(e)}`,
+      );
     } finally {
-      setBusy(false)
+      setBusy(false);
     }
-  }
+  };
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
@@ -279,36 +317,46 @@ function AddAgentDialog({
           <DialogTitle>Add agent</DialogTitle>
           <DialogDescription>
             {allowLocal
-              ? 'Create an agent on this Mac, or connect to one that already runs.'
-              : 'Connect to a Gents server. Its admin approves the enrolment.'}
+              ? "Create an agent on this Mac, or connect to one that already runs."
+              : "Connect to a Gents server. Its admin approves the enrolment."}
           </DialogDescription>
         </DialogHeader>
         {allowLocal && (
-          <div className="grid gap-2" role="radiogroup" aria-label="Where the agent lives">
+          <div
+            className="grid gap-2"
+            role="radiogroup"
+            aria-label="Where the agent lives"
+          >
             <button
               type="button"
               role="radio"
-              aria-checked={where === 'local'}
-              onClick={() => setWhere('local')}
+              aria-checked={where === "local"}
+              onClick={() => setWhere("local")}
               className={cn(
-                'flex w-full items-center gap-3 rounded-2xl border bg-raised px-4 py-3 text-left',
-                where === 'local' ? 'border-brand ring-1 ring-brand' : 'border-border/60',
+                "flex w-full items-center gap-3 rounded-2xl border bg-raised px-4 py-3 text-left",
+                where === "local"
+                  ? "border-brand ring-1 ring-brand"
+                  : "border-border/60",
               )}
             >
               <Server className="size-4 shrink-0" />
               <span>
                 <span className="block text-sm font-medium">Local agent</span>
-                <span className="block text-xs text-muted-foreground">Create one on this Mac</span>
+                <span className="block text-xs text-muted-foreground">
+                  Create one on this Mac
+                </span>
               </span>
             </button>
             <button
               type="button"
               role="radio"
-              aria-checked={where === 'remote'}
-              onClick={() => setWhere('remote')}
+              aria-checked={where === "remote"}
+              onClick={() => setWhere("remote")}
               className={cn(
-                'flex w-full items-center gap-3 rounded-2xl border bg-raised px-4 py-3 text-left',
-                where === 'remote' ? 'border-brand ring-1 ring-brand' : 'border-border/60',
+                "flex w-full items-center gap-3 rounded-2xl border bg-raised px-4 py-3 text-left",
+                where === "remote"
+                  ? "border-brand ring-1 ring-brand"
+                  : "border-border/60",
               )}
             >
               <Wifi className="size-4 shrink-0" />
@@ -324,11 +372,11 @@ function AddAgentDialog({
         <form
           className="grid gap-2"
           onSubmit={(e) => {
-            e.preventDefault()
-            if (ready && !busy) void submit()
+            e.preventDefault();
+            if (ready && !busy) void submit();
           }}
         >
-          {where === 'local' ? (
+          {where === "local" ? (
             <>
               <label htmlFor="local-agent-name" className="text-sm">
                 Name
@@ -368,15 +416,17 @@ function AddAgentDialog({
             variant="brand"
             disabled={!ready || busy}
             onClick={() => void submit()}
-            data-testid={where === 'local' ? 'fleet-connect-local-submit' : 'fleet-fetch-status'}
+            data-testid={
+              where === "local" ? "fleet-connect-local-submit" : "fleet-fetch-status"
+            }
           >
-            {busy ? <Spinner /> : null}{' '}
-            {busy ? 'Working…' : where === 'local' ? 'Create' : 'Request enrolment'}
+            {busy ? <Spinner /> : null}{" "}
+            {busy ? "Working…" : where === "local" ? "Create" : "Request enrolment"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }
 
 /* the saved label for a peer, the one thing the fleet row edits in place */
@@ -385,20 +435,20 @@ function RenameDialog({
   target,
   onClose,
 }: {
-  shell: Shell
-  target: { peerId: string; label: string } | null
-  onClose: () => void
+  shell: Shell;
+  target: { peerId: string; label: string } | null;
+  onClose: () => void;
 }) {
-  const [label, setLabel] = useState(target?.label ?? '')
+  const [label, setLabel] = useState(target?.label ?? "");
   const save = async () => {
-    if (!target) return
-    const next = label.trim()
+    if (!target) return;
+    const next = label.trim();
     if (next && next !== target.label) {
-      await shell.renamePeer(target.peerId, next)
-      toast('Renamed')
+      await shell.renamePeer(target.peerId, next);
+      toast("Renamed");
     }
-    onClose()
-  }
+    onClose();
+  };
   return (
     <Dialog open={target !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
@@ -410,8 +460,8 @@ function RenameDialog({
         </DialogHeader>
         <form
           onSubmit={(e) => {
-            e.preventDefault()
-            void save()
+            e.preventDefault();
+            void save();
           }}
         >
           <Input value={label} onChange={(e) => setLabel(e.target.value)} autoFocus />
@@ -426,38 +476,38 @@ function RenameDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }
 
 /* this node: peer id, listen addresses, connections, saved peers, repair */
 function Network({ shell }: { shell: Shell }) {
-  const [open, setOpen] = useState(false)
-  const [status, setStatus] = useState<NetworkStatusView | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [repairing, setRepairing] = useState(false)
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState<NetworkStatusView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [repairing, setRepairing] = useState(false);
   const load = async () => {
-    setLoading(true)
+    setLoading(true);
     try {
-      setStatus(await shell.api.fetchNetworkStatus())
+      setStatus(await shell.api.fetchNetworkStatus());
     } catch (e) {
-      toast(`Network status failed: ${String(e)}`)
+      toast(`Network status failed: ${String(e)}`);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
   const repair = async () => {
-    setRepairing(true)
+    setRepairing(true);
     try {
-      await shell.api.repairP2P()
-      await shell.refreshSnapshot()
-      await load()
-      toast('P2P repaired')
+      await shell.api.repairP2P();
+      await shell.refreshSnapshot();
+      await load();
+      toast("P2P repaired");
     } catch (e) {
-      toast(`Repair failed: ${String(e)}`)
+      toast(`Repair failed: ${String(e)}`);
     } finally {
-      setRepairing(false)
+      setRepairing(false);
     }
-  }
+  };
   return (
     <section className="mt-8">
       <button
@@ -465,12 +515,14 @@ function Network({ shell }: { shell: Shell }) {
         aria-expanded={open}
         className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
         onClick={() => {
-          if (!open && !status) void load()
-          setOpen(!open)
+          if (!open && !status) void load();
+          setOpen(!open);
         }}
       >
-        Network{' '}
-        <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} />
+        Network{" "}
+        <ChevronDown
+          className={cn("size-3.5 transition-transform", open && "rotate-180")}
+        />
       </button>
       {open && (
         <div className="mt-3">
@@ -478,8 +530,13 @@ function Network({ shell }: { shell: Shell }) {
             title="This node"
             action={
               <span className="flex gap-1">
-                <Button variant="quiet" size="sm" disabled={loading} onClick={() => void load()}>
-                  {loading ? <Spinner /> : 'Refresh'}
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  disabled={loading}
+                  onClick={() => void load()}
+                >
+                  {loading ? <Spinner /> : "Refresh"}
                 </Button>
                 <Button
                   variant="outline"
@@ -497,18 +554,21 @@ function Network({ shell }: { shell: Shell }) {
               <>
                 <Row label="Peer ID">
                   <Mono
-                    lines={[status.localPeerId ?? status.localPeerIdError ?? 'unknown']}
+                    lines={[status.localPeerId ?? status.localPeerIdError ?? "unknown"]}
                     copy={status.localPeerId}
                   />
                 </Row>
-                <Row label="Listening" description="Addresses this node accepts peers on.">
+                <Row
+                  label="Listening"
+                  description="Addresses this node accepts peers on."
+                >
                   <Mono
                     lines={
                       status.listenAddressesError
                         ? [status.listenAddressesError]
                         : status.listenAddresses
                     }
-                    copy={status.listenAddresses.join('\n') || null}
+                    copy={status.listenAddresses.join("\n") || null}
                   />
                 </Row>
                 <Row label="Connected">
@@ -524,7 +584,10 @@ function Network({ shell }: { shell: Shell }) {
                   <span className="grid max-w-[28rem] gap-1 text-right text-sm">
                     {status.savedPeers.length === 0 && <Fact>none</Fact>}
                     {status.savedPeers.map((p) => (
-                      <span key={p.peerId} className="flex items-center justify-end gap-2">
+                      <span
+                        key={p.peerId}
+                        className="flex items-center justify-end gap-2"
+                      >
                         <span>{p.label}</span>
                         <span className="truncate font-mono text-xs text-muted-foreground">
                           {p.addr}
@@ -535,7 +598,7 @@ function Network({ shell }: { shell: Shell }) {
                 </Row>
               </>
             ) : (
-              <Row label={loading ? 'Reading…' : 'No status yet'}>
+              <Row label={loading ? "Reading…" : "No status yet"}>
                 {loading ? <Spinner /> : null}
               </Row>
             )}
@@ -543,7 +606,7 @@ function Network({ shell }: { shell: Shell }) {
         </div>
       )}
     </section>
-  )
+  );
 }
 
 /* one or more mono lines, right-aligned, with a copy button when there is something to copy */
@@ -563,5 +626,5 @@ function Mono({ lines, copy }: { lines: string[]; copy?: string | null }) {
       </span>
       {copy && <CopyButton getText={() => copy} className="-my-1" />}
     </span>
-  )
+  );
 }

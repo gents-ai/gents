@@ -149,6 +149,8 @@ fn init_tool_package_shorthands_parse() {
     assert!(!yolo.write_tools);
     assert!(!parse_init(&[]).write_tools);
     assert!(!parse_init(&[]).yolo);
+    assert!(!parse_init(&[]).setup_steward);
+    assert!(parse_init(&["--setup-steward"]).setup_steward);
     assert!(
         Cli::try_parse_from(["gents", "init", "--write", "--yolo"]).is_err(),
         "--write and --yolo conflict"

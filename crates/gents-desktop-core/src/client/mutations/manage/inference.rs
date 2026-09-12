@@ -7,6 +7,20 @@ use gents::config_client::{
 };
 use gents::InferenceBackend;
 
+pub async fn upsert_inference_backend_on(
+    access: &ConfigAccess,
+    document: &InferenceBackend,
+) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::InferenceBackend,
+        add: value.clone(),
+        update: value,
+    }])?;
+    super::apply_plan(access, "desktop.inference_backend.save", plan).await
+}
+
+#[cfg(test)]
 pub async fn upsert_inference_backend(
     node: &EmbeddedNode,
     document: &InferenceBackend,

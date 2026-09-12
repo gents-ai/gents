@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-claude-login"
+description = "Enables the desktop_claude_login command without any pre-configured scope."
+commands.allow = ["desktop_claude_login"]
+
+[[permission]]
+identifier = "deny-desktop-claude-login"
+description = "Denies the desktop_claude_login command without any pre-configured scope."
+commands.deny = ["desktop_claude_login"]

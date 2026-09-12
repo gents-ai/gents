@@ -36,19 +36,142 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
 
 pub async fn load_full_snapshot_with_peer_records(
     node: &EmbeddedNode,
-    _peers: &[PeerRecord],
+    peers: &[PeerRecord],
     _requester_did: &str,
 ) -> Result<ClientStore> {
-    load_full_snapshot(node).await
+    let mut store = load_full_snapshot(node).await?;
+    for peer in peers {
+        let Some(graphql) = peer.operator_graphql() else {
+            continue;
+        };
+        match load_operator_config(&gents::config_client::ConfigAccess::Graphql(
+            graphql.to_string(),
+        ))
+        .await
+        {
+            Ok(remote) => {
+                store = store.overlay_agent_operator_config(&peer.agent_did, &remote);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop_core::query",
+                    agent_did = %peer.agent_did,
+                    graphql,
+                    error = %error,
+                    "operator GraphQL config overlay failed; keeping the desktop replica"
+                );
+            }
+        }
+    }
+    Ok(store)
+}
+
+async fn load_operator_config(access: &gents::config_client::ConfigAccess) -> Result<ClientStore> {
+    Ok(ClientStore::from_rows(ClientStoreRows {
+        agent_principals: load_rows_from_access(
+            access,
+            "AgentPrincipal",
+            &format!("query {{ AgentPrincipal {{ {AGENT_PRINCIPAL_FIELDS} }} }}"),
+        )
+        .await?,
+        behaviors: load_rows_from_access(
+            access,
+            "AgentBehavior",
+            &format!("query {{ AgentBehavior {{ {AGENT_BEHAVIOR_FIELDS} }} }}"),
+        )
+        .await?,
+        runtimes: load_rows_from_access(
+            access,
+            AGENT_RUNTIME_NAME,
+            &format!("query {{ {AGENT_RUNTIME_NAME} {{ {AGENT_RUNTIME_FIELDS} }} }}"),
+        )
+        .await?,
+        behavior_readiness: load_rows_from_access(
+            access,
+            AGENT_BEHAVIOR_READINESS_NAME,
+            &format!(
+                "query {{ {AGENT_BEHAVIOR_READINESS_NAME} {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        contexts: load_rows_from_access(
+            access,
+            "AgentContext",
+            &format!("query {{ AgentContext {{ {AGENT_CONTEXT_FIELDS} }} }}"),
+        )
+        .await?,
+        tools: load_rows_from_access(
+            access,
+            TOOLS_NAME,
+            &format!("query {{ {TOOLS_NAME} {{ {TOOLS_FIELDS} }} }}"),
+        )
+        .await?,
+        inference_backends: load_rows_from_access(
+            access,
+            "InferenceBackend",
+            &format!("query {{ InferenceBackend {{ {INFERENCE_BACKEND_FIELDS} }} }}"),
+        )
+        .await?,
+        inference_profiles: load_rows_from_access(
+            access,
+            "InferenceProfile",
+            &format!("query {{ InferenceProfile {{ {INFERENCE_PROFILE_FIELDS} }} }}"),
+        )
+        .await?,
+        sessions: load_rows_from_access(
+            access,
+            AGENT_SESSION_NAME,
+            &format!("query {{ {AGENT_SESSION_NAME} {{ {AGENT_SESSION_FIELDS} }} }}"),
+        )
+        .await?,
+        requests: load_rows_from_access(
+            access,
+            AGENT_REQUEST_NAME,
+            &format!("query {{ {AGENT_REQUEST_NAME} {{ {AGENT_REQUEST_FIELDS} }} }}"),
+        )
+        .await?,
+        responses: load_rows_from_access(
+            access,
+            AGENT_RESPONSE_NAME,
+            &format!("query {{ {AGENT_RESPONSE_NAME} {{ {AGENT_RESPONSE_FIELDS} }} }}"),
+        )
+        .await?,
+        ..ClientStoreRows::default()
+    }))
 }
 
 pub async fn load_agent_scoped_snapshot_with_peer_records(
     node: &EmbeddedNode,
     agent_did: &str,
-    _peers: &[PeerRecord],
+    peers: &[PeerRecord],
     _requester_did: &str,
 ) -> Result<ClientStore> {
-    load_agent_scoped_snapshot(node, agent_did).await
+    let mut store = load_agent_scoped_snapshot(node, agent_did).await?;
+    if let Some(graphql) = peers
+        .iter()
+        .find(|peer| peer.agent_did == agent_did)
+        .and_then(PeerRecord::operator_graphql)
+    {
+        match load_operator_config(&gents::config_client::ConfigAccess::Graphql(
+            graphql.to_string(),
+        ))
+        .await
+        {
+            Ok(remote) => {
+                store = store.overlay_agent_operator_config(agent_did, &remote);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop_core::query",
+                    agent_did,
+                    graphql,
+                    error = %error,
+                    "operator GraphQL config overlay failed; keeping the desktop replica"
+                );
+            }
+        }
+    }
+    Ok(store)
 }
 
 pub async fn load_agent_principals(node: &EmbeddedNode) -> Result<Vec<AgentPrincipal>> {

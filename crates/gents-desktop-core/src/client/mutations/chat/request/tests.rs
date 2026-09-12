@@ -1041,6 +1041,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
         "requester route regression",
         Some(RECOVERY_BEHAVIOR_ID),
         SubmitRequestOptions::default(),
+        None,
     )
     .await?;
 

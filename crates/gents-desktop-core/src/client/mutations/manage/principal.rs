@@ -7,6 +7,20 @@ use gents::config_client::{
 };
 use gents::document_config::AgentPrincipal;
 
+pub async fn upsert_agent_principal_on(
+    access: &ConfigAccess,
+    document: &AgentPrincipal,
+) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::AgentPrincipal,
+        add: value.clone(),
+        update: value,
+    }])?;
+    super::apply_plan(access, "desktop.agent_principal.save", plan).await
+}
+
+#[cfg(test)]
 pub async fn upsert_agent_principal(node: &EmbeddedNode, document: &AgentPrincipal) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -82,8 +96,52 @@ pub async fn apply_config_components(
 /// candidate owners. Omitted fields (including hidden credentials) are retained.
 /// Explicit null is a value validated by the canonical document deserializer.
 /// This operation never creates or removes a document.
+pub async fn patch_config_components_on(
+    access: &ConfigAccess,
+    agent_did: &str,
+    patches: &[(
+        gents::config_client::patch::SelfConfigTarget,
+        String,
+        gents::config_client::patch::SelfConfigPatch,
+    )],
+) -> Result<()> {
+    patch_config_components_with(access, agent_did, patches).await
+}
+
+#[cfg(test)]
 pub async fn patch_config_components(
     node: &EmbeddedNode,
+    agent_did: &str,
+    patches: &[(
+        gents::config_client::patch::SelfConfigTarget,
+        String,
+        gents::config_client::patch::SelfConfigPatch,
+    )],
+) -> Result<()> {
+    ConfigAccess::transact_local(node, None, "desktop.config.components.patch", |txn| {
+        Box::pin(async move { patch_config_components_in_txn(txn, agent_did, patches).await })
+    })
+    .await
+}
+
+async fn patch_config_components_with(
+    access: &ConfigAccess,
+    agent_did: &str,
+    patches: &[(
+        gents::config_client::patch::SelfConfigTarget,
+        String,
+        gents::config_client::patch::SelfConfigPatch,
+    )],
+) -> Result<()> {
+    access
+        .transact("desktop.config.components.patch", |txn| {
+            Box::pin(async move { patch_config_components_in_txn(txn, agent_did, patches).await })
+        })
+        .await
+}
+
+async fn patch_config_components_in_txn(
+    txn: &gents::config_client::ConfigApplyTxn<'_>,
     agent_did: &str,
     patches: &[(
         gents::config_client::patch::SelfConfigTarget,
@@ -112,39 +170,34 @@ pub async fn patch_config_components(
         );
         ensure_admissible(*target, patch)?;
     }
-    ConfigAccess::transact_local(node, None, "desktop.config.components.patch", |txn| {
-        Box::pin(async move {
-            read_desired_state_record_in_txn(txn, Collection::AgentPrincipal, agent_did, agent_did)
+    read_desired_state_record_in_txn(txn, Collection::AgentPrincipal, agent_did, agent_did)
+        .await?
+        .context("component patch requires an existing principal")?;
+    let mut documents = Vec::with_capacity(patches.len());
+    for (target, id, patch) in patches {
+        let (_, retained) =
+            read_desired_state_record_in_txn(txn, target.collection(), agent_did, id)
                 .await?
-                .context("component patch requires an existing principal")?;
-            let mut documents = Vec::with_capacity(patches.len());
-            for (target, id, patch) in patches {
-                let (_, retained) =
-                    read_desired_state_record_in_txn(txn, target.collection(), agent_did, id)
-                        .await?
-                        .with_context(|| {
-                            format!(
-                                "component patch requires existing {} {}",
-                                target.collection_name(),
-                                id
-                            )
-                        })?;
-                let retained = retained
-                    .as_object()
-                    .context("canonical config document must be an object")?;
-                let value = serde_json::Value::Object(apply_patch(*target, retained, patch));
-                documents.push(DesiredStateApplyDocument {
-                    collection: target.collection(),
-                    add: value.clone(),
-                    update: value,
-                });
-            }
-            let plan = DesiredStateApplyPlan::new(documents)?;
-            apply_desired_state_plan(txn, &plan).await?;
-            Ok(())
-        })
-    })
-    .await
+                .with_context(|| {
+                    format!(
+                        "component patch requires existing {} {}",
+                        target.collection_name(),
+                        id
+                    )
+                })?;
+        let retained = retained
+            .as_object()
+            .context("canonical config document must be an object")?;
+        let value = serde_json::Value::Object(apply_patch(*target, retained, patch));
+        documents.push(DesiredStateApplyDocument {
+            collection: target.collection(),
+            add: value.clone(),
+            update: value,
+        });
+    }
+    let plan = DesiredStateApplyPlan::new(documents)?;
+    apply_desired_state_plan(txn, &plan).await?;
+    Ok(())
 }
 
 #[cfg(test)]
