@@ -432,6 +432,7 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
                 root
                 preset
                 profile_id
+                make_default
                 created_at
                 status
                 status_detail
@@ -634,6 +635,7 @@ fn persona_request_doc_from_row(row: PersonaRequestRow) -> Option<PersonaRequest
         root: row.root,
         preset: row.preset,
         profile_id: row.profile_id,
+        make_default: row.make_default.unwrap_or(false),
         created_at: row.created_at,
         status: row.status,
         status_detail: row.status_detail,
@@ -659,6 +661,7 @@ fn local_persona_record(doc: &PersonaRequestDoc) -> LocalPersonaRequestRecord {
         root: doc.root.clone(),
         preset: doc.preset.clone(),
         profile_id: doc.profile_id.clone(),
+        make_default: doc.make_default,
         created_at: doc.created_at.clone().unwrap_or_default(),
         local_signature: doc.local_signature.clone(),
     }
@@ -740,6 +743,8 @@ struct PersonaRequestRow {
     preset: Option<String>,
     #[serde(default)]
     profile_id: Option<String>,
+    #[serde(default)]
+    make_default: Option<bool>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
@@ -1319,6 +1324,7 @@ mod tests {
             root: Some("/repo/allowed".to_string()),
             preset: Some("write".to_string()),
             profile_id: Some("profile-1".to_string()),
+            make_default: true,
             created_at: "2026-07-23T00:00:00Z".to_string(),
             local_signature: Vec::new(),
         };
@@ -1347,6 +1353,12 @@ mod tests {
             Some("Research Assistant".to_string())
         );
         assert!(behavior.enabled);
+        assert_eq!(
+            crate::load_agent_principal(&node, &agent_did)
+                .await?
+                .and_then(|principal| principal.default_behavior_id),
+            Some(behavior_id.clone())
+        );
         let (context, tools) = crate::config_client::ConfigAccess::transact_local(
             &node,
             None,

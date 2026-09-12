@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
@@ -84,9 +82,15 @@ pub async fn desktop_managed_server_start<R: Runtime>(
     emit_status(&app, &state).await;
 
     // The managed desktop binary is the host authority for local work. First
-    // run gives that binary a full filesystem ceiling; the selected Tools
-    // document still decides which capabilities a behavior actually receives.
-    let tool_root = PathBuf::from(std::path::MAIN_SEPARATOR.to_string());
+    // run gives that binary the full existing read/write ceiling, rooted at
+    // the user's home. The selected Tools document still decides which
+    // capabilities a behavior actually receives.
+    let tool_root = dirs::home_dir().ok_or_else(|| {
+        BridgeError::new(
+            BridgeErrorCode::ClientStartFailed,
+            "unable to resolve the user home directory for first-run tools",
+        )
+    })?;
     let result: anyhow::Result<_> = async {
         gents_server::server_host::ensure_standard_home(
             gents_server::server_host::ProvisionOptions {

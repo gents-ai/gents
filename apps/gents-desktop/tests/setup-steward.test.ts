@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { deployment } from "./config-panel-wiring/fixtures";
-import { setupStewardPatches } from "../src/ui/lib/setupSteward";
+import {
+  SETUP_STEWARD_PROMPT,
+  setupStewardPatches,
+} from "../src/ui/lib/setupSteward";
 
 describe("setup steward patches", () => {
   it("wires the default behavior, context prompt, and self-config tools", () => {
@@ -45,5 +48,14 @@ describe("setup steward patches", () => {
         },
       },
     });
+  });
+
+  it("keeps Setup as the configurator and promotes a separate working behavior", () => {
+    expect(SETUP_STEWARD_PROMPT).toContain("leaving Setup unchanged");
+    expect(SETUP_STEWARD_PROMPT).toContain('action "create"');
+    expect(SETUP_STEWARD_PROMPT).toContain("make_default true");
+    expect(SETUP_STEWARD_PROMPT).not.toContain(
+      "configure this behavior and context as a focused coding agent",
+    );
   });
 });

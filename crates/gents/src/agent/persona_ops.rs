@@ -16,8 +16,8 @@ use crate::config_client::{
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::document_config::{
-    AgentBehavior as AgentBehaviorDocument, AgentContext, BashTools, BuiltInTools, FileTools,
-    HostTools, Tools,
+    AgentBehavior as AgentBehaviorDocument, AgentContext, AgentPrincipal, BashTools, BuiltInTools,
+    FileTools, HostTools, Tools,
 };
 use crate::Collection;
 
@@ -104,6 +104,7 @@ pub struct PersonaRequestDoc {
     pub root: Option<String>,
     pub preset: Option<String>,
     pub profile_id: Option<String>,
+    pub make_default: bool,
     pub created_at: Option<String>,
     pub status: Option<String>,
     pub status_detail: Option<String>,
@@ -129,7 +130,7 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
                 network_id: null, member_peer: null, enrollment_request_digest: null,
                 authorization_sequence: null, authorization_expires_at: null,
                 op: "{}", behavior_id: {}, clone_from: {},
-                persona_name: {}, root: {}, preset: {}, profile_id: {},
+                persona_name: {}, root: {}, preset: {}, profile_id: {}, make_default: {},
                 created_at: "{}", status: "pending"
             }}) {{ _docID }}
         }}"#,
@@ -146,6 +147,7 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
         nullable(record.root.as_deref()),
         nullable(record.preset.as_deref()),
         nullable(record.profile_id.as_deref()),
+        record.make_default,
         crate::graphql::escape_graphql_string(&record.created_at),
     )
 }
@@ -364,6 +366,9 @@ pub fn decide_persona_request(
             PersonaVerdict::Admit
         }
         PersonaOp::Disable => {
+            if doc.make_default {
+                return PersonaVerdict::Reject("disable must not request make_default".to_string());
+            }
             let behavior_id = doc.behavior_id.as_deref().unwrap_or("");
             if !catalog.behaviors.contains_key(behavior_id) {
                 return PersonaVerdict::Reject(format!(
@@ -590,6 +595,12 @@ pub async fn apply_persona_request(
             documents.push(replacement(Collection::AgentContext, &context)?);
         }
         documents.push(replacement(Collection::AgentBehavior, &behavior)?);
+        if doc.make_default {
+            let mut principal: AgentPrincipal =
+                load_config(txn, Collection::AgentPrincipal, owner, owner).await?;
+            principal.default_behavior_id = Some(behavior.behavior_id.clone());
+            documents.push(replacement(Collection::AgentPrincipal, &principal)?);
+        }
         apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await?;
         Ok(PersonaApplyOutcome {behavior_id:behavior.behavior_id,repaired:false})
     })).await
@@ -691,6 +702,69 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn rejects_disabling_and_promoting_the_same_behavior() {
+        let mut doc = create_doc(PersonaOp::Disable);
+        doc.op_raw = "disable".to_string();
+        doc.behavior_id = Some("existing-enabled".to_string());
+        doc.make_default = true;
+        assert_eq!(
+            decide_persona_request(&doc, &base_catalog()),
+            PersonaVerdict::Reject("disable must not request make_default".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn persona_create_can_atomically_become_default_without_mutating_setup() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let owner = "did:key:agent";
+        seed_persona_validation_references(&node, owner).await?;
+        let setup = AgentBehaviorDocument {
+            behavior_id: "setup".into(),
+            agent_did: owner.into(),
+            display_name: Some("Setup".into()),
+            context_id: None,
+            inference_profile_id: "profile-1".into(),
+            enabled: true,
+            description: None,
+            tags: Vec::new(),
+            created_at: None,
+        };
+        ConfigAccess::Local(node.clone())
+            .transact("test.persona.setup", |txn| {
+                let setup = setup.clone();
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        &DesiredStateApplyPlan::new(vec![replacement(
+                            Collection::AgentBehavior,
+                            &setup,
+                        )?])?,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await?;
+
+        let mut doc = create_doc(PersonaOp::Create { clone_from: None });
+        doc.request_key = "promoted".into();
+        doc.make_default = true;
+        let outcome = apply_persona_request(&node, &doc, &base_catalog()).await?;
+        let principal: AgentPrincipal =
+            read(&node, Collection::AgentPrincipal, owner, owner).await?;
+        assert_eq!(
+            principal.default_behavior_id.as_deref(),
+            Some(outcome.behavior_id.as_str())
+        );
+        assert_eq!(
+            read::<AgentBehaviorDocument>(&node, Collection::AgentBehavior, owner, "setup").await?,
+            setup
+        );
+        Ok(())
     }
 
     #[test]

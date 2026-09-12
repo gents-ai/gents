@@ -80,6 +80,7 @@ structure Request where
   root : String
   preset : String
   profile : String
+  makeDefault : Bool
   cloneFrom : String
   target : String
   deriving DecidableEq, Repr
@@ -184,7 +185,7 @@ def opOk (cat : Catalog) (st : BehaviorCatalog) (r : Request) : Prop :=
       behaviorPresent st r.target ∧ nameOk r ∧ rootOk cat r ∧
         profileOk cat r ∧ editPresetOk r
   | Op.disable =>
-      behaviorPresent st r.target
+      behaviorPresent st r.target ∧ r.makeDefault = false
 
 instance (cat : Catalog) (st : BehaviorCatalog) (r : Request) : Decidable (opOk cat st r) := by
   unfold opOk
@@ -205,6 +206,24 @@ def targetBehaviorId (r : Request) : String :=
   match r.op with
   | .create => r.key
   | .edit | .disable => r.target
+
+/-- Default selection is part of the same admitted create/edit publication.
+It never rewrites the configurator/source behavior; it only points the
+principal at the separately materialized target. -/
+def defaultBehaviorAfter (preDefault appliedBehavior : String) (r : Request) : String :=
+  if r.op ≠ .disable ∧ r.makeDefault = true then appliedBehavior else preDefault
+
+theorem requested_promotion_selects_applied_behavior
+    (preDefault appliedBehavior : String) (r : Request)
+    (hop : r.op ≠ .disable) (hdefault : r.makeDefault = true) :
+    defaultBehaviorAfter preDefault appliedBehavior r = appliedBehavior := by
+  simp [defaultBehaviorAfter, hop, hdefault]
+
+theorem omitted_promotion_keeps_existing_default
+    (preDefault appliedBehavior : String) (r : Request)
+    (hdefault : r.makeDefault = false) :
+    defaultBehaviorAfter preDefault appliedBehavior r = preDefault := by
+  simp [defaultBehaviorAfter, hdefault]
 
 /-- A create/edit result must resolve as one context-plus-inference configuration.
 The candidate is supplied by the common authoring loader, not reconstructed from

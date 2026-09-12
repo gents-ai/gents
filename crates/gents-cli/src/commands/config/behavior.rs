@@ -152,6 +152,7 @@ fn local_record(
         root,
         preset,
         profile_id,
+        make_default: false,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         local_signature: Vec::new(),
     }

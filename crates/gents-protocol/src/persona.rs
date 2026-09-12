@@ -28,6 +28,7 @@ pub struct LocalPersonaRequestRecord {
     pub root: Option<String>,
     pub preset: Option<String>,
     pub profile_id: Option<String>,
+    pub make_default: bool,
     pub created_at: String,
     pub local_signature: Vec<u8>,
 }
@@ -101,6 +102,7 @@ impl LocalPersonaRequestRecord {
             option(self.root.as_deref()),
             option(self.preset.as_deref()),
             option(self.profile_id.as_deref()),
+            self.make_default.to_string(),
             self.created_at.clone(),
         ];
         canonical_domain_payload(
@@ -128,6 +130,7 @@ mod tests {
             root: None,
             preset: Some("write".into()),
             profile_id: Some("profile-1".into()),
+            make_default: true,
             created_at: "2026-08-29T00:00:00Z".into(),
             local_signature: vec![0; 64],
         }
@@ -143,6 +146,9 @@ mod tests {
         assert_ne!(payload, changed.signing_payload());
         changed = base.clone();
         changed.agent_did = "did:key:other".into();
+        assert_ne!(payload, changed.signing_payload());
+        changed = base.clone();
+        changed.make_default = false;
         assert_ne!(payload, changed.signing_payload());
     }
 

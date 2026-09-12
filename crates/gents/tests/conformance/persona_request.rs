@@ -120,6 +120,13 @@ fn admission_matrix_mirrors_lean_admits() {
         PersonaVerdict::Admit
     );
 
+    let mut promoted_disable = happy_disable.clone();
+    promoted_disable.make_default = true;
+    assert_eq!(
+        decide_persona_request(&promoted_disable, &cat),
+        PersonaVerdict::Reject("disable must not request make_default".to_string())
+    );
+
     // Reject branch (Lean `admits` = false → no candidate resolution): one
     // row per failing conjunct.
     let mut rejects: Vec<PersonaRequestDoc> = Vec::new();

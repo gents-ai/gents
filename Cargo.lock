@@ -3969,6 +3969,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "chrono",
+ "dirs 5.0.1",
  "gents",
  "gents-chatgpt-login",
  "gents-claude-login",
