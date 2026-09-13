@@ -73,7 +73,7 @@ impl ClientStore {
             agent_did,
             |row| row.agent_did.as_str(),
         );
-        let replaced_backend_ids = rows
+        let target_backend_ids = rows
             .inference_backends
             .iter()
             .filter(|row| row.agent_did == agent_did)
@@ -85,6 +85,13 @@ impl ClientStore {
                     .filter(|row| row.agent_did == agent_did)
                     .map(|row| row.backend_id.clone()),
             )
+            .collect::<HashSet<_>>();
+        let shared_backend_ids = rows
+            .inference_backends
+            .iter()
+            .filter(|row| row.agent_did != agent_did)
+            .map(|row| row.backend_id.clone())
+            .filter(|backend_id| target_backend_ids.contains(backend_id))
             .collect::<HashSet<_>>();
         let incoming_backend_ids = remote
             .inference_backends
@@ -102,7 +109,12 @@ impl ClientStore {
         retain_rows_and_sources(
             &mut rows.backend_observations,
             &mut rows.backend_observation_source_agent_dids,
-            |row, _source| !replaced_backend_ids.contains(&row.backend_id),
+            |row, source| {
+                source != Some(agent_did)
+                    && !(source.is_none()
+                        && target_backend_ids.contains(&row.backend_id)
+                        && !shared_backend_ids.contains(&row.backend_id))
+            },
         );
         let backend_observations = remote
             .backend_observations
@@ -834,8 +846,22 @@ mod overlay_tests {
             behaviors: vec![behavior("did:test:local", "ghost")],
             runtimes: vec![runtime("did:test:local", "desktop")],
             behavior_readiness: vec![readiness("did:test:local", "desktop")],
-            inference_backends: vec![backend("did:test:local", "Desktop backend")],
-            backend_observations: vec![backend_observation("stale")],
+            inference_backends: vec![
+                backend("did:test:local", "Desktop backend"),
+                backend("did:test:other", "Other backend"),
+            ],
+            inference_backend_source_agent_dids: vec![
+                Some("did:test:local".to_string()),
+                Some("did:test:other".to_string()),
+            ],
+            backend_observations: vec![
+                backend_observation("stale"),
+                backend_observation("other-healthy"),
+            ],
+            backend_observation_source_agent_dids: vec![
+                Some("did:test:local".to_string()),
+                Some("did:test:other".to_string()),
+            ],
             tasks: vec![task("did:test:local", "stale-task", false)],
             ..ClientStoreRows::default()
         });
@@ -877,15 +903,20 @@ mod overlay_tests {
             Some("agent")
         );
         assert_eq!(overlayed.behavior_readiness[0].snapshot_json, "agent");
-        assert_eq!(overlayed.inference_backends[0].name, "Agent backend");
-        assert_eq!(
-            overlayed.backend_observation_source_agent_dids[0].as_deref(),
-            Some("did:test:local")
-        );
-        assert_eq!(
-            overlayed.backend_observations[0].probe_status.as_deref(),
-            Some("healthy")
-        );
+        assert_eq!(overlayed.inference_backends.len(), 2);
+        let observations = overlayed
+            .backend_observations
+            .iter()
+            .zip(&overlayed.backend_observation_source_agent_dids)
+            .map(|(row, source)| {
+                (
+                    source.as_deref().expect("observation source"),
+                    row.probe_status.as_deref().expect("probe status"),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(observations.get("did:test:local"), Some(&"healthy"));
+        assert_eq!(observations.get("did:test:other"), Some(&"other-healthy"));
         assert_eq!(overlayed.tasks.len(), 1);
         assert_eq!(overlayed.tasks[0].task_id, "canonical-task");
         assert!(overlayed.tasks[0].enabled);

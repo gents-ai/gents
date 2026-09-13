@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 /* A reviewable draft. Nothing crosses the bridge until the user explicitly
@@ -9,8 +9,21 @@ export function useDraft<T extends object>(
 ) {
   const [draft, setDraft] = useState<T>(saved);
   const [baseline, setBaseline] = useState<T>(saved);
+  const baselineRef = useRef<T>(saved);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const savedKey = JSON.stringify(saved);
+  useEffect(() => {
+    const previousKey = JSON.stringify(baselineRef.current);
+    setDraft((currentDraft) =>
+      JSON.stringify(currentDraft) === previousKey ? saved : currentDraft,
+    );
+    baselineRef.current = saved;
+    setBaseline(saved);
+    // Object identity changes on every projected snapshot; semantic content is
+    // the bridge-confirmed generation this draft needs to observe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedKey]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   const save = async () => {
     if (!dirty || saving) return;
@@ -18,6 +31,7 @@ export function useDraft<T extends object>(
     setError(null);
     try {
       await persist(draft);
+      baselineRef.current = draft;
       setBaseline(draft);
       toast("Saved");
     } catch (e) {

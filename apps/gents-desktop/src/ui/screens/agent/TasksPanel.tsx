@@ -358,12 +358,7 @@ export function TasksPanel({
       detail={(id) => {
         const task = deployment.tasks.find((t) => t.taskId === id)!;
         return (
-          <Editor
-            key={JSON.stringify(task)}
-            shell={shell}
-            deployment={deployment}
-            task={task}
-          />
+          <Editor key={task.taskId} shell={shell} deployment={deployment} task={task} />
         );
       }}
     />

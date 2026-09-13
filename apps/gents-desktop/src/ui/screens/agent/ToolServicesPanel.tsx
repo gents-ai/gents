@@ -267,7 +267,7 @@ export function ToolServicesPanel({
         )!;
         return (
           <Editor
-            key={JSON.stringify(service)}
+            key={service.service_id}
             shell={shell}
             deployment={deployment}
             service={service}

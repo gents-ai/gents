@@ -296,7 +296,7 @@ export function EventSourcesPanel({
         const source = deployment.eventSources.find((s) => s.event_source_id === id)!;
         return (
           <Editor
-            key={JSON.stringify(source)}
+            key={source.event_source_id}
             shell={shell}
             deployment={deployment}
             source={source}

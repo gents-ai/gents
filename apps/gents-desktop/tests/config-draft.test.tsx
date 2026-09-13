@@ -7,10 +7,12 @@ import { DraftActions } from "../src/ui/screens/agent/editors";
 
 function Harness({
   persist,
+  saved = { name: "Saved", enabled: true },
 }: {
   persist: (next: { name: string; enabled: boolean }) => Promise<unknown>;
+  saved?: { name: string; enabled: boolean };
 }) {
-  const draft = useDraft({ name: "Saved", enabled: true }, persist);
+  const draft = useDraft(saved, persist);
   return (
     <>
       <output data-testid="name">{draft.draft.name}</output>
@@ -67,5 +69,27 @@ describe("configuration drafts", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(persist).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
+  it("accepts fresh snapshots without discarding an unsaved draft", async () => {
+    const user = userEvent.setup();
+    const persist = vi.fn(async () => undefined);
+    const view = render(<Harness persist={persist} />);
+
+    view.rerender(
+      <Harness persist={persist} saved={{ name: "Remote", enabled: false }} />,
+    );
+    expect(screen.getByTestId("name")).toHaveTextContent("Remote");
+    expect(screen.getByTestId("enabled")).toHaveTextContent("false");
+
+    await user.click(screen.getByRole("button", { name: "Edit text" }));
+    view.rerender(
+      <Harness persist={persist} saved={{ name: "New remote", enabled: true }} />,
+    );
+    expect(screen.getByTestId("name")).toHaveTextContent("Draft");
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("name")).toHaveTextContent("New remote");
+    expect(screen.getByTestId("enabled")).toHaveTextContent("true");
   });
 });

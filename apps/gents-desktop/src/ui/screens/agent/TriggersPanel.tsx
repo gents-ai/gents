@@ -243,7 +243,7 @@ export function TriggersPanel({
         const trigger = deployment.triggers.find((t) => t.config.trigger_id === id)!;
         return (
           <Editor
-            key={JSON.stringify(trigger)}
+            key={trigger.config.trigger_id}
             shell={shell}
             deployment={deployment}
             trigger={trigger}

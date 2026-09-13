@@ -10,7 +10,10 @@ use crate::enrollment::canonical_domain_payload;
 
 pub const PERSONA_AUTHORITY_ENROLLMENT: &str = "enrollment";
 pub const PERSONA_AUTHORITY_LOCAL_SELF: &str = "local-self";
-const LOCAL_PERSONA_SIGNATURE_DOMAIN: &str = "gents-persona-local-self-signature-v1";
+// `make_default` is part of the signed semantic envelope. This request shape
+// was introduced on the onboarding branch, so use a fresh domain instead of
+// accepting signatures authored against the earlier field set.
+const LOCAL_PERSONA_SIGNATURE_DOMAIN: &str = "gents-persona-local-self-signature-v2";
 const MAX_PERSONA_FIELD_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

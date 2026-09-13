@@ -302,6 +302,11 @@ pub async fn desktop_client_shutdown<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
+    // Enrollment authoring temporarily installs bootstrap replication state.
+    // Let that bounded operation unwind before dropping its core instead of
+    // aborting the future between install and cleanup.
+    let _managed_lifecycle = state.managed_server_lifecycle.lock().await;
+    super::managed_server::drain_managed_runtime_pairing(&state).await;
     // Drain in-flight start first (without lifecycle) so the starter can install
     // and we can then take the core cleanly. Retry if a start sneaks in between
     // drain and the lifecycle lock.

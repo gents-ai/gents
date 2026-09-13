@@ -754,6 +754,7 @@ struct PersonaCatalogSnapshot {
 #[derive(Debug, Clone, serde::Serialize)]
 struct PersonaBehaviorSnapshot {
     enabled: bool,
+    protected: bool,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -883,6 +884,7 @@ async fn persona_list(node: &Arc<EmbeddedNode>, agent_did: &str) -> Result<Strin
                     behavior_id,
                     PersonaBehaviorSnapshot {
                         enabled: reference.enabled,
+                        protected: reference.protected,
                     },
                 )
             })

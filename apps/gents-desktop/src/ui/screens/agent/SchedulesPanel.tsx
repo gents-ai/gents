@@ -250,7 +250,7 @@ export function SchedulesPanel({
         const schedule = deployment.schedules.find((s) => s.schedule_id === id)!;
         return (
           <Editor
-            key={JSON.stringify(schedule)}
+            key={schedule.schedule_id}
             shell={shell}
             deployment={deployment}
             schedule={schedule}

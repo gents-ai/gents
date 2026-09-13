@@ -566,7 +566,7 @@ export function ProfilesPanel({
         const profile = deployment.inferenceProfiles.find((p) => p.profile_id === id)!;
         return (
           <Editor
-            key={JSON.stringify(profile)}
+            key={profile.profile_id}
             shell={shell}
             deployment={deployment}
             profile={profile}

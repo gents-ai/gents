@@ -220,7 +220,7 @@ export function ContextsPanel({
         const context = deployment.contexts.find((c) => c.context_id === id)!;
         return (
           <Editor
-            key={JSON.stringify(context)}
+            key={context.context_id}
             shell={shell}
             deployment={deployment}
             context={context}

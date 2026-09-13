@@ -16,6 +16,23 @@ use crate::types::{ManagedServerStartRequest, ManagedServerState, ManagedServerS
 
 const MANAGED_SERVER_CONFIG: &str = "managed-server.json";
 
+#[derive(Debug, Clone)]
+struct ManagedPairingTarget {
+    agent_name: String,
+    agent_did: String,
+    graphql: String,
+}
+
+impl From<gents_server::server_host::ServerReady> for ManagedPairingTarget {
+    fn from(ready: gents_server::server_host::ServerReady) -> Self {
+        Self {
+            agent_name: ready.agent_name,
+            agent_did: ready.agent_did,
+            graphql: ready.graphql,
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredManagedServer {
@@ -72,7 +89,13 @@ pub async fn desktop_managed_server_start<R: Runtime>(
             };
             save_preference(&state, &committed).await?;
             if let Some(core) = current_core(&state) {
-                start_managed_runtime_pairing(&state, core, agent_home.clone(), ready).await;
+                start_managed_runtime_pairing(
+                    &state,
+                    core,
+                    agent_home.clone(),
+                    ManagedPairingTarget::from(ready),
+                )
+                .await;
             }
             let managed = state.managed_server.lock().await;
             return Ok(status_from(&managed, Some(&committed)));
@@ -85,6 +108,12 @@ pub async fn desktop_managed_server_start<R: Runtime>(
     // second call intentionally commits auto-start after client provisioning;
     // probing first would return early and leave the preference disabled.
     if let Some(external) = matching_external_server(&agent_home).await? {
+        if let (Some(core), Some(target)) = (current_core(&state), pairing_target(&external)) {
+            core.refresh_local_standard_peer(&agent_home, &target.agent_name)
+                .await
+                .map_err(|error| BridgeError::untyped(error.to_string()))?;
+            start_managed_runtime_pairing(&state, core, agent_home, target).await;
+        }
         return Ok(external);
     }
 
@@ -191,31 +220,57 @@ pub async fn desktop_managed_server_start<R: Runtime>(
 }
 
 pub(super) async fn start_running_managed_pairing(state: &DesktopAppState, core: Arc<ClientCore>) {
-    let ready = state
+    let Some(agent_home) = state.policy.agent_home.clone() else {
+        tracing::warn!("managed pairing requires a local agent home");
+        return;
+    };
+    let target = state
         .managed_server
         .lock()
         .await
         .server
         .as_ref()
-        .map(|server| server.ready().clone());
-    let Some(ready) = ready else {
-        return;
+        .map(|server| ManagedPairingTarget::from(server.ready().clone()));
+    let (target, external) = match target {
+        Some(target) => (Some(target), false),
+        None => match matching_external_server(&agent_home).await {
+            Ok(status) => (status.as_ref().and_then(pairing_target), true),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::managed_server",
+                    error = %error,
+                    "failed to inspect external managed runtime for background pairing"
+                );
+                (None, true)
+            }
+        },
     };
-    let Some(agent_home) = state.policy.agent_home.clone() else {
-        tracing::warn!("managed pairing requires a local agent home");
-        return;
-    };
-    start_managed_runtime_pairing(state, core, agent_home, ready).await;
+    let Some(target) = target else { return };
+    if external {
+        if let Err(error) = core
+            .refresh_local_standard_peer(&agent_home, &target.agent_name)
+            .await
+        {
+            tracing::warn!(
+                target: "gents_desktop::managed_server",
+                agent_did = %target.agent_did,
+                error = %error,
+                "failed to refresh external managed runtime route before pairing"
+            );
+            return;
+        }
+    }
+    start_managed_runtime_pairing(state, core, agent_home, target).await;
 }
 
 async fn start_managed_runtime_pairing(
     state: &DesktopAppState,
     core: Arc<ClientCore>,
     agent_home: std::path::PathBuf,
-    ready: gents_server::server_host::ServerReady,
+    target: ManagedPairingTarget,
 ) {
     if core.peer_records().await.iter().any(|peer| {
-        peer.agent_did == ready.agent_did
+        peer.agent_did == target.agent_did
             && peer.is_enrollment()
             && peer.is_managed_runtime()
             && peer.is_chat_ready_at(chrono::Utc::now())
@@ -232,10 +287,10 @@ async fn start_managed_runtime_pairing(
         return;
     }
     managed.pairing_task = Some(tauri::async_runtime::spawn(async move {
-        if let Err(error) = ensure_managed_runtime_pairing(core, &agent_home, &ready).await {
+        if let Err(error) = ensure_managed_runtime_pairing(core, &agent_home, &target).await {
             tracing::warn!(
                 target: "gents_desktop::managed_server",
-                agent_did = %ready.agent_did,
+                agent_did = %target.agent_did,
                 error = %error,
                 "background managed runtime pairing failed"
             );
@@ -246,10 +301,10 @@ async fn start_managed_runtime_pairing(
 async fn ensure_managed_runtime_pairing(
     core: Arc<ClientCore>,
     agent_home: &std::path::Path,
-    ready: &gents_server::server_host::ServerReady,
+    target: &ManagedPairingTarget,
 ) -> Result<(), String> {
     if core.peer_records().await.iter().any(|peer| {
-        peer.agent_did == ready.agent_did
+        peer.agent_did == target.agent_did
             && peer.is_enrollment()
             && peer.is_managed_runtime()
             && peer.is_chat_ready_at(chrono::Utc::now())
@@ -257,7 +312,7 @@ async fn ensure_managed_runtime_pairing(
         return Ok(());
     }
 
-    let mut status_url = reqwest::Url::parse(&ready.graphql)
+    let mut status_url = reqwest::Url::parse(&target.graphql)
         .map_err(|error| format!("parsing managed runtime GraphQL URL: {error}"))?;
     status_url.set_path("/status");
     status_url.set_query(None);
@@ -271,49 +326,51 @@ async fn ensure_managed_runtime_pairing(
         .filter(|token| !token.trim().is_empty())
         .ok_or_else(|| "managed runtime did not advertise an enrollment offer".to_string())?;
     let enrollment = core
-        .request_status_enrollment_with_label(token, Some(&ready.agent_name))
+        .request_status_enrollment_with_label(token, Some(&target.agent_name))
         .await
         .map_err(|error| format!("requesting managed runtime enrollment: {error:#}"))?;
-    if let Err(error) = gents_server::server_host::approve_managed_client_enrollment(
-        agent_home,
-        &ready.graphql,
-        &enrollment.request_id,
-    )
-    .await
-    {
-        let message = format!("{error:#}");
-        if enrollment_decision_was_already_reconciled(&message) {
-            // The durable enrollment reconciler can consume and authorize the
-            // request between its P2P delivery and this co-hosted operator
-            // call. Treat that race as idempotent and prove readiness below;
-            // a rejected or incomplete route still reaches the timeout.
-            tracing::debug!(
-                request_id = %enrollment.request_id,
-                "managed enrollment was already reconciled before explicit approval"
-            );
-        } else {
-            return Err(format!("approving managed runtime enrollment: {message}"));
-        }
-    }
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut approval_committed = false;
     loop {
-        core.request_p2p_repair()
-            .await
-            .map_err(|error| format!("requesting managed route reconciliation: {error:#}"))?;
         if core.peer_records().await.iter().any(|peer| {
-            peer.agent_did == ready.agent_did
+            peer.agent_did == target.agent_did
                 && peer.is_enrollment()
                 && peer.is_managed_runtime()
                 && peer.is_chat_ready_at(chrono::Utc::now())
         }) {
             tracing::info!(
                 target: "gents_desktop::managed_server",
-                agent_did = %ready.agent_did,
+                agent_did = %target.agent_did,
                 "managed runtime desktop pairing is ready"
             );
             return Ok(());
         }
+        if !approval_committed {
+            match gents_server::server_host::approve_managed_client_enrollment(
+                agent_home,
+                &target.graphql,
+                &enrollment.request_id,
+            )
+            .await
+            {
+                Ok(()) => approval_committed = true,
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    if enrollment_request_is_not_visible_yet(&message) {
+                        tracing::debug!(
+                            request_id = %enrollment.request_id,
+                            "managed enrollment request is not yet visible to operator approval"
+                        );
+                    } else {
+                        return Err(format!("approving managed runtime enrollment: {message}"));
+                    }
+                }
+            }
+        }
+        core.request_p2p_repair()
+            .await
+            .map_err(|error| format!("requesting managed route reconciliation: {error:#}"))?;
         if tokio::time::Instant::now() >= deadline {
             return Err("timed out waiting for managed runtime pairing".to_string());
         }
@@ -321,8 +378,32 @@ async fn ensure_managed_runtime_pairing(
     }
 }
 
-fn enrollment_decision_was_already_reconciled(message: &str) -> bool {
+fn enrollment_request_is_not_visible_yet(message: &str) -> bool {
     message.contains("no fresh pending enrollment request")
+}
+
+fn pairing_target(status: &ManagedServerStatus) -> Option<ManagedPairingTarget> {
+    Some(ManagedPairingTarget {
+        agent_name: status.agent_name.as_deref()?.trim().to_string(),
+        agent_did: status.agent_did.as_deref()?.trim().to_string(),
+        graphql: status.graphql.as_deref()?.trim().to_string(),
+    })
+    .filter(|target| {
+        !target.agent_name.is_empty() && !target.agent_did.is_empty() && !target.graphql.is_empty()
+    })
+}
+
+pub(super) async fn drain_managed_runtime_pairing(state: &DesktopAppState) {
+    let task = state.managed_server.lock().await.pairing_task.take();
+    if let Some(task) = task {
+        if let Err(error) = task.await {
+            tracing::warn!(
+                target: "gents_desktop::managed_server",
+                error = %error,
+                "managed pairing task failed while draining"
+            );
+        }
+    }
 }
 
 async fn matching_external_server(
@@ -381,11 +462,9 @@ pub async fn desktop_managed_server_stop<R: Runtime>(
         let mut managed = state.managed_server.lock().await;
         managed.starting = false;
         managed.last_error = None;
-        if let Some(task) = managed.pairing_task.take() {
-            task.abort();
-        }
         managed.server.take()
     };
+    drain_managed_runtime_pairing(&state).await;
     if let Some(server) = server {
         server
             .shutdown()
@@ -596,11 +675,11 @@ mod tests {
     }
 
     #[test]
-    fn already_reconciled_enrollment_decision_is_idempotent() {
-        assert!(enrollment_decision_was_already_reconciled(
+    fn request_visibility_race_is_retriable() {
+        assert!(enrollment_request_is_not_visible_yet(
             "runtime rejected enrollment decision (400 Bad Request): no fresh pending enrollment request enroll-1"
         ));
-        assert!(!enrollment_decision_was_already_reconciled(
+        assert!(!enrollment_request_is_not_visible_yet(
             "runtime rejected enrollment decision (403 Forbidden): invalid operator signature"
         ));
     }

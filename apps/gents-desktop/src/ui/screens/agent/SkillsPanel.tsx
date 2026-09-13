@@ -213,7 +213,7 @@ export function SkillsPanel({
         const skill = deployment.skills.find((s) => s.skillId === id)!;
         return (
           <SkillEditor
-            key={JSON.stringify(skill)}
+            key={skill.skillId}
             shell={shell}
             deployment={deployment}
             skill={skill}

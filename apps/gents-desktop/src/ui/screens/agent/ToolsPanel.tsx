@@ -240,7 +240,7 @@ export function ToolsPanel({
         const tools = deployment.tools.find((t) => t.tools_id === id)!;
         return (
           <Editor
-            key={JSON.stringify(tools)}
+            key={tools.tools_id}
             shell={shell}
             deployment={deployment}
             tools={tools}

@@ -89,6 +89,7 @@ structure Request where
 and ownership are validated by resolution of the compiled candidate below. -/
 structure BehaviorCatalog where
   behaviors : Finset (String × Bool)
+  protectedIds : Finset String
   deriving DecidableEq
 
 -- These admission conjuncts are `abbrev` (reducible) so the `Decidable`
@@ -129,6 +130,13 @@ abbrev createModeOk (st : BehaviorCatalog) (r : Request) : Prop :=
 `disable` `contains_key` check. -/
 abbrev behaviorPresent (st : BehaviorCatalog) (id : String) : Prop :=
   (id, true) ∈ st.behaviors ∨ (id, false) ∈ st.behaviors
+
+/-- Product-owned configurators may be cloned but cannot be edited or disabled
+through their own sibling-persona tool. This keeps a recovery/configuration
+behavior available while allowing newly created working behaviors to become
+the principal default. -/
+abbrev behaviorMutable (st : BehaviorCatalog) (id : String) : Prop :=
+  id ∉ st.protectedIds
 
 /-- Edit may preserve the current context (empty preset) or name a known
 preset. Optional context/tools references are resolved by the common loader. -/
@@ -182,10 +190,10 @@ def opOk (cat : Catalog) (st : BehaviorCatalog) (r : Request) : Prop :=
   | Op.create =>
       nameOk r ∧ rootOk cat r ∧ profileOk cat r ∧ createModeOk st r
   | Op.edit =>
-      behaviorPresent st r.target ∧ nameOk r ∧ rootOk cat r ∧
+      behaviorPresent st r.target ∧ behaviorMutable st r.target ∧ nameOk r ∧ rootOk cat r ∧
         profileOk cat r ∧ editPresetOk r
   | Op.disable =>
-      behaviorPresent st r.target ∧ r.makeDefault = false
+      behaviorPresent st r.target ∧ behaviorMutable st r.target ∧ r.makeDefault = false
 
 instance (cat : Catalog) (st : BehaviorCatalog) (r : Request) : Decidable (opOk cat st r) := by
   unfold opOk
@@ -288,6 +296,13 @@ theorem blank_profile_rejected (cat : Catalog) (st : BehaviorCatalog) (r : Reque
     ¬ admits cat st r := by
   intro hadm
   exact (admitted_profile cat st r hadm hop).1 hblank
+
+theorem protected_edit_or_disable_rejected (cat : Catalog) (st : BehaviorCatalog) (r : Request)
+    (hop : r.op = .edit ∨ r.op = .disable) (hprotected : r.target ∈ st.protectedIds) :
+    ¬ admits cat st r := by
+  intro hadm
+  have hopOk := hadm.2.2
+  rcases hop with h | h <;> simp [opOk, behaviorMutable, h, hprotected] at hopOk
 
 end PersonaRequest
 end PeerRegistryDiscovery

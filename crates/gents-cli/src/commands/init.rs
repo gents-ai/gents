@@ -806,7 +806,11 @@ async fn initialize_runtime_home(
         context_id: Some(context.context_id.clone()),
         inference_profile_id: inference_profile_id.clone(),
         enabled: true,
-        tags: Vec::new(),
+        tags: if args.setup_steward {
+            vec![gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG.to_string()]
+        } else {
+            Vec::new()
+        },
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
     // One canonical publication: every init-owned document is staged into a

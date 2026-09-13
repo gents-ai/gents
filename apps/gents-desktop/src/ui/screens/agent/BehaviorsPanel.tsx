@@ -198,7 +198,7 @@ export function BehaviorsPanel({
         const behavior = deployment.behaviors.find((b) => b.behaviorId === id)!;
         return (
           <Editor
-            key={JSON.stringify(behavior)}
+            key={behavior.behaviorId}
             shell={shell}
             deployment={deployment}
             behavior={behavior}

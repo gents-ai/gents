@@ -664,7 +664,7 @@ export function InferencePanel({
         const backend = deployment.inferenceBackends.find((b) => b.backendId === id)!;
         return (
           <Editor
-            key={JSON.stringify(backend)}
+            key={backend.backendId}
             shell={shell}
             deployment={deployment}
             backend={backend}

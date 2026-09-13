@@ -35,7 +35,15 @@ fn catalog_with(
         known_agent_dids: BTreeSet::from(["did:key:agent".to_string()]),
         behaviors: behaviors
             .iter()
-            .map(|(id, enabled)| (id.to_string(), BehaviorRef { enabled: *enabled }))
+            .map(|(id, enabled)| {
+                (
+                    id.to_string(),
+                    BehaviorRef {
+                        enabled: *enabled,
+                        protected: false,
+                    },
+                )
+            })
             .collect::<BTreeMap<_, _>>(),
         ..Default::default()
     }
@@ -126,6 +134,24 @@ fn admission_matrix_mirrors_lean_admits() {
         decide_persona_request(&promoted_disable, &cat),
         PersonaVerdict::Reject("disable must not request make_default".to_string())
     );
+
+    let mut protected_catalog = cat.clone();
+    protected_catalog
+        .behaviors
+        .get_mut("existing-enabled")
+        .expect("fixture behavior")
+        .protected = true;
+    let mut protected_edit = create_doc(PersonaOp::Edit);
+    protected_edit.op_raw = "edit".to_string();
+    protected_edit.behavior_id = Some("existing-enabled".to_string());
+    assert!(matches!(
+        decide_persona_request(&protected_edit, &protected_catalog),
+        PersonaVerdict::Reject(_)
+    ));
+    assert!(matches!(
+        decide_persona_request(&happy_disable, &protected_catalog),
+        PersonaVerdict::Reject(_)
+    ));
 
     // Reject branch (Lean `admits` = false → no candidate resolution): one
     // row per failing conjunct.

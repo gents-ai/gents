@@ -46,10 +46,13 @@ pub struct PersonaCatalogView {
 /// The slice of an `AgentBehavior` row admission and apply need: whether it
 /// is a legal clone/edit/disable target. Config payloads are read by the
 /// shared loader inside the apply transaction.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BehaviorRef {
     pub enabled: bool,
+    pub protected: bool,
 }
+
+pub const SETUP_STEWARD_BEHAVIOR_TAG: &str = "gents:setup-steward";
 
 /// The requested operation, with `clone_from` folded in for `create` (the
 /// only op it applies to).
@@ -342,12 +345,17 @@ pub fn decide_persona_request(
         }
         PersonaOp::Edit => {
             let behavior_id = doc.behavior_id.as_deref().unwrap_or("");
-            let Some(_target) = catalog.behaviors.get(behavior_id) else {
+            let Some(target) = catalog.behaviors.get(behavior_id) else {
                 return PersonaVerdict::Reject(format!(
                     r#"unknown behavior_id "{behavior_id}" — pick from this agent's behaviors: {}"#,
                     enumerate_behavior_ids(&catalog.behaviors)
                 ));
             };
+            if target.protected {
+                return PersonaVerdict::Reject(format!(
+                    r#"behavior_id "{behavior_id}" is a protected configurator and cannot be edited through configure_persona"#
+                ));
+            }
             if let Some(msg) = validate_persona_name(doc.persona_name.as_deref()) {
                 return PersonaVerdict::Reject(msg);
             }
@@ -370,10 +378,15 @@ pub fn decide_persona_request(
                 return PersonaVerdict::Reject("disable must not request make_default".to_string());
             }
             let behavior_id = doc.behavior_id.as_deref().unwrap_or("");
-            if !catalog.behaviors.contains_key(behavior_id) {
+            let Some(target) = catalog.behaviors.get(behavior_id) else {
                 return PersonaVerdict::Reject(format!(
                     r#"unknown behavior_id "{behavior_id}" — pick from this agent's behaviors: {}"#,
                     enumerate_behavior_ids(&catalog.behaviors)
+                ));
+            };
+            if target.protected {
+                return PersonaVerdict::Reject(format!(
+                    r#"behavior_id "{behavior_id}" is a protected configurator and cannot be disabled"#
                 ));
             }
             PersonaVerdict::Admit
@@ -541,7 +554,7 @@ pub async fn apply_persona_request(
             anyhow::ensure!(source.as_ref().is_some_and(|source| source.enabled), "clone source is disabled");
         }
         let mut behavior = if let Some(source) = source.clone() { source } else {
-            serde_json::from_value(serde_json::json!({"behavior_id":derive_behavior_id(owner, doc.persona_name.as_deref().context("persona name missing")?, &current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled})).collect()), "agent_did":owner,
+            serde_json::from_value(serde_json::json!({"behavior_id":derive_behavior_id(owner, doc.persona_name.as_deref().context("persona name missing")?, &current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)})).collect()), "agent_did":owner,
                 "inference_profile_id":doc.profile_id.as_deref().context("persona profile missing")?}))?
         };
         if matches!(op, PersonaOp::Disable) {
@@ -554,10 +567,13 @@ pub async fn apply_persona_request(
         anyhow::ensure!(!profile.trim().is_empty(), "persona profile must be explicit");
         let create = matches!(op, PersonaOp::Create {..});
         if create {
-            let catalog = current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled})).collect();
+            let catalog = current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)})).collect();
             behavior.behavior_id = derive_behavior_id(owner, name, &catalog);
             behavior.created_at = None;
             behavior.enabled = true;
+            behavior
+                .tags
+                .retain(|tag| tag != SETUP_STEWARD_BEHAVIOR_TAG);
         }
         behavior.display_name = Some(name.into());
         behavior.inference_profile_id = profile.into();
@@ -637,7 +653,13 @@ mod tests {
             behaviors: behaviors
                 .iter()
                 .map(|(id, enabled, _context_id)| {
-                    (id.to_string(), BehaviorRef { enabled: *enabled })
+                    (
+                        id.to_string(),
+                        BehaviorRef {
+                            enabled: *enabled,
+                            protected: false,
+                        },
+                    )
                 })
                 .collect(),
         }
@@ -714,6 +736,33 @@ mod tests {
             decide_persona_request(&doc, &base_catalog()),
             PersonaVerdict::Reject("disable must not request make_default".to_string())
         );
+    }
+
+    #[test]
+    fn rejects_editing_or_disabling_a_protected_configurator() {
+        let mut catalog = base_catalog();
+        catalog
+            .behaviors
+            .get_mut("existing-enabled")
+            .expect("fixture behavior")
+            .protected = true;
+
+        let mut edit = create_doc(PersonaOp::Edit);
+        edit.op_raw = "edit".to_string();
+        edit.behavior_id = Some("existing-enabled".to_string());
+        assert!(matches!(
+            decide_persona_request(&edit, &catalog),
+            PersonaVerdict::Reject(detail) if detail.contains("protected configurator")
+        ));
+
+        let mut disable = create_doc(PersonaOp::Disable);
+        disable.op_raw = "disable".to_string();
+        disable.behavior_id = Some("existing-enabled".to_string());
+        disable.make_default = false;
+        assert!(matches!(
+            decide_persona_request(&disable, &catalog),
+            PersonaVerdict::Reject(detail) if detail.contains("protected configurator")
+        ));
     }
 
     #[tokio::test]
@@ -1007,14 +1056,20 @@ mod tests {
         let mut existing = BTreeMap::new();
         existing.insert(
             "did:key:agent:research-assistant".to_string(),
-            BehaviorRef { enabled: true },
+            BehaviorRef {
+                enabled: true,
+                protected: false,
+            },
         );
         let id = derive_behavior_id("did:key:agent", "Research Assistant", &existing);
         assert_eq!(id, "did:key:agent:research-assistant-2");
 
         existing.insert(
             "did:key:agent:research-assistant-2".to_string(),
-            BehaviorRef { enabled: true },
+            BehaviorRef {
+                enabled: true,
+                protected: false,
+            },
         );
         let id = derive_behavior_id("did:key:agent", "Research Assistant", &existing);
         assert_eq!(id, "did:key:agent:research-assistant-3");

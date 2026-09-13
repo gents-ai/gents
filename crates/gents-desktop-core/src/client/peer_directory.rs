@@ -402,6 +402,16 @@ impl PeerDirectory {
         record.enrollment_admin_did = Some(admin_did.to_string());
         record.enrollment_authorization_sequence = Some(authorization_sequence);
         record.enrollment_authorization_expires_at = Some(authorization_expires_at.to_string());
+        if let Some(managed) = managed.as_ref() {
+            // A transport-peer rotation can leave both the previous enrollment
+            // row and the managed bootstrap row present. Enrollment remains
+            // the route authority, while the co-hosted bootstrap row remains
+            // the authority for local operator access.
+            record.graphql.clone_from(&managed.graphql);
+            record
+                .local_agent_home
+                .clone_from(&managed.local_agent_home);
+        }
         if managed.is_none() && !record.is_managed_runtime() {
             record.graphql = None;
             record.local_agent_home = None;
@@ -411,6 +421,14 @@ impl PeerDirectory {
             candidate
                 .peers
                 .retain(|candidate| candidate.peer_id != managed.peer_id);
+        }
+        if let Some(existing) = existing
+            .as_ref()
+            .filter(|existing| existing.peer_id != peer_id)
+        {
+            candidate
+                .peers
+                .retain(|candidate| candidate.peer_id != existing.peer_id);
         }
 
         // Status polling observes the same signed authorization on every
@@ -943,6 +961,69 @@ mod tests {
 
         let reloaded = load_peer_records(&path).await.unwrap();
         assert_eq!(reloaded, vec![enrolled]);
+    }
+
+    #[tokio::test]
+    async fn managed_runtime_peer_rotation_keeps_one_route_and_operator_access() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        directory
+            .upsert_enrollment_peer(
+                "old-transport-peer",
+                "Mandrake",
+                "iroh://old-ticket",
+                "did:key:agent",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                1,
+                "2099-09-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        directory.peers.push(PeerRecord::local_standard(
+            "Mandrake",
+            "iroh://bootstrap-ticket",
+            "did:key:agent",
+            "http://127.0.0.1:9291/api/v0/graphql",
+        ));
+        let managed = directory
+            .peers
+            .last_mut()
+            .expect("managed bootstrap row was inserted");
+        managed.local_agent_home = Some("/tmp/managed-agent".to_string());
+
+        let rotated = directory
+            .upsert_enrollment_peer(
+                "new-transport-peer",
+                "Ignored enrollment label",
+                "iroh://new-ticket",
+                "did:key:agent",
+                "network-a",
+                "request-b",
+                "digest-b",
+                "did:key:admin",
+                2,
+                "2099-10-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(directory.records(), &[rotated.clone()]);
+        assert_eq!(rotated.peer_id, "new-transport-peer");
+        assert!(rotated.is_enrollment());
+        assert!(rotated.is_managed_runtime());
+        assert_eq!(
+            rotated.operator_graphql(),
+            Some("http://127.0.0.1:9291/api/v0/graphql")
+        );
+        assert_eq!(
+            rotated.local_agent_home.as_deref(),
+            Some("/tmp/managed-agent")
+        );
+        assert_eq!(load_peer_records(&path).await.unwrap(), vec![rotated]);
     }
 
     #[tokio::test]

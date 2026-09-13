@@ -542,6 +542,7 @@ async fn load_catalog_view_from_node(
             AgentBehavior(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
                 behavior_id
                 enabled
+                tags
             }}
         }}"#
     );
@@ -592,6 +593,9 @@ async fn load_catalog_view_from_node(
                     behavior_id,
                     BehaviorRef {
                         enabled: row.enabled.unwrap_or(true),
+                        protected: row.tags.as_deref().unwrap_or_default().iter().any(|tag| {
+                            tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+                        }),
                     },
                 ))
             })
@@ -785,6 +789,8 @@ struct AgentBehaviorCatalogRow {
     behavior_id: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -846,6 +852,33 @@ mod tests {
         assert!(
             matches!(decide_persona_request(&request, &catalog), PersonaVerdict::Reject(detail) if detail.contains("foreign-only"))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn catalog_marks_the_setup_steward_as_protected() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = build_apply_node(&tempdir).await;
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentBehavior(input: {{
+                    agent_did: "did:key:agent",
+                    behavior_id: "setup",
+                    display_name: "Setup",
+                    inference_profile_id: "profile-1",
+                    enabled: true,
+                    tags: ["{}"]
+                }}) {{ _docID }}
+            }}"#,
+            crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+        );
+        ensure_no_errors(&node.execute(&mutation).await, "seed protected Setup")?;
+
+        let catalog = load_catalog_view_from_node(&node, "did:key:agent", None).await?;
+        assert!(catalog
+            .behaviors
+            .get("setup")
+            .is_some_and(|behavior| behavior.protected));
         Ok(())
     }
 
@@ -1243,6 +1276,10 @@ mod tests {
                 behavior.behavior_id.clone(),
                 BehaviorRef {
                     enabled: behavior.enabled,
+                    protected: behavior
+                        .tags
+                        .iter()
+                        .any(|tag| tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG),
                 },
             );
         }
