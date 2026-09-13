@@ -83,6 +83,13 @@ export function createDesktopProjectionController({
             // snapshot allowed dispose() to discard the only preview refresh.
             await refreshSnapshot();
           }
+          // The empty composer chooses its behavior from the fleet/config
+          // projection. Refresh it when leaving a session so an operator-side
+          // default change made during the completed turn is visible before
+          // the next session is created.
+          if (!sessionId && !(work & SNAPSHOT)) {
+            await refreshSnapshot();
+          }
         } else if (sessionId && work & SESSION_DELTA) {
           if (!(await refreshSessionLiveDelta())) {
             enqueue(SESSION);

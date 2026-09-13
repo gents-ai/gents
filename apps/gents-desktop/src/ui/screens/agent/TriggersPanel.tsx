@@ -1,8 +1,15 @@
 import type { DeploymentView, TriggerView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { ChoiceRow, FactRow, SwitchRow, TextRow } from "./editors";
-import { newId, useDraft } from "./draft";
+import {
+  AreaRow,
+  ChoiceRow,
+  DraftActions,
+  FactRow,
+  SwitchRow,
+  TextRow,
+} from "./editors";
+import { fromLinesOrNull, newId, toLines, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 
@@ -23,30 +30,44 @@ function Editor({
   };
   const saved = {
     displayName: cfg.display_name ?? "",
+    description: cfg.description ?? "",
     taskId: cfg.task_id,
     enabled: cfg.enabled ?? true,
+    concurrency: cfg.concurrency ?? "",
     sourceKind: cfg.source.kind,
     sourceId:
       cfg.source.kind === "schedule"
         ? cfg.source.schedule_id
         : cfg.source.event_source_id,
+    tags: toLines(cfg.tags ?? []),
   };
-  const d = useDraft(saved, (next) =>
-    shell.applyConfig((api) =>
+  const d = useDraft(saved, async (next) => {
+    if (!deployment.tasks.some((task) => task.taskId === next.taskId))
+      throw new Error("Choose an existing task");
+    const sourceExists =
+      next.sourceKind === "schedule"
+        ? deployment.schedules.some((row) => row.schedule_id === next.sourceId)
+        : deployment.eventSources.some((row) => row.event_source_id === next.sourceId);
+    if (!sourceExists) throw new Error("Choose an existing source");
+    await shell.applyConfig((api) =>
       api.saveTriggerConfig({
         document: {
           ...cfg,
-          display_name: next.displayName || null,
+          display_name: next.displayName.trim() || null,
+          description: next.description.trim() || null,
           task_id: next.taskId,
           enabled: next.enabled,
+          concurrency: (next.concurrency || null) as
+            "parallel" | "serial" | "latest_only" | null,
           source:
             next.sourceKind === "schedule"
               ? { kind: "schedule", schedule_id: next.sourceId }
               : { kind: "event", event_source_id: next.sourceId },
+          tags: fromLinesOrNull(next.tags),
         },
       }),
-    ),
-  );
+    );
+  });
   const id = (f: string) => `${cfg.trigger_id}-${f}`;
   return (
     <>
@@ -62,6 +83,14 @@ function Editor({
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
+        <AreaRow
+          id={id("description")}
+          label="Description"
+          value={d.draft.description}
+          onChange={(v) => d.set("description", v)}
+          onCommit={d.commit}
+          rows={2}
+        />
         <ChoiceRow
           id={id("task")}
           label="Task"
@@ -76,7 +105,16 @@ function Editor({
           id={id("kind")}
           label="Source"
           value={d.draft.sourceKind}
-          onChange={(v) => d.choose("sourceKind", v as "schedule" | "event")}
+          onChange={(v) => {
+            const kind = v as "schedule" | "event";
+            d.set("sourceKind", kind);
+            d.set(
+              "sourceId",
+              kind === "schedule"
+                ? (deployment.schedules[0]?.schedule_id ?? "")
+                : (deployment.eventSources[0]?.event_source_id ?? ""),
+            );
+          }}
           items={[
             { value: "schedule", label: "Schedule" },
             { value: "event", label: "Event source" },
@@ -105,7 +143,37 @@ function Editor({
           checked={d.draft.enabled}
           onChange={(v) => d.choose("enabled", v)}
         />
+        <ChoiceRow
+          id={id("concurrency")}
+          label="Concurrency"
+          value={d.draft.concurrency}
+          onChange={(v) => d.choose("concurrency", v)}
+          items={[
+            { value: "parallel", label: "Parallel" },
+            { value: "serial", label: "Serial" },
+            { value: "latest_only", label: "Latest only" },
+          ]}
+          none="Default (parallel)"
+        />
       </Group>
+      <Group title="Metadata">
+        <AreaRow
+          id={id("tags")}
+          label="Tags"
+          description="One per line."
+          value={d.draft.tags}
+          onChange={(v) => d.set("tags", v)}
+          onCommit={d.commit}
+          rows={3}
+        />
+      </Group>
+      <DraftActions
+        dirty={d.dirty}
+        saving={d.saving}
+        error={d.error}
+        onSave={d.save}
+        onCancel={d.reset}
+      />
       <DeleteButton
         label={cfg.display_name ?? cfg.trigger_id}
         base={base}
@@ -160,7 +228,7 @@ export function TriggersPanel({
               display_name: "New trigger",
               task_id: task.taskId,
               source: { kind: "schedule", schedule_id: schedule.schedule_id },
-              enabled: true,
+              enabled: false,
             },
           }),
         );

@@ -197,6 +197,10 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_behavior_delete", {
         request,
       }),
+    deleteContextConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_context_delete", {
+        request,
+      }),
     saveBackendConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_backend_save", { request }),
     probeInferenceEndpoint: (endpoint) =>

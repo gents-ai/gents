@@ -4,8 +4,8 @@
 import type { DeploymentView, SkillView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { AreaRow, FactRow, SwitchRow, TextRow } from "./editors";
-import { fromLines, toLines, useDraft } from "./draft";
+import { AreaRow, DraftActions, FactRow, SwitchRow, TextRow } from "./editors";
+import { fromLinesOrNull, toLines, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { newId } from "./draft";
 import { Group } from "./rows";
@@ -31,25 +31,36 @@ function SkillEditor({
     description: skill.description ?? "",
     instructions: skill.instructions ?? "",
     toolRefs: toLines(skill.toolRefs),
+    interfaceJson: skill.interfaceJson ?? "",
+    tags: toLines(skill.tags),
   };
-  const d = useDraft(saved, (next) =>
-    shell.applyConfig((api) =>
+  const d = useDraft(saved, async (next) => {
+    if (!next.name.trim()) throw new Error("Name is required");
+    if (next.interfaceJson.trim()) {
+      try {
+        JSON.parse(next.interfaceJson);
+      } catch {
+        throw new Error("Interface JSON must be valid JSON");
+      }
+    }
+    await shell.applyConfig((api) =>
       api.saveSkillConfig({
         document: {
           skill_id: skill.skillId,
           agent_did: deployment.agentDid,
-          name: next.name.trim() || skill.skillId,
+          name: next.name.trim(),
           description: next.description || null,
           instructions: next.instructions,
-          tool_refs: fromLines(next.toolRefs),
+          tool_refs: fromLinesOrNull(next.toolRefs),
           display_name: next.displayName || null,
+          interface_json: next.interfaceJson || null,
           enabled: next.enabled,
           created_at: skill.createdAt,
-          tags: null,
+          tags: fromLinesOrNull(next.tags),
         },
       }),
-    ),
-  );
+    );
+  });
   const id = (f: string) => `${skill.skillId}-${f}`;
   return (
     <>
@@ -107,7 +118,33 @@ function SkillEditor({
           rows={3}
           mono
         />
+        <AreaRow
+          id={id("interface")}
+          label="Interface JSON"
+          description="Optional structured interface metadata. Must be valid JSON."
+          value={d.draft.interfaceJson}
+          onChange={(v) => d.set("interfaceJson", v)}
+          onCommit={d.commit}
+          rows={4}
+          mono
+        />
+        <AreaRow
+          id={id("tags")}
+          label="Tags"
+          description="One optional discovery label per line."
+          value={d.draft.tags}
+          onChange={(v) => d.set("tags", v)}
+          onCommit={d.commit}
+          rows={2}
+        />
       </Group>
+      <DraftActions
+        dirty={d.dirty}
+        saving={d.saving}
+        error={d.error}
+        onSave={d.save}
+        onCancel={d.reset}
+      />
       <DeleteButton
         label={skill.name ?? skill.skillId}
         base={base}
@@ -159,9 +196,9 @@ export function SkillsPanel({
               name: "New skill",
               description: null,
               instructions: "",
-              tool_refs: [],
+              tool_refs: null,
               display_name: null,
-              enabled: true,
+              enabled: false,
             },
           }),
         );

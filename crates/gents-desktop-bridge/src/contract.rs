@@ -7,6 +7,7 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
+// 7.3: additive — Context delete plus backend tags and Skill interface/tags.
 // 7.2: additive — Claude subscription login/cancel and desktop://claude-login-url.
 // 7.1: additive — TaskView carries canonical task hooks and tags.
 // 7.0: breaking — canonical session and configuration vocabulary replaces
@@ -55,13 +56,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "7.2";
+pub const CONTRACT_VERSION: &str = "7.3";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "7f69a350858dc1eb2ee4fd69c0a9d1b772f0f33326cb3bbbd15018be107413f2";
+    "5f4165bb235d9cd3f74352b18ee5ce8281ec00e85fee41f160fd505f8e33ae65";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -182,6 +183,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_tools_delete", "config-write"),
         ("desktop_tool_service_delete", "config-write"),
         ("desktop_behavior_delete", "config-write"),
+        ("desktop_context_delete", "config-write"),
         ("desktop_backend_save", "config-write"),
         ("desktop_inference_profile_save", "config-write"),
         ("desktop_tools_save", "config-write"),
@@ -635,6 +637,7 @@ mod tests {
             ("desktop_tools_delete", "mutate"),
             ("desktop_tool_service_delete", "mutate"),
             ("desktop_behavior_delete", "mutate"),
+            ("desktop_context_delete", "mutate"),
             ("desktop_backend_save", "mutate"),
             ("desktop_inference_profile_save", "mutate"),
             ("desktop_tools_save", "mutate"),

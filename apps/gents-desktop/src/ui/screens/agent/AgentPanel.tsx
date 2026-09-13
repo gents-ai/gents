@@ -1,22 +1,8 @@
-/* The agent itself (remounted by its parent whenever the saved record
-   changes, so the draft starts from what is saved): what a person can
-   change (display name, default behaviour, enabled) through
-   AgentConfigSaveRequest, and the identity facts the bridge reports.
-   Every change saves as it is made: text on blur or Enter, choices at
-   once; a toast confirms. */
-import { useState } from "react";
+/* The agent itself: editable principal fields and identity/runtime facts. */
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
-import { Input } from "@gents/ui/components/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@gents/ui/components/select";
-import { Switch } from "@gents/ui/components/switch";
-import { toast } from "sonner";
 import type { Shell } from "@/hooks/useShell";
+import { AreaRow, ChoiceRow, DraftActions, SwitchRow, TextRow } from "./editors";
+import { fromLinesOrNull, toLines, useDraft } from "./draft";
 import { Fact, Group, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
 
@@ -28,102 +14,78 @@ export function AgentPanel({
   deployment: DeploymentView;
 }) {
   const agent = deployment.agentPrincipal;
-  const [displayName, setDisplayName] = useState(agent.displayName ?? "");
   const behaviours = deployment.behaviors.map((b) => ({
     value: b.behaviorId,
     label: b.displayName,
   }));
-
-  const save = async (
-    patch: Partial<{
-      displayName: string;
-      defaultBehaviorId: string;
-      enabled: boolean;
-    }>,
-  ) => {
-    const next = {
+  const d = useDraft(
+    {
       displayName: agent.displayName ?? "",
       defaultBehaviorId: agent.defaultBehaviorId ?? "",
       enabled: agent.enabled ?? true,
-      ...patch,
-    };
-    try {
+      tags: toLines(deployment.principalConfig?.tags ?? []),
+    },
+    async (next) => {
+      if (!next.displayName.trim()) throw new Error("Display name is required");
+      if (!next.defaultBehaviorId) throw new Error("Default behaviour is required");
       await shell.saveAgentConfig({
         document: {
           agent_did: agent.agentDid,
-          display_name: next.displayName,
+          display_name: next.displayName.trim(),
           default_behavior_id: next.defaultBehaviorId,
           enabled: next.enabled,
           created_at: agent.createdAt,
           created_by: agent.createdBy,
-          tags: null,
+          tags: fromLinesOrNull(next.tags),
         },
       });
-      toast("Saved");
-    } catch (e) {
-      toast(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
-  const commitName = () => {
-    const name = displayName.trim();
-    if (name && name !== (agent.displayName ?? "")) void save({ displayName: name });
-  };
+    },
+  );
 
   return (
     <div>
       <Group title="Agent details">
-        <Row
+        <TextRow
+          id="agent-name"
           label="Display name"
           description="How this agent is named across the desktop."
-          htmlFor="agent-name"
-        >
-          <Input
-            id="agent-name"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            onBlur={commitName}
-            onKeyDown={(e) =>
-              e.key === "Enter" && (e.target as HTMLInputElement).blur()
-            }
-            className="w-72 max-md:w-full"
-          />
-        </Row>
-        <Row
+          value={d.draft.displayName}
+          onChange={(v) => d.set("displayName", v)}
+          onCommit={d.commit}
+          onEnter={d.onEnter}
+        />
+        <ChoiceRow
+          id="agent-default"
           label="Default behaviour"
           description="Used when a session does not choose one."
-          htmlFor="agent-default"
-        >
-          <Select
-            items={behaviours}
-            value={agent.defaultBehaviorId ?? ""}
-            onValueChange={(v) =>
-              v && v !== agent.defaultBehaviorId && save({ defaultBehaviorId: v })
-            }
-          >
-            <SelectTrigger id="agent-default" className="w-72 max-md:w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {behaviours.map((b) => (
-                <SelectItem key={b.value} value={b.value}>
-                  {b.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Row>
-        <Row
+          value={d.draft.defaultBehaviorId}
+          onChange={(v) => d.choose("defaultBehaviorId", v)}
+          items={behaviours}
+        />
+        <SwitchRow
+          id="agent-enabled"
           label="Enabled"
           description="A disabled agent accepts no requests."
-          htmlFor="agent-enabled"
-        >
-          <Switch
-            id="agent-enabled"
-            checked={agent.enabled ?? true}
-            onCheckedChange={(v) => save({ enabled: v })}
-          />
-        </Row>
+          checked={d.draft.enabled}
+          onChange={(v) => d.choose("enabled", v)}
+        />
+        <AreaRow
+          id="agent-tags"
+          label="Tags"
+          description="One optional discovery label per line."
+          value={d.draft.tags}
+          onChange={(v) => d.set("tags", v)}
+          onCommit={d.commit}
+          rows={2}
+        />
       </Group>
+      <DraftActions
+        dirty={d.dirty}
+        saving={d.saving}
+        error={d.error}
+        onSave={d.save}
+        onCancel={d.reset}
+      />
 
       <Group title="Identity">
         <Row

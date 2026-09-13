@@ -177,12 +177,15 @@ async fn run_detached_client_start<R: Runtime>(
     paths: gents_desktop_core::client::DesktopPaths,
     progress_tx: watch::Sender<ClientStartProgress>,
 ) {
-    let start_result = start_client_core_async(paths).await;
-
     let state = app.state::<DesktopAppState>();
-    // Serialize install against shutdown so we never leave an untracked open DB
-    // or install over a concurrent tear-down without coordination.
+    // Own the lifecycle before opening the peer directory and embedded node,
+    // not only while installing the result. Managed-runtime restart refreshes
+    // its ephemeral P2P endpoint under this same lock. Without covering the
+    // open, that refresh can observe no installed core while the detached
+    // starter already holds the peer-directory lease, then fail trying to use
+    // the offline writer for the same directory.
     let _lifecycle_guard = state.client_lifecycle.lock().await;
+    let start_result = start_client_core_async(paths).await;
 
     match start_result {
         Ok(core) => {

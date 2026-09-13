@@ -1,8 +1,15 @@
 import type { DeploymentView, Tools } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { ChoiceRow, FactRow, TextRow } from "./editors";
-import { newId, useDraft } from "./draft";
+import {
+  AreaRow,
+  ChoiceRow,
+  DraftActions,
+  FactRow,
+  SwitchRow,
+  TextRow,
+} from "./editors";
+import { newId, optionalAbsolutePath, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 
@@ -25,33 +32,77 @@ function Editor({
     root: tools.host?.root ?? "",
     files: (tools.host?.files?.mode ?? "Off") as "Off" | "ReadOnly" | "ReadWrite",
     bash: (tools.host?.bash?.mode ?? "Off") as "Off" | "ReadOnly" | "Unrestricted",
+    background: tools.host?.bash?.background_enabled ?? false,
+    advanced: JSON.stringify(
+      {
+        host: tools.host ?? null,
+        remote: tools.remote ?? null,
+        subagents: tools.subagents ?? null,
+        built_ins: tools.built_ins ?? null,
+        datastore: tools.datastore ?? null,
+        integrations: tools.integrations ?? null,
+        self_config: tools.self_config ?? null,
+        tags: tools.tags ?? null,
+      },
+      null,
+      2,
+    ),
   };
-  const d = useDraft(saved, (next) =>
-    shell.applyConfig((api) =>
+  const d = useDraft(saved, async (next) => {
+    const root = optionalAbsolutePath("Workspace root", next.root);
+    let advanced: Partial<Tools>;
+    try {
+      advanced = JSON.parse(next.advanced) as Partial<Tools>;
+    } catch {
+      throw new Error("Advanced configuration must be valid JSON");
+    }
+    if (!advanced || typeof advanced !== "object" || Array.isArray(advanced))
+      throw new Error("Advanced configuration must be a JSON object");
+    const allowed = new Set([
+      "host",
+      "remote",
+      "subagents",
+      "built_ins",
+      "datastore",
+      "integrations",
+      "self_config",
+      "tags",
+    ]);
+    const unknown = Object.keys(advanced).find((key) => !allowed.has(key));
+    if (unknown) throw new Error(`Unknown advanced configuration field: ${unknown}`);
+    if ("tools_id" in advanced || "agent_did" in advanced || "display_name" in advanced)
+      throw new Error("IDs and display name are edited in their dedicated fields");
+    const advancedHost =
+      advanced.host && typeof advanced.host === "object" ? advanced.host : {};
+    await shell.applyConfig((api) =>
       api.saveToolsConfig({
         document: {
           ...tools,
-          display_name: next.displayName || null,
+          ...advanced,
+          tools_id: tools.tools_id,
+          agent_did: deployment.agentDid,
+          display_name: next.displayName.trim() || null,
           host: {
-            ...(tools.host ?? {}),
-            root: next.root || null,
+            ...advancedHost,
+            root,
             files: {
+              ...(advancedHost.files ?? {}),
               mode: next.files as NonNullable<
                 NonNullable<Tools["host"]>["files"]
               >["mode"],
-              timeout_secs: null,
             },
             bash: {
-              ...(tools.host?.bash ?? {}),
+              ...(advancedHost.bash ?? {}),
               mode: next.bash as NonNullable<
                 NonNullable<Tools["host"]>["bash"]
               >["mode"],
+              background_enabled: next.background,
             },
           },
         },
       }),
-    ),
-  );
+    );
+  });
   const id = (f: string) => `${tools.tools_id}-${f}`;
   return (
     <>
@@ -97,7 +148,33 @@ function Editor({
             { value: "Unrestricted", label: "Unrestricted" },
           ]}
         />
+        <SwitchRow
+          id={id("background")}
+          label="Background processes"
+          description="Permit background execution for the selected bash capability."
+          checked={d.draft.background}
+          onChange={(v) => d.choose("background", v)}
+        />
       </Group>
+      <Group title="Advanced tool groups">
+        <AreaRow
+          id={id("advanced")}
+          label="Canonical JSON"
+          description="Host limits, MCP grants, subagents, built-ins, datastore, integrations, self-config, and tags. Invalid or unknown fields are rejected before persistence."
+          value={d.draft.advanced}
+          onChange={(v) => d.set("advanced", v)}
+          onCommit={d.commit}
+          rows={18}
+          mono
+        />
+      </Group>
+      <DraftActions
+        dirty={d.dirty}
+        saving={d.saving}
+        error={d.error}
+        onSave={d.save}
+        onCancel={d.reset}
+      />
       <DeleteButton
         label={tools.display_name ?? tools.tools_id}
         base={base}

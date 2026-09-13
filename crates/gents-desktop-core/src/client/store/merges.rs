@@ -137,6 +137,114 @@ impl ClientStore {
             |row| row.agent_did.as_str(),
         );
         replace_agent_rows_with_sources(
+            &mut rows.tasks,
+            &mut rows.task_source_agent_dids,
+            remote.tasks,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.schedules,
+            &mut rows.schedule_source_agent_dids,
+            remote.schedules,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        let incoming_trigger_ids = remote
+            .triggers
+            .iter()
+            .filter(|row| row.agent_did == agent_did)
+            .map(|row| row.trigger_id.clone())
+            .collect::<HashSet<_>>();
+        retain_rows_and_sources(
+            &mut rows.schedule_observations,
+            &mut rows.schedule_observation_source_agent_dids,
+            |_row, source| source != Some(agent_did),
+        );
+        let schedule_observations = remote
+            .schedule_observations
+            .into_iter()
+            .filter(|row| incoming_trigger_ids.contains(&row.trigger_id))
+            .collect::<Vec<_>>();
+        rows.schedule_observation_source_agent_dids
+            .extend(std::iter::repeat_n(
+                Some(agent_did.to_string()),
+                schedule_observations.len(),
+            ));
+        rows.schedule_observations.extend(schedule_observations);
+        replace_agent_rows_with_sources(
+            &mut rows.triggers,
+            &mut rows.trigger_source_agent_dids,
+            remote.triggers,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        retain_rows_and_sources(
+            &mut rows.trigger_observations,
+            &mut rows.trigger_observation_source_agent_dids,
+            |_row, source| source != Some(agent_did),
+        );
+        let trigger_observations = remote
+            .trigger_observations
+            .into_iter()
+            .filter(|row| incoming_trigger_ids.contains(&row.trigger_id))
+            .collect::<Vec<_>>();
+        rows.trigger_observation_source_agent_dids
+            .extend(std::iter::repeat_n(
+                Some(agent_did.to_string()),
+                trigger_observations.len(),
+            ));
+        rows.trigger_observations.extend(trigger_observations);
+        replace_agent_rows_with_sources(
+            &mut rows.skills,
+            &mut rows.skill_source_agent_dids,
+            remote.skills,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.compactions,
+            &mut rows.compaction_source_agent_dids,
+            remote.compactions,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.tool_service_registries,
+            &mut rows.tool_service_registry_source_agent_dids,
+            remote.tool_service_registries,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.event_sources,
+            &mut rows.event_source_source_agent_dids,
+            remote.event_sources,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.subagent_targets,
+            &mut rows.subagent_target_source_agent_dids,
+            remote.subagent_targets,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.datastore_tool_surfaces,
+            &mut rows.datastore_tool_surface_source_agent_dids,
+            remote.datastore_tool_surfaces,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.chain_key_bindings,
+            &mut rows.chain_key_binding_source_agent_dids,
+            remote.chain_key_bindings,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
             &mut rows.sessions,
             &mut rows.session_source_agent_dids,
             remote.sessions,
@@ -712,7 +820,7 @@ impl ClientStore {
 mod overlay_tests {
     use super::*;
     use gents::document_config::{
-        AgentBehavior, AgentPrincipal, InferenceBackend, InferenceBackendObservation,
+        AgentBehavior, AgentPrincipal, InferenceBackend, InferenceBackendObservation, Task,
     };
     use gents_protocol::row::{AgentBehaviorReadinessRow, AgentRuntimeRow};
 
@@ -728,6 +836,7 @@ mod overlay_tests {
             behavior_readiness: vec![readiness("did:test:local", "desktop")],
             inference_backends: vec![backend("did:test:local", "Desktop backend")],
             backend_observations: vec![backend_observation("stale")],
+            tasks: vec![task("did:test:local", "stale-task", false)],
             ..ClientStoreRows::default()
         });
         let remote = ClientStore::from_rows(ClientStoreRows {
@@ -737,6 +846,7 @@ mod overlay_tests {
             behavior_readiness: vec![readiness("did:test:local", "agent")],
             inference_backends: vec![backend("did:test:local", "Agent backend")],
             backend_observations: vec![backend_observation("healthy")],
+            tasks: vec![task("did:test:local", "canonical-task", true)],
             ..ClientStoreRows::default()
         });
         let overlayed = local.overlay_agent_operator_config("did:test:local", &remote);
@@ -776,6 +886,13 @@ mod overlay_tests {
             overlayed.backend_observations[0].probe_status.as_deref(),
             Some("healthy")
         );
+        assert_eq!(overlayed.tasks.len(), 1);
+        assert_eq!(overlayed.tasks[0].task_id, "canonical-task");
+        assert!(overlayed.tasks[0].enabled);
+        assert_eq!(
+            overlayed.task_source_agent_dids[0].as_deref(),
+            Some("did:test:local")
+        );
     }
 
     fn principal(agent_did: &str, display_name: &str) -> AgentPrincipal {
@@ -799,6 +916,17 @@ mod overlay_tests {
             "inference_profile_id": format!("{agent_did}:profile"),
         }))
         .expect("behavior")
+    }
+
+    fn task(agent_did: &str, task_id: &str, enabled: bool) -> Task {
+        serde_json::from_value(serde_json::json!({
+            "agent_did": agent_did,
+            "task_id": task_id,
+            "behavior_id": "behavior",
+            "prompt_template": "Do the thing",
+            "enabled": enabled,
+        }))
+        .expect("task")
     }
 
     fn runtime(agent_did: &str, reconcile_phase: &str) -> AgentRuntimeRow {

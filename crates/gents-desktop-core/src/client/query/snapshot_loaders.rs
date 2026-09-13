@@ -138,6 +138,80 @@ async fn load_operator_config(access: &gents::config_client::ConfigAccess) -> Re
             &format!("query {{ InferenceExecution {{ {INFERENCE_EXECUTION_FIELDS} }} }}"),
         )
         .await?,
+        tasks: load_rows_from_access(
+            access,
+            TASK_NAME,
+            &format!("query {{ {TASK_NAME} {{ {TASK_FIELDS} }} }}"),
+        )
+        .await?,
+        schedules: load_rows_from_access(
+            access,
+            SCHEDULE_NAME,
+            &format!("query {{ {SCHEDULE_NAME} {{ {SCHEDULE_FIELDS} }} }}"),
+        )
+        .await?,
+        schedule_observations: load_rows_from_access(
+            access,
+            TRIGGER_NAME,
+            &format!("query {{ {TRIGGER_NAME} {{ {SCHEDULE_OBSERVATION_FIELDS} }} }}"),
+        )
+        .await?,
+        triggers: load_rows_from_access(
+            access,
+            TRIGGER_NAME,
+            &format!("query {{ {TRIGGER_NAME} {{ {TRIGGER_FIELDS} }} }}"),
+        )
+        .await?,
+        trigger_observations: load_rows_from_access(
+            access,
+            TRIGGER_NAME,
+            &format!("query {{ {TRIGGER_NAME} {{ {TRIGGER_OBSERVATION_FIELDS} }} }}"),
+        )
+        .await?,
+        skills: load_rows_from_access(
+            access,
+            SKILL_NAME,
+            &format!("query {{ {SKILL_NAME} {{ {SKILL_FIELDS} }} }}"),
+        )
+        .await?,
+        compactions: load_rows_from_access(
+            access,
+            "CompactionConfig",
+            &format!("query {{ CompactionConfig {{ {COMPACTION_CONFIG_FIELDS} }} }}"),
+        )
+        .await?,
+        tool_service_registries: load_rows_from_access(
+            access,
+            TOOL_SERVICE_REGISTRY_NAME,
+            &format!(
+                "query {{ {TOOL_SERVICE_REGISTRY_NAME} {{ {TOOL_SERVICE_REGISTRY_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        event_sources: load_rows_from_access(
+            access,
+            "EventSource",
+            &format!("query {{ EventSource {{ {EVENT_SOURCE_FIELDS} }} }}"),
+        )
+        .await?,
+        subagent_targets: load_rows_from_access(
+            access,
+            "SubagentTarget",
+            &format!("query {{ SubagentTarget {{ {SUBAGENT_TARGET_FIELDS} }} }}"),
+        )
+        .await?,
+        datastore_tool_surfaces: load_rows_from_access(
+            access,
+            "DatastoreToolSurface",
+            &format!("query {{ DatastoreToolSurface {{ {DATASTORE_TOOL_SURFACE_FIELDS} }} }}"),
+        )
+        .await?,
+        chain_key_bindings: load_rows_from_access(
+            access,
+            "ChainKeyBinding",
+            &format!("query {{ ChainKeyBinding {{ {CHAIN_KEY_BINDING_FIELDS} }} }}"),
+        )
+        .await?,
         sessions: load_rows_from_access(
             access,
             AGENT_SESSION_NAME,

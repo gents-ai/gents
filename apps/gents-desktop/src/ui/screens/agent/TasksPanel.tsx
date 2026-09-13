@@ -7,8 +7,16 @@ import { Button } from "@gents/ui/components/button";
 import { Textarea } from "@gents/ui/components/textarea";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { AreaRow, ChoiceRow, FactRow, NumberRow, SwitchRow, TextRow } from "./editors";
-import { intOrNull, str, useDraft } from "./draft";
+import {
+  AreaRow,
+  ChoiceRow,
+  DraftActions,
+  FactRow,
+  NumberRow,
+  SwitchRow,
+  TextRow,
+} from "./editors";
+import { fromLinesOrNull, optionalInteger, str, toLines, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { newId } from "./draft";
 import { Group, Row } from "./rows";
@@ -39,10 +47,48 @@ function Editor({
     goalObjectiveTemplate: task.goalObjectiveTemplate ?? "",
     goalTokenBudget: str(task.goalTokenBudget),
     outputSchemaRef: task.outputSchemaRef ?? "",
+    hooks: JSON.stringify(task.hooks ?? [], null, 2),
+    tags: toLines(task.tags ?? []),
   };
   const d = useDraft(saved, (n) => {
+    if (!deployment.behaviors.some((behavior) => behavior.behaviorId === n.behaviorId))
+      return Promise.reject(new Error("Choose an existing behaviour"));
+    if (!n.promptTemplate.trim())
+      return Promise.reject(new Error("Prompt template is required"));
     if (n.goalTokenBudget.trim() && !n.goalObjectiveTemplate.trim()) {
       return Promise.reject(new Error("A goal budget needs a goal objective"));
+    }
+    let hooks: typeof task.hooks;
+    try {
+      hooks = JSON.parse(n.hooks) as typeof task.hooks;
+      if (!Array.isArray(hooks)) throw new Error();
+    } catch {
+      return Promise.reject(new Error("Hooks must be a JSON array"));
+    }
+    const hookIds = new Set<string>();
+    for (const hook of hooks) {
+      if (!hook || typeof hook !== "object")
+        return Promise.reject(new Error("Every hook must be a JSON object"));
+      if (!hook.hook_id?.trim())
+        return Promise.reject(new Error("Every hook needs a hook_id"));
+      if (hookIds.has(hook.hook_id))
+        return Promise.reject(new Error(`Duplicate hook ID: ${hook.hook_id}`));
+      hookIds.add(hook.hook_id);
+      if (!["before", "after_success", "after_failure", "finally"].includes(hook.phase))
+        return Promise.reject(new Error(`Invalid hook phase: ${String(hook.phase)}`));
+      if (
+        !Array.isArray(hook.command) ||
+        !hook.command.length ||
+        !hook.command[0]?.trim()
+      )
+        return Promise.reject(new Error(`Hook ${hook.hook_id} needs a command`));
+      if (
+        hook.timeout_secs != null &&
+        (!Number.isInteger(hook.timeout_secs) || hook.timeout_secs < 1)
+      )
+        return Promise.reject(
+          new Error(`Hook ${hook.hook_id} timeout must be a positive whole number`),
+        );
     }
     return shell.applyConfig((api) =>
       api.saveTaskConfig({
@@ -54,17 +100,20 @@ function Editor({
           behavior_id: n.behaviorId,
           prompt_template: n.promptTemplate,
           goal_objective_template: n.goalObjectiveTemplate || null,
-          goal_token_budget: intOrNull(n.goalTokenBudget),
+          goal_token_budget: optionalInteger("Goal token budget", n.goalTokenBudget, {
+            min: 1,
+          }),
           enabled: n.enabled,
           output_schema_ref: n.outputSchemaRef || null,
-          hooks: task.hooks,
-          tags: task.tags,
+          hooks: hooks.length ? hooks : null,
+          tags: fromLinesOrNull(n.tags),
         },
       }),
     );
   });
   const [args, setArgs] = useState("{}");
   const [lastRun, setLastRun] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
   const id = (f: string) => `${task.taskId}-${f}`;
   const behaviours = deployment.behaviors.map((b) => ({
     value: b.behaviorId,
@@ -80,10 +129,19 @@ function Editor({
       toast("Args must be a JSON object");
       return;
     }
-    const r = await shell.api.runTask({ taskId: task.taskId, args: parsed });
-    setLastRun(r.requestId);
-    toast(`Task started · ${r.requestId}`);
-    void shell.refreshSnapshot();
+    setRunning(true);
+    try {
+      const r = await shell.api.runTask({ taskId: task.taskId, args: parsed });
+      setLastRun(r.requestId);
+      toast(`Task started · ${r.requestId}`);
+      await shell.refreshSnapshot();
+    } catch (error) {
+      toast(
+        `Task failed to start: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setRunning(false);
+    }
   };
   return (
     <>
@@ -157,7 +215,33 @@ function Editor({
           onEnter={d.onEnter}
           mono
         />
+        <AreaRow
+          id={id("hooks")}
+          label="Task hooks"
+          description='Canonical JSON array. Commands are argv arrays, for example [{"hook_id":"verify","phase":"after_success","command":["cargo","test"],"timeout_secs":120}].'
+          value={d.draft.hooks}
+          onChange={(v) => d.set("hooks", v)}
+          onCommit={d.commit}
+          rows={8}
+          mono
+        />
+        <AreaRow
+          id={id("tags")}
+          label="Tags"
+          description="One per line."
+          value={d.draft.tags}
+          onChange={(v) => d.set("tags", v)}
+          onCommit={d.commit}
+          rows={3}
+        />
       </Group>
+      <DraftActions
+        dirty={d.dirty}
+        saving={d.saving}
+        error={d.error}
+        onSave={d.save}
+        onCancel={d.reset}
+      />
       <Group title="Runs">
         <FactRow label="Total fires">{task.recentRuns.totalFires}</FactRow>
         <FactRow label="Last attempt">{when(task.recentRuns.lastAttemptAt)}</FactRow>
@@ -180,8 +264,8 @@ function Editor({
       <Group
         title="Manual run"
         action={
-          <Button size="sm" variant="brand" onClick={run}>
-            Run task
+          <Button size="sm" variant="brand" disabled={running} onClick={run}>
+            {running ? "Starting…" : "Run task"}
           </Button>
         }
       >
@@ -256,10 +340,10 @@ export function TasksPanel({
                 deployment.behaviors.find((b) => b.isDefault)?.behaviorId ??
                 deployment.behaviors[0]?.behaviorId ??
                 "",
-              prompt_template: "",
+              prompt_template: "Describe what this task should do.",
               goal_objective_template: null,
               goal_token_budget: null,
-              enabled: true,
+              enabled: false,
               output_schema_ref: null,
             },
           }),

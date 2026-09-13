@@ -243,7 +243,7 @@ impl ExecutionOrigin {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TriggerLineage {
     pub trigger_id: Option<String>,
     pub trigger_kind: Option<String>,

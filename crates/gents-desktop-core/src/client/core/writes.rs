@@ -9,9 +9,12 @@ use defra_node::EmbeddedNode;
 use gents::config_client::ConfigAccess;
 use gents::document_config::{Schedule, Task};
 use gents::identity::AgentIdentity;
+use gents::lifecycle::TriggerLineage;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_protocol::session::{SessionTitle, SessionTitleSource};
 use gents_protocol::session_hydration::{
     decode_manifest_json, SessionHydrationDocumentKey, SessionHydrationReceipt,
     SESSION_HYDRATION_RECEIPT_VERSION,
@@ -458,6 +461,17 @@ impl ClientCore {
             .request_row(request_id)
             .is_some_and(|row| row.is_terminal());
         let version = self.store.merge_chat_patch(patch);
+        // A completed agent turn may have used self-configuration tools. Most
+        // of that control plane is intentionally absent from the client P2P
+        // route (AgentPrincipal and inference credentials in particular), so
+        // the terminal request is the bounded signal to refresh the agent's
+        // operator projection. This keeps the next composer/default behavior
+        // current without putting GraphQL reads on every snapshot render.
+        let version = if terminal {
+            self.refresh_agent(agent_did).await?.unwrap_or(version)
+        } else {
+            version
+        };
         tracing::debug!(
             target: "gents_desktop_core::replication",
             request_id,
@@ -507,9 +521,9 @@ impl ClientCore {
     }
 
     pub async fn delete_skill(&self, skill_id: &str, source_agent_did: &str) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
         let result = async {
-            let deleted =
-                mutations::delete_skill(self.node.as_ref(), source_agent_did, skill_id).await?;
+            let deleted = mutations::delete_skill_on(&access, source_agent_did, skill_id).await?;
             if deleted == 0 {
                 bail!("no Skill document with skill_id {skill_id:?} for {source_agent_did}");
             }
@@ -536,9 +550,9 @@ impl ClientCore {
     }
 
     pub async fn delete_task(&self, task_id: &str, source_agent_did: &str) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
         let result = async {
-            let deleted =
-                mutations::delete_task(self.node.as_ref(), source_agent_did, task_id).await?;
+            let deleted = mutations::delete_task_on(&access, source_agent_did, task_id).await?;
             if deleted == 0 {
                 bail!("no Task document with task_id {task_id:?}");
             }
@@ -565,10 +579,10 @@ impl ClientCore {
     }
 
     pub async fn delete_schedule(&self, schedule_id: &str, source_agent_did: &str) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
         let result = async {
             let deleted =
-                mutations::delete_schedule(self.node.as_ref(), source_agent_did, schedule_id)
-                    .await?;
+                mutations::delete_schedule_on(&access, source_agent_did, schedule_id).await?;
             if deleted == 0 {
                 bail!("no Schedule document with schedule_id {schedule_id:?}");
             }
@@ -595,9 +609,10 @@ impl ClientCore {
     }
 
     pub async fn delete_trigger(&self, trigger_id: &str, source_agent_did: &str) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
         let result = async {
             let deleted =
-                mutations::delete_trigger(self.node.as_ref(), source_agent_did, trigger_id).await?;
+                mutations::delete_trigger_on(&access, source_agent_did, trigger_id).await?;
             if deleted == 0 {
                 bail!("no Trigger document with trigger_id {trigger_id:?}");
             }
@@ -628,13 +643,11 @@ impl ClientCore {
         backend_id: &str,
         source_agent_did: &str,
     ) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
         let result = async {
-            let deleted = mutations::delete_inference_backend(
-                self.node.as_ref(),
-                source_agent_did,
-                backend_id,
-            )
-            .await?;
+            let deleted =
+                mutations::delete_inference_backend_on(&access, source_agent_did, backend_id)
+                    .await?;
             if deleted == 0 {
                 bail!("no InferenceBackend document with backend_id {backend_id:?}");
             }
@@ -665,13 +678,11 @@ impl ClientCore {
         profile_id: &str,
         source_agent_did: &str,
     ) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
         let result = async {
-            let deleted = mutations::delete_inference_profile(
-                self.node.as_ref(),
-                source_agent_did,
-                profile_id,
-            )
-            .await?;
+            let deleted =
+                mutations::delete_inference_profile_on(&access, source_agent_did, profile_id)
+                    .await?;
             if deleted == 0 {
                 bail!("no InferenceProfile document with profile_id {profile_id:?}");
             }
@@ -698,9 +709,9 @@ impl ClientCore {
     }
 
     pub async fn delete_tools(&self, tools_id: &str, source_agent_did: &str) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
         let result = async {
-            let deleted =
-                mutations::delete_tools(self.node.as_ref(), source_agent_did, tools_id).await?;
+            let deleted = mutations::delete_tools_on(&access, source_agent_did, tools_id).await?;
             if deleted == 0 {
                 bail!("no Tools document with tools_id {tools_id:?}");
             }
@@ -726,13 +737,11 @@ impl ClientCore {
         service_id: &str,
         source_agent_did: &str,
     ) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
         let result = async {
-            let deleted = mutations::delete_tool_service_registry(
-                self.node.as_ref(),
-                source_agent_did,
-                service_id,
-            )
-            .await?;
+            let deleted =
+                mutations::delete_tool_service_registry_on(&access, source_agent_did, service_id)
+                    .await?;
             if deleted == 0 {
                 bail!("no ToolServiceRegistry document with service_id {service_id:?}");
             }
@@ -759,10 +768,10 @@ impl ClientCore {
     }
 
     pub async fn delete_behavior(&self, behavior_id: &str, source_agent_did: &str) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
         let result = async {
             let deleted =
-                mutations::delete_agent_behavior(self.node.as_ref(), source_agent_did, behavior_id)
-                    .await?;
+                mutations::delete_agent_behavior_on(&access, source_agent_did, behavior_id).await?;
             if deleted == 0 {
                 bail!("no AgentBehavior document with behavior_id {behavior_id:?}");
             }
@@ -779,6 +788,36 @@ impl ClientCore {
                 rows.behaviors.retain(|row| {
                     row.behavior_id != behavior_id || row.agent_did != source_agent_did
                 });
+            },
+        )
+        .await
+    }
+
+    pub async fn delete_context(&self, context_id: &str, source_agent_did: &str) -> Result<()> {
+        let access = self.operator_access(source_agent_did)?;
+        let result = async {
+            let deleted =
+                mutations::delete_agent_context_on(&access, source_agent_did, context_id).await?;
+            if deleted == 0 {
+                bail!("no AgentContext document with context_id {context_id:?}");
+            }
+            Ok(())
+        }
+        .await;
+        self.finish_automation_delete(
+            result,
+            "delete context",
+            "config_context_delete",
+            context_id,
+            source_agent_did,
+            |rows| {
+                retain_sourced_rows(
+                    &mut rows.contexts,
+                    &mut rows.context_source_agent_dids,
+                    source_agent_did,
+                    false,
+                    |row| row.context_id == context_id,
+                );
             },
         )
         .await
@@ -1051,7 +1090,10 @@ impl ClientCore {
                 .map(str::to_owned)
                 .map(ConfigAccess::Graphql)
                 .context("local standard runtime has no operator GraphQL endpoint"),
-            _ => Ok(ConfigAccess::Local(self.node_arc())),
+            Some(_) => anyhow::bail!(
+                "managed agent {agent_did} has no operator GraphQL endpoint; refusing a desktop-replica configuration fallback"
+            ),
+            None => Ok(ConfigAccess::Local(self.node_arc())),
         }
     }
 
@@ -1098,7 +1140,8 @@ impl ClientCore {
         &self,
         document: &gents::document_config::PackConfig,
     ) -> Result<()> {
-        match mutations::apply_config_components(self.node.as_ref(), document).await {
+        let access = self.operator_access(&document.agent_principal.agent_did)?;
+        match mutations::apply_config_components_on(&access, document).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1149,7 +1192,8 @@ impl ClientCore {
     }
 
     pub async fn save_tools(&self, row: &gents::Tools) -> Result<()> {
-        let result = mutations::upsert_tools(self.node.as_ref(), row).await;
+        let access = self.operator_access(&row.agent_did)?;
+        let result = mutations::upsert_tools_on(&access, row).await;
         match result {
             Ok(()) => {
                 self.refresh_store().await?;
@@ -1170,7 +1214,8 @@ impl ClientCore {
         &self,
         row: &gents::document_config::ToolServiceRegistry,
     ) -> Result<()> {
-        match mutations::upsert_tool_service_registry(self.node.as_ref(), row).await {
+        let access = self.operator_access(&row.agent_did)?;
+        match mutations::upsert_tool_service_registry_on(&access, row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1205,7 +1250,8 @@ impl ClientCore {
     }
 
     pub async fn save_task(&self, row: &gents::document_config::Task) -> Result<()> {
-        match mutations::upsert_task(self.node.as_ref(), row).await {
+        let access = self.operator_access(&row.agent_did)?;
+        match mutations::upsert_task_on(&access, row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1222,7 +1268,8 @@ impl ClientCore {
     }
 
     pub async fn save_skill(&self, row: &gents::document_config::SkillDocument) -> Result<()> {
-        match mutations::upsert_skill(self.node.as_ref(), row).await {
+        let access = self.operator_access(&row.agent_did)?;
+        match mutations::upsert_skill_on(&access, row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1239,7 +1286,8 @@ impl ClientCore {
     }
 
     pub async fn save_schedule(&self, row: &gents::document_config::Schedule) -> Result<()> {
-        match mutations::upsert_schedule(self.node.as_ref(), row).await {
+        let access = self.operator_access(&row.agent_did)?;
+        match mutations::upsert_schedule_on(&access, row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1256,7 +1304,8 @@ impl ClientCore {
     }
 
     pub async fn save_trigger(&self, row: &gents::document_config::Trigger) -> Result<()> {
-        match mutations::upsert_trigger(self.node.as_ref(), row).await {
+        let access = self.operator_access(&row.agent_did)?;
+        match mutations::upsert_trigger_on(&access, row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1276,7 +1325,8 @@ impl ClientCore {
         &self,
         document: &gents::document_config::EventSource,
     ) -> Result<()> {
-        match mutations::upsert_event_source(self.node.as_ref(), document).await {
+        let access = self.operator_access(&document.agent_did)?;
+        match mutations::upsert_event_source_on(&access, document).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1287,7 +1337,8 @@ impl ClientCore {
     }
 
     pub async fn delete_event_source(&self, event_source_id: &str, agent_did: &str) -> Result<()> {
-        match mutations::delete_event_source(self.node.as_ref(), agent_did, event_source_id).await {
+        let access = self.operator_access(agent_did)?;
+        match mutations::delete_event_source_on(&access, agent_did, event_source_id).await {
             Ok(0) => Err(self.record_mutation_error(
                 "delete event source",
                 anyhow::anyhow!("no EventSource document with event_source_id {event_source_id:?}"),
@@ -1319,6 +1370,19 @@ impl ClientCore {
         }
     }
 
+    pub async fn fire_task_now_for_agent(
+        &self,
+        agent_did: &str,
+        task_id: &str,
+        args: serde_json::Value,
+    ) -> Result<SubmittedRequest> {
+        let access = self.operator_access(agent_did)?;
+        let invocation = mutations::resolve_task_now_on(&access, agent_did, task_id, args)
+            .await
+            .map_err(|error| self.record_mutation_error("resolve task", error))?;
+        self.submit_manual_task_invocation(invocation).await
+    }
+
     pub async fn fire_schedule_now(&self, row: &Schedule) -> Result<String> {
         match mutations::fire_schedule_now(self.node.as_ref(), row).await {
             Ok(doc_id) => {
@@ -1335,6 +1399,103 @@ impl ClientCore {
                 Ok(doc_id)
             }
             Err(error) => Err(self.record_mutation_error("fire schedule now", error)),
+        }
+    }
+
+    pub async fn fire_schedule_now_for_agent(
+        &self,
+        agent_did: &str,
+        schedule_id: &str,
+    ) -> Result<SubmittedRequest> {
+        let access = self.operator_access(agent_did)?;
+        let invocation = mutations::resolve_schedule_now_on(&access, agent_did, schedule_id)
+            .await
+            .map_err(|error| self.record_mutation_error("resolve schedule", error))?;
+        self.submit_manual_task_invocation(invocation).await
+    }
+
+    async fn submit_manual_task_invocation(
+        &self,
+        invocation: mutations::ManualTaskInvocation,
+    ) -> Result<SubmittedRequest> {
+        let snapshot = self.store.snapshot();
+        let peer_record = self
+            .peer_record_for_chat_write(&invocation.agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(&invocation.agent_did, peer_record.as_ref(), Utc::now())?;
+        let (signer, admission, requester_did) = self
+            .request_authority(&invocation.agent_did, peer_record.as_ref())
+            .await?;
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let options = SubmitRequestOptions {
+            input: RequestInput {
+                initial_title: Some(SessionTitle {
+                    text: invocation.session_title.clone(),
+                    source: SessionTitleSource::Task,
+                }),
+                ..RequestInput::default()
+            },
+            trigger_lineage: TriggerLineage {
+                trigger_kind: Some("manual".to_string()),
+                ..TriggerLineage::default()
+            },
+            ..SubmitRequestOptions::default()
+        };
+        let behavior_id = behavior_id_for_write(Some(&invocation.behavior_id));
+        let submitted = match invocation.goal_objective.as_deref() {
+            Some(objective) => {
+                let access = self.operator_access(&invocation.agent_did)?;
+                mutations::submit_goal_backed_request(
+                    self.node.as_ref(),
+                    snapshot.as_ref(),
+                    &access,
+                    &session_id,
+                    &invocation.agent_did,
+                    &requester_did,
+                    signer.as_ref(),
+                    admission,
+                    &invocation.content,
+                    behavior_id.as_deref(),
+                    options,
+                    objective,
+                    invocation.goal_token_budget,
+                )
+                .await
+            }
+            None => {
+                mutations::submit_request(
+                    self.node.as_ref(),
+                    snapshot.as_ref(),
+                    &session_id,
+                    &invocation.agent_did,
+                    &requester_did,
+                    signer.as_ref(),
+                    admission,
+                    &invocation.content,
+                    behavior_id.as_deref(),
+                    options,
+                )
+                .await
+            }
+        };
+        match submitted {
+            Ok(result) => {
+                self.store
+                    .set_focused_request_id(Some(result.request_id.clone()));
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    doc_type = "manual_run",
+                    agent_did = %invocation.agent_did,
+                    task_id = %invocation.task_id,
+                    request_id = %result.request_id,
+                    requester_did,
+                    "desktop canonical manual task run submitted through client authority"
+                );
+                Ok(result)
+            }
+            Err(error) => Err(self.record_mutation_error("fire task", error)),
         }
     }
 

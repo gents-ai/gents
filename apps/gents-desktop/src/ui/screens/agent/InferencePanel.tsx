@@ -10,6 +10,7 @@ import type {
   BackendProviderKind,
   BackendSaveRequest,
   DeploymentView,
+  InferenceBackend,
   InferenceBackendView,
   OpenAiWireApi,
   ProviderAccountView,
@@ -18,13 +19,29 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { intOrNull, newId, str, toLines, useDraft } from "./draft";
-import { AreaRow, ChoiceRow, FactRow, NumberRow, SwitchRow, TextRow } from "./editors";
+import {
+  fromLinesOrNull,
+  newId,
+  optionalInteger,
+  requiredHttpUrl,
+  str,
+  toLines,
+  useDraft,
+} from "./draft";
+import {
+  AreaRow,
+  ChoiceRow,
+  DraftActions,
+  FactRow,
+  NumberRow,
+  SwitchRow,
+  TextRow,
+} from "./editors";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group, Row } from "./rows";
 import { ProviderLogo } from "../ProviderLogo";
 
-function backendSave(
+export function backendSave(
   agentDid: string,
   fields: {
     backendId: string;
@@ -34,6 +51,8 @@ function backendSave(
     endpoint: string;
     apiKey: string | null;
     apiKeyEnvVar: string | null;
+    connectTimeoutSecs: number | null;
+    discoveryTimeoutSecs: number | null;
     maxConcurrent: number | null;
     maxQueueDepth: number | null;
     enabled: boolean | null;
@@ -47,17 +66,26 @@ function backendSave(
       provider_kind: fields.providerKind as BackendProviderKind,
       openai_wire_api: (fields.openaiWireApi as OpenAiWireApi | null) ?? null,
       endpoint: fields.endpoint,
-      auth: fields.apiKey
-        ? { kind: "api_key", key: fields.apiKey }
-        : fields.apiKeyEnvVar
-          ? { kind: "environment", variable: fields.apiKeyEnvVar }
-          : { kind: "unauthenticated" },
+      auth: isSubscriptionKind(fields.providerKind)
+        ? { kind: "principal_oauth" }
+        : fields.apiKey
+          ? { kind: "api_key", key: fields.apiKey }
+          : fields.apiKeyEnvVar
+            ? { kind: "environment", variable: fields.apiKeyEnvVar }
+            : { kind: "unauthenticated" },
+      connect_timeout_secs: fields.connectTimeoutSecs,
+      discovery_timeout_secs: fields.discoveryTimeoutSecs,
       max_concurrent: fields.maxConcurrent,
       max_queue_depth: fields.maxQueueDepth,
       enabled: fields.enabled,
     },
   };
 }
+
+const isSubscriptionKind = (kind: string) =>
+  kind === "ChatGptCodex" ||
+  kind === "XaiGrokOAuth" ||
+  kind === "ClaudeCliSubscription";
 
 const KINDS = [
   { value: "OpenAiCompatible", label: "OpenAI compatible" },
@@ -125,6 +153,7 @@ function AccountRows({
   const [openedAt] = useState(() => Date.now());
   const expired = account ? Date.parse(account.accessTokenExpiresAt) < openedAt : false;
   const [busy, setBusy] = useState(false);
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const api = shell.api;
   const signIn = async () => {
     setBusy(true);
@@ -134,6 +163,26 @@ function AccountRows({
       else await api.grokLogin(deployment.agentDid);
       toast("Signed in");
       await reload();
+    } catch (error) {
+      toast(
+        `Sign in failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const disconnect = async () => {
+    if (!account) return;
+    setBusy(true);
+    try {
+      await api.disconnectProviderAccount?.(deployment.agentDid, account.credentialId);
+      toast("Disconnected");
+      setConfirmingDisconnect(false);
+      await reload();
+    } catch (error) {
+      toast(
+        `Disconnect failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     } finally {
       setBusy(false);
     }
@@ -147,23 +196,38 @@ function AccountRows({
               {expired ? "Expired" : "Connected"}
             </Badge>
           )}
-          {account && (
+          {account && !confirmingDisconnect && (
             <Button
               size="sm"
               variant="quiet"
               disabled={busy}
-              onClick={async () => {
-                if (!confirm(`Disconnect ${sub.title}?`)) return;
-                await api.disconnectProviderAccount?.(
-                  deployment.agentDid,
-                  account.credentialId,
-                );
-                toast("Disconnected");
-                await reload();
-              }}
+              onClick={() => setConfirmingDisconnect(true)}
             >
               Disconnect
             </Button>
+          )}
+          {account && confirmingDisconnect && (
+            <>
+              <span className="text-xs text-muted-foreground">
+                Disconnect {sub.title}?
+              </span>
+              <Button
+                size="sm"
+                variant="quiet"
+                disabled={busy}
+                onClick={() => setConfirmingDisconnect(false)}
+              >
+                Keep connected
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy}
+                onClick={disconnect}
+              >
+                {busy ? "Disconnecting…" : "Disconnect now"}
+              </Button>
+            </>
           )}
           <Button
             size="sm"
@@ -214,32 +278,67 @@ function Editor({
   const saved = {
     name: backend.name ?? "",
     providerKind: backend.providerKind ?? "OpenAiCompatible",
+    openaiWireApi: backend.openaiWireApi ?? "",
     endpoint: backend.endpoint ?? "",
-    models: toLines(backend.models),
     apiKeyEnvVar: backend.apiKeyEnvVar ?? "",
     apiKey: "",
+    connectTimeoutSecs: str(backend.connectTimeoutSecs),
+    discoveryTimeoutSecs: str(backend.discoveryTimeoutSecs),
     maxConcurrent: str(backend.maxConcurrent),
     maxQueueDepth: str(backend.maxQueueDepth),
     enabled: backend.enabled ?? true,
+    tags: toLines(backend.tags),
   };
-  const d = useDraft(saved, (next) =>
-    shell.applyConfig((api) =>
-      api.saveBackendConfig(
-        backendSave(deployment.agentDid, {
-          backendId: backend.backendId,
-          name: next.name.trim() || backend.backendId,
-          providerKind: next.providerKind,
-          openaiWireApi: backend.openaiWireApi,
-          endpoint: next.endpoint,
-          apiKey: next.apiKey || null,
-          apiKeyEnvVar: next.apiKeyEnvVar || null,
-          maxConcurrent: intOrNull(next.maxConcurrent),
-          maxQueueDepth: intOrNull(next.maxQueueDepth),
-          enabled: next.enabled,
-        }),
-      ),
-    ),
-  );
+  const d = useDraft(saved, async (next) => {
+    const name = next.name.trim();
+    if (!name) throw new Error("Name is required");
+    const endpoint = requiredHttpUrl("Endpoint", next.endpoint);
+    if (next.apiKey.trim() && next.apiKeyEnvVar.trim())
+      throw new Error("Choose an API key or an environment variable, not both");
+    const maxConcurrent = optionalInteger("Max concurrent", next.maxConcurrent, {
+      min: 1,
+    });
+    const maxQueueDepth = optionalInteger("Max queue depth", next.maxQueueDepth, {
+      min: 0,
+    });
+    const connectTimeoutSecs = optionalInteger(
+      "Connect timeout",
+      next.connectTimeoutSecs,
+      { min: 1 },
+    );
+    const discoveryTimeoutSecs = optionalInteger(
+      "Discovery timeout",
+      next.discoveryTimeoutSecs,
+      { min: 1 },
+    );
+    let auth: InferenceBackend["auth"] | undefined;
+    if (isSubscriptionKind(next.providerKind)) auth = { kind: "principal_oauth" };
+    else if (next.apiKey.trim()) auth = { kind: "api_key", key: next.apiKey };
+    else if (next.apiKeyEnvVar.trim())
+      auth = { kind: "environment", variable: next.apiKeyEnvVar.trim() };
+    else if (!backend.apiKeyConfigured || isSubscriptionKind(saved.providerKind))
+      auth = { kind: "unauthenticated" };
+
+    const changes: Partial<Omit<InferenceBackend, "agent_did" | "backend_id">> = {
+      name,
+      provider_kind: next.providerKind as BackendProviderKind,
+      openai_wire_api: (next.openaiWireApi as OpenAiWireApi) || null,
+      endpoint,
+      connect_timeout_secs: connectTimeoutSecs,
+      discovery_timeout_secs: discoveryTimeoutSecs,
+      max_concurrent: maxConcurrent,
+      max_queue_depth: maxQueueDepth,
+      enabled: next.enabled,
+      tags: fromLinesOrNull(next.tags),
+    };
+    if (auth) changes.auth = auth;
+    await shell.applyConfig((api) =>
+      api.patchConfigComponents({
+        agentDid: deployment.agentDid,
+        patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
+      }),
+    );
+  });
   const [probe, setProbe] = useState<string | null>(null);
   const id = (f: string) => `${backend.backendId}-${f}`;
   const subscription = d.draft.providerKind in SUBSCRIPTION;
@@ -264,18 +363,22 @@ function Editor({
               size="sm"
               variant="outline"
               onClick={async () => {
-                setProbe("probing…");
-                const r = await shell.api
-                  .probeInferenceEndpoint(d.draft.endpoint)
-                  .catch(() => null);
-                setProbe(
-                  r
-                    ? r.reachable
+                try {
+                  const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
+                  setProbe("probing…");
+                  const r = await shell.api.probeInferenceEndpoint(endpoint);
+                  setProbe(
+                    r.reachable
                       ? `reachable · ${r.models.length} models`
-                      : "unreachable"
-                    : "probe failed",
-                );
-                toast(r?.reachable ? "Endpoint reachable" : "Endpoint unreachable");
+                      : "unreachable",
+                  );
+                  toast(r.reachable ? "Endpoint reachable" : "Endpoint unreachable");
+                } catch (error) {
+                  setProbe("probe failed");
+                  toast(
+                    `Probe failed: ${error instanceof Error ? error.message : String(error)}`,
+                  );
+                }
               }}
             >
               Probe
@@ -301,6 +404,18 @@ function Editor({
           value={d.draft.providerKind}
           onChange={(v) => d.choose("providerKind", v)}
           items={KINDS}
+        />
+        <ChoiceRow
+          id={id("wire")}
+          label="OpenAI wire API"
+          description="Leave automatic unless the endpoint requires one protocol."
+          value={d.draft.openaiWireApi}
+          onChange={(v) => d.choose("openaiWireApi", v)}
+          items={[
+            { value: "responses", label: "Responses" },
+            { value: "chat_completions", label: "Chat completions" },
+          ]}
+          none="Automatic"
         />
         <FactRow
           label="Used by"
@@ -354,22 +469,23 @@ function Editor({
                   onClick={() =>
                     shell
                       .applyConfig((api) =>
-                        api.saveBackendConfig(
-                          backendSave(deployment.agentDid, {
-                            backendId: backend.backendId,
-                            name: backend.name ?? backend.backendId,
-                            providerKind: backend.providerKind ?? "OpenAiCompatible",
-                            openaiWireApi: backend.openaiWireApi,
-                            endpoint: backend.endpoint ?? "",
-                            apiKey: null,
-                            apiKeyEnvVar: backend.apiKeyEnvVar,
-                            maxConcurrent: backend.maxConcurrent,
-                            maxQueueDepth: backend.maxQueueDepth,
-                            enabled: backend.enabled,
-                          }),
-                        ),
+                        api.patchConfigComponents({
+                          agentDid: deployment.agentDid,
+                          patches: [
+                            {
+                              collection: "InferenceBackend",
+                              id: backend.backendId,
+                              changes: { auth: { kind: "unauthenticated" } },
+                            },
+                          ],
+                        }),
                       )
                       .then(() => toast("Stored key cleared"))
+                      .catch((error) =>
+                        toast(
+                          `Clear failed: ${error instanceof Error ? error.message : String(error)}`,
+                        ),
+                      )
                   }
                 >
                   Clear stored key
@@ -392,15 +508,30 @@ function Editor({
           wide
         />
         {probe && <FactRow label="Last probe">{probe}</FactRow>}
-        <AreaRow
-          id={id("models")}
-          label="Models"
-          description="One per line; at least one."
-          value={d.draft.models}
-          onChange={(v) => d.set("models", v)}
-          onCommit={d.commit}
-          rows={3}
+        <FactRow
+          label="Advertised models"
+          description="Runtime discovery owns this catalog. Select a model on a profile."
           mono
+        >
+          {backend.models.length ? backend.models.join(", ") : "none discovered"}
+        </FactRow>
+        <NumberRow
+          id={id("connect-timeout")}
+          label="Connect timeout seconds"
+          description="Positive whole number, or blank for the runtime default."
+          value={d.draft.connectTimeoutSecs}
+          onChange={(v) => d.set("connectTimeoutSecs", v)}
+          onCommit={d.commit}
+          onEnter={d.onEnter}
+        />
+        <NumberRow
+          id={id("discovery-timeout")}
+          label="Discovery timeout seconds"
+          description="Positive whole number, or blank for the runtime default."
+          value={d.draft.discoveryTimeoutSecs}
+          onChange={(v) => d.set("discoveryTimeoutSecs", v)}
+          onCommit={d.commit}
+          onEnter={d.onEnter}
         />
         <NumberRow
           id={id("conc")}
@@ -414,7 +545,7 @@ function Editor({
         <NumberRow
           id={id("queue")}
           label="Max queue depth"
-          description="Whole number of 1 or more."
+          description="Whole number of 0 or more; 0 disables queueing."
           value={d.draft.maxQueueDepth}
           onChange={(v) => d.set("maxQueueDepth", v)}
           onCommit={d.commit}
@@ -426,7 +557,23 @@ function Editor({
           checked={d.draft.enabled}
           onChange={(v) => d.choose("enabled", v)}
         />
+        <AreaRow
+          id={id("tags")}
+          label="Tags"
+          description="One optional discovery label per line."
+          value={d.draft.tags}
+          onChange={(v) => d.set("tags", v)}
+          onCommit={d.commit}
+          rows={2}
+        />
       </Group>
+      <DraftActions
+        dirty={d.dirty}
+        saving={d.saving}
+        error={d.error}
+        onSave={d.save}
+        onCancel={d.reset}
+      />
       <DeleteButton
         label={backend.name ?? backend.backendId}
         base={base}
@@ -495,12 +642,14 @@ export function InferencePanel({
               name: "New backend",
               providerKind: "OpenAiCompatible",
               openaiWireApi: "chat_completions",
-              endpoint: "",
+              endpoint: "http://127.0.0.1:8000/v1",
               apiKey: null,
               apiKeyEnvVar: null,
+              connectTimeoutSecs: 10,
+              discoveryTimeoutSecs: 10,
               maxConcurrent: 2,
               maxQueueDepth: 8,
-              enabled: true,
+              enabled: false,
             }),
           ),
         );

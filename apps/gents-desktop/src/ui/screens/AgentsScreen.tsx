@@ -9,6 +9,16 @@ import { EllipsisVertical, Inbox, Plus, Server, Wifi } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@gents/ui/components/alert-dialog";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -40,6 +50,10 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
   const [renaming, setRenaming] = useState<{ peerId: string; label: string } | null>(
     null,
   );
+  const [removing, setRemoving] = useState<{ peerId: string; label: string } | null>(
+    null,
+  );
+  const [removingBusy, setRemovingBusy] = useState(false);
   const pending = shell.snapshot?.client?.enrollmentRequests;
   return (
     <ScrollArea className="h-full" data-testid="agents-screen">
@@ -227,12 +241,9 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                         <DropdownMenuGroup>
                           <DropdownMenuItem
                             variant="destructive"
-                            onClick={() => {
-                              if (confirm(`Remove ${d.label} from this desktop?`))
-                                void shell
-                                  .removePeer(d.peerId)
-                                  .then(() => toast("Peer removed"));
-                            }}
+                            onClick={() =>
+                              setRemoving({ peerId: d.peerId, label: d.label })
+                            }
                           >
                             Remove peer
                           </DropdownMenuItem>
@@ -253,6 +264,44 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
         target={renaming}
         onClose={() => setRenaming(null)}
       />
+      <AlertDialog
+        open={removing !== null}
+        onOpenChange={(open) => !open && !removingBusy && setRemoving(null)}
+      >
+        <AlertDialogContent aria-modal="true">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {removing?.label}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This forgets the peer and its synchronization route on this desktop. It
+              does not delete the remote agent.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removingBusy}>Keep peer</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={removingBusy}
+              onClick={async (event) => {
+                event.preventDefault();
+                if (!removing) return;
+                setRemovingBusy(true);
+                try {
+                  await shell.removePeer(removing.peerId);
+                  toast("Peer removed");
+                  setRemoving(null);
+                } catch (error) {
+                  toast(
+                    `Remove failed: ${error instanceof Error ? error.message : String(error)}`,
+                  );
+                } finally {
+                  setRemovingBusy(false);
+                }
+              }}
+            >
+              {removingBusy ? "Removing…" : "Remove peer"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </ScrollArea>
   );
 }

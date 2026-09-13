@@ -230,6 +230,7 @@ pub struct InferenceBackendView {
     pub max_concurrent: Option<i64>,
     pub max_queue_depth: Option<i64>,
     pub enabled: Option<bool>,
+    pub tags: Vec<String>,
     pub models: Vec<String>,
     pub probe_status: Option<String>,
 }
@@ -298,8 +299,10 @@ pub struct SkillView {
     pub instructions: Option<String>,
     pub tool_refs: Vec<String>,
     pub display_name: Option<String>,
+    pub interface_json: Option<String>,
     pub enabled: Option<bool>,
     pub created_at: Option<String>,
+    pub tags: Vec<String>,
 }
 
 /// Authored trigger and its observed delivery state share one read-only envelope.

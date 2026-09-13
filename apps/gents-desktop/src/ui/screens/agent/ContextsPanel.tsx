@@ -1,8 +1,8 @@
 import type { AgentContext, DeploymentView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { AreaRow, ChoiceRow, FactRow, TextRow } from "./editors";
-import { fromLines, newId, toLines, useDraft } from "./draft";
+import { AreaRow, ChoiceRow, DraftActions, FactRow, TextRow } from "./editors";
+import { fromLines, fromLinesOrNull, newId, toLines, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 
@@ -27,9 +27,22 @@ function Editor({
     toolsId: context.tools_id ?? "",
     compactionId: context.compaction_id ?? "",
     skillIds: toLines(context.skill_ids ?? []),
+    tags: toLines(context.tags ?? []),
   };
-  const d = useDraft(saved, (next) =>
-    shell.applyConfig((api) =>
+  const d = useDraft(saved, async (next) => {
+    if (next.toolsId && !deployment.tools.some((row) => row.tools_id === next.toolsId))
+      throw new Error("Choose an existing Tools document");
+    if (
+      next.compactionId &&
+      !deployment.compactions.some((row) => row.compaction_id === next.compactionId)
+    )
+      throw new Error("Choose an existing compaction document");
+    const skillIds = fromLines(next.skillIds);
+    const missingSkill = skillIds.find(
+      (skillId) => !deployment.skills.some((row) => row.skillId === skillId),
+    );
+    if (missingSkill) throw new Error(`Unknown skill ID: ${missingSkill}`);
+    await shell.applyConfig((api) =>
       api.patchConfigComponents({
         agentDid: deployment.agentDid,
         patches: [
@@ -42,13 +55,14 @@ function Editor({
               system_prompt: next.systemPrompt || null,
               tools_id: next.toolsId || null,
               compaction_id: next.compactionId || null,
-              skill_ids: fromLines(next.skillIds),
+              skill_ids: skillIds.length ? skillIds : null,
+              tags: fromLinesOrNull(next.tags),
             },
           },
         ],
       }),
-    ),
-  );
+    );
+  });
   const id = (f: string) => `${context.context_id}-${f}`;
   return (
     <>
@@ -63,6 +77,14 @@ function Editor({
           onChange={(v) => d.set("displayName", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
+        />
+        <AreaRow
+          id={id("description")}
+          label="Description"
+          value={d.draft.description}
+          onChange={(v) => d.set("description", v)}
+          onCommit={d.commit}
+          rows={2}
         />
         <AreaRow
           id={id("prompt")}
@@ -108,19 +130,31 @@ function Editor({
           rows={3}
           mono
         />
+        <AreaRow
+          id={id("tags")}
+          label="Tags"
+          description="One per line."
+          value={d.draft.tags}
+          onChange={(v) => d.set("tags", v)}
+          onCommit={d.commit}
+          rows={3}
+        />
       </Group>
+      <DraftActions
+        dirty={d.dirty}
+        saving={d.saving}
+        error={d.error}
+        onSave={d.save}
+        onCancel={d.reset}
+      />
       <DeleteButton
         label={context.display_name ?? context.context_id}
         base={base}
         onDelete={() =>
           shell.applyConfig((api) =>
-            api.applyConfigComponents({
-              document: {
-                agent_principal: { agent_did: deployment.agentDid },
-                contexts: deployment.contexts.filter(
-                  (c) => c.context_id !== context.context_id,
-                ),
-              },
+            api.deleteContextConfig({
+              contextId: context.context_id,
+              agentDid: deployment.agentDid,
             }),
           )
         }
@@ -161,7 +195,6 @@ export function ContextsPanel({
             document: {
               agent_principal: { agent_did: deployment.agentDid },
               contexts: [
-                ...deployment.contexts,
                 {
                   context_id,
                   agent_did: deployment.agentDid,
@@ -169,7 +202,7 @@ export function ContextsPanel({
                   system_prompt: "",
                   tools_id: deployment.tools[0]?.tools_id ?? null,
                   compaction_id: deployment.compactions[0]?.compaction_id ?? null,
-                  skill_ids: [],
+                  skill_ids: null,
                   tags: null,
                 },
               ],

@@ -2,8 +2,8 @@ import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 
-/* a new behaviour with the agent's first backend and profile, then its
-   settings page; ids are minted here, outside render */
+/* Persist an inert scaffold, then open its settings page. A click on New must
+   never add a runnable behavior before the operator reviews and saves it. */
 export async function createBehavior(shell: Shell, deployment: DeploymentView) {
   const id = `behavior-${Date.now().toString(36)}`;
   const profileId = deployment.inferenceProfiles[0]?.profile_id;
@@ -16,7 +16,7 @@ export async function createBehavior(shell: Shell, deployment: DeploymentView) {
       description: null,
       context_id: deployment.contexts[0]?.context_id ?? null,
       inference_profile_id: profileId,
-      enabled: true,
+      enabled: false,
       tags: null,
       created_at: null,
     },

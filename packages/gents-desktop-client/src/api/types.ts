@@ -10,6 +10,7 @@ import type {
   BackendDeleteRequest,
   BackendSaveRequest,
   BehaviorDeleteRequest,
+  ContextDeleteRequest,
   BehaviorSaveRequest,
   CascadeCancelPreview,
   ChatSendResult,
@@ -179,6 +180,9 @@ export type DesktopApiAdapter = {
   ) => Promise<DesktopClientSnapshot>;
   deleteBehaviorConfig: (
     request: BehaviorDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteContextConfig: (
+    request: ContextDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (
     request: BackendSaveRequest,

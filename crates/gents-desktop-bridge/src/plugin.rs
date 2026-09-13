@@ -67,6 +67,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::config::desktop_tools_delete,
             tauri_commands::config::desktop_tool_service_delete,
             tauri_commands::config::desktop_behavior_delete,
+            tauri_commands::config::desktop_context_delete,
             tauri_commands::config::desktop_backend_save,
             tauri_commands::config::desktop_inference_profile_save,
             tauri_commands::config::desktop_tools_save,

@@ -563,6 +563,81 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    let response = core
+        .node()
+        .execute(
+            r#"mutation {
+                create_AgentPrincipal(input: {
+                    agent_did: "did:test:amy"
+                    display_name: "Amy"
+                    default_behavior_id: "did:test:amy:default"
+                    enabled: true
+                }) { _docID }
+                create_AgentRequest(input: {
+                    request_id: "request-terminal-config"
+                    agent_did: "did:test:amy"
+                    behavior_id: "did:test:amy:default"
+                    session_id: "session-terminal-config"
+                    content: "make research the default"
+                    lifecycle_state: "processing"
+                    created_at: "2026-08-21T18:07:35Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "seed rows: {:?}", response.errors);
+    core.refresh_store().await?;
+    assert_eq!(
+        core.store().snapshot().agent_principals[0]
+            .default_behavior_id
+            .as_deref(),
+        Some("did:test:amy:default")
+    );
+
+    let response = core
+        .node()
+        .execute(
+            r#"mutation {
+                update_AgentPrincipal(
+                    filter: { agent_did: { _eq: "did:test:amy" } }
+                    input: { default_behavior_id: "did:test:amy:research" }
+                ) { _docID }
+                update_AgentRequest(
+                    filter: { request_id: { _eq: "request-terminal-config" } }
+                    input: { lifecycle_state: "completed" }
+                ) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "complete turn: {:?}",
+        response.errors
+    );
+
+    assert!(core
+        .refresh_local_request("did:test:amy", "request-terminal-config")
+        .await?
+        .is_some());
+    assert_eq!(
+        core.store().snapshot().agent_principals[0]
+            .default_behavior_id
+            .as_deref(),
+        Some("did:test:amy:research")
+    );
+
+    core.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());

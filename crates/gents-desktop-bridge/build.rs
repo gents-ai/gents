@@ -45,6 +45,7 @@ const COMMANDS: &[&str] = &[
     "desktop_tools_delete",
     "desktop_tool_service_delete",
     "desktop_behavior_delete",
+    "desktop_context_delete",
     "desktop_backend_save",
     "desktop_inference_profile_save",
     "desktop_tools_save",

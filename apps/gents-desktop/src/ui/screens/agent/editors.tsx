@@ -1,9 +1,8 @@
-/* The pieces every configuration editor shares: a draft that saves as
-   it changes (choices at once, text when the field is left) with a toast,
-   and the row types the desktop app's panels use: text, number, lines,
-   choice, switch, textarea. Validation follows the desktop app's hints. */
+/* Shared configuration editor rows plus explicit Save/Cancel actions.
+   Fields only update their local draft; persistence is user-controlled. */
 import type { ReactNode } from "react";
 import { Input } from "@gents/ui/components/input";
+import { Button } from "@gents/ui/components/button";
 import {
   Select,
   SelectContent,
@@ -18,6 +17,38 @@ import { Fact, Row } from "./rows";
 export type Choice = { value: string; label: string };
 
 type Common = { id: string; label: ReactNode; description?: ReactNode };
+
+export function DraftActions({
+  dirty,
+  saving,
+  error,
+  onSave,
+  onCancel,
+}: {
+  dirty: boolean;
+  saving: boolean;
+  error: string | null;
+  onSave: () => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="mb-6">
+      {error && (
+        <p role="alert" className="mb-3 text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button variant="quiet" disabled={!dirty || saving} onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="brand" disabled={!dirty || saving} onClick={onSave}>
+          {saving ? "Saving…" : "Save changes"}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export function TextRow({
   id,

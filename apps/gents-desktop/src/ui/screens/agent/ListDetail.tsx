@@ -2,10 +2,11 @@
    routed by item id, as the desktop app's config tabs are (list on the
    left, editor beside it; here the list is the page and a row opens the
    editor). */
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { toast } from "sonner";
 import { href, navigate, type Route } from "@/lib/router";
 
 export type ListRow = {
@@ -35,6 +36,21 @@ export function ListDetail({
   /* renders the open document's editor */
   detail: (id: string) => ReactNode;
 }) {
+  const creatingRef = useRef(false);
+  const [creating, setCreating] = useState(false);
+  const create = async () => {
+    if (!onCreate || creatingRef.current) return;
+    creatingRef.current = true;
+    setCreating(true);
+    try {
+      await onCreate();
+    } catch (error) {
+      toast(`Create failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      creatingRef.current = false;
+      setCreating(false);
+    }
+  };
   if (item && rows.some((r) => r.id === item)) {
     return (
       <div>
@@ -52,8 +68,8 @@ export function ListDetail({
     <div>
       {onCreate && (
         <div className="mb-6 flex justify-end">
-          <Button variant="outline" onClick={onCreate}>
-            <Plus /> {createLabel}
+          <Button variant="outline" disabled={creating} onClick={create}>
+            <Plus /> {creating ? "Creating…" : createLabel}
           </Button>
         </div>
       )}
@@ -103,19 +119,45 @@ export function DeleteButton({
   onDelete: () => Promise<unknown>;
   base: Extract<Route, { name: "agent" }>;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function remove() {
+    setDeleting(true);
+    try {
+      await onDelete();
+      toast("Deleted");
+      navigate({ ...base, item: undefined });
+    } catch (error) {
+      toast(`Delete failed: ${error instanceof Error ? error.message : String(error)}`);
+      setDeleting(false);
+    }
+  }
+
   return (
-    <div className="mt-2 flex justify-end">
-      <Button
-        variant="quiet"
-        size="sm"
-        onClick={async () => {
-          if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
-          await onDelete();
-          navigate({ ...base, item: undefined });
-        }}
-      >
-        <Trash2 /> Delete
-      </Button>
+    <div className="mt-2 flex items-center justify-end gap-2">
+      {confirming ? (
+        <>
+          <span className="mr-1 text-xs text-muted-foreground">
+            Delete {label}? This cannot be undone.
+          </span>
+          <Button
+            variant="quiet"
+            size="sm"
+            disabled={deleting}
+            onClick={() => setConfirming(false)}
+          >
+            Cancel
+          </Button>
+          <Button variant="destructive" size="sm" disabled={deleting} onClick={remove}>
+            <Trash2 /> {deleting ? "Deleting…" : "Delete now"}
+          </Button>
+        </>
+      ) : (
+        <Button variant="quiet" size="sm" onClick={() => setConfirming(true)}>
+          <Trash2 /> Delete
+        </Button>
+      )}
     </div>
   );
 }

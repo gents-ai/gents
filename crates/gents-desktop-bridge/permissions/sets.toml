@@ -148,6 +148,7 @@ permissions = [
   "allow-desktop-tools-delete",
   "allow-desktop-tool-service-delete",
   "allow-desktop-behavior-delete",
+  "allow-desktop-context-delete",
   "allow-desktop-backend-save",
   "allow-desktop-inference-profile-save",
   "allow-desktop-tools-save",

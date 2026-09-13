@@ -1,5 +1,6 @@
 //! Canonical authored configuration through the shared retained-candidate owner.
 use anyhow::Result;
+#[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
 use gents::config_client::{
@@ -43,12 +44,62 @@ pub async fn upsert_agent_principal(node: &EmbeddedNode, document: &AgentPrincip
 /// canonical default. Principal settings use upsert_agent_principal instead.
 /// Omitted component documents remain unchanged. No deletes, interpolation,
 /// principal creation, or graph compilation are implied by this operation.
+#[cfg(test)]
 pub async fn apply_config_components(
     node: &EmbeddedNode,
     document: &gents::document_config::PackConfig,
 ) -> Result<()> {
     use anyhow::Context;
-    let owner = &document.agent_principal.agent_did;
+    let (owner, plan) = config_components_plan(document)?;
+    ConfigAccess::transact_local(node, None, "desktop.config.components", |txn| {
+        let plan = &plan;
+        let owner = &owner;
+        Box::pin(async move {
+            gents::config_client::read_desired_state_record_in_txn(
+                txn,
+                Collection::AgentPrincipal,
+                owner,
+                owner,
+            )
+            .await?
+            .context("component apply requires an existing principal")?;
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(())
+        })
+    })
+    .await
+}
+
+pub async fn apply_config_components_on(
+    access: &ConfigAccess,
+    document: &gents::document_config::PackConfig,
+) -> Result<()> {
+    use anyhow::Context;
+    let (owner, plan) = config_components_plan(document)?;
+    access
+        .transact("desktop.config.components", |txn| {
+            let plan = &plan;
+            let owner = &owner;
+            Box::pin(async move {
+                gents::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentPrincipal,
+                    owner,
+                    owner,
+                )
+                .await?
+                .context("component apply requires an existing principal")?;
+                apply_desired_state_plan(txn, plan).await?;
+                Ok(())
+            })
+        })
+        .await
+}
+
+fn config_components_plan(
+    document: &gents::document_config::PackConfig,
+) -> Result<(String, DesiredStateApplyPlan)> {
+    let owner = document.agent_principal.agent_did.clone();
     let scope: AgentPrincipal = serde_json::from_value(serde_json::json!({"agent_did":owner}))?;
     anyhow::ensure!(
         serde_json::to_value(&document.agent_principal)? == serde_json::to_value(scope)?,
@@ -74,22 +125,7 @@ pub async fn apply_config_components(
             .cloned()
             .collect(),
     )?;
-    ConfigAccess::transact_local(node, None, "desktop.config.components", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            gents::config_client::read_desired_state_record_in_txn(
-                txn,
-                Collection::AgentPrincipal,
-                owner,
-                owner,
-            )
-            .await?
-            .context("component apply requires an existing principal")?;
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(())
-        })
-    })
-    .await
+    Ok((owner, plan))
 }
 
 /// Patch existing scoped components atomically through the canonical patch and

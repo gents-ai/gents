@@ -137,6 +137,13 @@ pub struct BehaviorDeleteRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct ContextDeleteRequest {
+    pub context_id: String,
+    pub agent_did: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct BackendSaveRequest {
     pub document: gents::InferenceBackend,
@@ -376,6 +383,12 @@ mod tests {
             "behaviorId",
             behavior_id,
             "behavior-a"
+        );
+        assert_source_routed_delete_request!(
+            ContextDeleteRequest,
+            "contextId",
+            context_id,
+            "context-a"
         );
     }
 }

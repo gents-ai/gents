@@ -80,6 +80,63 @@ async fn live_core_persists_managed_server_peer_through_watched_owner() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let paths = DesktopPaths::from_root(tempdir.path());
+    let core =
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+    let agent_did = "did:key:managed-config-owner";
+    core.persist_local_standard_peer(
+        "Managed local runtime",
+        "endpoint:managed-config",
+        agent_did,
+        "http://127.0.0.1:1/api/v0/graphql",
+        "/tmp/test-managed-config-home",
+    )
+    .await?;
+
+    let tools: gents::Tools = serde_json::from_value(serde_json::json!({
+        "agent_did": agent_did,
+        "tools_id": "must-not-be-local",
+        "host": { "files": { "mode": "ReadOnly" } }
+    }))?;
+    let error = core
+        .save_tools(&tools)
+        .await
+        .expect_err("an unavailable managed operator endpoint must fail closed");
+    assert!(
+        format!("{error:#}").contains("127.0.0.1:1"),
+        "the managed endpoint error must stay visible: {error:#}"
+    );
+
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"{{ Tools(filter: {{ agent_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "must-not-be-local" }} }}) {{ _docID }} }}"#,
+            gents::graphql::escape_graphql_string(agent_did)
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query local Tools: {:?}",
+        response.errors
+    );
+    assert_eq!(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("Tools"))
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "failed managed writes must not appear in the desktop replica"
+    );
+
+    core.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn client_core_starts_and_registers_schemas() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());

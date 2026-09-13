@@ -466,6 +466,32 @@ Denies the desktop_config_components_patch command without any pre-configured sc
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-context-delete`
+
+</td>
+<td>
+
+Enables the desktop_context_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-context-delete`
+
+</td>
+<td>
+
+Denies the desktop_context_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-event-source-delete`
 
 </td>

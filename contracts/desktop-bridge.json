@@ -205,6 +205,10 @@
       "permissionSet": "config-write"
     },
     {
+      "name": "desktop_context_delete",
+      "permissionSet": "config-write"
+    },
+    {
       "name": "desktop_backend_save",
       "permissionSet": "config-write"
     },
@@ -297,7 +301,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "7.2",
+  "contractVersion": "7.3",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -425,5 +429,5 @@
       "name": "full"
     }
   ],
-  "wireSchemaHash": "7f69a350858dc1eb2ee4fd69c0a9d1b772f0f33326cb3bbbd15018be107413f2"
+  "wireSchemaHash": "5f4165bb235d9cd3f74352b18ee5ce8281ec00e85fee41f160fd505f8e33ae65"
 }

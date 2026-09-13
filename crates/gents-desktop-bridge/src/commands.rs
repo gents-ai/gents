@@ -18,7 +18,7 @@ mod util;
 pub use chat::{rename_session, send_chat_message};
 #[cfg_attr(test, allow(unused_imports))]
 pub use config::{
-    apply_config_components, delete_backend_config, delete_behavior_config,
+    apply_config_components, delete_backend_config, delete_behavior_config, delete_context_config,
     delete_inference_profile_config, delete_schedule_config, delete_skill_config,
     delete_task_config, delete_tool_service_config, delete_tools_config, delete_trigger_config,
     patch_config_components, save_agent_config, save_backend_config, save_behavior_config,

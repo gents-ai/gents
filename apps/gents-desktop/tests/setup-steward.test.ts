@@ -49,9 +49,13 @@ describe("setup steward patches", () => {
   });
 
   it("keeps Setup as the configurator and promotes a separate working behavior", () => {
-    expect(SETUP_STEWARD_PROMPT).toContain("leaving Setup unchanged");
+    expect(SETUP_STEWARD_PROMPT).toContain("Keep Setup unchanged");
     expect(SETUP_STEWARD_PROMPT).toContain('action "create"');
     expect(SETUP_STEWARD_PROMPT).toContain("make_default true");
+    expect(SETUP_STEWARD_PROMPT).toContain("AgentSession selects a behavior");
+    expect(SETUP_STEWARD_PROMPT).toContain("Unsafe or invalid request");
+    expect(SETUP_STEWARD_PROMPT).toContain("Verify the result");
+    expect(SETUP_STEWARD_PROMPT).toContain("home-scoped rather than repo-scoped");
     expect(SETUP_STEWARD_PROMPT).not.toContain(
       "configure this behavior and context as a focused coding agent",
     );

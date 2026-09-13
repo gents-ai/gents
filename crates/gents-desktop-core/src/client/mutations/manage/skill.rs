@@ -1,12 +1,14 @@
 //! Canonical authored configuration through the shared retained-candidate owner.
 use anyhow::Result;
+#[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
-use gents::config_client::{
-    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+#[cfg(test)]
+use gents::config_client::apply_desired_state_plan;
+use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::document_config::SkillDocument;
 
+#[cfg(test)]
 pub async fn upsert_skill(node: &EmbeddedNode, document: &SkillDocument) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -14,37 +16,39 @@ pub async fn upsert_skill(node: &EmbeddedNode, document: &SkillDocument) -> Resu
         add: value.clone(),
         update: value,
     }])?;
-    ConfigAccess::transact_local(node, None, "desktop.skill.save", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(())
-        })
-    })
+    super::apply_plan_local(node, "desktop.skill.save", plan).await
+}
+
+pub async fn upsert_skill_on(access: &ConfigAccess, document: &SkillDocument) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Skill,
+        add: value.clone(),
+        update: value,
+    }])?;
+    super::apply_plan(access, "desktop.skill.save", plan).await
+}
+
+#[cfg(test)]
+pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
+    super::delete_scoped_document_local(
+        node,
+        "desktop.skill.delete",
+        Collection::Skill,
+        agent_did,
+        id,
+    )
     .await
 }
 
-pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
-    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+pub async fn delete_skill_on(access: &ConfigAccess, agent_did: &str, id: &str) -> Result<usize> {
+    super::delete_scoped_document(
+        access,
+        "desktop.skill.delete",
         Collection::Skill,
-        agent_did.to_owned(),
-        id.to_owned(),
-    )])?;
-    ConfigAccess::transact_local(node, None, "desktop.skill.delete", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            let existed = gents::config_client::read_desired_state_record_in_txn(
-                txn,
-                Collection::Skill,
-                agent_did,
-                id,
-            )
-            .await?
-            .is_some();
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(usize::from(existed))
-        })
-    })
+        agent_did,
+        id,
+    )
     .await
 }
 

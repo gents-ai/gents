@@ -249,8 +249,10 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     instructions: normalize_optional(row.instructions.as_deref()),
                     tool_refs: row.tool_refs.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
+                    interface_json: normalize_optional(row.interface_json.as_deref()),
                     enabled: Some(row.enabled),
                     created_at: normalize_optional(row.created_at.as_deref()),
+                    tags: row.tags.clone(),
                 })
                 .collect::<Vec<_>>();
             skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
@@ -700,6 +702,7 @@ fn backend_config_view(
         max_concurrent: row.max_concurrent,
         max_queue_depth: row.max_queue_depth,
         enabled: Some(row.enabled),
+        tags: row.tags.clone(),
         models,
         probe_status: observation.and_then(|observation| observation.probe_status.clone()),
     }
@@ -901,8 +904,10 @@ mod behavior_environment_tests {
             instructions: None,
             tool_refs: vec![],
             display_name: Some("Host diagnostics".to_string()),
+            interface_json: None,
             enabled: Some(true),
             created_at: None,
+            tags: vec![],
         }
     }
 

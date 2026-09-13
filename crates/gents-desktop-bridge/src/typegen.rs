@@ -200,6 +200,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ToolsDeleteRequest,
         ToolServiceDeleteRequest,
         BehaviorDeleteRequest,
+        ContextDeleteRequest,
         BackendSaveRequest,
         InferenceProfileSaveRequest,
         ToolsSaveRequest,

@@ -2,8 +2,8 @@
    skills live on AgentContext (see ContextsPanel). */
 import type { DeploymentView, BehaviorView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
-import { ChoiceRow, FactRow, SwitchRow, TextRow } from "./editors";
-import { useDraft } from "./draft";
+import { ChoiceRow, DraftActions, FactRow, SwitchRow, TextRow } from "./editors";
+import { fromLinesOrNull, toLines, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { createBehavior } from "./createBehavior";
@@ -28,24 +28,49 @@ function Editor({
     contextId: behavior.contextId ?? "",
     inferenceProfileId: behavior.inferenceProfileId ?? "",
     enabled: behavior.enabled,
+    makeDefault: behavior.isDefault,
+    tags: toLines(behavior.tags ?? []),
   };
-  const d = useDraft(saved, (next) =>
-    shell.applyConfig((api) =>
+  const d = useDraft(saved, async (next) => {
+    if (!next.displayName.trim()) throw new Error("Display name is required");
+    if (!deployment.contexts.some((row) => row.context_id === next.contextId))
+      throw new Error("Choose an existing context");
+    if (
+      !deployment.inferenceProfiles.some(
+        (row) => row.profile_id === next.inferenceProfileId,
+      )
+    )
+      throw new Error("Choose an existing inference profile");
+    await shell.applyConfig((api) =>
       api.saveBehaviorConfig({
         document: {
           behavior_id: behavior.behaviorId,
           agent_did: deployment.agentDid,
-          display_name: next.displayName,
-          description: next.description || null,
+          display_name: next.displayName.trim(),
+          description: next.description.trim() || null,
           context_id: next.contextId || null,
           inference_profile_id: next.inferenceProfileId,
           enabled: next.enabled,
-          tags: behavior.tags,
+          tags: fromLinesOrNull(next.tags),
           created_at: behavior.createdAt,
         },
       }),
-    ),
-  );
+    );
+    if (next.makeDefault && !behavior.isDefault) {
+      const agent = deployment.agentPrincipal;
+      await shell.saveAgentConfig({
+        document: {
+          agent_did: agent.agentDid,
+          display_name: agent.displayName,
+          default_behavior_id: behavior.behaviorId,
+          enabled: agent.enabled,
+          created_at: agent.createdAt,
+          created_by: agent.createdBy,
+          tags: deployment.principalConfig?.tags ?? null,
+        },
+      });
+    }
+  });
   const id = (f: string) => `${behavior.behaviorId}-${f}`;
   return (
     <>
@@ -96,7 +121,37 @@ function Editor({
           checked={d.draft.enabled}
           onChange={(v) => d.choose("enabled", v)}
         />
+        <SwitchRow
+          id={id("default")}
+          label="Default behaviour"
+          description={
+            behavior.isDefault
+              ? "Choose another behaviour from Agent details to change the default."
+              : "New sessions use this behaviour unless they select another."
+          }
+          checked={d.draft.makeDefault}
+          onChange={(v) => {
+            if (behavior.isDefault && !v) return;
+            d.choose("makeDefault", v);
+          }}
+        />
+        <TextRow
+          id={id("tags")}
+          label="Tags"
+          description="Comma or newline separated."
+          value={d.draft.tags}
+          onChange={(v) => d.set("tags", v)}
+          onCommit={d.commit}
+          onEnter={d.onEnter}
+        />
       </Group>
+      <DraftActions
+        dirty={d.dirty}
+        saving={d.saving}
+        error={d.error}
+        onSave={d.save}
+        onCancel={d.reset}
+      />
       <DeleteButton
         label={behavior.displayName}
         base={base}

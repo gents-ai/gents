@@ -1,8 +1,26 @@
+import { useState } from "react";
+import { toast } from "sonner";
 import type { DeploymentView, Schedule } from "@source-inc/gents-desktop-client";
+import { Button } from "@gents/ui/components/button";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { FactRow, TextRow } from "./editors";
-import { newId, useDraft } from "./draft";
+import {
+  AreaRow,
+  ChoiceRow,
+  DraftActions,
+  FactRow,
+  NumberRow,
+  TextRow,
+} from "./editors";
+import {
+  fromLinesOrNull,
+  newId,
+  optionalInteger,
+  str,
+  toLines,
+  useDraft,
+  validateCronSchedule,
+} from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 
@@ -28,26 +46,58 @@ function Editor({
   };
   const saved = {
     displayName: schedule.display_name ?? "",
+    cadenceKind: schedule.cadence.kind,
+    intervalSecs:
+      schedule.cadence.kind === "interval" ? str(schedule.cadence.interval_secs) : "",
     expression: schedule.cadence.kind === "cron" ? schedule.cadence.expression : "",
     timezone: schedule.cadence.kind === "cron" ? schedule.cadence.timezone : "UTC",
+    tags: toLines(schedule.tags ?? []),
   };
-  const d = useDraft(saved, (next) =>
-    shell.applyConfig((api) =>
+  const d = useDraft(saved, async (next) => {
+    const cadence =
+      next.cadenceKind === "interval"
+        ? {
+            kind: "interval" as const,
+            interval_secs:
+              optionalInteger("Interval seconds", next.intervalSecs, { min: 1 }) ??
+              (() => {
+                throw new Error("Interval seconds is required");
+              })(),
+          }
+        : {
+            kind: "cron" as const,
+            ...validateCronSchedule(next.expression, next.timezone),
+            missed_run_policy: "latest_only" as const,
+          };
+    await shell.applyConfig((api) =>
       api.saveScheduleConfig({
         document: {
           ...schedule,
-          display_name: next.displayName || null,
-          cadence: {
-            kind: "cron",
-            expression: next.expression,
-            timezone: next.timezone,
-            missed_run_policy: "latest_only",
-          },
+          display_name: next.displayName.trim() || null,
+          cadence,
+          tags: fromLinesOrNull(next.tags),
         },
       }),
-    ),
-  );
+    );
+  });
+  const [lastRun, setLastRun] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
   const id = (f: string) => `${schedule.schedule_id}-${f}`;
+  const run = async () => {
+    setRunning(true);
+    try {
+      const result = await shell.api.runSchedule({ scheduleId: schedule.schedule_id });
+      setLastRun(result.requestId);
+      toast(`Schedule started · ${result.requestId}`);
+      await shell.refreshSnapshot();
+    } catch (error) {
+      toast(
+        `Schedule failed to start: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setRunning(false);
+    }
+  };
   return (
     <>
       <Group title={schedule.display_name ?? schedule.schedule_id}>
@@ -62,22 +112,79 @@ function Editor({
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
-        <TextRow
-          id={id("cron")}
-          label="Cron"
-          value={d.draft.expression}
-          onChange={(v) => d.set("expression", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
+        <ChoiceRow
+          id={id("cadence")}
+          label="Cadence"
+          value={d.draft.cadenceKind}
+          onChange={(v) => d.choose("cadenceKind", v as "interval" | "cron")}
+          items={[
+            { value: "interval", label: "Interval" },
+            { value: "cron", label: "Cron" },
+          ]}
         />
-        <TextRow
-          id={id("tz")}
-          label="Timezone"
-          value={d.draft.timezone}
-          onChange={(v) => d.set("timezone", v)}
+        {d.draft.cadenceKind === "interval" ? (
+          <NumberRow
+            id={id("interval")}
+            label="Interval seconds"
+            description="Positive whole number."
+            value={d.draft.intervalSecs}
+            onChange={(v) => d.set("intervalSecs", v)}
+            onCommit={d.commit}
+            onEnter={d.onEnter}
+          />
+        ) : (
+          <>
+            <TextRow
+              id={id("cron")}
+              label="Cron"
+              value={d.draft.expression}
+              onChange={(v) => d.set("expression", v)}
+              onCommit={d.commit}
+              onEnter={d.onEnter}
+            />
+            <TextRow
+              id={id("tz")}
+              label="Timezone"
+              value={d.draft.timezone}
+              onChange={(v) => d.set("timezone", v)}
+              onCommit={d.commit}
+              onEnter={d.onEnter}
+            />
+          </>
+        )}
+        <AreaRow
+          id={id("tags")}
+          label="Tags"
+          description="One per line."
+          value={d.draft.tags}
+          onChange={(v) => d.set("tags", v)}
           onCommit={d.commit}
-          onEnter={d.onEnter}
+          rows={3}
         />
+      </Group>
+      <DraftActions
+        dirty={d.dirty}
+        saving={d.saving}
+        error={d.error}
+        onSave={d.save}
+        onCancel={d.reset}
+      />
+      <Group
+        title="Manual run"
+        action={
+          <Button size="sm" variant="brand" disabled={running} onClick={run}>
+            {running ? "Starting…" : "Run schedule now"}
+          </Button>
+        }
+      >
+        <FactRow label="Trigger">
+          Uses the enabled trigger currently bound to this schedule.
+        </FactRow>
+        {lastRun && (
+          <FactRow label="Started" mono>
+            {lastRun}
+          </FactRow>
+        )}
       </Group>
       <DeleteButton
         label={schedule.display_name ?? schedule.schedule_id}

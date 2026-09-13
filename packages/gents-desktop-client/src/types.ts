@@ -84,6 +84,7 @@ export type {
   ToolsDeleteRequest,
   ToolServiceDeleteRequest,
   BehaviorDeleteRequest,
+  ContextDeleteRequest,
   SkillSaveRequest,
   TaskRunRequest,
   TaskRunResult,

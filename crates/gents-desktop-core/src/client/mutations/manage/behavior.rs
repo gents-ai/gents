@@ -1,10 +1,10 @@
 use anyhow::Result;
+#[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
-use gents::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+#[cfg(test)]
+use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
+use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::AgentBehaviorDocument;
 
 pub async fn upsert_agent_behavior_on(
@@ -41,27 +41,61 @@ pub async fn upsert_agent_behavior(
     .await
 }
 
+#[cfg(test)]
 pub async fn delete_agent_behavior(
     node: &EmbeddedNode,
     agent_did: &str,
     id: &str,
 ) -> Result<usize> {
-    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+    super::delete_scoped_document_local(
+        node,
+        "desktop.behavior.delete",
         Collection::AgentBehavior,
-        agent_did.to_owned(),
-        id.to_owned(),
-    )])?;
-    ConfigAccess::transact_local(node, None, "desktop.behavior.delete", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            let existed =
-                read_desired_state_record_in_txn(txn, Collection::AgentBehavior, agent_did, id)
-                    .await?
-                    .is_some();
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(usize::from(existed))
-        })
-    })
+        agent_did,
+        id,
+    )
+    .await
+}
+
+pub async fn delete_agent_behavior_on(
+    access: &ConfigAccess,
+    agent_did: &str,
+    id: &str,
+) -> Result<usize> {
+    super::delete_scoped_document(
+        access,
+        "desktop.behavior.delete",
+        Collection::AgentBehavior,
+        agent_did,
+        id,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub async fn delete_agent_context(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
+    super::delete_scoped_document_local(
+        node,
+        "desktop.context.delete",
+        Collection::AgentContext,
+        agent_did,
+        id,
+    )
+    .await
+}
+
+pub async fn delete_agent_context_on(
+    access: &ConfigAccess,
+    agent_did: &str,
+    id: &str,
+) -> Result<usize> {
+    super::delete_scoped_document(
+        access,
+        "desktop.context.delete",
+        Collection::AgentContext,
+        agent_did,
+        id,
+    )
     .await
 }
 
@@ -70,6 +104,37 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn context_delete_removes_the_scoped_document() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        let owner = "did:test:context-delete";
+        gents::ensure_agent_principal(&node, owner).await?;
+        let context = json!({
+            "agent_did": owner,
+            "context_id": "temporary",
+            "display_name": "Temporary"
+        });
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::AgentContext,
+            add: context.clone(),
+            update: context,
+        }])?;
+        ConfigAccess::Local(node.clone())
+            .transact("test.context.create", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan).await?;
+                    Ok(())
+                })
+            })
+            .await?;
+
+        assert_eq!(delete_agent_context(&node, owner, "temporary").await?, 1);
+        assert_eq!(delete_agent_context(&node, owner, "temporary").await?, 0);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn behavior_and_profile_deletion_obey_canonical_owned_references() -> Result<()> {

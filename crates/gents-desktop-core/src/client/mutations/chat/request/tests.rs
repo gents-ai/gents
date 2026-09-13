@@ -1040,7 +1040,13 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
         ),
         "requester route regression",
         Some(RECOVERY_BEHAVIOR_ID),
-        SubmitRequestOptions::default(),
+        SubmitRequestOptions {
+            trigger_lineage: TriggerLineage {
+                trigger_kind: Some("manual".to_string()),
+                ..TriggerLineage::default()
+            },
+            ..SubmitRequestOptions::default()
+        },
     )
     .await?;
 
@@ -1054,6 +1060,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
                         agent_did
                         requester_did
                         admission_signer_did
+                        caused_by_trigger_kind
                     }}
                     AgentSession(filter: {{
                         session_id: {{ _eq: "{session_id}" }},
@@ -1099,7 +1106,85 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
             "AgentRequest must carry {field}"
         );
     }
+    let row = data
+        .get("AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .context("missing AgentRequest row")?;
+    assert_eq!(
+        row.get("caused_by_trigger_kind")
+            .and_then(serde_json::Value::as_str),
+        Some("manual")
+    );
     core.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_together(
+) -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    core.add_local_standard_peer_for_test(core.principal().did())
+        .await?;
+
+    let session_id = Uuid::new_v4().to_string();
+    let snapshot = core.store().snapshot();
+    let access = ConfigAccess::Local(core.node_arc());
+    let submitted = super::submit_goal_backed_request(
+        core.node(),
+        snapshot.as_ref(),
+        &access,
+        &session_id,
+        core.principal().did(),
+        core.principal().did(),
+        core.principal(),
+        test_local_admission(&core),
+        "finish the task",
+        Some(RECOVERY_BEHAVIOR_ID),
+        SubmitRequestOptions::default(),
+        "prove the desktop goal path",
+        Some(2_000),
+    )
+    .await?;
+
+    let session_id = escape_graphql_string(&session_id);
+    let request_id = escape_graphql_string(&submitted.request_id);
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"{{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
+                    retry_key session_id requester_did
+                }}
+                Goal(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                    session_id objective token_budget
+                }}
+                GoalCreationClaim(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                    session_id objective token_budget
+                }}
+            }}"#,
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let data = response.data.context("goal-backed submission query data")?;
+    for collection in ["AgentRequest", "Goal", "GoalCreationClaim"] {
+        assert_eq!(
+            data[collection].as_array().map(Vec::len),
+            Some(1),
+            "{collection} should commit exactly once"
+        );
+    }
+    assert_eq!(data["Goal"][0]["objective"], "prove the desktop goal path");
+    assert_eq!(data["GoalCreationClaim"][0]["token_budget"], 2_000);
+    assert_eq!(
+        data["AgentRequest"][0]["retry_key"],
+        format!("desktop-goal-request:{session_id}")
+    );
     Ok(())
 }
 

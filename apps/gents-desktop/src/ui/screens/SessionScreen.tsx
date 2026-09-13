@@ -153,9 +153,16 @@ function useTraceOpen() {
   return [open, setOpen] as const;
 }
 
-function useBehaviorChoice(shell: Shell) {
+export function useBehaviorChoice(shell: Shell) {
   const behaviours = shell.selectedDeployment?.behaviors ?? [];
   const [picked, setPicked] = useState<string | null>(null);
+  const previousSessionId = useRef(shell.selectedSessionId);
+  useEffect(() => {
+    if (previousSessionId.current && !shell.selectedSessionId) {
+      setPicked(null);
+    }
+    previousSessionId.current = shell.selectedSessionId;
+  }, [shell.selectedSessionId]);
   const behaviorId =
     picked ??
     shell.mailboxCause?.behaviorId ??

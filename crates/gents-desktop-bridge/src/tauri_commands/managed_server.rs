@@ -274,13 +274,27 @@ async fn ensure_managed_runtime_pairing(
         .request_status_enrollment_with_label(token, Some(&ready.agent_name))
         .await
         .map_err(|error| format!("requesting managed runtime enrollment: {error:#}"))?;
-    gents_server::server_host::approve_managed_client_enrollment(
+    if let Err(error) = gents_server::server_host::approve_managed_client_enrollment(
         agent_home,
         &ready.graphql,
         &enrollment.request_id,
     )
     .await
-    .map_err(|error| format!("approving managed runtime enrollment: {error:#}"))?;
+    {
+        let message = format!("{error:#}");
+        if enrollment_decision_was_already_reconciled(&message) {
+            // The durable enrollment reconciler can consume and authorize the
+            // request between its P2P delivery and this co-hosted operator
+            // call. Treat that race as idempotent and prove readiness below;
+            // a rejected or incomplete route still reaches the timeout.
+            tracing::debug!(
+                request_id = %enrollment.request_id,
+                "managed enrollment was already reconciled before explicit approval"
+            );
+        } else {
+            return Err(format!("approving managed runtime enrollment: {message}"));
+        }
+    }
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -305,6 +319,10 @@ async fn ensure_managed_runtime_pairing(
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+fn enrollment_decision_was_already_reconciled(message: &str) -> bool {
+    message.contains("no fresh pending enrollment request")
 }
 
 async fn matching_external_server(
@@ -575,5 +593,15 @@ mod tests {
         let preferred = occupied.local_addr().expect("local addr").port();
         let chosen = first_free_http_port(preferred).expect("fallback port");
         assert_ne!(chosen, preferred);
+    }
+
+    #[test]
+    fn already_reconciled_enrollment_decision_is_idempotent() {
+        assert!(enrollment_decision_was_already_reconciled(
+            "runtime rejected enrollment decision (400 Bad Request): no fresh pending enrollment request enroll-1"
+        ));
+        assert!(!enrollment_decision_was_already_reconciled(
+            "runtime rejected enrollment decision (403 Forbidden): invalid operator signature"
+        ));
     }
 }
