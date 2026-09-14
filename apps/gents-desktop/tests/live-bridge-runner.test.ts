@@ -4,6 +4,8 @@ import { once } from "node:events";
 import { describe, expect, it } from "vitest";
 
 import {
+  createLiveBridgeRunnerInvocation,
+  LIVE_RUNNER_BINARY_ENV,
   observeRemoteAheadDesktopLag,
   observeRemoteTerminalDesktopStall,
   type RequestDiagnosticsBundle,
@@ -14,6 +16,83 @@ import {
   terminateRunnerProcess,
   waitForReadyMessage,
 } from "./live-bridge-runner/process";
+
+describe("live bridge runner invocation", () => {
+  it("keeps Cargo as the default and forwards configured provider arguments", () => {
+    expect(
+      createLiveBridgeRunnerInvocation(
+        {
+          inferenceUrl: "http://workstation-1:8000/v1",
+          modelName: "GLM-5.3-Flash-NVFP4",
+          provider: "OpenAiCompatible",
+        },
+        {},
+      ),
+    ).toEqual({
+      command: "cargo",
+      runnerArgs: [
+        "run",
+        "-p",
+        "gents-desktop-tauri",
+        "--bin",
+        "bridge_runner",
+        "--quiet",
+        "--",
+        "--inference-url",
+        "http://workstation-1:8000/v1",
+        "--model-name",
+        "GLM-5.3-Flash-NVFP4",
+        "--provider",
+        "OpenAiCompatible",
+      ],
+    });
+  });
+
+  it("runs an explicitly selected prebuilt binary directly with all runner args", () => {
+    const invocation = createLiveBridgeRunnerInvocation(
+      {
+        inferenceUrl: "http://workstation-1:8000/v1",
+        modelName: "primary",
+        subagentInferenceUrl: "http://workstation-2:8000/v1",
+        subagentModelName: "delegate",
+      },
+      { [LIVE_RUNNER_BINARY_ENV]: process.execPath },
+    );
+
+    expect(invocation.command).toBe(process.execPath);
+    expect(invocation.runnerArgs).toEqual([
+      "--inference-url",
+      "http://workstation-1:8000/v1",
+      "--model-name",
+      "primary",
+      "--subagent-inference-url",
+      "http://workstation-2:8000/v1",
+      "--subagent-model-name",
+      "delegate",
+    ]);
+  });
+
+  it("rejects relative, missing, and non-executable overrides before spawn", () => {
+    expect(() =>
+      createLiveBridgeRunnerInvocation(
+        {},
+        { [LIVE_RUNNER_BINARY_ENV]: "target/debug/bridge_runner" },
+      ),
+    ).toThrow("must be an absolute path");
+    expect(() =>
+      createLiveBridgeRunnerInvocation(
+        {},
+        { [LIVE_RUNNER_BINARY_ENV]: "/definitely/missing/gents-bridge-runner" },
+      ),
+    ).toThrow("must name an executable file");
+    expect(() =>
+      createLiveBridgeRunnerInvocation(
+        {},
+        { [LIVE_RUNNER_BINARY_ENV]: import.meta.filename },
+      ),
+    ).toThrow("must name an executable file");
+  });
+});
 
 function spawnRunnerFixture(script: string) {
   return spawn(process.execPath, ["-e", script], {
