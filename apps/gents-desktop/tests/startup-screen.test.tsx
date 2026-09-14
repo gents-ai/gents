@@ -134,7 +134,7 @@ describe("desktop startup screen", () => {
       "Checking the hosted agent",
     );
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Restore hosted agentWorking",
+      "Start hosted agentWorking",
     );
     expect(base.api.fetchDesktopSnapshot).not.toHaveBeenCalled();
 

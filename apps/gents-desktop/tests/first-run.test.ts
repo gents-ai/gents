@@ -9,6 +9,33 @@ import {
 } from "../src/ui/lib/firstRun";
 
 describe("first-run inference gate", () => {
+  it("recognizes the initialized local principal after background enrollment changes its route source", () => {
+    const paired = { ...deployment, source: "enrollment" };
+    expect(isLocalAgent(paired, deployment.agentDid)).toBe(true);
+    expect(isLocalAgent(paired, "did:another-home")).toBe(false);
+    expect(
+      needsFirstRunSetup({
+        bootstrap: { ...bootstrap, initAgentDid: deployment.agentDid },
+        client: { deployments: [paired] },
+      } as Parameters<typeof needsFirstRunSetup>[0]),
+    ).toBe(true);
+  });
+  it("does not finish setup just because an unrelated OAuth backend exists", () => {
+    expect(
+      inferenceIsConfigured({
+        ...deployment,
+        inferenceBackends: [
+          ...deployment.inferenceBackends,
+          {
+            ...deployment.inferenceBackends[0]!,
+            backendId: "codex-unbound",
+            authKind: "principal_oauth",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("treats a local placeholder backend as unfinished", () => {
     expect(isLocalAgent(deployment)).toBe(true);
     expect(inferenceIsConfigured(deployment)).toBe(false);

@@ -786,7 +786,8 @@ export function createDesktopUiHarness(
       provisioned = true;
       deployment = {
         ...deployment,
-        source: "local",
+        // Background pairing installs an enrollment route for the managed DID.
+        source: "enrollment",
         label,
         agentPrincipal: { ...deployment.agentPrincipal, displayName: label },
       };
@@ -1945,6 +1946,13 @@ export function createDesktopUiHarness(
     },
     async getInferenceSetupCatalog() {
       return {
+        executionDefaults: {
+          maxTurns: 250,
+          maxTotalTokens: null,
+          streamBatchMs: 100,
+          streamLivenessSecs: 1800,
+          deadlineSecs: 86400,
+        },
         contractVersion: 1,
         defaultsVersion: "2026-09-14.1",
         providers: [
@@ -2033,7 +2041,11 @@ export function createDesktopUiHarness(
     },
     async discoverInferenceModels(request) {
       const modelName =
-        request.provider === "local" ? "GLM-5.3-Flash-NVFP4" : "gpt-5.5";
+        request.provider === "local"
+          ? "GLM-5.3-Flash-NVFP4"
+          : request.provider === "anthropic"
+            ? "claude-sonnet-5"
+            : "gpt-5.5";
       const recommendation = await adapter.getInferenceModelRecommendation({
         provider: request.provider,
         authMethod: request.authMethod,
@@ -2049,9 +2061,18 @@ export function createDesktopUiHarness(
         defaultsVersion: "2026-09-14.1",
         requestedEndpoint: request.endpoint,
         effectiveEndpoint: request.endpoint,
-        backendName: request.provider === "local" ? "Local server" : "ChatGPT",
+        backendName:
+          request.provider === "local"
+            ? "Local server"
+            : request.provider === "anthropic"
+              ? "Anthropic"
+              : "ChatGPT",
         providerKind:
-          request.provider === "local" ? "OpenAiCompatible" : "ChatGptCodex",
+          request.provider === "local"
+            ? "OpenAiCompatible"
+            : request.provider === "anthropic"
+              ? "ClaudeCliSubscription"
+              : "ChatGptCodex",
         openaiWireApi: request.provider === "local" ? "chat_completions" : "responses",
         reachable: true,
         models: [
@@ -2072,6 +2093,20 @@ export function createDesktopUiHarness(
     },
     async getInferenceModelRecommendation(request) {
       const fixture = request.modelName === "GLM-5.3-Flash-NVFP4";
+      if (request.provider === "anthropic")
+        return {
+          defaultsVersion: "2026-09-14.3",
+          summary: "Anthropic defaults",
+          contextWindow: { recommended: 1000000, min: 1, max: 1000000 },
+          maxOutputTokens: { recommended: 64000, min: 1, max: 128000 },
+          temperature: null,
+          topP: null,
+          reasoningEffort: {
+            recommended: "high",
+            choices: ["low", "medium", "high", "xhigh", "max"],
+          },
+          maxConcurrent: { recommended: 8, min: 1, max: null },
+        };
       return {
         defaultsVersion: "2026-09-14.1",
         summary: fixture

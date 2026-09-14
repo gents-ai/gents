@@ -26,6 +26,7 @@ export function buildInferenceSetupPlan({
   model,
   recommendation,
   settings,
+  purpose = "onboarding",
 }: {
   deployment: DeploymentView;
   provider: InferenceProviderId;
@@ -35,7 +36,9 @@ export function buildInferenceSetupPlan({
   model: string;
   recommendation: InferenceModelRecommendation;
   settings: InferenceSetupSettings;
-}): { document: PackConfig; profileId: string; defaultBehaviorId: string } {
+  purpose?: "onboarding" | "add-backend";
+}): { document: PackConfig; profileId: string; defaultBehaviorId: string | null } {
+  const addingBackend = purpose === "add-backend";
   const normalizedEndpoint = (endpoint: string | null) =>
     endpoint?.trim().replace(/\/+$/, "") ?? "";
   const sameConnection = deployment.inferenceBackends.find(
@@ -52,8 +55,8 @@ export function buildInferenceSetupPlan({
       backendIsConfigured(backend) && backend.backendId !== sameConnection?.backendId,
   );
   const backendId =
-    sameConnection?.backendId ??
-    (!addingExtra ? placeholder?.backendId : undefined) ??
+    (!addingBackend ? sameConnection?.backendId : undefined) ??
+    (!addingBackend && !addingExtra ? placeholder?.backendId : undefined) ??
     (() => {
       let candidate: string = provider;
       let suffix = 2;
@@ -66,18 +69,18 @@ export function buildInferenceSetupPlan({
     })();
   const existingProfile =
     deployment.inferenceProfiles.find((row) => row.backend_id === backendId) ??
-    (!addingExtra ? deployment.inferenceProfiles[0] : undefined);
+    (!addingBackend && !addingExtra ? deployment.inferenceProfiles[0] : undefined);
   const profileId = existingProfile?.profile_id ?? `profile-${backendId}`;
   const samplingId =
     recommendation.temperature || recommendation.topP
       ? (existingProfile?.sampling_id ?? `${profileId}-sampling`)
       : null;
   const defaultBehaviorId = deployment.agentPrincipal.defaultBehaviorId;
-  if (!defaultBehaviorId) {
+  if (!defaultBehaviorId && !addingBackend) {
     throw new Error("The agent has no default behavior to activate for Setup");
   }
   const shouldRebindDefault = shouldRebindSetupDefault(deployment, addingExtra);
-  const behaviorConfigs = deployment.behaviorConfigs
+  const behaviorConfigs = (addingBackend ? [] : deployment.behaviorConfigs)
     .filter(
       (behavior) =>
         !behavior.inference_profile_id ||

@@ -128,6 +128,8 @@ pub(crate) struct LeanPromptAssemblyClaudeBodyCase {
     pub(crate) tools: Vec<String>,
     pub(crate) system: Vec<String>,
     pub(crate) tools_present: bool,
+    pub(crate) effort: Option<String>,
+    pub(crate) selected_effort: Option<String>,
 }
 
 /// A Claude Messages SSE witness computed by `ClaudeMap.runStream`.

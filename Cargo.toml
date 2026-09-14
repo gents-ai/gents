@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/gents-login-ui",
     "apps/fixture-host/src-tauri",
     "apps/gents-desktop/src-tauri",
     "crates/fixture-domain-plugin",
@@ -65,6 +66,7 @@ crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "ddb5a
 defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "ddb5a7c2f0a8316c3478ac5463789e82e7ca7e1d" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
+gents-login-ui = { path = "crates/gents-login-ui" }
 gents-claude-login = { path = "crates/gents-claude-login" }
 gents-codex-protocol = { path = "crates/gents-codex-protocol" }
 gents-schemas = { path = "crates/gents-schemas" }

@@ -574,12 +574,29 @@ fn generated_claude_body_cases_drive_the_body_builder() {
                 parameters: serde_json::json!({"type": "object"}),
             })
             .collect();
-        let body = build_messages_body_native(
+        let mut body = build_messages_body_native(
             "claude-sonnet-5",
             case.preamble.as_deref(),
             None,
             &history,
             &tools,
+        );
+        gents::claude_messages::apply_reasoning_parameters(
+            "claude-sonnet-5",
+            &serde_json::json!({"output_config": {"effort": case.effort}}),
+            &mut body,
+        );
+        assert_eq!(
+            body["output_config"]["effort"].as_str(),
+            case.selected_effort.as_deref(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            body.get("thinking").is_some(),
+            case.selected_effort.is_some(),
+            "{}",
+            case.name
         );
         let system: Vec<String> = body["system"]
             .as_array()

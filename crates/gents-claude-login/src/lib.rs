@@ -14,7 +14,7 @@ use base64::Engine;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tiny_http::{Header, Response, Server, StatusCode as TinyStatusCode};
+use tiny_http::{Response, Server};
 use tokio::sync::{mpsc, Notify};
 use url::Url;
 
@@ -53,6 +53,7 @@ pub struct LoginTokens {
     pub refresh_token: String,
     pub expires_in: Option<i64>,
     pub scope: Option<String>,
+    pub account_id: Option<String>,
 }
 
 impl fmt::Debug for LoginTokens {
@@ -291,11 +292,7 @@ async fn handle_callback_request(
 }
 
 fn text_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
-    let mut response = Response::from_string(body).with_status_code(TinyStatusCode(status));
-    if let Ok(header) = Header::from_bytes("Content-Type", "text/plain; charset=utf-8") {
-        response.add_header(header);
-    }
-    response
+    gents_login_ui::response(status, body)
 }
 
 #[derive(Clone)]
@@ -369,6 +366,8 @@ struct TokenResponse {
     expires_in: Option<i64>,
     #[serde(default)]
     scope: Option<String>,
+    #[serde(default)]
+    account: Option<serde_json::Value>,
 }
 
 pub(crate) async fn exchange_code(
@@ -413,6 +412,12 @@ pub(crate) async fn exchange_code(
         refresh_token: tokens.refresh_token,
         expires_in: tokens.expires_in,
         scope: tokens.scope,
+        account_id: tokens
+            .account
+            .as_ref()
+            .and_then(|account| account.get("email_address").or_else(|| account.get("uuid")))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -479,6 +484,7 @@ mod tests {
             refresh_token: "refresh-SECRET".into(),
             expires_in: Some(60),
             scope: Some("user:inference".into()),
+            account_id: None,
         };
         let rendered = format!("{tokens:?}");
         assert!(!rendered.contains("SECRET"), "{rendered}");
@@ -514,7 +520,7 @@ mod tests {
 
     #[tokio::test]
     async fn exchange_posts_json_with_state_and_verifier() {
-        let (url, handle) = one_shot_server(200, r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800,"scope":"user:inference"}"#).await;
+        let (url, handle) = one_shot_server(200, r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800,"scope":"user:inference","account":{"uuid":"account-1","email_address":"person@example.test"}}"#).await;
         let opts = LoginOptions {
             token_url: url,
             ..options()
@@ -545,6 +551,7 @@ mod tests {
         assert_eq!(tokens.access_token, "access-NEW");
         assert_eq!(tokens.refresh_token, "refresh-NEW");
         assert_eq!(tokens.expires_in, Some(28800));
+        assert_eq!(tokens.account_id.as_deref(), Some("person@example.test"));
     }
 
     #[tokio::test]

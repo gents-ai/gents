@@ -38,6 +38,14 @@ export function validateInferenceSettings(
   recommendation: InferenceModelRecommendation,
   draft: InferenceSettingsDraft,
 ) {
+  if (
+    recommendation.reasoningEffort &&
+    !recommendation.reasoningEffort.choices.includes(
+      draft.reasoningEffort as ReasoningEffort,
+    )
+  ) {
+    return "Choose a supported reasoning effort";
+  }
   const check = (
     label: string,
     value: string,
@@ -106,6 +114,7 @@ export function InferenceModelControls({
   expanded,
   onExpandedChange,
   includeConcurrency = true,
+  alwaysExpanded = false,
 }: {
   recommendation: InferenceModelRecommendation;
   value: InferenceSettingsDraft;
@@ -113,6 +122,7 @@ export function InferenceModelControls({
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   includeConcurrency?: boolean;
+  alwaysExpanded?: boolean;
 }) {
   const set = <Key extends keyof InferenceSettingsDraft>(
     key: Key,
@@ -120,22 +130,66 @@ export function InferenceModelControls({
   ) => onChange({ ...value, [key]: next });
   return (
     <div className="grid gap-3">
-      <div className="rounded-xl bg-accent/50 p-3">
-        <p className="text-sm">{recommendation.summary}</p>
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          Gents recommendation · defaults {recommendation.defaultsVersion}
-        </p>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        className="justify-self-start"
-        aria-expanded={expanded}
-        onClick={() => onExpandedChange(!expanded)}
-      >
-        {expanded ? "Hide customization" : "Customize"}
-      </Button>
-      {expanded ? (
+      {recommendation.temperature ? (
+        <NumericField
+          id="inference-temperature"
+          label="Temperature"
+          value={value.temperature}
+          min={recommendation.temperature.min}
+          max={recommendation.temperature.max}
+          step={recommendation.temperature.step}
+          onChange={(next) => set("temperature", next)}
+        />
+      ) : null}
+      {recommendation.topP ? (
+        <NumericField
+          id="inference-top-p"
+          label="Top-p"
+          value={value.topP}
+          min={recommendation.topP.min}
+          max={recommendation.topP.max}
+          step={recommendation.topP.step}
+          onChange={(next) => set("topP", next)}
+        />
+      ) : null}
+      {recommendation.reasoningEffort ? (
+        <label className="grid gap-1" htmlFor="inference-reasoning">
+          <span className="text-xs text-muted-foreground">Reasoning effort</span>
+          <Select
+            items={recommendation.reasoningEffort.choices.map((choice) => ({
+              value: choice,
+              label: choice,
+            }))}
+            value={value.reasoningEffort}
+            onValueChange={(next) =>
+              next && set("reasoningEffort", next as ReasoningEffort)
+            }
+          >
+            <SelectTrigger id="inference-reasoning" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {recommendation.reasoningEffort.choices.map((choice) => (
+                <SelectItem key={choice} value={choice}>
+                  {choice}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+      ) : null}
+      {!alwaysExpanded && (
+        <Button
+          type="button"
+          variant="outline"
+          className="justify-self-start"
+          aria-expanded={expanded}
+          onClick={() => onExpandedChange(!expanded)}
+        >
+          {expanded ? "Hide advanced settings" : "Advanced settings"}
+        </Button>
+      )}
+      {expanded || alwaysExpanded ? (
         <div className="grid grid-cols-2 gap-3" data-testid="inference-custom-controls">
           {recommendation.contextWindow ? (
             <NumericField
@@ -156,54 +210,6 @@ export function InferenceModelControls({
               max={recommendation.maxOutputTokens.max}
               onChange={(next) => set("maxOutputTokens", next)}
             />
-          ) : null}
-          {recommendation.temperature ? (
-            <NumericField
-              id="inference-temperature"
-              label="Temperature"
-              value={value.temperature}
-              min={recommendation.temperature.min}
-              max={recommendation.temperature.max}
-              step={recommendation.temperature.step}
-              onChange={(next) => set("temperature", next)}
-            />
-          ) : null}
-          {recommendation.topP ? (
-            <NumericField
-              id="inference-top-p"
-              label="Top-p"
-              value={value.topP}
-              min={recommendation.topP.min}
-              max={recommendation.topP.max}
-              step={recommendation.topP.step}
-              onChange={(next) => set("topP", next)}
-            />
-          ) : null}
-          {recommendation.reasoningEffort ? (
-            <label className="grid gap-1" htmlFor="inference-reasoning">
-              <span className="text-xs text-muted-foreground">Reasoning effort</span>
-              <Select
-                items={recommendation.reasoningEffort.choices.map((choice) => ({
-                  value: choice,
-                  label: choice,
-                }))}
-                value={value.reasoningEffort}
-                onValueChange={(next) =>
-                  next && set("reasoningEffort", next as ReasoningEffort)
-                }
-              >
-                <SelectTrigger id="inference-reasoning" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {recommendation.reasoningEffort.choices.map((choice) => (
-                    <SelectItem key={choice} value={choice}>
-                      {choice}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
           ) : null}
           {includeConcurrency ? (
             <NumericField

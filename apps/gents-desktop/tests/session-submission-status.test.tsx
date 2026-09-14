@@ -15,7 +15,11 @@ describe("kit session submission status", () => {
         }}
       />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Your message is queued");
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the agent…");
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "title",
+      expect.stringContaining("Your message is queued"),
+    );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
   it("shows submission errors instead of silently swallowing them", () => {

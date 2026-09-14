@@ -258,10 +258,13 @@ export function SessionSubmissionStatus({
 }: Pick<Shell, "error" | "activityStatus">) {
   return (
     <>
-      {activityStatus && (
-        <div role="status" className="mt-2 px-1 text-xs text-muted-foreground">
-          <p>{activityStatus.label}</p>
-          <p>{activityStatus.detail}</p>
+      {activityStatus && !error && (
+        <div
+          role="status"
+          title={activityStatus.detail}
+          className="mt-2 px-1 text-xs text-muted-foreground"
+        >
+          <span>{activityStatus.label}</span>
         </div>
       )}
       {error && (
@@ -892,11 +895,14 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     }
                   />
                 </div>
-                {status.kind === "disabled" && (
-                  <p className="mt-2 px-1 text-xs text-muted-foreground">
-                    {status.hint}
-                  </p>
-                )}
+                {status.kind === "disabled" &&
+                  !shell.activityStatus &&
+                  !shell.error &&
+                  !inFlight && (
+                    <p className="mt-2 px-1 text-xs text-muted-foreground">
+                      {status.hint}
+                    </p>
+                  )}
                 <SessionSubmissionStatus
                   error={shell.error}
                   activityStatus={shell.activityStatus}

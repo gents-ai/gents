@@ -7,15 +7,33 @@ import type {
   InferenceBackendView,
 } from "@source-inc/gents-desktop-client";
 
-export function isLocalAgent(deployment: DeploymentView): boolean {
+export function isLocalAgent(
+  deployment: DeploymentView,
+  initAgentDid?: string | null,
+): boolean {
   const source = deployment.source ?? "";
   return (
-    source === "local" || source === "local-standard" || source.startsWith("local")
+    deployment.agentDid === initAgentDid ||
+    source === "local" ||
+    source === "local-standard" ||
+    source.startsWith("local")
   );
 }
 
 export function inferenceIsConfigured(deployment: DeploymentView): boolean {
-  return deployment.inferenceBackends.some((backend) => backendIsConfigured(backend));
+  const behavior = deployment.behaviorConfigs.find(
+    (row) => row.behavior_id === deployment.agentPrincipal.defaultBehaviorId,
+  );
+  const profile = deployment.inferenceProfiles.find(
+    (row) => row.profile_id === behavior?.inference_profile_id,
+  );
+  return (
+    Boolean(profile?.model_name?.trim()) &&
+    deployment.inferenceBackends.some(
+      (backend) =>
+        backend.backendId === profile?.backend_id && backendIsConfigured(backend),
+    )
+  );
 }
 
 export function backendIsConfigured(backend: InferenceBackendView): boolean {
@@ -45,6 +63,8 @@ export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
   const deployments = snapshot.client?.deployments ?? [];
   if (deployments.length === 0) return true;
   return deployments.some(
-    (deployment) => isLocalAgent(deployment) && !inferenceIsConfigured(deployment),
+    (deployment) =>
+      isLocalAgent(deployment, snapshot.bootstrap.initAgentDid) &&
+      !inferenceIsConfigured(deployment),
   );
 }

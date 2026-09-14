@@ -154,6 +154,19 @@ struct OpenAiModelRecord {
     name: Option<String>,
     #[serde(rename = "contextWindow")]
     context_window: Option<i64>,
+    // vLLM's OpenAI-compatible catalog and OpenRouter's documented catalog.
+    max_model_len: Option<i64>,
+    context_length: Option<i64>,
+    top_provider: Option<OpenRouterModelProvider>,
+    display_name: Option<String>,
+    max_input_tokens: Option<i64>,
+    max_tokens: Option<i64>,
+    capabilities: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct OpenRouterModelProvider {
+    max_completion_tokens: Option<i64>,
 }
 
 impl OpenAiModelRecord {
@@ -172,24 +185,52 @@ impl OpenAiModelRecord {
             .map(|value| value.trim().to_string())
     }
 
-    /// Canonical advertised record for one catalog row. Capabilities stay
-    /// `None` (unknown) except where the provider's catalog shape — per the
-    /// existing adapter evidence — advertises them: only Grok `/models-v2`
-    /// rows carry `name` / `contextWindow`. No supported efforts, output
-    /// tokens, or model profiles are invented here.
+    /// Preserve provider-advertised limits without inferring them from model IDs.
     fn into_advertised(self, kind: BackendProviderKind) -> Option<AdvertisedModel> {
+        let reasoning_efforts = if kind == BackendProviderKind::ClaudeCliSubscription {
+            self.capabilities.as_ref().map(|caps| {
+                ["low", "medium", "high", "xhigh", "max"]
+                    .into_iter()
+                    .filter(|effort| caps["effort"][*effort]["supported"].as_bool() == Some(true))
+                    .filter_map(|effort| crate::config::ReasoningEffort::parse(effort).ok())
+                    .collect()
+            })
+        } else {
+            None
+        };
         let (name, context_window) = (
-            if kind == BackendProviderKind::XaiGrokOAuth {
+            if matches!(
+                kind,
+                BackendProviderKind::XaiGrokOAuth | BackendProviderKind::OpenRouter
+            ) {
                 self.name.clone()
+            } else if kind == BackendProviderKind::ClaudeCliSubscription {
+                self.display_name.clone()
             } else {
                 None
             },
             if kind == BackendProviderKind::XaiGrokOAuth {
                 self.context_window
+            } else if kind == BackendProviderKind::OpenRouter {
+                self.context_length
+            } else if kind == BackendProviderKind::OpenAiCompatible {
+                self.max_model_len
+            } else if kind == BackendProviderKind::ClaudeCliSubscription {
+                self.max_input_tokens
             } else {
                 None
             },
         );
+        let max_output_tokens = if kind == BackendProviderKind::OpenRouter {
+            self.top_provider
+                .as_ref()
+                .and_then(|provider| provider.max_completion_tokens)
+                .filter(|value| *value > 0)
+        } else if kind == BackendProviderKind::ClaudeCliSubscription {
+            self.max_tokens.filter(|value| *value > 0)
+        } else {
+            None
+        };
         let model_name = self.identifier(kind)?;
         let display_name = name
             .map(|value| value.trim().to_string())
@@ -197,9 +238,9 @@ impl OpenAiModelRecord {
         Some(AdvertisedModel {
             model_name,
             display_name,
-            context_window,
-            max_output_tokens: None,
-            reasoning_efforts: None,
+            context_window: context_window.filter(|value| *value > 0),
+            max_output_tokens,
+            reasoning_efforts,
         })
     }
 }
@@ -210,6 +251,15 @@ struct ChatGptCodexModelRecord {
     id: Option<String>,
     name: Option<String>,
     model: Option<String>,
+    display_name: Option<String>,
+    context_window: Option<i64>,
+    max_context_window: Option<i64>,
+    supported_reasoning_levels: Option<Vec<CodexReasoningLevel>>,
+}
+
+#[derive(Deserialize)]
+struct CodexReasoningLevel {
+    effort: String,
 }
 
 impl ChatGptCodexModelRecord {
@@ -221,17 +271,28 @@ impl ChatGptCodexModelRecord {
             .map(|value| value.trim().to_string())
     }
 
-    /// The Codex `models` shape advertises identifiers only. `name` participates
-    /// in identifier fallback, so it is not promoted to a display name; all
-    /// capabilities stay unknown.
+    /// Preserve the metadata returned by Codex's ModelInfo catalog. Its
+    /// max_context_window is an override ceiling, not the normal context size.
+    /// Output limits and sampling are provider-managed on this transport.
     fn into_advertised(self) -> Option<AdvertisedModel> {
+        let display_name = self.display_name.clone();
+        let context_window = self
+            .context_window
+            .or(self.max_context_window)
+            .filter(|v| *v > 0);
+        let reasoning_efforts = self.supported_reasoning_levels.as_ref().map(|levels| {
+            levels
+                .iter()
+                .filter_map(|level| crate::config::ReasoningEffort::parse(&level.effort).ok())
+                .collect()
+        });
         let model_name = self.identifier()?;
         Some(AdvertisedModel {
             model_name,
-            display_name: None,
-            context_window: None,
+            display_name,
+            context_window,
             max_output_tokens: None,
-            reasoning_efforts: None,
+            reasoning_efforts,
         })
     }
 }
@@ -419,6 +480,72 @@ pub fn truncate_probe_body(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openrouter_and_vllm_catalogs_preserve_advertised_limits() {
+        let router: OpenAiModelRecord = serde_json::from_value(serde_json::json!({
+            "id":"test", "name":"Test", "context_length":128000,
+            "top_provider":{"max_completion_tokens":4096}
+        }))
+        .unwrap();
+        let advertised = router
+            .into_advertised(BackendProviderKind::OpenRouter)
+            .unwrap();
+        assert_eq!(advertised.context_window, Some(128000));
+        assert_eq!(advertised.max_output_tokens, Some(4096));
+        let local: OpenAiModelRecord = serde_json::from_value(serde_json::json!({
+            "id":"GLM-5.3-Flash-NVFP4", "max_model_len":1048576
+        }))
+        .unwrap();
+        assert_eq!(
+            local
+                .into_advertised(BackendProviderKind::OpenAiCompatible)
+                .unwrap()
+                .context_window,
+            Some(1048576)
+        );
+    }
+
+    #[test]
+    fn codex_catalog_preserves_context_and_supported_efforts() {
+        let record: ChatGptCodexModelRecord = serde_json::from_value(serde_json::json!({
+            "slug": "gpt-5.6-sol", "display_name": "GPT-5.6 Sol",
+            "context_window": 272000, "max_context_window": 872000,
+            "supported_reasoning_levels": [{"effort":"low"}, {"effort":"ultra"}, {"effort":"future"}]
+        })).unwrap();
+        let advertised = record.into_advertised().unwrap();
+        assert_eq!(advertised.context_window, Some(272000));
+        assert_eq!(advertised.display_name.as_deref(), Some("GPT-5.6 Sol"));
+        assert_eq!(
+            advertised.reasoning_efforts,
+            Some(vec![
+                crate::config::ReasoningEffort::Low,
+                crate::config::ReasoningEffort::Ultra
+            ])
+        );
+        assert_eq!(advertised.max_output_tokens, None);
+    }
+
+    #[test]
+    fn codex_catalog_distinguishes_unknown_and_disabled_reasoning() {
+        for (fields, expected) in [
+            (serde_json::json!({}), None),
+            (
+                serde_json::json!({"supported_reasoning_levels": []}),
+                Some(vec![]),
+            ),
+        ] {
+            let mut value = serde_json::json!({"slug":"test", "max_context_window":128000});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            let record: ChatGptCodexModelRecord = serde_json::from_value(value).unwrap();
+            let advertised = record.into_advertised().unwrap();
+            assert_eq!(advertised.context_window, Some(128000));
+            assert_eq!(advertised.reasoning_efforts, expected);
+        }
+    }
 
     #[test]
     fn probe_error_body_truncation_preserves_utf8_boundaries() {
@@ -662,7 +789,7 @@ mod tests {
         // Live probe: `GET https://api.anthropic.com/v1/models` with the
         // subscription bearer returns the OpenAI-style `{"data":[{"id":...}]}`.
         let (endpoint, requests) = spawn_model_discovery_server(
-            r#"{"data":[{"id":"claude-fable-5-1","type":"model"},{"id":"claude-opus-5","type":"model"},{"id":"claude-sonnet-5","type":"model"}],"has_more":false}"#,
+            r#"{"data":[{"id":"claude-fable-5-1","display_name":"Claude Fable 5.1","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"effort":{"supported":true,"low":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true}}},"type":"model"},{"id":"claude-opus-5","type":"model"},{"id":"claude-sonnet-5","type":"model"}],"has_more":false}"#,
         )
         .await;
         let credential = claude_credential();
@@ -680,6 +807,20 @@ mod tests {
         assert_eq!(
             model_names(&models),
             vec!["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"]
+        );
+        assert_eq!(models[0].context_window, Some(1_000_000));
+        assert_eq!(models[0].max_output_tokens, Some(128_000));
+        assert_eq!(models[0].display_name.as_deref(), Some("Claude Fable 5.1"));
+        assert_eq!(
+            models[0].reasoning_efforts.as_deref(),
+            Some(
+                [
+                    crate::config::ReasoningEffort::Low,
+                    crate::config::ReasoningEffort::High,
+                    crate::config::ReasoningEffort::XHigh,
+                ]
+                .as_slice()
+            )
         );
         let requests = requests.lock().expect("requests lock");
         let request = requests

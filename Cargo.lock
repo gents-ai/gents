@@ -3859,6 +3859,7 @@ name = "gents-chatgpt-login"
 version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
+ "gents-login-ui",
  "gents-protocol",
  "rand 0.9.2",
  "reqwest 0.12.28",
@@ -3878,6 +3879,7 @@ name = "gents-claude-login"
 version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
+ "gents-login-ui",
  "rand 0.9.2",
  "reqwest 0.12.28",
  "serde",
@@ -4098,6 +4100,13 @@ version = "0.1.0"
 dependencies = [
  "lens_sdk",
  "serde_json",
+]
+
+[[package]]
+name = "gents-login-ui"
+version = "0.17.0"
+dependencies = [
+ "tiny_http",
 ]
 
 [[package]]

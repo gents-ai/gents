@@ -741,7 +741,10 @@ async fn initialize_runtime_home(
         discovery_timeout_secs: None,
         max_concurrent: Some(args.max_concurrent),
         max_queue_depth: Some(args.max_queue_depth),
-        enabled: true,
+        // First-run must not activate the placeholder model merely because an
+        // unrelated service happens to answer on the default localhost port.
+        // Selecting inference enables this backend through the normal config owner.
+        enabled: initial_backend_enabled(args),
         tags: Vec::new(),
     };
 
@@ -1257,6 +1260,10 @@ fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig>
     )
 }
 
+fn initial_backend_enabled(args: &InitArgs) -> bool {
+    !args.setup_steward || args.model_name.is_some() || args.backend_preset.is_some()
+}
+
 fn resolve_init_model_name(args: &InitArgs) -> Result<&str> {
     if let Some(explicit) = args.model_name.as_deref() {
         let model_name = explicit.trim();
@@ -1483,6 +1490,19 @@ mod tests {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         }
+    }
+
+    #[test]
+    fn setup_steward_placeholder_is_disabled_until_inference_is_selected() {
+        let mut args = init_args();
+        args.setup_steward = true;
+        args.model_name = None;
+        assert!(!initial_backend_enabled(&args));
+        args.model_name = Some("selected-model".into());
+        assert!(initial_backend_enabled(&args));
+        args.model_name = None;
+        args.setup_steward = false;
+        assert!(initial_backend_enabled(&args));
     }
 
     #[test]

@@ -131,8 +131,6 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         "--setup-steward".to_string(),
         "--inference-url".to_string(),
         crate::DEFAULT_INIT_ENDPOINT.to_string(),
-        "--model-name".to_string(),
-        crate::DEFAULT_INIT_MODEL_NAME.to_string(),
     ];
     if let Some(tool_root) = options.tool_root {
         argv.push("--tool-root".to_string());

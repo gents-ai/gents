@@ -1556,6 +1556,7 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
             refresh_token: "refresh-token".to_string(),
             expires_in: Some(3600),
             scope: None,
+            account_id: None,
         },
         chrono::Utc::now(),
     );

@@ -11,7 +11,7 @@ use crate::document_config::AdvertisedModel;
 use crate::openai_wire::OpenAiWireApi;
 
 pub const INFERENCE_SETUP_CONTRACT_VERSION: u32 = 1;
-pub const INFERENCE_DEFAULTS_VERSION: &str = "2026-09-14.1";
+pub const INFERENCE_DEFAULTS_VERSION: &str = "2026-09-14.3";
 
 pub const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1";
 pub const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1";
@@ -73,6 +73,7 @@ pub struct InferenceSetupCatalog {
     pub contract_version: u32,
     pub defaults_version: String,
     pub providers: Vec<InferenceProviderOption>,
+    pub execution_defaults: std::collections::BTreeMap<String, Option<i64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +144,25 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
     InferenceSetupCatalog {
         contract_version: INFERENCE_SETUP_CONTRACT_VERSION,
         defaults_version: INFERENCE_DEFAULTS_VERSION.to_string(),
+        execution_defaults: [
+            ("maxTurns", Some(crate::config::DEFAULT_MAX_TURNS as i64)),
+            ("maxTotalTokens", None),
+            (
+                "streamBatchMs",
+                Some(crate::config::DEFAULT_STREAM_BATCH_MS as i64),
+            ),
+            (
+                "streamLivenessSecs",
+                Some(crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
+            ),
+            (
+                "deadlineSecs",
+                Some(crate::config::DEFAULT_DEADLINE_DURATION_SECS as i64),
+            ),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect(),
         providers: vec![
             InferenceProviderOption {
                 id: OpenAi,
@@ -359,6 +379,35 @@ fn reasoning_model(model: &str) -> bool {
         || model.contains("glm-5.3")
 }
 
+/// Reviewed fallback for catalog responses that omit capability metadata.
+/// Sources: platform.claude.com/docs/en/models/overview and /build-with-claude/effort.
+/// Unknown models do not inherit capabilities from a family-name guess.
+pub(crate) fn claude_model_defaults(
+    model: &str,
+) -> Option<(i64, i64, Vec<ReasoningEffort>, ReasoningEffort)> {
+    use ReasoningEffort::{High, Low, Max, Medium, XHigh};
+    let model = model.strip_suffix("-20251001").unwrap_or(model);
+    match model {
+        "claude-fable-5-1" | "claude-fable-5" | "claude-mythos-5-1" | "claude-mythos-5"
+        | "claude-opus-5" | "claude-sonnet-5" => Some((
+            1_000_000,
+            128_000,
+            vec![Low, Medium, High, XHigh, Max],
+            High,
+        )),
+        "claude-opus-4-7" | "claude-opus-4-8" => Some((
+            1_000_000,
+            128_000,
+            vec![Low, Medium, High, XHigh, Max],
+            XHigh,
+        )),
+        "claude-opus-4-6" => Some((1_000_000, 128_000, vec![Low, Medium, High, Max], High)),
+        "claude-sonnet-4-6" => Some((1_000_000, 128_000, vec![Low, Medium, High, Max], Medium)),
+        "claude-haiku-4-5" => Some((200_000, 64_000, vec![], High)),
+        _ => None,
+    }
+}
+
 pub fn recommendation_for_model(
     provider: InferenceProviderId,
     auth: InferenceAuthMethod,
@@ -368,8 +417,39 @@ pub fn recommendation_for_model(
     let is_reasoning = reasoning_model(&advertised.model_name);
     let is_claude = spec.provider_kind == BackendProviderKind::ClaudeCliSubscription;
     let is_codex = spec.provider_kind == BackendProviderKind::ChatGptCodex;
+    let claude_defaults = is_claude
+        .then(|| claude_model_defaults(&advertised.model_name))
+        .flatten();
+    let mut advertised = advertised.clone();
+    if let Some((context, output, _, _)) = &claude_defaults {
+        advertised.context_window = advertised.context_window.or(Some(*context));
+        advertised.max_output_tokens = advertised.max_output_tokens.or(Some(*output));
+    }
 
-    let reasoning_effort = if is_codex || (is_reasoning && !is_claude) {
+    let reasoning_effort = if is_claude {
+        claude_defaults
+            .as_ref()
+            .and_then(|(_, _, supported, default)| {
+                let choices: Vec<_> = supported
+                    .iter()
+                    .copied()
+                    .filter(|effort| {
+                        advertised
+                            .reasoning_efforts
+                            .as_ref()
+                            .is_none_or(|advertised| advertised.contains(effort))
+                    })
+                    .collect();
+                (!choices.is_empty()).then(|| RecommendedReasoningControl {
+                    recommended: if choices.contains(default) {
+                        *default
+                    } else {
+                        choices[0]
+                    },
+                    choices,
+                })
+            })
+    } else if is_codex || is_reasoning {
         let choices = advertised.reasoning_efforts.clone().unwrap_or_else(|| {
             vec![
                 ReasoningEffort::Low,
@@ -408,6 +488,8 @@ pub fn recommendation_for_model(
 
     let summary = if fixture {
         "Gents recommends temperature 1 and top-p 0.95 for this workstation model."
+    } else if is_claude && reasoning_effort.is_some() {
+        "Anthropic model-specific thinking defaults; sampling is provider managed."
     } else if reasoning_effort.is_some() {
         "Gents recommends medium reasoning; sampling controls are hidden for this model."
     } else if is_claude {
@@ -429,7 +511,7 @@ pub fn recommendation_for_model(
         max_output_tokens: advertised
             .max_output_tokens
             .map(|value| RecommendedIntegerControl {
-                recommended: value,
+                recommended: if is_claude { value.min(64_000) } else { value },
                 min: 1,
                 max: Some(value),
             }),
@@ -437,7 +519,11 @@ pub fn recommendation_for_model(
         top_p,
         reasoning_effort,
         max_concurrent: RecommendedIntegerControl {
-            recommended: 1,
+            recommended: if provider == InferenceProviderId::Local {
+                1
+            } else {
+                8
+            },
             min: 1,
             max: None,
         },
@@ -489,6 +575,47 @@ mod tests {
     }
 
     #[test]
+    fn hosted_providers_default_to_eight_concurrent_requests() {
+        for provider in inference_setup_catalog().providers {
+            let recommendation = recommendation_for_model(
+                provider.id,
+                provider.default_auth_method,
+                &advertised("test-model"),
+            )
+            .unwrap();
+            assert_eq!(
+                recommendation.max_concurrent.recommended,
+                if provider.id == InferenceProviderId::Local {
+                    1
+                } else {
+                    8
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn claude_model_defaults_preserve_advertised_limits_and_supported_choices() {
+        let mut model = advertised("claude-sonnet-5");
+        model.context_window = Some(200_000);
+        model.max_output_tokens = Some(32_000);
+        model.reasoning_efforts = Some(vec![ReasoningEffort::Low, ReasoningEffort::High]);
+        let value = recommendation_for_model(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ClaudeOauth,
+            &model,
+        )
+        .unwrap();
+        assert_eq!(value.context_window.unwrap().recommended, 200_000);
+        assert_eq!(value.max_output_tokens.unwrap().recommended, 32_000);
+        assert_eq!(
+            value.reasoning_effort.unwrap().choices,
+            model.reasoning_efforts.unwrap()
+        );
+        assert!(claude_model_defaults("claude-unknown").is_none());
+    }
+
+    #[test]
     fn workstation_fixture_has_exact_reviewed_sampling_defaults() {
         let recommendation = recommendation_for_model(
             InferenceProviderId::Local,
@@ -510,7 +637,12 @@ mod tests {
         .unwrap();
         assert!(claude.temperature.is_none());
         assert!(claude.top_p.is_none());
-        assert!(claude.reasoning_effort.is_none());
+        assert_eq!(
+            claude.reasoning_effort.unwrap().recommended,
+            ReasoningEffort::High
+        );
+        assert_eq!(claude.context_window.unwrap().recommended, 1_000_000);
+        assert_eq!(claude.max_output_tokens.unwrap().max, Some(128_000));
 
         let codex = recommendation_for_model(
             InferenceProviderId::OpenAi,

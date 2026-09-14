@@ -5,6 +5,7 @@
    the account card sits in the row with connect, cancel and disconnect.
    Everything else is the desktop app's Backends panel field for field. */
 import { useEffect, useState } from "react";
+import { SetupScreen } from "../setup/SetupScreen";
 import { toast } from "sonner";
 import type {
   BackendProviderKind,
@@ -18,10 +19,9 @@ import type {
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import type { Shell } from "@/hooks/useShell";
-import { navigate } from "@/lib/router";
+import { PROVIDER_CREDENTIAL_KIND } from "@/lib/providerLogin";
 import {
   fromLinesOrNull,
-  newId,
   optionalInteger,
   requiredHttpUrl,
   str,
@@ -87,6 +87,8 @@ const isSubscriptionKind = (kind: string) =>
   kind === "XaiGrokOAuth" ||
   kind === "ClaudeCliSubscription";
 
+const healthy = (status: string | null) => status === "healthy" || status === "ok";
+
 const KINDS = [
   { value: "OpenAiCompatible", label: "OpenAI compatible" },
   { value: "OpenRouter", label: "OpenRouter" },
@@ -100,19 +102,19 @@ const SUBSCRIPTION: Record<
   { provider: string; title: string; note: string; login: "codex" | "grok" | "claude" }
 > = {
   ChatGptCodex: {
-    provider: "chatgpt",
+    provider: PROVIDER_CREDENTIAL_KIND.openai,
     title: "ChatGPT / Codex",
     note: "Use an eligible ChatGPT subscription for Codex inference.",
     login: "codex",
   },
   XaiGrokOAuth: {
-    provider: "xai",
+    provider: PROVIDER_CREDENTIAL_KIND.grok,
     title: "Grok / xAI",
     note: "Use SuperGrok or an eligible X Premium+ subscription.",
     login: "grok",
   },
   ClaudeCliSubscription: {
-    provider: "claude-subscription",
+    provider: PROVIDER_CREDENTIAL_KIND.anthropic,
     title: "Anthropic / Claude",
     note: "Use a Claude Pro or Max subscription.",
     login: "claude",
@@ -149,9 +151,13 @@ function AccountRows({
   reload: () => Promise<void>;
 }) {
   const sub = SUBSCRIPTION[kind]!;
-  const account = accounts.find((a) => a.provider === sub.provider);
-  const [openedAt] = useState(() => Date.now());
-  const expired = account ? Date.parse(account.accessTokenExpiresAt) < openedAt : false;
+  const account = accounts.find((a) => a.provider === sub.provider && a.enabled);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const expired = account ? Date.parse(account.accessTokenExpiresAt) < now : false;
   const [busy, setBusy] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const api = shell.api;
@@ -242,14 +248,14 @@ function AccountRows({
       {account && (
         <>
           <FactRow label="Signed in as">
-            {account.accountId ?? "—"}
+            {account.accountId ?? "Account identity unavailable — reconnect to refresh"}
             {account.planType ? ` · ${account.planType}` : ""}
           </FactRow>
-          <FactRow label="Credential" mono>
-            {account.credentialId}
-          </FactRow>
           <FactRow label="Expires">
-            {new Date(account.accessTokenExpiresAt).toLocaleString()}
+            {new Date(account.accessTokenExpiresAt).toLocaleString()} ·{" "}
+            {expired
+              ? "expired"
+              : `in ${Math.max(1, Math.ceil((Date.parse(account.accessTokenExpiresAt) - Date.now()) / 60000))} minutes`}
           </FactRow>
         </>
       )}
@@ -282,8 +288,8 @@ function Editor({
     endpoint: backend.endpoint ?? "",
     apiKeyEnvVar: backend.apiKeyEnvVar ?? "",
     apiKey: "",
-    connectTimeoutSecs: str(backend.connectTimeoutSecs),
-    discoveryTimeoutSecs: str(backend.discoveryTimeoutSecs),
+    connectTimeoutSecs: str(backend.connectTimeoutSecs ?? 10),
+    discoveryTimeoutSecs: str(backend.discoveryTimeoutSecs ?? 10),
     maxConcurrent: str(backend.maxConcurrent),
     maxQueueDepth: str(backend.maxQueueDepth),
     enabled: backend.enabled ?? true,
@@ -292,7 +298,11 @@ function Editor({
   const d = useDraft(saved, async (next) => {
     const name = next.name.trim();
     if (!name) throw new Error("Name is required");
-    const endpoint = requiredHttpUrl("Endpoint", next.endpoint);
+    const endpoint =
+      next.providerKind === "ClaudeCliSubscription" &&
+      next.endpoint === "claude-cli://subscription"
+        ? next.endpoint
+        : requiredHttpUrl("Endpoint", next.endpoint);
     if (next.apiKey.trim() && next.apiKeyEnvVar.trim())
       throw new Error("Choose an API key or an environment variable, not both");
     const maxConcurrent = optionalInteger("Max concurrent", next.maxConcurrent, {
@@ -340,6 +350,7 @@ function Editor({
     );
   });
   const [probe, setProbe] = useState<string | null>(null);
+  const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
   const id = (f: string) => `${backend.backendId}-${f}`;
   const subscription = d.draft.providerKind in SUBSCRIPTION;
   const users = deployment.inferenceProfiles
@@ -356,7 +367,8 @@ function Editor({
               endpoint={d.draft.endpoint}
               className="mr-1"
             />
-            <Badge variant={backend.probeStatus === "ok" ? "secondary" : "destructive"}>
+            {subscription && <Badge variant="secondary">Subscription</Badge>}
+            <Badge variant={healthy(backend.probeStatus) ? "secondary" : "destructive"}>
               {backend.probeStatus ?? "unprobed"}
             </Badge>
             <Button
@@ -364,6 +376,36 @@ function Editor({
               variant="outline"
               onClick={async () => {
                 try {
+                  if (subscription) {
+                    setProbe("Discovering models…");
+                    const provider =
+                      d.draft.providerKind === "ChatGptCodex"
+                        ? "openai"
+                        : d.draft.providerKind === "ClaudeCliSubscription"
+                          ? "anthropic"
+                          : "grok";
+                    const authMethod =
+                      provider === "openai"
+                        ? "chat_gpt_oauth"
+                        : provider === "anthropic"
+                          ? "claude_oauth"
+                          : "grok_oauth";
+                    const result = await shell.api.discoverInferenceModels({
+                      requestKey: `backend-${backend.backendId}-${Date.now()}`,
+                      agentDid: deployment.agentDid,
+                      provider,
+                      authMethod,
+                      endpoint: d.draft.endpoint,
+                      apiKey: null,
+                    });
+                    if (!result.reachable)
+                      throw new Error(result.failure?.message ?? "Discovery failed");
+                    setDiscoveredModels(
+                      result.models.map((option) => option.advertised.model_name),
+                    );
+                    setProbe(`Authenticated · ${result.models.length} models`);
+                    return;
+                  }
                   const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
                   setProbe("probing…");
                   const r = await shell.api.probeInferenceEndpoint(endpoint);
@@ -381,7 +423,7 @@ function Editor({
                 }
               }}
             >
-              Probe
+              {subscription ? "Refresh models" : "Probe"}
             </Button>
           </span>
         }
@@ -405,18 +447,20 @@ function Editor({
           onChange={(v) => d.choose("providerKind", v)}
           items={KINDS}
         />
-        <ChoiceRow
-          id={id("wire")}
-          label="OpenAI wire API"
-          description="Leave automatic unless the endpoint requires one protocol."
-          value={d.draft.openaiWireApi}
-          onChange={(v) => d.choose("openaiWireApi", v)}
-          items={[
-            { value: "responses", label: "Responses" },
-            { value: "chat_completions", label: "Chat completions" },
-          ]}
-          none="Automatic"
-        />
+        {!subscription && (
+          <ChoiceRow
+            id={id("wire")}
+            label="OpenAI wire API"
+            description="Leave automatic unless the endpoint requires one protocol."
+            value={d.draft.openaiWireApi}
+            onChange={(v) => d.choose("openaiWireApi", v)}
+            items={[
+              { value: "responses", label: "Responses" },
+              { value: "chat_completions", label: "Chat completions" },
+            ]}
+            none="Automatic"
+          />
+        )}
         <FactRow
           label="Used by"
           description="Delete is blocked while a behaviour points here."
@@ -513,7 +557,15 @@ function Editor({
           description="Runtime discovery owns this catalog. Select a model on a profile."
           mono
         >
-          {backend.models.length ? backend.models.join(", ") : "none discovered"}
+          {(discoveredModels ?? backend.models).length ? (
+            <span className="flex flex-col gap-1 whitespace-normal">
+              {(discoveredModels ?? backend.models).map((model) => (
+                <span key={model}>{model}</span>
+              ))}
+            </span>
+          ) : (
+            "No catalog yet — refresh models"
+          )}
         </FactRow>
         <NumberRow
           id={id("connect-timeout")}
@@ -605,6 +657,21 @@ export function InferencePanel({
     section: "inference",
   };
   const { accounts, reload } = useAccounts(shell, deployment.agentDid);
+  const [adding, setAdding] = useState(false);
+  if (adding)
+    return (
+      <SetupScreen
+        shell={shell}
+        initialStep="inference"
+        purpose="add-backend"
+        agentDid={deployment.agentDid}
+        onCancel={() => setAdding(false)}
+        onDone={() => {
+          setAdding(false);
+          void reload();
+        }}
+      />
+    );
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
     const account = sub && accounts.find((a) => a.provider === sub.provider);
@@ -617,7 +684,10 @@ export function InferencePanel({
         : b.apiKeyEnvVar
           ? `key from ${b.apiKeyEnvVar}`
           : "no key";
-    return `${b.models[0] ?? "no models"} · ${KINDS.find((k) => k.value === b.providerKind)?.label ?? b.providerKind} · ${cred}`;
+    const profiles = deployment.inferenceProfiles.filter(
+      (profile) => profile.backend_id === b.backendId,
+    );
+    return `${profiles.length} ${profiles.length === 1 ? "profile" : "profiles"} · ${KINDS.find((k) => k.value === b.providerKind)?.label ?? b.providerKind} · ${cred}`;
   };
   return (
     <ListDetail
@@ -629,37 +699,11 @@ export function InferencePanel({
         meta: rowMeta(b),
         icon: <ProviderLogo kind={b.providerKind} endpoint={b.endpoint} />,
         badge: b.probeStatus ?? undefined,
-        badgeTone: b.probeStatus === "ok" ? "default" : "bad",
+        badgeTone: healthy(b.probeStatus) ? "default" : "bad",
       }))}
       createLabel="New backend"
       empty="No inference yet. Add a backend: a local server, a key, or a subscription."
-      onCreate={async () => {
-        const backendId = newId("backend");
-        await shell.applyConfig((api) =>
-          api.saveBackendConfig(
-            backendSave(deployment.agentDid, {
-              backendId,
-              name: "New backend",
-              providerKind: "OpenAiCompatible",
-              openaiWireApi: "chat_completions",
-              endpoint: "http://127.0.0.1:8000/v1",
-              apiKey: null,
-              apiKeyEnvVar: null,
-              connectTimeoutSecs: 10,
-              discoveryTimeoutSecs: 10,
-              maxConcurrent: 2,
-              maxQueueDepth: 8,
-              enabled: false,
-            }),
-          ),
-        );
-        navigate({
-          name: "agent",
-          agentDid: deployment.agentDid,
-          section: "inference",
-          item: backendId,
-        });
-      }}
+      onCreate={() => setAdding(true)}
       detail={(id) => {
         const backend = deployment.inferenceBackends.find((b) => b.backendId === id)!;
         return (

@@ -61,7 +61,7 @@ export function projectStartupLoadingStatus(
       return {
         failed: true,
         title: "Startup paused",
-        currentLabel: "The hosted agent could not be restored",
+        currentLabel: "The hosted agent could not start",
         managedServerState: "error",
         connectionState: "pending",
         clientState: "pending",

@@ -1,6 +1,7 @@
 /* The agent itself: editable principal fields and identity/runtime facts. */
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
+import { isLocalAgent } from "@/lib/firstRun";
 import { AreaRow, ChoiceRow, DraftActions, SwitchRow, TextRow } from "./editors";
 import { fromLinesOrNull, toLines, useDraft } from "./draft";
 import { Fact, Group, Row } from "./rows";
@@ -133,7 +134,9 @@ export function AgentPanel({
           </Fact>
         </Row>
       </Group>
-      {deployment.source === "local" && <LocalServer shell={shell} />}
+      {isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid) && (
+        <LocalServer shell={shell} />
+      )}
     </div>
   );
 }

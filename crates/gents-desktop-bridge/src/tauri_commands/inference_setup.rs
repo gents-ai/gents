@@ -13,7 +13,7 @@ use gents::inference_setup::{
     InferenceAuthMethod, InferenceModelOption, InferenceModelRecommendation, InferenceProviderId,
     InferenceSetupCatalog,
 };
-use gents::oauth_credential::{list_oauth_credentials, OAuthCredential};
+use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential};
 use gents_chatgpt_login::{run_login_server, LoginOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -521,7 +521,7 @@ impl From<&OAuthCredential> for ProviderAccountView {
             credential_id: credential.credential_id.clone(),
             agent_did: credential.agent_did.clone(),
             provider: credential.provider.clone(),
-            account_id: credential.account_id.clone(),
+            account_id: gents::oauth_credential::account_display_label(credential),
             plan_type: credential.chatgpt_plan_type.clone(),
             access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
             last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
@@ -551,7 +551,10 @@ pub(crate) async fn desktop_provider_accounts_list(
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let agent_did = request.agent_did.trim();
-    let credentials = list_oauth_credentials(core.node(), agent_did)
+    let access = core
+        .operator_access(agent_did)
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let credentials = list_oauth_credentials_on(&access, agent_did)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     Ok(credentials.iter().map(ProviderAccountView::from).collect())
@@ -565,7 +568,10 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
 ) -> Result<(), BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-    let credentials = list_oauth_credentials(core.node(), request.agent_did.trim())
+    let access = core
+        .operator_access(request.agent_did.trim())
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let credentials = list_oauth_credentials_on(&access, request.agent_did.trim())
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let mut credential = credentials
@@ -573,9 +579,6 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
         .find(|entry| entry.credential_id == request.credential_id)
         .ok_or_else(|| BridgeError::untyped("provider account not found"))?;
     credential.enabled = false;
-    let access = core
-        .operator_access(request.agent_did.trim())
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
@@ -846,6 +849,7 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
         refresh_token: tokens.refresh_token,
         expires_in: tokens.expires_in,
         scope: tokens.scope,
+        account_id: tokens.account_id,
     };
     let credential =
         credential_from_login_tokens(&agent_did, &provider, &login_tokens, chrono::Utc::now());

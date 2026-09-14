@@ -26,6 +26,39 @@ credentials, OAuth callbacks, or tokens in run records, screenshots, or bugs.
 
 ## 1. Fresh install and managed runtime
 
+Provider regression checks for the next native run:
+
+- [ ] Add backend fits the settings content column at desktop and narrow widths;
+      it does not create a second full-window layout or clip provider controls.
+- [ ] An active chat shows one compact status, not stacked streaming/waiting
+      explanations. Submission errors remain visible and take precedence.
+- [ ] Claude and ChatGPT callback success, cancel, and error pages use the shared
+      Gents theme. Grok's device authorization page is provider-owned, not a local
+      callback; verify its in-app completion state instead.
+- [ ] Claude model selection exposes supported effort and correct context/output
+      limits. Save/reopen preserves effort, and the Messages body contains only
+      `thinking.type=adaptive` and `output_config.effort` for supported models,
+      never leaked sampling or arbitrary extra parameters.
+
+Claude defaults reference Anthropic's [model catalog](https://platform.claude.com/docs/en/api/models/list)
+and [effort guidance](https://platform.claude.com/docs/en/build-with-claude/effort).
+Live catalog observations on 2026-09-14 confirmed 1,000,000 context / 128,000 max
+output for Fable 5.1, Opus 5, and Sonnet 5. Setup starts output at 64,000 and permits
+edits up to the advertised maximum. Live OAuth-backed model discovery was checked.
+A direct Sonnet 5 Messages probe with adaptive thinking and low effort returned
+HTTP 200, `end_turn`, and `OK`. Full native chat acceptance after saving these
+settings remains unchecked; the direct probe is not a substitute for that flow.
+
+- [ ] Each OAuth sign-in opens exactly one browser window; the explicit fallback
+      link can still reopen it. Check ChatGPT, Claude, and Grok.
+- [ ] ChatGPT discovery uses client version 0.154.0 and shows the account's current
+      catalog. Context defaults come from `context_window`, not the larger
+      `max_context_window` override ceiling.
+- [ ] Hosted providers default to 8 concurrent requests; local defaults to 1.
+- [ ] Configuration → Backends → New backend uses the same provider/model flow
+      as onboarding. Cancel creates no blank documents. Save creates a separate
+      backend/profile without modifying existing behavior bindings or profiles.
+
 - [ ] Start the new native binary, not only a refreshed browser bundle.
 - [ ] Setup has no stale provider, identity, session, or authority selections.
 - [ ] The selected Local agent card shows editable name, pre-filled user-home
@@ -47,6 +80,22 @@ credentials, OAuth callbacks, or tokens in run records, screenshots, or bugs.
 For **each** supported provider below, test connection/login, cancel/failure,
 retry, explicit model selection, supported controls/defaults, persistence after
 restart, and a real response in chat. A model list alone does not prove inference.
+
+- [ ] Fresh managed initialization leaves the placeholder backend disabled;
+      an unrelated healthy service on localhost cannot complete setup.
+- [ ] After background enrollment, the initialized local DID still opens setup
+      if inference is unfinished, and retains managed runtime controls.
+- [ ] Remote Connect expands its address field on the initial card; progress says
+      Starting, not Resuming. Provider configuration stays in one expanded column.
+- [ ] Selecting a model collapses search/list to the selected model and a Change
+      model button. Supported temperature, top-p, and reasoning settings show
+      their editable values directly, without recommendation prose. Context/output
+      overrides and concurrency remain under Advanced settings.
+- [ ] Codex context/effort choices, vLLM max_model_len, and OpenRouter context/output
+      limits survive discovery. Unknown values are not invented; unsupported Codex
+      output/sampling overrides are labelled provider-managed.
+- [ ] Account readers and disconnect use the same operator endpoint as sign-in.
+      Resuming setup recognizes existing agent-scoped accounts.
 
 - [ ] Local OpenAI-compatible: endpoint and optional key; advertised model
       dropdown/search; manual entry only when discovery is unavailable.
@@ -151,6 +200,19 @@ confirmation, and save failure. Do not infer wiring from a control being visible
 - [ ] Agent identity/default behavior.
 - [ ] Behaviors and contexts, including literal prompts/descriptions.
 - [ ] Backends and profiles, including supported sampling/thinking controls.
+- [ ] Native macOS titlebar drag works after the capability update/rebuild.
+- [ ] Claude, Codex, and Grok show the signed-in email/provider ID (not the
+      credential document ID), plus absolute and relative credential expiry.
+      Claude account metadata requires a sign-in with the updated binary.
+- [ ] Grok authenticated model refresh lists its catalog and agrees with runtime
+      health; subscription backends do not expose the local wire-API selector.
+- [ ] Profile model choices come from the selected backend catalog; reasoning
+      and advanced controls are visible, descriptions collapsed, and execution
+      fields show runtime defaults while remaining editable.
+- Multiple OAuth accounts per provider remain unsupported: `PrincipalOAuth`
+  selects a principal/provider credential, not a backend-specific account. A
+  follow-up must thread an explicit selector through login, refresh, discovery,
+  and inference; creating extra backend cards alone is not sufficient.
 - [ ] Tools and effective authority.
 - [ ] Local runtime controls and pairing status.
 - [ ] Any exposed pack/graph controls; note missing UI separately from native

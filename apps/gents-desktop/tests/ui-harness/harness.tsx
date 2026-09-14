@@ -24,6 +24,19 @@ const harness =
     ? createLiveDesktopUiHarness({ bridgeUrl: params.get("bridgeUrl") })
     : createDesktopUiHarness({ scenario: params.get("scenario") });
 
+// Exercise retry/error UX through the same adapter boundary as native IPC.
+if (backend === "deterministic" && params.get("configApplyFailure") === "once") {
+  const apply = harness.adapter.applyConfigComponents;
+  let fail = true;
+  harness.adapter.applyConfigComponents = async (request) => {
+    if (fail) {
+      fail = false;
+      throw new Error("The agent could not save inference. Please retry.");
+    }
+    return apply(request);
+  };
+}
+
 document.documentElement.dataset.desktopUiHarnessBackend = backend;
 document.documentElement.dataset.desktopUiHarnessScenario =
   "scenario" in harness ? harness.scenario : "live";

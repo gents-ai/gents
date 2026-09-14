@@ -150,6 +150,8 @@ def promptAssemblyClaudeBodyCaseJson (witness : PromptAssemblyClaudeBodyCase) : 
     ++ "\"tools\":" ++ jsonStringArray witness.tools ++ ","
     ++ "\"system\":" ++ jsonStringArray witness.system ++ ","
     ++ "\"tools_present\":" ++ boolString witness.toolsPresent
+    ++ ",\"effort\":" ++ jsonOptionalString witness.effort
+    ++ ",\"selected_effort\":" ++ jsonOptionalString witness.selectedEffort
     ++ "}"
 
 def promptAssemblyClaudeBodyCasesJson : String :=

@@ -266,10 +266,44 @@ function Editor({
     useState<InferenceModelRecommendation | null>(null);
   const [guided, setGuided] = useState<InferenceSettingsDraft | null>(null);
   const [customize, setCustomize] = useState(false);
+  const [executionDefaults, setExecutionDefaults] = useState<
+    Record<string, number | null | undefined>
+  >({});
   useEffect(() => {
-    const backend = deployment.inferenceBackends.find(
-      (entry) => entry.backendId === d.draft.backendId,
-    );
+    let cancelled = false;
+    if (shell.api.getInferenceSetupCatalog)
+      void shell.api
+        .getInferenceSetupCatalog()
+        .then((catalog) => {
+          if (!cancelled) setExecutionDefaults(catalog.executionDefaults ?? {});
+        })
+        .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [shell.api]);
+  const executionDefault = (key: string) =>
+    executionDefaults[key] == null ? "Unlimited" : String(executionDefaults[key]);
+  const [editedExecution, setEditedExecution] = useState<Set<string>>(new Set());
+  const setExecution = (
+    key:
+      | "maxTurns"
+      | "maxTotalTokens"
+      | "streamBatchMs"
+      | "streamLivenessSecs"
+      | "deadlineSecs",
+    value: string,
+  ) => {
+    setEditedExecution((keys) => new Set(keys).add(key));
+    if (value && !d.draft.executionId)
+      d.set("executionId", `${profile.profile_id}-execution`);
+    d.set(key, value);
+  };
+  const selectedBackend = deployment.inferenceBackends.find(
+    (entry) => entry.backendId === d.draft.backendId,
+  );
+  useEffect(() => {
+    const backend = selectedBackend;
     if (!backend?.providerKind || !backend.endpoint || !d.draft.modelName.trim()) {
       setRecommendation(null);
       setGuided(null);
@@ -283,8 +317,16 @@ function Editor({
           endpoint: backend.endpoint!,
           modelName: d.draft.modelName.trim(),
           displayName: null,
-          contextWindow: null,
-          maxOutputTokens: null,
+          contextWindow:
+            profile.model_name === d.draft.modelName &&
+            profile.backend_id === d.draft.backendId
+              ? (profile.context_window ?? null)
+              : null,
+          maxOutputTokens:
+            profile.model_name === d.draft.modelName &&
+            profile.backend_id === d.draft.backendId
+              ? (profile.max_output_tokens ?? null)
+              : null,
           reasoningEfforts: null,
         })
         .then((next) => {
@@ -310,7 +352,14 @@ function Editor({
     };
     // Draft fields are intentionally captured for the exact backend/model request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d.draft.backendId, d.draft.modelName, deployment.inferenceBackends, shell.api]);
+  }, [
+    d.draft.backendId,
+    d.draft.modelName,
+    selectedBackend?.providerKind,
+    selectedBackend?.endpoint,
+    selectedBackend?.maxConcurrent,
+    shell.api,
+  ]);
   const updateGuided = (next: InferenceSettingsDraft) => {
     setGuided(next);
     d.set("contextWindow", next.contextWindow);
@@ -337,43 +386,66 @@ function Editor({
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
-        <AreaRow
-          id={id("description")}
-          label="Description"
-          value={d.draft.description}
-          onChange={(v) => d.set("description", v)}
-          onCommit={d.commit}
-          rows={2}
-        />
+        <details>
+          <summary className="cursor-pointer px-4 py-3 text-sm text-muted-foreground">
+            Description
+          </summary>
+          <AreaRow
+            id={id("description")}
+            label="Description"
+            value={d.draft.description}
+            onChange={(v) => d.set("description", v)}
+            onCommit={d.commit}
+            rows={2}
+          />
+        </details>
         <ChoiceRow
           id={id("backend")}
           label="Backend"
           value={d.draft.backendId}
-          onChange={(v) => d.choose("backendId", v)}
+          onChange={(v) => {
+            d.set("backendId", v);
+            d.set(
+              "modelName",
+              deployment.inferenceBackends.find((backend) => backend.backendId === v)
+                ?.models[0] ?? "",
+            );
+          }}
           items={deployment.inferenceBackends.map((b) => ({
             value: b.backendId,
             label: b.name ?? b.backendId,
           }))}
         />
-        <TextRow
+        <ChoiceRow
           id={id("model")}
           label="Model"
           value={d.draft.modelName}
-          onChange={(v) => d.set("modelName", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
+          onChange={(v) => d.choose("modelName", v)}
+          items={[
+            ...new Set([
+              d.draft.modelName,
+              ...(deployment.inferenceBackends.find(
+                (backend) => backend.backendId === d.draft.backendId,
+              )?.models ?? []),
+            ]),
+          ]
+            .filter(Boolean)
+            .map((model) => ({ value: model, label: model }))}
         />
       </Group>
       {recommendation && guided ? (
         <Group title="Model-aware defaults">
-          <InferenceModelControls
-            recommendation={recommendation}
-            value={guided}
-            onChange={updateGuided}
-            expanded={customize}
-            onExpandedChange={setCustomize}
-            includeConcurrency={false}
-          />
+          <div className="p-4">
+            <InferenceModelControls
+              recommendation={recommendation}
+              value={guided}
+              onChange={updateGuided}
+              expanded={customize}
+              onExpandedChange={setCustomize}
+              includeConcurrency={false}
+              alwaysExpanded
+            />
+          </div>
         </Group>
       ) : null}
       <Group title="Execution">
@@ -382,6 +454,7 @@ function Editor({
           label="Execution document ID"
           description="Reuse an existing ID or enter a new one for these limits."
           value={d.draft.executionId}
+          placeholder="Created when limits are customized"
           onChange={(v) => d.set("executionId", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
@@ -390,8 +463,15 @@ function Editor({
         <NumberRow
           id={id("max-turns")}
           label="Max turns"
-          value={d.draft.maxTurns}
-          onChange={(v) => d.set("maxTurns", v)}
+          value={
+            editedExecution.has("maxTurns")
+              ? d.draft.maxTurns
+              : d.draft.maxTurns ||
+                (executionDefaults.maxTurns == null
+                  ? ""
+                  : String(executionDefaults.maxTurns))
+          }
+          onChange={(v) => setExecution("maxTurns", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
@@ -399,31 +479,53 @@ function Editor({
           id={id("max-total")}
           label="Max total tokens"
           value={d.draft.maxTotalTokens}
-          onChange={(v) => d.set("maxTotalTokens", v)}
+          placeholder={executionDefault("maxTotalTokens")}
+          onChange={(v) => setExecution("maxTotalTokens", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
         <NumberRow
           id={id("batch")}
           label="Stream batch ms"
-          value={d.draft.streamBatchMs}
-          onChange={(v) => d.set("streamBatchMs", v)}
+          value={
+            editedExecution.has("streamBatchMs")
+              ? d.draft.streamBatchMs
+              : d.draft.streamBatchMs ||
+                (executionDefaults.streamBatchMs == null
+                  ? ""
+                  : String(executionDefaults.streamBatchMs))
+          }
+          onChange={(v) => setExecution("streamBatchMs", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
         <NumberRow
           id={id("liveness")}
           label="Stream liveness seconds"
-          value={d.draft.streamLivenessSecs}
-          onChange={(v) => d.set("streamLivenessSecs", v)}
+          value={
+            editedExecution.has("streamLivenessSecs")
+              ? d.draft.streamLivenessSecs
+              : d.draft.streamLivenessSecs ||
+                (executionDefaults.streamLivenessSecs == null
+                  ? ""
+                  : String(executionDefaults.streamLivenessSecs))
+          }
+          onChange={(v) => setExecution("streamLivenessSecs", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
         <NumberRow
           id={id("deadline")}
           label="Deadline seconds"
-          value={d.draft.deadlineSecs}
-          onChange={(v) => d.set("deadlineSecs", v)}
+          value={
+            editedExecution.has("deadlineSecs")
+              ? d.draft.deadlineSecs
+              : d.draft.deadlineSecs ||
+                (executionDefaults.deadlineSecs == null
+                  ? ""
+                  : String(executionDefaults.deadlineSecs))
+          }
+          onChange={(v) => setExecution("deadlineSecs", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
@@ -431,6 +533,7 @@ function Editor({
           id={id("retry")}
           label="Retry policy ID"
           value={d.draft.retryPolicyId}
+          placeholder="Runtime default"
           onChange={(v) => d.set("retryPolicyId", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
@@ -453,7 +556,10 @@ function Editor({
         saving={d.saving}
         error={d.error}
         onSave={d.save}
-        onCancel={d.reset}
+        onCancel={() => {
+          setEditedExecution(new Set());
+          d.reset();
+        }}
       />
       <DeleteButton
         label={profile.display_name ?? profile.profile_id}
@@ -492,7 +598,7 @@ export function ProfilesPanel({
       rows={deployment.inferenceProfiles.map((p) => ({
         id: p.profile_id,
         title: p.display_name ?? p.profile_id,
-        meta: p.model_name,
+        meta: `${p.model_name} · ${deployment.inferenceBackends.find((backend) => backend.backendId === p.backend_id)?.name ?? p.backend_id}`,
       }))}
       createLabel="New profile"
       empty="No inference profiles."

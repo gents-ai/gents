@@ -101,7 +101,9 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   /* First-run owns its own starting page. Do not swap it for the global
      startup screen or the wizard remounts at welcome after the server is up. */
   if (setup === "active") {
-    const hasLocalAgent = shell.deployments.some(isLocalAgent);
+    const hasLocalAgent = shell.deployments.some((deployment) =>
+      isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid),
+    );
     return (
       <>
         {titlebar}

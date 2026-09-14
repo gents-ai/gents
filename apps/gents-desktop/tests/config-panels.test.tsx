@@ -101,6 +101,120 @@ function expectFields(labels: string[]) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("configuration panels", () => {
+  it("does not starve model defaults while equivalent snapshots refresh", async () => {
+    const { api, shell } = harness();
+    const view = render(
+      <ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />,
+    );
+    for (let refresh = 0; refresh < 5; refresh++) {
+      await act(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+      view.rerender(
+        <ProfilesPanel
+          shell={shell}
+          deployment={{
+            ...deployment,
+            inferenceBackends: deployment.inferenceBackends.map((backend) => ({
+              ...backend,
+            })),
+          }}
+          item="profile-a"
+        />,
+      );
+    }
+    expect(api.getInferenceBackendRecommendation).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Temperature")).toBeVisible();
+  });
+
+  it("refreshes subscription catalogs with authenticated discovery and hides credential IDs", async () => {
+    const { api, shell } = harness();
+    api.listProviderAccounts.mockResolvedValue([
+      {
+        provider: "xai-oauth",
+        enabled: true,
+        accountId: "person@example.test",
+        credentialId: "private-credential-id",
+        planType: null,
+        accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+      },
+    ]);
+    api.discoverInferenceModels = vi.fn().mockResolvedValue({
+      reachable: true,
+      models: [{ advertised: { model_name: "grok-4.6" } }],
+    });
+    render(
+      <InferencePanel
+        shell={shell}
+        item="backend-a"
+        deployment={{
+          ...deployment,
+          inferenceBackends: [
+            {
+              ...deployment.inferenceBackends[0]!,
+              providerKind: "XaiGrokOAuth",
+              endpoint: "https://cli-chat-proxy.grok.com/v1",
+              probeStatus: "healthy",
+              models: ["grok-4.5"],
+            },
+          ],
+        }}
+      />,
+    );
+    expect(await screen.findByText("person@example.test")).toBeVisible();
+    expect(screen.queryByText("private-credential-id")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Subscription", { selector: "[data-slot=badge]" }),
+    ).toBeVisible();
+    expect(screen.queryByLabelText("OpenAI wire API")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Connect timeout seconds")).toHaveValue("10");
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Refresh models" }));
+    expect(await screen.findByText("grok-4.6")).toBeVisible();
+    expect(api.discoverInferenceModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDid: deployment.agentDid,
+        provider: "grok",
+        authMethod: "grok_oauth",
+        apiKey: null,
+      }),
+    );
+    expect(api.probeInferenceEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("shows runtime execution defaults and backend model choices without expanding advanced settings", async () => {
+    const { api, shell } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+      executionDefaults: {
+        maxTurns: 250,
+        maxTotalTokens: null,
+        streamBatchMs: 100,
+        streamLivenessSecs: 1800,
+        deadlineSecs: 86400,
+      },
+    });
+    render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
+    await waitFor(() => expect(screen.getByLabelText("Max turns")).toHaveValue("250"));
+    await replace("Max turns", "200");
+    expect(screen.getByLabelText("Max turns")).toHaveValue("200");
+    expect(screen.getByRole("combobox", { name: "Model" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Advanced settings" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens shared provider setup without eagerly creating a blank backend", async () => {
+    const { api, shell } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({ providers: [] });
+    render(<InferencePanel shell={shell} deployment={deployment} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "New backend" }));
+    expect(
+      await screen.findByRole("heading", { name: "Add an inference backend" }),
+    ).toBeVisible();
+    expect(api.getInferenceSetupCatalog).toHaveBeenCalled();
+    expect(api.saveBackendConfig).not.toHaveBeenCalled();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
   it("requires the agent identity fields and saves editable principal tags", async () => {
     const { api, shell } = harness();
     render(<AgentPanel shell={shell} deployment={deployment} />);
@@ -256,7 +370,7 @@ describe("configuration panels", () => {
       {
         credentialId: "credential-a",
         agentDid: deployment.agentDid,
-        provider: "xai",
+        provider: "xai-oauth",
         accountId: "account-a",
         planType: "supergrok",
         accessTokenExpiresAt: "2099-01-01T00:00:00Z",
@@ -297,9 +411,11 @@ describe("configuration panels", () => {
   it("validates model-supported profile defaults and execution settings", async () => {
     const { api, shell } = harness();
     render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
-    await screen.findByText("Gents recommends balanced sampling.");
+    await screen.findByLabelText("Temperature");
+    expect(screen.queryByText("Gents recommends balanced sampling.")).toBeNull();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Customize" }));
+    expect(screen.queryByRole("button", { name: "Advanced settings" })).toBeNull();
+    await user.click(screen.getByText("Description", { selector: "summary" }));
     expectFields([
       "Display name",
       "Description",

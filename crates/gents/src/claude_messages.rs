@@ -105,13 +105,32 @@ pub fn build_messages_body(model: &str, request: &CompletionRequest) -> Value {
         .iter()
         .map(crate::llm::rig_compat::from_rig_message)
         .collect();
-    build_messages_body_native(
+    let mut body = build_messages_body_native(
         model,
         request.preamble.as_deref(),
         request.max_tokens,
         &history,
         &request.tools,
-    )
+    );
+    if let Some(params) = &request.additional_params {
+        apply_reasoning_parameters(model, params, &mut body);
+    }
+    body
+}
+
+/// Lean `ClaudeMap.selectedEffort`: permit one supported effort field, not a
+/// wholesale merge of additional_params. Sampling and arbitrary keys stay out.
+pub fn apply_reasoning_parameters(model: &str, params: &Value, body: &mut Value) {
+    let Some((_, _, supported, _)) = crate::inference_setup::claude_model_defaults(model) else {
+        return;
+    };
+    let Some(effort) = params["output_config"]["effort"].as_str() else {
+        return;
+    };
+    if supported.iter().any(|value| value.as_str() == effort) {
+        body["output_config"] = json!({ "effort": effort });
+        body["thinking"] = json!({ "type": "adaptive" });
+    }
 }
 
 /// Body assembly over the native message family (no rig vocabulary).

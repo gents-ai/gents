@@ -1,5 +1,3 @@
-import { openExternalUrl } from "../../lib/externalLinks";
-
 export const PROVIDER_LOGIN_EVENT = {
   openai: "desktop://codex-login-url",
   anthropic: "desktop://claude-login-url",
@@ -7,6 +5,12 @@ export const PROVIDER_LOGIN_EVENT = {
 } as const;
 
 export type OauthProvider = keyof typeof PROVIDER_LOGIN_EVENT;
+
+export const PROVIDER_CREDENTIAL_KIND: Record<OauthProvider, string> = {
+  openai: "chatgpt-codex",
+  anthropic: "claude-subscription",
+  grok: "xai-oauth",
+};
 
 export async function watchProviderLoginUrl(
   provider: OauthProvider,
@@ -20,6 +24,7 @@ export async function watchProviderLoginUrl(
     const url = event.payload?.url;
     if (!url) return;
     onUrl(url);
-    void openExternalUrl(url);
+    // Native login owns the automatic browser launch. This event only exposes
+    // the URL for the user's explicit "Open browser" fallback.
   });
 }

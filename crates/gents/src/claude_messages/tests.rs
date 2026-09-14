@@ -24,6 +24,34 @@ fn identity_matches_lean_body_witness_head() {
     }
 }
 
+#[test]
+fn lean_effort_cases_drive_the_real_messages_request() {
+    for case in crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases() {
+        let mut request = echo_request();
+        request.additional_params = Some(json!({
+            "output_config": {"effort": case.effort, "untrusted": true},
+            "thinking": {"type": "enabled", "budget_tokens": 999},
+            "temperature": 0.5,
+        }));
+        let body = build_messages_body("claude-sonnet-5", &request);
+        assert_eq!(
+            body["output_config"]["effort"].as_str(),
+            case.selected_effort.as_deref(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            body.get("thinking").is_some(),
+            case.selected_effort.is_some()
+        );
+        assert!(body.get("temperature").is_none());
+        assert!(body["output_config"].get("untrusted").is_none());
+        if case.selected_effort.is_some() {
+            assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+        }
+    }
+}
+
 fn request_from_native(
     preamble: Option<&str>,
     history: Vec<Message>,

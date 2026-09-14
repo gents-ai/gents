@@ -39,6 +39,7 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
+import { isLocalAgent } from "@/lib/firstRun";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { AgentAvatar } from "./AgentAvatar";
@@ -159,25 +160,26 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                     </span>
                   )}
                 </a>
-                {d.source === "local" && d.inferenceBackends.length === 0 && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    nativeButton={false}
-                    render={
-                      <a
-                        href={href({
-                          name: "agent",
-                          agentDid: d.agentDid,
-                          section: "inference",
-                        })}
-                      />
-                    }
-                    title={`Configure inference for ${d.label}`}
-                  >
-                    Setup needed
-                  </Button>
-                )}
+                {isLocalAgent(d, shell.snapshot?.bootstrap.initAgentDid) &&
+                  d.inferenceBackends.length === 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      nativeButton={false}
+                      render={
+                        <a
+                          href={href({
+                            name: "agent",
+                            agentDid: d.agentDid,
+                            section: "inference",
+                          })}
+                        />
+                      }
+                      title={`Configure inference for ${d.label}`}
+                    >
+                      Setup needed
+                    </Button>
+                  )}
                 {waiting > 0 && (
                   <a
                     href={href({ name: "mailbox" })}

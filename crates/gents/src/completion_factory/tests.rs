@@ -43,6 +43,18 @@ fn request() -> AgentRequest {
 }
 
 #[test]
+fn claude_profile_effort_reaches_messages_without_sampling() {
+    assert_eq!(
+        reasoning_profile_params(
+            BackendProviderKind::ClaudeCliSubscription,
+            crate::OpenAiWireApi::ChatCompletions,
+            Some(ReasoningEffort::High),
+        ),
+        Some(serde_json::json!({"output_config": {"effort": "high"}}))
+    );
+}
+
+#[test]
 fn absent_profile_effort_does_not_inject_reasoning() {
     assert!(reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,

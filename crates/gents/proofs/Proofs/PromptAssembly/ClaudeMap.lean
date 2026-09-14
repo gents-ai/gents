@@ -19,6 +19,22 @@ The runtime's `toolu_*` → `Nat` injection is a separate plumbing obligation
 
 namespace PromptAssembly.ClaudeMap
 
+/-- Only explicit supported effort enters the Messages body. Arbitrary extra
+parameters and absent settings cannot enable thinking. Catalog support is an
+adapter fact; the serializer narrows to the provider's effort vocabulary. -/
+def selectedEffort (supported : List String) (requested : Option String) : Option String :=
+  requested.filter (fun value => value ∈ supported && value ∈ ["low", "medium", "high", "xhigh", "max"])
+
+theorem absent_effort_omitted (supported : List String) :
+    selectedEffort supported none = none := rfl
+
+theorem unsupported_effort_omitted : selectedEffort [] (some "high") = none := by
+  native_decide
+
+theorem supported_effort_preserved :
+    selectedEffort ["low", "medium", "high", "xhigh", "max"] (some "high") = some "high" := by
+  native_decide
+
 open ToolExecution (ToolCallId)
 open Transcript (MessageKind)
 
