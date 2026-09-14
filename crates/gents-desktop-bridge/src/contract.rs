@@ -7,6 +7,7 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
+// 7.6: additive — explicit native graph tool selection in canonical BuiltInTools.
 // 7.5: additive — versioned provider setup catalog, model discovery, and
 //      provider/model recommendation commands.
 // 7.4: additive — managed-runtime root/ceiling launch, validation, restart,
@@ -60,13 +61,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "7.5";
+pub const CONTRACT_VERSION: &str = "7.6";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "3a8c6e3da515f67b094a77c92793336aea678ea91fa9875266710e20b20479e9";
+    "5f7b12031f7ed5e11a9cdbe50134bd5b84e555b451126c26ccd6b300de3e7d15";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
