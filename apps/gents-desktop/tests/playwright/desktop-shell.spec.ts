@@ -7,6 +7,7 @@ import {
   openChat,
   openConfig,
   primarySurfaceCount,
+  sendButton,
   test,
 } from "./desktopTest";
 
@@ -26,6 +27,27 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     await openChat(page);
     await expect(composer(page)).toBeEditable();
+  });
+
+  test("session filters stay visible and can be reset", async ({ page }) => {
+    await gotoHarness(page);
+    await expect(page.getByLabel("Session filters")).toBeVisible();
+    await expect(page.getByLabel("Filter by behaviour")).toContainText(
+      "All behaviours",
+    );
+    await expect(page.getByLabel("Filter by state")).toContainText("Any state");
+    await expect(page.getByLabel("Filter by source")).toContainText("Any source");
+
+    await page.getByLabel("Filter by behaviour").click();
+    await page.getByRole("option", { name: "Ops" }).click();
+    await expect(page.getByText("Showing 0 of 1")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Clear filters" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Clear filters" }).click();
+    await expect(page.getByText("Showing 1 of 1")).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /introduction-and-greetings/ }),
+    ).toBeVisible();
   });
 
   test("agents and configuration are reachable", async ({ page }) => {
@@ -87,5 +109,40 @@ test.describe("kit shell", () => {
     await expect(
       page.getByText(/seeded turn gives the transcript a stable row/),
     ).toBeVisible();
+  });
+
+  test("reopens a conversation after using a different behavior", async ({ page }) => {
+    await gotoHarness(page);
+    await openChat(page);
+    await page.getByRole("button", { name: "Behaviour" }).click();
+    await page.getByRole("option", { name: /Ops/ }).click();
+    await composer(page).fill("inspect the runtime");
+    await sendButton(page).click();
+    await expect(page.getByText(/received "inspect the runtime"/)).toBeVisible();
+
+    await page
+      .getByTestId("session-screen")
+      .getByRole("link", { name: "Sessions" })
+      .last()
+      .click();
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+
+    await expect(
+      page.getByText(/seeded turn gives the transcript a stable row/),
+    ).toBeVisible();
+
+    await page
+      .getByTestId("session-screen")
+      .getByRole("link", { name: "Sessions" })
+      .last()
+      .click();
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /inspect the runtime/ })
+      .click();
+    await expect(page.getByText(/received "inspect the runtime"/)).toBeVisible();
   });
 });

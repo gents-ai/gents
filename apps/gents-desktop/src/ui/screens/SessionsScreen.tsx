@@ -1,20 +1,16 @@
 /* Sessions: a heading row with search and New, then plain rows on the
    ground: title, the behaviour's chip, and when it last moved. */
 import { useState } from "react";
-import { ListFilter, MessageSquare, Plus, Search, X } from "lucide-react";
+import { MessageSquare, Plus, Search, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@gents/ui/components/dropdown-menu";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@gents/ui/components/select";
 import { isLive } from "@/lib/live";
-import { behaviorName } from "./behavior";
 import { Input } from "@gents/ui/components/input";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
@@ -43,92 +39,32 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
     if (source === "person" && (c.taskId || c.triggerId)) return false;
     return true;
   });
-  const active = [
-    behavior && {
-      key: "behavior",
-      label: behaviorName(behavior, deployment),
-      clear: () => setBehavior(""),
-    },
-    state && {
-      key: "state",
-      label: { live: "Live", held: "Needs you", failed: "Failed" }[state],
-      clear: () => setState(""),
-    },
-    source && {
-      key: "source",
-      label: {
-        person: "Started by a person",
-        task: "From a task",
-        trigger: "From a trigger",
-      }[source],
-      clear: () => setSource(""),
-    },
-  ].filter(Boolean) as { key: string; label: string; clear: () => void }[];
+  const hasFilters = Boolean(behavior || state || source);
+  const behaviorItems = [
+    { value: "", label: "All behaviours" },
+    ...(deployment?.behaviors ?? []).map((item) => ({
+      value: item.behaviorId,
+      label: item.displayName,
+    })),
+  ];
+  const stateItems = [
+    { value: "", label: "Any state" },
+    { value: "live", label: "Live" },
+    { value: "held", label: "Needs you" },
+    { value: "failed", label: "Failed" },
+  ];
+  const sourceItems = [
+    { value: "", label: "Any source" },
+    { value: "person", label: "A person" },
+    { value: "task", label: "A task" },
+    { value: "trigger", label: "A trigger" },
+  ];
   return (
     <ScrollArea className="h-full" data-testid="sessions-screen">
       <div className="mx-auto max-w-page px-6 py-6">
         <div className="flex h-10 items-center gap-2">
           <h1 className="font-heading text-lg font-medium text-heading">Sessions</h1>
           <div className="ml-auto flex items-center gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Filter sessions"
-                    className={active.length ? "bg-accent text-foreground" : undefined}
-                  />
-                }
-              >
-                <ListFilter />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>Behaviour</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup value={behavior} onValueChange={setBehavior}>
-                    <DropdownMenuRadioItem value="">Any</DropdownMenuRadioItem>
-                    {(deployment?.behaviors ?? []).map((b) => (
-                      <DropdownMenuRadioItem key={b.behaviorId} value={b.behaviorId}>
-                        {b.displayName}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>State</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={state}
-                    onValueChange={(v) => setState(v as typeof state)}
-                  >
-                    <DropdownMenuRadioItem value="">Any</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="live">Live</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="held">
-                      Needs you
-                    </DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="failed">Failed</DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>Started by</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={source}
-                    onValueChange={(v) => setSource(v as typeof source)}
-                  >
-                    <DropdownMenuRadioItem value="">Anything</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="person">
-                      A person
-                    </DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="task">A task</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="trigger">
-                      A trigger
-                    </DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
             {query === null ? (
               <Button
                 variant="ghost"
@@ -170,20 +106,84 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
             </Button>
           </div>
         </div>
-        {active.length > 0 && (
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            {active.map((f) => (
-              <button
-                key={f.key}
-                type="button"
-                onClick={f.clear}
-                className="flex h-7 items-center gap-1 rounded-full border border-border px-2.5 text-xs text-muted-foreground hover:text-foreground"
-              >
-                {f.label} <X className="size-3" />
-              </button>
-            ))}
-          </div>
-        )}
+        <div
+          aria-label="Session filters"
+          className="mt-3 flex flex-wrap items-end gap-2 rounded-lg border border-border/60 px-3 py-2.5"
+        >
+          <label className="grid gap-1 text-xs text-muted-foreground">
+            Behaviour
+            <Select
+              items={behaviorItems}
+              value={behavior}
+              onValueChange={(value) => setBehavior(value ?? "")}
+            >
+              <SelectTrigger aria-label="Filter by behaviour" className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {behaviorItems.map((item) => (
+                  <SelectItem key={item.value || "all"} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="grid gap-1 text-xs text-muted-foreground">
+            State
+            <Select
+              items={stateItems}
+              value={state}
+              onValueChange={(value) => setState((value ?? "") as typeof state)}
+            >
+              <SelectTrigger aria-label="Filter by state" className="w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {stateItems.map((item) => (
+                  <SelectItem key={item.value || "any"} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="grid gap-1 text-xs text-muted-foreground">
+            Started by
+            <Select
+              items={sourceItems}
+              value={source}
+              onValueChange={(value) => setSource((value ?? "") as typeof source)}
+            >
+              <SelectTrigger aria-label="Filter by source" className="w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {sourceItems.map((item) => (
+                  <SelectItem key={item.value || "any"} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          {hasFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setBehavior("");
+                setState("");
+                setSource("");
+              }}
+            >
+              <X /> Clear filters
+            </Button>
+          )}
+          <span className="ml-auto pb-2 text-xs text-muted-foreground">
+            Showing {conversations.length} of {deployment?.sessions.length ?? 0}
+          </span>
+        </div>
         <ul className="mt-4 divide-y divide-border/60">
           {conversations.map((c) => (
             <li key={c.sessionId}>
@@ -206,12 +206,12 @@ export function SessionsScreen({ shell }: { shell: Shell }) {
               </a>
             </li>
           ))}
-          {conversations.length === 0 && (query || active.length > 0) && (
+          {conversations.length === 0 && (query || hasFilters) && (
             <li className="py-8 text-center text-sm text-muted-foreground">
               No sessions match.
             </li>
           )}
-          {conversations.length === 0 && !query && active.length === 0 && (
+          {conversations.length === 0 && !query && !hasFilters && (
             <li className="grid min-h-[50vh] place-items-center animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
               <div className="text-center">
                 <MessageSquare className="mx-auto size-6 text-muted-foreground" />

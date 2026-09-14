@@ -29,9 +29,10 @@ export function useShell(
       shell.onStartNewSession();
       return;
     }
-    if (routeSessionId !== shell.selectedSessionId) {
-      shell.setSelectedSessionId(routeSessionId);
-    }
+    // Session selection is behavior-aware. The route must use the same owner
+    // as every other session selection so reopening an older configurator
+    // chat also restores that session's behavior before consistency checks run.
+    shell.onSelectSession(routeSessionId);
   }, [routeSessionId]);
 
   const applyConfig = useCallback(
