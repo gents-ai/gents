@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Shell } from "../src/ui/hooks/useShell";
 import { useBehaviorChoice } from "../src/ui/screens/SessionScreen";
@@ -7,6 +7,7 @@ import { useBehaviorChoice } from "../src/ui/screens/SessionScreen";
 function shell(selectedSessionId: string | null, defaultBehaviorId: string): Shell {
   return {
     selectedSessionId,
+    selectBehavior: vi.fn(),
     mailboxCause: null,
     selectedDeployment: {
       behaviors: [

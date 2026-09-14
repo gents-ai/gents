@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
 
-function fixture(send: () => Promise<unknown>) {
+function fixture(send: () => Promise<unknown>, blocked = false) {
   const effects = {
     setLocalWorkflow: vi.fn(),
     setError: vi.fn(),
@@ -24,13 +24,30 @@ function fixture(send: () => Promise<unknown>) {
     selectedSessionId: "session",
     pendingMailboxCauseId: null,
     behaviorReadiness: { kind: "ready", behaviorId: "coding" },
-    shellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
+    shellProjection: {
+      nonEmptyContentSendStatus: blocked
+        ? {
+            kind: "disabled",
+            reason: "behaviorUnavailable",
+            hint: "Behavior is unavailable",
+          }
+        : { kind: "ready" },
+    },
     newSessionAgentRef: { current: null },
   } as unknown as Parameters<typeof createDesktopShellChatActions>[0]);
   return { actions, ...effects };
 }
 
 describe("canonical chat submission acceptance", () => {
+  it("does not bypass a stale admission blocker when a behavior is picked and sent in one event", async () => {
+    const send = vi.fn();
+    const f = fixture(send, true);
+    await expect(
+      f.actions.submitContent("review this", "new-choice"),
+    ).resolves.toBeNull();
+    expect(send).not.toHaveBeenCalled();
+    expect(f.setError).toHaveBeenLastCalledWith("Behavior is unavailable");
+  });
   it("records an accepted pending request without depending on a successful refresh", async () => {
     const accepted = {
       sessionId: "session",

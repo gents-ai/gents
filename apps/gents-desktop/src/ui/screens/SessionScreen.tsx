@@ -242,7 +242,13 @@ export function useBehaviorChoice(shell: Shell) {
     behaviours.find((b) => b.isDefault)?.behaviorId ??
     behaviours[0]?.behaviorId ??
     null;
-  return { behaviorId, setPicked };
+  return {
+    behaviorId,
+    setPicked: (id: string | null) => {
+      setPicked(id);
+      shell.selectBehavior(id);
+    },
+  };
 }
 
 /** Display the existing workflow owner's observation, never infer queue health. */

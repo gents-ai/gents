@@ -74,20 +74,14 @@ export function createDesktopShellChatActions({
       return null;
     }
 
+    if (shellProjection.nonEmptyContentSendStatus.kind !== "ready") {
+      setError(shellProjection.nonEmptyContentSendStatus.hint);
+      return null;
+    }
     const admission =
       behaviorId === undefined
         ? behaviorReadiness
         : selectedBehaviorReadinessDecision(deployment, behaviorId);
-    if (
-      shellProjection.nonEmptyContentSendStatus.kind !== "ready" &&
-      !(
-        behaviorId !== undefined &&
-        shellProjection.nonEmptyContentSendStatus.reason === "behaviorUnavailable"
-      )
-    ) {
-      setError(shellProjection.nonEmptyContentSendStatus.hint);
-      return null;
-    }
     if (admission.kind !== "ready") {
       setError("The selected behavior is unavailable");
       return null;
