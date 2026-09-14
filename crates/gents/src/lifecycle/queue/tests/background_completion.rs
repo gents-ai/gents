@@ -37,6 +37,8 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
                 "2099-01-01T00:00:00Z",
             ),
         );
+        // The background work outlives its finished desktop turn.
+        create.initial_lifecycle_state = RequestLifecycleState::Completed;
         crate::sign_agent_request_create(&desktop, &mut create)
             .await
             .unwrap();
@@ -222,6 +224,7 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
 
         // The next enrolled user request can use the same canonical session.
         let mut followup = create.clone();
+        followup.initial_lifecycle_state = RequestLifecycleState::Pending;
         followup.request_id = "desktop-followup".into();
         followup.retry_root_request = Some(followup.request_id.clone());
         followup.created_at = "2030-01-01T00:00:04Z".into();
