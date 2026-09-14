@@ -8,7 +8,9 @@ mod selection;
 
 pub use behavior_config::BehaviorToolConfig;
 pub use build::measured_mcp_services_for_access;
-pub(crate) use build::{measured_available_mcp_service_ids, resolve_configured_tool_root};
+pub(crate) use build::{
+    measured_available_mcp_service_ids, resolve_configured_tool_root, resolve_effective_tool_root,
+};
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub use policy::{
@@ -74,6 +76,17 @@ pub struct SelfConfigToolConfig {
     pub no_lockout: bool,
     pub dry_run: bool,
     pub enable_pack_install: bool,
+    /// Runtime-owned host ceiling captured when this behavior's tool surface
+    /// is resolved. It is observation data for self-configuration responses,
+    /// never a writable configuration document.
+    pub process_ceiling: SelfConfigProcessCeiling,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct SelfConfigProcessCeiling {
+    pub file_mode: FileToolMode,
+    pub bash_mode: BashMode,
+    pub root: Option<PathBuf>,
 }
 
 impl ToolSurface {

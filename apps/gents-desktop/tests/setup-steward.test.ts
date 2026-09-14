@@ -63,7 +63,9 @@ describe("setup steward patches", () => {
     expect(SETUP_STEWARD_PROMPT).toContain("AgentSession selects a behavior");
     expect(SETUP_STEWARD_PROMPT).toContain("Unsafe or invalid request");
     expect(SETUP_STEWARD_PROMPT).toContain("Verify the result");
-    expect(SETUP_STEWARD_PROMPT).toContain("home-scoped rather than repo-scoped");
+    expect(SETUP_STEWARD_PROMPT).toContain("managed process root remains the ceiling");
+    expect(SETUP_STEWARD_PROMPT).toContain("configure_behaviors");
+    expect(SETUP_STEWARD_PROMPT).toContain("run_graph");
     expect(SETUP_STEWARD_PROMPT).toContain(
       "Never infer its language or workflow from a directory name",
     );

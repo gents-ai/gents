@@ -9,7 +9,7 @@ use super::build::{
     build_host_tools, dedupe_strings, dedupe_subagent_targets, downgrade_bash,
     downgrade_file_tools, enabled_mcp_service_ids, measured_available_mcp_service_ids,
 };
-use super::modes::ToolCeiling;
+use super::modes::{BashMode, ToolCeiling};
 use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
 use super::selection::{
     BackgroundToolConfig, CustomToolFactory, ResolvedToolSelection, SubagentToolConfig,
@@ -259,8 +259,22 @@ impl BehaviorToolConfig {
             }
         }
 
-        let background_allowlist =
-            dedupe_strings(static_policy.filter_background_tools(backgroundable_tool_names));
+        let background_allowlist = dedupe_strings(
+            static_policy
+                .filter_background_tools(backgroundable_tool_names)
+                .into_iter()
+                .filter_map(|name| match (name.as_str(), bash) {
+                    // The document selection names the requested host tool,
+                    // while the runtime registers the ceiling-downgraded
+                    // variant. Keep background execution aligned with that
+                    // effective surface instead of quarantining an otherwise
+                    // valid behavior after restart.
+                    ("bash_unrestricted", BashMode::ReadOnly) => Some("bash".to_owned()),
+                    ("bash_unrestricted" | "bash", BashMode::Off) => None,
+                    _ => Some(name),
+                })
+                .collect(),
+        );
         for name in &background_allowlist {
             let allowed_mcp_wrapper = static_policy.meta
                 && remote_tools.as_ref().is_some_and(|remote| {
@@ -337,6 +351,11 @@ impl BehaviorToolConfig {
                 no_lockout: self_config_no_lockout,
                 dry_run: self_config_dry_run,
                 enable_pack_install,
+                process_ceiling: super::SelfConfigProcessCeiling {
+                    file_mode: ceiling.file_tools(),
+                    bash_mode: ceiling.bash(),
+                    root: ceiling.root().map(ToOwned::to_owned),
+                },
             },
             behavior_policy,
             ceiling_policy,

@@ -377,7 +377,7 @@ pub fn decide_persona_request(
             };
             if target.protected {
                 return PersonaVerdict::Reject(format!(
-                    r#"behavior_id "{behavior_id}" is a protected configurator and cannot be edited through configure_persona"#
+                    r#"behavior_id "{behavior_id}" is a protected configurator and cannot be edited through configure_behaviors"#
                 ));
             }
             if let Some(msg) = validate_persona_name(doc.persona_name.as_deref()) {
@@ -613,11 +613,19 @@ pub async fn apply_persona_request(
             Some(id) => load_config(txn, Collection::AgentContext, owner, id).await?,
             None => serde_json::from_value(serde_json::json!({"context_id":context_id,"agent_did":owner}))?,
         };
+        let existing_context = context.clone();
         let existing_tools: Option<Tools> = match context.tools_id.as_deref() {
             Some(id) => Some(load_config(txn, Collection::Tools, owner, id).await?), None => None,
         };
         if let Some(system_prompt) = &doc.system_prompt {
             context.system_prompt = Some(system_prompt.clone());
+        }
+        // The command exposes one concise description because Behavior and
+        // Context are materialized as one reusable interface. Keep both
+        // canonical owners coherent instead of leaving the context opaque in
+        // later inspect/edit flows.
+        if source.is_none() || doc.description.is_some() {
+            context.description = doc.description.clone();
         }
         let root = doc.root.as_ref().filter(|root| !root.trim().is_empty()).cloned();
         let preset = doc.preset.as_deref().unwrap_or("").trim();
@@ -633,7 +641,7 @@ pub async fn apply_persona_request(
                 else if root.is_some() { tools.host = Some(HostTools {root:root.clone(),..Default::default()}); }
             }
         }
-        let change_context = create || tools != existing_tools;
+        let change_context = create || context != existing_context || tools != existing_tools;
         let mut documents = Vec::new();
         if change_context {
             context.context_id = context_id;
@@ -1188,6 +1196,10 @@ mod tests {
             context.system_prompt.as_deref(),
             Some("Research the question and cite evidence.")
         );
+        assert_eq!(
+            context.description.as_deref(),
+            Some("Researches a focused question")
+        );
         context.system_prompt = Some("Keep literal {{braces}}".into());
         context.description = Some("Shared context".into());
         ConfigAccess::Local(node.clone())
@@ -1254,6 +1266,8 @@ mod tests {
         doc.op = Some(PersonaOp::Edit);
         doc.behavior_id = Some(cloned.behavior_id.clone());
         doc.root = None;
+        doc.description = Some("Edited behavior and context".into());
+        doc.system_prompt = Some("Edited literal instructions".into());
         apply_persona_request(&node, &doc, &catalog).await?;
         let edited: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
@@ -1273,6 +1287,14 @@ mod tests {
         .await?;
         assert_eq!(edited_tools.host.as_ref().unwrap().root, None);
         assert_eq!(
+            edited_context.description.as_deref(),
+            Some("Edited behavior and context")
+        );
+        assert_eq!(
+            edited_context.system_prompt.as_deref(),
+            Some("Edited literal instructions")
+        );
+        assert_eq!(
             read::<Tools>(&node, Collection::Tools, owner, &source_tools.tools_id).await?,
             source_tools
         );
@@ -1288,7 +1310,7 @@ mod tests {
             preset.context_id.as_deref().unwrap(),
         )
         .await?;
-        assert_eq!(preset_context.system_prompt, context.system_prompt);
+        assert_eq!(preset_context.system_prompt, edited_context.system_prompt);
         let preset_tools: Tools = read(
             &node,
             Collection::Tools,

@@ -432,7 +432,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
 }
 
 #[test]
-fn readonly_ceiling_clamps_unrestricted_bash_policy() {
+fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
     let config = BehaviorToolConfig::from_selection(
         "ops",
         ResolvedToolSelection {
@@ -782,7 +782,7 @@ fn background_tool_allowlist_registers_r6_tools() {
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: None,
-            bash: BashMode::ReadOnly,
+            bash: BashMode::Unrestricted,
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
@@ -790,7 +790,10 @@ fn background_tool_allowlist_registers_r6_tools() {
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
-            backgroundable_tool_names: vec!["bash".to_string(), "bash".to_string()],
+            backgroundable_tool_names: vec![
+                "bash_unrestricted".to_string(),
+                "bash_unrestricted".to_string(),
+            ],
             enable_memory: false,
             enable_session_history_tool: false,
             enable_context_budget: true,

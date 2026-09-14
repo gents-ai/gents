@@ -1,5 +1,6 @@
 mod catalog;
 mod install;
+mod run_adapter;
 
 #[cfg(test)]
 pub(crate) use catalog::load_package;
@@ -19,3 +20,4 @@ pub use install::{
     prepare_bundled_graph_package_install, prepare_bundled_graph_package_install_for_graph,
     GraphPackageInstallBindings, GraphPackageInstallReceipt,
 };
+pub use run_adapter::{prepare_code_review_run, PreparedGraphRun};

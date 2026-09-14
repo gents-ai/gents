@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 use std::{io, io::IsTerminal as _, io::Write as _};
 
@@ -8,7 +6,8 @@ use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::graph_package::{
     default_bundled_graph_package_install_bindings, install_bundled_graph_package,
-    load_bundled_graph_package, load_installed_package_plan, GraphPackageInstallBindings,
+    load_bundled_graph_package, load_installed_package_plan, prepare_code_review_run,
+    GraphPackageInstallBindings,
 };
 use gents::graph_pipeline::{
     activate_graph_revision_with_access, load_active_graph_plan_with_access,
@@ -18,10 +17,8 @@ use gents::graph_pipeline::{
 };
 use gents::run_timeline::{RunActivityRows, TimelineInferenceCallRow, TimelineToolCallRow};
 use gents::run_timeline_fetch::load_run_activity_rows;
-use gents_protocol::graphql::graphql_input_literal;
 use serde::Serialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{
@@ -29,14 +26,6 @@ use crate::cli::{
     GraphWatchArgs, PackInstallArgs,
 };
 use crate::{print_json, resolve_agent_did, resolve_config_access};
-
-// Datastore query results cap each projected string field at 2,000 bytes.
-// Keep every immutable field below that ceiling and expose sixteen fields per
-// page so each read also remains below the total tool-result ceiling. Page
-// count is dynamic: large patches create more immutable rows instead of losing
-// an unreviewed suffix to a process-wide evidence cap.
-const CODE_REVIEW_EVIDENCE_CHUNKS_PER_PAGE: usize = 16;
-const CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES: usize = 1_800;
 
 pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
     match command {
@@ -119,210 +108,6 @@ async fn access_and_actor(scope: &GraphScopeArgs) -> Result<(ConfigAccess, Strin
     Ok((access, actor))
 }
 
-fn git_output_bytes(repo: &Path, arguments: &[&str]) -> Result<Vec<u8>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(arguments)
-        .output()
-        .with_context(|| format!("running git in {}", repo.display()))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "git {} failed in {}: {}",
-            arguments.join(" "),
-            repo.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(output.stdout)
-}
-
-fn git_output(repo: &Path, arguments: &[&str]) -> Result<String> {
-    Ok(String::from_utf8(git_output_bytes(repo, arguments)?)?
-        .trim()
-        .to_owned())
-}
-
-fn git_output_exact(repo: &Path, arguments: &[&str]) -> Result<String> {
-    String::from_utf8(git_output_bytes(repo, arguments)?)
-        .context("Git emitted non-UTF-8 code-review evidence")
-}
-
-fn resolve_repository(
-    repo: &Path,
-    base: &str,
-    head: &str,
-) -> Result<(std::path::PathBuf, String, String)> {
-    let canonical = std::fs::canonicalize(repo)
-        .with_context(|| format!("canonicalizing repository {}", repo.display()))?;
-    if git_output(&canonical, &["rev-parse", "--is-inside-work-tree"])? != "true" {
-        anyhow::bail!("{} is not a Git work tree", canonical.display());
-    }
-    let base_sha = git_output(
-        &canonical,
-        &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
-    )?;
-    let head_sha = git_output(
-        &canonical,
-        &["rev-parse", "--verify", &format!("{head}^{{commit}}")],
-    )?;
-    Ok((canonical, base_sha, head_sha))
-}
-
-struct CodeReviewEvidence {
-    summary: String,
-    chunks: Vec<String>,
-    byte_count: usize,
-    sha256: String,
-}
-
-fn split_evidence_packet(packet: &str) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    while start < packet.len() {
-        let mut end = (start + CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES).min(packet.len());
-        while !packet.is_char_boundary(end) {
-            end -= 1;
-        }
-        chunks.push(packet[start..end].to_owned());
-        start = end;
-    }
-    chunks
-}
-
-fn code_review_evidence_page_inputs(
-    evidence_id: &str,
-    evidence_sha256: &str,
-    evidence_byte_count: usize,
-    chunks: &[String],
-) -> Vec<Value> {
-    let page_count = chunks.len().div_ceil(CODE_REVIEW_EVIDENCE_CHUNKS_PER_PAGE);
-    let mut pages = Vec::with_capacity(page_count);
-    for page in 0..page_count {
-        let first = page * CODE_REVIEW_EVIDENCE_CHUNKS_PER_PAGE;
-        let mut input = serde_json::Map::new();
-        input.insert(
-            "page_key".to_owned(),
-            Value::String(format!("{evidence_id}:{page:08}")),
-        );
-        input.insert(
-            "evidence_id".to_owned(),
-            Value::String(evidence_id.to_owned()),
-        );
-        input.insert("page_index".to_owned(), Value::String(page.to_string()));
-        input.insert(
-            "page_count".to_owned(),
-            Value::String(page_count.to_string()),
-        );
-        input.insert(
-            "evidence_chunk_count".to_owned(),
-            Value::String(chunks.len().to_string()),
-        );
-        input.insert(
-            "evidence_byte_count".to_owned(),
-            Value::String(evidence_byte_count.to_string()),
-        );
-        input.insert(
-            "evidence_sha256".to_owned(),
-            Value::String(evidence_sha256.to_owned()),
-        );
-        for slot in 0..CODE_REVIEW_EVIDENCE_CHUNKS_PER_PAGE {
-            input.insert(
-                format!("evidence_chunk_{slot}"),
-                Value::String(chunks.get(first + slot).cloned().unwrap_or_default()),
-            );
-        }
-        pages.push(Value::Object(input));
-    }
-    pages
-}
-
-fn code_review_evidence_manifest_input(evidence_id: &str, evidence: &CodeReviewEvidence) -> Value {
-    json!({
-        "evidence_id": evidence_id,
-        "format_version": "1",
-        "page_count": evidence.chunks.len().div_ceil(CODE_REVIEW_EVIDENCE_CHUNKS_PER_PAGE).to_string(),
-        "evidence_chunk_count": evidence.chunks.len().to_string(),
-        "evidence_byte_count": evidence.byte_count.to_string(),
-        "evidence_sha256": evidence.sha256,
-    })
-}
-
-async fn persist_code_review_evidence_pages(
-    access: &ConfigAccess,
-    evidence_id: &str,
-    evidence: &CodeReviewEvidence,
-) -> Result<()> {
-    let pages = code_review_evidence_page_inputs(
-        evidence_id,
-        &evidence.sha256,
-        evidence.byte_count,
-        &evidence.chunks,
-    );
-    let manifest = code_review_evidence_manifest_input(evidence_id, evidence);
-    let pages_ref = &pages;
-    let manifest_ref = &manifest;
-    access
-        .transact("cli.graph.persist_review_evidence", move |txn| {
-            Box::pin(async move {
-                txn.execute(&format!(
-                    "mutation {{ create_CodeReviewEvidenceManifest(input: {}) {{ _docID }} }}",
-                    graphql_input_literal(manifest_ref)?
-                ))
-                .await
-                .context("persisting immutable code-review evidence manifest")?;
-                for (page, input) in pages_ref.iter().enumerate() {
-                    let mutation = format!(
-                        "mutation {{ create_CodeReviewEvidencePage(input: {}) {{ _docID }} }}",
-                        graphql_input_literal(input)?
-                    );
-                    txn.execute(&mutation).await.with_context(|| {
-                        format!("persisting immutable code-review evidence page {page}")
-                    })?;
-                }
-                Ok::<_, anyhow::Error>(())
-            })
-        })
-        .await
-}
-
-/// Build immutable, host-owned review evidence. Recon sees only the compact
-/// changed-file summary. Scanner-only typed reads expose the complete patch in
-/// dynamically paged chunks below the datastore and tool-result ceilings.
-fn code_review_evidence(repo: &Path, base: &str, head: &str) -> Result<CodeReviewEvidence> {
-    let changed = git_output(repo, &["diff", "--name-status", base, head, "--"])?;
-    let stat = git_output(repo, &["diff", "--stat", base, head, "--"])?;
-    let patch = git_output_exact(
-        repo,
-        &[
-            "-c",
-            "core.quotepath=true",
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-            "--find-renames=50%",
-            "--unified=12",
-            base,
-            head,
-            "--",
-        ],
-    )?;
-    let summary = format!(
-        "PINNED BASE: {base}\nPINNED HEAD: {head}\n\nCHANGED FILES:\n{changed}\n\nDIFF STAT:\n{stat}"
-    );
-    let packet = format!("{summary}\n\nCOMPLETE PATCH:\n{patch}");
-    let byte_count = packet.len();
-    let sha256 = format!("{:x}", Sha256::digest(packet.as_bytes()));
-    Ok(CodeReviewEvidence {
-        summary,
-        chunks: split_evidence_packet(&packet),
-        byte_count,
-        sha256,
-    })
-}
-
 async fn run(args: GraphRunArgs) -> Result<()> {
     let (access, actor) = access_and_actor(&args.scope).await?;
     let ConfigAccess::Graphql(_) = &access else {
@@ -360,35 +145,11 @@ async fn run(args: GraphRunArgs) -> Result<()> {
     let digest = plan.digest.clone();
     let (entry, input) = match args.package.as_str() {
         "code_review" => {
-            let (repository_path, base_ref, head_ref) =
-                resolve_repository(&args.repo, &args.base, &args.head)?;
-            let evidence = code_review_evidence(&repository_path, &base_ref, &head_ref)?;
-            let workspace = gents::workspace::provision_read_only_workspace(
-                &access,
-                &repository_path,
-                &head_ref,
-                &actor,
+            let prepared = prepare_code_review_run(
+                &access, &actor, &args.repo, &args.base, &args.head, args.focus, None,
             )
             .await?;
-            let evidence_id = uuid::Uuid::new_v4().to_string();
-            persist_code_review_evidence_pages(&access, &evidence_id, &evidence).await?;
-            let input = json!({
-                "repository_path": ".",
-                "base_ref": base_ref,
-                "head_ref": head_ref,
-                "workspace_id": workspace.workspace.workspace_id,
-                "workspace_authority": "readOnly",
-                "workspace_owner_agent_did": workspace.workspace.owner_agent_did,
-                "lens_count": "4",
-                "lens_min": "4",
-                "lens_max": "4",
-                "pr_number": "",
-                "evidence_id": evidence_id,
-                "evidence_summary": evidence.summary,
-                "evidence_chunk_count": evidence.chunks.len().to_string(),
-                "focus": args.focus.unwrap_or_else(|| "Review the diff for material correctness, safety, durability, and maintainability defects.".to_owned()),
-            });
-            ("review", input)
+            (prepared.entry_name, prepared.input)
         }
         "web_deep_research" => {
             if !(2..=8).contains(&args.investigator_count) {
@@ -401,7 +162,7 @@ async fn run(args: GraphRunArgs) -> Result<()> {
                 .filter(|question| !question.is_empty())
                 .context("web-deep-research requires --question")?;
             (
-                "research",
+                "research".to_owned(),
                 json!({
                     "question": question,
                     "scope": args.research_scope,
@@ -415,7 +176,7 @@ async fn run(args: GraphRunArgs) -> Result<()> {
         package => anyhow::bail!("graph run has no entry adapter for package {package:?}"),
     };
     let receipt =
-        start_graph_run_with_access(&access, &actor, &graph_id, Some(&digest), entry, input)
+        start_graph_run_with_access(&access, &actor, &graph_id, Some(&digest), &entry, input)
             .await?;
     if args.watch {
         watch_run(
@@ -1026,70 +787,5 @@ mod tests {
             usage_detail(&summary),
             "~8.9m input estimated · output unavailable · 1 completed call unreported"
         );
-    }
-
-    #[test]
-    fn evidence_pages_are_dynamic_bounded_lossless_and_utf8_safe() {
-        let value = format!("{}{}", "a".repeat(1_750_000), "é日".repeat(2_000));
-        let chunks = split_evidence_packet(&value);
-        assert_eq!(chunks.concat(), value);
-        assert!(chunks
-            .iter()
-            .all(|chunk| chunk.len() <= CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES));
-        assert!(CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES < 2_000);
-        let sha256 = format!("{:x}", Sha256::digest(value.as_bytes()));
-        let pages = code_review_evidence_page_inputs("evidence-1", &sha256, value.len(), &chunks);
-        assert!(
-            pages.len() > 18,
-            "the old fixed-page ceiling must be exceeded"
-        );
-        let mut reconstructed = Vec::new();
-        for (page, input) in pages.iter().enumerate() {
-            let input = input.as_object().unwrap();
-            assert_eq!(input.len(), CODE_REVIEW_EVIDENCE_CHUNKS_PER_PAGE + 7);
-            assert_eq!(input["page_key"], format!("evidence-1:{page:08}"));
-            assert_eq!(input["evidence_id"], "evidence-1");
-            assert_eq!(input["page_index"], page.to_string());
-            assert_eq!(input["page_count"], pages.len().to_string());
-            assert_eq!(input["evidence_chunk_count"], chunks.len().to_string());
-            assert_eq!(input["evidence_byte_count"], value.len().to_string());
-            assert_eq!(input["evidence_sha256"], sha256);
-            assert!(serde_json::to_vec(input).unwrap().len() < 50 * 1024);
-            for slot in 0..CODE_REVIEW_EVIDENCE_CHUNKS_PER_PAGE {
-                let chunk = page * CODE_REVIEW_EVIDENCE_CHUNKS_PER_PAGE + slot;
-                let value = input[&format!("evidence_chunk_{slot}")].as_str().unwrap();
-                if chunk < chunks.len() {
-                    reconstructed.push(value.to_owned());
-                } else {
-                    assert!(value.is_empty(), "only final page padding may be empty");
-                }
-            }
-        }
-        assert_eq!(reconstructed.concat(), value);
-
-        let evidence = CodeReviewEvidence {
-            summary: "summary".to_owned(),
-            chunks,
-            byte_count: value.len(),
-            sha256: sha256.clone(),
-        };
-        assert_eq!(
-            code_review_evidence_manifest_input("evidence-1", &evidence),
-            json!({
-                "evidence_id": "evidence-1",
-                "format_version": "1",
-                "page_count": pages.len().to_string(),
-                "evidence_chunk_count": evidence.chunks.len().to_string(),
-                "evidence_byte_count": value.len().to_string(),
-                "evidence_sha256": sha256,
-            })
-        );
-    }
-
-    #[test]
-    fn empty_evidence_packet_has_no_loss_or_invalid_utf8() {
-        let chunks = split_evidence_packet("");
-        assert!(chunks.is_empty());
-        assert!(code_review_evidence_page_inputs("empty", "digest", 0, &chunks).is_empty());
     }
 }

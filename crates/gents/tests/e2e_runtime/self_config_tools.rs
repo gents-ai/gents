@@ -6,7 +6,7 @@ use gents::config_client::{
 };
 use gents::document_config::PackConfig;
 use gents::self_config::build_self_config_tools;
-use gents::tool_surface::SelfConfigToolConfig;
+use gents::tool_surface::{BashMode, FileToolMode, SelfConfigProcessCeiling, SelfConfigToolConfig};
 use gents::Collection;
 use serde_json::{json, Value};
 
@@ -67,6 +67,7 @@ fn tool_config(categories: &[&str], no_lockout: bool, dry_run: bool) -> SelfConf
         no_lockout,
         dry_run,
         enable_pack_install: false,
+        process_ceiling: Default::default(),
     }
 }
 
@@ -189,12 +190,13 @@ async fn configure_tools_respects_gate_and_no_lockout() {
 async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
     let db = test_db("self-config-read").await;
     seed_config(&db.node).await;
-    let tools = build_self_config_tools(
-        db.node.clone(),
-        AGENT_DID.into(),
-        None,
-        &tool_config(&["behavior", "tools", "profile", "backend"], false, true),
-    );
+    let mut config = tool_config(&["behavior", "tools", "profile", "backend"], false, true);
+    config.process_ceiling = SelfConfigProcessCeiling {
+        file_mode: FileToolMode::ReadWrite,
+        bash_mode: BashMode::Unrestricted,
+        root: None,
+    };
+    let tools = build_self_config_tools(db.node.clone(), AGENT_DID.into(), None, &config);
     let output = call_tool(&tools, "get_my_config", json!({})).await.unwrap();
     let config: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(config["behavior"]["behavior_id"], BEHAVIOR_ID);
@@ -205,6 +207,19 @@ async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
         config["documents"]["InferenceBackend"]["backend_id"],
         BACKEND_ID
     );
+    assert_eq!(
+        config["runtime_effective"]["process_ceiling"]["file_mode"],
+        "ReadWrite"
+    );
+    assert_eq!(
+        config["runtime_effective"]["process_ceiling"]["bash_mode"],
+        "Unrestricted"
+    );
+    assert_eq!(
+        config["runtime_effective"]["behavior_narrowing"]["requested_file_mode"],
+        "Off"
+    );
+    assert_eq!(config["runtime_effective"]["effective"]["file_mode"], "Off");
     assert!(
         !output.contains(SECRET),
         "backend credentials must never leave the read owner"

@@ -244,7 +244,7 @@ fn apply_effective_bash(
     policy
 }
 
-pub(super) fn resolve_effective_tool_root(
+pub(crate) fn resolve_effective_tool_root(
     behavior_name: &str,
     selection_root: Option<&Path>,
     ceiling_root: Option<&Path>,

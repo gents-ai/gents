@@ -68,6 +68,14 @@ impl BashMode {
             Self::Unrestricted => 2,
         }
     }
+
+    pub(crate) fn meet(self, other: Self) -> Self {
+        if self.rank() <= other.rank() {
+            self
+        } else {
+            other
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

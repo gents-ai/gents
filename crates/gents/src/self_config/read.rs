@@ -6,6 +6,7 @@ use crate::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
+use std::path::Path;
 
 impl SelfConfigCore {
     pub(crate) async fn read_effective_config(
@@ -61,6 +62,37 @@ impl SelfConfigCore {
                 }
             }
         }
+        let tools = documents.get(SelfConfigTarget::Tools.collection_name());
+        let requested_file_mode = tools
+            .and_then(|tools| tools.pointer("/host/files/mode"))
+            .and_then(Value::as_str)
+            .map(crate::tool_surface::FileToolMode::parse)
+            .transpose()?
+            .unwrap_or_default();
+        let requested_bash_mode = tools
+            .and_then(|tools| tools.pointer("/host/bash/mode"))
+            .and_then(Value::as_str)
+            .map(crate::tool_surface::BashMode::parse)
+            .transpose()?
+            .unwrap_or_default();
+        let configured_root = tools
+            .and_then(|tools| tools.pointer("/host/root"))
+            .and_then(Value::as_str)
+            .filter(|root| !root.trim().is_empty());
+        let process_ceiling = self.process_ceiling();
+        let effective_file_mode = requested_file_mode.meet(process_ceiling.file_mode);
+        let effective_bash_mode = requested_bash_mode.meet(process_ceiling.bash_mode);
+        let effective_root = if effective_file_mode != crate::tool_surface::FileToolMode::Off
+            || effective_bash_mode != crate::tool_surface::BashMode::Off
+        {
+            crate::tool_surface::resolve_effective_tool_root(
+                self.behavior_id(),
+                configured_root.map(Path::new),
+                process_ceiling.root.as_deref(),
+            )?
+        } else {
+            None
+        };
         let mut skills = Vec::new();
         if let Some(ids) = anchor.context.get("skill_ids").and_then(Value::as_array) {
             for id in ids {
@@ -156,6 +188,20 @@ impl SelfConfigCore {
             "behavior": anchor.doc, "context": anchor.context, "inference_profile": anchor.profile,
             "documents": documents, "skills": skills, "automation": automation,
             "self_config": {"categories": categories, "no_lockout": no_lockout, "dry_run": dry_run},
+            "runtime_effective": {
+                "process_ceiling": process_ceiling,
+                "behavior_narrowing": {
+                    "requested_file_mode": requested_file_mode,
+                    "requested_bash_mode": requested_bash_mode,
+                    "configured_root": configured_root,
+                },
+                "effective": {
+                    "file_mode": effective_file_mode,
+                    "bash_mode": effective_bash_mode,
+                    "root": effective_root,
+                },
+                "confirmed_by": "resolved runtime tool surface",
+            },
             "effect_timing": EFFECT_TIMING_NOTE,
         }))
     }

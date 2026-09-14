@@ -23,6 +23,7 @@ use crate::config_client::{
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::document_config::Tools;
+use crate::tool_surface::SelfConfigProcessCeiling;
 
 /// How a self-config write lands: config documents are watched by the control
 /// reconciler; a committed patch applies at the next generation swap, not to
@@ -39,6 +40,7 @@ pub struct SelfConfigCore {
     agent_did: String,
     behavior_id: String,
     no_lockout: bool,
+    process_ceiling: SelfConfigProcessCeiling,
 }
 
 /// Outcome of an applied (or previewed) patch.
@@ -88,12 +90,25 @@ impl SelfConfigCore {
             agent_did,
             behavior_id,
             no_lockout: false,
+            process_ceiling: SelfConfigProcessCeiling::default(),
         })
     }
 
     pub fn with_no_lockout(mut self, no_lockout: bool) -> Self {
         self.no_lockout = no_lockout;
         self
+    }
+
+    pub(crate) fn with_process_ceiling(
+        mut self,
+        process_ceiling: SelfConfigProcessCeiling,
+    ) -> Self {
+        self.process_ceiling = process_ceiling;
+        self
+    }
+
+    pub(crate) fn process_ceiling(&self) -> &SelfConfigProcessCeiling {
+        &self.process_ceiling
     }
 
     pub fn agent_did(&self) -> &str {
