@@ -24,6 +24,7 @@ use crate::config_client::{
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::document_config::Tools;
 use crate::tool_surface::SelfConfigProcessCeiling;
+use crate::toolset::CommandNetworkMode;
 
 /// How a self-config write lands: config documents are watched by the control
 /// reconciler; a committed patch applies at the next generation swap, not to
@@ -85,11 +86,13 @@ impl SelfConfigCore {
         &self,
         enable_lsp: Option<bool>,
         enable_graph_tools: Option<bool>,
+        network_mode: Option<CommandNetworkMode>,
     ) -> Result<PatchOutcome> {
         anyhow::ensure!(
-            enable_lsp.is_some() || enable_graph_tools.is_some(),
+            enable_lsp.is_some() || enable_graph_tools.is_some() || network_mode.is_some(),
             "configure_tools requires an explicit tool selection"
         );
+        validate_tool_network_selection(network_mode)?;
         let outcome = ConfigAccess::transact_local(
             &self.node, Some(self.identity()?), "self_config.sibling_tools",
             |txn| Box::pin(async move {
@@ -120,13 +123,16 @@ impl SelfConfigCore {
                 let (_, stored) = read_owned_doc(txn, SelfConfigTarget::Tools, self.agent_did(), &tools_id)
                     .await?.context("sibling Tools is missing")?;
                 let mut tools: Tools = decode_merged("Tools", &stored)?;
-                apply_tool_grant_selection(&mut tools, enable_lsp, enable_graph_tools);
+                apply_tool_grant_selection(&mut tools, enable_lsp, enable_graph_tools, network_mode);
                 let mut patch = SelfConfigPatch::new();
                 if enable_lsp.is_some() {
                     patch.push(("integrations".into(), Some(serde_json::to_value(tools.integrations)?)));
                 }
                 if enable_graph_tools.is_some() {
                     patch.push(("built_ins".into(), Some(serde_json::to_value(tools.built_ins)?)));
+                }
+                if network_mode.is_some() {
+                    patch.push(("host".into(), Some(serde_json::to_value(tools.host)?)));
                 }
                 let request = super::tools_request(self, patch, true);
                 ensure_admissible(request.target, &request.patch)?;
@@ -481,6 +487,7 @@ pub fn apply_tool_grant_selection(
     tools: &mut Tools,
     enable_lsp: Option<bool>,
     enable_graph_tools: Option<bool>,
+    network_mode: Option<CommandNetworkMode>,
 ) {
     if let Some(enabled) = enable_lsp {
         let integrations = tools.integrations.get_or_insert_with(Default::default);
@@ -496,6 +503,24 @@ pub fn apply_tool_grant_selection(
             .get_or_insert_with(Default::default)
             .enable_graph_tools = Some(enabled);
     }
+    if let Some(network_mode) = network_mode {
+        tools
+            .host
+            .get_or_insert_with(Default::default)
+            .bash
+            .get_or_insert_with(Default::default)
+            .network_mode = Some(network_mode);
+    }
+}
+
+/// Pure admission fence for the focused sibling network selection. The
+/// canonical Tools writer remains [`apply_tool_grant_selection`].
+pub fn validate_tool_network_selection(network_mode: Option<CommandNetworkMode>) -> Result<()> {
+    anyhow::ensure!(
+        network_mode.is_none_or(|mode| mode == CommandNetworkMode::Disabled),
+        "configure_tools may only narrow network_mode to disabled"
+    );
+    Ok(())
 }
 
 /// Per-call plumbing for one category patch. Boxed closures keep the core's

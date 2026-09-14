@@ -73,6 +73,22 @@ impl SelfConfigCore {
             .transpose()?;
         let lsp_selected = selection.as_ref().is_some_and(|s| s.enable_lsp);
         let graph_selected = selection.as_ref().is_some_and(|s| s.enable_graph_tools);
+        let configured_network_mode = canonical_tools
+            .as_ref()
+            .and_then(|tools| tools.host.as_ref())
+            .and_then(|host| host.bash.as_ref())
+            .and_then(|bash| bash.network_mode)
+            .unwrap_or(crate::toolset::CommandNetworkMode::Inherit);
+        let effective_network_mode = selection
+            .as_ref()
+            .and_then(|selection| selection.command_policy.as_ref())
+            .map(|policy| policy.network_mode)
+            .unwrap_or(configured_network_mode);
+        let network_enforcement = selection
+            .as_ref()
+            .and_then(|selection| selection.command_policy.as_ref())
+            .map(crate::toolset::CommandExecutionPolicy::network_enforcement_disclosure)
+            .unwrap_or("no host command policy is active");
         let requested_file_mode = tools
             .and_then(|tools| tools.pointer("/host/files/mode"))
             .and_then(Value::as_str)
@@ -199,7 +215,7 @@ impl SelfConfigCore {
             "documents": documents, "skills": skills, "automation": automation,
             "self_config": {"categories": categories, "no_lockout": no_lockout, "dry_run": dry_run},
             "tool_grants": {
-                "configured": { "lsp": lsp_selected, "native_graph_tools": graph_selected },
+                "configured": { "lsp": lsp_selected, "native_graph_tools": graph_selected, "network_mode": configured_network_mode },
                 "confirmed_by": "canonical Tools selection decoded from durable configuration",
                 "activation": "Applies after reconciliation to later dispatched requests. Tool registration and successful execution must be tested in the working behavior.",
                 "lsp_readiness": "Selection does not prove a language server is installed, started, or indexed.",
@@ -216,8 +232,10 @@ impl SelfConfigCore {
                     "file_mode": effective_file_mode,
                     "bash_mode": effective_bash_mode,
                     "root": effective_root,
+                    "network_mode": effective_network_mode,
+                    "network_enforcement": network_enforcement,
                 },
-                "confirmed_by": "resolved host authority",
+                "confirmed_by": "resolved host policy; sandbox availability and command enforcement are checked at execution time",
             },
             "effect_timing": EFFECT_TIMING_NOTE,
         }))

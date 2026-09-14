@@ -10,7 +10,10 @@ mod read;
 #[cfg(test)]
 mod tests;
 
-pub use ops::{apply_tool_grant_selection, PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE};
+pub use ops::{
+    apply_tool_grant_selection, validate_tool_network_selection, PatchOutcome, SelfConfigCore,
+    EFFECT_TIMING_NOTE,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -789,6 +792,9 @@ pub struct ConfigurePersonaParams {
     pub enable_lsp: Option<bool>,
     #[serde(default)]
     pub enable_graph_tools: Option<bool>,
+    /// Optional fail-closed network narrowing for canonical host bash tools.
+    #[serde(default)]
+    pub network_mode: Option<crate::toolset::CommandNetworkMode>,
 }
 
 /// How long [`ConfigurePersonaTool`] polls a freshly-authored
@@ -1377,7 +1383,7 @@ impl Tool for ConfigurePersonaTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: CONFIGURE_BEHAVIORS_TOOL_NAME.to_string(),
-            description: "Preview, list, inspect, create, clone, edit, or disable this principal's canonical behaviors through the signed command owner. Choose an existing profile and a complete system_prompt for a preset-based create. Then use the separate configure_tools action with an existing behavior_id to select LSP/native graph capabilities through the canonical config patch owner. Creation and tool selection are distinct commits; retry only the failed operation. Setup and shared tool references are protected. Inspect configured grants and test a new request after reconciliation before claiming readiness.".to_owned(),
+            description: "Preview, list, inspect, create, clone, edit, or disable this principal's canonical behaviors through the signed command owner. Choose an existing profile and a complete system_prompt for a preset-based create. Then use the separate configure_tools action with an existing behavior_id to select LSP/native graph capabilities or disable host-command network access through the canonical config patch owner. Creation and tool selection are distinct commits; retry only the failed operation. Setup and shared tool references are protected. Inspect configured grants and test a new request after reconciliation before claiming readiness.".to_owned(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -1435,6 +1441,11 @@ impl Tool for ConfigurePersonaTool {
                         "type": "boolean",
                         "description": "Only for action configure_tools on an existing sibling. Select native list_graphs/run_graph/get_graph_run/get_graph_result/cancel_graph_run on this node/principal, without pack installation or self-configuration. Omit to preserve; false disables. Graph caller admission still applies."
                     },
+                    "network_mode": {
+                        "type": "string",
+                        "enum": ["disabled"],
+                        "description": "Only for action configure_tools on an existing sibling. Set disabled to narrow canonical host bash commands to no network; omit to preserve the current policy. This control cannot widen network access. Inspect the effective report and test enforcement before claiming isolation."
+                    },
                 },
                 "required": ["action"],
             }),
@@ -1443,7 +1454,9 @@ impl Tool for ConfigurePersonaTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         if args.action != "configure_tools"
-            && (args.enable_lsp.is_some() || args.enable_graph_tools.is_some())
+            && (args.enable_lsp.is_some()
+                || args.enable_graph_tools.is_some()
+                || args.network_mode.is_some())
         {
             return Err(anyhow!("tool selections require the separate configure_tools action with an existing behavior_id; create/clone/edit remains a signed atomic behavior command").into());
         }
@@ -1460,7 +1473,11 @@ impl Tool for ConfigurePersonaTool {
                 )?
                 .with_process_ceiling(self.process_ceiling.clone());
                 let outcome = core
-                    .select_sibling_tools(args.enable_lsp, args.enable_graph_tools)
+                    .select_sibling_tools(
+                        args.enable_lsp,
+                        args.enable_graph_tools,
+                        args.network_mode,
+                    )
                     .await?;
                 let effective = core
                     .read_effective_config(&BTreeSet::new(), false, false)
@@ -1478,9 +1495,19 @@ impl Tool for ConfigurePersonaTool {
                         }
                     }
                 }
+                if let Some(requested) = args.network_mode {
+                    if effective["tool_grants"]["configured"]["network_mode"].as_str()
+                        != Some(requested.as_str())
+                    {
+                        return Err(anyhow!(
+                            "committed tool selection did not verify network_mode"
+                        )
+                        .into());
+                    }
+                }
                 Ok(serde_json::to_string_pretty(&json!({
                     "outcome": outcome, "behavior_id": behavior_id,
-                    "requested": {"enable_lsp": args.enable_lsp, "enable_graph_tools": args.enable_graph_tools},
+                    "requested": {"enable_lsp": args.enable_lsp, "enable_graph_tools": args.enable_graph_tools, "network_mode": args.network_mode},
                     "effective_config": effective,
                     "effect": "Tool selection committed separately from behavior creation. Existing IDs and prompt are unchanged; test a new request after reconciliation.",
                 })).context("serialize sibling tool selection")?)

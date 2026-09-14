@@ -471,8 +471,12 @@ async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_fore
     ))
     .await
     .unwrap();
-    core.select_sibling_tools(None, Some(true)).await.unwrap();
-    core.select_sibling_tools(None, Some(true)).await.unwrap();
+    core.select_sibling_tools(None, Some(true), None)
+        .await
+        .unwrap();
+    core.select_sibling_tools(None, Some(true), None)
+        .await
+        .unwrap();
     let inspect = core
         .read_effective_config(&BTreeSet::new(), false, false)
         .await
@@ -486,7 +490,46 @@ async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_fore
         "ReadOnly"
     );
     assert!(inspect["documents"]["Tools"]["self_config"].is_null());
-    core.select_sibling_tools(Some(false), Some(false))
+    core.select_sibling_tools(
+        None,
+        None,
+        Some(crate::toolset::CommandNetworkMode::Disabled),
+    )
+    .await
+    .unwrap();
+    // An omitted network selection preserves the canonical narrowing across
+    // a later focused tool update.
+    core.select_sibling_tools(Some(false), None, None)
+        .await
+        .unwrap();
+    let inspect = core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        inspect["documents"]["Tools"]["host"]["bash"]["network_mode"],
+        "disabled"
+    );
+    assert_eq!(
+        inspect["runtime_effective"]["effective"]["network_mode"],
+        "disabled"
+    );
+    assert!(
+        inspect["runtime_effective"]["effective"]["network_enforcement"]
+            .as_str()
+            .is_some_and(|note| note.contains("execution"))
+    );
+    assert!(core
+        .select_sibling_tools(
+            None,
+            None,
+            Some(crate::toolset::CommandNetworkMode::Enabled),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("only narrow"));
+    core.select_sibling_tools(Some(false), Some(false), None)
         .await
         .unwrap();
     let inspect = core
@@ -495,7 +538,7 @@ async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_fore
         .unwrap();
     assert_eq!(
         inspect["tool_grants"]["configured"],
-        json!({"lsp":false,"native_graph_tools":false})
+        json!({"lsp":false,"native_graph_tools":false,"network_mode":"disabled"})
     );
     core.apply(behavior_request(
         &core,
@@ -509,7 +552,7 @@ async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_fore
     .await
     .unwrap();
     assert!(core
-        .select_sibling_tools(None, Some(true))
+        .select_sibling_tools(None, Some(true), None)
         .await
         .unwrap_err()
         .to_string()
@@ -527,7 +570,7 @@ async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_fore
         .await
         .unwrap();
     assert!(core
-        .select_sibling_tools(None, Some(true))
+        .select_sibling_tools(None, Some(true), None)
         .await
         .unwrap_err()
         .to_string()
@@ -548,7 +591,7 @@ async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_fore
         .await
         .unwrap();
     assert!(core
-        .select_sibling_tools(None, Some(true))
+        .select_sibling_tools(None, Some(true), None)
         .await
         .unwrap_err()
         .to_string()
@@ -560,7 +603,7 @@ async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_fore
     )
     .unwrap();
     assert!(foreign
-        .select_sibling_tools(None, Some(true))
+        .select_sibling_tools(None, Some(true), None)
         .await
         .is_err());
 }
@@ -820,7 +863,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     assert_eq!(output["activation"]["durable"], "confirmed");
     assert_eq!(
         output["effective"]["effective_config"]["tool_grants"]["configured"],
-        json!({"lsp": false, "native_graph_tools": false})
+        json!({"lsp": false, "native_graph_tools": false, "network_mode": "inherit"})
     );
     let grant_tools = build_self_config_tools(
         node.clone(),
@@ -833,6 +876,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         json!({
             "action": "configure_tools", "behavior_id": created[0].behavior_id,
             "enable_lsp": true, "enable_graph_tools": true,
+            "network_mode": "disabled",
         }),
     )
     .await
@@ -840,7 +884,11 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     let selected: Value = serde_json::from_str(&selected).unwrap();
     assert_eq!(
         selected["effective_config"]["tool_grants"]["configured"],
-        json!({"lsp": true, "native_graph_tools": true})
+        json!({"lsp": true, "native_graph_tools": true, "network_mode": "disabled"})
+    );
+    assert_eq!(
+        selected["effective_config"]["runtime_effective"]["effective"]["network_mode"],
+        "disabled"
     );
 
     let snapshot = crate::agent::resolve_document_runtime_snapshot(

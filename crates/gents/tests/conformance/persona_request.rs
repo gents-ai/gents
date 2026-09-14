@@ -32,8 +32,9 @@ fn sibling_tool_selection_preserves_or_explicitly_overrides() {
                 &mut tools,
                 Some(existing),
                 Some(existing),
+                None,
             );
-            gents::self_config::apply_tool_grant_selection(&mut tools, requested, requested);
+            gents::self_config::apply_tool_grant_selection(&mut tools, requested, requested, None);
             let expected = requested.unwrap_or(existing);
             assert_eq!(
                 tools
@@ -52,6 +53,40 @@ fn sibling_tool_selection_preserves_or_explicitly_overrides() {
                 expected
             );
             assert!(tools.self_config.is_none());
+        }
+    }
+}
+
+/// Lean `networkSelectionAllowed`, omission preservation, and no-widening
+/// laws through the production admission fence and canonical Tools writer.
+#[test]
+fn sibling_network_selection_only_admits_omission_or_disabled_narrowing() {
+    use gents::toolset::CommandNetworkMode::{Disabled, Enabled, Inherit};
+
+    for existing in [Disabled, Inherit, Enabled] {
+        for requested in [None, Some(Disabled), Some(Inherit), Some(Enabled)] {
+            let admitted = gents::self_config::validate_tool_network_selection(requested).is_ok();
+            assert_eq!(
+                admitted,
+                requested.is_none_or(|mode| mode == Disabled),
+                "admission mismatch for existing={existing:?} requested={requested:?}"
+            );
+            if !admitted {
+                continue;
+            }
+
+            let mut tools = gents::document_config::Tools::default();
+            gents::self_config::apply_tool_grant_selection(&mut tools, None, None, Some(existing));
+            gents::self_config::apply_tool_grant_selection(&mut tools, None, None, requested);
+            let selected = tools
+                .host
+                .as_ref()
+                .and_then(|host| host.bash.as_ref())
+                .and_then(|bash| bash.network_mode)
+                .expect("existing network mode is materialized");
+            let expected = requested.unwrap_or(existing);
+            assert_eq!(selected, expected);
+            assert!(selected.meet(existing) == selected, "selection widened");
         }
     }
 }

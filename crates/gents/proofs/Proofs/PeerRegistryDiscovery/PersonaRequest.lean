@@ -1,5 +1,6 @@
 import Proofs.Configuration
 import Proofs.Basic
+import Proofs.ToolPolicy.Meet
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Prod
 
@@ -100,6 +101,39 @@ theorem omitted_tool_selection_preserves (existing : Bool) :
 
 theorem explicit_tool_selection_wins (requested existing : Bool) :
     selectedToolFlag (some requested) existing = requested := rfl
+
+/-- Network selection reuses the command-policy vocabulary and tool-policy
+ordering. The focused configurator may preserve an existing selection or
+explicitly narrow it to disabled; inherit/enabled are never admitted inputs. -/
+def selectedNetworkMode
+    (requested : Option CommandPolicy.NetworkMode)
+    (existing : CommandPolicy.NetworkMode) : CommandPolicy.NetworkMode :=
+  requested.getD existing
+
+def networkSelectionAllowed : Option CommandPolicy.NetworkMode → Bool
+  | none => true
+  | some .disabled => true
+  | some .inherit | some .enabled => false
+
+theorem omitted_network_selection_preserves (existing : CommandPolicy.NetworkMode) :
+    selectedNetworkMode none existing = existing := rfl
+
+theorem only_disabled_network_selection_admitted
+    (requested : CommandPolicy.NetworkMode) :
+    networkSelectionAllowed (some requested) = true ↔ requested = .disabled := by
+  cases requested <;> simp [networkSelectionAllowed]
+
+theorem admitted_network_selection_does_not_widen
+    (requested : Option CommandPolicy.NetworkMode)
+    (existing : CommandPolicy.NetworkMode)
+    (h : networkSelectionAllowed requested = true) :
+    ToolPolicy.networkRank (selectedNetworkMode requested existing) ≤
+      ToolPolicy.networkRank existing := by
+  cases requested with
+  | none => simp [selectedNetworkMode]
+  | some requested =>
+      cases requested <;> cases existing <;>
+        simp [networkSelectionAllowed, selectedNetworkMode, ToolPolicy.networkRank] at h ⊢
 
 /-- Observations are supplied by the existing identity-scoped config transaction.
 The focused operation refuses protected or shared targets rather than mutating
