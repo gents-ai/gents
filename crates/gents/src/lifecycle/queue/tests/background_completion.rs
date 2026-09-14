@@ -238,7 +238,10 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
         let failed = failed.data.unwrap();
         assert_eq!(failed["AgentRequest"][0]["lifecycle_state"], "failed");
         assert_eq!(failed["AgentResponse"][0]["status"], "error");
-        assert_eq!(failed["AgentResponse"][0]["error_message"], error.to_string());
+        assert_eq!(
+            failed["AgentResponse"][0]["error_message"],
+            error.to_string()
+        );
 
         // The next enrolled user request can use the same canonical session.
         let mut followup = create.clone();

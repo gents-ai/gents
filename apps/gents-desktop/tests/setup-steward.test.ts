@@ -75,8 +75,12 @@ describe("setup steward patches", () => {
     expect(SETUP_STEWARD_PROMPT).toContain("enable_lsp");
     expect(SETUP_STEWARD_PROMPT).toContain("enable_graph_tools");
     expect(SETUP_STEWARD_PROMPT).toContain("Starter recipes are optional");
-    expect(SETUP_STEWARD_PROMPT).toContain("A code review request is not permission for runtime repair");
-    expect(SETUP_STEWARD_PROMPT).toContain("Never search for or adopt another runtime home");
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "A code review request is not permission for runtime repair",
+    );
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "Never search for or adopt another runtime home",
+    );
     expect(SETUP_STEWARD_PROMPT).toContain("not completed");
     expect(SETUP_STEWARD_PROMPT).not.toContain(
       "configure this behavior and context as a focused coding agent",
