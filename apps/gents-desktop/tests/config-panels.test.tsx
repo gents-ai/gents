@@ -309,9 +309,9 @@ describe("configuration panels", () => {
       "System prompt",
       "Tools",
       "Compaction",
-      "Skill IDs",
       "Tags",
     ]);
+    expect(screen.getByRole("textbox", { name: "Search skills" })).toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Delete" }));
     expect(api.deleteContextConfig).not.toHaveBeenCalled();

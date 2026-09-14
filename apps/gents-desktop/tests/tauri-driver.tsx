@@ -88,7 +88,22 @@ export function renderTauriAppDriverWithBridge(
       return screen.getAllByLabelText(/^Open .* chat/)[0];
     },
     configSectionTab(tabId: string) {
-      return screen.getByTestId(`config-tab-${tabId}`);
+      const labels: Record<string, string> = {
+        agent: "Agent",
+        behaviors: "Behaviours",
+        contexts: "Contexts",
+        skills: "Skills",
+        inference: "Backends",
+        profiles: "Profiles",
+        tools: "Tools",
+        "tool-services": "Remote Tools",
+        tasks: "Tasks",
+        schedules: "Schedules",
+        "event-sources": "Event sources",
+        triggers: "Triggers",
+      };
+      const label = labels[tabId] ?? tabId;
+      return screen.getByRole("link", { name: new RegExp(`^${label}(?:\\s+\\d+)?$`) });
     },
     behaviorKey() {
       return screen.getByTestId("behavior-id") as HTMLInputElement;
@@ -101,6 +116,11 @@ export function renderTauriAppDriverWithBridge(
     },
     behaviorSaveStatus() {
       return screen.getByText("Saved", { selector: ".config-editor .chip" });
+    },
+    contextSystemPrompt() {
+      return screen.getByRole("textbox", {
+        name: "System prompt",
+      }) as HTMLTextAreaElement;
     },
     input(testId: string) {
       return screen.getByTestId(testId) as HTMLInputElement;
@@ -140,9 +160,19 @@ export function renderTauriAppDriverWithBridge(
     async openConfigSection(tabId: string) {
       await user.click(this.configSectionTab(tabId));
       await waitFor(() => {
-        expect(this.configSectionTab(tabId)).toHaveClass("selected");
+        expect(screen.getByTestId("agent-screen")).toHaveAttribute(
+          "data-section",
+          tabId,
+        );
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    async openConfigItem(itemId: string) {
+      const link = document.querySelector<HTMLAnchorElement>(
+        `a[href$="/${encodeURIComponent(itemId)}"]`,
+      );
+      if (!link) throw new Error(`configuration item ${itemId} is not visible`);
+      await user.click(link);
     },
     async replaceInput(testId: string, value: string) {
       fireEvent.change(this.input(testId), { target: { value } });
@@ -167,6 +197,9 @@ export function renderTauriAppDriverWithBridge(
     },
     async replaceBehaviorSystemPrompt(value: string) {
       fireEvent.change(this.behaviorSystemPrompt(), { target: { value } });
+    },
+    async replaceContextSystemPrompt(value: string) {
+      fireEvent.change(this.contextSystemPrompt(), { target: { value } });
     },
     async saveBehaviorConfig() {
       await user.click(this.behaviorSaveButton());

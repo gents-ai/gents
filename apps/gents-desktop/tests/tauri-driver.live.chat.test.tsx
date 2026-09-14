@@ -153,10 +153,10 @@ async function exerciseShellWhileTurnRuns(driver: LiveDesktopDriver) {
   expect(screen.queryByRole("button", { name: /open operations drawer/i })).toBeNull();
 
   await driver.openConfig();
-  await driver.openConfigSection("backends");
-  expect(screen.getByTestId("backend-save")).toBeInTheDocument();
-  await driver.openConfigSection("behavior");
-  expect(driver.behaviorSystemPrompt()).toBeInTheDocument();
+  await driver.openConfigSection("inference");
+  expect(screen.getByRole("button", { name: "New backend" })).toBeInTheDocument();
+  await driver.openConfigSection("contexts");
+  expect(screen.getByRole("button", { name: "New context" })).toBeInTheDocument();
 
   await driver.openChat();
   expect(driver.composer()).toBeInTheDocument();

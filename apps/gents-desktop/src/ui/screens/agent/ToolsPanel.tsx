@@ -1,4 +1,8 @@
-import type { DeploymentView, Tools } from "@source-inc/gents-desktop-client";
+import type {
+  DeploymentView,
+  Tools,
+  SubagentTargetDocument,
+} from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
@@ -12,6 +16,7 @@ import {
 import { newId, optionalAbsolutePath, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
+import { ToolGroupControls } from "./ToolGroupControls";
 
 function Editor({
   shell,
@@ -33,6 +38,7 @@ function Editor({
     files: (tools.host?.files?.mode ?? "Off") as "Off" | "ReadOnly" | "ReadWrite",
     bash: (tools.host?.bash?.mode ?? "Off") as "Off" | "ReadOnly" | "Unrestricted",
     background: tools.host?.bash?.background_enabled ?? false,
+    pendingTargets: [] as SubagentTargetDocument[],
     advanced: JSON.stringify(
       {
         host: tools.host ?? null,
@@ -72,36 +78,159 @@ function Editor({
     if (unknown) throw new Error(`Unknown advanced configuration field: ${unknown}`);
     if ("tools_id" in advanced || "agent_did" in advanced || "display_name" in advanced)
       throw new Error("IDs and display name are edited in their dedicated fields");
+    const positiveSeconds = (label: string, value: unknown) => {
+      if (
+        value != null &&
+        (typeof value !== "number" || !Number.isInteger(value) || value < 1)
+      )
+        throw new Error(`${label} must be a positive whole number`);
+    };
+    const orderedSeconds = (
+      label: string,
+      lower: number | null | undefined,
+      upper: number | null | undefined,
+    ) => {
+      if (lower != null && upper != null && upper < lower)
+        throw new Error(`${label} maximum must be at least its default`);
+    };
+    positiveSeconds("File timeout", advanced.host?.files?.timeout_secs);
+    for (const [label, value] of [
+      ["Bash timeout", advanced.host?.bash?.timeout_secs],
+      ["Maximum bash timeout", advanced.host?.bash?.max_timeout_secs],
+      ["Background bash timeout", advanced.host?.bash?.background_timeout_secs],
+      ["Bash wait timeout", advanced.host?.bash?.wait_timeout_secs],
+      ["Maximum bash wait timeout", advanced.host?.bash?.max_wait_timeout_secs],
+      [
+        "Subagent spawn timeout",
+        advanced.subagents?.cross_principal_spawn_timeout_secs,
+      ],
+      ["Subagent wait timeout", advanced.subagents?.wait_timeout_secs],
+      ["Maximum subagent wait timeout", advanced.subagents?.max_wait_timeout_secs],
+      ["Language server timeout", advanced.integrations?.lsp?.timeout_secs],
+      ["Maximum language server timeout", advanced.integrations?.lsp?.max_timeout_secs],
+      ["Language server RPC timeout", advanced.integrations?.lsp?.rpc_timeout_secs],
+    ] as const)
+      positiveSeconds(label, value);
+    orderedSeconds(
+      "Bash timeout",
+      advanced.host?.bash?.timeout_secs,
+      advanced.host?.bash?.max_timeout_secs,
+    );
+    orderedSeconds(
+      "Bash wait timeout",
+      advanced.host?.bash?.wait_timeout_secs,
+      advanced.host?.bash?.max_wait_timeout_secs,
+    );
+    orderedSeconds(
+      "Subagent wait timeout",
+      advanced.subagents?.wait_timeout_secs,
+      advanced.subagents?.max_wait_timeout_secs,
+    );
+    orderedSeconds(
+      "Language server timeout",
+      advanced.integrations?.lsp?.timeout_secs,
+      advanced.integrations?.lsp?.max_timeout_secs,
+    );
+    for (const target of advanced.subagents?.target_ids ?? []) {
+      if (
+        ![...(deployment.subagentTargets ?? []), ...next.pendingTargets].some(
+          (row) => row.target_id === target,
+        )
+      )
+        throw new Error(`Unknown subagent target: ${target}`);
+    }
+    for (const service of advanced.remote?.services ?? []) {
+      const names = [
+        ...new Set(
+          (service.tool_names ?? []).map((name) => name.trim()).filter(Boolean),
+        ),
+      ];
+      service.tool_names = names.length ? names : null;
+      if (Object.prototype.hasOwnProperty.call(service, "background_tool_names")) {
+        const backgroundNames = [
+          ...new Set(
+            (service.background_tool_names ?? [])
+              .map((name) => name.trim())
+              .filter(Boolean),
+          ),
+        ];
+        service.background_tool_names = backgroundNames.length ? backgroundNames : null;
+      }
+      if (
+        !deployment.toolServiceRegistries.some(
+          (row) => row.service_id === service.mcp_service_id,
+        )
+      )
+        throw new Error(`Unknown remote service: ${service.mcp_service_id}`);
+      if (service.tool_names?.some((name) => name.includes("*")))
+        throw new Error("Remote tool names must be exact names, not wildcards");
+      if (
+        service.background_tool_names?.some(
+          (name) => !service.tool_names?.includes(name),
+        )
+      )
+        throw new Error("Background remote tools must be selected tool names");
+      for (const [label, value] of [
+        ["Remote connection timeout", service.connect_timeout_secs],
+        ["Remote discovery timeout", service.discovery_timeout_secs],
+        ["Remote call timeout", service.timeout_secs],
+        ["Remote stale-health timeout", service.stale_timeout_secs],
+        ["Remote background timeout", service.background_timeout_secs],
+        ["Remote wait timeout", service.wait_timeout_secs],
+        ["Maximum remote wait timeout", service.max_wait_timeout_secs],
+      ] as const)
+        positiveSeconds(label, value);
+      if (
+        service.timeout_secs != null &&
+        service.stale_timeout_secs != null &&
+        service.stale_timeout_secs > service.timeout_secs
+      )
+        throw new Error("Remote stale-health timeout cannot exceed call timeout");
+      orderedSeconds(
+        "Remote wait timeout",
+        service.wait_timeout_secs,
+        service.max_wait_timeout_secs,
+      );
+    }
+    for (const surface of advanced.datastore?.datastore_tool_surface_ids ?? []) {
+      if (!deployment.datastoreToolSurfaces?.some((row) => row.surface_id === surface))
+        throw new Error(`Unknown datastore surface: ${surface}`);
+    }
     const advancedHost =
       advanced.host && typeof advanced.host === "object" ? advanced.host : {};
-    await shell.applyConfig((api) =>
-      api.saveToolsConfig({
-        document: {
-          ...tools,
-          ...advanced,
-          tools_id: tools.tools_id,
-          agent_did: deployment.agentDid,
-          display_name: next.displayName.trim() || null,
-          host: {
-            ...advancedHost,
-            root,
-            files: {
-              ...(advancedHost.files ?? {}),
-              mode: next.files as NonNullable<
-                NonNullable<Tools["host"]>["files"]
-              >["mode"],
-            },
-            bash: {
-              ...(advancedHost.bash ?? {}),
-              mode: next.bash as NonNullable<
-                NonNullable<Tools["host"]>["bash"]
-              >["mode"],
-              background_enabled: next.background,
-            },
-          },
+    const document: Tools = {
+      ...tools,
+      ...advanced,
+      tools_id: tools.tools_id,
+      agent_did: deployment.agentDid,
+      display_name: next.displayName.trim() || null,
+      host: {
+        ...advancedHost,
+        root,
+        files: {
+          ...(advancedHost.files ?? {}),
+          mode: next.files as NonNullable<NonNullable<Tools["host"]>["files"]>["mode"],
         },
-      }),
-    );
+        bash: {
+          ...(advancedHost.bash ?? {}),
+          mode: next.bash as NonNullable<NonNullable<Tools["host"]>["bash"]>["mode"],
+          background_enabled: next.background,
+        },
+      },
+    };
+    if (next.pendingTargets.length) {
+      await shell.applyConfig((api) =>
+        api.applyConfigComponents({
+          document: {
+            agent_principal: { agent_did: deployment.agentDid },
+            tools: [document],
+            subagent_targets: next.pendingTargets,
+          },
+        }),
+      );
+    } else {
+      await shell.applyConfig((api) => api.saveToolsConfig({ document }));
+    }
   });
   const id = (f: string) => `${tools.tools_id}-${f}`;
   return (
@@ -156,6 +285,38 @@ function Editor({
           onChange={(v) => d.choose("background", v)}
         />
       </Group>
+      <ToolGroupControls
+        shell={shell}
+        value={d.draft.advanced}
+        onChange={(value) => d.set("advanced", value)}
+        deployment={{
+          ...deployment,
+          subagentTargets: [
+            ...(deployment.subagentTargets ?? []),
+            ...d.draft.pendingTargets.filter(
+              (target) =>
+                !deployment.subagentTargets?.some(
+                  (saved) => saved.target_id === target.target_id,
+                ),
+            ),
+          ],
+        }}
+        onCreateTarget={(behaviorId) => {
+          const behavior = deployment.behaviorConfigs.find(
+            (row) => row.behavior_id === behaviorId,
+          );
+          if (!behavior) return;
+          const target: SubagentTargetDocument = {
+            target_id: newId("target"),
+            agent_did: deployment.agentDid,
+            target_agent_did: deployment.agentDid,
+            behavior_id: behaviorId,
+            name: behavior.display_name ?? behaviorId,
+            description: behavior.description ?? null,
+          };
+          d.set("pendingTargets", [...d.draft.pendingTargets, target]);
+        }}
+      />
       <Group title="Advanced tool groups">
         <AreaRow
           id={id("advanced")}

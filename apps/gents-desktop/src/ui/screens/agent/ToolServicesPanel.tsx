@@ -238,8 +238,8 @@ export function ToolServicesPanel({
         title: s.display_name ?? s.service_id,
         meta: s.hostname ?? "",
       }))}
-      createLabel="New tool service"
-      empty="No MCP tool services."
+      createLabel="New remote tools"
+      empty="No remote tools. Add an MCP connection, then select its tools in a Tools document."
       onCreate={async () => {
         const service_id = newId("mcp");
         await shell.applyConfig((api) =>

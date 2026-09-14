@@ -5,6 +5,7 @@ import { AreaRow, ChoiceRow, DraftActions, FactRow, TextRow } from "./editors";
 import { fromLines, fromLinesOrNull, newId, toLines, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
+import { DocumentSelection } from "./DocumentSelection";
 
 function Editor({
   shell,
@@ -120,15 +121,32 @@ function Editor({
             })),
           ]}
         />
-        <AreaRow
-          id={id("skills")}
-          label="Skill IDs"
-          description="One per line. Empty means no skills."
-          value={d.draft.skillIds}
-          onChange={(v) => d.set("skillIds", v)}
-          onCommit={d.commit}
-          rows={3}
-          mono
+        {d.draft.toolsId && (
+          <div className="px-4 py-3 text-sm">
+            <button
+              type="button"
+              className="underline"
+              onClick={() =>
+                navigate({ ...base, section: "tools", item: d.draft.toolsId })
+              }
+            >
+              Configure selected tools
+            </button>
+            <p className="mt-1 text-muted-foreground">
+              Tool permissions and subagent targets belong to the selected Tools
+              document and are shared by contexts that use it.
+            </p>
+          </div>
+        )}
+        <DocumentSelection
+          label="Skills"
+          options={deployment.skills.map((skill) => ({
+            value: skill.skillId,
+            label: skill.displayName ?? skill.name ?? skill.skillId,
+            description: skill.description,
+          }))}
+          selected={fromLines(d.draft.skillIds)}
+          onChange={(values) => d.set("skillIds", toLines(values))}
         />
         <AreaRow
           id={id("tags")}

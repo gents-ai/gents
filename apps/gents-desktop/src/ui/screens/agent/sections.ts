@@ -20,7 +20,7 @@ export const SECTIONS = [
   { group: "Inference", id: "inference", label: "Backends", icon: Cpu },
   { group: "Inference", id: "profiles", label: "Profiles", icon: SlidersHorizontal },
   { group: "Tools", id: "tools", label: "Tools", icon: Wrench },
-  { group: "Tools", id: "tool-services", label: "Tool services", icon: Brain },
+  { group: "Tools", id: "tool-services", label: "Remote Tools", icon: Brain },
   { group: "Automation", id: "tasks", label: "Tasks", icon: Play },
   { group: "Automation", id: "schedules", label: "Schedules", icon: Timer },
   { group: "Automation", id: "event-sources", label: "Event sources", icon: Zap },
