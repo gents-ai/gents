@@ -1,36 +1,11 @@
 import type { ManagedServerAuthorityInput } from "@source-inc/gents-desktop-client";
 
-export type ManagedRuntimePreset =
-  "full-home" | "readonly-home" | "selected-directory" | "no-files";
-
-export function authorityForPreset(
-  preset: ManagedRuntimePreset,
-  home: string,
-  selectedDirectory: string | null,
+export function authorityForSelection(
+  toolCeiling: ManagedServerAuthorityInput["toolCeiling"],
+  toolRoot: string | null,
 ): ManagedServerAuthorityInput | null {
-  switch (preset) {
-    case "full-home":
-      return { toolCeiling: "readwrite", toolRoot: home };
-    case "readonly-home":
-      return { toolCeiling: "readonly", toolRoot: home };
-    case "selected-directory":
-      return selectedDirectory
-        ? { toolCeiling: "readwrite", toolRoot: selectedDirectory }
-        : null;
-    case "no-files":
-      return { toolCeiling: "meta-only", toolRoot: null };
-  }
-}
-
-export function presetForAuthority(
-  ceiling: ManagedServerAuthorityInput["toolCeiling"] | null | undefined,
-  root: string | null | undefined,
-  home: string,
-): ManagedRuntimePreset {
-  if (ceiling === "meta-only") return "no-files";
-  if (ceiling === "readonly" && root === home) return "readonly-home";
-  if (ceiling === "readwrite" && root !== home) return "selected-directory";
-  return "full-home";
+  if (toolCeiling === "meta-only") return { toolCeiling, toolRoot: null };
+  return toolRoot ? { toolCeiling, toolRoot } : null;
 }
 
 export function authoritySummary(authority: ManagedServerAuthorityInput): string {

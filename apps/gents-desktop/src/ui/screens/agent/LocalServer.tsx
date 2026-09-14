@@ -3,7 +3,10 @@
    deployment has one; peers run their own. */
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import type { ManagedServerStatus } from "@source-inc/gents-desktop-client";
+import type {
+  ManagedServerStatus,
+  ManagedServerAuthorityInput,
+} from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
@@ -12,13 +15,8 @@ import type { Shell } from "@/hooks/useShell";
 import {
   ManagedRuntimeAuthorityPicker,
   ManagedRuntimeAuthorityReview,
-  authorityForPreset,
 } from "@/components/ManagedRuntimeAuthority";
-import {
-  authoritiesEqual,
-  presetForAuthority,
-  type ManagedRuntimePreset,
-} from "@/lib/managedRuntimeAuthority";
+import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
 import { Fact, Group, Row } from "./rows";
 
 export function LocalServer({ shell }: { shell: Shell }) {
@@ -26,7 +24,8 @@ export function LocalServer({ shell }: { shell: Shell }) {
   const [status, setStatus] = useState<ManagedServerStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [editingAuthority, setEditingAuthority] = useState(false);
-  const [preset, setPreset] = useState<ManagedRuntimePreset>("full-home");
+  const [toolCeiling, setToolCeiling] =
+    useState<ManagedServerAuthorityInput["toolCeiling"]>("readwrite");
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
   const [authorityError, setAuthorityError] = useState<string | null>(null);
   const load = () => api.managedServerStatus?.().then(setStatus, () => setStatus(null));
@@ -54,18 +53,11 @@ export function LocalServer({ shell }: { shell: Shell }) {
   const running = status?.state === "running" || status?.state === "external";
   const name = status?.agentName ?? "gents";
   const home = status?.suggestedToolRoot ?? status?.effectiveToolRoot ?? "";
-  const authority = home ? authorityForPreset(preset, home, selectedDirectory) : null;
+  const authority = authorityForSelection(toolCeiling, selectedDirectory);
   const beginAuthorityEdit = () => {
     if (!status || !home) return;
-    const nextPreset = presetForAuthority(
-      status.effectiveToolCeiling,
-      status.effectiveToolRoot,
-      home,
-    );
-    setPreset(nextPreset);
-    setSelectedDirectory(
-      nextPreset === "selected-directory" ? status.effectiveToolRoot : null,
-    );
+    setToolCeiling(status.effectiveToolCeiling ?? "readwrite");
+    setSelectedDirectory(status.effectiveToolRoot ?? home);
     setAuthorityError(null);
     setEditingAuthority(true);
   };
@@ -190,10 +182,10 @@ export function LocalServer({ shell }: { shell: Shell }) {
           <p className="text-sm font-medium">Restart-required access change</p>
           <ManagedRuntimeAuthorityPicker
             home={home}
-            preset={preset}
-            selectedDirectory={selectedDirectory}
-            onPresetChange={setPreset}
-            onDirectoryChange={setSelectedDirectory}
+            toolCeiling={toolCeiling}
+            toolRoot={selectedDirectory}
+            onCeilingChange={setToolCeiling}
+            onRootChange={setSelectedDirectory}
             validateRoot={api.validateManagedServerRoot}
             error={authorityError}
             onError={setAuthorityError}

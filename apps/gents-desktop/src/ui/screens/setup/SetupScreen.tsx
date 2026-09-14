@@ -51,15 +51,8 @@ import { applyTheme, themePreference } from "@/theme";
 import { Mark } from "@/app/Mark";
 import { openExternalUrl } from "../../../lib/externalLinks";
 import { watchProviderLoginUrl, type OauthProvider } from "@/lib/providerLogin";
-import {
-  ManagedRuntimeAuthorityPicker,
-  ManagedRuntimeAuthorityReview,
-  authorityForPreset,
-} from "@/components/ManagedRuntimeAuthority";
-import {
-  authoritiesEqual,
-  type ManagedRuntimePreset,
-} from "@/lib/managedRuntimeAuthority";
+import { ManagedRuntimeAuthorityPicker } from "@/components/ManagedRuntimeAuthority";
+import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
 import {
   currentInferenceDiscovery,
   inferenceDiscoveryKey,
@@ -72,15 +65,7 @@ import {
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
 
-type Step =
-  | "welcome"
-  | "remote"
-  | "agent"
-  | "authority"
-  | "authority-review"
-  | "starting"
-  | "inference"
-  | "ready";
+type Step = "welcome" | "remote" | "starting" | "inference";
 
 type ProviderId = InferenceProviderId;
 type InferenceStage = "provider" | "connect" | "model" | "review";
@@ -130,7 +115,7 @@ function Frame({ children }: { children: React.ReactNode }) {
     >
       <div className="px-8">
         {/* anchored a fixed way down, not centred: a step can grow or shrink without moving its title */}
-        <div className="mx-auto w-full max-w-xl pt-[22vh] pb-16">{children}</div>
+        <div className="mx-auto w-full max-w-xl pt-[10vh] pb-8">{children}</div>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -162,6 +147,7 @@ function Option({
   icon: Icon,
   logo,
   testId,
+  children,
 }: {
   selected: boolean;
   onSelect: () => void;
@@ -170,38 +156,48 @@ function Option({
   icon: typeof Server;
   logo?: string;
   testId?: string;
+  children?: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      data-testid={testId}
-      onClick={onSelect}
+    <div
       className={cn(
-        "flex w-full items-center gap-3 rounded-2xl border bg-raised px-4 py-3.5 text-left transition-shadow",
-        selected
-          ? "border-brand ring-1 ring-brand"
-          : "border-border/60 hover:bg-accent",
+        "rounded-2xl border bg-raised",
+        selected ? "border-brand ring-1 ring-brand" : "border-border/60",
       )}
     >
-      {selected ? (
-        <CircleCheck className="size-4 shrink-0 text-foreground" />
-      ) : (
-        <Circle className="size-4 shrink-0 text-muted-foreground" />
-      )}
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-medium">{title}</span>
-        {hint && (
-          <span className="block truncate text-xs text-muted-foreground">{hint}</span>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected}
+        data-testid={testId}
+        onClick={onSelect}
+        className="flex w-full items-center gap-3 rounded-2xl px-4 py-3.5 text-left hover:bg-accent"
+      >
+        {selected ? (
+          <CircleCheck className="size-4 shrink-0 text-foreground" />
+        ) : (
+          <Circle className="size-4 shrink-0 text-muted-foreground" />
         )}
-      </span>
-      {logo ? (
-        <img src={logo} alt="" className="size-5 shrink-0 object-contain dark:invert" />
-      ) : (
-        <Icon className="size-5 shrink-0 text-heading" />
-      )}
-    </button>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium">{title}</span>
+          {hint && (
+            <span className="block truncate text-xs text-muted-foreground">{hint}</span>
+          )}
+        </span>
+        {logo ? (
+          <img
+            src={logo}
+            alt=""
+            className="size-5 shrink-0 object-contain dark:invert"
+          />
+        ) : (
+          <Icon className="size-5 shrink-0 text-heading" />
+        )}
+      </button>
+      {selected && children ? (
+        <div className="grid gap-3 border-t border-border/60 px-4 py-3">{children}</div>
+      ) : null}
+    </div>
   );
 }
 
@@ -283,9 +279,11 @@ export function SetupScreen({
   const [homeRoot, setHomeRoot] = useState<string | null>(
     api.managedServerStatus ? null : (shell.snapshot?.bootstrap.initToolRoot ?? null),
   );
-  const [authorityPreset, setAuthorityPreset] =
-    useState<ManagedRuntimePreset>("full-home");
-  const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
+  const [toolCeiling, setToolCeiling] =
+    useState<ManagedServerAuthorityInput["toolCeiling"]>("readwrite");
+  const [selectedDirectory, setSelectedDirectory] = useState<string | null | undefined>(
+    undefined,
+  );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -301,22 +299,23 @@ export function SetupScreen({
   const [signedIn, setSignedIn] = useState<Partial<Record<ProviderId, string>>>({});
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const root = shell.snapshot?.bootstrap.defaultAgentHome ?? "~/.gents";
-  const authority = homeRoot
-    ? authorityForPreset(authorityPreset, homeRoot, selectedDirectory)
-    : null;
+  const toolRoot = selectedDirectory === undefined ? homeRoot : selectedDirectory;
+  const authority = authorityForSelection(toolCeiling, toolRoot);
 
   useEffect(() => {
-    if (step !== "authority" || !api.managedServerStatus || homeRoot) return;
+    if (step !== "welcome" || !allowLocal || !api.managedServerStatus || homeRoot)
+      return;
     const pending = api.managedServerStatus();
     if (!pending) return;
     void pending
       .then((status) => {
         if (status.suggestedToolRoot) setHomeRoot(status.suggestedToolRoot);
+        else setAuthorityError("The user home directory is unavailable.");
       })
       .catch((cause) =>
         setAuthorityError(cause instanceof Error ? cause.message : String(cause)),
       );
-  }, [api, homeRoot, step]);
+  }, [api, homeRoot, step, allowLocal]);
   const [discovery, setDiscovery] = useState<InferenceDiscoveryResult | null>(null);
   const [modelSearch, setModelSearch] = useState("");
   const [model, setModel] = useState("");
@@ -376,7 +375,7 @@ export function SetupScreen({
           ? "Choose and validate an existing directory."
           : "The user home directory is still being resolved.",
       );
-      setStep("authority");
+      setStep("welcome");
       return;
     }
     setBusy(true);
@@ -636,8 +635,8 @@ export function SetupScreen({
     setError(null);
     try {
       const { profileId, defaultBehaviorId } = await persistInference();
-      await waitForSelectedBehavior(profileId, defaultBehaviorId);
-      setStep("ready");
+      const snapshot = await waitForSelectedBehavior(profileId, defaultBehaviorId);
+      onDone(snapshot);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -667,7 +666,67 @@ export function SetupScreen({
               title="Local agent"
               hint="Create an agent on this Mac."
               icon={Server}
-            />
+            >
+              <div className="flex items-end gap-3">
+                <AgentAvatar name={name} className="mb-1 size-8 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <Field label="Agent name">
+                    <Input
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                    />
+                  </Field>
+                </div>
+              </div>
+              {homeRoot ? (
+                <ManagedRuntimeAuthorityPicker
+                  home={homeRoot}
+                  toolCeiling={toolCeiling}
+                  toolRoot={toolRoot}
+                  onCeilingChange={setToolCeiling}
+                  onRootChange={setSelectedDirectory}
+                  validateRoot={api.validateManagedServerRoot}
+                  error={authorityError}
+                  onError={setAuthorityError}
+                />
+              ) : (
+                <div className="grid gap-2 text-sm text-muted-foreground">
+                  {authorityError ? (
+                    <>
+                      <p role="alert" className="text-destructive">
+                        {authorityError}
+                      </p>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setAuthorityError(null);
+                          void api
+                            .managedServerStatus?.()
+                            .then((status) => {
+                              if (status.suggestedToolRoot)
+                                setHomeRoot(status.suggestedToolRoot);
+                              else
+                                setAuthorityError(
+                                  "The user home directory is unavailable.",
+                                );
+                            })
+                            .catch((cause) => setAuthorityError(String(cause)));
+                        }}
+                      >
+                        Try again
+                      </Button>
+                    </>
+                  ) : (
+                    <p className="flex items-center gap-2">
+                      <Spinner /> Resolving your home directory…
+                    </p>
+                  )}
+                </div>
+              )}
+              <p className="break-all text-xs text-muted-foreground">
+                Agent data: <span className="font-mono">{root}</span>
+              </p>
+            </Option>
           )}
           <Option
             selected={where === "remote"}
@@ -677,7 +736,16 @@ export function SetupScreen({
             icon={Wifi}
           />
         </div>
-        <Nav next={() => setStep(where === "local" ? "agent" : "remote")} />
+        {error ? (
+          <p role="alert" className="mt-3 text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+        <Nav
+          next={where === "local" ? createAgent : () => setStep("remote")}
+          busy={busy}
+          disabled={where === "local" && (!name.trim() || !authority || !homeRoot)}
+        />
       </Frame>
     );
   }
@@ -700,118 +768,6 @@ export function SetupScreen({
           nextLabel="Request access"
           busy={busy}
           disabled={!address.trim()}
-        />
-      </Frame>
-    );
-  }
-  if (step === "agent") {
-    return (
-      <Frame>
-        <div className="mb-4 flex items-center gap-1">
-          <AgentAvatar name={name} className="size-9" />
-        </div>
-        <Title note="Its name is how it appears everywhere; its home is where its documents live.">
-          Configure your agent
-        </Title>
-        <div className="rounded-2xl border border-border/60 bg-raised p-4">
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            aria-label="Agent name"
-            autoFocus
-          />
-          <p className="mt-3 font-mono text-xs text-muted-foreground">
-            root: <span className="text-foreground">{root}</span>
-          </p>
-        </div>
-        {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
-        <Nav
-          onBack={() => setStep("welcome")}
-          next={() => setStep("authority")}
-          disabled={!name.trim()}
-        />
-      </Frame>
-    );
-  }
-  if (step === "authority") {
-    return (
-      <Frame>
-        <Title note="This is the most access any behavior can receive. You can make individual behaviors narrower later.">
-          What can the hosted agent do on this computer?
-        </Title>
-        {homeRoot ? (
-          <ManagedRuntimeAuthorityPicker
-            home={homeRoot}
-            preset={authorityPreset}
-            selectedDirectory={selectedDirectory}
-            onPresetChange={setAuthorityPreset}
-            onDirectoryChange={setSelectedDirectory}
-            validateRoot={api.validateManagedServerRoot}
-            error={authorityError}
-            onError={setAuthorityError}
-          />
-        ) : (
-          <div className="grid gap-3">
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Spinner /> Resolving your home directory…
-            </p>
-            {authorityError ? (
-              <>
-                <p className="text-sm text-destructive">{authorityError}</p>
-                <Button
-                  variant="outline"
-                  className="justify-self-start"
-                  onClick={() => {
-                    setAuthorityError(null);
-                    void api
-                      .managedServerStatus?.()
-                      .then((status) => {
-                        if (status?.suggestedToolRoot) {
-                          setHomeRoot(status.suggestedToolRoot);
-                        }
-                      })
-                      .catch((cause) =>
-                        setAuthorityError(
-                          cause instanceof Error ? cause.message : String(cause),
-                        ),
-                      );
-                  }}
-                >
-                  Try again
-                </Button>
-              </>
-            ) : null}
-          </div>
-        )}
-        <Nav
-          onBack={() => setStep("agent")}
-          next={() => {
-            if (!authority) {
-              setAuthorityError("Choose and validate an existing directory.");
-              return;
-            }
-            setStep("authority-review");
-          }}
-          disabled={!authority}
-        />
-      </Frame>
-    );
-  }
-  if (step === "authority-review" && authority) {
-    return (
-      <Frame>
-        <Title note="The managed runtime will start with exactly these host limits.">
-          Review access
-        </Title>
-        <ManagedRuntimeAuthorityReview authority={authority} />
-        {authorityError ? (
-          <p className="mt-3 text-sm text-destructive">{authorityError}</p>
-        ) : null}
-        <Nav
-          onBack={() => setStep("authority")}
-          next={createAgent}
-          nextLabel="Start hosted agent"
-          busy={busy}
         />
       </Frame>
     );
@@ -860,48 +816,13 @@ export function SetupScreen({
               variant="brand"
               onClick={() => {
                 setError(null);
-                setStep(where === "local" ? "authority-review" : "remote");
+                setStep(where === "local" ? "welcome" : "remote");
               }}
             >
               Try again
             </Button>
           </div>
         )}
-      </Frame>
-    );
-  }
-  if (step === "ready") {
-    const agentName =
-      shell.selectedDeployment?.agentPrincipal.displayName ??
-      (name.trim() || "your agent");
-    const providerTitle = providerOption?.displayName ?? "Inference";
-    return (
-      <Frame>
-        <Mark className="mb-6 h-6 text-ink" />
-        <Title
-          note={`${providerTitle} is connected. The first message starts a conversation with ${agentName}.`}
-        >
-          You’re in
-        </Title>
-        <p className="text-sm text-muted-foreground">
-          Send a message to begin. You can add another provider later from the agent’s
-          inference settings.
-        </p>
-        {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
-        <Nav
-          next={async () => {
-            setBusy(true);
-            try {
-              const snapshot = await api.fetchDesktopSnapshot();
-              onDone(snapshot);
-            } catch (e) {
-              setError(e instanceof Error ? e.message : String(e));
-              setBusy(false);
-            }
-          }}
-          nextLabel="Start chatting"
-          busy={busy}
-        />
       </Frame>
     );
   }
@@ -960,7 +881,7 @@ export function SetupScreen({
         )}
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
         <Nav
-          onBack={initialStep === "inference" ? undefined : () => setStep("agent")}
+          onBack={initialStep === "inference" ? undefined : () => setStep("welcome")}
           next={() => setInferenceStage("connect")}
           disabled={!catalog || !connection}
         />
@@ -1209,7 +1130,7 @@ export function SetupScreen({
       <Nav
         onBack={() => setInferenceStage("model")}
         next={saveInference}
-        nextLabel="Save and activate"
+        nextLabel="Save and start chatting"
         busy={busy}
         disabled={!selectedRecommendation || !settings}
       />

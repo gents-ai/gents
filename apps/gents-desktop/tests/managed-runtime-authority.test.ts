@@ -1,40 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
   authoritiesEqual,
-  authorityForPreset,
+  authorityForSelection,
   authoritySummary,
-  presetForAuthority,
 } from "../src/ui/lib/managedRuntimeAuthority";
 
-describe("managed runtime authority presets", () => {
+describe("managed runtime authority selection", () => {
   const home = "/Users/A Person";
-
-  it("maps each presentation preset to the canonical process ceiling", () => {
-    expect(authorityForPreset("full-home", home, null)).toEqual({
-      toolCeiling: "readwrite",
-      toolRoot: home,
-    });
-    expect(authorityForPreset("readonly-home", home, null)).toEqual({
-      toolCeiling: "readonly",
-      toolRoot: home,
-    });
-    expect(authorityForPreset("selected-directory", home, "/tmp/a folder")).toEqual({
-      toolCeiling: "readwrite",
-      toolRoot: "/tmp/a folder",
-    });
-    expect(authorityForPreset("no-files", home, null)).toEqual({
+  it.each(["readwrite", "readonly"] as const)(
+    "keeps root independent of %s ceiling",
+    (toolCeiling) => {
+      for (const toolRoot of [home, "/tmp/a folder"]) {
+        expect(authorityForSelection(toolCeiling, toolRoot)).toEqual({
+          toolCeiling,
+          toolRoot,
+        });
+      }
+      expect(authorityForSelection(toolCeiling, null)).toBeNull();
+    },
+  );
+  it("omits the host root for metatools only", () => {
+    expect(authorityForSelection("meta-only", home)).toEqual({
       toolCeiling: "meta-only",
       toolRoot: null,
     });
   });
-
-  it("does not invent a fallback for an unselected directory", () => {
-    expect(authorityForPreset("selected-directory", home, null)).toBeNull();
-  });
-
-  it("projects confirmed settings back to presentation state", () => {
-    expect(presetForAuthority("readonly", home, home)).toBe("readonly-home");
-    expect(presetForAuthority("readwrite", "/work", home)).toBe("selected-directory");
+  it("compares exact authority and explains unrestricted commands", () => {
     expect(
       authoritiesEqual(
         { toolCeiling: "readwrite", toolRoot: home },

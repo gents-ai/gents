@@ -47,8 +47,10 @@ describe("managed runtime restart settings", () => {
 
     render(<LocalServer shell={shell} />);
     await user.click(await screen.findByRole("button", { name: "Change access…" }));
-    await user.click(screen.getByRole("button", { name: "Customize" }));
-    await user.click(screen.getByRole("radio", { name: /No files or commands/ }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Tool ceiling" }),
+      "meta-only",
+    );
     await user.click(screen.getByRole("button", { name: "Review complete — restart" }));
 
     expect(await screen.findByText("meta-only")).toBeInTheDocument();

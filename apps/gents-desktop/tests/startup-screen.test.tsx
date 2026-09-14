@@ -181,7 +181,9 @@ describe("desktop startup screen", () => {
       expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
-    expect(managedServerStatus).toHaveBeenCalledTimes(1);
+    // Restoration probes once; the expanded local card also resolves its
+    // default root without blocking entry to the first-run screen.
+    expect(managedServerStatus).toHaveBeenCalledTimes(2);
   });
 
   it("does not invent a synchronization phase while client startup is pending", () => {

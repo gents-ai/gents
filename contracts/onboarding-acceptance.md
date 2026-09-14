@@ -28,8 +28,11 @@ credentials, OAuth callbacks, or tokens in run records, screenshots, or bugs.
 
 - [ ] Start the new native binary, not only a refreshed browser bundle.
 - [ ] Setup has no stale provider, identity, session, or authority selections.
-- [ ] Select tool root (including user home) and permission preset; review the
-      exact values before starting. Invalid or unavailable roots fail inline.
+- [ ] The selected Local agent card shows editable name, pre-filled user-home
+      tool root with optional folder picker, and a read/write, read-only, or
+      metatools-only ceiling dropdown. Root and ceiling are independent.
+- [ ] One Next starts the local runtime and opens inference without separate
+      naming/access/review clicks. Invalid or unavailable roots fail inline.
 - [ ] Rapid directory changes cannot apply an obsolete validation result.
 - [ ] Launch reaches runtime readiness and pairs in the background without a
       manual pairing/retry step. The runtime reports the selected root/ceiling.
@@ -63,6 +66,8 @@ restart, and a real response in chat. A model list alone does not prove inferenc
 - [ ] Saving adds one coherent backend/profile/default-behavior configuration
       to the serving agent. A write failure does not silently save a desktop-only
       backend or claim success.
+- [ ] Saving inference waits for readiness and opens the composer directly,
+      without another welcome or Start chatting confirmation screen.
 - [ ] Adding local inference does not overwrite a previously connected Grok
       backend; distinct compatible endpoints retain distinct configurations.
 - [ ] Credentials do not appear in snapshots, logs, errors, or persisted UI state.
