@@ -742,6 +742,14 @@ pub struct ConfigurePersonaParams {
     pub action: String,
     #[serde(default)]
     pub persona_name: Option<String>,
+    /// User-facing summary for the working behavior and its context.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Complete operating instructions for the working behavior. Required
+    /// when creating from a permission preset; optional overrides a clone or
+    /// an existing behavior.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
     /// Exact behavior_id of the sibling persona (required for edit/disable).
     #[serde(default)]
     pub behavior_id: Option<String>,
@@ -797,6 +805,10 @@ struct PersonaRequestRowOut {
     #[serde(default)]
     persona_name: Option<String>,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    system_prompt: Option<String>,
+    #[serde(default)]
     root: Option<String>,
     #[serde(default)]
     preset: Option<String>,
@@ -833,6 +845,8 @@ async fn load_persona_request_row(
                 behavior_id
                 clone_from
                 persona_name
+                description
+                system_prompt
                 root
                 preset
                 profile_id
@@ -989,6 +1003,8 @@ async fn persona_mutate(
         behavior_id: resolved_behavior_id,
         clone_from,
         persona_name: args.persona_name.clone(),
+        description: args.description.clone(),
+        system_prompt: args.system_prompt.clone(),
         root: args.root.clone(),
         preset: args.preset.clone(),
         profile_id: resolved_profile_id,
@@ -1018,7 +1034,7 @@ impl Tool for ConfigurePersonaTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: CONFIGURE_PERSONA_TOOL_NAME.to_string(),
-            description: "List, create, clone, edit, or disable sibling personas through signed PersonaConfigRequest admission. Choose an existing inference profile. A create/edit may atomically make the applied behavior this principal's default. Document IDs are exact and scoped to this principal. Clone copies source permissions; choosing a preset requests a new persona instead. Pending requests return their key for later inspection.".to_owned(),
+            description: "List, create, clone, edit, or disable sibling working behaviors through signed PersonaConfigRequest admission. Choose an existing inference profile. A preset-based create requires a complete system_prompt so the behavior is useful on its first request. A create/edit may atomically make the applied behavior this principal's default. Document IDs are exact and scoped to this principal. Clone copies source configuration unless an explicit description or system_prompt overrides it. Pending requests return their key for later inspection.".to_owned(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -1029,6 +1045,14 @@ impl Tool for ConfigurePersonaTool {
                     "persona_name": {
                         "type": "string",
                         "description": "Display name for the persona (create/edit).",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Concise user-facing purpose for the working behavior and context.",
+                    },
+                    "system_prompt": {
+                        "type": "string",
+                        "description": "Complete operating instructions. Required for a preset-based create; optional to override a clone or edit. Must describe the requested role, scope, tools, constraints, and verification expectations.",
                     },
                     "behavior_id": {
                         "type": "string",

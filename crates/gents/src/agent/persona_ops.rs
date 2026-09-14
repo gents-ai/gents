@@ -104,6 +104,8 @@ pub struct PersonaRequestDoc {
     pub op: Option<PersonaOp>,
     pub behavior_id: Option<String>,
     pub persona_name: Option<String>,
+    pub description: Option<String>,
+    pub system_prompt: Option<String>,
     pub root: Option<String>,
     pub preset: Option<String>,
     pub profile_id: Option<String>,
@@ -133,7 +135,8 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
                 network_id: null, member_peer: null, enrollment_request_digest: null,
                 authorization_sequence: null, authorization_expires_at: null,
                 op: "{}", behavior_id: {}, clone_from: {},
-                persona_name: {}, root: {}, preset: {}, profile_id: {}, make_default: {},
+                persona_name: {}, description: {}, system_prompt: {},
+                root: {}, preset: {}, profile_id: {}, make_default: {},
                 created_at: "{}", status: "pending"
             }}) {{ _docID }}
         }}"#,
@@ -147,6 +150,8 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
         nullable(record.behavior_id.as_deref()),
         nullable(record.clone_from.as_deref()),
         nullable(record.persona_name.as_deref()),
+        nullable(record.description.as_deref()),
+        nullable(record.system_prompt.as_deref()),
         nullable(record.root.as_deref()),
         nullable(record.preset.as_deref()),
         nullable(record.profile_id.as_deref()),
@@ -176,6 +181,19 @@ fn validate_persona_name(name: Option<&str>) -> Option<String> {
         ));
     }
     None
+}
+
+fn validate_system_prompt(prompt: Option<&str>, required: bool) -> Option<String> {
+    match prompt {
+        Some(prompt) if prompt.trim().is_empty() => {
+            Some("system_prompt must not be blank when supplied".to_string())
+        }
+        None if required => Some(
+            "system_prompt is required when creating a behavior from a permission preset"
+                .to_string(),
+        ),
+        _ => None,
+    }
 }
 
 /// The most entries an enumerated rejection lists before summarizing the
@@ -309,6 +327,9 @@ pub fn decide_persona_request(
             let preset = doc.preset.as_deref().unwrap_or("").trim();
             match clone_from {
                 Some(source_id) => {
+                    if let Some(msg) = validate_system_prompt(doc.system_prompt.as_deref(), false) {
+                        return PersonaVerdict::Reject(msg);
+                    }
                     if !preset.is_empty() {
                         return PersonaVerdict::Reject(format!(
                             r#"create with clone_from must not also set preset "{preset}" — omit preset when cloning"#
@@ -330,6 +351,9 @@ pub fn decide_persona_request(
                     }
                 }
                 None => {
+                    if let Some(msg) = validate_system_prompt(doc.system_prompt.as_deref(), true) {
+                        return PersonaVerdict::Reject(msg);
+                    }
                     if preset.is_empty() {
                         return PersonaVerdict::Reject(format!(
                             r#"unknown preset "" — pick from {}"#,
@@ -363,6 +387,9 @@ pub fn decide_persona_request(
                 return PersonaVerdict::Reject(msg);
             }
             if let Some(msg) = validate_profile(doc.profile_id.as_deref(), catalog) {
+                return PersonaVerdict::Reject(msg);
+            }
+            if let Some(msg) = validate_system_prompt(doc.system_prompt.as_deref(), false) {
                 return PersonaVerdict::Reject(msg);
             }
             let preset = doc.preset.as_deref().unwrap_or("").trim();
@@ -576,6 +603,11 @@ pub async fn apply_persona_request(
                 .retain(|tag| tag != SETUP_STEWARD_BEHAVIOR_TAG);
         }
         behavior.display_name = Some(name.into());
+        // A clone inherits its source description unless the request supplies
+        // an override. A preset-based create has no source to inherit from.
+        if source.is_none() || doc.description.is_some() {
+            behavior.description = doc.description.clone();
+        }
         behavior.inference_profile_id = profile.into();
         let mut context: AgentContext = match source.as_ref().and_then(|b| b.context_id.as_deref()) {
             Some(id) => load_config(txn, Collection::AgentContext, owner, id).await?,
@@ -584,6 +616,9 @@ pub async fn apply_persona_request(
         let existing_tools: Option<Tools> = match context.tools_id.as_deref() {
             Some(id) => Some(load_config(txn, Collection::Tools, owner, id).await?), None => None,
         };
+        if let Some(system_prompt) = &doc.system_prompt {
+            context.system_prompt = Some(system_prompt.clone());
+        }
         let root = doc.root.as_ref().filter(|root| !root.trim().is_empty()).cloned();
         let preset = doc.preset.as_deref().unwrap_or("").trim();
         let mut tools = if !preset.is_empty() {
@@ -687,6 +722,8 @@ mod tests {
             op_raw: "create".to_string(),
             op: Some(op),
             persona_name: Some("Research Assistant".to_string()),
+            description: Some("Researches a focused question".to_string()),
+            system_prompt: Some("Research the question and cite evidence.".to_string()),
             root: None,
             preset: Some(persona_presets::PRESET_WRITE.to_string()),
             profile_id: Some("profile-1".to_string()),
@@ -1136,6 +1173,10 @@ mod tests {
         )
         .await?;
         assert_eq!(original.inference_profile_id, "profile-1");
+        assert_eq!(
+            original.description.as_deref(),
+            Some("Researches a focused question")
+        );
         let mut context: AgentContext = read(
             &node,
             Collection::AgentContext,
@@ -1143,6 +1184,10 @@ mod tests {
             original.context_id.as_deref().unwrap(),
         )
         .await?;
+        assert_eq!(
+            context.system_prompt.as_deref(),
+            Some("Research the question and cite evidence.")
+        );
         context.system_prompt = Some("Keep literal {{braces}}".into());
         context.description = Some("Shared context".into());
         ConfigAccess::Local(node.clone())
@@ -1174,12 +1219,15 @@ mod tests {
         });
         doc.preset = None;
         doc.persona_name = Some("Cloned".into());
+        doc.description = None;
+        doc.system_prompt = None;
         doc.root = None;
         doc.profile_id = Some("profile-2".into());
         let cloned = apply_persona_request(&node, &doc, &catalog).await?;
         let behavior: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
         assert_eq!(behavior.inference_profile_id, "profile-2");
+        assert_eq!(behavior.description, original.description);
         let clone_context: AgentContext = read(
             &node,
             Collection::AgentContext,

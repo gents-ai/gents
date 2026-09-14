@@ -68,6 +68,8 @@ fn create_doc(op: PersonaOp) -> PersonaRequestDoc {
         op_raw: "create".to_string(),
         op: Some(op),
         persona_name: Some("Research Assistant".to_string()),
+        description: Some("Researches a focused question".to_string()),
+        system_prompt: Some("Research the question and cite evidence.".to_string()),
         root: None,
         preset: Some(persona_presets::PRESET_WRITE.to_string()),
         profile_id: Some("profile-1".to_string()),
@@ -189,6 +191,10 @@ fn admission_matrix_mirrors_lean_admits() {
     let mut bad_name = create_doc(PersonaOp::Create { clone_from: None });
     bad_name.persona_name = Some(String::new());
     rejects.push(bad_name);
+    // createPromptOk: a preset-based create must be useful on its first turn.
+    let mut missing_prompt = create_doc(PersonaOp::Create { clone_from: None });
+    missing_prompt.system_prompt = None;
+    rejects.push(missing_prompt);
     // createModeOk: clone must omit preset.
     let mut clone_with_preset = create_doc(PersonaOp::Create {
         clone_from: Some("existing-enabled".to_string()),

@@ -219,6 +219,7 @@ fn validate_raw_persona_document(doc: &PersonaRequestDoc) -> Result<()> {
     use gents_protocol::canonical::{
         parse_utc_seconds, require_enum, require_identifier, require_optional_identifier,
     };
+    use gents_protocol::persona::MAX_PERSONA_FIELD_BYTES;
     require_identifier("persona document id", &doc.doc_id)?;
     for (name, value) in [
         ("request_key", doc.request_key.as_str()),
@@ -228,6 +229,10 @@ fn validate_raw_persona_document(doc: &PersonaRequestDoc) -> Result<()> {
         ("op", doc.op_raw.as_str()),
     ] {
         require_identifier(name, value)?;
+        anyhow::ensure!(
+            value.len() <= MAX_PERSONA_FIELD_BYTES,
+            "{name} exceeds maximum length"
+        );
     }
     require_enum(
         "persona authority_kind",
@@ -248,7 +253,21 @@ fn validate_raw_persona_document(doc: &PersonaRequestDoc) -> Result<()> {
         ("preset", doc.preset.as_deref()),
         ("profile_id", doc.profile_id.as_deref()),
     ] {
+        anyhow::ensure!(
+            value.is_none_or(|value| value.len() <= MAX_PERSONA_FIELD_BYTES),
+            "{name} exceeds maximum length"
+        );
         require_optional_identifier(name, value)?;
+    }
+    for (name, value) in [
+        ("persona_name", doc.persona_name.as_deref()),
+        ("description", doc.description.as_deref()),
+        ("system_prompt", doc.system_prompt.as_deref()),
+    ] {
+        anyhow::ensure!(
+            value.is_none_or(|value| value.len() <= MAX_PERSONA_FIELD_BYTES),
+            "{name} exceeds maximum length"
+        );
     }
     let created_at = doc
         .created_at
@@ -429,6 +448,8 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
                 behavior_id
                 clone_from
                 persona_name
+                description
+                system_prompt
                 root
                 preset
                 profile_id
@@ -636,6 +657,8 @@ fn persona_request_doc_from_row(row: PersonaRequestRow) -> Option<PersonaRequest
         op,
         behavior_id: row.behavior_id,
         persona_name: row.persona_name,
+        description: row.description,
+        system_prompt: row.system_prompt,
         root: row.root,
         preset: row.preset,
         profile_id: row.profile_id,
@@ -662,6 +685,8 @@ fn local_persona_record(doc: &PersonaRequestDoc) -> LocalPersonaRequestRecord {
             _ => None,
         },
         persona_name: doc.persona_name.clone(),
+        description: doc.description.clone(),
+        system_prompt: doc.system_prompt.clone(),
         root: doc.root.clone(),
         preset: doc.preset.clone(),
         profile_id: doc.profile_id.clone(),
@@ -741,6 +766,10 @@ struct PersonaRequestRow {
     clone_from: Option<String>,
     #[serde(default)]
     persona_name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    system_prompt: Option<String>,
     #[serde(default)]
     root: Option<String>,
     #[serde(default)]
@@ -907,6 +936,8 @@ mod tests {
             op_raw: "create".to_string(),
             op: Some(PersonaOp::Create { clone_from: None }),
             persona_name: Some("Research Assistant".to_string()),
+            description: Some("Researches a focused question".to_string()),
+            system_prompt: Some("Research the question and cite evidence.".to_string()),
             preset: Some(crate::agent::persona_presets::PRESET_WRITE.to_string()),
             profile_id: Some("profile-1".to_string()),
             created_at: Some("2026-08-30T00:00:00Z".to_string()),
@@ -955,6 +986,11 @@ mod tests {
             opaque_name.persona_name.as_deref(),
             Some("  Display Name  ")
         );
+
+        let mut oversized_prompt = pending_create_doc("oversized-prompt", "did:key:agent");
+        oversized_prompt.system_prompt =
+            Some("x".repeat(gents_protocol::persona::MAX_PERSONA_FIELD_BYTES + 1));
+        assert!(validate_raw_persona_document(&oversized_prompt).is_err());
     }
 
     #[test]
@@ -1358,6 +1394,8 @@ mod tests {
             behavior_id: None,
             clone_from: None,
             persona_name: Some("Research Assistant".to_string()),
+            description: Some("Researches a focused question".to_string()),
+            system_prompt: Some("Research the question and cite evidence.".to_string()),
             root: Some("/repo/allowed".to_string()),
             preset: Some("write".to_string()),
             profile_id: Some("profile-1".to_string()),

@@ -13,8 +13,8 @@ pub const PERSONA_AUTHORITY_LOCAL_SELF: &str = "local-self";
 // `make_default` is part of the signed semantic envelope. This request shape
 // was introduced on the onboarding branch, so use a fresh domain instead of
 // accepting signatures authored against the earlier field set.
-const LOCAL_PERSONA_SIGNATURE_DOMAIN: &str = "gents-persona-local-self-signature-v2";
-const MAX_PERSONA_FIELD_BYTES: usize = 16 * 1024;
+const LOCAL_PERSONA_SIGNATURE_DOMAIN: &str = "gents-persona-local-self-signature-v3";
+pub const MAX_PERSONA_FIELD_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +28,8 @@ pub struct LocalPersonaRequestRecord {
     pub behavior_id: Option<String>,
     pub clone_from: Option<String>,
     pub persona_name: Option<String>,
+    pub description: Option<String>,
+    pub system_prompt: Option<String>,
     pub root: Option<String>,
     pub preset: Option<String>,
     pub profile_id: Option<String>,
@@ -63,7 +65,6 @@ impl LocalPersonaRequestRecord {
         for (name, value) in [
             ("behavior_id", self.behavior_id.as_deref()),
             ("clone_from", self.clone_from.as_deref()),
-            ("persona_name", self.persona_name.as_deref()),
             ("root", self.root.as_deref()),
             ("preset", self.preset.as_deref()),
             ("profile_id", self.profile_id.as_deref()),
@@ -72,9 +73,17 @@ impl LocalPersonaRequestRecord {
                 value.is_none_or(|value| value.len() <= MAX_PERSONA_FIELD_BYTES),
                 "{name} exceeds maximum length"
             );
-            if name != "persona_name" {
-                require_optional_identifier(name, value)?;
-            }
+            require_optional_identifier(name, value)?;
+        }
+        for (name, value) in [
+            ("persona_name", self.persona_name.as_deref()),
+            ("description", self.description.as_deref()),
+            ("system_prompt", self.system_prompt.as_deref()),
+        ] {
+            anyhow::ensure!(
+                value.is_none_or(|value| value.len() <= MAX_PERSONA_FIELD_BYTES),
+                "{name} exceeds maximum length"
+            );
         }
         require_enum("persona op", &self.op, &["create", "edit", "disable"])?;
         parse_utc_seconds("persona created_at", &self.created_at)?;
@@ -102,6 +111,8 @@ impl LocalPersonaRequestRecord {
             option(self.behavior_id.as_deref()),
             option(self.clone_from.as_deref()),
             option(self.persona_name.as_deref()),
+            option(self.description.as_deref()),
+            option(self.system_prompt.as_deref()),
             option(self.root.as_deref()),
             option(self.preset.as_deref()),
             option(self.profile_id.as_deref()),
@@ -130,6 +141,8 @@ mod tests {
             behavior_id: None,
             clone_from: None,
             persona_name: Some("Research".into()),
+            description: Some("Researches a focused question.".into()),
+            system_prompt: Some("Research the user's question and cite evidence.".into()),
             root: None,
             preset: Some("write".into()),
             profile_id: Some("profile-1".into()),
@@ -152,6 +165,9 @@ mod tests {
         assert_ne!(payload, changed.signing_payload());
         changed = base.clone();
         changed.make_default = false;
+        assert_ne!(payload, changed.signing_payload());
+        changed = base.clone();
+        changed.system_prompt = Some("Different instructions".into());
         assert_ne!(payload, changed.signing_payload());
     }
 

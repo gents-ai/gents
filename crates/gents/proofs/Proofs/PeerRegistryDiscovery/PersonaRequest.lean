@@ -77,6 +77,8 @@ structure Request where
   localSigner : String
   localSignatureValid : Bool
   name : String
+  description : String
+  systemPrompt : String
   root : String
   preset : String
   profile : String
@@ -100,6 +102,12 @@ abbrev presetKnown (r : Request) : Prop :=
   r.preset = "readonly" ∨ r.preset = "write"
 
 abbrev nameOk (r : Request) : Prop := r.name ≠ ""
+
+/-- A preset-based behavior is authored from scratch and must carry useful
+operating instructions. A clone may inherit its source prompt when this field
+is empty. -/
+abbrev createPromptOk (r : Request) : Prop :=
+  r.cloneFrom ≠ "" ∨ r.systemPrompt.trim ≠ ""
 
 /-- An empty root selects the runtime cwd; a non-empty composer root must
 be published. Existence and authority are checked by the host execution owner. -/
@@ -188,7 +196,7 @@ instance (cat : Catalog) (r : Request) : Decidable (authorizationOk cat r) := by
 def opOk (cat : Catalog) (st : BehaviorCatalog) (r : Request) : Prop :=
   match r.op with
   | Op.create =>
-      nameOk r ∧ rootOk cat r ∧ profileOk cat r ∧ createModeOk st r
+      nameOk r ∧ createPromptOk r ∧ rootOk cat r ∧ profileOk cat r ∧ createModeOk st r
   | Op.edit =>
       behaviorPresent st r.target ∧ behaviorMutable st r.target ∧ nameOk r ∧ rootOk cat r ∧
         profileOk cat r ∧ editPresetOk r
@@ -296,6 +304,16 @@ theorem blank_profile_rejected (cat : Catalog) (st : BehaviorCatalog) (r : Reque
     ¬ admits cat st r := by
   intro hadm
   exact (admitted_profile cat st r hadm hop).1 hblank
+
+/-- An admitted preset-based create cannot materialize an instructionless
+working behavior. Clones retain the source prompt unless explicitly
+overridden by the authoring loader. -/
+theorem admitted_preset_create_has_prompt (cat : Catalog) (st : BehaviorCatalog) (r : Request)
+    (hadm : admits cat st r) (hop : r.op = .create) (hclone : r.cloneFrom = "") :
+    r.systemPrompt.trim ≠ "" := by
+  have hopOk := hadm.2.2
+  simp [opOk, createPromptOk, hop, hclone] at hopOk
+  exact hopOk.2.1
 
 theorem protected_edit_or_disable_rejected (cat : Catalog) (st : BehaviorCatalog) (r : Request)
     (hop : r.op = .edit ∨ r.op = .disable) (hprotected : r.target ∈ st.protectedIds) :

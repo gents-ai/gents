@@ -1847,6 +1847,13 @@ pub(crate) struct BehaviorCreateArgs {
     pub(crate) agent_did: String,
     #[arg(long, help = "Persona display name")]
     pub(crate) display_name: String,
+    #[arg(long, help = "Concise purpose for the created behavior")]
+    pub(crate) description: Option<String>,
+    #[arg(
+        long,
+        help = "Complete behavior instructions; required with --preset and optional as a clone override"
+    )]
+    pub(crate) system_prompt: Option<String>,
     #[arg(
         long,
         help = "Built-in permission preset (readonly|write); mutually exclusive with --clone-from"
@@ -1880,6 +1887,10 @@ pub(crate) struct BehaviorCloneArgs {
     pub(crate) source_behavior_id: String,
     #[arg(long, help = "Display name for the cloned persona")]
     pub(crate) display_name: String,
+    #[arg(long, help = "Override the source behavior/context description")]
+    pub(crate) description: Option<String>,
+    #[arg(long, help = "Override the source context system prompt")]
+    pub(crate) system_prompt: Option<String>,
     #[arg(long, help = "Override the source's workspace root scope")]
     pub(crate) root: Option<String>,
     #[arg(

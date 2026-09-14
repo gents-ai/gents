@@ -345,6 +345,8 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     let args = serde_json::json!({
         "action": "create",
         "persona_name": "Research Assistant",
+        "description": "Researches a focused question",
+        "system_prompt": "Research the question and cite evidence.",
         "preset": "write",
         // Short id — profile IDs are preserved exactly as authored; the
         // request row carries this value verbatim to admission.
@@ -401,6 +403,31 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         created[0].display_name,
         Some("Research Assistant".to_string())
     );
+    let context_id = crate::graphql::escape_graphql_string(
+        created[0]
+            .context_id
+            .as_deref()
+            .expect("created behavior has context"),
+    );
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentContext(filter: {{ context_id: {{ _eq: "{context_id}" }} }}) {{ system_prompt }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query failed: {:?}",
+        response.errors
+    );
+    let prompt = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentContext"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("system_prompt"))
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(prompt, Some("Research the question and cite evidence."));
 
     let output = call_handle
         .await
