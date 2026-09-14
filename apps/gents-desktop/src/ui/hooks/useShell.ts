@@ -20,6 +20,12 @@ export function useShell(
   const d = useDesktopShell(bridge);
   const api = bridge.api;
   const shellRef = useRef(d);
+  // The kit screen accepts a value instead of the legacy shell's form event,
+  // so it cannot use `onSendMessage` directly. Keep the same immediate
+  // single-flight guarantee here: React state does not update soon enough to
+  // fence two Enter key events delivered in one render.
+  const chatSubmitInFlight = useRef(false);
+  const [chatSubmitting, setChatSubmitting] = useState(false);
   shellRef.current = d;
 
   useEffect(() => {
@@ -46,22 +52,30 @@ export function useShell(
 
   const sendMessage = useCallback(
     async (content: string, behaviorId: string | null) => {
+      if (chatSubmitInFlight.current) return null;
       const agentDid = d.selectedAgentDid ?? d.deployments[0]?.agentDid;
       if (!agentDid) return null;
-      if (behaviorId) d.setSelectedBehaviorId(behaviorId);
-      const result = await api.sendChatMessage({
-        agentDid,
-        behaviorId,
-        sessionId: d.selectedSessionId,
-        content,
-        causedBySourceDocId: d.pendingMailboxCauseId ?? null,
-      });
-      if (result?.sessionId) {
-        d.setSelectedSessionId(result.sessionId);
-        await d.refreshSession(result.sessionId);
-        await d.refreshSnapshot();
+      chatSubmitInFlight.current = true;
+      setChatSubmitting(true);
+      try {
+        if (behaviorId) d.setSelectedBehaviorId(behaviorId);
+        const result = await api.sendChatMessage({
+          agentDid,
+          behaviorId,
+          sessionId: d.selectedSessionId,
+          content,
+          causedBySourceDocId: d.pendingMailboxCauseId ?? null,
+        });
+        if (result?.sessionId) {
+          d.setSelectedSessionId(result.sessionId);
+          await d.refreshSession(result.sessionId);
+          await d.refreshSnapshot();
+        }
+        return result;
+      } finally {
+        chatSubmitInFlight.current = false;
+        setChatSubmitting(false);
       }
-      return result;
     },
     [api, d],
   );
@@ -81,7 +95,7 @@ export function useShell(
       api,
       snapshot: d.snapshot,
       error: d.error,
-      sending: d.sending,
+      sending: d.sending || chatSubmitting,
       deployments,
       selectedDeployment,
       selectedAgentDid: d.selectedAgentDid ?? selectedDeployment?.agentDid ?? null,
@@ -134,7 +148,7 @@ export function useShell(
       onInitLocalRuntime: d.onInitLocalRuntime,
       startupPhase: d.startupPhase,
     };
-  }, [api, applyConfig, behaviorColors, d, sendMessage]);
+  }, [api, applyConfig, behaviorColors, chatSubmitting, d, sendMessage]);
 }
 
 export type Shell = ReturnType<typeof useShell>;
