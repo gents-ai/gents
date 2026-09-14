@@ -123,6 +123,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             Boundary("daemon-visible classification is an accepted boundary (Boundaries.lean)"),
         ),
         (
+            "StorageWriteGate",
+            WorkspaceTest("crates/gents/src/admission/stream_guard/conformance.rs"),
+        ),
+        (
             "StreamingResponse",
             Module("conformance/streaming_compaction.rs"),
         ),

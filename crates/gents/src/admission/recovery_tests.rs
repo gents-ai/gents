@@ -1,4 +1,5 @@
 use super::*;
+use futures::{future::BoxFuture, StreamExt};
 use serde_json::Value;
 
 const AGENT_DID: &str = "did:test:inference-recovery-cas";
@@ -207,6 +208,157 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
         .await;
     let rows = crate::graphql::rows::<Value>(&response, "InferenceCall").unwrap();
     assert_eq!(rows[0]["call_state"], "cancelled");
+}
+
+struct SignalledPermitFinalizer {
+    permit: super::super::permit::AdmissionPermit,
+    invoked: tokio::sync::oneshot::Sender<()>,
+}
+
+impl super::super::stream_guard::StreamGuardLifecycle for SignalledPermitFinalizer {
+    fn mark_stream_success(&mut self, usage: Option<rig::completion::Usage>) {
+        super::super::stream_guard::StreamGuardLifecycle::mark_stream_success(
+            &mut self.permit,
+            usage,
+        );
+    }
+
+    fn mark_stream_error(&mut self, error: &rig::completion::CompletionError) {
+        super::super::stream_guard::StreamGuardLifecycle::mark_stream_error(
+            &mut self.permit,
+            error,
+        );
+    }
+
+    fn finish_stream(self) -> BoxFuture<'static, Result<(), rig::completion::CompletionError>> {
+        Box::pin(async move {
+            let _ = self.invoked.send(());
+            super::super::stream_guard::StreamGuardLifecycle::finish_stream(self.permit).await
+        })
+    }
+}
+
+/// Dropping a stream while its independently scheduled terminal persistence is
+/// waiting for the canonical gate must still return real admission ownership.
+/// Once the existing gate owner exits, AdmissionPermit's Drop repair installs
+/// exactly one terminal outcome on the already-created call.
+#[tokio::test]
+async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once() {
+    use super::super::controller::BackendAdmissionController;
+    use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    let controller = BackendAdmissionController::new(
+        1,
+        super::super::BackendAdmissionConfig {
+            backend_id: "recovery-cas-backend".into(),
+            max_concurrent: 1,
+            max_queue_depth: 1,
+            enabled: true,
+            probe_status: "healthy".into(),
+            measured_unhealthy: false,
+            config_fingerprint: "recovery-cas".into(),
+        },
+        std::sync::Weak::new(),
+    );
+    let permit = controller
+        .clone()
+        .acquire(
+            node.clone(),
+            pending_call("aborted-finalizer-call"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(controller.available_permits_for_test(), 0);
+    assert!(!controller.is_drained());
+
+    let gate_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    let blocker_node = node.clone();
+    let blocker_entered = gate_entered.clone();
+    let blocker_release = release_gate.clone();
+    let blocker = tokio::spawn(async move {
+        crate::config_client::ConfigAccess::transact_local(
+            &blocker_node,
+            None,
+            "test.admission.abort_finalizer_gate_blocker",
+            move |_txn| {
+                let entered = blocker_entered.clone();
+                let release = blocker_release.clone();
+                Box::pin(async move {
+                    entered.notify_one();
+                    release.notified().await;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    });
+    gate_entered.notified().await;
+
+    let (invoked_tx, invoked_rx) = tokio::sync::oneshot::channel();
+    let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(vec![Ok(
+        RawStreamingChoice::FinalResponse(()),
+    )])));
+    let mut stream = super::super::stream_guard::hold_stream_guard(
+        inner,
+        SignalledPermitFinalizer {
+            permit,
+            invoked: invoked_tx,
+        },
+    );
+    let mut terminal = Box::pin(stream.next());
+    tokio::select! {
+        result = invoked_rx => result.expect("terminal finalizer must start"),
+        item = &mut terminal => panic!("terminal item escaped blocked persistence: {item:?}"),
+    }
+    drop(terminal);
+    drop(stream);
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !controller.is_drained() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("aborted finalizer must drop its AdmissionPermit");
+    assert_eq!(
+        controller.available_permits_for_test(),
+        1,
+        "aborted finalizer must return the real provider permit"
+    );
+
+    release_gate.notify_one();
+    blocker
+        .await
+        .expect("gate blocker task")
+        .expect("gate blocker transaction");
+
+    let rows = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let response = node
+                .execute(
+                    r#"{ InferenceCall(filter: {call_id: {_eq: "aborted-finalizer-call"}}) {call_state} }"#,
+                )
+                .await;
+            let rows = crate::graphql::rows::<Value>(&response, "InferenceCall").unwrap();
+            if rows.first().is_some_and(|row| row["call_state"] == "completed") {
+                break rows;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("AdmissionPermit drop repair must persist a terminal outcome");
+    assert_eq!(
+        rows.len(),
+        1,
+        "drop repair must not create a second call row"
+    );
+    assert_eq!(rows[0]["call_state"], "completed");
 }
 
 /// Lean namespace InferenceCall.Persistence: terminal_winner_preserves_outcome_and_stamp and

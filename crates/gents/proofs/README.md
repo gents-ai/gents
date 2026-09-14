@@ -119,6 +119,12 @@ local lemmas only — not listed as fenced proven areas):
   conformance-fenced here. See
   `boundary.p2p-backpressure.obligation-model`.
 
+`StorageWriteGate` has a **partial** bridge: three generated scheduling cases
+exercise the real stream guard and a shared-task negative control. Its cleanup
+and future-drop return observations remain explicit, unbridged obligations; see
+[`storage-write-gate-scheduling`](../../../contracts/storage-write-gate-scheduling.md).
+This does not establish DefraDB termination or a wall-clock bound.
+
 ## Quick Start
 
 ```bash
@@ -595,6 +601,14 @@ Local observation theorems also record the daemon assumptions Rust relies on:
 "Liveness" theorems in this suite fall into four tiers. **Almost all Lean
 results are tier 1.** Reading an `*_eventually_*` or `*_convergence` name as
 fair-scheduler or wall-clock progress is a misread (#557).
+
+The enum-only lemmas in `Properties/Decidable.lean` are now named
+`*_has_distinct_state`. They are **not even tier-1 reachability**: finding a
+different enum value does not prove an enabled transition. The former
+`*_no_deadlocks` names overstated their content. `StorageWriteGate` separately
+exhibits an infinite legal stalled trace when a sibling waiter suspends the
+only task polling a gate-owning stream finalizer. Timeout passage is not timeout
+observation, and independent scheduling still requires external progress.
 
 | Tier | Meaning | Where it lives |
 |------|---------|----------------|
