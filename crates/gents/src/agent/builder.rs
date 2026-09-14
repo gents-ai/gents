@@ -617,6 +617,7 @@ impl PendingAgentBehavior {
             backend_endpoint: backend_fields.backend_endpoint,
             backend_auth: backend_fields.backend_auth,
             model_name: self.model_name,
+            resolved_reasoning_efforts: None,
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
             max_turns: self.max_turns,

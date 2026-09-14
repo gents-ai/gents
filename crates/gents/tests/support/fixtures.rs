@@ -144,6 +144,7 @@ pub fn test_behavior_for_principal(
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         backend_auth: gents::document_config::BackendAuth::Unauthenticated,
         model_name: gents::config::DEFAULT_MODEL_NAME.to_string(),
+        resolved_reasoning_efforts: None,
         context_window: gents::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: gents::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: gents::config::DEFAULT_MAX_TURNS,

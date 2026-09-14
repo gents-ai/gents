@@ -4,7 +4,7 @@
    ChatGPT/Codex and Grok exist only through a subscription sign-in, so
    the account card sits in the row with connect, cancel and disconnect.
    Everything else is the desktop app's Backends panel field for field. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SetupScreen } from "../setup/SetupScreen";
 import { toast } from "sonner";
 import type {
@@ -15,6 +15,8 @@ import type {
   InferenceBackendView,
   OpenAiWireApi,
   ProviderAccountView,
+  InferenceAuthMethod,
+  InferenceProviderId,
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
@@ -99,22 +101,35 @@ const KINDS = [
 /* subscription kinds, and the provider name their account carries */
 const SUBSCRIPTION: Record<
   string,
-  { provider: string; title: string; note: string; login: "codex" | "grok" | "claude" }
+  {
+    provider: string;
+    providerId: InferenceProviderId;
+    authMethod: InferenceAuthMethod;
+    title: string;
+    note: string;
+    login: "codex" | "grok" | "claude";
+  }
 > = {
   ChatGptCodex: {
     provider: PROVIDER_CREDENTIAL_KIND.openai,
+    providerId: "openai",
+    authMethod: "chat_gpt_oauth",
     title: "ChatGPT / Codex",
     note: "Use an eligible ChatGPT subscription for Codex inference.",
     login: "codex",
   },
   XaiGrokOAuth: {
     provider: PROVIDER_CREDENTIAL_KIND.grok,
+    providerId: "grok",
+    authMethod: "grok_oauth",
     title: "Grok / xAI",
     note: "Use SuperGrok or an eligible X Premium+ subscription.",
     login: "grok",
   },
   ClaudeCliSubscription: {
     provider: PROVIDER_CREDENTIAL_KIND.anthropic,
+    providerId: "anthropic",
+    authMethod: "claude_oauth",
     title: "Anthropic / Claude",
     note: "Use a Claude Pro or Max subscription.",
     login: "claude",
@@ -288,8 +303,8 @@ function Editor({
     endpoint: backend.endpoint ?? "",
     apiKeyEnvVar: backend.apiKeyEnvVar ?? "",
     apiKey: "",
-    connectTimeoutSecs: str(backend.connectTimeoutSecs ?? 10),
-    discoveryTimeoutSecs: str(backend.discoveryTimeoutSecs ?? 10),
+    connectTimeoutSecs: str(backend.connectTimeoutSecs),
+    discoveryTimeoutSecs: str(backend.discoveryTimeoutSecs),
     maxConcurrent: str(backend.maxConcurrent),
     maxQueueDepth: str(backend.maxQueueDepth),
     enabled: backend.enabled ?? true,
@@ -351,8 +366,14 @@ function Editor({
   });
   const [probe, setProbe] = useState<string | null>(null);
   const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
+  const discoveryRevision = useRef(0);
   const id = (f: string) => `${backend.backendId}-${f}`;
   const subscription = d.draft.providerKind in SUBSCRIPTION;
+  useEffect(() => {
+    discoveryRevision.current += 1;
+    setDiscoveredModels(null);
+    setProbe(null);
+  }, [d.draft.providerKind, d.draft.endpoint]);
   const users = deployment.inferenceProfiles
     .filter((p) => p.backend_id === backend.backendId)
     .map((p) => p.display_name ?? p.profile_id);
@@ -375,31 +396,22 @@ function Editor({
               size="sm"
               variant="outline"
               onClick={async () => {
+                const revision = ++discoveryRevision.current;
                 try {
                   if (subscription) {
                     setProbe("Discovering models…");
-                    const provider =
-                      d.draft.providerKind === "ChatGptCodex"
-                        ? "openai"
-                        : d.draft.providerKind === "ClaudeCliSubscription"
-                          ? "anthropic"
-                          : "grok";
-                    const authMethod =
-                      provider === "openai"
-                        ? "chat_gpt_oauth"
-                        : provider === "anthropic"
-                          ? "claude_oauth"
-                          : "grok_oauth";
+                    const connection = SUBSCRIPTION[d.draft.providerKind]!;
                     const result = await shell.api.discoverInferenceModels({
                       requestKey: `backend-${backend.backendId}-${Date.now()}`,
                       agentDid: deployment.agentDid,
-                      provider,
-                      authMethod,
+                      provider: connection.providerId,
+                      authMethod: connection.authMethod,
                       endpoint: d.draft.endpoint,
                       apiKey: null,
                     });
                     if (!result.reachable)
                       throw new Error(result.failure?.message ?? "Discovery failed");
+                    if (discoveryRevision.current !== revision) return;
                     setDiscoveredModels(
                       result.models.map((option) => option.advertised.model_name),
                     );
@@ -409,6 +421,7 @@ function Editor({
                   const endpoint = requiredHttpUrl("Endpoint", d.draft.endpoint);
                   setProbe("probing…");
                   const r = await shell.api.probeInferenceEndpoint(endpoint);
+                  if (discoveryRevision.current !== revision) return;
                   setProbe(
                     r.reachable
                       ? `reachable · ${r.models.length} models`
@@ -416,6 +429,7 @@ function Editor({
                   );
                   toast(r.reachable ? "Endpoint reachable" : "Endpoint unreachable");
                 } catch (error) {
+                  if (discoveryRevision.current !== revision) return;
                   setProbe("probe failed");
                   toast(
                     `Probe failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -572,6 +586,7 @@ function Editor({
           label="Connect timeout seconds"
           description="Positive whole number, or blank for the runtime default."
           value={d.draft.connectTimeoutSecs}
+          placeholder="Runtime default (10)"
           onChange={(v) => d.set("connectTimeoutSecs", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
@@ -581,6 +596,7 @@ function Editor({
           label="Discovery timeout seconds"
           description="Positive whole number, or blank for the runtime default."
           value={d.draft.discoveryTimeoutSecs}
+          placeholder="Runtime default (10)"
           onChange={(v) => d.set("discoveryTimeoutSecs", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
@@ -674,7 +690,8 @@ export function InferencePanel({
     );
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
-    const account = sub && accounts.find((a) => a.provider === sub.provider);
+    const account =
+      sub && accounts.find((a) => a.provider === sub.provider && a.enabled);
     const cred = sub
       ? account
         ? "signed in"

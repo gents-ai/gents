@@ -10,6 +10,7 @@ import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
 import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
 import { ProfilesPanel } from "../src/ui/screens/agent/ProfilesPanel";
+import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { SchedulesPanel } from "../src/ui/screens/agent/SchedulesPanel";
 import { SkillsPanel } from "../src/ui/screens/agent/SkillsPanel";
 import { TasksPanel } from "../src/ui/screens/agent/TasksPanel";
@@ -101,6 +102,60 @@ function expectFields(labels: string[]) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("configuration panels", () => {
+  it("clears a prior agent sign-in while the next account lookup fails", async () => {
+    const { api, shell } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+      contractVersion: 1,
+      defaultsVersion: "test",
+      executionDefaults: {},
+      providers: [
+        {
+          id: "openai",
+          displayName: "OpenAI",
+          description: "OpenAI",
+          authMethods: ["chat_gpt_oauth"],
+          authOptions: [
+            {
+              method: "chat_gpt_oauth",
+              displayName: "ChatGPT sign-in",
+              defaultEndpoint: "https://chatgpt.com/backend-api/codex",
+            },
+          ],
+          defaultAuthMethod: "chat_gpt_oauth",
+          defaultEndpoint: "https://chatgpt.com/backend-api/codex",
+        },
+      ],
+    });
+    api.listProviderAccounts
+      .mockResolvedValueOnce([
+        {
+          provider: "chatgpt-codex",
+          enabled: true,
+          credentialId: "agent-a-credential",
+        },
+      ])
+      .mockRejectedValueOnce(new Error("agent B lookup failed"));
+    const view = render(
+      <SetupScreen
+        shell={shell}
+        initialStep="inference"
+        agentDid="did:test:agent-a"
+        onDone={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("Account connected")).toBeVisible();
+    view.rerender(
+      <SetupScreen
+        shell={shell}
+        initialStep="inference"
+        agentDid="did:test:agent-b"
+        onDone={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+  });
+
   it("does not starve model defaults while equivalent snapshots refresh", async () => {
     const { api, shell } = harness();
     const view = render(
@@ -165,7 +220,7 @@ describe("configuration panels", () => {
       screen.getByText("Subscription", { selector: "[data-slot=badge]" }),
     ).toBeVisible();
     expect(screen.queryByLabelText("OpenAI wire API")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Connect timeout seconds")).toHaveValue("10");
+    expect(screen.getByLabelText("Connect timeout seconds")).toHaveValue("");
     await userEvent
       .setup()
       .click(screen.getByRole("button", { name: "Refresh models" }));
@@ -179,6 +234,71 @@ describe("configuration panels", () => {
       }),
     );
     expect(api.probeInferenceEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("discards subscription discovery when the edited connection changes", async () => {
+    const { api, shell } = harness();
+    let resolveDiscovery!: (value: unknown) => void;
+    api.discoverInferenceModels = vi.fn().mockReturnValue(
+      new Promise((resolve) => {
+        resolveDiscovery = resolve;
+      }),
+    );
+    render(
+      <InferencePanel
+        shell={shell}
+        item="backend-a"
+        deployment={{
+          ...deployment,
+          inferenceBackends: [
+            {
+              ...deployment.inferenceBackends[0]!,
+              providerKind: "XaiGrokOAuth",
+              endpoint: "https://old.example.test/v1",
+              models: ["saved-model"],
+            },
+          ],
+        }}
+      />,
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Refresh models" }));
+    await replace("Endpoint", "https://new.example.test/v1");
+    await act(async () => {
+      resolveDiscovery({
+        reachable: true,
+        models: [{ advertised: { model_name: "stale-model" } }],
+      });
+    });
+    expect(screen.queryByText("stale-model")).not.toBeInTheDocument();
+    expect(screen.getByText("saved-model")).toBeVisible();
+  });
+
+  it("does not treat a disabled subscription credential as signed in", async () => {
+    const { api, shell } = harness();
+    api.listProviderAccounts.mockResolvedValue([
+      {
+        provider: "xai-oauth",
+        enabled: false,
+        credentialId: "disabled-credential",
+      },
+    ]);
+    render(
+      <InferencePanel
+        shell={shell}
+        deployment={{
+          ...deployment,
+          inferenceBackends: [
+            {
+              ...deployment.inferenceBackends[0]!,
+              providerKind: "XaiGrokOAuth",
+            },
+          ],
+        }}
+      />,
+    );
+    expect(await screen.findByText(/not signed in/)).toBeVisible();
   });
 
   it("shows runtime execution defaults and backend model choices without expanding advanced settings", async () => {

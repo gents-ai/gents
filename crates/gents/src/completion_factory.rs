@@ -64,16 +64,20 @@ pub(crate) fn loop_config(
         temperature: behavior.sampling.temperature,
         max_tokens: effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens),
         aggregate_token_budget: None,
-        additional_params: merge_optional_params(
+        additional_params: authoritative_reasoning_capabilities(
             merge_optional_params(
-                reasoning_profile_params(
-                    behavior.backend_provider_kind,
-                    behavior.openai_wire_api,
-                    behavior.sampling.reasoning_effort,
+                merge_optional_params(
+                    reasoning_profile_params(
+                        behavior.backend_provider_kind,
+                        behavior.openai_wire_api,
+                        behavior.sampling.reasoning_effort,
+                    ),
+                    provider_additional_params(behavior.backend_provider_kind),
                 ),
-                provider_additional_params(behavior.backend_provider_kind),
+                behavior.sampling.additional_params(),
             ),
-            behavior.sampling.additional_params(),
+            behavior.backend_provider_kind,
+            behavior.resolved_reasoning_efforts.as_deref(),
         ),
         structured_output: None,
         tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
@@ -91,6 +95,27 @@ pub(crate) fn loop_config(
         max_turns: behavior.max_turns,
         output_obligation_gate: None,
     }
+}
+
+fn authoritative_reasoning_capabilities(
+    params: Option<serde_json::Value>,
+    kind: BackendProviderKind,
+    advertised: Option<&[ReasoningEffort]>,
+) -> Option<serde_json::Value> {
+    if kind != BackendProviderKind::ClaudeCliSubscription {
+        return params;
+    }
+    let mut params = params.unwrap_or_else(|| serde_json::json!({}));
+    params[crate::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM] =
+        advertised.map_or(serde_json::Value::Null, |values| {
+            serde_json::Value::Array(
+                values
+                    .iter()
+                    .map(|value| serde_json::Value::String(value.as_str().to_string()))
+                    .collect(),
+            )
+        });
+    Some(params)
 }
 
 pub(crate) fn loop_config_for_request(
@@ -404,6 +429,7 @@ pub(crate) async fn build_compaction_engine(
     summary.backend_endpoint = backend.backend_endpoint;
     summary.backend_auth = backend.backend_auth;
     summary.model_name = inference.profile.model_name.clone();
+    summary.resolved_reasoning_efforts = inference.resolved_reasoning_efforts();
     summary.context_window = inference.context_window()?;
     summary.max_output_tokens = inference.max_output_tokens()?;
     summary.sampling = inference.sampling_config()?;

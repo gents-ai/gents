@@ -51,6 +51,11 @@ mod tests {
         assert!(!error.contains("<script>"));
         assert!(error.contains("&lt;script&gt;"));
         assert!(!error.contains("{{"));
+        for provider in ["ChatGPT", "Claude", "Grok"] {
+            let page = render(200, &format!("{provider} sign-in complete."));
+            assert!(page.contains("Gents account connection"));
+            assert!(!page.contains("ChatGPT connection"));
+        }
     }
 
     #[test]

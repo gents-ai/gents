@@ -25,6 +25,7 @@ import type {
   InferenceModelRecommendation,
   InferenceProviderId,
   InferenceSetupCatalog,
+  ProviderAccountView,
 } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -277,6 +278,19 @@ const stepIcon = (state: LoadingStepState | null) =>
     <span className="size-1.5 rounded-full bg-border" />
   );
 
+export function providerSignInState(accounts: ProviderAccountView[]) {
+  const next: Partial<Record<ProviderId, string>> = {};
+  for (const [providerId, credentialKind] of Object.entries(
+    PROVIDER_CREDENTIAL_KIND,
+  )) {
+    const account = accounts.find(
+      (entry) => entry.enabled && entry.provider === credentialKind,
+    );
+    if (account) next[providerId as OauthProvider] = account.credentialId;
+  }
+  return next;
+}
+
 export function SetupScreen({
   shell,
   onDone,
@@ -320,29 +334,25 @@ export function SetupScreen({
     Partial<Record<ProviderId, ConnectionDraft>>
   >({});
   const [signedIn, setSignedIn] = useState<Partial<Record<ProviderId, string>>>({});
+  const accountRevision = useRef(0);
   const setupAgentDid =
     agentDid ??
     shell.selectedDeployment?.agentDid ??
     shell.snapshot?.client?.deployments[0]?.agentDid;
+  const setupAgentDidRef = useRef(setupAgentDid);
+  setupAgentDidRef.current = setupAgentDid;
   useEffect(() => {
-    if (!setupAgentDid || !api.listProviderAccounts) return;
+    const revision = ++accountRevision.current;
+    setSignedIn({});
+    if (!setupAgentDid || !api.listProviderAccounts) {
+      return;
+    }
     let cancelled = false;
     void api
       .listProviderAccounts(setupAgentDid)
       .then((accounts) => {
-        if (cancelled) return;
-        setSignedIn((current) => {
-          const next = { ...current };
-          for (const [providerId, credentialKind] of Object.entries(
-            PROVIDER_CREDENTIAL_KIND,
-          )) {
-            const account = accounts.find(
-              (entry) => entry.enabled && entry.provider === credentialKind,
-            );
-            if (account) next[providerId as OauthProvider] = account.credentialId;
-          }
-          return next;
-        });
+        if (cancelled || accountRevision.current !== revision) return;
+        setSignedIn(providerSignInState(accounts));
       })
       .catch(() => {
         /* Sign-in remains available if account lookup fails. */
@@ -515,6 +525,8 @@ export function SetupScreen({
           : oauthProvider === "anthropic"
             ? await api.claudeLogin(agentDid)
             : await api.grokLogin(agentDid);
+      if (setupAgentDidRef.current !== agentDid) return;
+      accountRevision.current += 1;
       setSignedIn((current) => ({ ...current, [provider]: result.credentialId }));
       invalidateDiscovery();
       setAuthUrl(null);

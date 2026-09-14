@@ -408,6 +408,18 @@ pub(crate) fn claude_model_defaults(
     }
 }
 
+/// Resolve Claude effort support once from authoritative advertised metadata,
+/// falling back only to the reviewed exact-model table when metadata is absent.
+/// `Some([])` is authoritative unsupported; unknown models are never guessed.
+pub(crate) fn claude_supported_reasoning_efforts(
+    model: &str,
+    advertised: Option<&[ReasoningEffort]>,
+) -> Option<Vec<ReasoningEffort>> {
+    advertised
+        .map(|values| values.to_vec())
+        .or_else(|| claude_model_defaults(model).map(|(_, _, supported, _)| supported))
+}
+
 pub fn recommendation_for_model(
     provider: InferenceProviderId,
     auth: InferenceAuthMethod,
@@ -427,28 +439,27 @@ pub fn recommendation_for_model(
     }
 
     let reasoning_effort = if is_claude {
-        claude_defaults
-            .as_ref()
-            .and_then(|(_, _, supported, default)| {
-                let choices: Vec<_> = supported
-                    .iter()
-                    .copied()
-                    .filter(|effort| {
-                        advertised
-                            .reasoning_efforts
-                            .as_ref()
-                            .is_none_or(|advertised| advertised.contains(effort))
-                    })
-                    .collect();
-                (!choices.is_empty()).then(|| RecommendedReasoningControl {
-                    recommended: if choices.contains(default) {
-                        *default
-                    } else {
-                        choices[0]
-                    },
-                    choices,
-                })
+        claude_supported_reasoning_efforts(
+            &advertised.model_name,
+            advertised.reasoning_efforts.as_deref(),
+        )
+        .map(|choices| {
+            let default = claude_defaults
+                .as_ref()
+                .map(|(_, _, _, default)| *default)
+                .unwrap_or(ReasoningEffort::High);
+            (choices, default)
+        })
+        .and_then(|(choices, default)| {
+            (!choices.is_empty()).then(|| RecommendedReasoningControl {
+                recommended: if choices.contains(&default) {
+                    default
+                } else {
+                    choices[0]
+                },
+                choices,
             })
+        })
     } else if is_codex || is_reasoning {
         let choices = advertised.reasoning_efforts.clone().unwrap_or_else(|| {
             vec![
@@ -613,6 +624,32 @@ mod tests {
             model.reasoning_efforts.unwrap()
         );
         assert!(claude_model_defaults("claude-unknown").is_none());
+    }
+
+    #[test]
+    fn newly_advertised_claude_model_uses_exact_provider_efforts() {
+        let mut model = advertised("claude-future-unreviewed");
+        model.reasoning_efforts = Some(vec![ReasoningEffort::Low, ReasoningEffort::XHigh]);
+        let value = recommendation_for_model(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ClaudeOauth,
+            &model,
+        )
+        .unwrap();
+        assert_eq!(
+            value.reasoning_effort.unwrap().choices,
+            vec![ReasoningEffort::Low, ReasoningEffort::XHigh]
+        );
+
+        model.reasoning_efforts = None;
+        assert!(recommendation_for_model(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ClaudeOauth,
+            &model,
+        )
+        .unwrap()
+        .reasoning_effort
+        .is_none());
     }
 
     #[test]

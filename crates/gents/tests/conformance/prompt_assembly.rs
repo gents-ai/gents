@@ -583,7 +583,11 @@ fn generated_claude_body_cases_drive_the_body_builder() {
         );
         gents::claude_messages::apply_reasoning_parameters(
             "claude-sonnet-5",
-            &serde_json::json!({"output_config": {"effort": case.effort}}),
+            &serde_json::json!({
+                (gents::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM):
+                    case.supported_efforts,
+                "output_config": {"effort": case.effort}
+            }),
             &mut body,
         );
         assert_eq!(

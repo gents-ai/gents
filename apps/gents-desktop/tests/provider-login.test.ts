@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { watchProviderLoginUrl } from "../src/ui/lib/providerLogin";
+import { providerSignInState } from "../src/ui/screens/setup/SetupScreen";
 
 const { listen, openExternalUrl } = vi.hoisted(() => ({
   listen: vi.fn(),
@@ -29,3 +30,23 @@ it.each(["openai", "anthropic", "grok"] as const)(
     expect(openExternalUrl).not.toHaveBeenCalled();
   },
 );
+
+it("replaces stale provider sign-ins from the latest account snapshot", () => {
+  const account = (provider: string, credentialId: string, enabled = true) => ({
+    provider,
+    credentialId,
+    enabled,
+    agentDid: "did:test:agent",
+    accountId: null,
+    planType: null,
+    accessTokenExpiresAt: "2026-09-15T00:00:00Z",
+    lastRefresh: null,
+  });
+  expect(
+    providerSignInState([
+      account("chatgpt-codex", "codex-current"),
+      account("claude-subscription", "claude-disabled", false),
+    ]),
+  ).toEqual({ openai: "codex-current" });
+  expect(providerSignInState([])).toEqual({});
+});

@@ -253,7 +253,6 @@ struct ChatGptCodexModelRecord {
     model: Option<String>,
     display_name: Option<String>,
     context_window: Option<i64>,
-    max_context_window: Option<i64>,
     supported_reasoning_levels: Option<Vec<CodexReasoningLevel>>,
 }
 
@@ -276,10 +275,7 @@ impl ChatGptCodexModelRecord {
     /// Output limits and sampling are provider-managed on this transport.
     fn into_advertised(self) -> Option<AdvertisedModel> {
         let display_name = self.display_name.clone();
-        let context_window = self
-            .context_window
-            .or(self.max_context_window)
-            .filter(|v| *v > 0);
+        let context_window = self.context_window.filter(|v| *v > 0);
         let reasoning_efforts = self.supported_reasoning_levels.as_ref().map(|levels| {
             levels
                 .iter()
@@ -542,7 +538,7 @@ mod tests {
                 .extend(fields.as_object().unwrap().clone());
             let record: ChatGptCodexModelRecord = serde_json::from_value(value).unwrap();
             let advertised = record.into_advertised().unwrap();
-            assert_eq!(advertised.context_window, Some(128000));
+            assert_eq!(advertised.context_window, None);
             assert_eq!(advertised.reasoning_efforts, expected);
         }
     }

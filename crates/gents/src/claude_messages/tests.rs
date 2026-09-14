@@ -29,6 +29,7 @@ fn lean_effort_cases_drive_the_real_messages_request() {
     for case in crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases() {
         let mut request = echo_request();
         request.additional_params = Some(json!({
+            (ADVERTISED_REASONING_EFFORTS_PARAM): case.supported_efforts,
             "output_config": {"effort": case.effort, "untrusted": true},
             "thinking": {"type": "enabled", "budget_tokens": 999},
             "temperature": 0.5,
@@ -45,6 +46,7 @@ fn lean_effort_cases_drive_the_real_messages_request() {
             case.selected_effort.is_some()
         );
         assert!(body.get("temperature").is_none());
+        assert!(body.get(ADVERTISED_REASONING_EFFORTS_PARAM).is_none());
         assert!(body["output_config"].get("untrusted").is_none());
         if case.selected_effort.is_some() {
             assert_eq!(body["thinking"], json!({"type": "adaptive"}));
