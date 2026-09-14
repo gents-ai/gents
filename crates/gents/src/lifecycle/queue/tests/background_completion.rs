@@ -37,8 +37,6 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
                 "2099-01-01T00:00:00Z",
             ),
         );
-        // The background work outlives its finished desktop turn.
-        create.initial_lifecycle_state = RequestLifecycleState::Completed;
         crate::sign_agent_request_create(&desktop, &mut create)
             .await
             .unwrap();
@@ -47,6 +45,34 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
         let parent = crate::request_binding::load_agent_request(&db.node, "desktop-parent")
             .await
             .unwrap()
+            .unwrap();
+        // Materialize and finish the enrolled desktop turn through the real
+        // lifecycle, before its longer-lived background work completes.
+        let writer = crate::streaming::DefraStreamWriter::new(
+            db.node.clone(),
+            db.agent_did(),
+            std::time::Duration::ZERO,
+        );
+        let mut parent_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+            db.node.clone(),
+            TEST_BEHAVIOR_ID,
+            db.agent_did(),
+            parent.clone(),
+            60,
+            ExecutionOrigin::Interactive,
+            "backend-test",
+        );
+        assert_eq!(
+            parent_lifecycle.claim_with_identity().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        parent_lifecycle
+            .begin_owned_execution(&writer)
+            .await
+            .unwrap();
+        parent_lifecycle
+            .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+            .await
             .unwrap();
         session::ensure_session_with_behavior_id_and_requester_did(
             &db.node,
@@ -123,11 +149,6 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
             db.node.execute(&query).await.data.unwrap(),
             before,
             "control must preserve exact user observation and session owner"
-        );
-        let writer = crate::streaming::DefraStreamWriter::new(
-            db.node.clone(),
-            db.agent_did(),
-            std::time::Duration::ZERO,
         );
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         lifecycle
