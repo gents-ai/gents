@@ -3,6 +3,11 @@
 //! Recipes are a catalog and rendering aid only. A resolved recipe contains a
 //! literal system prompt and a canonical [`Tools`] proposal; it does not become
 //! a durable runtime selector or bypass the existing behavior materializer.
+//! Consumers must keep direct, open-ended behavior authoring available without
+//! selecting a recipe. When a recipe is useful, its editable output goes through
+//! the same preview, admission, and materialization path as a hand-authored
+//! behavior. Recipe identifiers and provenance must never drive runtime
+//! selection, automatic upgrades, or replacement of later user edits.
 
 use std::fmt;
 use std::path::Path;
@@ -108,8 +113,10 @@ const CATALOG: &[StarterRecipeDefinition] = &[
     },
 ];
 
-/// Stable catalog identifier. This value is authoring provenance, not a
-/// runtime behavior selector.
+/// Stable identifier for an optional starter draft.
+///
+/// This value is authoring provenance, not a required behavior kind or runtime
+/// selector. Generic behavior creation must not require one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StarterRecipeId {
     Coding,
@@ -223,9 +230,13 @@ pub struct StarterRecipeRenderInput {
     pub guided_concerns: Vec<String>,
 }
 
-/// Complete, editable authoring output. Materialization stores
+/// Complete, editable authoring output from an optional starter. Materialization stores
 /// `system_prompt` literally and persists `recommended_tools` as an ordinary
 /// canonical `Tools` document after the existing owner admits it.
+///
+/// After resolution, callers may freely edit or discard this proposal. Its
+/// provenance records where the initial draft came from; it does not assert
+/// continued conformance to the recipe and must not trigger later rewrites.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResolvedStarterRecipe {
     pub recipe_id: StarterRecipeId,
@@ -248,8 +259,10 @@ pub fn starter_recipe(id: StarterRecipeId) -> &'static StarterRecipeDefinition {
         .expect("every stable recipe id must have one catalog entry")
 }
 
-/// Resolve a recipe without mutating configuration. The caller supplies the
-/// canonical identity fields that the existing behavior materializer owns.
+/// Resolve an optional recipe without mutating configuration. The caller
+/// supplies the canonical identity fields that the existing behavior
+/// materializer owns. The returned draft must use the same canonical
+/// preview/admission/materialization path as directly authored configuration.
 pub fn resolve_starter_recipe(
     id: StarterRecipeId,
     agent_did: &str,
