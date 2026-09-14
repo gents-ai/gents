@@ -245,6 +245,28 @@ export function useBehaviorChoice(shell: Shell) {
   return { behaviorId, setPicked };
 }
 
+/** Display the existing workflow owner's observation, never infer queue health. */
+export function SessionSubmissionStatus({
+  error,
+  activityStatus,
+}: Pick<Shell, "error" | "activityStatus">) {
+  return (
+    <>
+      {activityStatus && (
+        <div role="status" className="mt-2 px-1 text-xs text-muted-foreground">
+          <p>{activityStatus.label}</p>
+          <p>{activityStatus.detail}</p>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="mt-2 px-1 text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
 export function SessionScreen({ shell }: { shell: Shell }) {
   const session = shell.selectedSession;
   const [draft, setDraft] = useState("");
@@ -318,7 +340,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       text,
       session?.behaviorId ?? choice.behaviorId,
     );
-    setDraft("");
+    if (result) setDraft("");
     if (result && result.sessionId !== shell.selectedSessionId) {
       navigate({ name: "session", sessionId: result.sessionId });
     }
@@ -403,6 +425,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             }
           />
         </div>
+        <SessionSubmissionStatus
+          error={shell.error}
+          activityStatus={shell.activityStatus}
+        />
         <p className="text-xs text-muted-foreground">
           {chosenName} <strong className="font-medium text-foreground">can</strong>{" "}
           {env
@@ -434,12 +460,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   /* ---- an existing session ---- */
   const holdsHere = shell.holds.filter((h) => h.sessionId === session?.sessionId);
   const live = session?.timelineItems.find((i) => i.kind === "liveAssistant");
-  const inFlight = Boolean(shell.selectedTrackedRequestId);
+  const inFlight = shell.interruptVisible ?? Boolean(shell.selectedTrackedRequestId);
 
   /* stop: the desktop previews the cascade first; with no children it
      interrupts at once, otherwise it asks */
   const stop = async () => {
-    const requestId = session?.latestRequestId;
+    const requestId = shell.activeRequestId ?? session?.latestRequestId;
     if (!requestId) return;
     try {
       const preview = await shell.api.previewInterruptCascade({
@@ -478,14 +504,18 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     Boolean(latest?.interruptedAt) ||
     latest?.cancelCause?.cause === "interrupted" ||
     latest?.cancelCause?.cause === "userCancelled";
-  const responseError = latest?.errorMessage?.trim() ?? "";
+  const responseError =
+    latest?.errorMessage?.trim() ||
+    (session?.turnState === "failed"
+      ? "The request failed before a response was available. Check the request trace for details."
+      : "");
   const showError = Boolean(responseError) && !wasInterrupted && !inFlight;
   const retry = async () => {
     const requestId = session?.latestRequestId;
     if (!requestId) return;
     setRetrying(true);
     try {
-      await shell.api.retryRequest(requestId);
+      await shell.retryMessage(requestId);
     } catch (e) {
       toast(`Couldn't retry: ${String(e)}`);
     } finally {
@@ -861,6 +891,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     {status.hint}
                   </p>
                 )}
+                <SessionSubmissionStatus
+                  error={shell.error}
+                  activityStatus={shell.activityStatus}
+                />
               </div>
             </div>
           </ScrollArea>

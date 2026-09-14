@@ -59,19 +59,9 @@ export function useShell(
       setChatSubmitting(true);
       try {
         if (behaviorId) d.setSelectedBehaviorId(behaviorId);
-        const result = await api.sendChatMessage({
-          agentDid,
-          behaviorId,
-          sessionId: d.selectedSessionId,
-          content,
-          causedBySourceDocId: d.pendingMailboxCauseId ?? null,
-        });
-        if (result?.sessionId) {
-          d.setSelectedSessionId(result.sessionId);
-          await d.refreshSession(result.sessionId);
-          await d.refreshSnapshot();
-        }
-        return result;
+        // The submission owner records acceptance before observation. A later
+        // refresh failure must never turn an accepted message into a failed send.
+        return await d.submitContent(content, behaviorId);
       } finally {
         chatSubmitInFlight.current = false;
         setChatSubmitting(false);
@@ -95,6 +85,9 @@ export function useShell(
       api,
       snapshot: d.snapshot,
       error: d.error,
+      activityStatus: d.activityStatus,
+      interruptVisible: d.interruptVisible,
+      activeRequestId: d.activeRequestId,
       sending: d.sending || chatSubmitting,
       deployments,
       selectedDeployment,
@@ -118,6 +111,7 @@ export function useShell(
         args: string;
       }[],
       sendMessage,
+      retryMessage: d.onRetryMessage,
       resolveHold: async (_id: string, _approve: boolean) => {},
       dismissMailboxItem: d.onDismissMailboxItem,
       openMailboxItem: d.onOpenMailboxItem,

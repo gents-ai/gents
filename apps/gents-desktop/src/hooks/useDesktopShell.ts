@@ -275,6 +275,7 @@ export function useDesktopShell({
   });
 
   const {
+    submitContent,
     onRenameSessionTitle,
     onRetryMessage,
     onSelectSession,
@@ -366,6 +367,7 @@ export function useDesktopShell({
       shellProjection.workflow.kind === "awaitingObservation" ||
       shellProjection.workflow.kind === "turnInProgress",
     activityStatus: shellProjection.activityStatus,
+    submitContent,
     sendStatus: shellProjection.sendStatus,
     retryStatus: retryShellProjection.nonEmptyContentSendStatus,
     setSelectedAgentDid: selectAgent,

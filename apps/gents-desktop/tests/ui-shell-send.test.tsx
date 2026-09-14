@@ -11,6 +11,7 @@ const desktopShell = vi.hoisted(() => ({
   snapshot: null,
   error: null,
   sending: false,
+  submitContent: vi.fn(),
   session: null,
   sessionLoad: null,
   sessionLoadingStatus: null,
@@ -55,6 +56,7 @@ describe("kit shell chat submission", () => {
       api: { sendChatMessage },
       listenToUpdates: vi.fn(),
     } as never;
+    desktopShell.submitContent.mockImplementation(sendChatMessage);
     const { result } = renderHook(() => useShell(bridge, undefined));
 
     let first!: ReturnType<typeof result.current.sendMessage>;
@@ -74,6 +76,8 @@ describe("kit shell chat submission", () => {
     });
 
     expect(result.current.sending).toBe(false);
-    expect(desktopShell.setSelectedSessionId).toHaveBeenCalledWith("session-1");
+    expect(desktopShell.submitContent).toHaveBeenCalledWith("review this", "coding");
+    expect(desktopShell.refreshSession).not.toHaveBeenCalled();
+    expect(desktopShell.refreshSnapshot).not.toHaveBeenCalled();
   });
 });
