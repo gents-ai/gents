@@ -34,18 +34,36 @@ describe("canonical tool selections", () => {
     const { api, shell } = harness();
     const user = userEvent.setup();
     render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
-    const timeout = screen.getByRole("textbox", { name: "File operation timeout seconds" });
-    fireEvent.change(timeout, { target: { value: "1.5" } });
-    expect(timeout).toHaveValue("1.5");
-    expect(screen.getByRole("alert")).toHaveTextContent("positive whole number");
+    const timeout = screen.getByRole("textbox", {
+      name: "File operation timeout seconds",
+    });
     await user.type(screen.getByRole("textbox", { name: "Display name" }), " edited");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    for (const invalid of ["0", "-1", "1.5", "abc", "9007199254740992"]) {
+      fireEvent.change(timeout, { target: { value: invalid } });
+      expect(timeout).toHaveValue(invalid);
+      expect(screen.getByRole("alert")).toHaveTextContent("positive whole number");
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    }
     fireEvent.change(timeout, { target: { value: "15" } });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(api.saveToolsConfig.mock.calls[0][0].document.host.files.timeout_secs).toBe(
       15,
     );
+  });
+
+  it("cancels invalid guided limits without changing canonical settings", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    const field = () =>
+      screen.getByRole("textbox", { name: "File operation timeout seconds" });
+    const original = (field() as HTMLInputElement).value;
+    fireEvent.change(field(), { target: { value: "nope" } });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(field()).toHaveValue(original);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
   });
 
   it("keeps independent opt-ins off and persists only an explicitly selected permission", async () => {

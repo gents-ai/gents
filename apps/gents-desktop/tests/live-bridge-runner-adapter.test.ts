@@ -36,9 +36,6 @@ describe("live bridge runner startup/config adapter", () => {
     };
 
     await expect(adapter.applyConfigComponents(request)).resolves.toBe(snapshot);
-    expect(postJson).toHaveBeenCalledWith(
-      "/desktop/config/components/apply",
-      request,
-    );
+    expect(postJson).toHaveBeenCalledWith("/desktop/config/components/apply", request);
   });
 });
