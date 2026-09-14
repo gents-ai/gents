@@ -1633,6 +1633,7 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn interruption_cascades_only_to_exact_parent_background_workers() {
     use std::time::Duration;
     let dir = tempfile::tempdir().unwrap();
