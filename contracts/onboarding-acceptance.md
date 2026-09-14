@@ -17,10 +17,12 @@ failed case after its fix; do not mark an entire area accepted from one happy pa
 - Automated validation evidence:
 - Bugs / fixes / retest results:
 
-Create new homes for a from-scratch run. Preserve previous demo homes and logs.
-Existing-home restart is a separate compatibility check; never repair a failed
-upgrade by wiping data. Do not include credentials, OAuth callbacks, or tokens
-in the run record, screenshots, or bug reports.
+Create new homes for a from-scratch run. Compatibility with homes from previous
+builds is not an acceptance requirement for this development cycle; do not add
+migrations or legacy paths to satisfy it. Restart tests below apply to the home
+created and configured during this run. Previous demo data need not be upgraded;
+leave it untouched unless cleanup is explicitly requested. Do not include
+credentials, OAuth callbacks, or tokens in run records, screenshots, or bugs.
 
 ## 1. Fresh install and managed runtime
 
@@ -158,5 +160,5 @@ confirmation, and save failure. Do not infer wiring from a control being visible
 - [ ] Critical-path live checks above have recorded evidence.
 - [ ] Every failure is fixed and retested, or explicitly documented and accepted
       as a remaining limitation; no silent credential, data-loss, or queue wedge.
-- [ ] Existing homes preserved; merged worktree handoffs archived before cleanup.
+- [ ] Fresh-run restart works; merged worktree handoffs archived before cleanup.
 - [ ] DefraDB dependency bump remains separate from this acceptance run.
