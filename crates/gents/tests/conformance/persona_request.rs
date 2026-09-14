@@ -28,14 +28,12 @@ fn sibling_tool_selection_preserves_or_explicitly_overrides() {
     for existing in [false, true] {
         for requested in [None, Some(false), Some(true)] {
             let mut tools = gents::document_config::Tools::default();
-            gents::agent::persona_ops::apply_sibling_tool_selection(
+            gents::self_config::apply_tool_grant_selection(
                 &mut tools,
                 Some(existing),
                 Some(existing),
             );
-            gents::agent::persona_ops::apply_sibling_tool_selection(
-                &mut tools, requested, requested,
-            );
+            gents::self_config::apply_tool_grant_selection(&mut tools, requested, requested);
             let expected = requested.unwrap_or(existing);
             assert_eq!(
                 tools

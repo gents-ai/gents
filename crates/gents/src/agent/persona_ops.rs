@@ -110,36 +110,11 @@ pub struct PersonaRequestDoc {
     pub preset: Option<String>,
     pub profile_id: Option<String>,
     pub make_default: bool,
-    pub enable_lsp: Option<bool>,
-    pub enable_graph_tools: Option<bool>,
     pub created_at: Option<String>,
     pub status: Option<String>,
     pub status_detail: Option<String>,
     pub applied_behavior_id: Option<String>,
     pub processed_at: Option<String>,
-}
-
-/// Apply explicit sibling selections to canonical groups. Omission preserves
-/// cloned settings and never grants self-configuration or pack installation.
-pub fn apply_sibling_tool_selection(
-    tools: &mut Tools,
-    enable_lsp: Option<bool>,
-    enable_graph_tools: Option<bool>,
-) {
-    if let Some(enabled) = enable_lsp {
-        let integrations = tools.integrations.get_or_insert_with(Default::default);
-        if enabled {
-            integrations.lsp.get_or_insert_with(Default::default);
-        } else {
-            integrations.lsp = None;
-        }
-    }
-    if let Some(enabled) = enable_graph_tools {
-        tools
-            .built_ins
-            .get_or_insert_with(Default::default)
-            .enable_graph_tools = Some(enabled);
-    }
 }
 
 /// Render the one canonical local/self request shape. The signature is over
@@ -162,7 +137,6 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
                 op: "{}", behavior_id: {}, clone_from: {},
                 persona_name: {}, description: {}, system_prompt: {},
                 root: {}, preset: {}, profile_id: {}, make_default: {},
-                enable_lsp: {}, enable_graph_tools: {},
                 created_at: "{}", status: "pending"
             }}) {{ _docID }}
         }}"#,
@@ -182,14 +156,6 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
         nullable(record.preset.as_deref()),
         nullable(record.profile_id.as_deref()),
         record.make_default,
-        record
-            .enable_lsp
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "null".into()),
-        record
-            .enable_graph_tools
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "null".into()),
         crate::graphql::escape_graphql_string(&record.created_at),
     )
 }
@@ -666,18 +632,6 @@ pub async fn apply_persona_request(
         let mut tools = if !preset.is_empty() {
             Some(tools_from_preset(tools_id.clone(), owner, name, preset, root.clone())?)
         } else { existing_tools.clone() };
-        // Permission preset edits change host modes, not independently selected
-        // integrations. Preserve the complete LSP config (timeouts/servers too).
-        if !preset.is_empty() {
-            if let (Some(selected), Some(existing)) = (&mut tools, &existing_tools) {
-                if let Some(lsp) = existing.integrations.as_ref().and_then(|v| v.lsp.clone()) {
-                    selected.integrations.get_or_insert_with(Default::default).lsp = Some(lsp);
-                }
-                if let Some(enabled) = existing.built_ins.as_ref().and_then(|v| v.enable_graph_tools) {
-                    selected.built_ins.get_or_insert_with(Default::default).enable_graph_tools = Some(enabled);
-                }
-            }
-        }
         // A cloning request with no root retains its source cwd. An edit's
         // complete selection may clear root; serde replacement resets it to None.
         if root.is_some() || !create {
@@ -686,12 +640,6 @@ pub async fn apply_persona_request(
                 if let Some(host) = &mut tools.host { host.root = root.clone(); }
                 else if root.is_some() { tools.host = Some(HostTools {root:root.clone(),..Default::default()}); }
             }
-        }
-        if doc.enable_lsp.is_some() || doc.enable_graph_tools.is_some() {
-            let tools = tools.get_or_insert_with(|| Tools {
-                tools_id: tools_id.clone(), agent_did: owner.clone(), ..Default::default()
-            });
-            apply_sibling_tool_selection(tools, doc.enable_lsp, doc.enable_graph_tools);
         }
         let change_context = create || context != existing_context || tools != existing_tools;
         let mut documents = Vec::new();
@@ -1220,8 +1168,6 @@ mod tests {
         seed_persona_validation_references(&node, owner).await?;
         let mut doc = create_doc(PersonaOp::Create { clone_from: None });
         doc.root = Some("/original".into());
-        doc.enable_lsp = Some(true);
-        doc.enable_graph_tools = Some(true);
         let catalog = base_catalog();
         let created = apply_persona_request(&node, &doc, &catalog).await?;
         let replay = apply_persona_request(&node, &doc, &catalog).await?;
@@ -1280,8 +1226,6 @@ mod tests {
         )
         .await?;
         doc.request_key = "clone".into();
-        doc.enable_lsp = None;
-        doc.enable_graph_tools = None;
         doc.op = Some(PersonaOp::Create {
             clone_from: Some(created.behavior_id.clone()),
         });
@@ -1374,13 +1318,6 @@ mod tests {
             preset_context.tools_id.as_deref().unwrap(),
         )
         .await?;
-        assert_eq!(preset_tools.integrations, source_tools.integrations);
-        assert!(preset_tools.integrations.as_ref().unwrap().lsp.is_some());
-        assert_eq!(
-            preset_tools.built_ins.as_ref().unwrap().enable_graph_tools,
-            Some(true)
-        );
-        assert!(preset_tools.self_config.is_none());
         assert_eq!(
             preset_tools.host.unwrap().files.unwrap().mode,
             crate::tool_surface::FileToolMode::ReadOnly

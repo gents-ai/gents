@@ -157,8 +157,6 @@ fn local_record(
         preset,
         profile_id,
         make_default: false,
-        enable_lsp: None,
-        enable_graph_tools: None,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         local_signature: Vec::new(),
     }

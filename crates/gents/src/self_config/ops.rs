@@ -78,6 +78,67 @@ impl BehaviorAnchor {
 }
 
 impl SelfConfigCore {
+    /// Select focused sibling capabilities through the same patch transaction
+    /// owner as configure_tools. This is deliberately separate from signed
+    /// creation so the replicated command schema/genesis stays unchanged.
+    pub(crate) async fn select_sibling_tools(
+        &self,
+        enable_lsp: Option<bool>,
+        enable_graph_tools: Option<bool>,
+    ) -> Result<PatchOutcome> {
+        anyhow::ensure!(
+            enable_lsp.is_some() || enable_graph_tools.is_some(),
+            "configure_tools requires an explicit tool selection"
+        );
+        let outcome = ConfigAccess::transact_local(
+            &self.node, Some(self.identity()?), "self_config.sibling_tools",
+            |txn| Box::pin(async move {
+                let anchor = self.load_behavior_anchor(txn).await?;
+                anyhow::ensure!(
+                    !anchor.doc.get("tags").and_then(Value::as_array).is_some_and(|tags|
+                        tags.iter().any(|tag| tag.as_str() == Some(crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG))),
+                    "Setup is a protected configurator; sibling tool selection cannot change it"
+                );
+                let tools_id = anchor.ref_id("tools_id").context("sibling Tools is missing")?;
+                let context_id = anchor.ref_id("context_id").context("sibling Context is missing")?;
+                let owner = crate::graphql::escape_graphql_string(self.agent_did());
+                // Sharing is intentional in canonical config. Refuse a focused
+                // sibling patch that would also change another behavior; never
+                // invent a second context/tools materializer to hide that effect.
+                for (collection, field, value, unique, expected) in [
+                    ("AgentContext", "tools_id", tools_id.as_str(), "context_id", context_id.as_str()),
+                    ("AgentBehavior", "context_id", context_id.as_str(), "behavior_id", self.behavior_id()),
+                ] {
+                    let value = crate::graphql::escape_graphql_string(value);
+                    let response = txn.execute(&format!(
+                        "{{ {collection}(filter: {{agent_did: {{_eq: \"{owner}\"}}, {field}: {{_eq: \"{value}\"}}}}) {{ {unique} }} }}"
+                    )).await?;
+                    let rows = response["data"][collection].as_array().context("sibling reference query missing rows")?;
+                    anyhow::ensure!(rows.len() == 1 && rows[0][unique].as_str() == Some(expected),
+                        "sibling tool selection requires unshared Context and Tools; clone the working behavior first");
+                }
+                let (_, stored) = read_owned_doc(txn, SelfConfigTarget::Tools, self.agent_did(), &tools_id)
+                    .await?.context("sibling Tools is missing")?;
+                let mut tools: Tools = decode_merged("Tools", &stored)?;
+                apply_tool_grant_selection(&mut tools, enable_lsp, enable_graph_tools);
+                let mut patch = SelfConfigPatch::new();
+                if enable_lsp.is_some() {
+                    patch.push(("integrations".into(), Some(serde_json::to_value(tools.integrations)?)));
+                }
+                if enable_graph_tools.is_some() {
+                    patch.push(("built_ins".into(), Some(serde_json::to_value(tools.built_ins)?)));
+                }
+                let request = super::tools_request(self, patch, true);
+                ensure_admissible(request.target, &request.patch)?;
+                self.apply_in_txn(txn, &request).await
+            }),
+        ).await?;
+        Ok(PatchOutcome {
+            committed: true,
+            ..outcome
+        })
+    }
+
     pub fn new(node: Arc<EmbeddedNode>, agent_did: String, behavior_id: String) -> Result<Self> {
         if agent_did.trim().is_empty() {
             bail!("self-config requires a non-empty agent DID (fail closed)");
@@ -412,6 +473,28 @@ impl SelfConfigCore {
             changed: safe_diff(request.target, &stored_doc, &merged),
             effect: "dry-run: nothing was written",
         })
+    }
+}
+
+/// Focused convenience over canonical Tools groups, not a separate config type.
+pub fn apply_tool_grant_selection(
+    tools: &mut Tools,
+    enable_lsp: Option<bool>,
+    enable_graph_tools: Option<bool>,
+) {
+    if let Some(enabled) = enable_lsp {
+        let integrations = tools.integrations.get_or_insert_with(Default::default);
+        if enabled {
+            integrations.lsp.get_or_insert_with(Default::default);
+        } else {
+            integrations.lsp = None;
+        }
+    }
+    if let Some(enabled) = enable_graph_tools {
+        tools
+            .built_ins
+            .get_or_insert_with(Default::default)
+            .enable_graph_tools = Some(enabled);
     }
 }
 

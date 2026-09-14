@@ -448,6 +448,123 @@ async fn persona_unknown_action_errors_cleanly() {
     );
 }
 
+#[tokio::test]
+async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_foreign_targets() {
+    // Lean siblingToolsAllowed: real transaction observations.
+    let node = build_persona_node().await;
+    let identity = persona_identity("sibling-tools");
+    let owner = identity.did().to_string();
+    for behavior in ["working", "other"] {
+        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    }
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "working".into()).unwrap();
+    core.apply(tools_request(
+        &core,
+        vec![
+            (
+                "integrations".into(),
+                Some(json!({"lsp":{"timeout_secs":25}})),
+            ),
+            ("host".into(), Some(json!({"files":{"mode":"ReadOnly"}}))),
+        ],
+        false,
+    ))
+    .await
+    .unwrap();
+    core.select_sibling_tools(None, Some(true)).await.unwrap();
+    core.select_sibling_tools(None, Some(true)).await.unwrap();
+    let inspect = core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        inspect["documents"]["Tools"]["integrations"]["lsp"]["timeout_secs"],
+        25
+    );
+    assert_eq!(
+        inspect["documents"]["Tools"]["host"]["files"]["mode"],
+        "ReadOnly"
+    );
+    assert!(inspect["documents"]["Tools"]["self_config"].is_null());
+    core.select_sibling_tools(Some(false), Some(false))
+        .await
+        .unwrap();
+    let inspect = core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        inspect["tool_grants"]["configured"],
+        json!({"lsp":false,"native_graph_tools":false})
+    );
+    core.apply(behavior_request(
+        &core,
+        vec![(
+            "tags".into(),
+            Some(json!([
+                crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+            ])),
+        )],
+    ))
+    .await
+    .unwrap();
+    assert!(core
+        .select_sibling_tools(None, Some(true))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("protected"));
+    core.apply(behavior_request(&core, vec![("tags".into(), None)]))
+        .await
+        .unwrap();
+    let other = SelfConfigCore::new(node.clone(), owner.clone(), "other".into()).unwrap();
+    other
+        .apply(anchored_request(
+            SelfConfigTarget::AgentContext,
+            "context_id",
+            vec![("tools_id".into(), Some(json!("working:tools")))],
+        ))
+        .await
+        .unwrap();
+    assert!(core
+        .select_sibling_tools(None, Some(true))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("unshared"));
+    other
+        .apply(anchored_request(
+            SelfConfigTarget::AgentContext,
+            "context_id",
+            vec![("tools_id".into(), Some(json!("other:tools")))],
+        ))
+        .await
+        .unwrap();
+    other
+        .apply(behavior_request(
+            &other,
+            vec![("context_id".into(), Some(json!("working:context")))],
+        ))
+        .await
+        .unwrap();
+    assert!(core
+        .select_sibling_tools(None, Some(true))
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("unshared"));
+    let foreign = SelfConfigCore::new(
+        node,
+        persona_identity("foreign").did().into(),
+        "working".into(),
+    )
+    .unwrap();
+    assert!(foreign
+        .select_sibling_tools(None, Some(true))
+        .await
+        .is_err());
+}
+
 #[derive(serde::Deserialize)]
 struct PersonaRequestRowForTest {
     request_key: Option<String>,
@@ -578,8 +695,6 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         // request row carries this value verbatim to admission.
         "profile_id": profile_id,
         "make_default": true,
-        "enable_lsp": true,
-        "enable_graph_tools": true,
     })
     .to_string();
 
@@ -606,6 +721,23 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     let request_key = request_key.expect("configure_behaviors authors a PersonaConfigRequest row");
+    // Existing home/queued command compatibility: retain schema genesis and
+    // leave the existing signed pending row consumable after ensure.
+    let before_schema = node
+        .get_collection("PersonaConfigRequest")
+        .unwrap()
+        .unwrap()
+        .version_id;
+    crate::ensure_runtime_schemas(&node)
+        .await
+        .expect("existing schema remains valid");
+    assert_eq!(
+        node.get_collection("PersonaConfigRequest")
+            .unwrap()
+            .unwrap()
+            .version_id,
+        before_schema
+    );
 
     let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
         node.clone(),
@@ -688,6 +820,26 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     assert_eq!(output["activation"]["durable"], "confirmed");
     assert_eq!(
         output["effective"]["effective_config"]["tool_grants"]["configured"],
+        json!({"lsp": false, "native_graph_tools": false})
+    );
+    let grant_tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &config(&["persona"]),
+    );
+    let selected = call_persona_tool(
+        &grant_tools,
+        json!({
+            "action": "configure_tools", "behavior_id": created[0].behavior_id,
+            "enable_lsp": true, "enable_graph_tools": true,
+        }),
+    )
+    .await
+    .expect("explicit second operation grants sibling tools");
+    let selected: Value = serde_json::from_str(&selected).unwrap();
+    assert_eq!(
+        selected["effective_config"]["tool_grants"]["configured"],
         json!({"lsp": true, "native_graph_tools": true})
     );
 

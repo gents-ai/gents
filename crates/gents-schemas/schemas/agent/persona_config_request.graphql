@@ -43,8 +43,6 @@ type PersonaConfigRequest @branchable {
     # When true, an admitted create/edit atomically promotes the applied
     # behavior to AgentPrincipal.default_behavior_id. Disable may not set it.
     make_default: Boolean @immutable
-    enable_lsp: Boolean @immutable
-    enable_graph_tools: Boolean @immutable
     created_at: DateTime @immutable
     # Server-written outcome. pending | applied | rejected.
     status: String @index

@@ -4,12 +4,16 @@ Issue: #1467. Baseline: `main` at `1aebca07`.
 
 ## Demo acceptance refinement (#1475)
 
-`configure_behaviors` accepts optional `enable_lsp` and
-`enable_graph_tools` selections for create/clone/edit. The existing signed
-`PersonaConfigRequest` authenticates both tri-state fields and its materializer
-applies them in the same desired-state transaction. Omission preserves inherited
-selection, including across a host permission preset change; false revokes.
-LSP's existing config and timeout settings survive an omitted selection.
+`configure_behaviors` action `configure_tools` selects optional `enable_lsp`
+and `enable_graph_tools` on an existing sibling. Creation/clone/edit remain
+unchanged signed commands and reject these flags. After creation, callers
+explicitly select tools using the returned behavior ID; failures never imply
+recreating the behavior. This separate operation delegates to the existing
+SelfConfigCore identity-scoped patch/validation/publication transaction.
+Protected Setup and shared Context/Tools references are rejected rather than
+silently changing other behaviors. Omission preserves current selections and
+full LSP settings; false revokes. Permission-preset edits retain their existing
+replacement semantics, so callers must re-inspect/reselect afterward.
 These are focused conveniences, not a second Tools model or a full arbitrary
 Tools editor. Recipes remain optional.
 
@@ -25,12 +29,11 @@ requested flags against persisted selections. Tests also resolve the created
 behavior's actual tool surface after restart-style reload: LSP and native graph
 tools are present without configuration/installation tools.
 
-The optional immutable schema fields are additive. Existing queued commands
-with neither selection retain their exact v3 signature payload; commands with
-selections use v4 and authenticate every absent/false/true combination. This
-preserves live queued work, without historical conversions or database wipes.
-New writers require the updated runtime schema; native old-home acceptance
-must verify normal schema reconciliation preserves documents.
+The PersonaConfigRequest schema, pinned baseline root, and signed envelope are
+unchanged. Adding immutable fields here would change the fresh-client genesis
+CID; a versioned migration would also break client/server fresh-apply parity.
+The explicit second operation avoids both failures and preserves existing homes
+and queued signed requests without export/import, conversions, or data wipes.
 
 Setup and generated working-role instructions prohibit searching/adopting another
 runtime home, rebuilding the CLI to bypass missing authority, and resetting or
