@@ -63,6 +63,16 @@ impl SelfConfigCore {
             }
         }
         let tools = documents.get(SelfConfigTarget::Tools.collection_name());
+        let canonical_tools = tools
+            .cloned()
+            .map(serde_json::from_value::<crate::document_config::Tools>)
+            .transpose()?;
+        let selection = canonical_tools
+            .as_ref()
+            .map(crate::tool_surface::ResolvedToolSelection::from_document)
+            .transpose()?;
+        let lsp_selected = selection.as_ref().is_some_and(|s| s.enable_lsp);
+        let graph_selected = selection.as_ref().is_some_and(|s| s.enable_graph_tools);
         let requested_file_mode = tools
             .and_then(|tools| tools.pointer("/host/files/mode"))
             .and_then(Value::as_str)
@@ -188,6 +198,13 @@ impl SelfConfigCore {
             "behavior": anchor.doc, "context": anchor.context, "inference_profile": anchor.profile,
             "documents": documents, "skills": skills, "automation": automation,
             "self_config": {"categories": categories, "no_lockout": no_lockout, "dry_run": dry_run},
+            "tool_grants": {
+                "configured": { "lsp": lsp_selected, "native_graph_tools": graph_selected },
+                "confirmed_by": "canonical Tools selection decoded from durable configuration",
+                "activation": "Applies after reconciliation to later dispatched requests. Tool registration and successful execution must be tested in the working behavior.",
+                "lsp_readiness": "Selection does not prove a language server is installed, started, or indexed.",
+                "graph_readiness": "Selection does not install a pack or grant graph caller admission. Use native list_graphs/run_graph on this node; do not adopt another runtime home or rebuild a CLI.",
+            },
             "runtime_effective": {
                 "process_ceiling": process_ceiling,
                 "behavior_narrowing": {
@@ -200,7 +217,7 @@ impl SelfConfigCore {
                     "bash_mode": effective_bash_mode,
                     "root": effective_root,
                 },
-                "confirmed_by": "resolved runtime tool surface",
+                "confirmed_by": "resolved host authority",
             },
             "effect_timing": EFFECT_TIMING_NOTE,
         }))

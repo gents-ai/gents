@@ -29,6 +29,7 @@ describe("setup steward patches", () => {
           tools_id: "tools-a",
           agent_did: deployment.agentDid,
           display_name: "Standard",
+          built_ins: { enable_context_budget: true },
           self_config: null,
         },
       ],
@@ -46,6 +47,7 @@ describe("setup steward patches", () => {
     expect(tools).toMatchObject({
       id: "tools-a",
       changes: {
+        built_ins: { enable_graph_tools: true, enable_context_budget: true },
         self_config: {
           enable_self_config: true,
           self_config_categories: ["behavior", "tools", "profile", "persona"],
@@ -70,6 +72,12 @@ describe("setup steward patches", () => {
       "Never infer its language or workflow from a directory name",
     );
     expect(SETUP_STEWARD_PROMPT).toContain("install_pack");
+    expect(SETUP_STEWARD_PROMPT).toContain("enable_lsp");
+    expect(SETUP_STEWARD_PROMPT).toContain("enable_graph_tools");
+    expect(SETUP_STEWARD_PROMPT).toContain("Starter recipes are optional");
+    expect(SETUP_STEWARD_PROMPT).toContain("A code review request is not permission for runtime repair");
+    expect(SETUP_STEWARD_PROMPT).toContain("Never search for or adopt another runtime home");
+    expect(SETUP_STEWARD_PROMPT).toContain("not completed");
     expect(SETUP_STEWARD_PROMPT).not.toContain(
       "configure this behavior and context as a focused coding agent",
     );

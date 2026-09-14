@@ -34,6 +34,10 @@ pub struct LocalPersonaRequestRecord {
     pub preset: Option<String>,
     pub profile_id: Option<String>,
     pub make_default: bool,
+    #[serde(default)]
+    pub enable_lsp: Option<bool>,
+    #[serde(default)]
+    pub enable_graph_tools: Option<bool>,
     pub created_at: String,
     pub local_signature: Vec<u8>,
 }
@@ -101,7 +105,7 @@ impl LocalPersonaRequestRecord {
                 None => "none:".to_string(),
             }
         }
-        let fields = [
+        let mut fields = vec![
             self.request_key.clone(),
             self.requester_did.clone(),
             self.agent_did.clone(),
@@ -119,10 +123,28 @@ impl LocalPersonaRequestRecord {
             self.make_default.to_string(),
             self.created_at.clone(),
         ];
-        canonical_domain_payload(
-            LOCAL_PERSONA_SIGNATURE_DOMAIN,
-            fields.iter().map(String::as_str),
-        )
+        // Existing queued commands keep their exact signed payload. A present
+        // selection has its own domain and authenticates both tri-state values.
+        let domain = if self.enable_lsp.is_some() || self.enable_graph_tools.is_some() {
+            fields.push(option(self.enable_lsp.map(|v| {
+                if v {
+                    "true"
+                } else {
+                    "false"
+                }
+            })));
+            fields.push(option(self.enable_graph_tools.map(|v| {
+                if v {
+                    "true"
+                } else {
+                    "false"
+                }
+            })));
+            "gents-persona-local-self-signature-v4"
+        } else {
+            LOCAL_PERSONA_SIGNATURE_DOMAIN
+        };
+        canonical_domain_payload(domain, fields.iter().map(String::as_str))
     }
 }
 
@@ -147,6 +169,8 @@ mod tests {
             preset: Some("write".into()),
             profile_id: Some("profile-1".into()),
             make_default: true,
+            enable_lsp: None,
+            enable_graph_tools: None,
             created_at: "2026-08-29T00:00:00Z".into(),
             local_signature: vec![0; 64],
         }
@@ -180,6 +204,31 @@ mod tests {
         value.agent_did = value.requester_did.clone();
         value.local_signature.clear();
         assert!(value.validate_shape().is_err());
+    }
+
+    #[test]
+    fn optional_grants_are_signed_and_absent_commands_keep_their_payload() {
+        let base = record();
+        let old_payload = base.signing_payload();
+        let mut json = serde_json::to_value(&base).unwrap();
+        json.as_object_mut().unwrap().remove("enable_lsp");
+        json.as_object_mut().unwrap().remove("enable_graph_tools");
+        let queued: LocalPersonaRequestRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(queued.signing_payload(), old_payload);
+        let mut payloads = std::collections::BTreeSet::new();
+        for lsp in [None, Some(false), Some(true)] {
+            for graph in [None, Some(false), Some(true)] {
+                let mut changed = base.clone();
+                changed.enable_lsp = lsp;
+                changed.enable_graph_tools = graph;
+                assert!(payloads.insert(changed.signing_payload()));
+            }
+        }
+        assert_eq!(
+            payloads.len(),
+            9,
+            "every tri-state selection is authenticated"
+        );
     }
 
     #[test]

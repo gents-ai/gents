@@ -21,6 +21,66 @@ use gents::agent::persona_ops::{
 };
 use gents::agent::persona_presets;
 
+/// Lean selectedToolFlag omission/explicit laws, through the production
+/// canonical Tools adapter rather than a second test materializer.
+#[test]
+fn sibling_tool_selection_preserves_or_explicitly_overrides() {
+    for existing in [false, true] {
+        for requested in [None, Some(false), Some(true)] {
+            let mut tools = gents::document_config::Tools::default();
+            gents::agent::persona_ops::apply_sibling_tool_selection(
+                &mut tools,
+                Some(existing),
+                Some(existing),
+            );
+            gents::agent::persona_ops::apply_sibling_tool_selection(
+                &mut tools, requested, requested,
+            );
+            let expected = requested.unwrap_or(existing);
+            assert_eq!(
+                tools
+                    .integrations
+                    .as_ref()
+                    .and_then(|v| v.lsp.as_ref())
+                    .is_some(),
+                expected
+            );
+            assert_eq!(
+                tools
+                    .built_ins
+                    .as_ref()
+                    .and_then(|v| v.enable_graph_tools)
+                    .unwrap_or(false),
+                expected
+            );
+            assert!(tools.self_config.is_none());
+        }
+    }
+}
+
+#[test]
+fn graph_presentation_is_independent_of_configuration_and_installation() {
+    for requested in [false, true] {
+        for enabled in [false, true] {
+            for install in [false, true] {
+                let names = gents::self_config::self_config_tool_names(
+                    &gents::tool_surface::SelfConfigToolConfig {
+                        enabled,
+                        enable_pack_install: install,
+                        enable_graph_tools: requested,
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(names.iter().any(|v| v == "run_graph"), requested);
+                assert_eq!(
+                    names.iter().any(|v| v == "install_pack"),
+                    enabled && install
+                );
+            }
+        }
+    }
+}
+
 fn catalog_with(
     roots: &[&str],
     profiles: &[&str],

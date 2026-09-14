@@ -343,6 +343,11 @@ pub struct SubagentTools {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct BuiltInTools {
+    /// Native graph discovery/run/status/result/cancel, independent of self-config
+    /// and pack installation. Existing graph caller admission still applies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_graph_tools: Option<bool>,
     /// Independent goal get/update capability. Unset is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]

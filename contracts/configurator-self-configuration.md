@@ -2,6 +2,42 @@
 
 Issue: #1467. Baseline: `main` at `1aebca07`.
 
+## Demo acceptance refinement (#1475)
+
+`configure_behaviors` accepts optional `enable_lsp` and
+`enable_graph_tools` selections for create/clone/edit. The existing signed
+`PersonaConfigRequest` authenticates both tri-state fields and its materializer
+applies them in the same desired-state transaction. Omission preserves inherited
+selection, including across a host permission preset change; false revokes.
+LSP's existing config and timeout settings survive an omitted selection.
+These are focused conveniences, not a second Tools model or a full arbitrary
+Tools editor. Recipes remain optional.
+
+Native graph APIs use `Tools.built_ins.enable_graph_tools`, default false,
+independent of self-configuration and pack installation. Graph invocation still
+uses the existing caller-admission, host ceiling, and node/principal owners.
+No new runtime home, CLI executor, graph state, or identity is introduced.
+
+Inspect returns `tool_grants.configured` from decoded canonical Tools and
+distinguishes configuration from activation, LSP process readiness, installed
+packs, caller admission, and successful execution. Applied outcomes compare the
+requested flags against persisted selections. Tests also resolve the created
+behavior's actual tool surface after restart-style reload: LSP and native graph
+tools are present without configuration/installation tools.
+
+The optional immutable schema fields are additive. Existing queued commands
+with neither selection retain their exact v3 signature payload; commands with
+selections use v4 and authenticate every absent/false/true combination. This
+preserves live queued work, without historical conversions or database wipes.
+New writers require the updated runtime schema; native old-home acceptance
+must verify normal schema reconciliation preserves documents.
+
+Setup and generated working-role instructions prohibit searching/adopting another
+runtime home, rebuilding the CLI to bypass missing authority, and resetting or
+deleting databases for a review request. Missing authority/version/dependency
+problems are reported as blockers. Native graph observations use the actual
+terminal vocabulary and return control while work is running.
+
 ## Decision: keep the request boundary, retire “persona” from the model surface
 
 `AgentBehavior` remains the only reusable runtime interface. The model-facing

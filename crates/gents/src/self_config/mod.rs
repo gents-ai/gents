@@ -785,6 +785,10 @@ pub struct ConfigurePersonaParams {
     /// Promote the applied behavior to this principal's default behavior.
     #[serde(default)]
     pub make_default: bool,
+    #[serde(default)]
+    pub enable_lsp: Option<bool>,
+    #[serde(default)]
+    pub enable_graph_tools: Option<bool>,
 }
 
 /// How long [`ConfigurePersonaTool`] polls a freshly-authored
@@ -834,6 +838,10 @@ struct PersonaRequestRowOut {
     #[serde(default)]
     make_default: Option<bool>,
     #[serde(default)]
+    enable_lsp: Option<bool>,
+    #[serde(default)]
+    enable_graph_tools: Option<bool>,
+    #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
     status: Option<String>,
@@ -868,6 +876,8 @@ async fn load_persona_request_row(
                 preset
                 profile_id
                 make_default
+                enable_lsp
+                enable_graph_tools
                 created_at
                 status
                 status_detail
@@ -1104,6 +1114,8 @@ async fn persona_preview(
         preset: args.preset.clone(),
         profile_id: args.profile_id.clone(),
         make_default: args.make_default,
+        enable_lsp: args.enable_lsp,
+        enable_graph_tools: args.enable_graph_tools,
         ..Default::default()
     };
     let verdict = decide_persona_request(&doc, &catalog);
@@ -1169,6 +1181,8 @@ async fn persona_preview(
             "root": args.root,
             "preset": args.preset,
             "make_default": args.make_default,
+            "enable_lsp": args.enable_lsp,
+            "enable_graph_tools": args.enable_graph_tools,
         },
         "preset_requested": preset_requested,
         "inherited_config": inherited_config,
@@ -1251,6 +1265,8 @@ async fn persona_mutate(
         preset: args.preset.clone(),
         profile_id: resolved_profile_id,
         make_default: args.make_default,
+        enable_lsp: args.enable_lsp,
+        enable_graph_tools: args.enable_graph_tools,
         created_at: now,
         local_signature: Vec::new(),
     };
@@ -1298,6 +1314,18 @@ async fn persona_mutate(
             &persona_inspect(node, agent_did, applied_behavior_id, process_ceiling).await?,
         )?;
         let effective_config = &effective["effective_config"];
+        for (requested, name) in [
+            (args.enable_lsp, "lsp"),
+            (args.enable_graph_tools, "native_graph_tools"),
+        ] {
+            if let Some(requested) = requested {
+                anyhow::ensure!(
+                    effective_config["tool_grants"]["configured"][name].as_bool()
+                        == Some(requested),
+                    "applied behavior request did not persist requested {name} selection"
+                );
+            }
+        }
         let required_materialized_id = |pointer: &str, name: &str| -> Result<String> {
             effective_config
                 .pointer(pointer)
@@ -1422,6 +1450,14 @@ impl Tool for ConfigurePersonaTool {
                         "type": "boolean",
                         "description": "For create/edit, atomically promote the applied behavior to this principal's default. Must be false for disable.",
                         "default": false,
+                    },
+                    "enable_lsp": {
+                        "type": "boolean",
+                        "description": "Explicit LSP selection in the sibling's canonical Tools. Omit to preserve inherited settings; false disables. Tool presence does not prove a language server is installed or indexed; test it in the new behavior."
+                    },
+                    "enable_graph_tools": {
+                        "type": "boolean",
+                        "description": "Expose native list_graphs/run_graph/get_graph_run/get_graph_result/cancel_graph_run on this node and principal, without pack installation or self-configuration. Omit to preserve; false disables. Graph caller admission still applies."
                     },
                 },
                 "required": ["action"],
@@ -2032,7 +2068,7 @@ pub fn build_self_config_tools(
     identity: Option<Arc<dyn AgentIdentity>>,
     config: &SelfConfigToolConfig,
 ) -> Vec<Box<dyn ToolDyn>> {
-    if !config.enabled {
+    if !config.enabled && !config.enable_graph_tools {
         return Vec::new();
     }
     let core =
@@ -2050,18 +2086,8 @@ pub fn build_self_config_tools(
             }
         };
 
-    let mut tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(GetMyConfigTool {
-        core: core.clone(),
-        categories: config.categories.clone(),
-        no_lockout: config.no_lockout,
-        dry_run: config.dry_run,
-        allow_pack_install: config.enable_pack_install,
-    })];
-    if config.enable_pack_install {
-        tools.push(Box::new(InstallPackTool {
-            core: core.clone(),
-            node: node.clone(),
-        }));
+    let mut tools: Vec<Box<dyn ToolDyn>> = Vec::new();
+    if config.enable_graph_tools {
         tools.push(Box::new(ListGraphsTool {
             core: core.clone(),
             node: node.clone(),
@@ -2079,6 +2105,22 @@ pub fn build_self_config_tools(
             node: node.clone(),
         }));
         tools.push(Box::new(CancelGraphRunTool {
+            core: core.clone(),
+            node: node.clone(),
+        }));
+    }
+    if !config.enabled {
+        return tools;
+    }
+    tools.push(Box::new(GetMyConfigTool {
+        core: core.clone(),
+        categories: config.categories.clone(),
+        no_lockout: config.no_lockout,
+        dry_run: config.dry_run,
+        allow_pack_install: config.enable_pack_install,
+    }));
+    if config.enable_pack_install {
+        tools.push(Box::new(InstallPackTool {
             core: core.clone(),
             node: node.clone(),
         }));
@@ -2118,12 +2160,8 @@ pub fn build_self_config_tools(
 
 /// Advertised tool names for a resolved self-config surface.
 pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
-    if !config.enabled {
-        return Vec::new();
-    }
-    let mut names = vec![GET_MY_CONFIG_TOOL_NAME.to_string()];
-    if config.enable_pack_install {
-        names.push(INSTALL_PACK_TOOL_NAME.to_string());
+    let mut names = Vec::new();
+    if config.enable_graph_tools {
         names.extend([
             LIST_GRAPHS_TOOL_NAME.to_string(),
             RUN_GRAPH_TOOL_NAME.to_string(),
@@ -2131,6 +2169,13 @@ pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
             GET_GRAPH_RESULT_TOOL_NAME.to_string(),
             CANCEL_GRAPH_RUN_TOOL_NAME.to_string(),
         ]);
+    }
+    if !config.enabled {
+        return names;
+    }
+    names.push(GET_MY_CONFIG_TOOL_NAME.to_string());
+    if config.enable_pack_install {
+        names.push(INSTALL_PACK_TOOL_NAME.to_string());
     }
     names.extend(
         config

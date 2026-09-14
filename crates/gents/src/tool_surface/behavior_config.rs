@@ -201,6 +201,7 @@ impl BehaviorToolConfig {
             cli_tool_names,
             enable_meta_tools: _,
             enable_goal_tools: _,
+            enable_graph_tools,
             enable_goal_creation: _,
             allowed_mcp_service_ids,
             remote_tools,
@@ -351,6 +352,7 @@ impl BehaviorToolConfig {
                 no_lockout: self_config_no_lockout,
                 dry_run: self_config_dry_run,
                 enable_pack_install,
+                enable_graph_tools,
                 process_ceiling: super::SelfConfigProcessCeiling {
                     file_mode: ceiling.file_tools(),
                     bash_mode: ceiling.bash(),

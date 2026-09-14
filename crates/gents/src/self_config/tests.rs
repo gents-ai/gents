@@ -12,6 +12,7 @@ fn config(categories: &[&str]) -> SelfConfigToolConfig {
         no_lockout: false,
         dry_run: false,
         enable_pack_install: false,
+        enable_graph_tools: false,
         process_ceiling: Default::default(),
     }
 }
@@ -108,6 +109,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     let mut tool_config = config(&[]);
     tool_config.behavior_id = "setup".to_string();
     tool_config.enable_pack_install = true;
+    tool_config.enable_graph_tools = true;
     let tools = build_self_config_tools(
         node.clone(),
         agent_did.clone(),
@@ -235,12 +237,18 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     let mut tool_config = config(&["tools"]);
     tool_config.behavior_id = "setup".to_owned();
     tool_config.enable_pack_install = true;
+    tool_config.enable_graph_tools = true;
     tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
         file_mode: crate::tool_surface::FileToolMode::ReadOnly,
         bash_mode: crate::tool_surface::BashMode::Off,
         root: Some(repository.path().to_owned()),
     };
-    let tools = build_self_config_tools(node, agent_did.clone(), Some(identity), &tool_config);
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &tool_config,
+    );
     let call = |name: &str, args: Value| {
         let tool = tools
             .iter()
@@ -261,6 +269,20 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     call(INSTALL_PACK_TOOL_NAME, json!({"package": "code_review"}))
         .await
         .expect("code-review pack installs");
+    // Running an admitted pack needs neither installation nor self-config.
+    tool_config.enabled = false;
+    tool_config.enable_pack_install = false;
+    let tools = build_self_config_tools(node, agent_did.clone(), Some(identity), &tool_config);
+    assert!(!tools
+        .iter()
+        .any(|t| t.name() == INSTALL_PACK_TOOL_NAME || t.name() == GET_MY_CONFIG_TOOL_NAME));
+    let call = |name: &str, args: Value| {
+        tools
+            .iter()
+            .find(|t| t.name() == name)
+            .expect("native graph tool")
+            .call(args.to_string())
+    };
     let started = call(
         RUN_GRAPH_TOOL_NAME,
         json!({
@@ -556,6 +578,8 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         // request row carries this value verbatim to admission.
         "profile_id": profile_id,
         "make_default": true,
+        "enable_lsp": true,
+        "enable_graph_tools": true,
     })
     .to_string();
 
@@ -662,6 +686,10 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         "Research the question and cite evidence."
     );
     assert_eq!(output["activation"]["durable"], "confirmed");
+    assert_eq!(
+        output["effective"]["effective_config"]["tool_grants"]["configured"],
+        json!({"lsp": true, "native_graph_tools": true})
+    );
 
     let snapshot = crate::agent::resolve_document_runtime_snapshot(
         node.as_ref(),
@@ -686,6 +714,23 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     assert_eq!(
         runtime_behavior.system_prompt,
         "Research the question and cite evidence."
+    );
+    let names = runtime_behavior
+        .tools
+        .resolve(node.as_ref(), &agent_did)
+        .await
+        .expect("new behavior tool surface resolves after restart")
+        .tool_names();
+    assert!(names.iter().any(|name| name == "lsp"), "{names:?}");
+    assert!(
+        names.iter().any(|name| name == RUN_GRAPH_TOOL_NAME),
+        "{names:?}"
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|name| name == INSTALL_PACK_TOOL_NAME || name == GET_MY_CONFIG_TOOL_NAME),
+        "{names:?}"
     );
 }
 

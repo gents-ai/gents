@@ -141,6 +141,7 @@ pub struct ResolvedToolSelection {
     /// Enables the session-owned durable goal read/update tools independently
     /// of generic MCP discovery and dispatch.
     pub enable_goal_tools: bool,
+    pub enable_graph_tools: bool,
     /// Enables model-originated durable goal creation. Creation is an
     /// additional capability: it is effective only when `enable_goal_tools`
     /// is also enabled.
@@ -179,6 +180,7 @@ impl Default for ResolvedToolSelection {
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
             enable_goal_tools: true,
+            enable_graph_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             remote_tools: None,
@@ -300,6 +302,9 @@ impl ResolvedToolSelection {
             cli_tool_names,
             enable_meta_tools,
             enable_goal_tools,
+            enable_graph_tools: built_ins
+                .and_then(|built| built.enable_graph_tools)
+                .unwrap_or(false),
             enable_goal_creation,
             allowed_mcp_service_ids,
             remote_tools: tools.remote.clone(),

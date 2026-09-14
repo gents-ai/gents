@@ -83,9 +83,33 @@ structure Request where
   preset : String
   profile : String
   makeDefault : Bool
+  enableLsp : Option Bool := none
+  enableGraphTools : Option Bool := none
   cloneFrom : String
   target : String
   deriving DecidableEq, Repr
+
+/-- Sibling command tool selections refine the canonical tool document inside
+the existing publication transaction. Omission preserves the selected preset or
+clone; explicit false revokes. They never imply self-configuration or pack install.
+Host execution and graph caller admission still use their existing owners. -/
+def selectedToolFlag (requested : Option Bool) (existing : Bool) : Bool :=
+  requested.getD existing
+
+theorem omitted_tool_selection_preserves (existing : Bool) :
+    selectedToolFlag none existing = existing := rfl
+
+theorem explicit_tool_selection_wins (requested existing : Bool) :
+    selectedToolFlag (some requested) existing = requested := rfl
+
+/-- Native graph tool presentation is an independent opt-in. Presentation is
+not graph caller admission and does not grant installation or configuration. -/
+def graphToolPresented (requested : Bool) (_selfConfig _packInstall : Bool) : Bool :=
+  requested
+
+theorem graph_tools_without_configuration : graphToolPresented true false false = true := rfl
+theorem configuration_does_not_grant_graph_tools :
+    graphToolPresented false true true = false := rfl
 
 /-- Read-only enabled/id projection for command target checks. Canonical references
 and ownership are validated by resolution of the compiled candidate below. -/

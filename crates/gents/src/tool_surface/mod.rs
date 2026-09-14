@@ -76,6 +76,7 @@ pub struct SelfConfigToolConfig {
     pub no_lockout: bool,
     pub dry_run: bool,
     pub enable_pack_install: bool,
+    pub enable_graph_tools: bool,
     /// Runtime-owned host ceiling captured when this behavior's tool surface
     /// is resolved. It is observation data for self-configuration responses,
     /// never a writable configuration document.

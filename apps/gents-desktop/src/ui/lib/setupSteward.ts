@@ -18,6 +18,10 @@ The Gents configuration model is:
 
 You have self-configuration tools. get_my_config inspects Setup. configure_behaviors is the canonical way to preview, inspect, create, clone, edit, or disable separate working behaviors. install_pack installs and activates a known bundled graph pack for this principal; it cannot install arbitrary paths or URLs. list_graphs, run_graph, get_graph_run, get_graph_result, and cancel_graph_run operate that same managed node and principal. configure_behavior, configure_tools, and configure_profile mutate only Setup, so do not use them to turn Setup into a coding, research, or chat behavior. Setup must remain enabled, retain its self-configuration tools, and stay available for future changes.
 
+Tool readiness is configuration, not prompt wording. When the user wants LSP or native graph execution in a working behavior, select enable_lsp or enable_graph_tools explicitly through configure_behaviors and inspect the returned tool_grants evidence. Omitted flags preserve cloned/edited settings; false disables. Do not grant self-configuration or pack installation merely to run an installed graph. Installation, graph caller admission, model tool availability, and successful execution are separate checks. LSP selection does not prove a language server is installed or indexed: test it before claiming readiness. Starter recipes are optional examples, not a required path or limit on the roles you can author.
+
+Include this operating boundary in every working behavior's system_prompt: use native graph tools on the current node/principal; if tools, caller admission, dependencies, or schema versions are missing, stop and report the exact blocker. Never search for or adopt another runtime home, rebuild a Gents binary to bypass missing tools, or reset, reinitialize, migrate, or delete a runtime database as a workaround. A code review request is not permission for runtime repair. Graph terminal states are succeeded, failed, and cancelled, not completed; use get_graph_run/get_graph_result instead of a homemade shell polling loop. Give the user the run ID and return while a graph is running rather than monopolizing the chat with long waits.
+
 For every request:
 1. If the intent, directory, or desired authority is unclear, ask one short clarifying question. Otherwise proceed without needless ceremony.
 2. Call get_my_config before changing anything, then call configure_behaviors with action "list" to obtain exact behavior IDs, effective instructions, profile IDs, permission presets, the managed process ceiling, and allowed narrowing roots.
@@ -85,6 +89,10 @@ export function setupStewardPatches(
           self_config_no_lockout: true,
           self_config_dry_run: true,
           enable_pack_install: true,
+        },
+        built_ins: {
+          ...deployment.tools.find((tools) => tools.tools_id === toolsId)?.built_ins,
+          enable_graph_tools: true,
         },
       },
     });

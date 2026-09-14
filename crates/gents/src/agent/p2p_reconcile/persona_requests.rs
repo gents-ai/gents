@@ -454,6 +454,8 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
                 preset
                 profile_id
                 make_default
+                enable_lsp
+                enable_graph_tools
                 created_at
                 status
                 status_detail
@@ -663,6 +665,8 @@ fn persona_request_doc_from_row(row: PersonaRequestRow) -> Option<PersonaRequest
         preset: row.preset,
         profile_id: row.profile_id,
         make_default: row.make_default.unwrap_or(false),
+        enable_lsp: row.enable_lsp,
+        enable_graph_tools: row.enable_graph_tools,
         created_at: row.created_at,
         status: row.status,
         status_detail: row.status_detail,
@@ -691,6 +695,8 @@ fn local_persona_record(doc: &PersonaRequestDoc) -> LocalPersonaRequestRecord {
         preset: doc.preset.clone(),
         profile_id: doc.profile_id.clone(),
         make_default: doc.make_default,
+        enable_lsp: doc.enable_lsp,
+        enable_graph_tools: doc.enable_graph_tools,
         created_at: doc.created_at.clone().unwrap_or_default(),
         local_signature: doc.local_signature.clone(),
     }
@@ -778,6 +784,10 @@ struct PersonaRequestRow {
     profile_id: Option<String>,
     #[serde(default)]
     make_default: Option<bool>,
+    #[serde(default)]
+    enable_lsp: Option<bool>,
+    #[serde(default)]
+    enable_graph_tools: Option<bool>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
@@ -1400,6 +1410,8 @@ mod tests {
             preset: Some("write".to_string()),
             profile_id: Some("profile-1".to_string()),
             make_default: true,
+            enable_lsp: None,
+            enable_graph_tools: None,
             created_at: "2026-07-23T00:00:00Z".to_string(),
             local_signature: Vec::new(),
         };
