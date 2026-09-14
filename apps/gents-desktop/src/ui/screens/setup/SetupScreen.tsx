@@ -280,9 +280,7 @@ const stepIcon = (state: LoadingStepState | null) =>
 
 export function providerSignInState(accounts: ProviderAccountView[]) {
   const next: Partial<Record<ProviderId, string>> = {};
-  for (const [providerId, credentialKind] of Object.entries(
-    PROVIDER_CREDENTIAL_KIND,
-  )) {
+  for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
     const account = accounts.find(
       (entry) => entry.enabled && entry.provider === credentialKind,
     );

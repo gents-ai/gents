@@ -107,6 +107,11 @@ export function createBridgeHttpAdapter(
         "/desktop/config/components/apply",
         request,
       ),
+    patchConfigComponents: async (request) =>
+      client.postJson<DesktopClientSnapshot>(
+        "/desktop/config/components/patch",
+        request,
+      ),
     getInferenceSetupCatalog: async () =>
       client.getJson<InferenceSetupCatalog>("/desktop/inference/setup/catalog"),
     saveToolsConfig: async (request) =>

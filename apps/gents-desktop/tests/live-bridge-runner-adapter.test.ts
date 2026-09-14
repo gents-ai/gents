@@ -38,4 +38,15 @@ describe("live bridge runner startup/config adapter", () => {
     await expect(adapter.applyConfigComponents(request)).resolves.toBe(snapshot);
     expect(postJson).toHaveBeenCalledWith("/desktop/config/components/apply", request);
   });
+
+  it("routes existing component edits through canonical patch", async () => {
+    const postJson = vi.fn().mockResolvedValue({ bootstrap: {}, client: null });
+    const adapter = createBridgeHttpAdapter({ getJson: vi.fn(), postJson });
+    const request = {
+      agentDid: "did:test:agent",
+      patches: [{ collection: "Context" as const, id: "context-a", changes: {} }],
+    };
+    await adapter.patchConfigComponents(request);
+    expect(postJson).toHaveBeenCalledWith("/desktop/config/components/patch", request);
+  });
 });

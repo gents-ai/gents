@@ -48,10 +48,11 @@ describeLive("Tauri app live interrupt flow", () => {
         logTurn(`interrupt latched: cause=${cause.cause}`);
         await waitFor(
           () => {
-            const labels = [...document.querySelectorAll(".cause-badge")].map(
-              (node) => node.textContent,
-            );
-            expect(labels).toContain(cancelCauseLabel(cause.cause));
+            expect(
+              screen.getByText(
+                new RegExp(`^Interrupted · ${cancelCauseLabel(cause.cause)}(?: \\(|$)`),
+              ),
+            ).toBeInTheDocument();
           },
           { timeout: 30_000 },
         );
@@ -63,9 +64,25 @@ describeLive("Tauri app live interrupt flow", () => {
       }
 
       await driver.typeComposer(FOLLOW_UP_PROMPT);
-      await waitFor(() => {
-        expect(driver.sendButton()).toBeEnabled();
-      });
+      try {
+        await waitFor(
+          () => {
+            expect(
+              driver.sendButton(),
+              `follow-up send disabled: ${driver.composer().placeholder}`,
+            ).toBeEnabled();
+          },
+          { timeout: 30_000 },
+        );
+      } catch (error) {
+        const diagnostics = await runner.fetchRequestDiagnostics(
+          submitted.sessionId,
+          submitted.requestId,
+        );
+        throw new Error(
+          `follow-up composer did not recover; terminal=${JSON.stringify(finalSession)} diagnostics=${JSON.stringify(diagnostics)}: ${String(error)}`,
+        );
+      }
       await driver.pressEnter();
       await waitFor(() => {
         expect(runner.sendResults).toHaveLength(2);

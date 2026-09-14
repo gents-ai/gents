@@ -374,15 +374,30 @@ impl ClientCore {
     /// readiness through the signed route owner.
     #[doc(hidden)]
     pub async fn add_local_standard_peer_for_test(&self, agent_did: &str) -> Result<()> {
+        self.add_local_standard_peer_route_for_test(
+            "Test Local Runtime",
+            "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+            agent_did,
+            "http://127.0.0.1:56001/graphql",
+            "/tmp/test-agent-home",
+        )
+        .await
+    }
+
+    /// Test-fixture seam for publishing readiness after the fixture has
+    /// established and verified its real local-standard route.
+    #[doc(hidden)]
+    pub async fn add_local_standard_peer_route_for_test(
+        &self,
+        label: &str,
+        addr: &str,
+        agent_did: &str,
+        graphql: &str,
+        agent_home: &str,
+    ) -> Result<()> {
         let record = self
             .sync_state
-            .upsert_local_standard_peer(
-                "Test Local Runtime",
-                "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-                agent_did,
-                "http://127.0.0.1:56001/graphql",
-                "/tmp/test-agent-home",
-            )
+            .upsert_local_standard_peer(label, addr, agent_did, graphql, agent_home)
             .await?;
         self.sync_state.set_pairing_ready(&record, true).await?;
         Ok(())

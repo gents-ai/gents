@@ -4,6 +4,7 @@ import { expect } from "vitest";
 
 import App from "../src/App";
 import { setDesktopShellTimingConfigForTests } from "../src/hooks/useDesktopShell";
+import { navigate } from "../src/ui/lib/router";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { type DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 
@@ -18,6 +19,7 @@ export type TauriDriverBridge = {
   adapter: DesktopApiAdapter;
   listenerFactory: DesktopClientUpdatedListenerFactory;
   sentRequests: TauriDriverChatRequest[];
+  sendResults?: Array<{ sessionId: string }>;
   dispose?: () => Promise<void> | void;
 };
 
@@ -33,6 +35,19 @@ export function renderTauriAppDriverWithBridge(
   timingConfig: TauriDriverTimingConfig | null = null,
 ) {
   setDesktopShellTimingConfigForTests(timingConfig);
+  if (typeof globalThis.IntersectionObserver === "undefined") {
+    globalThis.IntersectionObserver = class IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly thresholds = [0];
+      disconnect() {}
+      observe() {}
+      takeRecords() {
+        return [];
+      }
+      unobserve() {}
+    };
+  }
 
   const user = userEvent.setup();
   const rendered = render(
@@ -57,35 +72,22 @@ export function renderTauriAppDriverWithBridge(
       return screen.getByTestId(`session-${sessionId}`);
     },
     configButton() {
-      if (firstPeerId) {
-        const fleetConfig = screen.queryByTestId(`fleet-config-${firstPeerId}`);
-        if (fleetConfig) {
-          return fleetConfig;
-        }
-        const savedPeerConfig = screen.queryByTestId(
-          `deployment-config-${firstPeerId}`,
-        );
-        if (savedPeerConfig) {
-          return savedPeerConfig;
-        }
-      }
-      return (
-        screen.queryByRole("button", { name: "Configure" }) ??
-        screen.getAllByLabelText(/^Configure /)[0]
-      );
+      return screen.getAllByRole("link", { name: / configuration$/i })[0];
     },
     chatButton() {
-      const configBack = screen.queryByTestId("config-back-tab");
-      if (configBack) {
-        return configBack;
+      const sessionId =
+        bridge.sendResults?.at(-1)?.sessionId ?? bridge.sentRequests.at(-1)?.sessionId;
+      if (sessionId) {
+        const existing = [...screen.getAllByRole("link")].find(
+          (link) => link.getAttribute("href") === `/sessions/${sessionId}`,
+        );
+        if (existing) return existing;
       }
-      if (firstPeerId) {
-        const fleetChat = screen.queryByTestId(`fleet-chat-${firstPeerId}`);
-        if (fleetChat) {
-          return fleetChat;
-        }
-      }
-      return screen.getAllByLabelText(/^Open .* chat/)[0];
+      const recent = [...screen.getAllByRole("link")].find((link) =>
+        /^\/sessions\/(?!new$).+/.test(link.getAttribute("href") ?? ""),
+      );
+      if (recent) return recent;
+      return screen.getAllByRole("link", { name: "New session" })[0];
     },
     configSectionTab(tabId: string) {
       const labels: Record<string, string> = {
@@ -138,12 +140,19 @@ export function renderTauriAppDriverWithBridge(
       await waitFor(() => {
         expect(screen.getByTestId("app-shell")).toBeInTheDocument();
         if (firstPeerId) {
-          expect(screen.getByTestId(`fleet-row-${firstPeerId}`)).toBeInTheDocument();
+          expect(
+            screen.getAllByRole("link", { name: / configuration$/i })[0],
+          ).toBeInTheDocument();
         }
       });
     },
     async openChat() {
-      await user.click(this.chatButton());
+      const sessionId = bridge.sendResults?.at(-1)?.sessionId;
+      if (sessionId) {
+        navigate({ name: "session", sessionId });
+      } else {
+        await user.click(this.chatButton());
+      }
       await waitFor(() => {
         expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
       });
@@ -152,7 +161,11 @@ export function renderTauriAppDriverWithBridge(
       await user.type(this.composer(), value);
     },
     async clickSend() {
-      await user.click(this.sendButton());
+      const button = this.sendButton();
+      if (button.hasAttribute("disabled")) {
+        throw new Error(`send disabled: ${this.composer().placeholder}`);
+      }
+      await user.click(button);
     },
     async openConfig() {
       await user.click(this.configButton());
@@ -168,8 +181,8 @@ export function renderTauriAppDriverWithBridge(
       await new Promise((resolve) => setTimeout(resolve, 0));
     },
     async openConfigItem(itemId: string) {
-      const link = document.querySelector<HTMLAnchorElement>(
-        `a[href$="/${encodeURIComponent(itemId)}"]`,
+      const link = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find(
+        (candidate) => candidate.getAttribute("href")?.split("/").at(-1) === itemId,
       );
       if (!link) throw new Error(`configuration item ${itemId} is not visible`);
       await user.click(link);
@@ -205,13 +218,17 @@ export function renderTauriAppDriverWithBridge(
       await user.click(this.behaviorSaveButton());
     },
     async pressEnter() {
+      const button = this.sendButton();
+      if (button.hasAttribute("disabled")) {
+        throw new Error(`send disabled: ${this.composer().placeholder}`);
+      }
       await user.type(this.composer(), "{enter}");
     },
     async pressShiftEnter() {
       await user.type(this.composer(), "{shift>}{enter}{/shift}");
     },
     cancelButton() {
-      return screen.queryByTestId("cancel-button");
+      return screen.queryByRole("button", { name: "Stop" });
     },
     async clickCancel() {
       const btn = this.cancelButton();

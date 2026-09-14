@@ -546,7 +546,7 @@ pub(super) fn handle_request(
                 "decoding component apply request",
             )?;
             runtime.block_on(gents_desktop_bridge::commands::apply_config_components(
-                fixture.desktop_core().as_ref(),
+                fixture.remote_core().as_ref(),
                 request,
             ))?;
             Ok(snapshot_response(runtime, fixture)?)
@@ -557,7 +557,7 @@ pub(super) fn handle_request(
                 "decoding component patch request",
             )?;
             runtime.block_on(gents_desktop_bridge::commands::patch_config_components(
-                fixture.desktop_core().as_ref(),
+                fixture.remote_core().as_ref(),
                 request,
             ))?;
             Ok(snapshot_response(runtime, fixture)?)

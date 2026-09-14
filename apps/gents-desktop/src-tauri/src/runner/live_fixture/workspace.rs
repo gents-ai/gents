@@ -83,6 +83,31 @@ fn copy_repo_tree(src: &Path, dst: &Path) -> Result<()> {
 fn should_skip_workspace_entry(name: &str) -> bool {
     matches!(
         name,
-        ".git" | "target" | "node_modules" | ".next" | ".turbo" | "dist" | "build" | ".direnv"
-    )
+        ".git"
+            | ".gents"
+            | ".lake"
+            | "target"
+            | "node_modules"
+            | ".next"
+            | ".turbo"
+            | "dist"
+            | "build"
+            | ".direnv"
+    ) || name == ".env"
+        || name.starts_with(".env.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_copy_excludes_runtime_identity_secrets_and_build_caches() {
+        for name in [".gents", ".env", ".env.local", ".lake", "target", ".git"] {
+            assert!(should_skip_workspace_entry(name), "must not copy {name}");
+        }
+        for name in ["README.md", "AGENTS.md", "src", "Cargo.toml"] {
+            assert!(!should_skip_workspace_entry(name), "must retain {name}");
+        }
+    }
 }

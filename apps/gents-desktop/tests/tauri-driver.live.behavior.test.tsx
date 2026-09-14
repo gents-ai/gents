@@ -22,6 +22,16 @@ describeLive("Tauri app live bridge runner behavior config", () => {
       const systemPrompt = `You are Amy, a repository analysis agent. When asked for the live config marker, include exactly CONFIG-${suffix}.`;
 
       await driver.ready();
+      let previousGeneration = 0;
+      await waitFor(
+        async () => {
+          const current = (await runner.fetchSnapshot()).client?.deployments[0];
+          expect(current?.runtime?.reconcilePhase).toBe("idle");
+          expect(current?.behaviorReadiness.activeGeneration).toBeGreaterThan(0);
+          previousGeneration = current!.behaviorReadiness.activeGeneration!;
+        },
+        { timeout: 30_000 },
+      );
       await driver.openConfig();
       await driver.openConfigSection("contexts");
       await driver.openConfigItem(contextId);
@@ -37,6 +47,7 @@ describeLive("Tauri app live bridge runner behavior config", () => {
         behaviorId,
         behavior!.displayName,
         systemPrompt,
+        previousGeneration,
       );
       logTurn(`context config saved behaviorId=${behaviorId} contextId=${contextId}`);
 
