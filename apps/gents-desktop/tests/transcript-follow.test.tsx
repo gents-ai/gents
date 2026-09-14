@@ -29,8 +29,7 @@ describe("transcript streaming follow", () => {
   it("stays pinned across growth, releases on scroll up, and relocks at the tip", () => {
     const fixture = transcriptFixture();
     const { result, rerender } = renderHook(
-      ({ signal }) =>
-        useTranscriptFollow(fixture.ownerRef, "session-1", signal),
+      ({ signal }) => useTranscriptFollow(fixture.ownerRef, "session-1", signal),
       { initialProps: { signal: "assistant:10" } },
     );
 

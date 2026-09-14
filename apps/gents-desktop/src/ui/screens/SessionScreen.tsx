@@ -260,8 +260,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement>(null);
-  const viewport = () =>
-    transcriptViewport(column.current);
+  const viewport = () => transcriptViewport(column.current);
   const transcriptContentSignal = (session?.timelineItems ?? [])
     .map((item) => {
       switch (item.kind) {
