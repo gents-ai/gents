@@ -66,6 +66,7 @@ fn tool_config(categories: &[&str], no_lockout: bool, dry_run: bool) -> SelfConf
         categories: categories.iter().map(|s| s.to_string()).collect(),
         no_lockout,
         dry_run,
+        enable_pack_install: false,
     }
 }
 

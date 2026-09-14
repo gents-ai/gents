@@ -11,6 +11,7 @@ fn config(categories: &[&str]) -> SelfConfigToolConfig {
         categories: categories.iter().map(|c| c.to_string()).collect(),
         no_lockout: false,
         dry_run: false,
+        enable_pack_install: false,
     }
 }
 
@@ -30,6 +31,20 @@ fn tool_names_follow_enabled_categories() {
 
     let disabled = SelfConfigToolConfig::default();
     assert!(self_config_tool_names(&disabled).is_empty());
+}
+
+#[test]
+fn pack_install_requires_its_separate_opt_in() {
+    let without_install = config(&["behavior"]);
+    assert!(!self_config_tool_names(&without_install)
+        .iter()
+        .any(|name| name == INSTALL_PACK_TOOL_NAME));
+
+    let mut with_install = without_install;
+    with_install.enable_pack_install = true;
+    assert!(self_config_tool_names(&with_install)
+        .iter()
+        .any(|name| name == INSTALL_PACK_TOOL_NAME));
 }
 
 #[test]
@@ -80,6 +95,92 @@ async fn build_registers_gated_family() {
         &config(&["behavior", "backend"]),
     );
     assert!(!tools.is_empty(), "a gated config must register tools");
+}
+
+#[tokio::test]
+async fn pack_install_uses_current_principal_and_inference_chain() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("pack-install");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+
+    let mut tool_config = config(&[]);
+    tool_config.behavior_id = "setup".to_string();
+    tool_config.enable_pack_install = true;
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity),
+        &tool_config,
+    );
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == INSTALL_PACK_TOOL_NAME)
+        .expect("install_pack registered");
+    let output = tool
+        .call(serde_json::json!({"package": "code_review"}).to_string())
+        .await
+        .expect("bundled pack installs");
+    let output: serde_json::Value = serde_json::from_str(&output).expect("JSON receipt");
+    assert_eq!(output["install"]["package_name"], "code_review");
+    assert_eq!(output["activation"]["graph_id"], "code-review");
+    assert_eq!(
+        output["activation"]["active_digest"],
+        output["install"]["revision_digest"]
+    );
+
+    let response = node
+        .execute(&format!(
+            "{{ GraphDefinition(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{graph_id agent_did active_revision_digest}} }}",
+            crate::graphql::escape_graphql_string(&agent_did)
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let definitions = response.data.unwrap()["GraphDefinition"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0]["agent_did"], agent_did);
+    assert_eq!(definitions[0]["graph_id"], "code-review");
+    assert_eq!(
+        definitions[0]["active_revision_digest"],
+        output["install"]["revision_digest"]
+    );
+}
+
+#[tokio::test]
+async fn configure_tools_cannot_self_grant_pack_install() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("pack-self-grant");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "setup".to_string();
+    let tools = build_self_config_tools(node, agent_did, Some(identity), &tool_config);
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIGURE_TOOLS_TOOL_NAME)
+        .expect("configure_tools registered");
+    let error = tool
+        .call(
+            serde_json::json!({
+                "patch": {
+                    "self_config": {
+                        "enable_self_config": true,
+                        "enable_pack_install": true
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .await
+        .expect_err("pack install cannot be self-granted");
+    assert!(
+        error.to_string().contains("cannot be self-granted"),
+        "{error:#}"
+    );
 }
 
 // -- configure_persona (#Task 5) --
@@ -393,7 +494,7 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         Some(json!({"enable_self_config":true})),
     )];
     let preview = core
-        .preview(tools_request(&core, patch.clone()))
+        .preview(tools_request(&core, patch.clone(), false))
         .await
         .unwrap();
     assert!(!preview.committed);
@@ -402,10 +503,16 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .await
         .unwrap();
     assert!(read["documents"]["Tools"]["self_config"].is_null());
-    core.apply(tools_request(&core, patch)).await.unwrap();
+    core.apply(tools_request(&core, patch, false))
+        .await
+        .unwrap();
     let guarded = core.clone().with_no_lockout(true);
     assert!(guarded
-        .apply(tools_request(&guarded, vec![("self_config".into(), None)]))
+        .apply(tools_request(
+            &guarded,
+            vec![("self_config".into(), None)],
+            false,
+        ))
         .await
         .is_err());
     assert!(guarded
@@ -426,7 +533,8 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
     assert!(core
         .preview(tools_request(
             &core,
-            vec![("host".into(), Some(json!({"unexpected":true})))]
+            vec![("host".into(), Some(json!({"unexpected":true})))],
+            false,
         ))
         .await
         .is_err());

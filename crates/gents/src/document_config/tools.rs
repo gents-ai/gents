@@ -470,6 +470,11 @@ pub struct SelfConfigTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub self_config_dry_run: Option<bool>,
+    /// Opt-in authority to install and activate bundled graph packs for this
+    /// principal. Disabled by absence and never implied by general self-config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_pack_install: Option<bool>,
     /// Optional execution cap per tool call. Unset retains the existing enclosing
     /// tool-call/request deadline without introducing an independent timer.
     #[serde(skip_serializing_if = "Option::is_none")]

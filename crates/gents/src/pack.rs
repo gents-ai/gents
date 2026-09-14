@@ -108,11 +108,22 @@ impl ResolvedPack {
         &self,
         options: &PackInstallOptions,
     ) -> Result<crate::document_config::PackConfig> {
+        self.load_config_with_environment(options, &|name| std::env::var(name).ok())
+    }
+
+    /// Load a bundled pack with an explicit interpolation source. Runtime
+    /// owners use this to bind known package inputs without mutating the
+    /// process environment shared by concurrent requests.
+    pub(crate) fn load_config_with_environment(
+        &self,
+        options: &PackInstallOptions,
+        environment: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<crate::document_config::PackConfig> {
         load_pack_config(
             &self.manifest,
             options,
             &|path| Ok(self.asset(path)?.to_vec()),
-            &|name| std::env::var(name).ok(),
+            environment,
         )
     }
 

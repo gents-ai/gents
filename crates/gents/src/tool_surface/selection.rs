@@ -162,6 +162,7 @@ pub struct ResolvedToolSelection {
     pub self_config_categories: Option<Vec<String>>,
     pub self_config_no_lockout: bool,
     pub self_config_dry_run: bool,
+    pub enable_pack_install: bool,
     pub enable_lsp: bool,
     pub lsp_config: Option<String>,
     pub eth_queries: Vec<crate::eth::ResolvedEthQuery>,
@@ -194,6 +195,7 @@ impl Default for ResolvedToolSelection {
             self_config_categories: None,
             self_config_no_lockout: false,
             self_config_dry_run: false,
+            enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -341,6 +343,9 @@ impl ResolvedToolSelection {
                 .unwrap_or(false),
             self_config_dry_run: self_config_group
                 .and_then(|group| group.self_config_dry_run)
+                .unwrap_or(false),
+            enable_pack_install: self_config_group
+                .and_then(|group| group.enable_pack_install)
                 .unwrap_or(false),
             enable_lsp: integrations
                 .map(|group| group.lsp.is_some())

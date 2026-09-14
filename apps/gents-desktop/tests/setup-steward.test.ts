@@ -50,6 +50,7 @@ describe("setup steward patches", () => {
           enable_self_config: true,
           self_config_categories: ["behavior", "tools", "profile", "persona"],
           self_config_no_lockout: true,
+          enable_pack_install: true,
         },
       },
     });
@@ -63,6 +64,7 @@ describe("setup steward patches", () => {
     expect(SETUP_STEWARD_PROMPT).toContain("Unsafe or invalid request");
     expect(SETUP_STEWARD_PROMPT).toContain("Verify the result");
     expect(SETUP_STEWARD_PROMPT).toContain("home-scoped rather than repo-scoped");
+    expect(SETUP_STEWARD_PROMPT).toContain("install_pack");
     expect(SETUP_STEWARD_PROMPT).not.toContain(
       "configure this behavior and context as a focused coding agent",
     );

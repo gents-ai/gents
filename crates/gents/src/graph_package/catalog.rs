@@ -167,6 +167,14 @@ pub fn load_resolved_graph_package(
     load_package(distribution, options, &|name| std::env::var(name).ok())
 }
 
+pub(crate) fn load_resolved_graph_package_with_environment(
+    distribution: &crate::pack::ResolvedPack,
+    options: &PackInstallOptions,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<BundledGraphPackage> {
+    load_package(distribution, options, environment)
+}
+
 pub fn graph_package_catalog(
     options: &PackInstallOptions,
 ) -> Result<Vec<GraphPackageCatalogEntry>> {

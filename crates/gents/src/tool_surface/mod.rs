@@ -73,6 +73,7 @@ pub struct SelfConfigToolConfig {
     pub categories: std::collections::BTreeSet<String>,
     pub no_lockout: bool,
     pub dry_run: bool,
+    pub enable_pack_install: bool,
 }
 
 impl ToolSurface {
