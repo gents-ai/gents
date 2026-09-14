@@ -205,6 +205,8 @@ pub enum ClaimOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ClaimAdmissionError {
+    #[error("session {session_id} requester scope mismatch: {reason}")]
+    SessionScopeMismatch { session_id: String, reason: String },
     #[error(
         "session {session_id} is pinned to behavior {existing_behavior_id} and cannot switch to {requested_behavior_id}"
     )]
