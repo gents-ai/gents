@@ -64,6 +64,9 @@ describe("setup steward patches", () => {
     expect(SETUP_STEWARD_PROMPT).toContain("Unsafe or invalid request");
     expect(SETUP_STEWARD_PROMPT).toContain("Verify the result");
     expect(SETUP_STEWARD_PROMPT).toContain("home-scoped rather than repo-scoped");
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "Never infer its language or workflow from a directory name",
+    );
     expect(SETUP_STEWARD_PROMPT).toContain("install_pack");
     expect(SETUP_STEWARD_PROMPT).not.toContain(
       "configure this behavior and context as a focused coding agent",

@@ -17,7 +17,7 @@ export const PACKAGE_VERSION = "0.17.0";
 // from database-owned gauges; goal permissions are explicit fields.
 export const BRIDGE_CONTRACT_VERSION = "7.3";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "5f4165bb235d9cd3f74352b18ee5ce8281ec00e85fee41f160fd505f8e33ae65";
+  "e8630c24508b27dc770c9491f2c121c475dc40195c9506f34438f35f1c4a612d";
 
 export function assertExactBridgeContract(contract: DesktopBridgeContract) {
   if (contract.contractVersion !== BRIDGE_CONTRACT_VERSION) {
