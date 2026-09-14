@@ -30,6 +30,24 @@ function harness() {
 }
 
 describe("canonical tool selections", () => {
+  it("keeps invalid timeout text visible and blocks unrelated saves until corrected", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    const timeout = screen.getByRole("textbox", { name: "File operation timeout seconds" });
+    fireEvent.change(timeout, { target: { value: "1.5" } });
+    expect(timeout).toHaveValue("1.5");
+    expect(screen.getByRole("alert")).toHaveTextContent("positive whole number");
+    await user.type(screen.getByRole("textbox", { name: "Display name" }), " edited");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    fireEvent.change(timeout, { target: { value: "15" } });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(api.saveToolsConfig.mock.calls[0][0].document.host.files.timeout_secs).toBe(
+      15,
+    );
+  });
+
   it("keeps independent opt-ins off and persists only an explicitly selected permission", async () => {
     const { api, shell } = harness();
     const user = userEvent.setup();

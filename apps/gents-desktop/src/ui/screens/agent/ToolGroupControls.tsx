@@ -4,6 +4,49 @@ import { DocumentSelection } from "./DocumentSelection";
 import { Group } from "./rows";
 import type { Shell } from "@/hooks/useShell";
 import { RemoteToolDiscovery } from "./RemoteToolDiscovery";
+import { useEffect, useState } from "react";
+
+function SecondsRow({
+  id,
+  label,
+  value,
+  onChange,
+  onInvalid,
+  placeholder,
+}: {
+  id: string;
+  label: string;
+  value: number | null | undefined;
+  onChange: (value: number | null) => void;
+  onInvalid: (id: string, label: string | null) => void;
+  placeholder: string;
+}) {
+  const canonical = value == null ? "" : String(value);
+  const [raw, setRaw] = useState(canonical);
+  useEffect(() => {
+    setRaw(canonical);
+    onInvalid(id, null);
+  }, [canonical, id, onInvalid]);
+  useEffect(() => () => onInvalid(id, null), [id, onInvalid]);
+  return (
+    <NumberRow
+      id={id}
+      label={label}
+      value={raw}
+      placeholder={placeholder}
+      onCommit={() => {}}
+      onEnter={() => {}}
+      onChange={(text) => {
+        setRaw(text);
+        const valid =
+          text === "" ||
+          (/^[1-9]\d*$/.test(text) && Number.isSafeInteger(Number(text)));
+        onInvalid(id, valid ? null : label);
+        if (valid) onChange(text === "" ? null : Number(text));
+      }}
+    />
+  );
+}
 
 export function parseToolGroups(value: string): Partial<Tools> | null {
   try {
@@ -60,12 +103,14 @@ export function ToolGroupControls({
   deployment,
   onCreateTarget,
   shell,
+  onInvalid,
 }: {
   value: string;
   onChange: (value: string) => void;
   deployment: DeploymentView;
   onCreateTarget: (behaviorId: string) => void;
   shell: Shell;
+  onInvalid: (id: string, label: string | null) => void;
 }) {
   const groups = parseToolGroups(value);
   if (!groups)
@@ -107,17 +152,13 @@ export function ToolGroupControls({
     onValidChange: (value: number | null) => void,
     placeholder: string,
   ) => (
-    <NumberRow
+    <SecondsRow
       id={id}
       label={label}
-      value={value == null ? "" : String(value)}
+      value={value}
       placeholder={placeholder}
-      onCommit={() => {}}
-      onEnter={() => {}}
-      onChange={(raw) => {
-        if (!raw) onValidChange(null);
-        else if (/^[1-9]\d*$/.test(raw)) onValidChange(Number(raw));
-      }}
+      onInvalid={onInvalid}
+      onChange={onValidChange}
     />
   );
   return (

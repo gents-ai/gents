@@ -17,6 +17,7 @@ import { newId, optionalAbsolutePath, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { ToolGroupControls } from "./ToolGroupControls";
+import { useCallback, useState } from "react";
 
 function Editor({
   shell,
@@ -27,6 +28,20 @@ function Editor({
   deployment: DeploymentView;
   tools: Tools;
 }) {
+  const [invalidLimits, setInvalidLimits] = useState<Record<string, string>>({});
+  const [controlsGeneration, setControlsGeneration] = useState(0);
+  const reportInvalidLimit = useCallback((id: string, label: string | null) => {
+    setInvalidLimits((current) => {
+      if ((current[id] ?? null) === label) return current;
+      const next = { ...current };
+      if (label === null) delete next[id];
+      else next[id] = label;
+      return next;
+    });
+  }, []);
+  const limitError = Object.values(invalidLimits).length
+    ? `${Object.values(invalidLimits).join(", ")} must be a positive whole number`
+    : null;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -55,6 +70,7 @@ function Editor({
     ),
   };
   const d = useDraft(saved, async (next) => {
+    if (limitError) throw new Error(limitError);
     const root = optionalAbsolutePath("Workspace root", next.root);
     let advanced: Partial<Tools>;
     try {
@@ -286,6 +302,8 @@ function Editor({
         />
       </Group>
       <ToolGroupControls
+        key={controlsGeneration}
+        onInvalid={reportInvalidLimit}
         shell={shell}
         value={d.draft.advanced}
         onChange={(value) => d.set("advanced", value)}
@@ -330,11 +348,17 @@ function Editor({
         />
       </Group>
       <DraftActions
-        dirty={d.dirty}
+        dirty={d.dirty || limitError !== null}
         saving={d.saving}
-        error={d.error}
-        onSave={d.save}
-        onCancel={d.reset}
+        error={limitError ?? d.error}
+        onSave={() => {
+          if (!limitError) void d.save();
+        }}
+        onCancel={() => {
+          d.reset();
+          setInvalidLimits({});
+          setControlsGeneration((current) => current + 1);
+        }}
       />
       <DeleteButton
         label={tools.display_name ?? tools.tools_id}

@@ -132,6 +132,9 @@ pub(super) fn handle_request(
             let snapshot = runtime.block_on(build_desktop_client_snapshot(fixture));
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
+        ("GET", "/desktop/inference/setup/catalog") => Ok(HttpResponse::json_ok(
+            serde_json::to_string(&gents::inference_setup::inference_setup_catalog())?,
+        )),
         ("POST", "/desktop/init") => Ok(HttpResponse::json_ok(serde_json::to_string(
             &fixture.init_summary(),
         )?)),

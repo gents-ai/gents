@@ -7,6 +7,7 @@ import type {
   DesktopClientSnapshot,
   DesktopOperationsSnapshot,
   DesktopSessionSnapshot,
+  InferenceSetupCatalog,
   InitSummary,
   InterruptRequestResult,
   MCPServiceHealthView,
@@ -101,6 +102,13 @@ export function createBridgeHttpAdapter(
         "/desktop/inference-profile/save",
         request,
       ),
+    applyConfigComponents: async (request) =>
+      client.postJson<DesktopClientSnapshot>(
+        "/desktop/config/components/apply",
+        request,
+      ),
+    getInferenceSetupCatalog: async () =>
+      client.getJson<InferenceSetupCatalog>("/desktop/inference/setup/catalog"),
     saveToolsConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/tools/save", request),
     saveToolServiceConfig: async (request) =>
