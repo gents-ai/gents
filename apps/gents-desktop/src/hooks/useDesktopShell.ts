@@ -197,7 +197,6 @@ export function useDesktopShell({
     setError,
     setSelectedAgentDid,
     setSelectedBehaviorId,
-    setSelectedSessionId,
     snapshot,
     starting,
     stopping,

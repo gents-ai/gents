@@ -1,7 +1,6 @@
 import { useEffect, type MutableRefObject } from "react";
 
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
-import { sessionBelongsToBehavior } from "@source-inc/gents-desktop-chat";
 import type {
   DeploymentView,
   DesktopApiAdapter,
@@ -47,7 +46,6 @@ type DesktopShellEffectsArgs = {
   setError: (error: string | null) => void;
   setSelectedAgentDid: (agentDid: string | null) => void;
   setSelectedBehaviorId: (behaviorId: string | null) => void;
-  setSelectedSessionId: (sessionId: string | null) => void;
   snapshot: DesktopClientSnapshot | null;
   starting: boolean;
   stopping: boolean;
@@ -82,7 +80,6 @@ export function useDesktopShellEffects({
   setError,
   setSelectedAgentDid,
   setSelectedBehaviorId,
-  setSelectedSessionId,
   snapshot,
   starting,
   stopping,
@@ -218,7 +215,6 @@ export function useDesktopShellEffects({
   useEffect(() => {
     if (!selectedDeployment) {
       setSelectedBehaviorId(null);
-      setSelectedSessionId(null);
       return;
     }
 
@@ -238,35 +234,16 @@ export function useDesktopShellEffects({
       setSelectedBehaviorId(effectiveBehaviorId);
     }
 
-    if (
-      selectedSessionId &&
-      (selectedDeployment.sessions.some(
-        (session) =>
-          session.sessionId === selectedSessionId &&
-          sessionBelongsToBehavior(session, effectiveBehaviorId),
-      ) ||
-        ((localWorkflow.kind === "awaitingObservation" ||
-          localWorkflow.kind === "turnInProgress") &&
-          localWorkflow.agentDid === selectedDeployment.agentDid &&
-          localWorkflow.sessionId === selectedSessionId))
-    ) {
-      newSessionAgentRef.current = null;
-      return;
-    }
-
-    setSelectedSessionId(
-      selectedDeployment.sessions.find((session) =>
-        sessionBelongsToBehavior(session, effectiveBehaviorId),
-      )?.sessionId ?? null,
-    );
+    // A snapshot may reconcile behavior availability, never user session
+    // selection. Null is an intentional fresh composer, not a request to open
+    // the first matching session. A missing selected row stays selected while
+    // hydration/error presentation handles its availability (ClientShell's
+    // snapshot_preserves_selection contract).
   }, [
-    localWorkflow,
     newSessionAgentRef,
     selectedBehaviorId,
     selectedDeployment,
-    selectedSessionId,
     setSelectedBehaviorId,
-    setSelectedSessionId,
   ]);
 
   useEffect(() => {

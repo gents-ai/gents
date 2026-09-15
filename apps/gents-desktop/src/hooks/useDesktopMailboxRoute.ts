@@ -129,6 +129,11 @@ export function useDesktopMailboxRoute({
     if (agentDid !== selectedAgentDid) {
       advanceComposeIntent();
       clearPendingMailboxCause();
+      // Explicit principal navigation owns this reset. Snapshot reconciliation
+      // must not guess a replacement session for the newly selected agent.
+      setSelectedSessionId(null);
+      setSelectedBehaviorId(null);
+      setSession(null);
     }
     setSelectedAgentDid(agentDid);
   }
