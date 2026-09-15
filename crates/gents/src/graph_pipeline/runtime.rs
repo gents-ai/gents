@@ -370,7 +370,7 @@ async fn verify_package_artifacts_in_txn(
                 artifact.logical_id
             )
         })?;
-        let observed = crate::config_client::desired_state_document_digest(&live)?;
+        let observed = crate::pack::pack_artifact_document_digest(&live)?;
         anyhow::ensure!(
             observed == artifact.content_digest,
             "package artifact {} {owner_did:?}/{:?} drifted: expected {}, observed {observed}",

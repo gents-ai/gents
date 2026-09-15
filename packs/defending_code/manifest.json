@@ -66,5 +66,41 @@
     "tasks/defend_verifier_task/prompt.md"
   ],
   "dependencies": [],
-  "config": "pack_config.json"
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "coordinator",
+      "description": "Threat modeling, planning, triage, clustering, and reporting.",
+      "behaviors": [
+        "defend-cluster",
+        "defend-plan",
+        "defend-remediation-plan",
+        "defend-report",
+        "defend-threat-model",
+        "defend-triage"
+      ]
+    },
+    {
+      "name": "worker",
+      "description": "Bounded security scans and patch execution.",
+      "behaviors": [
+        "defend-patch",
+        "defend-patch-integrate",
+        "defend-patch-skip",
+        "defend-scan"
+      ]
+    },
+    {
+      "name": "verifier",
+      "description": "Contract, patch, validation, and adversarial verification review.",
+      "behaviors": [
+        "defend-contract-review",
+        "defend-patch-review",
+        "defend-patch-security-review",
+        "defend-patch-validation",
+        "defend-verification-plan",
+        "defend-verifier"
+      ]
+    }
+  ]
 }

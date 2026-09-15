@@ -11,7 +11,7 @@ use crate::document_config::AdvertisedModel;
 use crate::openai_wire::OpenAiWireApi;
 
 pub const INFERENCE_SETUP_CONTRACT_VERSION: u32 = 1;
-pub const INFERENCE_DEFAULTS_VERSION: &str = "2026-09-14.3";
+pub const INFERENCE_DEFAULTS_VERSION: &str = "2026-09-15.1";
 
 pub const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1";
 pub const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1";
@@ -429,6 +429,7 @@ pub fn recommendation_for_model(
     let is_reasoning = reasoning_model(&advertised.model_name);
     let is_claude = spec.provider_kind == BackendProviderKind::ClaudeCliSubscription;
     let is_codex = spec.provider_kind == BackendProviderKind::ChatGptCodex;
+    let is_grok = provider == InferenceProviderId::Grok;
     let claude_defaults = is_claude
         .then(|| claude_model_defaults(&advertised.model_name))
         .flatten();
@@ -491,7 +492,7 @@ pub fn recommendation_for_model(
         step: 0.05,
     });
     let top_p = (supports_sampling || fixture).then(|| RecommendedNumberControl {
-        recommended: if fixture { 0.95 } else { 1.0 },
+        recommended: if fixture || is_grok { 0.95 } else { 1.0 },
         min: 0.0,
         max: Some(1.0),
         step: 0.05,
@@ -517,7 +518,12 @@ pub fn recommendation_for_model(
             .map(|value| RecommendedIntegerControl {
                 recommended: value,
                 min: 1,
-                max: Some(value),
+                max: Some(
+                    advertised
+                        .max_context_window
+                        .filter(|maximum| *maximum >= value)
+                        .unwrap_or(value),
+                ),
             }),
         max_output_tokens: advertised
             .max_output_tokens
@@ -562,6 +568,7 @@ mod tests {
             model_name: name.into(),
             display_name: None,
             context_window: None,
+            max_context_window: None,
             max_output_tokens: None,
             reasoning_efforts: None,
         }
@@ -662,6 +669,68 @@ mod tests {
         .unwrap();
         assert_eq!(recommendation.temperature.unwrap().recommended, 1.0);
         assert_eq!(recommendation.top_p.unwrap().recommended, 0.95);
+    }
+
+    #[test]
+    fn grok_has_provider_specific_sampling_without_changing_other_providers() {
+        let grok = recommendation_for_model(
+            InferenceProviderId::Grok,
+            InferenceAuthMethod::GrokOauth,
+            &advertised("grok-4.6"),
+        )
+        .unwrap();
+        assert_eq!(grok.temperature.unwrap().recommended, 0.7);
+        assert_eq!(grok.top_p.unwrap().recommended, 0.95);
+
+        let openai = recommendation_for_model(
+            InferenceProviderId::OpenAi,
+            InferenceAuthMethod::ApiKey,
+            &advertised("gpt-4.1"),
+        )
+        .unwrap();
+        assert_eq!(openai.top_p.unwrap().recommended, 1.0);
+    }
+
+    #[test]
+    fn codex_context_default_and_override_ceiling_remain_distinct() {
+        let mut model = advertised("gpt-5.6-sol");
+        model.context_window = Some(272_000);
+        model.max_context_window = Some(872_000);
+        let control = recommendation_for_model(
+            InferenceProviderId::OpenAi,
+            InferenceAuthMethod::ChatGptOauth,
+            &model,
+        )
+        .unwrap()
+        .context_window
+        .unwrap();
+        assert_eq!(control.recommended, 272_000);
+        assert_eq!(control.max, Some(872_000));
+
+        model.max_context_window = None;
+        assert_eq!(
+            recommendation_for_model(
+                InferenceProviderId::OpenAi,
+                InferenceAuthMethod::ChatGptOauth,
+                &model,
+            )
+            .unwrap()
+            .context_window
+            .unwrap()
+            .max,
+            Some(272_000)
+        );
+
+        model.context_window = None;
+        model.max_context_window = Some(872_000);
+        assert!(recommendation_for_model(
+            InferenceProviderId::OpenAi,
+            InferenceAuthMethod::ChatGptOauth,
+            &model,
+        )
+        .unwrap()
+        .context_window
+        .is_none());
     }
 
     #[test]

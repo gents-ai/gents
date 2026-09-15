@@ -46,5 +46,29 @@
     "schemas/finding.graphql",
     "schemas/verification_summary.graphql",
     "schemas/triage_report.graphql"
+  ],
+  "inference_slots": [
+    {
+      "name": "coordinator",
+      "description": "Planning, evidence triage, and final review. Prefer a strong reasoning profile.",
+      "behaviors": [
+        "review-recon",
+        "review-triage"
+      ]
+    },
+    {
+      "name": "worker",
+      "description": "Bounded parallel code-review scans. A fast, capable worker profile is appropriate.",
+      "behaviors": [
+        "review-scan"
+      ]
+    },
+    {
+      "name": "verifier",
+      "description": "Adversarial verification of candidate findings. Prefer an independent high-quality profile.",
+      "behaviors": [
+        "review-verify"
+      ]
+    }
   ]
 }

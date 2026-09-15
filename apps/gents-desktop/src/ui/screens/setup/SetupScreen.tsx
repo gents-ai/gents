@@ -628,6 +628,7 @@ export function SetupScreen({
         modelName: model.trim(),
         displayName: null,
         contextWindow: null,
+        maxContextWindow: null,
         maxOutputTokens: null,
         reasoningEfforts: null,
       });
@@ -1143,10 +1144,12 @@ export function SetupScreen({
           <fieldset disabled={busy} className="min-w-0">
             <div className="mb-4 rounded-2xl border border-border/60 bg-raised p-4 text-sm">
               <p className="font-medium">{model}</p>
-              <p className="mt-2 text-xs text-muted-foreground">Model limits</p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Model defaults and limits
+              </p>
               <dl className="mt-1 grid grid-cols-2 gap-2 text-xs">
                 <div>
-                  <dt className="text-muted-foreground">Context window</dt>
+                  <dt className="text-muted-foreground">Default context</dt>
                   <dd>
                     {(
                       advertised?.context_window ??

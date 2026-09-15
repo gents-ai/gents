@@ -13,10 +13,13 @@ const REPOSITORY_ROOT = resolve(APP_ROOT, "..", "..");
 const DEFAULT_RUNS = 5;
 const DEFAULT_PORT = 1427;
 const VIEWPORT = { width: 390, height: 844 };
+const TYPING_NEXT_PAINT_BUDGET_MS = 50;
+const TYPING_REACT_BUDGET_MS_PER_CHARACTER = 12;
 
 const args = process.argv.slice(2);
 const runs = integerArgument("--runs", DEFAULT_RUNS);
 const port = integerArgument("--port", DEFAULT_PORT);
+const enforceResponsiveBudgets = args.includes("--enforce-responsive-budgets");
 const outputArgument = valueArgument("--output");
 const outputRoot = resolve(
   APP_ROOT,
@@ -91,6 +94,7 @@ try {
     coldBrowserProcessSample: samples[0] ?? null,
     distributions: summarizeDistributions(samples.slice(1)),
     structuralAssertions: evaluateStructuralAssertions(samples),
+    responsiveBudgetsEnforced: enforceResponsiveBudgets,
     unsupportedInThisLane: [
       "iOS process resident-memory high-water mark",
       "device energy log and thermal state",
@@ -106,10 +110,13 @@ try {
   process.stdout.write(`Machine artifact: ${jsonPath}\n`);
   process.stdout.write(`Human summary: ${summaryPath}\n`);
 
-  const failures = artifact.structuralAssertions.filter((entry) => !entry.passed);
+  const failures = artifact.structuralAssertions.filter(
+    (entry) =>
+      !entry.passed && (entry.policy === "hard" || artifact.responsiveBudgetsEnforced),
+  );
   if (failures.length > 0) {
     throw new Error(
-      `deterministic mobile performance assertions failed: ${failures
+      `gated mobile performance assertions failed: ${failures
         .map((entry) => entry.id)
         .join(", ")}`,
     );
@@ -233,6 +240,50 @@ async function runSample(browserInstance, sampleIndex) {
     ),
   );
 
+  const typingStartingRows = await page
+    .locator(
+      '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
+    )
+    .count();
+  scenarios.push(
+    await measureScenario(
+      page,
+      cdp,
+      "grow_long_transcript_to_typing_size",
+      async () => {
+        if (typingStartingRows % fixture.transcriptPageSize !== 0) {
+          throw new Error(
+            `typing transcript starts with a partial page: ${typingStartingRows} rows`,
+          );
+        }
+        const startingPages = typingStartingRows / fixture.transcriptPageSize;
+        const additionalPages = fixture.typingLoadedPages - startingPages;
+        if (additionalPages < 0) {
+          throw new Error(
+            `typing transcript already exceeds the target: ${startingPages} pages`,
+          );
+        }
+        for (let index = 0; index < additionalPages; index += 1) {
+          const expectedRows =
+            typingStartingRows + (index + 1) * fixture.transcriptPageSize;
+          await page.locator('[data-testid="transcript-load-older"]').click();
+          await page.waitForFunction(
+            (count) =>
+              document.querySelectorAll(
+                '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
+              ).length === count,
+            expectedRows,
+          );
+        }
+      },
+      async () => ({
+        startingRows: typingStartingRows,
+        loadedPages: fixture.typingLoadedPages,
+        expectedLoadedRows: fixture.typingLoadedPages * fixture.transcriptPageSize,
+      }),
+    ),
+  );
+
   scenarios.push(
     await measureScenario(page, cdp, "sustained_streamed_response", async () => {
       const count = fixture.streamUpdateCount;
@@ -259,6 +310,57 @@ async function runSample(browserInstance, sampleIndex) {
         .waitFor();
     }),
   );
+
+  const typingText = Array.from({ length: fixture.typingBurstCharacters }, (_, index) =>
+    String.fromCharCode(97 + (index % 26)),
+  ).join("");
+  scenarios.push(
+    await measureScenario(
+      page,
+      cdp,
+      "typing_burst_active_turn_no_live_deltas_long_transcript",
+      () => typeBurstToNextPaint(page, typingText),
+      () => typingPaintEvidence(page, typingText.length, fixture.typingLoadedPages),
+    ),
+  );
+  await page.getByRole("textbox", { name: "Message" }).fill("");
+  await settleRender(page);
+
+  scenarios.push(
+    await measureScenario(
+      page,
+      cdp,
+      "typing_burst_concurrent_stream_deltas_long_transcript",
+      () => typeBurstWithConcurrentStreamDeltas(page, typingText),
+      async () => ({
+        ...(await typingPaintEvidence(
+          page,
+          typingText.length,
+          fixture.typingLoadedPages,
+        )),
+        ...(await page.evaluate(() => window.__GENTS_CONCURRENT_STREAM_EVIDENCE__)),
+      }),
+    ),
+  );
+  await page.getByRole("textbox", { name: "Message" }).fill("");
+  await settleRender(page);
+
+  await page.evaluate(() => {
+    window.__GENTS_MOBILE_PERFORMANCE__.finishStreaming();
+  });
+  await page.getByRole("button", { name: "Stop" }).waitFor({ state: "detached" });
+  await settleRender(page);
+  scenarios.push(
+    await measureScenario(
+      page,
+      cdp,
+      "typing_burst_idle_long_transcript",
+      () => typeBurstToNextPaint(page, typingText),
+      () => typingPaintEvidence(page, typingText.length, fixture.typingLoadedPages),
+    ),
+  );
+  await page.getByRole("textbox", { name: "Message" }).fill("");
+  await settleRender(page);
 
   const navigationHeapSamples = [];
   scenarios.push(
@@ -347,6 +449,118 @@ async function measureScenario(page, cdp, id, action, extra = async () => ({})) 
   };
 }
 
+async function typeBurstToNextPaint(page, text) {
+  await prepareTypingPaintMeasurement(page);
+  const input = page.getByRole("textbox", { name: "Message" });
+  await input.focus();
+  await input.pressSequentially(text, { delay: 1 });
+  await page.waitForFunction(
+    (expectedCharacters) =>
+      (window.__GENTS_TYPING_PAINT_SAMPLES__?.length ?? 0) === expectedCharacters,
+    text.length,
+  );
+}
+
+async function prepareTypingPaintMeasurement(page) {
+  await page.evaluate(() => {
+    const samples = [];
+    Object.defineProperty(window, "__GENTS_TYPING_PAINT_SAMPLES__", {
+      value: samples,
+      configurable: true,
+    });
+    const input = document.querySelector('textarea[aria-label="Message"]');
+    if (!(input instanceof HTMLTextAreaElement)) {
+      throw new Error("mobile performance composer is unavailable");
+    }
+    if (window.__GENTS_TYPING_INPUT_HANDLER__) {
+      document.removeEventListener("input", window.__GENTS_TYPING_INPUT_HANDLER__, {
+        capture: true,
+      });
+    }
+    const recordNextPaint = (event) => {
+      const eventAt = event.timeStamp;
+      requestAnimationFrame(() => {
+        setTimeout(() => samples.push(performance.now() - eventAt), 0);
+      });
+    };
+    window.__GENTS_TYPING_INPUT_HANDLER__ = recordNextPaint;
+    document.addEventListener("input", recordNextPaint, { capture: true });
+  });
+}
+
+async function typeBurstWithConcurrentStreamDeltas(page, text) {
+  await prepareTypingPaintMeasurement(page);
+  await page.evaluate((expectedCharacters) => {
+    window.__GENTS_CONCURRENT_STREAM_EVIDENCE__ = {
+      streamUpdateCount: 0,
+      firstStreamUpdateAtMs: null,
+      lastStreamUpdateAtMs: null,
+      typingStartedAtMs: null,
+      typingFinishedAtMs: null,
+      liveDeltaReadsDuringTyping: 0,
+      lastSequence: null,
+    };
+    const evidence = window.__GENTS_CONCURRENT_STREAM_EVIDENCE__;
+    let inputCount = 0;
+    const observeTypingBoundary = (event) => {
+      inputCount += 1;
+      if (inputCount === 1) {
+        evidence.typingStartedAtMs = event.timeStamp;
+      }
+      if (
+        inputCount % 3 === 0 &&
+        evidence.streamUpdateCount <
+          window.__GENTS_MOBILE_PERFORMANCE__.fixture.streamUpdateCount
+      ) {
+        const updatedAt = performance.now();
+        evidence.firstStreamUpdateAtMs ??= updatedAt;
+        evidence.lastStreamUpdateAtMs = updatedAt;
+        evidence.lastSequence = window.__GENTS_MOBILE_PERFORMANCE__.streamUpdate();
+        evidence.streamUpdateCount += 1;
+      }
+      if (inputCount === expectedCharacters) {
+        evidence.typingFinishedAtMs = event.timeStamp;
+        evidence.liveDeltaReadsDuringTyping = window.__GENTS_MOBILE_PERFORMANCE__
+          .snapshot()
+          .bridgeCalls.filter(
+            (call) => call.command === "fetchSessionLiveDelta",
+          ).length;
+        document.removeEventListener("input", observeTypingBoundary, {
+          capture: true,
+        });
+      }
+    };
+    document.addEventListener("input", observeTypingBoundary, { capture: true });
+  }, text.length);
+  const input = page.getByRole("textbox", { name: "Message" });
+  await input.focus();
+  await input.pressSequentially(text, { delay: 2 });
+  const lastSequence = await page.evaluate(
+    () => window.__GENTS_CONCURRENT_STREAM_EVIDENCE__.lastSequence,
+  );
+  await page
+    .getByText(`stream-chunk-${lastSequence}`, { exact: false })
+    .last()
+    .waitFor();
+  await page.waitForFunction(
+    (expectedCharacters) =>
+      (window.__GENTS_TYPING_PAINT_SAMPLES__?.length ?? 0) === expectedCharacters,
+    text.length,
+  );
+}
+
+async function typingPaintEvidence(page, expectedCharacters, loadedPages) {
+  const samples = await page.evaluate(
+    () => window.__GENTS_TYPING_PAINT_SAMPLES__ ?? [],
+  );
+  return {
+    typedCharacters: samples.length,
+    expectedCharacters,
+    loadedPages,
+    eventToNextPaintMs: distribution(samples),
+  };
+}
+
 async function browserMetrics(page, cdp) {
   const response = await cdp.send("Performance.getMetrics");
   const metrics = Object.fromEntries(
@@ -426,6 +640,9 @@ function summarizeDistributions(samples) {
     const transcriptRows = scenarios.map(
       (scenario) => scenario.dom.transcriptTurnBlocks,
     );
+    const eventToNextPaintP95 = scenarios
+      .map((scenario) => scenario.eventToNextPaintMs?.p95)
+      .filter(Number.isFinite);
     const navigationHeapHighWater = scenarios
       .map((scenario) => scenario.navigationHeapHighWaterBytes)
       .filter(Number.isFinite);
@@ -441,6 +658,9 @@ function summarizeDistributions(samples) {
       jsHeapGrowthBytes: distribution(heapGrowth),
       longTaskCount: distribution(longTasks),
       transcriptTurnBlocks: distribution(transcriptRows),
+      ...(eventToNextPaintP95.length
+        ? { eventToNextPaintP95Ms: distribution(eventToNextPaintP95) }
+        : {}),
       ...(navigationHeapHighWater.length
         ? { navigationHeapHighWaterBytes: distribution(navigationHeapHighWater) }
         : {}),
@@ -455,6 +675,13 @@ function evaluateStructuralAssertions(samples) {
   const pageOlder = all("page_older_transcript_rows");
   const sustained = all("sustained_streamed_response");
   const burst = all("update_coalescing_burst");
+  const typingActiveTurn = all(
+    "typing_burst_active_turn_no_live_deltas_long_transcript",
+  );
+  const typingConcurrent = all("typing_burst_concurrent_stream_deltas_long_transcript");
+  const typingIdle = all("typing_burst_idle_long_transcript");
+  const typingWithoutLiveDeltas = [...typingActiveTurn, ...typingIdle];
+  const typing = [...typingWithoutLiveDeltas, ...typingConcurrent];
   return [
     {
       id: "large_tip_mounts_one_page",
@@ -475,6 +702,101 @@ function evaluateStructuralAssertions(samples) {
       passed: pageOlder.every(
         (scenario) =>
           scenario.dom.transcriptTurnBlocks <= 80 && scenario.retainedRowStillMounted,
+      ),
+    },
+    {
+      id: "typing_bursts_mount_five_pages",
+      policy: "hard",
+      limit:
+        samples[0].fixture.typingLoadedPages * samples[0].fixture.transcriptPageSize,
+      observedMax: Math.max(
+        ...typing.map((scenario) => scenario.dom.transcriptTurnBlocks),
+      ),
+      passed: typing.every(
+        (scenario) =>
+          scenario.loadedPages === samples[0].fixture.typingLoadedPages &&
+          scenario.dom.transcriptTurnBlocks ===
+            samples[0].fixture.typingLoadedPages *
+              samples[0].fixture.transcriptPageSize,
+      ),
+    },
+    {
+      id: "typing_bursts_capture_every_character",
+      policy: "hard",
+      limit: samples[0].fixture.typingBurstCharacters,
+      observedMax: Math.max(...typing.map((scenario) => scenario.typedCharacters)),
+      passed: typing.every(
+        (scenario) =>
+          scenario.typedCharacters === samples[0].fixture.typingBurstCharacters,
+      ),
+    },
+    {
+      id: "active_turn_without_deltas_and_idle_typing_have_no_bridge_calls",
+      policy: "hard",
+      limit: 0,
+      observedMax: Math.max(
+        ...typingWithoutLiveDeltas.map((scenario) => scenario.bridge.callCount),
+      ),
+      passed: typingWithoutLiveDeltas.every(
+        (scenario) => scenario.bridge.callCount === 0,
+      ),
+    },
+    {
+      id: "concurrent_typing_observes_live_deltas_without_snapshots_or_submit",
+      policy: "hard",
+      limit: samples[0].fixture.streamUpdateCount,
+      observedMax: Math.max(
+        ...typingConcurrent.map(
+          (scenario) => scenario.bridge.byCommand.fetchSessionLiveDelta?.count ?? 0,
+        ),
+      ),
+      passed: typingConcurrent.every((scenario) => {
+        const liveDeltaReads =
+          scenario.bridge.byCommand.fetchSessionLiveDelta?.count ?? 0;
+        return (
+          scenario.streamUpdateCount === samples[0].fixture.streamUpdateCount &&
+          scenario.firstStreamUpdateAtMs >= scenario.typingStartedAtMs &&
+          scenario.firstStreamUpdateAtMs < scenario.typingFinishedAtMs &&
+          scenario.lastStreamUpdateAtMs <= scenario.typingFinishedAtMs &&
+          scenario.liveDeltaReadsDuringTyping > 0 &&
+          scenario.liveDeltaReadsDuringTyping <= liveDeltaReads &&
+          liveDeltaReads > 0 &&
+          liveDeltaReads <= samples[0].fixture.streamUpdateCount &&
+          scenario.bridge.responseBytes <= 64 * 1024 &&
+          (scenario.bridge.byCommand.fetchSessionLiveDelta?.maxResponseBytes ?? 0) <=
+            2 * 1024 &&
+          (scenario.bridge.byCommand.fetchDesktopSnapshot?.count ?? 0) === 0 &&
+          (scenario.bridge.byCommand.fetchSessionSnapshot?.count ?? 0) === 0 &&
+          (scenario.bridge.byCommand.sendChatMessage?.count ?? 0) === 0 &&
+          scenario.bridge.callCount === liveDeltaReads
+        );
+      }),
+    },
+    {
+      id: "typing_event_to_next_paint_p95",
+      policy: "responsive-budget",
+      limit: TYPING_NEXT_PAINT_BUDGET_MS,
+      observedMax: Math.max(
+        ...typing.map((scenario) => scenario.eventToNextPaintMs.p95),
+      ),
+      passed: typing.every(
+        (scenario) => scenario.eventToNextPaintMs.p95 <= TYPING_NEXT_PAINT_BUDGET_MS,
+      ),
+    },
+    {
+      id: "typing_react_work_per_character",
+      policy: "responsive-budget",
+      limit: TYPING_REACT_BUDGET_MS_PER_CHARACTER,
+      observedMax: Math.max(
+        ...typing.map(
+          (scenario) =>
+            scenario.render.totalCommitDurationMs / scenario.typedCharacters,
+        ),
+      ),
+      passed: typing.every(
+        (scenario) =>
+          scenario.render.totalCommitDurationMs / scenario.typedCharacters <=
+          TYPING_REACT_BUDGET_MS_PER_CHARACTER,
       ),
     },
     {
@@ -545,12 +867,12 @@ function evaluateStructuralAssertions(samples) {
 function humanSummary(artifact) {
   const rows = artifact.distributions.map(
     (entry) =>
-      `| ${entry.id} | ${entry.sampleCount} | ${format(entry.elapsedMs.median)} | ${format(entry.elapsedMs.p95)} | ${formatBytes(entry.bridgeResponseBytes.median)} | ${format(entry.renderCommitDurationMs.median)} |`,
+      `| ${entry.id} | ${entry.sampleCount} | ${format(entry.elapsedMs.median)} | ${format(entry.elapsedMs.p95)} | ${entry.eventToNextPaintP95Ms ? format(entry.eventToNextPaintP95Ms.median) : "—"} | ${formatBytes(entry.bridgeResponseBytes.median)} | ${format(entry.renderCommitDurationMs.median)} |`,
   );
-  const assertions = artifact.structuralAssertions.map(
-    (entry) =>
-      `- ${entry.passed ? "PASS" : "FAIL"} \`${entry.id}\`: max ${entry.observedMax}, limit ${entry.limit}`,
-  );
+  const assertions = artifact.structuralAssertions.map((entry) => {
+    const gated = entry.policy === "hard" || artifact.responsiveBudgetsEnforced;
+    return `- ${entry.passed ? "PASS" : "FAIL"} (${gated ? "gated" : "report only"}) \`${entry.id}\`: max ${entry.observedMax}, limit ${entry.limit}`;
+  });
   return [
     "# Mobile performance evidence",
     "",
@@ -561,11 +883,13 @@ function humanSummary(artifact) {
     `Measurement class: ${artifact.measurementClass}.`,
     `Cold browser-process shell proxy (n=1, not a trend): ${format(artifact.coldBrowserProcessSample.scenarios[0].elapsedMs)} ms.`,
     "",
-    "| Scenario | n | median ms | p95 ms | median bridge response | median React commit ms |",
-    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    "| Scenario | n | median ms | p95 ms | median input→paint p95 ms | median bridge response | median React commit ms |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows,
     "",
-    "## Deterministic structural assertions",
+    "## Benchmark assertions",
+    "",
+    `Responsive timing budgets: ${artifact.responsiveBudgetsEnforced ? "gated" : "report only; pass --enforce-responsive-budgets to gate them"}.`,
     "",
     ...assertions,
     "",

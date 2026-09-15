@@ -6,28 +6,28 @@
       "display_name": "Web research planner",
       "description": "Turns one research question into a bounded, closed assignment set.",
       "context_id": "research-plan-context",
-      "inference_profile_id": "research-plan-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "research-investigate",
       "display_name": "Web evidence investigator",
       "description": "Searches, extracts, and records evidence for one bounded research lens.",
       "context_id": "research-investigate-context",
-      "inference_profile_id": "research-investigate-profile"
+      "inference_profile_id": "gents:inference-slot:researcher"
     },
     {
       "behavior_id": "research-adjudicate",
       "display_name": "Research evidence adjudicator",
       "description": "Cross-checks claims, contradictions, provenance, and quote support.",
       "context_id": "research-adjudicate-context",
-      "inference_profile_id": "research-adjudicate-profile"
+      "inference_profile_id": "gents:inference-slot:verifier"
     },
     {
       "behavior_id": "research-report",
       "display_name": "Cited research reporter",
       "description": "Writes the final answer from adjudicated claims and source provenance.",
       "context_id": "research-report-context",
-      "inference_profile_id": "research-report-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     }
   ],
   "contexts": [
@@ -791,70 +791,6 @@
           ]
         }
       ]
-    }
-  ],
-  "inference_backends": [
-    {
-      "backend_id": "research-backend",
-      "name": "Web research backend",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_WEB_RESEARCH_ENDPOINT:-http://127.0.0.1:8080/v1}",
-      "auth": {
-        "kind": "unauthenticated"
-      },
-      "max_concurrent": 8
-    }
-  ],
-  "inference_sampling": [
-    {
-      "sampling_id": "research-sampling",
-      "temperature": 1.0,
-      "top_p": 0.95
-    }
-  ],
-  "inference_execution": [
-    {
-      "execution_id": "research-execution",
-      "max_turns": 1000
-    }
-  ],
-  "inference_profiles": [
-    {
-      "profile_id": "research-plan-profile",
-      "display_name": "Web research planner",
-      "backend_id": "research-backend",
-      "model_name": "${GENTS_WEB_RESEARCH_MODEL}",
-      "reasoning_effort": "high",
-      "sampling_id": "research-sampling",
-      "execution_id": "research-execution"
-    },
-    {
-      "profile_id": "research-investigate-profile",
-      "display_name": "Web evidence investigator",
-      "backend_id": "research-backend",
-      "model_name": "${GENTS_WEB_RESEARCH_MODEL}",
-      "reasoning_effort": "high",
-      "sampling_id": "research-sampling",
-      "execution_id": "research-execution"
-    },
-    {
-      "profile_id": "research-adjudicate-profile",
-      "display_name": "Research evidence adjudicator",
-      "backend_id": "research-backend",
-      "model_name": "${GENTS_WEB_RESEARCH_MODEL}",
-      "reasoning_effort": "high",
-      "sampling_id": "research-sampling",
-      "execution_id": "research-execution"
-    },
-    {
-      "profile_id": "research-report-profile",
-      "display_name": "Cited research reporter",
-      "backend_id": "research-backend",
-      "model_name": "${GENTS_WEB_RESEARCH_MODEL}",
-      "reasoning_effort": "high",
-      "sampling_id": "research-sampling",
-      "execution_id": "research-execution"
     }
   ],
   "tasks": [

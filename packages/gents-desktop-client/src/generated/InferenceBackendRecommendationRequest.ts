@@ -2,4 +2,4 @@
 import type { BackendProviderKind } from "./BackendProviderKind.js";
 import type { ReasoningEffort } from "./ReasoningEffort.js";
 
-export type InferenceBackendRecommendationRequest = { providerKind: BackendProviderKind, endpoint: string, modelName: string, displayName: string | null, contextWindow: number | null, maxOutputTokens: number | null, reasoningEfforts: Array<ReasoningEffort> | null, };
+export type InferenceBackendRecommendationRequest = { providerKind: BackendProviderKind, endpoint: string, modelName: string, displayName: string | null, contextWindow: number | null, maxContextWindow: number | null, maxOutputTokens: number | null, reasoningEfforts: Array<ReasoningEffort> | null, };

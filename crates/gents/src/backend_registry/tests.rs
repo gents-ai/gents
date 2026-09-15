@@ -344,8 +344,8 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     backend.tags = vec!["old".into()];
     let doc_id = crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalogs = serde_json::json!([
-        {"agent_did":null,"observed_at":"2026-01-01T00:00:00Z","models":[{"model_name":"shared","display_name":null,"context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]},
-        {"agent_did":"did:key:invoker","observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
+        {"agent_did":null,"observed_at":"2026-01-01T00:00:00Z","models":[{"model_name":"shared","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]},
+        {"agent_did":"did:key:invoker","observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
     ]);
     let observation = serde_json::json!({"catalogs":{"entries":catalogs.clone()},"probe_status":"healthy","last_probe":"2026-01-02T00:00:00Z"});
     access
@@ -463,6 +463,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
             model_name: "advertised-model".into(),
             display_name: None,
             context_window: Some(524288),
+            max_context_window: None,
             max_output_tokens: None,
             reasoning_efforts: None,
         }],
@@ -515,6 +516,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
             model_name: "exact-model".into(),
             display_name: None,
             context_window: None,
+            max_context_window: None,
             max_output_tokens: None,
             reasoning_efforts: Some(Vec::new()),
         }],

@@ -671,7 +671,7 @@ fn backend_config_view(
             ("principal_oauth", false, None, Some(row.agent_did.as_str()))
         }
     };
-    let models = observation
+    let advertised_models = observation
         .and_then(|observation| match observation.catalog_for(catalog_scope) {
             Ok(catalog) => catalog,
             Err(error) => {
@@ -680,14 +680,12 @@ fn backend_config_view(
                 None
             }
         })
-        .map(|catalog| {
-            catalog
-                .models
-                .iter()
-                .map(|model| model.model_name.clone())
-                .collect()
-        })
+        .map(|catalog| catalog.models.clone())
         .unwrap_or_default();
+    let models = advertised_models
+        .iter()
+        .map(|model| model.model_name.clone())
+        .collect();
     InferenceBackendView {
         backend_id: row.backend_id.clone(),
         name: Some(row.name.clone()),
@@ -704,6 +702,7 @@ fn backend_config_view(
         enabled: Some(row.enabled),
         tags: row.tags.clone(),
         models,
+        advertised_models,
         probe_status: observation.and_then(|observation| observation.probe_status.clone()),
     }
 }
@@ -1030,12 +1029,16 @@ mod backend_config_view_tests {
         let observation = serde_json::from_value(serde_json::json!({
             "backend_id":"backend","catalogs":[
                 {"agent_did":"foreign","observed_at":"now","models":[{"model_name":"foreign-model"}]},
-                {"agent_did":"owner","observed_at":"now","models":[{"model_name":"own-model"}]}
+                {"agent_did":"owner","observed_at":"now","models":[{
+                    "model_name":"own-model",
+                    "context_window":272000,
+                    "max_context_window":872000
+                }]}
             ]
         })).unwrap();
-        assert_eq!(
-            backend_config_view(&backend, Some(&observation)).models,
-            ["own-model"]
-        );
+        let view = backend_config_view(&backend, Some(&observation));
+        assert_eq!(view.models, ["own-model"]);
+        assert_eq!(view.advertised_models[0].context_window, Some(272_000));
+        assert_eq!(view.advertised_models[0].max_context_window, Some(872_000));
     }
 }

@@ -212,6 +212,7 @@ export function TriggersPanel({
         id: t.config.trigger_id,
         title: t.config.display_name ?? t.config.trigger_id,
         meta: t.config.source.kind,
+        tags: t.config.tags,
       }))}
       createLabel="New trigger"
       empty="No triggers. A trigger fires a task from a schedule or event source."

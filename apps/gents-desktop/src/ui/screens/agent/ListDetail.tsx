@@ -2,7 +2,7 @@
    routed by item id, as the desktop app's config tabs are (list on the
    left, editor beside it; here the list is the page and a row opens the
    editor). */
-import { useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
@@ -16,7 +16,19 @@ export type ListRow = {
   badge?: string;
   badgeTone?: "default" | "bad";
   icon?: ReactNode;
+  tags?: string[] | null;
 };
+
+const PACK_ORIGIN_PREFIX = "gents:pack:";
+const NOT_FROM_PACK_FILTER = "__not_from_pack__";
+
+export function packOrigin(tags: string[] | null | undefined): string | null {
+  const origins = (tags ?? [])
+    .filter((tag) => tag.startsWith(PACK_ORIGIN_PREFIX))
+    .map((tag) => tag.slice(PACK_ORIGIN_PREFIX.length))
+    .filter(Boolean);
+  return origins.length === 1 ? origins[0] : null;
+}
 
 export function ListDetail({
   base,
@@ -38,6 +50,33 @@ export function ListDetail({
 }) {
   const creatingRef = useRef(false);
   const [creating, setCreating] = useState(false);
+  const [originFilter, setOriginFilter] = useState("all");
+  const origins = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          rows
+            .map((row) => packOrigin(row.tags))
+            .filter((origin): origin is string => origin !== null),
+        ),
+      ).sort(),
+    [rows],
+  );
+  const effectiveOriginFilter =
+    originFilter === "all" ||
+    originFilter === NOT_FROM_PACK_FILTER ||
+    origins.includes(originFilter)
+      ? originFilter
+      : "all";
+  const visibleRows = rows.filter((row) => {
+    const origin = packOrigin(row.tags);
+    return (
+      effectiveOriginFilter === "all" ||
+      (effectiveOriginFilter === NOT_FROM_PACK_FILTER
+        ? origin === null
+        : origin === effectiveOriginFilter)
+    );
+  });
   const create = async () => {
     if (!onCreate || creatingRef.current) return;
     creatingRef.current = true;
@@ -66,15 +105,40 @@ export function ListDetail({
   }
   return (
     <div>
-      {onCreate && (
-        <div className="mb-6 flex justify-end">
+      {(onCreate || origins.length > 0) && (
+        <div className="mb-6 flex items-end justify-between gap-4">
+          {origins.length > 0 ? (
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              Origin
+              <select
+                className="rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
+                data-testid={`${base.section}-origin-filter`}
+                value={effectiveOriginFilter}
+                onChange={(event) => setOriginFilter(event.target.value)}
+              >
+                <option value="all">All</option>
+                {origins.map((origin) => (
+                  <option key={origin} value={origin}>
+                    {origin}
+                  </option>
+                ))}
+                <option value={NOT_FROM_PACK_FILTER}>Not from a pack</option>
+              </select>
+            </label>
+          ) : (
+            <span />
+          )}
+          {onCreate && (
           <Button variant="outline" disabled={creating} onClick={create}>
             <Plus /> {creating ? "Creating…" : createLabel}
           </Button>
+          )}
         </div>
       )}
       <ul className="divide-y divide-border/60 rounded-2xl border border-border/60 bg-raised">
-        {rows.map((r) => (
+        {visibleRows.map((r) => {
+          const origin = packOrigin(r.tags);
+          return (
           <li key={r.id}>
             <a
               href={href({ ...base, item: r.id })}
@@ -88,6 +152,7 @@ export function ListDetail({
                 {r.meta && (
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
                     {r.meta}
+                    {origin ? ` · pack:${origin}` : ""}
                   </p>
                 )}
               </div>
@@ -98,10 +163,11 @@ export function ListDetail({
               )}
             </a>
           </li>
-        ))}
-        {rows.length === 0 && (
+          );
+        })}
+        {visibleRows.length === 0 && (
           <li className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {empty}
+            {rows.length === 0 ? empty : "No matching documents."}
           </li>
         )}
       </ul>

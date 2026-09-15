@@ -54,6 +54,8 @@ pub(crate) mod oauth_http;
 pub mod openai_wire;
 pub mod p2p_observability;
 pub mod pack;
+pub mod pack_archive;
+pub mod plugin;
 pub(crate) mod provider_input;
 /// Exact provider context-window budget policy shared by compaction,
 /// diagnostics, and the final dispatch gate.
@@ -110,11 +112,14 @@ pub(crate) mod test_support {
 
     pub(crate) fn load_test_graph_package(
         name: &str,
-        options: &crate::pack::PackInstallOptions,
+        options: &crate::graph_package::GraphPackageInstallBindings,
     ) -> crate::graph_package::BundledGraphPackage {
+        let scope = crate::pack::PackInstallOptions {
+            agent_did: options.agent_did.clone(),
+        };
         crate::graph_package::load_package(
             &crate::pack::resolve_pack(name).unwrap(),
-            options,
+            &scope,
             &|name| (name == "GENTS_REVIEW_MODEL").then(|| "test-model".to_owned()),
         )
         .unwrap()
@@ -124,7 +129,7 @@ pub(crate) mod test_support {
         access: &crate::ConfigAccess,
         actor: &str,
         name: &str,
-        options: &crate::pack::PackInstallOptions,
+        options: &crate::graph_package::GraphPackageInstallBindings,
     ) -> anyhow::Result<crate::graph_package::GraphPackageInstallReceipt> {
         let package = load_test_graph_package(name, options);
         crate::graph_package::install_loaded_graph_package(access, actor, &package, options, None)

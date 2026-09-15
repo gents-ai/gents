@@ -227,6 +227,7 @@ export function SchedulesPanel({
         id: s.schedule_id,
         title: s.display_name ?? s.schedule_id,
         meta: cadenceLabel(s),
+        tags: s.tags,
       }))}
       createLabel="New schedule"
       empty="No schedules. A trigger binds a task to a schedule."

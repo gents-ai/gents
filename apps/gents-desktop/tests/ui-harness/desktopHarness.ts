@@ -142,6 +142,7 @@ export type MobilePerformanceHarnessController = {
   reset(): void;
   snapshot(): MobilePerformanceHarnessSnapshot;
   recordCommit(commit: MobilePerformanceCommit): void;
+  finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
 };
@@ -168,6 +169,8 @@ export const MOBILE_PERFORMANCE_FIXTURE = {
   shortSessionTimelineItems: 1,
   largeSessionTimelineItems: 600,
   transcriptPageSize: 40,
+  typingBurstCharacters: 160,
+  typingLoadedPages: 5,
   streamUpdateCount: 50,
   repeatedNavigationCount: 10,
 } as const;
@@ -2045,13 +2048,16 @@ export function createDesktopUiHarness(
           ? "GLM-5.3-Flash-NVFP4"
           : request.provider === "anthropic"
             ? "claude-sonnet-5"
-            : "gpt-5.5";
+            : request.provider === "grok"
+              ? "grok-4.6"
+              : "gpt-5.6-sol";
       const recommendation = await adapter.getInferenceModelRecommendation({
         provider: request.provider,
         authMethod: request.authMethod,
         modelName,
         displayName: null,
         contextWindow: null,
+        maxContextWindow: null,
         maxOutputTokens: null,
         reasoningEfforts: null,
       });
@@ -2066,13 +2072,17 @@ export function createDesktopUiHarness(
             ? "Local server"
             : request.provider === "anthropic"
               ? "Anthropic"
-              : "ChatGPT",
+              : request.provider === "grok"
+                ? "Grok"
+                : "ChatGPT",
         providerKind:
           request.provider === "local"
             ? "OpenAiCompatible"
             : request.provider === "anthropic"
               ? "ClaudeCliSubscription"
-              : "ChatGptCodex",
+              : request.provider === "grok"
+                ? "XaiGrokOAuth"
+                : "ChatGptCodex",
         openaiWireApi: request.provider === "local" ? "chat_completions" : "responses",
         reachable: true,
         models: [
@@ -2081,6 +2091,7 @@ export function createDesktopUiHarness(
               model_name: modelName,
               display_name: null,
               context_window: null,
+              max_context_window: null,
               max_output_tokens: null,
               reasoning_efforts: null,
             },
@@ -2112,10 +2123,16 @@ export function createDesktopUiHarness(
         summary: fixture
           ? "Gents recommends temperature 1 and top-p 0.95 for this workstation model."
           : "Gents recommends medium reasoning.",
-        contextWindow: null,
+        contextWindow:
+          request.provider === "openai"
+            ? { recommended: 272000, min: 1, max: 872000 }
+            : null,
         maxOutputTokens: null,
         temperature: fixture ? { recommended: 1, min: 0, max: 2, step: 0.05 } : null,
-        topP: fixture ? { recommended: 0.95, min: 0, max: 1, step: 0.05 } : null,
+        topP:
+          fixture || request.provider === "grok"
+            ? { recommended: 0.95, min: 0, max: 1, step: 0.05 }
+            : null,
         reasoningEffort: fixture
           ? null
           : { recommended: "medium" as const, choices: ["low", "medium", "high"] },
@@ -2141,6 +2158,7 @@ export function createDesktopUiHarness(
         modelName: request.modelName,
         displayName: request.displayName,
         contextWindow: request.contextWindow,
+        maxContextWindow: request.maxContextWindow,
         maxOutputTokens: request.maxOutputTokens,
         reasoningEfforts: request.reasoningEfforts,
       });
@@ -2397,6 +2415,36 @@ export function createDesktopUiHarness(
           },
           recordCommit(commit) {
             commits.push(commit);
+          },
+          finishStreaming() {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const timelineItems = session.timelineItems.map((item, index) =>
+              item.kind === "liveAssistant" && item.itemKey === "large-live"
+                ? {
+                    kind: "assistantMessage" as const,
+                    itemKey: item.itemKey,
+                    sequence: index,
+                    content: item.content,
+                    reasoning: item.reasoning,
+                    timestamp: STARTED_AT,
+                  }
+                : item,
+            );
+            sessions.set("session-large", {
+              ...session,
+              status: "completed",
+              turnState: "completed",
+              timelineItems,
+              latestResponse: session.latestResponse
+                ? { ...session.latestResponse, status: "completed" }
+                : null,
+              activeResponseOverlay: null,
+            });
+            syncSessions();
+            notify("store");
           },
           streamUpdate() {
             const sequence = appendStreamChunk();

@@ -81,6 +81,7 @@ function NumericField({
   min,
   max,
   step,
+  hint,
   onChange,
 }: {
   id: string;
@@ -89,13 +90,18 @@ function NumericField({
   min: number;
   max: number | null;
   step?: number;
+  hint?: string;
   onChange: (value: string) => void;
 }) {
   return (
     <label className="grid gap-1" htmlFor={id}>
-      <span className="text-xs text-muted-foreground">{label}</span>
+      <span id={`${id}-label`} className="text-xs text-muted-foreground">
+        {label}
+      </span>
       <Input
         id={id}
+        aria-labelledby={`${id}-label`}
+        aria-describedby={hint ? `${id}-hint` : undefined}
         type="number"
         value={value}
         min={min}
@@ -103,6 +109,11 @@ function NumericField({
         step={step ?? 1}
         onChange={(event) => onChange(event.target.value)}
       />
+      {hint ? (
+        <span id={`${id}-hint`} className="text-xs text-muted-foreground">
+          {hint}
+        </span>
+      ) : null}
     </label>
   );
 }
@@ -198,6 +209,13 @@ export function InferenceModelControls({
               value={value.contextWindow}
               min={recommendation.contextWindow.min}
               max={recommendation.contextWindow.max}
+              hint={
+                recommendation.contextWindow.max != null &&
+                recommendation.contextWindow.max >
+                  recommendation.contextWindow.recommended
+                  ? `Default ${recommendation.contextWindow.recommended.toLocaleString()} · Maximum ${recommendation.contextWindow.max.toLocaleString()}`
+                  : undefined
+              }
               onChange={(next) => set("contextWindow", next)}
             />
           ) : null}

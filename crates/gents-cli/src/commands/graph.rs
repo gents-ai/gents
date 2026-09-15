@@ -40,7 +40,8 @@ pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
 
 pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<()> {
     let (access, owner_did) = access_and_actor(&args.scope).await?;
-    let bindings = if let Some(path) = args.bindings.as_deref() {
+    let requested = super::pack::parse_inference_slot_bindings(&args.inference_slots)?;
+    let mut bindings = if let Some(path) = args.bindings.as_deref() {
         let bindings: GraphPackageInstallBindings = serde_json::from_slice(
             &std::fs::read(path)
                 .with_context(|| format!("reading graph package bindings {}", path.display()))?,
@@ -55,9 +56,46 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
         }
         bindings
     } else {
-        default_bundled_graph_package_install_bindings(&access, &args.package, &owner_did).await?
+        default_bundled_graph_package_install_bindings(
+            &access,
+            &args.package,
+            &owner_did,
+            &requested,
+        )
+        .await?
     };
-    let package = load_bundled_graph_package(&args.package, &bindings)?;
+    for (slot, profile_id) in requested {
+        if let Some(existing) = bindings
+            .inference_slots
+            .insert(slot.clone(), profile_id.clone())
+        {
+            anyhow::ensure!(
+                existing == profile_id,
+                "inference slot {slot:?} has conflicting bindings"
+            );
+        }
+    }
+    let scope = gents::pack::PackInstallOptions {
+        agent_did: bindings.agent_did.clone(),
+    };
+    let package = load_bundled_graph_package(&args.package, &scope)?;
+    let preview = gents::pack::preview_pack_inference_bindings(
+        &access,
+        &package.manifest,
+        &owner_did,
+        &bindings.inference_slots,
+    )
+    .await?;
+    bindings.inference_slots = preview.bindings.clone();
+    if args.preview {
+        return print_json(&json!({
+            "pack": package.manifest.name,
+            "owner": owner_did,
+            "inference": preview,
+            "origin_tag": gents::pack::pack_origin_tag(&package.manifest.name)?,
+            "would_write": false,
+        }));
+    }
     let receipt =
         install_bundled_graph_package(&access, &owner_did, &args.package, &bindings).await?;
     let previous = load_active_graph_plan_with_access(&access, &owner_did, &receipt.graph_id)

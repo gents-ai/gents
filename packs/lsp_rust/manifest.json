@@ -22,5 +22,14 @@
     "workspace/src/lib.rs"
   ],
   "dependencies": [],
-  "config": "pack_config.json"
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "coder",
+      "description": "Rust coding and rust-analyzer tool use.",
+      "behaviors": [
+        "lsp-coder"
+      ]
+    }
+  ]
 }

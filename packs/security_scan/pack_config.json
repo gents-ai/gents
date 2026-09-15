@@ -6,28 +6,28 @@
       "display_name": "Batch investigator",
       "description": "Investigates one candidate batch in depth and records findings.",
       "context_id": "scan-investigate-context",
-      "inference_profile_id": "scan-profile"
+      "inference_profile_id": "gents:inference-slot:scanner"
     },
     {
       "behavior_id": "scan-plan",
       "display_name": "Scan batch planner",
       "description": "Batches pre-scan candidates into investigation assignments.",
       "context_id": "scan-plan-context",
-      "inference_profile_id": "scan-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "scan-report",
       "display_name": "Scan reporter",
       "description": "Publishes confirmed findings and the run report.",
       "context_id": "scan-report-context",
-      "inference_profile_id": "scan-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "scan-revalidate",
       "display_name": "Adversarial revalidator",
       "description": "Re-checks every candidate finding and stamps verdicts.",
       "context_id": "scan-revalidate-context",
-      "inference_profile_id": "scan-profile"
+      "inference_profile_id": "gents:inference-slot:verifier"
     }
   ],
   "contexts": [
@@ -531,62 +531,6 @@
           ]
         }
       ]
-    }
-  ],
-  "inference_backends": [
-    {
-      "backend_id": "scan-backend",
-      "name": "Security scan backend",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_SCAN_ENDPOINT:-http://127.0.0.1:8080/v1}",
-      "auth": {
-        "kind": "unauthenticated"
-      },
-      "max_concurrent": 8,
-      "max_queue_depth": 100
-    }
-  ],
-  "inference_profiles": [
-    {
-      "profile_id": "scan-profile",
-      "display_name": "Security scan profile",
-      "backend_id": "scan-backend",
-      "model_name": "${GENTS_SCAN_MODEL:-GLM-5.2}",
-      "context_window": 262144,
-      "max_output_tokens": 65536,
-      "sampling_id": "scan-profile-sampling",
-      "execution_id": "scan-profile-execution"
-    }
-  ],
-  "inference_sampling": [
-    {
-      "sampling_id": "scan-profile-sampling",
-      "display_name": "Security scan profile sampling",
-      "temperature": 1.0,
-      "top_p": 0.95
-    }
-  ],
-  "inference_execution": [
-    {
-      "execution_id": "scan-profile-execution",
-      "display_name": "Security scan profile execution",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000,
-      "retry_policy_id": "scan-profile-retry"
-    }
-  ],
-  "inference_retry_policies": [
-    {
-      "retry_policy_id": "scan-profile-retry",
-      "display_name": "Security scan profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 32
     }
   ],
   "tasks": [

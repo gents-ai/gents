@@ -3,17 +3,27 @@ use crate::graph_pipeline::{activate_graph_revision, start_graph_run};
 use crate::test_support::{install_test_graph_package, load_test_graph_package};
 use defra_node::EmbeddedNode;
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 async fn fixture() -> (Arc<EmbeddedNode>, ConfigAccess, GraphPackageInstallBindings) {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let options = GraphPackageInstallBindings {
-        agent_did: "did:key:package-owner".into(),
-    };
-    crate::document_config::ensure_agent_principal(&node, &options.agent_did)
+    let owner = "did:key:package-owner";
+    crate::document_config::ensure_agent_principal(&node, owner)
         .await
         .unwrap();
+    for profile in ["claude", "glm", "grok"] {
+        crate::test_support::install_test_behavior(&node, owner, profile).await;
+    }
+    let options = GraphPackageInstallBindings {
+        agent_did: owner.into(),
+        inference_slots: BTreeMap::from([
+            ("coordinator".into(), "claude:inference".into()),
+            ("worker".into(), "glm:inference".into()),
+            ("verifier".into(), "grok:inference".into()),
+        ]),
+    };
     let access = ConfigAccess::Local(node.clone());
     (node, access, options)
 }
@@ -22,6 +32,7 @@ async fn fixture() -> (Arc<EmbeddedNode>, ConfigAccess, GraphPackageInstallBindi
 fn explicit_graph_selection_preserves_authored_identity_and_rejects_ambiguity() {
     let options = GraphPackageInstallBindings {
         agent_did: "did:key:owner".into(),
+        inference_slots: BTreeMap::new(),
     };
     let mut package = load_test_graph_package("code_review", &options);
     assert_eq!(
@@ -53,6 +64,7 @@ async fn missing_or_foreign_owner_does_not_register_package_schema() {
     );
     let missing = GraphPackageInstallBindings {
         agent_did: "did:key:missing".into(),
+        inference_slots: options.inference_slots.clone(),
     };
     assert!(
         install_test_graph_package(&access, &missing.agent_did, "code_review", &missing)
@@ -87,7 +99,15 @@ async fn invalid_retained_reference_fails_before_any_package_schema_write() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.unwrap();
-    assert!(data["AgentBehavior"].as_array().unwrap().is_empty());
+    assert_eq!(
+        data["AgentBehavior"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|behavior| behavior["behavior_id"].as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["claude", "glm", "grok"])
+    );
     assert!(data["GraphRevision"].as_array().unwrap().is_empty());
 }
 
@@ -132,26 +152,43 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
         )
         .await;
     assert!(!unrelated.has_errors(), "{:?}", unrelated.errors);
+    let expected_documents = DesiredStateApplyPlan::from_pack_config(
+        &load_test_graph_package("code_review", &options).config,
+    )
+    .unwrap()
+    .documents()
+    .iter()
+    .filter(|document| document.collection != Collection::AgentPrincipal)
+    .count();
     let first = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
         .await
         .unwrap();
+    let user_tag = node
+        .execute(
+            r#"mutation { update_AgentBehavior(filter: {
+        agent_did: {_eq: "did:key:package-owner"}, behavior_id: {_eq: "review-recon"}
+    }, input: {tags: ["gents:pack:code_review", "user-label"]}) {_docID} }"#,
+        )
+        .await;
+    assert!(!user_tag.has_errors(), "{:?}", user_tag.errors);
     let second = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
         .await
         .unwrap();
     assert_eq!(first, second);
-    assert_eq!(first.desired_documents, 29);
+    assert_eq!(first.desired_documents, expected_documents);
     assert_eq!(first.graph_id, "code-review");
     let state = node
         .execute(
             r#"{
         AgentPrincipal {agent_did display_name tags}
-        AgentBehavior {behavior_id agent_did context_id inference_profile_id}
-        Task {task_id agent_did goal_objective_template goal_token_budget}
+        AgentBehavior {behavior_id agent_did context_id inference_profile_id tags}
+        AgentContext {context_id tags}
+        Tools {tools_id tags}
+        Task {task_id agent_did goal_objective_template goal_token_budget tags}
+        GraphDefinition {graph_id tags}
         GraphRevision {digest artifacts_complete plan_json}
-        InferenceSampling {sampling_id temperature top_p}
-        InferenceExecution {execution_id max_turns}
-        InferenceProfile {profile_id sampling_id execution_id reasoning_effort}
-        InferenceBackend {backend_id max_concurrent}
+        InferenceProfile {profile_id tags}
+        InferenceBackend {backend_id endpoint provider_kind auth tags}
     }"#,
         )
         .await;
@@ -183,34 +220,106 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
             .is_some_and(|s| !s.is_empty()));
         assert!(task["goal_token_budget"].as_i64().is_some_and(|n| n > 0));
     }
-    assert_eq!(data["InferenceSampling"][0]["temperature"], 1.0);
-    assert_eq!(data["InferenceSampling"][0]["top_p"], 0.95);
-    assert_eq!(data["InferenceExecution"][0]["max_turns"], 1000);
-    assert_eq!(data["InferenceBackend"][0]["max_concurrent"], 8);
-    for profile in data["InferenceProfile"].as_array().unwrap() {
-        assert_eq!(profile["sampling_id"], "review-sampling");
-        assert_eq!(profile["execution_id"], "review-execution");
-        assert_eq!(profile["reasoning_effort"], "high");
+    let expected_bindings = BTreeMap::from([
+        ("review-recon", "claude:inference"),
+        ("review-scan", "glm:inference"),
+        ("review-verify", "grok:inference"),
+        ("review-triage", "claude:inference"),
+    ]);
+    for behavior in data["AgentBehavior"].as_array().unwrap() {
+        let behavior_id = behavior["behavior_id"].as_str().unwrap();
+        let Some(profile_id) = expected_bindings.get(behavior_id) else {
+            assert!(behavior["tags"].is_null());
+            continue;
+        };
+        assert_eq!(behavior["inference_profile_id"], *profile_id);
+        assert!(behavior["tags"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("gents:pack:code_review")));
+    }
+    let review_recon = data["AgentBehavior"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|behavior| behavior["behavior_id"] == "review-recon")
+        .unwrap();
+    assert!(review_recon["tags"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("user-label")));
+    for (collection, id_field, retained_ids) in [
+        (
+            &data["AgentContext"],
+            "context_id",
+            &["claude:context", "glm:context", "grok:context"][..],
+        ),
+        (
+            &data["Tools"],
+            "tools_id",
+            &["claude:tools", "glm:tools", "grok:tools"][..],
+        ),
+        (&data["Task"], "task_id", &["unrelated-task"][..]),
+        (&data["GraphDefinition"], "graph_id", &[][..]),
+    ] {
+        for document in collection.as_array().unwrap() {
+            if retained_ids.contains(&document[id_field].as_str().unwrap()) {
+                assert!(document["tags"].is_null());
+                continue;
+            }
+            assert!(document["tags"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("gents:pack:code_review")));
+        }
+    }
+    assert_eq!(data["InferenceProfile"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        data["InferenceProfile"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|profile| profile["profile_id"].as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["claude:inference", "glm:inference", "grok:inference"])
+    );
+    assert_eq!(data["InferenceBackend"].as_array().unwrap().len(), 3);
+    assert!(data["InferenceProfile"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|profile| profile["tags"].is_null()));
+    assert!(data["InferenceBackend"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|backend| backend["tags"].is_null()));
+    for backend in data["InferenceBackend"].as_array().unwrap() {
+        assert_eq!(backend["endpoint"], "http://127.0.0.1:1/v1");
+        assert_eq!(backend["provider_kind"], "OpenAiCompatible");
+        assert_eq!(backend["auth"]["kind"], "unauthenticated");
     }
     let plan: GraphPlan =
         serde_json::from_str(data["GraphRevision"][0]["plan_json"].as_str().unwrap()).unwrap();
     let artifacts = &plan.package.as_ref().unwrap().artifacts;
-    assert_eq!(artifacts.len(), 29);
-    for collection in [
-        Collection::Tools,
-        Collection::AgentContext,
-        Collection::InferenceProfile,
-        Collection::InferenceBackend,
-        Collection::InferenceSampling,
-        Collection::InferenceExecution,
-    ] {
+    assert_eq!(artifacts.len(), expected_documents);
+    for collection in [Collection::Tools, Collection::AgentContext] {
         assert!(artifacts
             .iter()
             .any(|artifact| artifact.collection == collection));
     }
-    assert!(!artifacts
-        .iter()
-        .any(|artifact| artifact.collection == Collection::AgentPrincipal));
+    for collection in [
+        Collection::AgentPrincipal,
+        Collection::InferenceProfile,
+        Collection::InferenceBackend,
+        Collection::InferenceSampling,
+        Collection::InferenceExecution,
+        Collection::InferenceRetryPolicy,
+    ] {
+        assert!(!artifacts
+            .iter()
+            .any(|artifact| artifact.collection == collection));
+    }
     activate_graph_revision(
         &node,
         None,
@@ -262,10 +371,16 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
     // Identical authored logical IDs may coexist under another selected DID.
     let foreign = GraphPackageInstallBindings {
         agent_did: "did:key:second-owner".into(),
+        inference_slots: BTreeMap::from([
+            ("coordinator".into(), "package:inference".into()),
+            ("worker".into(), "package:inference".into()),
+            ("verifier".into(), "package:inference".into()),
+        ]),
     };
     crate::document_config::ensure_agent_principal(&node, &foreign.agent_did)
         .await
         .unwrap();
+    crate::test_support::install_test_behavior(&node, &foreign.agent_did, "package").await;
     let other = install_test_graph_package(&access, &foreign.agent_did, "code_review", &foreign)
         .await
         .unwrap();

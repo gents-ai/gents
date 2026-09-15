@@ -155,7 +155,11 @@ pub struct BackendModelCatalog {
 pub struct AdvertisedModel {
     pub model_name: String,
     pub display_name: Option<String>,
+    /// Provider-advertised normal/default context size, when known.
     pub context_window: Option<i64>,
+    /// Provider-advertised ceiling for an explicit context override. This is
+    /// distinct from `context_window` and must never become a default itself.
+    pub max_context_window: Option<i64>,
     pub max_output_tokens: Option<i64>,
     /// None means unknown; Some(empty) means no configurable reasoning effort.
     /// The server advertises these choices without materializing effort profiles.

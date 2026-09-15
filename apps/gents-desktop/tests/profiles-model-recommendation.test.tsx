@@ -168,7 +168,7 @@ describe("profile model recommendation ownership", () => {
           inference_profiles: [
             expect.objectContaining({
               context_window: 131072,
-              max_output_tokens: 1000,
+              max_output_tokens: null,
             }),
           ],
         }),

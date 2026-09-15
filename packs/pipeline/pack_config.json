@@ -5,13 +5,13 @@
       "behavior_id": "exp-stage1",
       "display_name": "Pipeline stage 1",
       "context_id": "exp-stage1-context",
-      "inference_profile_id": "exp-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "exp-stage2",
       "display_name": "Pipeline stage 2",
       "context_id": "exp-stage2-context",
-      "inference_profile_id": "exp-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     }
   ],
   "contexts": [
@@ -76,44 +76,6 @@
           ]
         }
       ]
-    }
-  ],
-  "inference_backends": [
-    {
-      "backend_id": "exp-deepseek",
-      "name": "DeepSeek V4 Flash (workstation-1)",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_EXP_ENDPOINT:-http://127.0.0.1:8080/v1}",
-      "auth": {
-        "kind": "unauthenticated"
-      },
-      "max_concurrent": 4,
-      "max_queue_depth": 100
-    }
-  ],
-  "inference_profiles": [
-    {
-      "profile_id": "exp-profile",
-      "display_name": "Experiment default",
-      "backend_id": "exp-deepseek",
-      "model_name": "${GENTS_EXP_MODEL:-d4f}",
-      "max_output_tokens": 8192,
-      "sampling_id": "exp-profile-sampling",
-      "execution_id": "exp-profile-execution"
-    }
-  ],
-  "inference_sampling": [
-    {
-      "sampling_id": "exp-profile-sampling",
-      "display_name": "Experiment default sampling",
-      "temperature": 0.2
-    }
-  ],
-  "inference_execution": [
-    {
-      "execution_id": "exp-profile-execution",
-      "display_name": "Experiment default execution"
     }
   ],
   "tasks": [

@@ -6,7 +6,16 @@ import type { ReasoningEffort } from "./ReasoningEffort.js";
  * Optional capabilities remain unknown unless discovery or an explicit adapter
  * contract establishes them. No separate document identity or model profile.
  */
-export type AdvertisedModel = { model_name: string, display_name: string | null, context_window: number | null, max_output_tokens: number | null,
+export type AdvertisedModel = { model_name: string, display_name: string | null,
+/**
+ * Provider-advertised normal/default context size, when known.
+ */
+context_window: number | null,
+/**
+ * Provider-advertised ceiling for an explicit context override. This is
+ * distinct from `context_window` and must never become a default itself.
+ */
+max_context_window: number | null, max_output_tokens: number | null,
 /**
  * None means unknown; Some(empty) means no configurable reasoning effort.
  * The server advertises these choices without materializing effort profiles.

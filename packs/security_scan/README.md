@@ -119,19 +119,15 @@ tells investigators to treat violations as real findings.
 
 ```bash
 export GENTS_SCAN_ROOT=/path/to/repo
-export GENTS_SCAN_ENDPOINT=http://127.0.0.1:8000/v1
-export GENTS_SCAN_MODEL=GLM-5.2
 export GENTS_SCAN_MIN_BATCHES=4
 export GENTS_SCAN_MAX_BATCHES=24
 export GENTS_SCAN_MAX_PAYLOAD_CHARS=49152
 ```
 
 `GENTS_SCAN_ROOT` roots the pre-scan, the file tools, and bash for the
-investigate/revalidate stages, and defaults to `.`. `GENTS_SCAN_ENDPOINT`
-and `GENTS_SCAN_MODEL` retarget the one shared inference backend (default
-`GLM-5.2` at `http://127.0.0.1:8080/v1`, `concurrency: 8`) that all
-four stages use, so batch fan-out never exceeds eight in-flight requests
-regardless of batch count. `GENTS_SCAN_MIN_BATCHES` /
+investigate/revalidate stages, and defaults to `.`. Install binds the declared
+`coordinator`, `scanner`, and `verifier` slots to existing user profiles;
+their backends own connectivity and concurrency. `GENTS_SCAN_MIN_BATCHES` /
 `GENTS_SCAN_MAX_BATCHES` bound how many `InvestigationBatch` rows the
 planner may create; `GENTS_SCAN_MAX_PAYLOAD_CHARS` bounds the pre-scan
 payload embedded in the seed `ScanJob` before excerpts truncate and,

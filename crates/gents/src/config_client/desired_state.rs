@@ -201,6 +201,7 @@ pub(crate) async fn read_desired_state_document_in_txn(
 }
 
 /// Immutable revision checks remain separate from ordinary config replacement.
+#[cfg(test)]
 pub(crate) async fn verify_existing_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,

@@ -78,6 +78,26 @@ uuid.workspace = true
 url = "2"
 tempfile = "3"
 
+# `gents pack build` (src/commands/pack/build.rs) compiles a tool's source
+# through Afterburner's own compiler rather than growing a second one:
+# `dispatch_compile` already covers every language Afterburner supports
+# (JS/TS via Javy, Ruby via wasi-vfs, Python to an emscripten-pyodide
+# bundle, Rust/Go/C/C++ via their native toolchains). `cli::compile` sits
+# behind the `bin` feature. Pinned to the same rev as the afterburner-*
+# crates in crates/gents/Cargo.toml so all of them agree on the
+# `.afb`/`Manifold` wire shapes.
+afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "dd0b702f62164fe3ce25806f71eff71889308c98", default-features = false, features = [
+    "bin",
+] }
+# The package loader `dispatch_compile` expects (`pkg::LocalPackage`):
+# `burn compile` loads a tool's source the same way, so this reuses that
+# loader instead of hand-rolling a second `afb.toml` reader.
+#
+# Pinned to the same rev as `afterburner` above: `dispatch_compile` takes a
+# `pkg::LocalPackage` from this crate, and two instances of it at different
+# revs are different types to the compiler.
+afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "dd0b702f62164fe3ce25806f71eff71889308c98" }
+
 [dev-dependencies]
 acp.workspace = true
 async-trait = "0.1"
