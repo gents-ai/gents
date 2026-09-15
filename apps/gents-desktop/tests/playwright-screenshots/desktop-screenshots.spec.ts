@@ -77,6 +77,7 @@ test.describe("desktop stable screenshot states", () => {
       page.getByRole("textbox", { name: "Type Default context to confirm" }),
     ).toBeFocused();
     await captureStableScreenshot(page, testInfo, "reconciliation-delete-confirmation");
+    await expect(page.getByRole("alertdialog")).toHaveCSS("opacity", "1");
 
     await gotoHarness(page, "mailbox-overflow");
     const mailbox = page.getByRole("link", { name: "Mailbox" });
