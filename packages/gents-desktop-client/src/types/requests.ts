@@ -2,6 +2,7 @@ import type { AgentConfigSaveRequest as GeneratedAgentConfigSaveRequest } from "
 import type { BackendDeleteRequest as GeneratedBackendDeleteRequest } from "../generated/BackendDeleteRequest.js";
 import type { BackendSaveRequest as GeneratedBackendSaveRequest } from "../generated/BackendSaveRequest.js";
 import type { BehaviorDeleteRequest as GeneratedBehaviorDeleteRequest } from "../generated/BehaviorDeleteRequest.js";
+import type { ContextDeleteRequest as GeneratedContextDeleteRequest } from "../generated/ContextDeleteRequest.js";
 import type { BehaviorSaveRequest as GeneratedBehaviorSaveRequest } from "../generated/BehaviorSaveRequest.js";
 import type { ChatSendRequest as GeneratedChatSendRequest } from "../generated/ChatSendRequest.js";
 import type { MailboxItemRequest as GeneratedMailboxItemRequest } from "../generated/MailboxItemRequest.js";
@@ -41,6 +42,7 @@ export type BackendDeleteRequest = RequestInput<GeneratedBackendDeleteRequest>;
 export type BackendSaveRequest = RequestInput<GeneratedBackendSaveRequest>;
 export type BehaviorDeleteRequest =
   RequestInput<GeneratedBehaviorDeleteRequest>;
+export type ContextDeleteRequest = RequestInput<GeneratedContextDeleteRequest>;
 export type BehaviorSaveRequest = RequestInput<GeneratedBehaviorSaveRequest>;
 export type ChatSendRequest = RequestInput<GeneratedChatSendRequest>;
 export type MailboxItemRequest = RequestInput<GeneratedMailboxItemRequest>;
@@ -85,6 +87,9 @@ export type { GrokLoginResult } from "../generated/GrokLoginResult.js";
 export type { GrokLoginRequest } from "../generated/GrokLoginRequest.js";
 export type { GrokLoginUrl } from "../generated/GrokLoginUrl.js";
 export type { CodexLoginUrl } from "../generated/CodexLoginUrl.js";
+export type { ClaudeLoginResult } from "../generated/ClaudeLoginResult.js";
+export type { ClaudeLoginRequest } from "../generated/ClaudeLoginRequest.js";
+export type { ClaudeLoginUrl } from "../generated/ClaudeLoginUrl.js";
 export type { InferenceProbeResult } from "../generated/InferenceProbeResult.js";
 export type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 export type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";

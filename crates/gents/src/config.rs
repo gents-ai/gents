@@ -44,6 +44,9 @@ pub struct ResolvedBehavior {
     pub backend_endpoint: String,
     pub backend_auth: crate::document_config::BackendAuth,
     pub model_name: String,
+    /// Provider-advertised effort choices for the selected model. `None` is
+    /// unknown and must not be inferred from the model name at dispatch.
+    pub resolved_reasoning_efforts: Option<Vec<ReasoningEffort>>,
     pub context_window: usize,
     pub max_output_tokens: usize,
     pub max_turns: usize,
@@ -81,6 +84,21 @@ pub struct ResolvedInference {
 }
 
 impl ResolvedInference {
+    pub fn resolved_reasoning_efforts(&self) -> Option<Vec<ReasoningEffort>> {
+        let advertised = self
+            .advertised_model
+            .as_ref()
+            .and_then(|model| model.reasoning_efforts.as_deref());
+        if self.backend.provider_kind == BackendProviderKind::ClaudeCliSubscription {
+            crate::inference_setup::claude_supported_reasoning_efforts(
+                &self.profile.model_name,
+                advertised,
+            )
+        } else {
+            advertised.map(|values| values.to_vec())
+        }
+    }
+
     pub fn context_window(&self) -> Result<usize> {
         positive_inference_limit(
             self.profile.context_window.or_else(|| {
@@ -302,6 +320,10 @@ impl std::fmt::Debug for ResolvedBehavior {
             .field("backend_endpoint", &self.backend_endpoint)
             .field("backend_auth", &self.backend_auth)
             .field("model_name", &self.model_name)
+            .field(
+                "resolved_reasoning_efforts",
+                &self.resolved_reasoning_efforts,
+            )
             .field("context_window", &self.context_window)
             .field("max_output_tokens", &self.max_output_tokens)
             .field("max_turns", &self.max_turns)
@@ -416,6 +438,7 @@ mod tests {
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             model_name: DEFAULT_MODEL_NAME.to_string(),
+            resolved_reasoning_efforts: None,
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_turns: DEFAULT_MAX_TURNS,

@@ -34,11 +34,13 @@ export function useDesktopShell({
   const selectedAgentDidRef = useRef<string | null>(null);
   const selectedTrackedRequestIdRef = useRef<string | null>(null);
   const [sending, setSending] = useState(false);
+  const submissionInFlight = useRef(false);
   const [savingBehaviorConfig, setSavingBehaviorConfig] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [addingPeer, setAddingPeer] = useState(false);
   const [repairingP2P, setRepairingP2P] = useState(false);
   const [runningTask, setRunningTask] = useState(false);
+  const runningTaskCountRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const {
     session,
@@ -62,7 +64,7 @@ export function useDesktopShell({
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
     snapshot,
-    setSnapshot,
+    mutateSnapshot,
     startupPhase,
     loading,
     starting,
@@ -86,6 +88,9 @@ export function useDesktopShell({
   const [selectedBehaviorId, setSelectedBehaviorId] = useState<string | null>(null);
   const {
     newSessionAgentRef,
+    advanceComposeIntent,
+    captureComposeIntent,
+    acceptsComposeIntent,
     pendingMailboxCauseId,
     setPendingMailboxCauseId,
     clearPendingMailboxCause,
@@ -192,9 +197,8 @@ export function useDesktopShell({
     sending,
     setLocalWorkflow,
     setError,
-    setSelectedAgentDid,
+    setSelectedAgentDid: selectAgent,
     setSelectedBehaviorId,
-    setSelectedSessionId,
     snapshot,
     starting,
     stopping,
@@ -209,13 +213,15 @@ export function useDesktopShell({
     onRepairP2P,
   } = createDesktopShellPeerActions({
     api,
+    mutateSnapshot,
+    refreshSnapshot,
     snapshot,
     ensureDesktopClientStarted,
     setAddingPeer,
     setError,
     setRepairingP2P,
-    setSelectedAgentDid,
-    setSnapshot,
+    selectedAgentDidRef,
+    selectAgent,
     setStarting,
   });
   const foregroundRepairRef = useRef(onRepairP2P);
@@ -245,6 +251,7 @@ export function useDesktopShell({
     onApplyConfigComponents,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteContextConfig,
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
     onDeleteEventSourceConfig,
@@ -266,28 +273,32 @@ export function useDesktopShell({
     onTestToolService,
   } = createDesktopShellConfigActions({
     api,
+    mutateSnapshot,
     setError,
     setSavingBehaviorConfig,
     setSavingConfig,
-    setSelectedAgentDid,
-    setSelectedBehaviorId,
-    setSnapshot,
   });
 
   const {
+    submitContent,
     onRenameSessionTitle,
     onRetryMessage,
     onSelectSession,
     onSendMessage,
     onStartNewSession,
   } = createDesktopShellChatActions({
+    acceptsComposeIntent,
+    submissionInFlight,
+    advanceComposeIntent,
     api,
     behaviorReadiness,
+    captureComposeIntent,
     draft,
     newSessionAgentRef,
     refreshSession,
     refreshSnapshot,
     selectedDeployment,
+    deployments,
     selectedSessionId,
     pendingMailboxCauseId,
     setDraft,
@@ -311,14 +322,15 @@ export function useDesktopShell({
     onSaveTaskConfig,
     onSaveTriggerConfig,
   } = createDesktopShellTaskActions({
+    acceptsComposeIntent,
     api,
-    refreshSession,
+    mutateSnapshot,
+    captureComposeIntent,
     refreshSnapshot,
+    runningTaskCountRef,
     setError,
     setRunningTask,
     setSavingConfig,
-    setSelectedSessionId,
-    setSnapshot,
   });
 
   function onDismissError() {
@@ -359,12 +371,17 @@ export function useDesktopShell({
     canSendMessage,
     chatWorkflow: shellProjection.workflow,
     activeRequestId: shellProjection.activeRequestId,
+    selectedTrackedRequestId,
     turnState: shellProjection.turnState,
     interruptVisible:
       shellProjection.workflow.kind === "awaitingObservation" ||
       shellProjection.workflow.kind === "turnInProgress",
     activityStatus: shellProjection.activityStatus,
+    submitContent,
+    captureComposeIntent,
+    acceptsComposeIntent,
     sendStatus: shellProjection.sendStatus,
+    nonEmptyContentSendStatus: shellProjection.nonEmptyContentSendStatus,
     retryStatus: retryShellProjection.nonEmptyContentSendStatus,
     setSelectedAgentDid: selectAgent,
     setSelectedSessionId: selectSession,
@@ -391,6 +408,7 @@ export function useDesktopShell({
     onSaveAgentConfig,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteContextConfig,
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
     onDeleteEventSourceConfig,

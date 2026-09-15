@@ -279,6 +279,7 @@ mod tests {
             write_tools: false,
             yolo: false,
             tool_package: None,
+            setup_steward: false,
             tool_root: None,
             enable_memory: false,
             disable_defra_query: false,

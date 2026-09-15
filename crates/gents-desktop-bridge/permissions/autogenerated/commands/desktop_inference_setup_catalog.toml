@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-inference-setup-catalog"
+description = "Enables the desktop_inference_setup_catalog command without any pre-configured scope."
+commands.allow = ["desktop_inference_setup_catalog"]
+
+[[permission]]
+identifier = "deny-desktop-inference-setup-catalog"
+description = "Denies the desktop_inference_setup_catalog command without any pre-configured scope."
+commands.deny = ["desktop_inference_setup_catalog"]

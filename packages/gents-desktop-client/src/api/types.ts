@@ -4,16 +4,25 @@ import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest
 import type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteRequest.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
+import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
+import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
+import type { InferenceDiscoveryRequest } from "../generated/InferenceDiscoveryRequest.js";
+import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
+import type { InferenceRecommendationRequest } from "../generated/InferenceRecommendationRequest.js";
+import type { InferenceBackendRecommendationRequest } from "../generated/InferenceBackendRecommendationRequest.js";
+import type { InferenceModelRecommendation } from "../generated/InferenceModelRecommendation.js";
 import type {
   AgentConfigSaveRequest,
   BackendDeleteRequest,
   BackendSaveRequest,
   BehaviorDeleteRequest,
+  ContextDeleteRequest,
   BehaviorSaveRequest,
   CascadeCancelPreview,
   ChatSendResult,
   CodexLoginResult,
+  ClaudeLoginResult,
   GrokLoginResult,
   DesktopClientSnapshot,
   EnrollmentRequestView,
@@ -60,6 +69,11 @@ import type {
   DesktopOperationsSnapshotRequest,
 } from "../types/operations.js";
 
+export type ManagedServerAuthorityInput = {
+  toolCeiling: ManagedServerToolCeiling;
+  toolRoot: string | null;
+};
+
 export type DesktopApiAdapter = {
   fetchDesktopSnapshot: () => Promise<DesktopClientSnapshot>;
   initLocalStandardRuntime: (request: {
@@ -70,7 +84,15 @@ export type DesktopApiAdapter = {
   startDesktopClient: () => Promise<DesktopClientSnapshot>;
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   managedServerStatus?: () => Promise<ManagedServerStatus>;
-  startManagedServer?: (agentName: string) => Promise<ManagedServerStatus>;
+  startManagedServer?: (
+    agentName: string,
+    authority?: ManagedServerAuthorityInput,
+  ) => Promise<ManagedServerStatus>;
+  restartManagedServer?: (
+    agentName: string,
+    authority: ManagedServerAuthorityInput,
+  ) => Promise<ManagedServerStatus>;
+  validateManagedServerRoot?: (path: string) => Promise<string>;
   commitManagedServerAutoStart?: (
     agentName: string,
   ) => Promise<ManagedServerStatus>;
@@ -179,10 +201,23 @@ export type DesktopApiAdapter = {
   deleteBehaviorConfig: (
     request: BehaviorDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
+  deleteContextConfig: (
+    request: ContextDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
   saveBackendConfig: (
     request: BackendSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
   probeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
+  getInferenceSetupCatalog: () => Promise<InferenceSetupCatalog>;
+  discoverInferenceModels: (
+    request: InferenceDiscoveryRequest,
+  ) => Promise<InferenceDiscoveryResult>;
+  getInferenceModelRecommendation: (
+    request: InferenceRecommendationRequest,
+  ) => Promise<InferenceModelRecommendation>;
+  getInferenceBackendRecommendation: (
+    request: InferenceBackendRecommendationRequest,
+  ) => Promise<InferenceModelRecommendation>;
   codexLogin: (
     agentDid: string,
     provider?: string | null,
@@ -193,6 +228,11 @@ export type DesktopApiAdapter = {
     provider?: string | null,
   ) => Promise<GrokLoginResult>;
   cancelGrokLogin: () => Promise<void>;
+  claudeLogin: (
+    agentDid: string,
+    provider?: string | null,
+  ) => Promise<ClaudeLoginResult>;
+  cancelClaudeLogin: () => Promise<void>;
   listProviderAccounts?: (agentDid: string) => Promise<ProviderAccountView[]>;
   disconnectProviderAccount?: (
     agentDid: string,

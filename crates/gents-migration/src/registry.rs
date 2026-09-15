@@ -575,7 +575,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
         gents_protocol::schemas::PERSONA_CONFIG_REQUEST,
-        "bafyreidoth5phfvohyp2mzpuocyf2nqxjzu367ytomvpr57lopqjysmgta"
+        "bafyreiaj3vl4bdrzkuuzqjwis2u7nmj6zixp4po4wwws6vehkhkbq6qkbe"
     ),
     baseline_entry!(
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,

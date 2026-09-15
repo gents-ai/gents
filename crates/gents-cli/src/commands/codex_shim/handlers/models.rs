@@ -589,6 +589,7 @@ mod tests {
             model_name: model_name.to_string(),
             display_name: None,
             context_window: None,
+            max_context_window: None,
             max_output_tokens: None,
             reasoning_efforts: None,
         }
@@ -733,6 +734,7 @@ mod tests {
                     model_name: "model-y".to_string(),
                     display_name: None,
                     context_window: None,
+                    max_context_window: None,
                     max_output_tokens: None,
                     reasoning_efforts: None,
                 },
@@ -740,6 +742,7 @@ mod tests {
                     model_name: "model-x".to_string(),
                     display_name: None,
                     context_window: Some(32_000),
+                    max_context_window: None,
                     max_output_tokens: None,
                     reasoning_efforts: Some(vec![ReasoningEffort::High, ReasoningEffort::Max]),
                 },

@@ -7,61 +7,13 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
-// 7.2: additive — SkillView carries canonical tags for pack provenance.
-// 7.1: additive — TaskView carries canonical task hooks and tags.
-// 7.0: breaking — canonical session and configuration vocabulary replaces
-//      conversation, tool-selection, and event-trigger command/DTO names.
-// 6.3: additive — BridgeError.endpoint carries the unreachable endpoint as a
-//      structured field for EndpointUnreachable errors, so callers stop
-//      regexing it back out of `message` (#1339).
-// 6.2: additive — MCPServiceHealthView.displayState is the projected
-//      three-state MCP health classification (ToolServiceHealthState::project);
-//      the desktop no longer re-derives a synthetic "stuck" state from status.
-// 6.1: additive — DesktopInitSummary is generated from the Rust struct
-//      (camelCase wire shape) instead of a hand-written TS mirror (#1340).
-// 6.0: breaking — exact-version matching, single-owner client state, and
-//      compatibility aliases removed; includes the 5.2 goal save fields.
-//      Also in 6.0: AgentRequest.status is removed; request state is carried
-//      solely by lifecycle_state (RequestLifecycleState). SubagentNodeView,
-//      TaskRunResult, and TaskRunSummaryView drop their status fields.
-// 5.2: additive — goal capability and Task goal save fields may be omitted to
-//      preserve stored values; explicit null clears the override/declaration.
-// 5.1: additive — durable-goal tool capabilities and Task declarations.
-// 5.0: breaking — sync health exposes DefraDB gauges and removes duplicated
-//      pairing/route retry fields.
-// 4.2: additive — SessionHydrationView.coveredCount distinguishes signed
-//      manifest coverage from all locally merged transcript rows.
-// 4.1: additive — bootstrap reports persisted client state independently from
-//      the materialized peer directory so enrollment recovery can restart.
-// 4.0: breaking — status-first enrollment replaces unauthenticated peer add.
-// 3.0: breaking — runtime-authored behavior readiness is required on every
-//       deployment and duplicate AgentRuntime readiness counters are removed.
-// 2.0: breaking — global sync health no longer embeds selected-session
-//       hydration; hydration wakes use the existing store reason.
-// 1.6: additive — explicit session hydration retry command.
-// 1.5: additive — session hydration / sync-health snapshot fields and
-//       `desktop://client-updated` reason `hydration`.
-// 1.4: additive — owner-scoped mailbox read/start/dismiss commands.
-// 1.3: additive — query-level transcript page evidence and exact-total marker.
-// 1.2: additive — observer response in-place/copy-on-write merge counters.
-// 1.1: additive — revisioned desktop_session_live_delta read and store event metadata.
-// 1.0: breaking — clients submit requests; desktop session-fork projection removed.
-// 0.8: additive — managed-server tray event inventory.
-// 0.7: additive — retry eligibility projection and agent-scoped session rename.
-// 0.6: additive — predecessor-aware desktop_request_retry command.
-// 0.5: additive — inference onboarding (probe endpoint, Codex login/cancel in
-// config-write) merged from main (#871); desktop://codex-login-url event.
-// 0.4: additive — Pairing error code; fingerprint set inventory aligned with
-// grantable [[set]] entries + default (core/client-lifecycle).
-// 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
-// 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "7.2";
+pub const CONTRACT_VERSION: &str = "7.8";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "8a91697193d2c3362918f8ff2ac5d0ec51fc6762f600697cbf69b2e5489fc6ba";
+    "e5ff21ba8b9a75532ebe0506db35136cd2c7220b44c64846ea51b41b306ad52d";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -105,6 +57,9 @@ pub const MANAGED_SERVER_TRAY_STOP_EVENT: &str = "desktop://managed-server-tray-
 /// One-shot auth URL emission during the guided Grok login flow.
 pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
 
+/// One-shot auth URL emission during the guided Claude login flow.
+pub const CLAUDE_LOGIN_URL_EVENT: &str = "desktop://claude-login-url";
+
 /// Coarse ping reasons on `desktop://client-updated`.
 pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
@@ -126,6 +81,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_managed_server_status", "runtime-admin"),
         ("desktop_managed_server_start", "runtime-admin"),
         ("desktop_managed_server_stop", "runtime-admin"),
+        ("desktop_managed_server_restart", "runtime-admin"),
+        ("desktop_managed_server_validate_root", "runtime-admin"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
@@ -179,16 +136,23 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_tools_delete", "config-write"),
         ("desktop_tool_service_delete", "config-write"),
         ("desktop_behavior_delete", "config-write"),
+        ("desktop_context_delete", "config-write"),
         ("desktop_backend_save", "config-write"),
         ("desktop_inference_profile_save", "config-write"),
         ("desktop_tools_save", "config-write"),
         ("desktop_tool_service_save", "config-write"),
         ("desktop_tool_service_test", "config-write"),
         ("desktop_probe_inference_endpoint", "config-write"),
+        ("desktop_inference_setup_catalog", "config-write"),
+        ("desktop_inference_models_discover", "config-write"),
+        ("desktop_inference_model_recommendation", "config-write"),
+        ("desktop_inference_backend_recommendation", "config-write"),
         ("desktop_codex_login", "config-write"),
         ("desktop_codex_login_cancel", "config-write"),
         ("desktop_grok_login", "config-write"),
         ("desktop_grok_login_cancel", "config-write"),
+        ("desktop_claude_login", "config-write"),
+        ("desktop_claude_login_cancel", "config-write"),
         ("desktop_provider_accounts_list", "provider-accounts-read"),
         ("desktop_provider_account_disconnect", "config-write"),
         // tasks
@@ -282,6 +246,7 @@ pub fn current_contract() -> BridgeContract {
             CLIENT_UPDATED_EVENT.to_string(),
             CODEX_LOGIN_URL_EVENT.to_string(),
             GROK_LOGIN_URL_EVENT.to_string(),
+            CLAUDE_LOGIN_URL_EVENT.to_string(),
             MANAGED_SERVER_UPDATED_EVENT.to_string(),
             MANAGED_SERVER_TRAY_STOP_EVENT.to_string(),
         ],
@@ -589,6 +554,8 @@ mod tests {
             ("desktop_managed_server_status", "mutate"),
             ("desktop_managed_server_start", "mutate"),
             ("desktop_managed_server_stop", "mutate"),
+            ("desktop_managed_server_restart", "mutate"),
+            ("desktop_managed_server_validate_root", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_session_live_delta", "read"),
             ("desktop_session_hydration_retry", "mutate"),
@@ -629,16 +596,23 @@ mod tests {
             ("desktop_tools_delete", "mutate"),
             ("desktop_tool_service_delete", "mutate"),
             ("desktop_behavior_delete", "mutate"),
+            ("desktop_context_delete", "mutate"),
             ("desktop_backend_save", "mutate"),
             ("desktop_inference_profile_save", "mutate"),
             ("desktop_tools_save", "mutate"),
             ("desktop_tool_service_save", "mutate"),
             ("desktop_tool_service_test", "mutate"),
             ("desktop_probe_inference_endpoint", "mutate"),
+            ("desktop_inference_setup_catalog", "mutate"),
+            ("desktop_inference_models_discover", "mutate"),
+            ("desktop_inference_model_recommendation", "mutate"),
+            ("desktop_inference_backend_recommendation", "mutate"),
             ("desktop_codex_login", "mutate"),
             ("desktop_codex_login_cancel", "mutate"),
             ("desktop_grok_login", "mutate"),
             ("desktop_grok_login_cancel", "mutate"),
+            ("desktop_claude_login", "mutate"),
+            ("desktop_claude_login_cancel", "mutate"),
             ("desktop_provider_accounts_list", "read"),
             ("desktop_provider_account_disconnect", "mutate"),
             ("desktop_task_save", "mutate"),

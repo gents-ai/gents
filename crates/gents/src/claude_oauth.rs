@@ -59,6 +59,7 @@ pub struct ClaudeLoginTokens {
     pub refresh_token: String,
     pub expires_in: Option<i64>,
     pub scope: Option<String>,
+    pub account_id: Option<String>,
 }
 
 impl fmt::Debug for ClaudeLoginTokens {
@@ -93,7 +94,7 @@ pub fn credential_from_login_tokens(
         access_token: tokens.access_token.clone(),
         refresh_token: tokens.refresh_token.clone(),
         id_token: None,
-        account_id: None,
+        account_id: tokens.account_id.clone(),
         chatgpt_plan_type: None,
         is_fedramp: false,
         access_token_expires_at,
@@ -161,6 +162,7 @@ mod tests {
             refresh_token: "refresh-TEST".into(),
             expires_in: Some(28800),
             scope: Some(CLAUDE_OAUTH_SCOPES.into()),
+            account_id: Some("person@example.test".into()),
         };
         let credential =
             credential_from_login_tokens("did:key:z6MkTest", CLAUDE_OAUTH_PROVIDER, &tokens, now);
@@ -173,7 +175,10 @@ mod tests {
             now + chrono::Duration::seconds(28800)
         );
         assert_eq!(credential.id_token, None);
-        assert_eq!(credential.account_id, None);
+        assert_eq!(
+            credential.account_id.as_deref(),
+            Some("person@example.test")
+        );
         assert_eq!(credential.chatgpt_plan_type, None);
         assert!(!credential.is_fedramp);
         assert_eq!(credential.last_refresh, Some(now));
@@ -188,6 +193,7 @@ mod tests {
             refresh_token: "r".into(),
             expires_in: None,
             scope: None,
+            account_id: None,
         };
         let credential =
             credential_from_login_tokens("did:key:z6MkTest", CLAUDE_OAUTH_PROVIDER, &tokens, now);
@@ -204,6 +210,7 @@ mod tests {
             refresh_token: "refresh-SECRET".into(),
             expires_in: Some(28800),
             scope: Some("user:profile".into()),
+            account_id: None,
         };
         let text = format!("{tokens:?}");
         assert!(!text.contains("SECRET"), "{text}");

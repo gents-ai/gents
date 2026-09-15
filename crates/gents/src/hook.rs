@@ -1014,7 +1014,7 @@ impl DefraSessionHook {
                 .collect::<Vec<_>>()
         };
 
-        let count = lifecycles.len();
+        let mut count = lifecycles.len();
         for mut lifecycle in lifecycles {
             let dispatch = lifecycle
                 .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &self.agent_did)
@@ -1043,6 +1043,52 @@ impl DefraSessionHook {
                             );
                         }
                     }
+                }
+            }
+        }
+        // spawn_process lifecycles live in the background registry, not the
+        // foreground map. Explicit interruption cascades to this exact physical
+        // parent's native background work; ordinary completion still detaches
+        // execution from the parent's deadline as before.
+        if let Some(parent_doc) = self.active_request_doc_id().await {
+            let query = format!(
+                r#"{{ AgentToolCall(filter: {{ agent_did: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}, cancel_policy: {{ _eq: "cascade" }}, child_request_id: {{ _eq: null }} }}) {{ session_id tool_call_id }} }}"#,
+                crate::graphql::escape_graphql_string(&self.agent_did),
+                crate::graphql::escape_graphql_string(&parent_doc),
+            );
+            let response = self.node.execute(&query).await;
+            anyhow::ensure!(
+                !response.has_errors(),
+                "load interrupted background tools: {:?}",
+                response.errors
+            );
+            for row in response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentToolCall"))
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let session_id = row["session_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("background tool omitted session"))?;
+                let tool_call_id = row["tool_call_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("background tool omitted identity"))?;
+                if matches!(
+                    crate::tool_control::cancel_background_tool_call_with_cause(
+                        self.node.clone(),
+                        &self.background_executions,
+                        &self.agent_did,
+                        session_id,
+                        tool_call_id,
+                        CancelCause::Interrupted,
+                    )
+                    .await?,
+                    crate::tool_control::CancelBackgroundToolCallOutcome::Cancelled { .. }
+                ) {
+                    count += 1;
                 }
             }
         }

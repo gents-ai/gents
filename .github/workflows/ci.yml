@@ -387,9 +387,8 @@ jobs:
         working-directory: crates/gents/proofs
         run: lake build
 
-      # The chat package consumes the generated ClientShell contract. Running
-      # this test after the proof build reuses the persistent Lake cache; on a
-      # cold hosted runner, the same collection step takes roughly 10 minutes.
+      # Desktop consumers exercise generated ClientShell contracts here, after
+      # the proof build has warmed the persistent Lake cache.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -405,8 +404,10 @@ jobs:
           npm run build --workspace @source-inc/gents-desktop-ui
           npm run build --workspace @source-inc/gents-desktop-chat
 
-      - name: Run Lean-backed desktop chat conformance tests
-        run: npm test --workspace @source-inc/gents-desktop-chat
+      - name: Run Lean-backed desktop conformance tests
+        run: |
+          npm test --workspace @source-inc/gents-desktop-chat
+          npm run test:lean-conformance --workspace @source-inc/gents-desktop-app
 
   desktop-packages:
     if: >-

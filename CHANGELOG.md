@@ -6,6 +6,56 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.17.0 - 2026-09-11
+
+### Changed
+
+- Resolve runtime, CLI, desktop, and bundled-pack configuration through one
+  canonical document model. `AgentSession` is the durable session, behaviors
+  select context and inference profiles, tools own their nested settings, and
+  tasks, triggers, schedules, and event sources share one desired-state owner.
+- Remove the duplicate conversation, deployment, approval-hold, graph-config,
+  validator, migration, and desktop configuration machinery superseded by the
+  canonical owners. The full refactor removes more than 24,000 net lines.
+- Keep the application/database boundary explicit: Gents selects authorized
+  sessions and projects locally available documents; DefraDB owns delivery,
+  reconnect catch-up, retries, and backpressure.
+
+### Fixed
+
+- Bound embedded transaction phases and route storage timeouts through the
+  standard retry classifier without claiming ambiguous transactions committed.
+- Converge hydration after failed or ambiguous delivery and terminal writes,
+  with idempotent repeat delivery and durable periodic recovery instead of
+  readiness heartbeats.
+- Coalesce native document-change bursts, remove per-lease global scans, and
+  keep sticky observer resync without event-drop amplification.
+- Batch durable collection subscription changes and startup restoration while
+  preserving Go-compatible DefraDB semantics. Failed live topic installation
+  and removal now retry in-process from durable desired state.
+- Scope pairing reconciliation wakes and skip redundant migration baselines,
+  eliminating broad application replay and repeated startup work.
+
+### Performance and validation
+
+- Cover fresh and 2,500-revision enrollment, streaming, offline reopen, local
+  transcript pagination, and independent database-to-observer projection in
+  the canonical mobile integration suite.
+- Verify all writes persist under a deterministic 32-writer hot-document load
+  and that the next canonical write remains live.
+- Measure clean client startup at 51-116 ms, collection subscription setup at
+  3-16 ms, steady request delivery at 95-243 ms, and offline reply recovery at
+  0.78-1.05 seconds, with no event-drop recovery in deterministic runs.
+- Complete a fresh server, client, enrollment, real P2P, live inference, and
+  client-visible conversation in 10.86 seconds against
+  `GLM-5.3-Flash-NVFP4`.
+
+### Upgrade
+
+- Upgrade phone/desktop clients and agent runtimes together. Preserve stores,
+  DIDs, identities, and enrollment state; do not wipe or re-pair installations.
+  Mixed pre-0.17 canonical configuration models are not supported.
+
 ## 0.16.4 - 2026-09-09
 
 ### Fixed

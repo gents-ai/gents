@@ -160,7 +160,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_cases.len(),
-        16
+        26
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_case_count,
@@ -168,7 +168,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_cases.len(),
-        12
+        22
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 54);

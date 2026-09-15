@@ -16,133 +16,80 @@ type VisualReviewEntry = {
 };
 
 test.describe("desktop visual baselines", () => {
-  test("matches stable shell states", async ({ page }, testInfo) => {
+  test("matches stable kit shell states", async ({ page }, testInfo) => {
     const snapshots: VisualReviewEntry[] = [];
 
     await gotoHarness(page);
-    await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
-    await expect(page).toHaveScreenshot("fleet-dashboard.png", {
+    await expect(page.getByTestId("sessions-screen")).toBeVisible();
+    await expect(page).toHaveScreenshot("sessions.png", {
       animations: "disabled",
       fullPage: true,
     });
     snapshots.push({
-      state: "fleet dashboard",
+      state: "sessions",
       scenario: "default",
-      snapshotName: "fleet-dashboard.png",
+      snapshotName: "sessions.png",
     });
 
     await openChat(page);
-    await expect(page.getByTestId("transcript-panel")).toBeVisible();
-    await expect(page).toHaveScreenshot("chat-transcript.png", {
+    await expect(page.getByTestId("session-screen")).toBeVisible();
+    await expect(page).toHaveScreenshot("new-session.png", {
       animations: "disabled",
       fullPage: true,
     });
     snapshots.push({
-      state: "chat transcript",
+      state: "new session",
       scenario: "default",
-      snapshotName: "chat-transcript.png",
-    });
-
-    await gotoHarness(page, "coding");
-    await openChat(page);
-    await expect(page.getByTestId("tool-intro-bash")).toBeVisible();
-    await expect(page).toHaveScreenshot("tool-timeline.png", {
-      animations: "disabled",
-      fullPage: true,
-    });
-    snapshots.push({
-      state: "tool timeline",
-      scenario: "coding",
-      snapshotName: "tool-timeline.png",
+      snapshotName: "new-session.png",
     });
 
     await gotoHarness(page);
     await openConfig(page);
-    await expect(page.locator(".config-workspace")).toBeVisible();
-    await expect(page).toHaveScreenshot("config-workspace.png", {
+    await expect(page.getByTestId("agent-screen")).toBeVisible();
+    await expect(page).toHaveScreenshot("agent-config.png", {
       animations: "disabled",
       fullPage: true,
     });
     snapshots.push({
-      state: "config workspace",
+      state: "agent configuration",
       scenario: "default",
-      snapshotName: "config-workspace.png",
+      snapshotName: "agent-config.png",
     });
 
     await gotoHarness(page, "empty-fleet");
-    await expect(page.getByTestId("fleet-empty")).toBeVisible();
-    await expect(page).toHaveScreenshot("empty-fleet.png", {
+    await expect(page.getByTestId("setup-screen")).toBeVisible();
+    await expect(page).toHaveScreenshot("setup.png", {
       animations: "disabled",
       fullPage: true,
     });
     snapshots.push({
-      state: "empty fleet",
+      state: "first-run setup",
       scenario: "empty-fleet",
-      snapshotName: "empty-fleet.png",
+      snapshotName: "setup.png",
     });
 
     await gotoHarness(page, "bridge-unavailable");
-    await expect(page.getByTestId("startup-screen")).toContainText(
-      "Desktop native bridge is unavailable",
-    );
+    await expect(page.getByTestId("startup-screen")).toBeVisible();
     await expect(page).toHaveScreenshot("bridge-error.png", {
       animations: "disabled",
       fullPage: true,
     });
     snapshots.push({
-      state: "bridge error",
+      state: "startup error",
       scenario: "bridge-unavailable",
       snapshotName: "bridge-error.png",
     });
 
-    await gotoHarness(page);
-    await page.getByTestId("theme-toggle").click();
-    await expect(page.locator('html[data-theme="light"]')).toHaveCount(1);
-    await expect(page).toHaveScreenshot("fleet-dashboard-light.png", {
-      animations: "disabled",
-      fullPage: true,
-    });
-    snapshots.push({
-      state: "fleet dashboard (light theme)",
-      scenario: "default",
-      snapshotName: "fleet-dashboard-light.png",
-    });
-    await page.evaluate(() => window.localStorage.removeItem("gents-desktop-theme"));
-
-    await attachVisualReviewManifest(testInfo, snapshots);
+    await attachReview(testInfo, snapshots);
   });
 });
 
-async function attachVisualReviewManifest(
-  testInfo: TestInfo,
-  snapshots: VisualReviewEntry[],
-) {
-  const rows = snapshots
-    .map(
-      (snapshot) =>
-        `| ${snapshot.state} | \`${snapshot.scenario}\` | \`${snapshot.snapshotName}\` |`,
-    )
+async function attachReview(testInfo: TestInfo, snapshots: VisualReviewEntry[]) {
+  const body = snapshots
+    .map((entry) => `- ${entry.state} (${entry.scenario}): ${entry.snapshotName}`)
     .join("\n");
-  const body = [
-    "# Desktop Visual Baseline Review",
-    "",
-    `Project: \`${testInfo.project.name}\``,
-    "Command: `npm run test:ui:visual`",
-    "",
-    "These are golden snapshot assertions for stable desktop shell states.",
-    "",
-    "| State | Harness scenario | Snapshot |",
-    "| --- | --- | --- |",
-    rows,
-    "",
-    "When a visual diff fails, inspect the Playwright visual report and decide",
-    "whether the changed pixels are an intended UI update or a confirmed defect.",
-    "File confirmed defects with labels `bug` and `ui`.",
-    "",
-  ].join("\n");
   const path = testInfo.outputPath("desktop-visual-review.md");
-  await writeFile(path, body);
-
+  await writeFile(path, `# Kit visual baselines\n\n${body}\n`);
   await testInfo.attach("desktop-visual-review.md", {
     path,
     contentType: "text/markdown",

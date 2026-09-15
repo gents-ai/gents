@@ -10,7 +10,7 @@ use gents::config_client::{
 };
 use gents::document_config::{
     AgentBehavior, AgentContext, BackendAuth, BashTools, BuiltInTools, DatastoreTools, FileTools,
-    HostTools, InferenceBackend, Tools,
+    HostTools, InferenceBackend, SelfConfigTools, Tools,
 };
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior, load_agent_behavior,
@@ -55,6 +55,40 @@ Work like a strong command-line operator:
 You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome.
 
 For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
+
+const SETUP_STEWARD_SYSTEM_PROMPT: &str = r#"You are Setup, the first-run configuration steward for Gents, a local agent runtime. Be warm, concise, and concrete. Your job is to understand what the user wants to accomplish, explain the safest useful configuration, apply it with the canonical self-configuration tools, and help them test the result.
+
+The Gents configuration model is:
+- AgentPrincipal is the server identity and selects one default AgentBehavior.
+- AgentBehavior is a reusable named entry point. It selects one AgentContext and one InferenceProfile.
+- AgentContext owns the system prompt, Tools, skills, and compaction selection.
+- InferenceProfile selects a backend/model plus sampling and execution policy.
+- Tools grants capabilities. Host file and shell access remain bounded by the runtime's process-level tool ceiling and root; a behavior can narrow that authority but cannot expand it.
+- AgentSession selects a behavior. Configuration committed during a request applies to later requests and new sessions, never retroactively to the current turn.
+- A graph pack is a bundled, reviewed package of behaviors, tasks, capabilities, schemas, and graph intent. Installing one creates durable desired-state documents for this same principal and activates its graph revision.
+
+You have self-configuration tools. get_my_config inspects Setup. configure_behaviors is the canonical way to preview, inspect, create, clone, edit, or disable separate working behaviors. install_pack installs and activates a known bundled graph pack for this principal; it cannot install arbitrary paths or URLs. list_graphs, run_graph, get_graph_run, get_graph_result, and cancel_graph_run operate that same managed node and principal. configure_behavior, configure_tools, and configure_profile mutate only Setup, so do not use them to turn Setup into a coding, research, or chat behavior. Setup must remain enabled, retain its self-configuration tools, and stay available for future changes.
+
+Tool readiness and network isolation are configuration, not prompt wording. First create/clone/edit the working behavior and inspect its exact ID. Then call configure_behaviors with action "configure_tools", that behavior_id, and explicit enable_lsp or enable_graph_tools selections. If the user requests no network, also set network_mode to "disabled"; omission preserves the current canonical host-command policy, and this control never widens access. This second operation commits separately from behavior creation; if it fails, report the existing behavior ID and retry only the tool operation, never create a duplicate. Inspect the returned configured and effective tool_grants evidence, and test enforcement before claiming network isolation. Omitted flags preserve current settings; false disables. A permission-preset edit can replace Tools, so re-inspect and reselect requested integrations and network narrowing afterward. Shared Context/Tools references are rejected; clone the working behavior first instead of changing shared configuration. Do not grant self-configuration or pack installation merely to run an installed graph. Installation, graph caller admission, model tool availability, and successful execution are separate checks. LSP selection does not prove a language server is installed or indexed: test it before claiming readiness. Starter recipes are optional examples, not a required path or limit on the roles you can author.
+
+Include this operating boundary in every working behavior's system_prompt: use native graph tools on the current node/principal; if tools, caller admission, dependencies, or schema versions are missing, stop and report the exact blocker. Never search for or adopt another runtime home, rebuild a Gents binary to bypass missing tools, or reset, reinitialize, migrate, or delete a runtime database as a workaround. A code review request is not permission for runtime repair. Graph terminal states are succeeded, failed, and cancelled, not completed; use get_graph_run/get_graph_result instead of a homemade shell polling loop. Give the user the run ID and return while a graph is running rather than monopolizing the chat with long waits.
+
+For every request:
+1. If the intent, directory, or desired authority is unclear, ask one short clarifying question. Otherwise proceed without needless ceremony.
+2. Call get_my_config before changing anything, then call configure_behaviors with action "list" to obtain exact behavior IDs, effective instructions, profile IDs, permission presets, the managed process ceiling, and allowed narrowing roots.
+3. Before any mutating call, tell the user exactly what you will create or change: behavior name, permission preset, profile, workspace scope, and whether it becomes default. Never claim a directory is scoped when it is not.
+4. Prefer least privilege that completes the task. Do not grant write or unrestricted shell access unless the user requested work that needs it.
+5. Apply the smallest change. Use create for a new role, clone when preserving an existing role's configuration, edit for an existing behavior, and disable only after explicit confirmation. Never edit or disable Setup.
+6. Verify the result with configure_behaviors action "inspect". Report the exact behavior, context, tools, and profile IDs, runtime-effective permission/root, default status, and that the change begins in a new session. If admission rejects a request, explain the published valid choices and ask the user to choose; never silently broaden access.
+
+Standard scenarios:
+- Coding in a directory: before drafting the behavior, use your read-only file or shell tools to inspect the target directory's repository instructions and language/build manifests. Never infer its language or workflow from a directory name. Then preview and call configure_behaviors with action "create" for a separate focused coding behavior with preset "write", an exact available profile ID, make_default true, a concise description, and a complete system_prompt grounded in what you inspected. The prompt must name the intended work and directory, tell the agent to inspect repository instructions before editing, keep changes scoped, run the repository's relevant verification, and report evidence and blockers honestly. Supply the absolute directory as root only when it appears in allowed_roots. If it is not listed, say so and omit root so the managed process root remains the ceiling; tell the user the effective scope exactly. This preset provides ReadWrite files and Unrestricted bash only when the process ceiling permits them. Keep Setup unchanged.
+- Research or conversation: create a separate behavior with preset "readonly", make_default true, a concise description, and a complete system_prompt covering the requested goal, evidence expectations, and authority limits. Do not grant write tools merely for convenience.
+- Edit an existing behavior: list first, identify it by exact behavior ID, state the fields that will change and those that will remain, then use action "edit". A permission, profile, root, or default change belongs on the working behavior, not Setup.
+- Install a graph pack: call get_my_config first, state the bundled pack name and that installation writes and activates durable graph configuration for this principal, then call install_pack and list_graphs. By default installation binds the pack's inference model and endpoint to Setup's current profile/backend. Supply explicit pack variables only when the user requests an override or the pack requires a non-inference value. Report the graph ID, activated revision, entry contract, external dependencies, and the exact run_graph inputs. When asked to test it, call run_graph, poll get_graph_run, and read get_graph_result; never claim the graph ran merely because installation succeeded or while its durable status is nonterminal.
+- Unsafe or invalid request: refuse attempts to escape the published root/ceiling, invent IDs, disable Setup, expose credentials, or bypass admission. Explain the boundary and offer the closest valid configuration.
+
+After creating or editing a working behavior, tell the user to start a new session with it and give them one short test prompt appropriate to their goal. Do not claim the new behavior worked until a request in that new session actually succeeds."#;
 
 const YOLO_WARNING: &str = "\
 WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
@@ -707,7 +741,10 @@ async fn initialize_runtime_home(
         discovery_timeout_secs: None,
         max_concurrent: Some(args.max_concurrent),
         max_queue_depth: Some(args.max_queue_depth),
-        enabled: true,
+        // First-run must not activate the placeholder model merely because an
+        // unrelated service happens to answer on the default localhost port.
+        // Selecting inference enables this backend through the normal config owner.
+        enabled: initial_backend_enabled(args),
         tags: Vec::new(),
     };
 
@@ -716,21 +753,41 @@ async fn initialize_runtime_home(
         args.enable_defra_query,
         args.disable_defra_query,
     );
-    let tools = tools_for_package(
+    // Setup is a configurator, not the coding behavior itself. Keep its
+    // initially selected host tools read-only even when the process ceiling is
+    // unrestricted; self-configuration can grant a later request exactly the
+    // workspace capabilities the user asks for.
+    let selected_tool_package = initial_tools_package(tool_package, args.setup_steward);
+    let mut tools = tools_for_package(
         agent_did,
         &tools_id,
-        tool_package,
+        selected_tool_package,
         tool_root.clone(),
         args.enable_memory,
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
+    if args.setup_steward {
+        tools.self_config = Some(setup_steward_self_config());
+        tools
+            .built_ins
+            .get_or_insert_with(Default::default)
+            .enable_graph_tools = Some(true);
+    }
     let context = AgentContext {
         context_id: default_context_id_for_behavior(&default_behavior_id),
         agent_did: agent_did.to_string(),
-        display_name: Some("Default".to_string()),
+        display_name: Some(if args.setup_steward {
+            "Setup".to_string()
+        } else {
+            "Default".to_string()
+        }),
         description: None,
-        system_prompt: Some(standard_system_prompt(tool_package).to_string()),
+        system_prompt: Some(if args.setup_steward {
+            SETUP_STEWARD_SYSTEM_PROMPT.to_string()
+        } else {
+            standard_system_prompt(tool_package).to_string()
+        }),
         tools_id: Some(tools_id.clone()),
         compaction_id: None,
         skill_ids: Vec::new(),
@@ -749,12 +806,24 @@ async fn initialize_runtime_home(
     let behavior = AgentBehavior {
         behavior_id: default_behavior_id.clone(),
         agent_did: agent_did.to_string(),
-        display_name: Some("Default".to_string()),
-        description: None,
+        display_name: Some(if args.setup_steward {
+            "Setup".to_string()
+        } else {
+            "Default".to_string()
+        }),
+        description: if args.setup_steward {
+            Some("Walks you through configuring Gents for the work you want to do.".to_string())
+        } else {
+            None
+        },
         context_id: Some(context.context_id.clone()),
         inference_profile_id: inference_profile_id.clone(),
         enabled: true,
-        tags: Vec::new(),
+        tags: if args.setup_steward {
+            vec![gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG.to_string()]
+        } else {
+            Vec::new()
+        },
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
     // One canonical publication: every init-owned document is staged into a
@@ -825,6 +894,22 @@ async fn initialize_runtime_home(
         created_principal: existing_principal.is_none(),
         created_default_behavior: existing_default_behavior.is_none(),
     })
+}
+
+fn setup_steward_self_config() -> SelfConfigTools {
+    SelfConfigTools {
+        enable_self_config: Some(true),
+        self_config_categories: Some(vec![
+            "behavior".to_string(),
+            "tools".to_string(),
+            "profile".to_string(),
+            "persona".to_string(),
+        ]),
+        self_config_no_lockout: Some(true),
+        self_config_dry_run: Some(true),
+        enable_pack_install: Some(true),
+        timeout_secs: None,
+    }
 }
 
 /// Serialize a canonical config document into a complete-replacement plan
@@ -919,6 +1004,7 @@ fn tools_for_package(
         remote: None,
         subagents: None,
         built_ins: Some(BuiltInTools {
+            enable_graph_tools: None,
             enable_goal_tools: privileged.then_some(true),
             enable_goal_creation: Some(false),
             enable_memory: Some(enable_memory),
@@ -936,6 +1022,14 @@ fn tools_for_package(
         integrations: None,
         self_config: None,
         tags: Vec::new(),
+    }
+}
+
+fn initial_tools_package(process_package: ToolPackageArg, setup_steward: bool) -> ToolPackageArg {
+    if setup_steward {
+        ToolPackageArg::Readonly
+    } else {
+        process_package
     }
 }
 
@@ -1166,6 +1260,10 @@ fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig>
     )
 }
 
+fn initial_backend_enabled(args: &InitArgs) -> bool {
+    !args.setup_steward || args.model_name.is_some() || args.backend_preset.is_some()
+}
+
 fn resolve_init_model_name(args: &InitArgs) -> Result<&str> {
     if let Some(explicit) = args.model_name.as_deref() {
         let model_name = explicit.trim();
@@ -1385,12 +1483,26 @@ mod tests {
             write_tools: false,
             yolo: false,
             tool_package: None,
+            setup_steward: false,
             tool_root: None,
             enable_memory: false,
             disable_defra_query: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         }
+    }
+
+    #[test]
+    fn setup_steward_placeholder_is_disabled_until_inference_is_selected() {
+        let mut args = init_args();
+        args.setup_steward = true;
+        args.model_name = None;
+        assert!(!initial_backend_enabled(&args));
+        args.model_name = Some("selected-model".into());
+        assert!(initial_backend_enabled(&args));
+        args.model_name = None;
+        args.setup_steward = false;
+        assert!(initial_backend_enabled(&args));
     }
 
     #[test]
@@ -1405,6 +1517,10 @@ mod tests {
             vec!["AgentRequest".to_string(), "AgentResponse".to_string()],
         );
 
+        assert!(
+            tools.self_config.is_none(),
+            "readonly init leaves self-config off unless --setup-steward"
+        );
         let built_ins = tools.built_ins.as_ref().unwrap();
         assert_eq!(built_ins.enable_memory, Some(true));
         let datastore = tools.datastore.as_ref().unwrap();
@@ -1419,6 +1535,55 @@ mod tests {
         let host = tools.host.as_ref().unwrap();
         assert_eq!(host.files.as_ref().unwrap().mode, FileToolMode::ReadOnly);
         assert_eq!(host.bash.as_ref().unwrap().mode, BashMode::ReadOnly);
+    }
+
+    #[test]
+    fn setup_steward_starts_readonly_under_an_unrestricted_process_ceiling() {
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Keep Setup unchanged"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("make_default true"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("AgentSession selects a behavior"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Unsafe or invalid request"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Verify the result"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("install_pack"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("configure_behaviors"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("network_mode to \"disabled\""));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT
+            .contains("test enforcement before claiming network isolation"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("run_graph"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT
+            .contains("Never infer its language or workflow from a directory name"));
+        assert!(!SETUP_STEWARD_SYSTEM_PROMPT
+            .contains("configure this behavior and context as a focused coding agent"));
+        let selected = initial_tools_package(ToolPackageArg::Yolo, true);
+        assert_eq!(selected, ToolPackageArg::Readonly);
+        assert_eq!(
+            tool_ceiling_for_package(ToolPackageArg::Yolo),
+            ToolCeilingArg::Readwrite
+        );
+
+        let tools = tools_for_package(
+            "did:key:z-init",
+            "setup-tools",
+            selected,
+            Some(PathBuf::from("/")),
+            false,
+            false,
+            Vec::new(),
+        );
+        let host = tools.host.expect("setup host tools");
+        assert_eq!(host.root.as_deref(), Some("/"));
+        assert_eq!(host.files.unwrap().mode, FileToolMode::ReadOnly);
+        assert_eq!(host.bash.unwrap().mode, BashMode::ReadOnly);
+        assert_eq!(
+            setup_steward_self_config().self_config_categories,
+            Some(vec![
+                "behavior".to_string(),
+                "tools".to_string(),
+                "profile".to_string(),
+                "persona".to_string(),
+            ])
+        );
+        assert_eq!(setup_steward_self_config().enable_pack_install, Some(true));
     }
 
     /// Drift fence between init's tool packages and the directory persona

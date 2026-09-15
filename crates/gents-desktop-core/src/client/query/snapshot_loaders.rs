@@ -36,19 +36,271 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
 
 pub async fn load_full_snapshot_with_peer_records(
     node: &EmbeddedNode,
-    _peers: &[PeerRecord],
+    peers: &[PeerRecord],
     _requester_did: &str,
 ) -> Result<ClientStore> {
-    load_full_snapshot(node).await
+    let mut store = load_full_snapshot(node).await?;
+    for peer in peers {
+        let Some(graphql) = peer.operator_graphql() else {
+            continue;
+        };
+        match load_operator_config(
+            &gents::config_client::ConfigAccess::Graphql(graphql.to_string()),
+            &peer.agent_did,
+        )
+        .await
+        {
+            Ok(remote) => {
+                store = store.overlay_agent_operator_config(&peer.agent_did, &remote);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop_core::query",
+                    agent_did = %peer.agent_did,
+                    graphql,
+                    error = %error,
+                    "operator GraphQL config overlay failed; keeping the desktop replica"
+                );
+            }
+        }
+    }
+    Ok(store)
+}
+
+async fn load_operator_config(
+    access: &gents::config_client::ConfigAccess,
+    agent_did: &str,
+) -> Result<ClientStore> {
+    let did = escape_graphql_string(agent_did);
+    let did_filter = format!("filter: {{ agent_did: {{ _eq: \"{did}\" }} }}");
+    Ok(ClientStore::from_rows(ClientStoreRows {
+        agent_principals: load_rows_from_access(
+            access,
+            "AgentPrincipal",
+            &format!("query {{ AgentPrincipal({did_filter}) {{ {AGENT_PRINCIPAL_FIELDS} }} }}"),
+        )
+        .await?,
+        behaviors: load_rows_from_access(
+            access,
+            "AgentBehavior",
+            &format!("query {{ AgentBehavior({did_filter}) {{ {AGENT_BEHAVIOR_FIELDS} }} }}"),
+        )
+        .await?,
+        runtimes: load_rows_from_access(
+            access,
+            AGENT_RUNTIME_NAME,
+            &format!(
+                "query {{ {AGENT_RUNTIME_NAME}({did_filter}) {{ {AGENT_RUNTIME_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        behavior_readiness: load_rows_from_access(
+            access,
+            AGENT_BEHAVIOR_READINESS_NAME,
+            &format!(
+                "query {{ {AGENT_BEHAVIOR_READINESS_NAME}({did_filter}) {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        contexts: load_rows_from_access(
+            access,
+            "AgentContext",
+            &format!("query {{ AgentContext({did_filter}) {{ {AGENT_CONTEXT_FIELDS} }} }}"),
+        )
+        .await?,
+        tools: load_rows_from_access(
+            access,
+            TOOLS_NAME,
+            &format!("query {{ {TOOLS_NAME}({did_filter}) {{ {TOOLS_FIELDS} }} }}"),
+        )
+        .await?,
+        inference_backends: load_rows_from_access(
+            access,
+            "InferenceBackend",
+            &format!(
+                "query {{ InferenceBackend({did_filter}) {{ {INFERENCE_BACKEND_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        backend_observations: load_rows_from_access(
+            access,
+            "InferenceBackend",
+            &format!(
+                "query {{ InferenceBackend({did_filter}) {{ {INFERENCE_BACKEND_OBSERVATION_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        inference_profiles: load_rows_from_access(
+            access,
+            "InferenceProfile",
+            &format!(
+                "query {{ InferenceProfile({did_filter}) {{ {INFERENCE_PROFILE_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        inference_sampling: load_rows_from_access(
+            access,
+            "InferenceSampling",
+            &format!(
+                "query {{ InferenceSampling({did_filter}) {{ {INFERENCE_SAMPLING_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        inference_execution: load_rows_from_access(
+            access,
+            "InferenceExecution",
+            &format!(
+                "query {{ InferenceExecution({did_filter}) {{ {INFERENCE_EXECUTION_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        tasks: load_rows_from_access(
+            access,
+            TASK_NAME,
+            &format!("query {{ {TASK_NAME}({did_filter}) {{ {TASK_FIELDS} }} }}"),
+        )
+        .await?,
+        schedules: load_rows_from_access(
+            access,
+            SCHEDULE_NAME,
+            &format!("query {{ {SCHEDULE_NAME}({did_filter}) {{ {SCHEDULE_FIELDS} }} }}"),
+        )
+        .await?,
+        schedule_observations: load_rows_from_access(
+            access,
+            TRIGGER_NAME,
+            &format!(
+                "query {{ {TRIGGER_NAME}({did_filter}) {{ {SCHEDULE_OBSERVATION_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        triggers: load_rows_from_access(
+            access,
+            TRIGGER_NAME,
+            &format!("query {{ {TRIGGER_NAME}({did_filter}) {{ {TRIGGER_FIELDS} }} }}"),
+        )
+        .await?,
+        trigger_observations: load_rows_from_access(
+            access,
+            TRIGGER_NAME,
+            &format!(
+                "query {{ {TRIGGER_NAME}({did_filter}) {{ {TRIGGER_OBSERVATION_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        skills: load_rows_from_access(
+            access,
+            SKILL_NAME,
+            &format!("query {{ {SKILL_NAME}({did_filter}) {{ {SKILL_FIELDS} }} }}"),
+        )
+        .await?,
+        compactions: load_rows_from_access(
+            access,
+            "CompactionConfig",
+            &format!(
+                "query {{ CompactionConfig({did_filter}) {{ {COMPACTION_CONFIG_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        tool_service_registries: load_rows_from_access(
+            access,
+            TOOL_SERVICE_REGISTRY_NAME,
+            &format!(
+                "query {{ {TOOL_SERVICE_REGISTRY_NAME}({did_filter}) {{ {TOOL_SERVICE_REGISTRY_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        event_sources: load_rows_from_access(
+            access,
+            "EventSource",
+            &format!("query {{ EventSource({did_filter}) {{ {EVENT_SOURCE_FIELDS} }} }}"),
+        )
+        .await?,
+        subagent_targets: load_rows_from_access(
+            access,
+            "SubagentTarget",
+            &format!(
+                "query {{ SubagentTarget({did_filter}) {{ {SUBAGENT_TARGET_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        datastore_tool_surfaces: load_rows_from_access(
+            access,
+            "DatastoreToolSurface",
+            &format!(
+                "query {{ DatastoreToolSurface({did_filter}) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        chain_key_bindings: load_rows_from_access(
+            access,
+            "ChainKeyBinding",
+            &format!(
+                "query {{ ChainKeyBinding({did_filter}) {{ {CHAIN_KEY_BINDING_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        sessions: load_rows_from_access(
+            access,
+            AGENT_SESSION_NAME,
+            &format!(
+                "query {{ {AGENT_SESSION_NAME}({did_filter}) {{ {AGENT_SESSION_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        requests: load_rows_from_access(
+            access,
+            AGENT_REQUEST_NAME,
+            &format!(
+                "query {{ {AGENT_REQUEST_NAME}({did_filter}) {{ {AGENT_REQUEST_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        responses: load_rows_from_access(
+            access,
+            AGENT_RESPONSE_NAME,
+            &format!(
+                "query {{ {AGENT_RESPONSE_NAME}({did_filter}) {{ {AGENT_RESPONSE_FIELDS} }} }}"
+            ),
+        )
+        .await?,
+        ..ClientStoreRows::default()
+    }))
 }
 
 pub async fn load_agent_scoped_snapshot_with_peer_records(
     node: &EmbeddedNode,
     agent_did: &str,
-    _peers: &[PeerRecord],
+    peers: &[PeerRecord],
     _requester_did: &str,
 ) -> Result<ClientStore> {
-    load_agent_scoped_snapshot(node, agent_did).await
+    let mut store = load_agent_scoped_snapshot(node, agent_did).await?;
+    if let Some(graphql) = peers
+        .iter()
+        .find(|peer| peer.agent_did == agent_did)
+        .and_then(PeerRecord::operator_graphql)
+    {
+        match load_operator_config(
+            &gents::config_client::ConfigAccess::Graphql(graphql.to_string()),
+            agent_did,
+        )
+        .await
+        {
+            Ok(remote) => {
+                store = store.overlay_agent_operator_config(agent_did, &remote);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop_core::query",
+                    agent_did,
+                    graphql,
+                    error = %error,
+                    "operator GraphQL config overlay failed; keeping the desktop replica"
+                );
+            }
+        }
+    }
+    Ok(store)
 }
 
 pub async fn load_agent_principals(node: &EmbeddedNode) -> Result<Vec<AgentPrincipal>> {

@@ -16,8 +16,8 @@ use crate::config_client::{
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::document_config::{
-    AgentBehavior as AgentBehaviorDocument, AgentContext, BashTools, BuiltInTools, FileTools,
-    HostTools, Tools,
+    AgentBehavior as AgentBehaviorDocument, AgentContext, AgentPrincipal, BashTools, BuiltInTools,
+    FileTools, HostTools, Tools,
 };
 use crate::Collection;
 
@@ -46,10 +46,13 @@ pub struct PersonaCatalogView {
 /// The slice of an `AgentBehavior` row admission and apply need: whether it
 /// is a legal clone/edit/disable target. Config payloads are read by the
 /// shared loader inside the apply transaction.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BehaviorRef {
     pub enabled: bool,
+    pub protected: bool,
 }
+
+pub const SETUP_STEWARD_BEHAVIOR_TAG: &str = "gents:setup-steward";
 
 /// The requested operation, with `clone_from` folded in for `create` (the
 /// only op it applies to).
@@ -101,9 +104,12 @@ pub struct PersonaRequestDoc {
     pub op: Option<PersonaOp>,
     pub behavior_id: Option<String>,
     pub persona_name: Option<String>,
+    pub description: Option<String>,
+    pub system_prompt: Option<String>,
     pub root: Option<String>,
     pub preset: Option<String>,
     pub profile_id: Option<String>,
+    pub make_default: bool,
     pub created_at: Option<String>,
     pub status: Option<String>,
     pub status_detail: Option<String>,
@@ -129,7 +135,8 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
                 network_id: null, member_peer: null, enrollment_request_digest: null,
                 authorization_sequence: null, authorization_expires_at: null,
                 op: "{}", behavior_id: {}, clone_from: {},
-                persona_name: {}, root: {}, preset: {}, profile_id: {},
+                persona_name: {}, description: {}, system_prompt: {},
+                root: {}, preset: {}, profile_id: {}, make_default: {},
                 created_at: "{}", status: "pending"
             }}) {{ _docID }}
         }}"#,
@@ -143,9 +150,12 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
         nullable(record.behavior_id.as_deref()),
         nullable(record.clone_from.as_deref()),
         nullable(record.persona_name.as_deref()),
+        nullable(record.description.as_deref()),
+        nullable(record.system_prompt.as_deref()),
         nullable(record.root.as_deref()),
         nullable(record.preset.as_deref()),
         nullable(record.profile_id.as_deref()),
+        record.make_default,
         crate::graphql::escape_graphql_string(&record.created_at),
     )
 }
@@ -171,6 +181,19 @@ fn validate_persona_name(name: Option<&str>) -> Option<String> {
         ));
     }
     None
+}
+
+fn validate_system_prompt(prompt: Option<&str>, required: bool) -> Option<String> {
+    match prompt {
+        Some(prompt) if prompt.trim().is_empty() => {
+            Some("system_prompt must not be blank when supplied".to_string())
+        }
+        None if required => Some(
+            "system_prompt is required when creating a behavior from a permission preset"
+                .to_string(),
+        ),
+        _ => None,
+    }
 }
 
 /// The most entries an enumerated rejection lists before summarizing the
@@ -304,6 +327,9 @@ pub fn decide_persona_request(
             let preset = doc.preset.as_deref().unwrap_or("").trim();
             match clone_from {
                 Some(source_id) => {
+                    if let Some(msg) = validate_system_prompt(doc.system_prompt.as_deref(), false) {
+                        return PersonaVerdict::Reject(msg);
+                    }
                     if !preset.is_empty() {
                         return PersonaVerdict::Reject(format!(
                             r#"create with clone_from must not also set preset "{preset}" — omit preset when cloning"#
@@ -325,6 +351,9 @@ pub fn decide_persona_request(
                     }
                 }
                 None => {
+                    if let Some(msg) = validate_system_prompt(doc.system_prompt.as_deref(), true) {
+                        return PersonaVerdict::Reject(msg);
+                    }
                     if preset.is_empty() {
                         return PersonaVerdict::Reject(format!(
                             r#"unknown preset "" — pick from {}"#,
@@ -340,12 +369,17 @@ pub fn decide_persona_request(
         }
         PersonaOp::Edit => {
             let behavior_id = doc.behavior_id.as_deref().unwrap_or("");
-            let Some(_target) = catalog.behaviors.get(behavior_id) else {
+            let Some(target) = catalog.behaviors.get(behavior_id) else {
                 return PersonaVerdict::Reject(format!(
                     r#"unknown behavior_id "{behavior_id}" — pick from this agent's behaviors: {}"#,
                     enumerate_behavior_ids(&catalog.behaviors)
                 ));
             };
+            if target.protected {
+                return PersonaVerdict::Reject(format!(
+                    r#"behavior_id "{behavior_id}" is a protected configurator and cannot be edited through configure_behaviors"#
+                ));
+            }
             if let Some(msg) = validate_persona_name(doc.persona_name.as_deref()) {
                 return PersonaVerdict::Reject(msg);
             }
@@ -353,6 +387,9 @@ pub fn decide_persona_request(
                 return PersonaVerdict::Reject(msg);
             }
             if let Some(msg) = validate_profile(doc.profile_id.as_deref(), catalog) {
+                return PersonaVerdict::Reject(msg);
+            }
+            if let Some(msg) = validate_system_prompt(doc.system_prompt.as_deref(), false) {
                 return PersonaVerdict::Reject(msg);
             }
             let preset = doc.preset.as_deref().unwrap_or("").trim();
@@ -364,11 +401,19 @@ pub fn decide_persona_request(
             PersonaVerdict::Admit
         }
         PersonaOp::Disable => {
+            if doc.make_default {
+                return PersonaVerdict::Reject("disable must not request make_default".to_string());
+            }
             let behavior_id = doc.behavior_id.as_deref().unwrap_or("");
-            if !catalog.behaviors.contains_key(behavior_id) {
+            let Some(target) = catalog.behaviors.get(behavior_id) else {
                 return PersonaVerdict::Reject(format!(
                     r#"unknown behavior_id "{behavior_id}" — pick from this agent's behaviors: {}"#,
                     enumerate_behavior_ids(&catalog.behaviors)
+                ));
+            };
+            if target.protected {
+                return PersonaVerdict::Reject(format!(
+                    r#"behavior_id "{behavior_id}" is a protected configurator and cannot be disabled"#
                 ));
             }
             PersonaVerdict::Admit
@@ -536,7 +581,7 @@ pub async fn apply_persona_request(
             anyhow::ensure!(source.as_ref().is_some_and(|source| source.enabled), "clone source is disabled");
         }
         let mut behavior = if let Some(source) = source.clone() { source } else {
-            serde_json::from_value(serde_json::json!({"behavior_id":derive_behavior_id(owner, doc.persona_name.as_deref().context("persona name missing")?, &current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled})).collect()), "agent_did":owner,
+            serde_json::from_value(serde_json::json!({"behavior_id":derive_behavior_id(owner, doc.persona_name.as_deref().context("persona name missing")?, &current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)})).collect()), "agent_did":owner,
                 "inference_profile_id":doc.profile_id.as_deref().context("persona profile missing")?}))?
         };
         if matches!(op, PersonaOp::Disable) {
@@ -549,20 +594,39 @@ pub async fn apply_persona_request(
         anyhow::ensure!(!profile.trim().is_empty(), "persona profile must be explicit");
         let create = matches!(op, PersonaOp::Create {..});
         if create {
-            let catalog = current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled})).collect();
+            let catalog = current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)})).collect();
             behavior.behavior_id = derive_behavior_id(owner, name, &catalog);
             behavior.created_at = None;
             behavior.enabled = true;
+            behavior
+                .tags
+                .retain(|tag| tag != SETUP_STEWARD_BEHAVIOR_TAG);
         }
         behavior.display_name = Some(name.into());
+        // A clone inherits its source description unless the request supplies
+        // an override. A preset-based create has no source to inherit from.
+        if source.is_none() || doc.description.is_some() {
+            behavior.description = doc.description.clone();
+        }
         behavior.inference_profile_id = profile.into();
         let mut context: AgentContext = match source.as_ref().and_then(|b| b.context_id.as_deref()) {
             Some(id) => load_config(txn, Collection::AgentContext, owner, id).await?,
             None => serde_json::from_value(serde_json::json!({"context_id":context_id,"agent_did":owner}))?,
         };
+        let existing_context = context.clone();
         let existing_tools: Option<Tools> = match context.tools_id.as_deref() {
             Some(id) => Some(load_config(txn, Collection::Tools, owner, id).await?), None => None,
         };
+        if let Some(system_prompt) = &doc.system_prompt {
+            context.system_prompt = Some(system_prompt.clone());
+        }
+        // The command exposes one concise description because Behavior and
+        // Context are materialized as one reusable interface. Keep both
+        // canonical owners coherent instead of leaving the context opaque in
+        // later inspect/edit flows.
+        if source.is_none() || doc.description.is_some() {
+            context.description = doc.description.clone();
+        }
         let root = doc.root.as_ref().filter(|root| !root.trim().is_empty()).cloned();
         let preset = doc.preset.as_deref().unwrap_or("").trim();
         let mut tools = if !preset.is_empty() {
@@ -577,7 +641,7 @@ pub async fn apply_persona_request(
                 else if root.is_some() { tools.host = Some(HostTools {root:root.clone(),..Default::default()}); }
             }
         }
-        let change_context = create || tools != existing_tools;
+        let change_context = create || context != existing_context || tools != existing_tools;
         let mut documents = Vec::new();
         if change_context {
             context.context_id = context_id;
@@ -590,6 +654,12 @@ pub async fn apply_persona_request(
             documents.push(replacement(Collection::AgentContext, &context)?);
         }
         documents.push(replacement(Collection::AgentBehavior, &behavior)?);
+        if doc.make_default {
+            let mut principal: AgentPrincipal =
+                load_config(txn, Collection::AgentPrincipal, owner, owner).await?;
+            principal.default_behavior_id = Some(behavior.behavior_id.clone());
+            documents.push(replacement(Collection::AgentPrincipal, &principal)?);
+        }
         apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await?;
         Ok(PersonaApplyOutcome {behavior_id:behavior.behavior_id,repaired:false})
     })).await
@@ -626,7 +696,13 @@ mod tests {
             behaviors: behaviors
                 .iter()
                 .map(|(id, enabled, _context_id)| {
-                    (id.to_string(), BehaviorRef { enabled: *enabled })
+                    (
+                        id.to_string(),
+                        BehaviorRef {
+                            enabled: *enabled,
+                            protected: false,
+                        },
+                    )
                 })
                 .collect(),
         }
@@ -654,6 +730,8 @@ mod tests {
             op_raw: "create".to_string(),
             op: Some(op),
             persona_name: Some("Research Assistant".to_string()),
+            description: Some("Researches a focused question".to_string()),
+            system_prompt: Some("Research the question and cite evidence.".to_string()),
             root: None,
             preset: Some(persona_presets::PRESET_WRITE.to_string()),
             profile_id: Some("profile-1".to_string()),
@@ -691,6 +769,96 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn rejects_disabling_and_promoting_the_same_behavior() {
+        let mut doc = create_doc(PersonaOp::Disable);
+        doc.op_raw = "disable".to_string();
+        doc.behavior_id = Some("existing-enabled".to_string());
+        doc.make_default = true;
+        assert_eq!(
+            decide_persona_request(&doc, &base_catalog()),
+            PersonaVerdict::Reject("disable must not request make_default".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_editing_or_disabling_a_protected_configurator() {
+        let mut catalog = base_catalog();
+        catalog
+            .behaviors
+            .get_mut("existing-enabled")
+            .expect("fixture behavior")
+            .protected = true;
+
+        let mut edit = create_doc(PersonaOp::Edit);
+        edit.op_raw = "edit".to_string();
+        edit.behavior_id = Some("existing-enabled".to_string());
+        assert!(matches!(
+            decide_persona_request(&edit, &catalog),
+            PersonaVerdict::Reject(detail) if detail.contains("protected configurator")
+        ));
+
+        let mut disable = create_doc(PersonaOp::Disable);
+        disable.op_raw = "disable".to_string();
+        disable.behavior_id = Some("existing-enabled".to_string());
+        disable.make_default = false;
+        assert!(matches!(
+            decide_persona_request(&disable, &catalog),
+            PersonaVerdict::Reject(detail) if detail.contains("protected configurator")
+        ));
+    }
+
+    #[tokio::test]
+    async fn persona_create_can_atomically_become_default_without_mutating_setup() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let owner = "did:key:agent";
+        seed_persona_validation_references(&node, owner).await?;
+        let setup = AgentBehaviorDocument {
+            behavior_id: "setup".into(),
+            agent_did: owner.into(),
+            display_name: Some("Setup".into()),
+            context_id: None,
+            inference_profile_id: "profile-1".into(),
+            enabled: true,
+            description: None,
+            tags: Vec::new(),
+            created_at: None,
+        };
+        ConfigAccess::Local(node.clone())
+            .transact("test.persona.setup", |txn| {
+                let setup = setup.clone();
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        &DesiredStateApplyPlan::new(vec![replacement(
+                            Collection::AgentBehavior,
+                            &setup,
+                        )?])?,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await?;
+
+        let mut doc = create_doc(PersonaOp::Create { clone_from: None });
+        doc.request_key = "promoted".into();
+        doc.make_default = true;
+        let outcome = apply_persona_request(&node, &doc, &base_catalog()).await?;
+        let principal: AgentPrincipal =
+            read(&node, Collection::AgentPrincipal, owner, owner).await?;
+        assert_eq!(
+            principal.default_behavior_id.as_deref(),
+            Some(outcome.behavior_id.as_str())
+        );
+        assert_eq!(
+            read::<AgentBehaviorDocument>(&node, Collection::AgentBehavior, owner, "setup").await?,
+            setup
+        );
+        Ok(())
     }
 
     #[test]
@@ -933,14 +1101,20 @@ mod tests {
         let mut existing = BTreeMap::new();
         existing.insert(
             "did:key:agent:research-assistant".to_string(),
-            BehaviorRef { enabled: true },
+            BehaviorRef {
+                enabled: true,
+                protected: false,
+            },
         );
         let id = derive_behavior_id("did:key:agent", "Research Assistant", &existing);
         assert_eq!(id, "did:key:agent:research-assistant-2");
 
         existing.insert(
             "did:key:agent:research-assistant-2".to_string(),
-            BehaviorRef { enabled: true },
+            BehaviorRef {
+                enabled: true,
+                protected: false,
+            },
         );
         let id = derive_behavior_id("did:key:agent", "Research Assistant", &existing);
         assert_eq!(id, "did:key:agent:research-assistant-3");
@@ -1007,6 +1181,10 @@ mod tests {
         )
         .await?;
         assert_eq!(original.inference_profile_id, "profile-1");
+        assert_eq!(
+            original.description.as_deref(),
+            Some("Researches a focused question")
+        );
         let mut context: AgentContext = read(
             &node,
             Collection::AgentContext,
@@ -1014,6 +1192,14 @@ mod tests {
             original.context_id.as_deref().unwrap(),
         )
         .await?;
+        assert_eq!(
+            context.system_prompt.as_deref(),
+            Some("Research the question and cite evidence.")
+        );
+        assert_eq!(
+            context.description.as_deref(),
+            Some("Researches a focused question")
+        );
         context.system_prompt = Some("Keep literal {{braces}}".into());
         context.description = Some("Shared context".into());
         ConfigAccess::Local(node.clone())
@@ -1045,12 +1231,15 @@ mod tests {
         });
         doc.preset = None;
         doc.persona_name = Some("Cloned".into());
+        doc.description = None;
+        doc.system_prompt = None;
         doc.root = None;
         doc.profile_id = Some("profile-2".into());
         let cloned = apply_persona_request(&node, &doc, &catalog).await?;
         let behavior: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
         assert_eq!(behavior.inference_profile_id, "profile-2");
+        assert_eq!(behavior.description, original.description);
         let clone_context: AgentContext = read(
             &node,
             Collection::AgentContext,
@@ -1077,6 +1266,8 @@ mod tests {
         doc.op = Some(PersonaOp::Edit);
         doc.behavior_id = Some(cloned.behavior_id.clone());
         doc.root = None;
+        doc.description = Some("Edited behavior and context".into());
+        doc.system_prompt = Some("Edited literal instructions".into());
         apply_persona_request(&node, &doc, &catalog).await?;
         let edited: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
@@ -1096,6 +1287,14 @@ mod tests {
         .await?;
         assert_eq!(edited_tools.host.as_ref().unwrap().root, None);
         assert_eq!(
+            edited_context.description.as_deref(),
+            Some("Edited behavior and context")
+        );
+        assert_eq!(
+            edited_context.system_prompt.as_deref(),
+            Some("Edited literal instructions")
+        );
+        assert_eq!(
             read::<Tools>(&node, Collection::Tools, owner, &source_tools.tools_id).await?,
             source_tools
         );
@@ -1111,7 +1310,7 @@ mod tests {
             preset.context_id.as_deref().unwrap(),
         )
         .await?;
-        assert_eq!(preset_context.system_prompt, context.system_prompt);
+        assert_eq!(preset_context.system_prompt, edited_context.system_prompt);
         let preset_tools: Tools = read(
             &node,
             Collection::Tools,

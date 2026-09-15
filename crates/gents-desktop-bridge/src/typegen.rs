@@ -23,9 +23,12 @@ use crate::contract::BridgeContract;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
-    CodexLoginRequest, CodexLoginResult, CodexLoginUrl, GrokLoginRequest, GrokLoginResult,
-    GrokLoginUrl, InferenceProbeRequest, InferenceProbeResult, ProviderAccountDisconnectRequest,
-    ProviderAccountView, ProviderAccountsRequest,
+    ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
+    CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
+    InferenceBackendRecommendationRequest, InferenceDiscoveryFailure, InferenceDiscoveryRequest,
+    InferenceDiscoveryResult, InferenceProbeRequest, InferenceProbeResult,
+    InferenceRecommendationRequest, ProviderAccountDisconnectRequest, ProviderAccountView,
+    ProviderAccountsRequest,
 };
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
@@ -179,6 +182,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
     export_types!(
         DesktopInitRequest,
         ManagedServerStartRequest,
+        ManagedServerRestartRequest,
+        ManagedServerRootValidationRequest,
         PeerStatusFetchRequest,
         EnrollmentStatusRequest,
         ChatSendRequest,
@@ -199,6 +204,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ToolsDeleteRequest,
         ToolServiceDeleteRequest,
         BehaviorDeleteRequest,
+        ContextDeleteRequest,
         BackendSaveRequest,
         InferenceProfileSaveRequest,
         ToolsSaveRequest,
@@ -217,8 +223,12 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopInterruptRequest,
         DesktopProbeMcpServiceRequest,
         InferenceProbeRequest,
+        InferenceDiscoveryRequest,
+        InferenceRecommendationRequest,
+        InferenceBackendRecommendationRequest,
         CodexLoginRequest,
         GrokLoginRequest,
+        ClaudeLoginRequest,
         ProviderAccountsRequest,
         ProviderAccountDisconnectRequest,
     );
@@ -230,6 +240,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopInitSummary,
         ManagedServerState,
         ManagedServerStatus,
+        ManagedServerRootValidation,
         PeerRemoveResponse,
         EnrollmentRequestView,
         NetworkStatusView,
@@ -257,10 +268,24 @@ fn export_all(dir: &Path) -> Result<(), String> {
         WorkspaceListingView,
         DesktopObserverMetrics,
         InferenceProbeResult,
+        InferenceDiscoveryFailure,
+        InferenceDiscoveryResult,
+        gents::inference_setup::InferenceSetupCatalog,
+        gents::inference_setup::InferenceProviderOption,
+        gents::inference_setup::InferenceAuthOption,
+        gents::inference_setup::InferenceProviderId,
+        gents::inference_setup::InferenceAuthMethod,
+        gents::inference_setup::InferenceModelOption,
+        gents::inference_setup::InferenceModelRecommendation,
+        gents::inference_setup::RecommendedNumberControl,
+        gents::inference_setup::RecommendedIntegerControl,
+        gents::inference_setup::RecommendedReasoningControl,
         CodexLoginResult,
         CodexLoginUrl,
         GrokLoginResult,
         GrokLoginUrl,
+        ClaudeLoginResult,
+        ClaudeLoginUrl,
         ProviderAccountView,
     );
 
@@ -357,6 +382,9 @@ fn all_bridge_visible_contract_roots_are_generated() {
         "GrokLoginRequest.ts",
         "GrokLoginResult.ts",
         "GrokLoginUrl.ts",
+        "ClaudeLoginRequest.ts",
+        "ClaudeLoginResult.ts",
+        "ClaudeLoginUrl.ts",
     ] {
         assert!(
             files.contains(inference_wire_type),

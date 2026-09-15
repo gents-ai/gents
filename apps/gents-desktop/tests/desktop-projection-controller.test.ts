@@ -179,13 +179,16 @@ describe("createDesktopProjectionController", () => {
 
   it("clears the bounded React session projection when selection is empty", async () => {
     const refreshSession = vi.fn(async () => null);
+    const refreshSnapshot = vi.fn(async () => {});
     const projection = controller({
       currentSessionId: () => null,
       refreshSession,
+      refreshSnapshot,
     });
 
     await projection.request("session");
 
     expect(refreshSession).toHaveBeenCalledExactlyOnceWith(null);
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
   });
 });

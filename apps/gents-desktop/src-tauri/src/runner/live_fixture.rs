@@ -27,7 +27,7 @@ pub(crate) use self::backend::LiveBackendOverride;
 pub(crate) use self::backend::LiveSubagentBackendOverride;
 use self::replication::{
     configure_live_replicators, wait_for_connectable_iroh_addr, wait_for_connected_peer,
-    wait_for_live_documents, write_peer_directory_records,
+    wait_for_live_documents, wait_for_ready_peer_status, write_peer_directory_records,
 };
 use self::workspace::seed_runner_agent_home;
 
@@ -169,6 +169,18 @@ impl LiveBridgeFixture {
             remote_core.as_ref(),
             desktop_core.local_peer_id(),
             "amy -> desktop",
+        ))?;
+        runtime.block_on(desktop_core.add_local_standard_peer_route_for_test(
+            &peer_record.label,
+            &peer_record.addr,
+            &peer_record.agent_did,
+            peer_record.graphql.as_deref().unwrap_or_default(),
+            &agent_home.display().to_string(),
+        ))?;
+        runtime.block_on(wait_for_ready_peer_status(
+            desktop_core.as_ref(),
+            &peer_record.peer_id,
+            "desktop -> amy",
         ))?;
         runtime.block_on(wait_for_live_documents(
             desktop_core.as_ref(),

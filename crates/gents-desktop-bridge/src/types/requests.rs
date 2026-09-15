@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Local-runtime init request. Filesystem paths are **not** accepted from the
@@ -15,6 +15,33 @@ pub struct DesktopInitRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerStartRequest {
     pub agent_name: String,
+    #[serde(default)]
+    pub tool_ceiling: Option<ManagedServerToolCeiling>,
+    #[serde(default)]
+    pub tool_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case")]
+pub enum ManagedServerToolCeiling {
+    MetaOnly,
+    Readonly,
+    Readwrite,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedServerRootValidationRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedServerRestartRequest {
+    pub agent_name: String,
+    pub tool_ceiling: ManagedServerToolCeiling,
+    pub tool_root: Option<String>,
 }
 
 /// Fetch peer runtime status by **saved peer id** only — read grants never
@@ -132,6 +159,13 @@ pub struct ToolServiceDeleteRequest {
 #[serde(rename_all = "camelCase")]
 pub struct BehaviorDeleteRequest {
     pub behavior_id: String,
+    pub agent_did: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextDeleteRequest {
+    pub context_id: String,
     pub agent_did: String,
 }
 
@@ -376,6 +410,12 @@ mod tests {
             "behaviorId",
             behavior_id,
             "behavior-a"
+        );
+        assert_source_routed_delete_request!(
+            ContextDeleteRequest,
+            "contextId",
+            context_id,
+            "context-a"
         );
     }
 }

@@ -99,6 +99,7 @@ pub(crate) async fn run_claude_login(
         refresh_token: tokens.refresh_token,
         expires_in: tokens.expires_in,
         scope: tokens.scope,
+        account_id: tokens.account_id,
     };
     let credential = gents::claude_oauth::credential_from_login_tokens(
         agent_did,
@@ -168,6 +169,7 @@ mod tests {
                 refresh_token: "refresh-SECRET".into(),
                 expires_in: Some(60),
                 scope: None,
+                account_id: None,
             },
             chrono::Utc::now(),
         );

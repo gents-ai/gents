@@ -817,6 +817,9 @@ pub(super) async fn apply_request_session_projection(
     request: &AgentRequest,
     now: &str,
 ) -> Result<()> {
+    if session::preserve_control_session_in_txn(txn, request).await? {
+        return Ok(());
+    }
     if let Some(existing) = session::load_agent_session_row_in_txn(
         txn,
         &request.agent_did,

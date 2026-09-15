@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   BootstrapSummary,
-  DesktopApiAdapter,
   DeploymentView,
   EnrollmentRequestView,
   P2PHealth,
@@ -12,7 +11,6 @@ import type { FleetCopy } from "../copy.js";
 import { needsInferenceSetup } from "../fleetMetrics.js";
 import { AddPeerForm, type AddPeerFormProps } from "./AddPeerForm.js";
 import { FleetRow } from "./FleetRow.js";
-import { NetworkPanel } from "./NetworkPanel.js";
 
 export type FleetDashboardProps = {
   addingPeer: boolean;
@@ -31,7 +29,6 @@ export type FleetDashboardProps = {
   onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
   onRepairP2P: () => Promise<unknown>;
   brand?: ReactNode;
-  api: DesktopApiAdapter;
   copy?: FleetCopy;
   headerLeadingActions?: ReactNode;
   localRuntimeSetup?: ReactNode;
@@ -57,7 +54,6 @@ export function FleetDashboard({
   onRenamePeer,
   onRepairP2P,
   brand,
-  api,
   copy,
   headerLeadingActions,
   localRuntimeSetup,
@@ -256,8 +252,6 @@ export function FleetDashboard({
           </tbody>
         </table>
       </div>
-
-      <NetworkPanel api={api} />
 
       {activeWizardDeployment && renderInferenceSetup
         ? renderInferenceSetup(activeWizardDeployment, () =>

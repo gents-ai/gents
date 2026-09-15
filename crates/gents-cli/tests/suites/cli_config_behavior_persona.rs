@@ -12,7 +12,7 @@ use uuid::Uuid;
 /// reconciler, `crates/gents/src/agent/p2p_reconcile/persona_requests.rs`).
 /// The CLI submits a `PersonaConfigRequest` row over HTTP GraphQL and polls
 /// it to a terminal status — the exact channel the reconciler and the
-/// agent's own `configure_persona` self-config tool use — so this test
+/// agent's own `configure_behaviors` self-config tool use — so this test
 /// exercises the real end-to-end path against a running `gents server`,
 /// following the harness precedent in `cli_config_workspace_root.rs`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

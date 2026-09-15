@@ -40,6 +40,20 @@ Run the full Tauri shell:
 npm run tauri -- dev
 ```
 
+First-run click-through (empty desktop home, then the setup wizard):
+
+```bash
+GENTS_DESKTOP_HOME=/tmp/gents-desktop-fresh npm run tauri -- dev
+```
+
+That opens setup: Local agent → Start → pick inference (local Ollama/llama.cpp,
+OpenAI key, Codex, or Grok) → a new chat. The same path is the Playwright
+`desktop-first-run` spec against the deterministic harness:
+
+```bash
+npm run test:ui:e2e
+```
+
 Build the frontend:
 
 ```bash

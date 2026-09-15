@@ -369,17 +369,37 @@ impl ClientCore {
         &self.p2p
     }
 
-    #[cfg(test)]
-    pub(crate) async fn add_local_standard_peer_for_test(&self, agent_did: &str) -> Result<()> {
-        self.sync_state
-            .upsert_local_standard_peer(
-                "Test Local Runtime",
-                "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-                agent_did,
-                "http://127.0.0.1:56001/graphql",
-                "/tmp/test-agent-home",
-            )
+    /// Test-fixture seam for exercising local mutation semantics independently
+    /// of the enrollment integration suite. Product callers must establish
+    /// readiness through the signed route owner.
+    #[doc(hidden)]
+    pub async fn add_local_standard_peer_for_test(&self, agent_did: &str) -> Result<()> {
+        self.add_local_standard_peer_route_for_test(
+            "Test Local Runtime",
+            "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+            agent_did,
+            "http://127.0.0.1:56001/graphql",
+            "/tmp/test-agent-home",
+        )
+        .await
+    }
+
+    /// Test-fixture seam for publishing readiness after the fixture has
+    /// established and verified its real local-standard route.
+    #[doc(hidden)]
+    pub async fn add_local_standard_peer_route_for_test(
+        &self,
+        label: &str,
+        addr: &str,
+        agent_did: &str,
+        graphql: &str,
+        agent_home: &str,
+    ) -> Result<()> {
+        let record = self
+            .sync_state
+            .upsert_local_standard_peer(label, addr, agent_did, graphql, agent_home)
             .await?;
+        self.sync_state.set_pairing_ready(&record, true).await?;
         Ok(())
     }
 
@@ -397,6 +417,23 @@ impl ClientCore {
 
     pub fn sync_state_updates(&self) -> watch::Receiver<ClientSyncStateSnapshot> {
         self.sync_state.subscribe()
+    }
+
+    /// Clear the live readiness observation before a desktop-managed runtime
+    /// is deliberately restarted. The signed enrollment remains durable, but
+    /// the replacement process must re-establish both route legs before chat
+    /// writes reopen.
+    pub async fn mark_managed_runtime_restarting(&self, agent_did: &str) -> Result<()> {
+        let records = self.peer_records().await;
+        for record in records.into_iter().filter(|record| {
+            record.agent_did == agent_did
+                && record.is_enrollment()
+                && record.is_managed_runtime()
+                && record.pairing_ready
+        }) {
+            self.sync_state.set_pairing_ready(&record, false).await?;
+        }
+        Ok(())
     }
 
     async fn send_p2p_command(&self, command: P2PSupervisorCommand) -> Result<()> {

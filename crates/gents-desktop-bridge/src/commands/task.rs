@@ -9,14 +9,16 @@ use super::super::types::{
 };
 use super::util::require_trimmed;
 
-async fn load_agent_request_by_doc_id(
+async fn load_agent_request_by_request_id(
     core: &ClientCore,
-    request_doc_id: &str,
+    agent_did: &str,
+    request_id: &str,
 ) -> Result<AgentRequestRow> {
-    let escaped_doc_id = escape_graphql_string(request_doc_id);
+    let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                _docID
                 request_id
                 agent_did
                 behavior_id
@@ -32,15 +34,26 @@ async fn load_agent_request_by_doc_id(
             response.errors
         );
     }
-
-    let row = response
+    let local_row = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
+        .cloned();
+    if let Some(row) = local_row {
+        return serde_json::from_value(row).map_err(Into::into);
+    }
+
+    // Goal-backed manual runs are committed atomically on the managed
+    // runtime so Goal, GoalCreationClaim and AgentRequest become visible
+    // together. Resolve their document ID at that authoritative operator
+    // node instead of racing the runtime-to-client P2P projection.
+    let response = core.operator_access(agent_did)?.execute(&query).await?;
+    let row = response
+        .pointer("/data/AgentRequest/0")
         .cloned()
-        .ok_or_else(|| anyhow!("manual task run request {request_doc_id} was not found"))?;
+        .ok_or_else(|| anyhow!("manual task run request {request_id} was not found"))?;
     serde_json::from_value(row).map_err(Into::into)
 }
 
@@ -58,14 +71,31 @@ pub async fn run_schedule_config(
 ) -> Result<TaskRunResult> {
     let schedule_id = require_trimmed("schedule_id", request.schedule_id)?;
     let store = core.store().snapshot();
-    let schedule = store
+    let selected_agent_did = core.selected_agent_did();
+    let mut schedules = store
         .schedules
         .iter()
-        .find(|row| row.schedule_id == schedule_id)
-        .cloned()
+        .filter(|row| row.schedule_id == schedule_id)
+        .filter(|row| {
+            selected_agent_did
+                .as_deref()
+                .is_none_or(|agent_did| row.agent_did == agent_did)
+        });
+    let schedule = schedules
+        .next()
         .ok_or_else(|| anyhow!("schedule {schedule_id} was not found"))?;
-    let request_doc_id = core.fire_schedule_now(&schedule).await?;
-    let row = load_agent_request_by_doc_id(core, &request_doc_id).await?;
+    if schedules.next().is_some() {
+        bail!("schedule {schedule_id} is ambiguous across agent scopes");
+    }
+    let submitted = core
+        .fire_schedule_now_for_agent(&schedule.agent_did, &schedule_id)
+        .await?;
+    let row =
+        load_agent_request_by_request_id(core, &submitted.agent_did, &submitted.request_id).await?;
+    let request_doc_id = row
+        .doc_id
+        .clone()
+        .ok_or_else(|| anyhow!("manual schedule run request has no _docID"))?;
 
     Ok(TaskRunResult {
         request_doc_id,
@@ -85,14 +115,31 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
     let task_id = require_trimmed("task_id", request.task_id)?;
     let args = request.args.unwrap_or_else(|| serde_json::json!({}));
     let store = core.store().snapshot();
-    let task = store
+    let selected_agent_did = core.selected_agent_did();
+    let mut tasks = store
         .tasks
         .iter()
-        .find(|row| row.task_id == task_id)
-        .cloned()
+        .filter(|row| row.task_id == task_id)
+        .filter(|row| {
+            selected_agent_did
+                .as_deref()
+                .is_none_or(|agent_did| row.agent_did == agent_did)
+        });
+    let task = tasks
+        .next()
         .ok_or_else(|| anyhow!("task {task_id} was not found"))?;
-    let request_doc_id = core.fire_task_now(&task, args).await?;
-    let row = load_agent_request_by_doc_id(core, &request_doc_id).await?;
+    if tasks.next().is_some() {
+        bail!("task {task_id} is ambiguous across agent scopes");
+    }
+    let submitted = core
+        .fire_task_now_for_agent(&task.agent_did, &task_id, args)
+        .await?;
+    let row =
+        load_agent_request_by_request_id(core, &submitted.agent_did, &submitted.request_id).await?;
+    let request_doc_id = row
+        .doc_id
+        .clone()
+        .ok_or_else(|| anyhow!("manual task run request has no _docID"))?;
 
     Ok(TaskRunResult {
         request_doc_id,

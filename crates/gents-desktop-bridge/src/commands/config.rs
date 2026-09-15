@@ -3,9 +3,10 @@ use gents_desktop_core::client::ClientCore;
 
 use super::super::types::{
     AgentConfigSaveRequest, BackendDeleteRequest, BackendSaveRequest, BehaviorDeleteRequest,
-    BehaviorSaveRequest, InferenceProfileDeleteRequest, InferenceProfileSaveRequest,
-    ScheduleDeleteRequest, SkillDeleteRequest, SkillSaveRequest, TaskDeleteRequest,
-    ToolServiceDeleteRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
+    BehaviorSaveRequest, ContextDeleteRequest, InferenceProfileDeleteRequest,
+    InferenceProfileSaveRequest, ScheduleDeleteRequest, SkillDeleteRequest, SkillSaveRequest,
+    TaskDeleteRequest, ToolServiceDeleteRequest, ToolsDeleteRequest, ToolsSaveRequest,
+    TriggerDeleteRequest,
 };
 
 pub async fn save_agent_config(core: &ClientCore, request: AgentConfigSaveRequest) -> Result<()> {
@@ -83,6 +84,12 @@ pub async fn delete_behavior_config(
     request: BehaviorDeleteRequest,
 ) -> Result<()> {
     core.delete_behavior(&request.behavior_id, &request.agent_did)
+        .await
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub async fn delete_context_config(core: &ClientCore, request: ContextDeleteRequest) -> Result<()> {
+    core.delete_context(&request.context_id, &request.agent_did)
         .await
 }
 

@@ -750,7 +750,10 @@ fn render_profile_params_json(
     format!("{{{}}}", fields.join(","))
 }
 
-/// Keep only workspace roots inside the operator tool-root ceiling
+/// Keep only workspace roots inside the operator tool-root ceiling and
+/// publish the resolved ceiling itself as the widest valid choice. This keeps
+/// a managed runtime configurable even when no narrower `WorkspaceRoot`
+/// document has been authored yet.
 /// (`gents server --tool-root`). The serve-time guard in
 /// `tool_surface::build` refuses any behavior whose file tool root escapes
 /// the ceiling, so publishing such a root in the catalog — or admitting it
@@ -768,14 +771,19 @@ pub(crate) fn filter_roots_to_ceiling(
     let Ok(ceiling) = crate::tool_surface::resolve_configured_tool_root(ceiling) else {
         return Vec::new();
     };
-    roots
+    let mut filtered = roots
         .into_iter()
         .filter(|root| {
             crate::tool_surface::resolve_configured_tool_root(std::path::Path::new(root))
                 .map(|resolved| resolved.starts_with(&ceiling))
                 .unwrap_or(false)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let ceiling = ceiling.to_string_lossy().into_owned();
+    if !filtered.iter().any(|root| root == &ceiling) {
+        filtered.push(ceiling);
+    }
+    filtered
 }
 
 const DIRECTORY_CONFIG_COLLECTIONS: &[crate::collection::Collection] = &[
@@ -1144,6 +1152,11 @@ mod tests {
             filter_roots_to_ceiling(roots, Some(std::path::Path::new("/ceil/ws"))),
             vec!["/ceil/ws/app".to_string(), "/ceil/ws".to_string()],
             "only roots within the ceiling (incl. the ceiling itself) survive"
+        );
+        assert_eq!(
+            filter_roots_to_ceiling(Vec::new(), Some(std::path::Path::new("/ceil/ws"))),
+            vec!["/ceil/ws".to_string()],
+            "the managed ceiling is a usable root even without narrower root documents"
         );
     }
 

@@ -127,6 +127,8 @@ permissions = [
   "allow-desktop-managed-server-status",
   "allow-desktop-managed-server-start",
   "allow-desktop-managed-server-stop",
+  "allow-desktop-managed-server-restart",
+  "allow-desktop-managed-server-validate-root",
 ]
 
 [[set]]
@@ -148,16 +150,23 @@ permissions = [
   "allow-desktop-tools-delete",
   "allow-desktop-tool-service-delete",
   "allow-desktop-behavior-delete",
+  "allow-desktop-context-delete",
   "allow-desktop-backend-save",
   "allow-desktop-inference-profile-save",
   "allow-desktop-tools-save",
   "allow-desktop-tool-service-save",
   "allow-desktop-tool-service-test",
   "allow-desktop-probe-inference-endpoint",
+  "allow-desktop-inference-setup-catalog",
+  "allow-desktop-inference-models-discover",
+  "allow-desktop-inference-model-recommendation",
+  "allow-desktop-inference-backend-recommendation",
   "allow-desktop-codex-login",
   "allow-desktop-codex-login-cancel",
   "allow-desktop-grok-login",
   "allow-desktop-grok-login-cancel",
+  "allow-desktop-claude-login",
+  "allow-desktop-claude-login-cancel",
   "allow-desktop-provider-account-disconnect",
 ]
 

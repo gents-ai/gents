@@ -18,9 +18,11 @@ native-e2e = []
 anyhow.workspace = true
 blake3 = "1"
 chrono.workspace = true
+dirs.workspace = true
 gents = { path = "../gents", features = ["typescript"] }
 gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
 gents-chatgpt-login.workspace = true
+gents-claude-login.workspace = true
 gents-desktop-core.workspace = true
 gents-protocol = { workspace = true, features = ["typescript"] }
 hostname.workspace = true
@@ -30,6 +32,7 @@ serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tokio.workspace = true
 tracing.workspace = true
+webbrowser = "1"
 tracing-subscriber.workspace = true
 # ts-rs is the source-of-truth generator for the public desktop request/view
 # contract. serde-compat handles rename_all and tagged enums
@@ -46,5 +49,6 @@ tauri-plugin = { version = "2", features = ["build"] }
 
 [dev-dependencies]
 gents-lean-contract.workspace = true
+tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 toml.workspace = true

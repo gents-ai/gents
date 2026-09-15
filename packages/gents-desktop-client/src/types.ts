@@ -59,6 +59,9 @@ export type {
   CodexLoginResult,
   CodexLoginRequest,
   CodexLoginUrl,
+  ClaudeLoginResult,
+  ClaudeLoginRequest,
+  ClaudeLoginUrl,
   GrokLoginResult,
   GrokLoginRequest,
   GrokLoginUrl,
@@ -81,6 +84,7 @@ export type {
   ToolsDeleteRequest,
   ToolServiceDeleteRequest,
   BehaviorDeleteRequest,
+  ContextDeleteRequest,
   SkillSaveRequest,
   TaskRunRequest,
   TaskRunResult,
@@ -146,6 +150,22 @@ export type {
 export type { ProviderAccountView } from "./generated/ProviderAccountView.js";
 export type { ProviderAccountsRequest } from "./generated/ProviderAccountsRequest.js";
 export type { ProviderAccountDisconnectRequest } from "./generated/ProviderAccountDisconnectRequest.js";
+export type { InferenceSetupCatalog } from "./generated/InferenceSetupCatalog.js";
+export type { InferenceProviderOption } from "./generated/InferenceProviderOption.js";
+export type { InferenceAuthOption } from "./generated/InferenceAuthOption.js";
+export type { InferenceProviderId } from "./generated/InferenceProviderId.js";
+export type { InferenceAuthMethod } from "./generated/InferenceAuthMethod.js";
+export type { InferenceDiscoveryRequest } from "./generated/InferenceDiscoveryRequest.js";
+export type { InferenceDiscoveryResult } from "./generated/InferenceDiscoveryResult.js";
+export type { InferenceDiscoveryFailure } from "./generated/InferenceDiscoveryFailure.js";
+export type { InferenceRecommendationRequest } from "./generated/InferenceRecommendationRequest.js";
+export type { InferenceBackendRecommendationRequest } from "./generated/InferenceBackendRecommendationRequest.js";
+export type { InferenceModelOption } from "./generated/InferenceModelOption.js";
+export type { InferenceModelRecommendation } from "./generated/InferenceModelRecommendation.js";
+export type { RecommendedNumberControl } from "./generated/RecommendedNumberControl.js";
+export type { RecommendedIntegerControl } from "./generated/RecommendedIntegerControl.js";
+export type { RecommendedReasoningControl } from "./generated/RecommendedReasoningControl.js";
+export type { ReasoningEffort } from "./generated/ReasoningEffort.js";
 export type { InferenceBackend } from "./generated/InferenceBackend.js";
 export type { BackendAuth } from "./generated/BackendAuth.js";
 export type { BackendProviderKind } from "./generated/BackendProviderKind.js";

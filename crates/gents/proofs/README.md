@@ -119,6 +119,12 @@ local lemmas only — not listed as fenced proven areas):
   conformance-fenced here. See
   `boundary.p2p-backpressure.obligation-model`.
 
+`StorageWriteGate` has a **partial** bridge: three generated scheduling cases
+exercise the real stream guard and a shared-task negative control. Its cleanup
+and future-drop return observations remain explicit, unbridged obligations; see
+[`storage-write-gate-scheduling`](../../../contracts/storage-write-gate-scheduling.md).
+This does not establish DefraDB termination or a wall-clock bound.
+
 ## Quick Start
 
 ```bash
@@ -271,7 +277,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/GraphPipeline/FailureAttribution.lean` | Existing GraphRun transaction refinement: capture the first durable failure before interrupting siblings, preserve it through drain/restart, reject stale generation writes, and retain explicit cancellation precedence. “First” means the first committed fail-fast decision; evidence discovery and logical continuation eligibility remain separate inputs. |
 | `Proofs/GraphPipeline/LogicalInvocation.lean` | Derived authenticated physical ancestry, conservative committed Goal obligations, logical tip outcome and physical limits; existing GraphRun publication generation fence. Projection cases and publication traces target signed-row and transaction tests; new cases require consumer migration in the conformance layer. |
 | `Proofs/PromptAssembly/` | Provider-view sanitation and prompt assembly, per-turn context budgeting, and the request-wide aggregate token ledger. Fences: generated cases consumed by `agent::loop_stream::tests`. |
-| `Proofs/PromptAssembly/ClaudeMap.lean` | Claude tool-name map and Messages provider-input assembly: `splitSystem_partition`, `systemBlocks_head`, `systemBlocks_tail_verbatim`, `toolsField_empty`, `accumulate_ignores_start_when_streamed`, `runStream_*`. Fences: `tests/conformance/prompt_assembly.rs::generated_claude_{map,stream,body}_cases_*`; the identity pin lives in `claude_messages::tests`. |
+| `Proofs/PromptAssembly/ClaudeMap.lean` | Claude tool-name map and Messages provider-input assembly: advertised reasoning metadata gates `selectedEffort` (unknown/unsupported efforts are omitted), plus `splitSystem_partition`, `systemBlocks_head`, `systemBlocks_tail_verbatim`, `toolsField_empty`, `accumulate_ignores_start_when_streamed`, `runStream_*`. Fences: `tests/conformance/prompt_assembly.rs::generated_claude_{map,stream,body}_cases_*`; the identity pin lives in `claude_messages::tests`. |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
 | `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (one parent and one child composed state; native tools retain their own executor models), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
@@ -306,7 +312,7 @@ Semantic submodules:
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement` |
-| `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Theorems` |
+| `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
 | `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed` |
@@ -595,6 +601,14 @@ Local observation theorems also record the daemon assumptions Rust relies on:
 "Liveness" theorems in this suite fall into four tiers. **Almost all Lean
 results are tier 1.** Reading an `*_eventually_*` or `*_convergence` name as
 fair-scheduler or wall-clock progress is a misread (#557).
+
+The enum-only lemmas in `Properties/Decidable.lean` are now named
+`*_has_distinct_state`. They are **not even tier-1 reachability**: finding a
+different enum value does not prove an enabled transition. The former
+`*_no_deadlocks` names overstated their content. `StorageWriteGate` separately
+exhibits an infinite legal stalled trace when a sibling waiter suspends the
+only task polling a gate-owning stream finalizer. Timeout passage is not timeout
+observation, and independent scheduling still requires external progress.
 
 | Tier | Meaning | Where it lives |
 |------|---------|----------------|

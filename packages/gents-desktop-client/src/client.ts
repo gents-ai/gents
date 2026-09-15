@@ -12,12 +12,12 @@ import type {
 
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
-export const PACKAGE_VERSION = "0.16.4";
+export const PACKAGE_VERSION = "0.17.0";
 // The client and bridge share one exact breaking contract. Sync status comes
 // from database-owned gauges; goal permissions are explicit fields.
-export const BRIDGE_CONTRACT_VERSION = "7.2";
+export const BRIDGE_CONTRACT_VERSION = "7.8";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "8a91697193d2c3362918f8ff2ac5d0ec51fc6762f600697cbf69b2e5489fc6ba";
+  "e5ff21ba8b9a75532ebe0506db35136cd2c7220b44c64846ea51b41b306ad52d";
 
 export function assertExactBridgeContract(contract: DesktopBridgeContract) {
   if (contract.contractVersion !== BRIDGE_CONTRACT_VERSION) {

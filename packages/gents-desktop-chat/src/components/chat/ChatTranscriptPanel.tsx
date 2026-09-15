@@ -381,6 +381,7 @@ export function ChatTranscriptPanel({
           ) : null}
           <MessageList
             timelineItems={visibleTimelineItems}
+            timelineIdentity={selectedSessionId}
             responseCancelCause={session?.latestResponse?.cancelCause}
             responseMaterializedSequence={
               session?.latestResponse?.materializedMessageSequence
@@ -394,15 +395,25 @@ export function ChatTranscriptPanel({
                 role="status"
                 aria-label="Assistant is working"
               >
-                <div className="message-role">
-                  {session?.turnState === "waitingForClaim"
-                    ? "Waiting for agent"
-                    : "Working"}
-                </div>
-                <div className="thinking-dots" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
+                <div className="message-role">assistant</div>
+                <div className="assistant-activity">
+                  <div className="thinking-dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <div className="assistant-activity-copy">
+                    <strong>
+                      {session?.turnState === "waitingForClaim"
+                        ? "Waiting for the agent"
+                        : "Assistant is working"}
+                    </strong>
+                    <span>
+                      {session?.turnState === "waitingForClaim"
+                        ? "Your message is queued and ready to be claimed."
+                        : "Progress will appear here as it arrives."}
+                    </span>
+                  </div>
                 </div>
               </article>
             </div>
@@ -415,9 +426,7 @@ export function ChatTranscriptPanel({
                 role="alert"
               >
                 <div className="message-role">assistant error</div>
-                <div className="message-content">
-                  {RESPONSE_ERROR_SUMMARY}
-                </div>
+                <div className="message-content">{RESPONSE_ERROR_SUMMARY}</div>
                 <details className="response-error-details">
                   <summary>Error details</summary>
                   <pre className="response-error-content">{responseError}</pre>

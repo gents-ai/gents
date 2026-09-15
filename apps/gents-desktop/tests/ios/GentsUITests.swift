@@ -56,7 +56,7 @@ final class GentsUITests: XCTestCase {
         let prompt = environment["GENTS_E2E_PROMPT"]
             ?? "Reply with only the uppercase underscore form of: fleet iphone simulator e2e."
 
-        _ = try waitForVisualText("Fleet Dashboard", timeout: 30)
+        _ = try waitForVisualText("Sessions", timeout: 30)
 
         var agent = try findVisualText(agentLabel, exact: true)
         if agent == nil {
@@ -65,7 +65,7 @@ final class GentsUITests: XCTestCase {
         }
         tap(try XCTUnwrap(agent, "\(agentLabel) did not appear after enrollment"))
 
-        let composer = try waitForVisualText("Message the selected agent", timeout: 30)
+        let composer = try waitForVisualText("Ask anything", timeout: 30)
         tap(composer)
         paste(prompt)
         app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])

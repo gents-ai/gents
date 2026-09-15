@@ -515,6 +515,7 @@ fn resolve_inference(
                 profile.model_name
             );
         }
+        validate_advertised_context_override(&profile, model)?;
         Some(model.clone())
     } else {
         None
@@ -542,6 +543,99 @@ fn resolve_inference(
     resolved.max_turns()?;
     resolved.sampling_config()?;
     Ok(resolved)
+}
+
+fn validate_advertised_context_override(
+    profile: &crate::document_config::InferenceProfile,
+    model: &crate::document_config::AdvertisedModel,
+) -> Result<()> {
+    let Some(selected) = profile.context_window else {
+        return Ok(());
+    };
+    let Some(maximum) = model.max_context_window.filter(|maximum| {
+        *maximum > 0
+            && model
+                .context_window
+                .is_none_or(|default| default > 0 && default <= *maximum)
+    }) else {
+        return Ok(());
+    };
+    anyhow::ensure!(
+        selected <= maximum,
+        "profile {} context window {} exceeds model {} advertised maximum {}",
+        profile.profile_id,
+        selected,
+        profile.model_name,
+        maximum
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod advertised_context_override_tests {
+    use super::*;
+
+    #[test]
+    fn context_override_admission_matches_lean() {
+        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let cases = snapshot.configuration_scope_cases["context_bounds"]
+            .as_array()
+            .unwrap();
+        assert_eq!(cases.len(), 8);
+        for case in cases {
+            let mut selected = profile(1);
+            selected.context_window = case["selected"].as_i64();
+            let model = advertised(case["default"].as_i64(), case["maximum"].as_i64());
+            assert_eq!(
+                validate_advertised_context_override(&selected, &model).is_ok(),
+                case["allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+
+    fn profile(context_window: i64) -> crate::document_config::InferenceProfile {
+        serde_json::from_value(serde_json::json!({
+            "agent_did": "did:test:owner",
+            "profile_id": "profile",
+            "backend_id": "backend",
+            "model_name": "gpt-5.6-sol",
+            "context_window": context_window
+        }))
+        .unwrap()
+    }
+
+    fn advertised(
+        default: Option<i64>,
+        maximum: Option<i64>,
+    ) -> crate::document_config::AdvertisedModel {
+        crate::document_config::AdvertisedModel {
+            model_name: "gpt-5.6-sol".into(),
+            display_name: None,
+            context_window: default,
+            max_context_window: maximum,
+            max_output_tokens: None,
+            reasoning_efforts: None,
+        }
+    }
+
+    #[test]
+    fn explicit_advertised_context_maximum_accepts_boundary_and_rejects_above() {
+        let model = advertised(Some(272_000), Some(872_000));
+        assert!(validate_advertised_context_override(&profile(872_000), &model).is_ok());
+        assert!(validate_advertised_context_override(&profile(872_001), &model).is_err());
+    }
+
+    #[test]
+    fn absent_or_invalid_advertised_maximum_does_not_invent_a_runtime_cap() {
+        for model in [
+            advertised(Some(272_000), None),
+            advertised(Some(272_000), Some(0)),
+            advertised(Some(272_000), Some(128_000)),
+        ] {
+            assert!(validate_advertised_context_override(&profile(872_001), &model).is_ok());
+        }
+    }
 }
 
 // The runtime configuration fingerprint is compared across independently

@@ -38,6 +38,7 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .plugin(init(platform_bridge_config()))
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder.setup(setup_tray).on_window_event(|window, event| {
@@ -113,6 +114,20 @@ struct TrayRuntimeState {
 }
 
 #[cfg(desktop)]
+fn tray_icon<'a>(
+    app: &'a tauri::App,
+) -> Result<tauri::image::Image<'a>, Box<dyn std::error::Error>> {
+    if cfg!(target_os = "macos") {
+        let bytes = include_bytes!("../../icons/gents-app-icon-tray@2x.png");
+        return Ok(tauri::image::Image::from_bytes(bytes)?);
+    }
+    Ok(app
+        .default_window_icon()
+        .cloned()
+        .ok_or("missing application icon")?)
+}
+
+#[cfg(desktop)]
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "Open Gents", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop", "Stop Local Agent", true, None::<&str>)?;
@@ -125,11 +140,8 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let tray = TrayIconBuilder::with_id("gents-managed-server")
         .menu(&menu)
         .tooltip("Gents local agent")
-        .icon(
-            app.default_window_icon()
-                .cloned()
-                .ok_or("missing application icon")?,
-        )
+        .icon(tray_icon(app)?)
+        .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
             "stop" => {

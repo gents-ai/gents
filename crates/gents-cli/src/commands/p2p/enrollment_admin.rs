@@ -31,9 +31,34 @@ pub(super) async fn decide_enrollment(
 ) -> Result<()> {
     let request_id = args.request_id.trim();
     anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
-    let identity = resolve_home_identity(args.home.as_deref())
-        .context("loading operator identity for enrollment decision")?;
+    let home = resolve_home_dir(args.home.as_deref());
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let body = submit_enrollment_decision(
+        &home,
+        &graphql,
+        request_id,
+        action.clone(),
+        if action == EnrollmentOperatorAction::Approve {
+            args.lease_seconds
+        } else {
+            0
+        },
+    )
+    .await?;
+    print_json(&body)
+}
+
+pub(crate) async fn submit_enrollment_decision(
+    home: &std::path::Path,
+    graphql: &str,
+    request_id: &str,
+    action: EnrollmentOperatorAction,
+    lease_seconds: u64,
+) -> Result<serde_json::Value> {
+    let request_id = request_id.trim();
+    anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
+    let identity = resolve_home_identity(Some(home))
+        .context("loading operator identity for enrollment decision")?;
     let mut url = reqwest::Url::parse(&graphql).context("parsing runtime GraphQL endpoint")?;
     url.set_path("/enrollment/decisions");
     url.set_query(None);
@@ -42,11 +67,7 @@ pub(super) async fn decide_enrollment(
     let mut command = EnrollmentOperatorDecisionCommand {
         protocol_version: ENROLLMENT_PROTOCOL_VERSION,
         request_id: request_id.to_string(),
-        lease_seconds: if action == EnrollmentOperatorAction::Approve {
-            args.lease_seconds
-        } else {
-            0
-        },
+        lease_seconds,
         action,
         admin_did: identity.did().to_string(),
         issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -78,7 +99,7 @@ pub(super) async fn decide_enrollment(
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown error")
     );
-    print_json(&body)
+    Ok(body)
 }
 
 pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {

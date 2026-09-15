@@ -41,6 +41,24 @@ fn default_read_root_errors_when_unavailable() {
 }
 
 #[test]
+fn configured_root_is_the_unbound_default_base() {
+    let root = tempfile::tempdir().unwrap();
+    let nested = root.path().join("launcher-cwd");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
+    let explicitly_bound =
+        ToolContext::new_with_base(root.path().to_path_buf(), Some(nested.clone()), false).unwrap();
+
+    assert_eq!(context.root(), std::fs::canonicalize(root.path()).unwrap());
+    assert_eq!(context.base(), std::fs::canonicalize(root.path()).unwrap());
+    assert_eq!(
+        explicitly_bound.base(),
+        std::fs::canonicalize(nested).unwrap()
+    );
+}
+
+#[test]
 fn relative_paths_resolve_from_base_inside_root() {
     let root =
         std::env::temp_dir().join(format!("gents-tool-context-root-{}", uuid::Uuid::new_v4()));

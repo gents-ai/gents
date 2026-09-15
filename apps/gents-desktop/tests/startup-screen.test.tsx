@@ -72,6 +72,27 @@ function bridge(
     fetchSessionSnapshot: vi.fn(async () => null),
     setSelectedAgent: vi.fn(async () => undefined),
     startDesktopClient,
+    getInferenceSetupCatalog: vi.fn(async () => ({
+      contractVersion: 1,
+      defaultsVersion: "test",
+      providers: [
+        {
+          id: "local",
+          displayName: "Local",
+          description: "OpenAI-compatible local server.",
+          authMethods: ["optional_api_key"],
+          authOptions: [
+            {
+              method: "optional_api_key",
+              displayName: "Endpoint + optional key",
+              defaultEndpoint: "http://127.0.0.1:11434/v1",
+            },
+          ],
+          defaultAuthMethod: "optional_api_key",
+          defaultEndpoint: "http://127.0.0.1:11434/v1",
+        },
+      ],
+    })),
   } as unknown as DesktopApiAdapter;
   const listenToUpdates: DesktopClientUpdatedListenerFactory = async () => () => {};
   return { api, listenToUpdates };
@@ -85,6 +106,10 @@ describe("desktop startup screen", () => {
       agentName: null;
       agentDid: null;
       graphql: null;
+      effectiveToolCeiling: null;
+      effectiveToolRoot: null;
+      suggestedToolRoot: string;
+      pairingReady: false;
       error: null;
     }>();
     const base = bridge(
@@ -109,7 +134,7 @@ describe("desktop startup screen", () => {
       "Checking the hosted agent",
     );
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Restore hosted agentWorking",
+      "Start hosted agentWorking",
     );
     expect(base.api.fetchDesktopSnapshot).not.toHaveBeenCalled();
 
@@ -119,29 +144,25 @@ describe("desktop startup screen", () => {
       agentName: null,
       agentDid: null,
       graphql: null,
+      effectiveToolCeiling: null,
+      effectiveToolRoot: null,
+      suggestedToolRoot: "/Users/test",
+      pairingReady: false,
       error: null,
     });
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
   });
 
-  it("keeps hosted-agent restoration failure in the startup retry flow", async () => {
+  it("does not block first-run setup when hosted-agent restoration fails", async () => {
     const base = bridge(
       vi.fn(async () => snapshot(false, false)),
       vi.fn(async () => snapshot(false, true)),
     );
     const managedServerStatus = vi
       .fn()
-      .mockRejectedValueOnce(new Error("hosted agent unavailable"))
-      .mockResolvedValueOnce({
-        state: "disabled",
-        autoStart: false,
-        agentName: null,
-        agentDid: null,
-        graphql: null,
-        error: null,
-      });
+      .mockRejectedValueOnce(new Error("hosted agent unavailable"));
     render(
       <App
         bridge={{
@@ -157,19 +178,11 @@ describe("desktop startup screen", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("startup-retry")).toBeInTheDocument();
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "hosted agent unavailable",
-    );
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "The hosted agent could not be restored",
-    );
-
-    await userEvent.click(screen.getByTestId("startup-retry"));
-    await waitFor(() => {
-      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
-    });
+    expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
+    // Restoration probes once; the expanded local card also resolves its
+    // default root without blocking entry to the first-run screen.
     expect(managedServerStatus).toHaveBeenCalledTimes(2);
   });
 
@@ -199,14 +212,11 @@ describe("desktop startup screen", () => {
     const initial = deferred<DesktopClientSnapshot>();
     const started = deferred<DesktopClientSnapshot>();
     const startDesktopClient = vi.fn(() => started.promise);
-    render(
-      <App
-        bridge={bridge(
-          vi.fn(() => initial.promise),
-          startDesktopClient,
-        )}
-      />,
-    );
+    const fetchDesktopSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValue(started.promise);
+    render(<App bridge={bridge(fetchDesktopSnapshot, startDesktopClient)} />);
 
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
       "Reading saved connections",
@@ -214,19 +224,22 @@ describe("desktop startup screen", () => {
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
       "Catalyzing dilithium converters.",
     );
-    expect(screen.queryByTestId("fleet-empty")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
 
     initial.resolve(snapshot(true, false));
     await waitFor(() => expect(startDesktopClient).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
       "Starting the secure client",
     );
-    expect(screen.queryByTestId("fleet-empty")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
 
     started.resolve(snapshot(true, true));
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-dashboard")).toBeInTheDocument();
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
+    expect(
+      screen.getByRole("heading", { name: "Choose an inference provider" }),
+    ).toBeInTheDocument();
     expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();
   });
 
@@ -243,11 +256,11 @@ describe("desktop startup screen", () => {
     );
 
     expect(screen.getByTestId("startup-screen")).toBeInTheDocument();
-    expect(screen.queryByTestId("fleet-empty")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
 
     initial.resolve(snapshot(false, false));
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(startDesktopClient).not.toHaveBeenCalled();
   });
@@ -278,7 +291,7 @@ describe("desktop startup screen", () => {
 
     await userEvent.click(screen.getByTestId("startup-retry"));
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(2);
   });

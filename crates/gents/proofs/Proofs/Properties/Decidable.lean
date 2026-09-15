@@ -51,7 +51,9 @@ def activeCoreRequestState : RequestState → Prop
   | .processing => True
   | _ => False
 
-theorem active_request_no_deadlocks (s : RequestState) (h : activeCoreRequestState s) :
+/-- These enum witnesses establish neither enabled transitions nor progress.
+    Operational storage/scheduler obligations live in `StorageWriteGate`. -/
+theorem active_request_has_distinct_state (s : RequestState) (h : activeCoreRequestState s) :
     ∃ s' : RequestState, s ≠ s' := by
   cases s with
   | workspaceBindingPending => cases h
@@ -65,7 +67,7 @@ theorem active_request_no_deadlocks (s : RequestState) (h : activeCoreRequestSta
   | dead => cases h
   | interrupted => cases h
 
-theorem process_no_deadlocks (s : ProcessState) (h : ¬isTerminal s) :
+theorem process_has_distinct_state (s : ProcessState) (h : ¬isTerminal s) :
     ∃ s' : ProcessState, s ≠ s' := by
   cases s with
   | uninitialized => exact ⟨.recovering, by decide⟩
@@ -74,7 +76,7 @@ theorem process_no_deadlocks (s : ProcessState) (h : ¬isTerminal s) :
   | shuttingDown => exact ⟨.shutdown, by decide⟩
   | shutdown => exact absurd rfl h
 
-theorem persistence_no_deadlocks (s : PersistenceState) (h : ¬isTerminal s) :
+theorem persistence_has_distinct_state (s : PersistenceState) (h : ¬isTerminal s) :
     ∃ s' : PersistenceState, s ≠ s' := by
   cases s with
   | uncommitted => exact ⟨.committing, by decide⟩
@@ -82,7 +84,7 @@ theorem persistence_no_deadlocks (s : PersistenceState) (h : ¬isTerminal s) :
   | committed => exact absurd (Or.inl rfl) h
   | lost => exact absurd (Or.inr rfl) h
 
-theorem storage_observation_no_deadlocks
+theorem storage_observation_has_distinct_state
     (s : StorageObservation)
     (h : ¬isTerminal s) :
     ∃ s' : StorageObservation, s ≠ s' := by
@@ -95,7 +97,7 @@ theorem storage_observation_no_deadlocks
   | readVisible => exact absurd (Or.inl rfl) h
   | lostAcknowledged => exact absurd (Or.inr rfl) h
 
-theorem inference_call_no_deadlocks (s : InferenceCallState) (h : ¬isTerminal s) :
+theorem inference_call_has_distinct_state (s : InferenceCallState) (h : ¬isTerminal s) :
     ∃ s' : InferenceCallState, s ≠ s' := by
   cases s with
   | queued => exact ⟨.running, by decide⟩
