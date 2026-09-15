@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   BackendProviderKind,
   DeploymentView,
@@ -31,8 +31,42 @@ import { Group } from "./rows";
 import {
   InferenceModelControls,
   recommendedInferenceSettings,
+  validateInferenceSettings,
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
+
+function settingsForDraft(
+  recommendation: InferenceModelRecommendation,
+  draft: {
+    contextWindow: string;
+    maxOutputTokens: string;
+    temperature: string;
+    topP: string;
+    reasoningEffort: string;
+  },
+  maxConcurrent: number | null | undefined,
+  edited: ReadonlySet<keyof InferenceSettingsDraft> = new Set(),
+): InferenceSettingsDraft {
+  const defaults = recommendedInferenceSettings(recommendation);
+  return {
+    ...defaults,
+    contextWindow: edited.has("contextWindow")
+      ? draft.contextWindow
+      : draft.contextWindow || defaults.contextWindow,
+    maxOutputTokens: edited.has("maxOutputTokens")
+      ? draft.maxOutputTokens
+      : draft.maxOutputTokens || defaults.maxOutputTokens,
+    temperature: edited.has("temperature")
+      ? draft.temperature
+      : draft.temperature || defaults.temperature,
+    topP: edited.has("topP") ? draft.topP : draft.topP || defaults.topP,
+    reasoningEffort: edited.has("reasoningEffort")
+      ? (draft.reasoningEffort as InferenceSettingsDraft["reasoningEffort"])
+      : (draft.reasoningEffort as InferenceSettingsDraft["reasoningEffort"]) ||
+        defaults.reasoningEffort,
+    maxConcurrent: str(maxConcurrent) || defaults.maxConcurrent,
+  };
+}
 
 function Editor({
   shell,
@@ -129,14 +163,42 @@ function Editor({
       )?.retry_policy_id ?? "",
     tags: toLines(profile.tags ?? []),
   };
+  const [recommendation, setRecommendation] =
+    useState<InferenceModelRecommendation | null>(null);
+  const [recommendationKey, setRecommendationKey] = useState<string | null>(null);
+  const [recommendationError, setRecommendationError] = useState<string | null>(null);
+  const [customize, setCustomize] = useState(false);
+  const [editedModelFields, setEditedModelFields] = useState<
+    Set<keyof InferenceSettingsDraft>
+  >(new Set());
+  const deliberateSelectionRef = useRef<string | null>(null);
   const d = useDraft(saved, async (next) => {
     if (!next.backendId.trim()) throw new Error("Backend is required");
     if (!deployment.inferenceBackends.some((b) => b.backendId === next.backendId))
       throw new Error("Choose an existing backend");
     if (!next.modelName.trim()) throw new Error("Model is required");
-    const samplingValuesPresent = [
-      next.temperature,
-      next.topP,
+    const modelKey = `${next.backendId}\u0000${next.modelName.trim()}`;
+    if (!recommendation || recommendationKey !== modelKey)
+      throw new Error(
+        recommendationError ?? "Wait for model-aware settings before saving",
+      );
+    const selected = deployment.inferenceBackends.find(
+      (backend) => backend.backendId === next.backendId,
+    );
+    const effectiveSettings = settingsForDraft(
+      recommendation,
+      next,
+      selected?.maxConcurrent,
+      editedModelFields,
+    );
+    const validationError = validateInferenceSettings(
+      recommendation,
+      effectiveSettings,
+    );
+    if (validationError) throw new Error(validationError);
+    const hasSamplingValues = [
+      effectiveSettings.temperature,
+      effectiveSettings.topP,
       next.topK,
       next.seed,
       next.minP,
@@ -144,8 +206,9 @@ function Editor({
       next.presencePenalty,
       next.repetitionPenalty,
     ].some((value) => value.trim());
-    if (samplingValuesPresent && !next.samplingId.trim())
-      throw new Error("Sampling values require a sampling document ID");
+    const effectiveSamplingId =
+      next.samplingId.trim() ||
+      (hasSamplingValues ? `${profile.profile_id}-sampling` : "");
     const executionValuesPresent = [
       next.maxTurns,
       next.maxTotalTokens,
@@ -157,14 +220,22 @@ function Editor({
     if (executionValuesPresent && !next.executionId.trim())
       throw new Error("Execution values require an execution document ID");
 
-    const contextWindow = optionalInteger("Context window", next.contextWindow, {
-      min: 1,
+    const contextWindow = optionalInteger(
+      "Context window",
+      effectiveSettings.contextWindow,
+      {
+        min: 1,
+      },
+    );
+    const maxOutputTokens = optionalInteger(
+      "Max output tokens",
+      effectiveSettings.maxOutputTokens,
+      { min: 1 },
+    );
+    const temperature = optionalNumber("Temperature", effectiveSettings.temperature, {
+      min: 0,
     });
-    const maxOutputTokens = optionalInteger("Max output tokens", next.maxOutputTokens, {
-      min: 1,
-    });
-    const temperature = optionalNumber("Temperature", next.temperature, { min: 0 });
-    const topP = optionalNumber("Top P", next.topP, { min: 0, max: 1 });
+    const topP = optionalNumber("Top P", effectiveSettings.topP, { min: 0, max: 1 });
     const topK = optionalInteger("Top K", next.topK, { min: 1 });
     const seed = optionalInteger("Seed", next.seed, { min: 0 });
     const minP = optionalNumber("Min P", next.minP, { min: 0, max: 1 });
@@ -203,7 +274,7 @@ function Editor({
       throw new Error("Stream liveness timeout must be less than the deadline");
 
     const sampling = deployment.inferenceSampling.find(
-      (row) => row.sampling_id === next.samplingId.trim(),
+      (row) => row.sampling_id === effectiveSamplingId,
     );
     const execution = deployment.inferenceExecution.find(
       (row) => row.execution_id === next.executionId.trim(),
@@ -214,20 +285,20 @@ function Editor({
       description: next.description.trim() || null,
       backend_id: next.backendId,
       model_name: next.modelName.trim(),
-      reasoning_effort: (next.reasoningEffort || null) as NonNullable<
+      reasoning_effort: (effectiveSettings.reasoningEffort || null) as NonNullable<
         InferenceProfile["reasoning_effort"]
       > | null,
       context_window: contextWindow,
       max_output_tokens: maxOutputTokens,
-      sampling_id: next.samplingId.trim() || null,
+      sampling_id: effectiveSamplingId || null,
       execution_id: next.executionId.trim() || null,
       tags: fromLinesOrNull(next.tags),
     };
-    const nextSampling: InferenceSampling | null = next.samplingId.trim()
+    const nextSampling: InferenceSampling | null = effectiveSamplingId
       ? {
           ...sampling,
           agent_did: deployment.agentDid,
-          sampling_id: next.samplingId.trim(),
+          sampling_id: effectiveSamplingId,
           temperature,
           top_p: topP,
           top_k: topK,
@@ -262,10 +333,6 @@ function Editor({
       }),
     );
   });
-  const [recommendation, setRecommendation] =
-    useState<InferenceModelRecommendation | null>(null);
-  const [guided, setGuided] = useState<InferenceSettingsDraft | null>(null);
-  const [customize, setCustomize] = useState(false);
   const [executionDefaults, setExecutionDefaults] = useState<
     Record<string, number | null | undefined>
   >({});
@@ -302,20 +369,37 @@ function Editor({
   const selectedBackend = deployment.inferenceBackends.find(
     (entry) => entry.backendId === d.draft.backendId,
   );
+  const beginModelSelection = (backendId: string, modelName: string) => {
+    if (
+      backendId === d.draft.backendId &&
+      modelName.trim() === d.draft.modelName.trim()
+    )
+      return;
+    deliberateSelectionRef.current = `${backendId}\u0000${modelName.trim()}`;
+    setRecommendation(null);
+    setRecommendationKey(null);
+    setRecommendationError(null);
+    setEditedModelFields(new Set());
+  };
   useEffect(() => {
     const backend = selectedBackend;
+    const modelName = d.draft.modelName.trim();
+    const requestKey = `${d.draft.backendId}\u0000${modelName}`;
     if (!backend?.providerKind || !backend.endpoint || !d.draft.modelName.trim()) {
       setRecommendation(null);
-      setGuided(null);
+      setRecommendationKey(null);
       return;
     }
+    setRecommendation(null);
+    setRecommendationKey(null);
+    setRecommendationError(null);
     let cancelled = false;
     const timeout = window.setTimeout(() => {
       void shell.api
         .getInferenceBackendRecommendation({
           providerKind: backend.providerKind as BackendProviderKind,
           endpoint: backend.endpoint!,
-          modelName: d.draft.modelName.trim(),
+          modelName,
           displayName: null,
           contextWindow:
             profile.model_name === d.draft.modelName &&
@@ -332,18 +416,29 @@ function Editor({
         .then((next) => {
           if (cancelled) return;
           const defaults = recommendedInferenceSettings(next);
+          const deliberate = deliberateSelectionRef.current === requestKey;
           setRecommendation(next);
-          setGuided({
-            ...defaults,
-            contextWindow: d.draft.contextWindow || defaults.contextWindow,
-            maxOutputTokens: d.draft.maxOutputTokens || defaults.maxOutputTokens,
-            temperature: d.draft.temperature || defaults.temperature,
-            topP: d.draft.topP || defaults.topP,
-            reasoningEffort:
-              (d.draft.reasoningEffort as InferenceSettingsDraft["reasoningEffort"]) ||
-              defaults.reasoningEffort,
-            maxConcurrent: str(backend.maxConcurrent) || defaults.maxConcurrent,
-          });
+          setRecommendationKey(requestKey);
+          setRecommendationError(null);
+          if (deliberate) {
+            d.set("contextWindow", defaults.contextWindow);
+            d.set("maxOutputTokens", defaults.maxOutputTokens);
+            d.set("temperature", defaults.temperature);
+            d.set("topP", defaults.topP);
+            d.set(
+              "reasoningEffort",
+              defaults.reasoningEffort as typeof d.draft.reasoningEffort,
+            );
+            if ((defaults.temperature || defaults.topP) && !d.draft.samplingId)
+              d.set("samplingId", `${profile.profile_id}-sampling`);
+            deliberateSelectionRef.current = null;
+          }
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setRecommendationError(
+            `Model-aware settings unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          );
         });
     }, 150);
     return () => {
@@ -361,7 +456,21 @@ function Editor({
     shell.api,
   ]);
   const updateGuided = (next: InferenceSettingsDraft) => {
-    setGuided(next);
+    if (guided) {
+      setEditedModelFields((fields) => {
+        const changed = new Set(fields);
+        for (const key of [
+          "contextWindow",
+          "maxOutputTokens",
+          "temperature",
+          "topP",
+          "reasoningEffort",
+        ] as const) {
+          if (next[key] !== guided[key]) changed.add(key);
+        }
+        return changed;
+      });
+    }
     d.set("contextWindow", next.contextWindow);
     d.set("maxOutputTokens", next.maxOutputTokens);
     d.set("temperature", next.temperature);
@@ -371,6 +480,14 @@ function Editor({
       d.set("samplingId", `${profile.profile_id}-sampling`);
     }
   };
+  const guided = recommendation
+    ? settingsForDraft(
+        recommendation,
+        d.draft,
+        selectedBackend?.maxConcurrent,
+        editedModelFields,
+      )
+    : null;
   const id = (f: string) => `${profile.profile_id}-${f}`;
   return (
     <>
@@ -404,12 +521,12 @@ function Editor({
           label="Backend"
           value={d.draft.backendId}
           onChange={(v) => {
-            d.set("backendId", v);
-            d.set(
-              "modelName",
+            const modelName =
               deployment.inferenceBackends.find((backend) => backend.backendId === v)
-                ?.models[0] ?? "",
-            );
+                ?.models[0] ?? "";
+            beginModelSelection(v, modelName);
+            d.set("backendId", v);
+            d.set("modelName", modelName);
           }}
           items={deployment.inferenceBackends.map((b) => ({
             value: b.backendId,
@@ -420,7 +537,10 @@ function Editor({
           id={id("model")}
           label="Model"
           value={d.draft.modelName}
-          onChange={(v) => d.choose("modelName", v)}
+          onChange={(v) => {
+            beginModelSelection(d.draft.backendId, v);
+            d.choose("modelName", v);
+          }}
           items={[
             ...new Set([
               d.draft.modelName,
@@ -447,6 +567,11 @@ function Editor({
             />
           </div>
         </Group>
+      ) : null}
+      {recommendationError ? (
+        <p role="alert" className="mb-4 text-sm text-destructive">
+          {recommendationError}
+        </p>
       ) : null}
       <Group title="Execution">
         <TextRow
@@ -558,6 +683,7 @@ function Editor({
         onSave={d.save}
         onCancel={() => {
           setEditedExecution(new Set());
+          setEditedModelFields(new Set());
           d.reset();
         }}
       />

@@ -570,7 +570,7 @@ describe("configuration panels", () => {
     await user.type(topP, "1.5");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Top P must be 1 or less",
+      "Top-p must be between 0 and 1",
     );
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
@@ -865,6 +865,9 @@ describe("configuration panels", () => {
       it(testCase.value, async () => {
         const { api, shell } = harness();
         const view = render(testCase.renderPanel(shell));
+        if (testCase.method === "applyConfigComponents") {
+          await screen.findByLabelText("Temperature");
+        }
         const user = await replace(testCase.field, testCase.value);
         await user.click(screen.getByRole("button", { name: "Save changes" }));
         expect(api[testCase.method], testCase.method).toHaveBeenCalledTimes(1);
