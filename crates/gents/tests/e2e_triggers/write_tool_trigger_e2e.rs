@@ -21,11 +21,6 @@ const TARGET_PATHS: &str = "infra/hosts/studio-1/host.md";
 const PROMPT_TEMPLATE: &str =
     "drift={{ doc.drift_sig }} summary={{ doc.summary }} paths={{ doc.target_paths }}";
 
-// Both cases start a full runtime and wait on the same process-wide DefraDB
-// update machinery. Running them together under the already parallel trigger
-// suite can starve one startup past its bounded readiness deadline.
-static WRITE_TOOL_TRIGGER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 async fn register_action_request_schema(node: &EmbeddedNode) {
     let sdl = r#"
         type ActionRequest {
@@ -64,50 +59,35 @@ async fn apply_documents(node: &EmbeddedNode, documents: Vec<(Collection, serde_
     .unwrap();
 }
 
-async fn create_task(
+async fn configure_action_trigger(
     node: &EmbeddedNode,
     owner: &str,
     task_id: &str,
+    trigger_id: &str,
     behavior_id: &str,
     prompt_template: &str,
 ) {
-    apply_documents(
-        node,
-        vec![(
+    apply_documents(node, vec![
+        (
             Collection::Task,
             serde_json::json!({"agent_did":owner,"task_id":task_id,"behavior_id":behavior_id,"prompt_template":prompt_template}),
-        )],
-    )
-    .await;
-}
-
-async fn create_event_trigger(
-    node: &EmbeddedNode,
-    owner: &str,
-    trigger_id: &str,
-    task_id: &str,
-    source_collection: &str,
-    event_kind: &str,
-) {
-    apply_documents(
-        node,
-        vec![
-            (
-                Collection::EventSource,
-                serde_json::json!({"agent_did":owner,"event_source_id":trigger_id,"source_collection":source_collection,"event_kind":event_kind}),
-            ),
-            (
-                Collection::Trigger,
-                serde_json::json!({"agent_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"}),
-            ),
-        ],
-    )
+        ),
+        (
+            Collection::EventSource,
+            serde_json::json!({"agent_did":owner,"event_source_id":trigger_id,"source_collection":"ActionRequest","event_kind":"created"}),
+        ),
+        (
+            Collection::Trigger,
+            serde_json::json!({"agent_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"}),
+        ),
+    ])
     .await;
 }
 
 async fn wait_for_runtime_snapshot<F>(
     node: &EmbeddedNode,
     agent_did: &str,
+    runtime: &tokio::task::JoinHandle<anyhow::Result<()>>,
     predicate: F,
 ) -> RuntimeSnapshot
 where
@@ -115,17 +95,62 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
-            if predicate(&snapshot) {
-                return snapshot;
+        let last_snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        if let Some(snapshot) = last_snapshot.as_ref() {
+            if predicate(snapshot) {
+                return snapshot.clone();
             }
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}"
+            "timed out waiting for runtime snapshot for {agent_did}; runtime_finished={}; \
+             last_snapshot={last_snapshot:?}",
+            runtime.is_finished()
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+fn is_routed_ready_after(snapshot: &RuntimeSnapshot, generation: i64) -> bool {
+    snapshot.process_state == "ready"
+        && snapshot.reconcile_phase == "idle"
+        && snapshot.active_generation > generation
+        && snapshot.router_generation == snapshot.active_generation
+        && snapshot.last_reconcile_error.is_empty()
+}
+
+#[test]
+fn routed_readiness_uses_generation_not_transient_reconcile_label() {
+    let snapshot = RuntimeSnapshot {
+        process_state: "ready".into(),
+        reconcile_phase: "idle".into(),
+        active_generation: 2,
+        router_generation: 2,
+        default_behavior_id: "behavior".into(),
+        last_reconcile_result: "noop".into(),
+        last_reconcile_error: String::new(),
+    };
+    assert!(is_routed_ready_after(&snapshot, 1));
+    let mut applied = snapshot.clone();
+    applied.last_reconcile_result = "applied".into();
+    assert!(is_routed_ready_after(&applied, 1));
+    assert!(!is_routed_ready_after(&snapshot, 2));
+
+    let mut starting = snapshot.clone();
+    starting.process_state = "starting".into();
+    assert!(!is_routed_ready_after(&starting, 1));
+
+    let mut not_routed = snapshot.clone();
+    not_routed.router_generation = 1;
+    assert!(!is_routed_ready_after(&not_routed, 1));
+
+    let mut reconciling = snapshot.clone();
+    reconciling.reconcile_phase = "applying".into();
+    assert!(!is_routed_ready_after(&reconciling, 1));
+
+    let mut failed = snapshot;
+    failed.last_reconcile_error = "reconcile failed".into();
+    assert!(!is_routed_ready_after(&failed, 1));
 }
 
 async fn query_agent_requests_for_trigger(
@@ -272,11 +297,8 @@ async fn boot_agent_with_action_trigger(
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation >= 1
-            && snapshot.last_reconcile_result == "startup"
+    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, &handle, |snapshot| {
+        is_routed_ready_after(snapshot, 0)
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -286,29 +308,18 @@ async fn boot_agent_with_action_trigger(
         startup.last_reconcile_error
     );
 
-    create_task(
+    configure_action_trigger(
         db.node.as_ref(),
         &agent_did,
         task_id,
+        trigger_id,
         &default_behavior_id,
         PROMPT_TEMPLATE,
     )
     .await;
-    create_event_trigger(
-        db.node.as_ref(),
-        &agent_did,
-        trigger_id,
-        task_id,
-        "ActionRequest",
-        "created",
-    )
-    .await;
 
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation > initial_generation
-            && snapshot.last_reconcile_result == "applied"
+    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, &handle, |snapshot| {
+        is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
     assert!(
@@ -353,7 +364,7 @@ fn request_action_decl() -> WriteToolDecl {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_field_template_renders_all_referenced_doc_fields() {
-    let _guard = WRITE_TOOL_TRIGGER_LOCK.lock().await;
+    let _guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-multifield").await;
     register_action_request_schema(db.node.as_ref()).await;
 
@@ -391,7 +402,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn declared_write_tool_call_fires_event_trigger() {
-    let _guard = WRITE_TOOL_TRIGGER_LOCK.lock().await;
+    let _guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-tooldriven").await;
     register_action_request_schema(db.node.as_ref()).await;
 
