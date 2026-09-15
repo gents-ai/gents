@@ -1628,9 +1628,12 @@ impl InstallPackTool {
         )
         .await?;
         let distribution = crate::pack::resolve_pack(package_name)?;
+        let scope = crate::pack::PackInstallOptions {
+            agent_did: bindings.agent_did.clone(),
+        };
         let package = crate::graph_package::load_resolved_graph_package_with_environment(
             &distribution,
-            &bindings,
+            &scope,
             &environment,
         )?;
         let external_dependencies = package.manifest.external_dependencies.clone();

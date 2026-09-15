@@ -141,6 +141,7 @@ pub(crate) async fn bundled_graph_package_install_bindings_for_owner(
     );
     let options = GraphPackageInstallBindings {
         agent_did: owner_did.to_owned(),
+        inference_slots: BTreeMap::new(),
     };
     validate_owner(access, owner_did).await?;
     Ok(options)
