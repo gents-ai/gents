@@ -81,6 +81,30 @@ pub(crate) struct InstalledPlugin {
     /// `sha256:<hex>`, matching the pack registry's own digest format.
     pub(crate) digest: String,
     pub(crate) language: String,
+    /// Authored admission metadata, retained verbatim rather than reconstructed
+    /// from artifact capabilities at execution time.
+    pub(crate) declaration: gents::pack::PackPlugin,
+}
+
+/// Standalone artifacts have no enclosing pack declaration. Capture their own
+/// manifest and authority once at installation; pack installs retain theirs.
+pub(crate) fn declaration_from_artifact(
+    afb: &afterburner_cloud::Afb,
+) -> Result<gents::pack::PackPlugin> {
+    let package = &afb.manifest.package;
+    Ok(gents::pack::PackPlugin {
+        name: package.name.clone(),
+        description: package
+            .description
+            .clone()
+            .unwrap_or_else(|| format!("installed plugin {}/{}", package.namespace, package.name)),
+        artifact: format!("plugins/{}.afb", package.name),
+        source: None,
+        language: package.language.clone(),
+        // The AFB manifest has no model-facing input schema.
+        input_schema: serde_json::json!({"type": "object"}),
+        manifold: Some(serde_json::to_value(&afb.manifold).context("encoding plugin manifold")?),
+    })
 }
 
 /// Writes `bytes` into the content-addressed store under `digest_hex`.

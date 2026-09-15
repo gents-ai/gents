@@ -344,11 +344,7 @@ fn prune(args: PackPruneArgs) -> Result<()> {
 
 async fn install(args: PackInstallArgs) -> Result<()> {
     let pack = resolve_pack_source(&args.package, args.registry.as_deref()).await?;
-    eprintln!(
-        "gents pack install: resolved {} from {}",
-        args.package,
-        pack.describe()
-    );
+    tracing::info!(package = %args.package, source = %pack.describe(), "resolved pack");
     let supported_outputs: &[crate::cli::output_format::OutputFormat] =
         if pack.manifest().metadata.kind == PackKind::Graph {
             &[
