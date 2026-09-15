@@ -9,6 +9,7 @@ import {
   type DeploymentView,
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
+import { useDesktopChatProjectionState } from "../src/hooks/useDesktopChatProjectionState";
 
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/router", async (importOriginal) => ({
@@ -91,7 +92,67 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
   } as unknown as Shell;
 }
 
+// Exercise the real context-keyed draft owner as well as the real kit Composer.
+function OwnedSessionScreen({ shell }: { shell: Shell }) {
+  const { draft, setDraft } = useDesktopChatProjectionState({
+    clientAvailable: true,
+    selectedAgentDid: shell.selectedAgentDid,
+    selectedBehaviorId: shell.selectedBehaviorId,
+    selectedSessionId: shell.selectedSessionId,
+    selectedSessionSummary: null,
+    selectedDeployment: null,
+    sending: false,
+    session: null,
+    syncHealth: null,
+  });
+  return <SessionScreen shell={{ ...shell, draft, setDraft }} />;
+}
+
 describe("SessionScreen canonical composer admission", () => {
+  it("does not erase text edited while the prior draft is being accepted", async () => {
+    let resolve!: (result: { sessionId: string; requestId: string }) => void;
+    const pending = new Promise<{ sessionId: string; requestId: string }>((done) => {
+      resolve = done;
+    });
+    const shell = {
+      ...existingSessionShell({ kind: "ready" }),
+      sendMessage: vi.fn(() => pending),
+    } as Shell;
+    render(<OwnedSessionScreen shell={shell} />);
+    fireEvent.change(screen.getByLabelText("Message"), {
+      target: { value: "send this" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(screen.getByLabelText("Message"), {
+      target: { value: "keep this next message" },
+    });
+    await act(async () => {
+      resolve({ sessionId: "session", requestId: "accepted" });
+      await pending;
+    });
+    expect(screen.getByLabelText("Message")).toHaveValue("keep this next message");
+  });
+  it("restores each session draft without carrying text into another session", () => {
+    const first = existingSessionShell({ kind: "ready" });
+    const second = { ...first, selectedSessionId: "second" };
+    const { rerender } = render(<OwnedSessionScreen shell={first} />);
+    fireEvent.change(screen.getByLabelText("Message"), {
+      target: { value: "first draft" },
+    });
+    rerender(<OwnedSessionScreen shell={second} />);
+    expect(screen.getByLabelText("Message")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("Message"), {
+      target: { value: "second draft" },
+    });
+    rerender(<OwnedSessionScreen shell={first} />);
+    expect(screen.getByLabelText("Message")).toHaveValue("first draft");
+    rerender(
+      <OwnedSessionScreen shell={{ ...first, selectedAgentDid: "other-agent" }} />,
+    );
+    expect(screen.getByLabelText("Message")).toHaveValue("");
+    rerender(<OwnedSessionScreen shell={second} />);
+    expect(screen.getByLabelText("Message")).toHaveValue("second draft");
+  });
   it("uses the selected non-default behavior decision, never the default or retry path", () => {
     const selected = (defaultReady: boolean, selectedReady: boolean) => {
       const deployment = {
@@ -164,7 +225,9 @@ describe("SessionScreen canonical composer admission", () => {
   it("keeps an empty composer editable, then submits when canonical admission is ready", async () => {
     const user = userEvent.setup();
     const sendMessage = vi.fn().mockResolvedValue(null);
-    render(<SessionScreen shell={newSessionShell({ kind: "ready" }, sendMessage)} />);
+    render(
+      <OwnedSessionScreen shell={newSessionShell({ kind: "ready" }, sendMessage)} />,
+    );
 
     const message = screen.getByRole("textbox", { name: "Message" });
     const send = screen.getByRole("button", { name: "Send" });
@@ -188,7 +251,7 @@ describe("SessionScreen canonical composer admission", () => {
     const shell = newSessionShell({ kind: "ready" }, sendMessage) as Shell & {
       advanceComposeIntentForTest: () => void;
     };
-    render(<SessionScreen shell={shell} />);
+    render(<OwnedSessionScreen shell={shell} />);
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "keep this draft" },
     });
@@ -207,7 +270,7 @@ describe("SessionScreen canonical composer admission", () => {
   it("preserves a canonical blocker for a non-empty local draft", () => {
     const sendMessage = vi.fn().mockResolvedValue(null);
     render(
-      <SessionScreen
+      <OwnedSessionScreen
         shell={newSessionShell(
           {
             kind: "disabled",
@@ -238,14 +301,14 @@ describe("SessionScreen canonical composer admission", () => {
       hint: "Turn still streaming",
     } as const;
     const { rerender } = render(
-      <SessionScreen shell={existingSessionShell(blocked)} />,
+      <OwnedSessionScreen shell={existingSessionShell(blocked)} />,
     );
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "follow up" },
     });
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
-    rerender(<SessionScreen shell={existingSessionShell({ kind: "ready" })} />);
+    rerender(<OwnedSessionScreen shell={existingSessionShell({ kind: "ready" })} />);
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 });

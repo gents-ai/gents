@@ -277,7 +277,7 @@ export function SessionSubmissionStatus({
 
 export function SessionScreen({ shell }: { shell: Shell }) {
   const session = shell.selectedSession;
-  const [draft, setDraft] = useState("");
+  const { draft, setDraft } = shell;
   const [cascadeFor, setCascadeFor] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -350,7 +350,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     const intentGeneration = shell.captureComposeIntent();
     const result = await pending;
     if (!shell.acceptsComposeIntent(intentGeneration)) return;
-    if (result) setDraft("");
+    if (result) setDraft((current) => (current === text ? "" : current));
     if (result && result.sessionId !== shell.selectedSessionId) {
       navigate({ name: "session", sessionId: result.sessionId });
     }
