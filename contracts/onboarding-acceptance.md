@@ -53,7 +53,10 @@ settings remains unchecked; the direct probe is not a substitute for that flow.
       link can still reopen it. Check ChatGPT, Claude, and Grok.
 - [ ] ChatGPT discovery uses client version 0.154.0 and shows the account's current
       catalog. Context defaults come from `context_window`, not the larger
-      `max_context_window` override ceiling.
+      `max_context_window` override ceiling. When advertised, that larger ceiling
+      is available as an explicit override; saving/reopening preserves the chosen
+      value without treating it as the model's maximum. Oversized values fail
+      before configuration is written.
 - [ ] Hosted providers default to 8 concurrent requests; local defaults to 1.
 - [ ] Configuration → Backends → New backend uses the same provider/model flow
       as onboarding. Cancel creates no blank documents. Save creates a separate
@@ -101,6 +104,7 @@ restart, and a real response in chat. A model list alone does not prove inferenc
       dropdown/search; manual entry only when discovery is unavailable.
 - [ ] OpenAI/ChatGPT account sign-in: successful OAuth and real chat.
 - [ ] Grok account sign-in: successful OAuth and real chat.
+      New model defaults use top-p 0.95; existing user-edited sampling is preserved.
 - [ ] Claude subscription: account login and real chat through Anthropic
       Messages HTTP; no API-key substitution or dependency on the Claude binary.
 - [ ] OpenRouter: connection, advertised model selection, and real chat.

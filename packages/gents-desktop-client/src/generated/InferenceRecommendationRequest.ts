@@ -3,4 +3,4 @@ import type { InferenceAuthMethod } from "./InferenceAuthMethod.js";
 import type { InferenceProviderId } from "./InferenceProviderId.js";
 import type { ReasoningEffort } from "./ReasoningEffort.js";
 
-export type InferenceRecommendationRequest = { provider: InferenceProviderId, authMethod: InferenceAuthMethod, modelName: string, displayName: string | null, contextWindow: number | null, maxOutputTokens: number | null, reasoningEfforts: Array<ReasoningEffort> | null, };
+export type InferenceRecommendationRequest = { provider: InferenceProviderId, authMethod: InferenceAuthMethod, modelName: string, displayName: string | null, contextWindow: number | null, maxContextWindow: number | null, maxOutputTokens: number | null, reasoningEfforts: Array<ReasoningEffort> | null, };

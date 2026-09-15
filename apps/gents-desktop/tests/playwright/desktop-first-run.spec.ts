@@ -64,7 +64,7 @@ test.describe("first-run install", () => {
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page.getByRole("button", { name: "Connect and find models" }).click();
-    await page.getByRole("option", { name: "gpt-5.5", exact: true }).click();
+    await page.getByRole("option", { name: "gpt-5.6-sol", exact: true }).click();
     await page.getByRole("button", { name: "Save backend", exact: true }).click();
     await expect(page.getByRole("button", { name: "New backend" })).toBeVisible();
     await expect(
@@ -100,7 +100,7 @@ test.describe("first-run install", () => {
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(page.getByText("Account connected", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Connect and find models" }).click();
-    await page.getByRole("option", { name: "gpt-5.5", exact: true }).click();
+    await page.getByRole("option", { name: "gpt-5.6-sol", exact: true }).click();
     await expect(page.getByRole("listbox", { name: "Advertised models" })).toHaveCount(
       0,
     );
@@ -114,7 +114,19 @@ test.describe("first-run install", () => {
     await expect(
       page.getByRole("listbox", { name: "Advertised models" }),
     ).toBeVisible();
-    await page.getByRole("option", { name: "gpt-5.5", exact: true }).click();
+    await page.getByRole("option", { name: "gpt-5.6-sol", exact: true }).click();
+    await page.getByRole("button", { name: "Advanced settings" }).click();
+    const contextWindow = page.getByLabel("Context window", { exact: false });
+    await expect(contextWindow).toHaveValue("272000");
+    await expect(contextWindow).toHaveAttribute("max", "872000");
+    await contextWindow.fill("872001");
+    await page.getByTestId("setup-save-inference").click();
+    await expect(page.getByRole("alert")).toContainText(
+      "Context window must be between 1 and 872000",
+    );
+    await expect(page.getByTestId("session-screen")).toHaveCount(0);
+    await contextWindow.fill("872000");
+    await expect(page.getByTestId("setup-save-inference")).toBeEnabled();
     await page.getByTestId("setup-save-inference").click();
     await expect(page.getByTestId("session-screen")).toBeVisible({ timeout: 10000 });
     await composer(page).fill("Codex onboarding assurance");

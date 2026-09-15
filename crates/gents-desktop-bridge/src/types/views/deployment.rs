@@ -232,6 +232,8 @@ pub struct InferenceBackendView {
     pub enabled: Option<bool>,
     pub tags: Vec<String>,
     pub models: Vec<String>,
+    /// Canonical provider advertisements for model-specific editing controls.
+    pub advertised_models: Vec<gents::document_config::AdvertisedModel>,
     pub probe_status: Option<String>,
 }
 

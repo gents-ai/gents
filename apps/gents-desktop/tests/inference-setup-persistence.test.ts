@@ -70,61 +70,67 @@ describe("inference setup persistence", () => {
     expect(deployment).toEqual(before);
   });
 
-  it("replaces the init model and binds Codex, profile, and default behavior together", () => {
-    const deployment = structuredClone(fixtureDeployment);
-    deployment.inferenceBackends = [
-      { ...deployment.inferenceBackends[0]!, enabled: false },
-    ];
-    deployment.inferenceProfiles = [deployment.inferenceProfiles[0]!];
-    const plan = buildInferenceSetupPlan({
-      deployment,
-      provider: "openai",
-      apiKey: "",
-      oauth: true,
-      discovery: {
-        ...discovery,
-        providerKind: "ChatGptCodex",
-        effectiveEndpoint: "https://chatgpt.com/backend-api/codex",
-        openaiWireApi: "responses",
-      },
-      model: "gpt-5.6-sol",
-      recommendation: {
-        ...recommendation,
-        temperature: null,
-        topP: null,
-        contextWindow: { recommended: 272000, min: 1, max: 272000 },
-        reasoningEffort: { recommended: "medium", choices: ["low", "medium", "high"] },
-      },
-      settings: {
-        contextWindow: "272000",
-        maxOutputTokens: "",
-        temperature: "",
-        topP: "",
-        reasoningEffort: "high",
-        maxConcurrent: "1",
-      },
-    });
-    const backend = plan.document.inference_backends![0]!;
-    const profile = plan.document.inference_profiles![0]!;
-    expect(backend).toMatchObject({
-      provider_kind: "ChatGptCodex",
-      auth: { kind: "principal_oauth" },
-      enabled: true,
-    });
-    expect(profile).toMatchObject({
-      backend_id: backend.backend_id,
-      model_name: "gpt-5.6-sol",
-      context_window: 272000,
-      reasoning_effort: "high",
-      sampling_id: null,
-    });
-    expect(
-      plan.document.agent_behaviors?.find(
-        (row) => row.behavior_id === plan.defaultBehaviorId,
-      )?.inference_profile_id,
-    ).toBe(profile.profile_id);
-    expect(plan.document.inference_sampling).toBeUndefined();
-  });
+  it.each([272000, 500000, 872000])(
+    "binds Codex and preserves the selected context window %s",
+    (contextWindow) => {
+      const deployment = structuredClone(fixtureDeployment);
+      deployment.inferenceBackends = [
+        { ...deployment.inferenceBackends[0]!, enabled: false },
+      ];
+      deployment.inferenceProfiles = [deployment.inferenceProfiles[0]!];
+      const plan = buildInferenceSetupPlan({
+        deployment,
+        provider: "openai",
+        apiKey: "",
+        oauth: true,
+        discovery: {
+          ...discovery,
+          providerKind: "ChatGptCodex",
+          effectiveEndpoint: "https://chatgpt.com/backend-api/codex",
+          openaiWireApi: "responses",
+        },
+        model: "gpt-5.6-sol",
+        recommendation: {
+          ...recommendation,
+          temperature: null,
+          topP: null,
+          contextWindow: { recommended: 272000, min: 1, max: 872000 },
+          reasoningEffort: {
+            recommended: "medium",
+            choices: ["low", "medium", "high"],
+          },
+        },
+        settings: {
+          contextWindow: String(contextWindow),
+          maxOutputTokens: "",
+          temperature: "",
+          topP: "",
+          reasoningEffort: "high",
+          maxConcurrent: "1",
+        },
+      });
+      const backend = plan.document.inference_backends![0]!;
+      const profile = plan.document.inference_profiles![0]!;
+      expect(backend).toMatchObject({
+        provider_kind: "ChatGptCodex",
+        auth: { kind: "principal_oauth" },
+        enabled: true,
+      });
+      expect(profile).toMatchObject({
+        backend_id: backend.backend_id,
+        model_name: "gpt-5.6-sol",
+        context_window: contextWindow,
+        reasoning_effort: "high",
+        sampling_id: null,
+      });
+      expect(
+        plan.document.agent_behaviors?.find(
+          (row) => row.behavior_id === plan.defaultBehaviorId,
+        )?.inference_profile_id,
+      ).toBe(profile.profile_id);
+      expect(plan.document.inference_sampling).toBeUndefined();
+    },
+  );
 
   it("preserves a configured compatible backend when adding another endpoint", () => {
     const deployment = structuredClone(fixtureDeployment);

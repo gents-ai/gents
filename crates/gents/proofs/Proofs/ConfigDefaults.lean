@@ -57,4 +57,25 @@ theorem absent_maximum_follows (fallback : Nat) (authored : Option Int) (pair : 
   cases h
   rfl
 
+/-- Only an explicit, coherent advertised ceiling constrains an authored override.
+The model's default is not itself a maximum. -/
+def advertisedCeiling (modelDefault maximum : Option Int) : Option Int :=
+  maximum.filter fun cap => 0 < cap && modelDefault.all (fun value => 0 < value && value ≤ cap)
+
+def contextOverrideAllowed (selected modelDefault maximum : Option Int) : Bool :=
+  match selected, advertisedCeiling modelDefault maximum with
+  | some value, some cap => value ≤ cap
+  | _, _ => true
+
+theorem explicit_context_ceiling_is_enforced (selected cap : Int)
+    (modelDefault maximum : Option Int)
+    (hcap : advertisedCeiling modelDefault maximum = some cap)
+    (h : contextOverrideAllowed (some selected) modelDefault maximum = true) :
+    selected ≤ cap := by
+  simpa [contextOverrideAllowed, hcap] using h
+
+theorem missing_context_ceiling_is_not_invented (selected modelDefault : Option Int) :
+    contextOverrideAllowed selected modelDefault none = true := by
+  cases selected <;> rfl
+
 end ConfigDefaults
