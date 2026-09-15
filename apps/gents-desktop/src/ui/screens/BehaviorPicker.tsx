@@ -59,7 +59,11 @@ export function BehaviorPicker({
       describe(b.behaviorId).toLowerCase().includes(q),
   );
   return (
-    <Popover open={popover.open} onOpenChange={popover.onOpenChange}>
+    <Popover
+      open={popover.open}
+      onOpenChange={popover.onOpenChange}
+      onOpenChangeComplete={popover.onOpenChangeComplete}
+    >
       <PopoverTrigger
         render={
           <Button variant="ghost" size="sm" className="gap-2 px-1.5 font-normal" />
@@ -75,6 +79,7 @@ export function BehaviorPicker({
         <ChevronDown className="ml-6 size-3.5 text-muted-foreground" />
       </PopoverTrigger>
       <PopoverContent
+        ref={popover.popupRef}
         aria-label="Choose behavior"
         align="start"
         className="w-[min(40rem,calc(100vw-4rem))] p-0"

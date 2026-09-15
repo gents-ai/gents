@@ -171,7 +171,11 @@ function SessionContext({ context }: { context: DesktopSessionSnapshot["context"
     context.lastRequest?.compactionThresholdTokens ?? context.compactionThresholdTokens,
   );
   return (
-    <Popover open={popover.open} onOpenChange={popover.onOpenChange}>
+    <Popover
+      open={popover.open}
+      onOpenChange={popover.onOpenChange}
+      onOpenChangeComplete={popover.onOpenChangeComplete}
+    >
       <PopoverTrigger
         render={
           <Button variant="quiet" size="sm" data-testid="context-meter">
@@ -180,6 +184,7 @@ function SessionContext({ context }: { context: DesktopSessionSnapshot["context"
         }
       />
       <PopoverContent
+        ref={popover.popupRef}
         aria-label="Session context details"
         align="start"
         className="w-80"

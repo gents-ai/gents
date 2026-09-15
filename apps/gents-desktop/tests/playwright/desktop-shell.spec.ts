@@ -82,6 +82,10 @@ test.describe("kit shell", () => {
       .getByTestId("sessions-screen")
       .getByRole("link", { name: /introduction-and-greetings/ })
       .click();
+    await page.addStyleTag({
+      content:
+        '[data-slot="popover-content"] { animation-duration: 600ms !important; }',
+    });
     await page.evaluate(() => {
       const counts: number[] = [];
       const record = () =>
@@ -96,6 +100,10 @@ test.describe("kit shell", () => {
 
     await page.getByTestId("context-meter").click();
     await expect(page.getByTestId("context-details")).toBeVisible();
+    const closingDuration = await page
+      .getByTestId("context-details")
+      .evaluate((element) => getComputedStyle(element).animationDuration);
+    expect(closingDuration).toBe("0.6s");
     await page.getByRole("button", { name: /Sync healthy/ }).click();
     await expect(
       page.getByRole("dialog", { name: "Database sync details" }),

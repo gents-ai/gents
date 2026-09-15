@@ -1,89 +1,104 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
-const POPOVER_OPEN_EVENT = "gents:popover-open";
-const POPOVER_EXIT_MS = 150;
-let activePopoverId: string | null = null;
+type PopoverController = {
+  activate: () => void;
+  closeForPeer: () => boolean;
+};
 
-/** Keep the shell to one open popover even when Base UI portals are siblings. */
+let activePopoverId: string | null = null;
+let pendingPopoverId: string | null = null;
+const controllers = new Map<string, PopoverController>();
+
+function activatePending() {
+  const pending = pendingPopoverId;
+  pendingPopoverId = null;
+  if (!pending) return;
+  const controller = controllers.get(pending);
+  if (!controller) return;
+  activePopoverId = pending;
+  controller.activate();
+}
+
+function release(id: string) {
+  if (activePopoverId !== id) return;
+  activePopoverId = null;
+  activatePending();
+}
+
+/** Keep the shell to one mounted popover across Base UI exit animations. */
 export function useExclusivePopover(onClose?: () => void) {
   const id = useId();
   const [open, setOpen] = useState(false);
+  const requestedOpenRef = useRef(false);
+  // Only detects never-mounted cancellation; Base UI acknowledges mounted closes.
+  const popupRef = useRef<HTMLDivElement | null>(null);
   const onCloseRef = useRef(onClose);
-  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const cancelPendingOpen = useCallback(() => {
-    if (openTimerRef.current !== null) {
-      clearTimeout(openTimerRef.current);
-      openTimerRef.current = null;
-    }
-  }, []);
-
-  const cancelPendingRelease = useCallback(() => {
-    if (releaseTimerRef.current !== null) {
-      clearTimeout(releaseTimerRef.current);
-      releaseTimerRef.current = null;
-    }
-  }, []);
-
-  const releaseAfterExit = useCallback(() => {
-    cancelPendingRelease();
-    releaseTimerRef.current = setTimeout(() => {
-      releaseTimerRef.current = null;
-      if (activePopoverId === id) activePopoverId = null;
-    }, POPOVER_EXIT_MS);
-  }, [cancelPendingRelease, id]);
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
 
   useEffect(() => {
-    const closeForPeer = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === id) return;
-      cancelPendingOpen();
-      setOpen(false);
-      onCloseRef.current?.();
+    const controller: PopoverController = {
+      activate: () => {
+        requestedOpenRef.current = true;
+        setOpen(true);
+      },
+      closeForPeer: () => {
+        if (!requestedOpenRef.current) return popupRef.current !== null;
+        requestedOpenRef.current = false;
+        const awaitsUnmount = popupRef.current !== null;
+        setOpen(false);
+        onCloseRef.current?.();
+        return awaitsUnmount;
+      },
     };
-    document.addEventListener(POPOVER_OPEN_EVENT, closeForPeer);
+    controllers.set(id, controller);
     return () => {
-      document.removeEventListener(POPOVER_OPEN_EVENT, closeForPeer);
-      cancelPendingOpen();
-      cancelPendingRelease();
-      // Unmount removes this hook's portal rather than running its exit state.
-      if (activePopoverId === id) activePopoverId = null;
+      controllers.delete(id);
+      if (pendingPopoverId === id) pendingPopoverId = null;
+      if (activePopoverId === id) release(id);
     };
-  }, [cancelPendingOpen, cancelPendingRelease, id]);
+  }, [id]);
 
   const onOpenChange = useCallback(
     (next: boolean) => {
-      if (next) {
-        cancelPendingRelease();
-        const replacingPeer = activePopoverId !== null && activePopoverId !== id;
-        activePopoverId = id;
-        document.dispatchEvent(new CustomEvent(POPOVER_OPEN_EVENT, { detail: id }));
-        cancelPendingOpen();
-        if (replacingPeer) {
-          // Base UI retains a closing popup for its 100 ms exit animation.
-          // Wait past that boundary before mounting the next dialog-role
-          // popup, so accessibility clients never observe stacked dialogs.
-          setOpen(false);
-          openTimerRef.current = setTimeout(() => {
-            openTimerRef.current = null;
-            if (activePopoverId === id) setOpen(true);
-          }, POPOVER_EXIT_MS);
-        } else {
-          setOpen(true);
-        }
-      } else {
-        cancelPendingOpen();
-        if (activePopoverId === id) releaseAfterExit();
+      const controller = controllers.get(id);
+      if (!controller) return;
+      if (!next) {
+        const wasRequestedOpen = requestedOpenRef.current;
+        requestedOpenRef.current = false;
+        if (pendingPopoverId === id) pendingPopoverId = null;
         setOpen(false);
-        onCloseRef.current?.();
+        if (wasRequestedOpen) onCloseRef.current?.();
+        if (activePopoverId === id && popupRef.current === null) release(id);
+        return;
       }
+      requestedOpenRef.current = true;
+      if (activePopoverId === id) {
+        pendingPopoverId = null;
+        setOpen(true);
+        return;
+      }
+      if (activePopoverId === null) {
+        activePopoverId = id;
+        controller.activate();
+        return;
+      }
+      pendingPopoverId = id;
+      const closingId = activePopoverId;
+      const active = controllers.get(closingId);
+      if (!active || !active.closeForPeer()) release(closingId);
     },
-    [cancelPendingOpen, cancelPendingRelease, id, releaseAfterExit],
+    [id],
   );
 
-  return { open, onOpenChange };
+  const onOpenChangeComplete = useCallback(
+    (next: boolean) => {
+      if (!next && !requestedOpenRef.current) release(id);
+    },
+    [id],
+  );
+
+  return { open, onOpenChange, onOpenChangeComplete, popupRef };
 }

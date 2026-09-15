@@ -37,7 +37,11 @@ export function SyncHealth({
     ["Quarantined DAGs", d.quarantinedDagCount ?? "—"],
   ];
   return (
-    <Popover open={popover.open} onOpenChange={popover.onOpenChange}>
+    <Popover
+      open={popover.open}
+      onOpenChange={popover.onOpenChange}
+      onOpenChangeComplete={popover.onOpenChangeComplete}
+    >
       <PopoverTrigger
         aria-label={`${status.shortLabel}. Show sync diagnostics.`}
         title={status.detail}
@@ -50,7 +54,12 @@ export function SyncHealth({
         )}
         {status.shortLabel}
       </PopoverTrigger>
-      <PopoverContent aria-label="Database sync details" align="end" className="w-96">
+      <PopoverContent
+        ref={popover.popupRef}
+        aria-label="Database sync details"
+        align="end"
+        className="w-96"
+      >
         <p className="font-heading text-sm font-medium text-heading">Database sync</p>
         <p className="mt-0.5 text-sm text-muted-foreground">{status.detail}</p>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
