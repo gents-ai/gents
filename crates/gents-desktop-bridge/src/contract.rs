@@ -7,13 +7,13 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
-pub const CONTRACT_VERSION: &str = "7.7";
+pub const CONTRACT_VERSION: &str = "7.8";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "f95fcbd42dfa0093760b3d0356dd89def9a2a9ca4e4aa3575162d90e621df8b4";
+    "e5ff21ba8b9a75532ebe0506db35136cd2c7220b44c64846ea51b41b306ad52d";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");

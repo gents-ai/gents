@@ -197,8 +197,8 @@ function Editor({
     );
     if (validationError) throw new Error(validationError);
     const hasSamplingValues = [
-      effectiveSettings.temperature,
-      effectiveSettings.topP,
+      next.temperature,
+      next.topP,
       next.topK,
       next.seed,
       next.minP,
@@ -220,22 +220,16 @@ function Editor({
     if (executionValuesPresent && !next.executionId.trim())
       throw new Error("Execution values require an execution document ID");
 
-    const contextWindow = optionalInteger(
-      "Context window",
-      effectiveSettings.contextWindow,
-      {
-        min: 1,
-      },
-    );
-    const maxOutputTokens = optionalInteger(
-      "Max output tokens",
-      effectiveSettings.maxOutputTokens,
-      { min: 1 },
-    );
-    const temperature = optionalNumber("Temperature", effectiveSettings.temperature, {
+    const contextWindow = optionalInteger("Context window", next.contextWindow, {
+      min: 1,
+    });
+    const maxOutputTokens = optionalInteger("Max output tokens", next.maxOutputTokens, {
+      min: 1,
+    });
+    const temperature = optionalNumber("Temperature", next.temperature, {
       min: 0,
     });
-    const topP = optionalNumber("Top P", effectiveSettings.topP, { min: 0, max: 1 });
+    const topP = optionalNumber("Top P", next.topP, { min: 0, max: 1 });
     const topK = optionalInteger("Top K", next.topK, { min: 1 });
     const seed = optionalInteger("Seed", next.seed, { min: 0 });
     const minP = optionalNumber("Min P", next.minP, { min: 0, max: 1 });
@@ -285,7 +279,7 @@ function Editor({
       description: next.description.trim() || null,
       backend_id: next.backendId,
       model_name: next.modelName.trim(),
-      reasoning_effort: (effectiveSettings.reasoningEffort || null) as NonNullable<
+      reasoning_effort: (next.reasoningEffort || null) as NonNullable<
         InferenceProfile["reasoning_effort"]
       > | null,
       context_window: contextWindow,
@@ -369,6 +363,10 @@ function Editor({
   const selectedBackend = deployment.inferenceBackends.find(
     (entry) => entry.backendId === d.draft.backendId,
   );
+  const advertisedModel = selectedBackend?.advertisedModels?.find(
+    (entry) => entry.model_name === d.draft.modelName.trim(),
+  );
+  const advertisedModelKey = JSON.stringify(advertisedModel ?? null);
   const beginModelSelection = (backendId: string, modelName: string) => {
     if (
       backendId === d.draft.backendId &&
@@ -400,18 +398,21 @@ function Editor({
           providerKind: backend.providerKind as BackendProviderKind,
           endpoint: backend.endpoint!,
           modelName,
-          displayName: null,
+          displayName: advertisedModel?.display_name ?? null,
           contextWindow:
-            profile.model_name === d.draft.modelName &&
+            advertisedModel?.context_window ??
+            (profile.model_name === d.draft.modelName &&
             profile.backend_id === d.draft.backendId
               ? (profile.context_window ?? null)
-              : null,
+              : null),
+          maxContextWindow: advertisedModel?.max_context_window ?? null,
           maxOutputTokens:
-            profile.model_name === d.draft.modelName &&
+            advertisedModel?.max_output_tokens ??
+            (profile.model_name === d.draft.modelName &&
             profile.backend_id === d.draft.backendId
               ? (profile.max_output_tokens ?? null)
-              : null,
-          reasoningEfforts: null,
+              : null),
+          reasoningEfforts: advertisedModel?.reasoning_efforts ?? null,
         })
         .then((next) => {
           if (cancelled) return;
@@ -453,6 +454,7 @@ function Editor({
     selectedBackend?.providerKind,
     selectedBackend?.endpoint,
     selectedBackend?.maxConcurrent,
+    advertisedModelKey,
     shell.api,
   ]);
   const updateGuided = (next: InferenceSettingsDraft) => {

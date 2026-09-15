@@ -239,6 +239,7 @@ impl OpenAiModelRecord {
             model_name,
             display_name,
             context_window: context_window.filter(|value| *value > 0),
+            max_context_window: None,
             max_output_tokens,
             reasoning_efforts,
         })
@@ -252,8 +253,18 @@ struct ChatGptCodexModelRecord {
     name: Option<String>,
     model: Option<String>,
     display_name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_i64_tolerant")]
     context_window: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_optional_i64_tolerant")]
+    max_context_window: Option<i64>,
     supported_reasoning_levels: Option<Vec<CodexReasoningLevel>>,
+}
+
+fn deserialize_optional_i64_tolerant<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<serde_json::Value>::deserialize(deserializer)?.and_then(|value| value.as_i64()))
 }
 
 #[derive(Deserialize)]
@@ -276,6 +287,10 @@ impl ChatGptCodexModelRecord {
     fn into_advertised(self) -> Option<AdvertisedModel> {
         let display_name = self.display_name.clone();
         let context_window = self.context_window.filter(|v| *v > 0);
+        let max_context_window = self
+            .max_context_window
+            .filter(|value| *value > 0)
+            .filter(|value| context_window.is_some_and(|default| *value >= default));
         let reasoning_efforts = self.supported_reasoning_levels.as_ref().map(|levels| {
             levels
                 .iter()
@@ -287,6 +302,7 @@ impl ChatGptCodexModelRecord {
             model_name,
             display_name,
             context_window,
+            max_context_window,
             max_output_tokens: None,
             reasoning_efforts,
         })
@@ -511,6 +527,7 @@ mod tests {
         })).unwrap();
         let advertised = record.into_advertised().unwrap();
         assert_eq!(advertised.context_window, Some(272000));
+        assert_eq!(advertised.max_context_window, Some(872000));
         assert_eq!(advertised.display_name.as_deref(), Some("GPT-5.6 Sol"));
         assert_eq!(
             advertised.reasoning_efforts,
@@ -539,7 +556,43 @@ mod tests {
             let record: ChatGptCodexModelRecord = serde_json::from_value(value).unwrap();
             let advertised = record.into_advertised().unwrap();
             assert_eq!(advertised.context_window, None);
+            assert_eq!(advertised.max_context_window, None);
             assert_eq!(advertised.reasoning_efforts, expected);
+        }
+    }
+
+    #[test]
+    fn codex_catalog_discards_invalid_or_inverted_context_ceilings() {
+        for (default, maximum) in [(272_000, 0), (272_000, -1), (272_000, 128_000)] {
+            let record: ChatGptCodexModelRecord = serde_json::from_value(serde_json::json!({
+                "slug": "gpt-test",
+                "context_window": default,
+                "max_context_window": maximum
+            }))
+            .unwrap();
+            let advertised = record.into_advertised().unwrap();
+            assert_eq!(advertised.context_window, Some(default));
+            assert_eq!(advertised.max_context_window, None);
+        }
+    }
+
+    #[test]
+    fn codex_catalog_retains_model_when_context_metadata_is_malformed() {
+        for malformed in [
+            serde_json::json!("872000"),
+            serde_json::json!({"tokens": 872000}),
+            serde_json::json!(872000.5),
+        ] {
+            let record: ChatGptCodexModelRecord = serde_json::from_value(serde_json::json!({
+                "slug": "gpt-test",
+                "context_window": malformed,
+                "max_context_window": malformed
+            }))
+            .unwrap();
+            let advertised = record.into_advertised().unwrap();
+            assert_eq!(advertised.model_name, "gpt-test");
+            assert_eq!(advertised.context_window, None);
+            assert_eq!(advertised.max_context_window, None);
         }
     }
 

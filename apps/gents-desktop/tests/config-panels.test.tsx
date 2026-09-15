@@ -169,6 +169,121 @@ describe("configuration panels", () => {
     expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
   });
 
+  it("uses advertised context bounds when reopening a profile with a smaller saved override", async () => {
+    const { api, shell } = harness();
+    api.getInferenceBackendRecommendation.mockResolvedValue({
+      defaultsVersion: "fixture",
+      summary: "",
+      contextWindow: { recommended: 272000, min: 1, max: 872000 },
+      maxOutputTokens: null,
+      temperature: null,
+      topP: null,
+      reasoningEffort: null,
+      maxConcurrent: { recommended: 8, min: 1, max: null },
+    });
+    const profile = deployment.inferenceProfiles.find(
+      (row) => row.profile_id === "profile-a",
+    )!;
+    const configured = {
+      ...deployment,
+      inferenceProfiles: deployment.inferenceProfiles.map((row) => ({
+        ...row,
+        context_window: 300000,
+      })),
+      inferenceBackends: deployment.inferenceBackends.map((backend) => ({
+        ...backend,
+        advertisedModels: [
+          {
+            model_name: profile.model_name,
+            display_name: null,
+            context_window: 272000,
+            max_context_window: 872000,
+            max_output_tokens: null,
+            reasoning_efforts: null,
+          },
+        ],
+      })),
+    };
+    render(<ProfilesPanel shell={shell} deployment={configured} item="profile-a" />);
+    await waitFor(() =>
+      expect(api.getInferenceBackendRecommendation).toHaveBeenCalledWith(
+        expect.objectContaining({ contextWindow: 272000, maxContextWindow: 872000 }),
+      ),
+    );
+    expect(api.saveInferenceProfileConfig).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Context window", { exact: false })).toHaveValue(
+      300000,
+    );
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText("Display name"));
+    await user.type(screen.getByLabelText("Display name"), "Renamed profile");
+    await user.click(screen.getByRole("button", { name: "Save changes", exact: true }));
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalled());
+    expect(
+      api.applyConfigComponents.mock.calls[0]![0].document.inference_profiles[0]
+        .context_window,
+    ).toBe(300000);
+  });
+
+  it.each([false, true])(
+    "does not backfill Grok sampling on rename (existing sampling=%s)",
+    async (existingSampling) => {
+      const { api, shell } = harness();
+      api.getInferenceBackendRecommendation.mockResolvedValue({
+        defaultsVersion: "fixture",
+        summary: "",
+        contextWindow: null,
+        maxOutputTokens: null,
+        reasoningEffort: null,
+        temperature: { recommended: 0.7, min: 0, max: 2, step: 0.05 },
+        topP: { recommended: 0.95, min: 0, max: 1, step: 0.05 },
+        maxConcurrent: { recommended: 8, min: 1, max: null },
+      });
+      const configured = {
+        ...deployment,
+        inferenceBackends: deployment.inferenceBackends.map((row) => ({
+          ...row,
+          providerKind: "XaiGrokOAuth",
+        })),
+        inferenceProfiles: deployment.inferenceProfiles.map((row) => ({
+          ...row,
+          sampling_id: existingSampling ? "sampling-custom" : null,
+        })),
+        inferenceSampling: existingSampling
+          ? [
+              {
+                agent_did: deployment.agentDid,
+                sampling_id: "sampling-custom",
+                temperature: 0.4,
+                top_p: null,
+              },
+            ]
+          : [],
+      };
+      render(<ProfilesPanel shell={shell} deployment={configured} item="profile-a" />);
+      await waitFor(() =>
+        expect(api.getInferenceBackendRecommendation).toHaveBeenCalled(),
+      );
+      const user = userEvent.setup();
+      await user.clear(screen.getByLabelText("Display name"));
+      await user.type(screen.getByLabelText("Display name"), "Renamed Grok");
+      await user.click(
+        screen.getByRole("button", { name: "Save changes", exact: true }),
+      );
+      await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalled());
+      const document = api.applyConfigComponents.mock.calls[0]![0].document;
+      if (existingSampling) {
+        expect(document.inference_sampling[0]).toMatchObject({
+          temperature: 0.4,
+          top_p: null,
+        });
+      } else {
+        expect(document.inference_sampling).toBeUndefined();
+        expect(document.inference_profiles[0].sampling_id).toBeNull();
+      }
+    },
+  );
+
   it("does not starve model defaults while equivalent snapshots refresh", async () => {
     const { api, shell } = harness();
     const view = render(

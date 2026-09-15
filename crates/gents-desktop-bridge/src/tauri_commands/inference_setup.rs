@@ -74,6 +74,7 @@ pub(crate) struct InferenceRecommendationRequest {
     pub model_name: String,
     pub display_name: Option<String>,
     pub context_window: Option<i64>,
+    pub max_context_window: Option<i64>,
     pub max_output_tokens: Option<i64>,
     pub reasoning_efforts: Option<Vec<gents::config::ReasoningEffort>>,
 }
@@ -87,6 +88,7 @@ pub(crate) struct InferenceBackendRecommendationRequest {
     pub model_name: String,
     pub display_name: Option<String>,
     pub context_window: Option<i64>,
+    pub max_context_window: Option<i64>,
     pub max_output_tokens: Option<i64>,
     pub reasoning_efforts: Option<Vec<gents::config::ReasoningEffort>>,
 }
@@ -111,6 +113,7 @@ pub(crate) fn desktop_inference_model_recommendation(
             model_name: model_name.to_string(),
             display_name: request.display_name,
             context_window: request.context_window,
+            max_context_window: request.max_context_window,
             max_output_tokens: request.max_output_tokens,
             reasoning_efforts: request.reasoning_efforts,
         },
@@ -132,6 +135,7 @@ pub(crate) fn desktop_inference_backend_recommendation(
         model_name: request.model_name,
         display_name: request.display_name,
         context_window: request.context_window,
+        max_context_window: request.max_context_window,
         max_output_tokens: request.max_output_tokens,
         reasoning_efforts: request.reasoning_efforts,
     })
