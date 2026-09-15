@@ -16,7 +16,7 @@ import {
 import { newId, optionalAbsolutePath, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
-import { ToolGroupControls } from "./ToolGroupControls";
+import { TOOL_LIMIT_DEFAULTS, ToolGroupControls } from "./ToolGroupControls";
 import { useCallback, useState } from "react";
 
 function Editor({
@@ -101,12 +101,16 @@ function Editor({
       )
         throw new Error(`${label} must be a positive whole number`);
     };
-    const orderedSeconds = (
+    const boundedSeconds = (
       label: string,
-      lower: number | null | undefined,
-      upper: number | null | undefined,
+      authored: number | null | undefined,
+      maximum: number | null | undefined,
+      fallback: number,
+      maximumFallback?: number,
     ) => {
-      if (lower != null && upper != null && upper < lower)
+      const effective = authored ?? fallback;
+      const effectiveMaximum = maximum ?? maximumFallback ?? effective;
+      if (effectiveMaximum < effective)
         throw new Error(`${label} maximum must be at least its default`);
     };
     positiveSeconds("File timeout", advanced.host?.files?.timeout_secs);
@@ -127,25 +131,32 @@ function Editor({
       ["Language server RPC timeout", advanced.integrations?.lsp?.rpc_timeout_secs],
     ] as const)
       positiveSeconds(label, value);
-    orderedSeconds(
+    boundedSeconds(
       "Bash timeout",
       advanced.host?.bash?.timeout_secs,
       advanced.host?.bash?.max_timeout_secs,
+      TOOL_LIMIT_DEFAULTS.bashTimeout,
     );
-    orderedSeconds(
+    boundedSeconds(
       "Bash wait timeout",
       advanced.host?.bash?.wait_timeout_secs,
       advanced.host?.bash?.max_wait_timeout_secs,
+      TOOL_LIMIT_DEFAULTS.waitTimeout,
+      TOOL_LIMIT_DEFAULTS.maxWaitTimeout,
     );
-    orderedSeconds(
+    boundedSeconds(
       "Subagent wait timeout",
       advanced.subagents?.wait_timeout_secs,
       advanced.subagents?.max_wait_timeout_secs,
+      TOOL_LIMIT_DEFAULTS.waitTimeout,
+      TOOL_LIMIT_DEFAULTS.maxWaitTimeout,
     );
-    orderedSeconds(
+    boundedSeconds(
       "Language server timeout",
       advanced.integrations?.lsp?.timeout_secs,
       advanced.integrations?.lsp?.max_timeout_secs,
+      TOOL_LIMIT_DEFAULTS.lspTimeout,
+      TOOL_LIMIT_DEFAULTS.maxLspTimeout,
     );
     for (const target of advanced.subagents?.target_ids ?? []) {
       if (
@@ -178,7 +189,7 @@ function Editor({
         )
       )
         throw new Error(`Unknown remote service: ${service.mcp_service_id}`);
-      if (service.tool_names?.some((name) => name.includes("*")))
+      if (service.tool_names?.some((name) => /[*?]/.test(name)))
         throw new Error("Remote tool names must be exact names, not wildcards");
       if (
         service.background_tool_names?.some(
@@ -196,16 +207,12 @@ function Editor({
         ["Maximum remote wait timeout", service.max_wait_timeout_secs],
       ] as const)
         positiveSeconds(label, value);
-      if (
-        service.timeout_secs != null &&
-        service.stale_timeout_secs != null &&
-        service.stale_timeout_secs > service.timeout_secs
-      )
-        throw new Error("Remote stale-health timeout cannot exceed call timeout");
-      orderedSeconds(
+      boundedSeconds(
         "Remote wait timeout",
         service.wait_timeout_secs,
         service.max_wait_timeout_secs,
+        TOOL_LIMIT_DEFAULTS.waitTimeout,
+        TOOL_LIMIT_DEFAULTS.maxWaitTimeout,
       );
     }
     for (const surface of advanced.datastore?.datastore_tool_surface_ids ?? []) {

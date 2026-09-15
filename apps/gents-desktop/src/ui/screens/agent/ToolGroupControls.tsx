@@ -6,6 +6,16 @@ import type { Shell } from "@/hooks/useShell";
 import { RemoteToolDiscovery } from "./RemoteToolDiscovery";
 import { useEffect, useState } from "react";
 
+// Mirrors the canonical effective defaults used by Tools::validation_violations.
+// The desktop bridge does not currently publish these values in its catalog.
+export const TOOL_LIMIT_DEFAULTS = {
+  bashTimeout: 120,
+  waitTimeout: 30,
+  maxWaitTimeout: 600,
+  lspTimeout: 20,
+  maxLspTimeout: 300,
+} as const;
+
 function SecondsRow({
   id,
   label,
@@ -204,7 +214,7 @@ export function ToolGroupControls({
           groups.host?.bash?.timeout_secs,
           (timeout_secs) =>
             update("host", { bash: { ...groups.host?.bash, timeout_secs } }),
-          "120",
+          String(TOOL_LIMIT_DEFAULTS.bashTimeout),
         )}
         {seconds(
           "tools-bash-max-timeout",
@@ -258,14 +268,14 @@ export function ToolGroupControls({
           "Background wait seconds",
           groups.subagents?.wait_timeout_secs,
           (wait_timeout_secs) => update("subagents", { wait_timeout_secs }),
-          "30",
+          String(TOOL_LIMIT_DEFAULTS.waitTimeout),
         )}
         {seconds(
           "tools-subagent-max-wait-timeout",
           "Maximum background wait seconds",
           groups.subagents?.max_wait_timeout_secs,
           (max_wait_timeout_secs) => update("subagents", { max_wait_timeout_secs }),
-          "600",
+          String(TOOL_LIMIT_DEFAULTS.maxWaitTimeout),
         )}
       </Group>
       <Group title="Runtime tools">
@@ -580,7 +590,7 @@ export function ToolGroupControls({
                     i === index ? { ...row, wait_timeout_secs } : row,
                   ),
                 }),
-              "30",
+              String(TOOL_LIMIT_DEFAULTS.waitTimeout),
             )}
             {seconds(
               `remote-max-wait-timeout-${index}`,
@@ -592,7 +602,7 @@ export function ToolGroupControls({
                     i === index ? { ...row, max_wait_timeout_secs } : row,
                   ),
                 }),
-              "600",
+              String(TOOL_LIMIT_DEFAULTS.maxWaitTimeout),
             )}
           </div>
         ))}
@@ -643,7 +653,7 @@ export function ToolGroupControls({
                 update("integrations", {
                   lsp: { ...groups.integrations?.lsp, timeout_secs },
                 }),
-              "20",
+              String(TOOL_LIMIT_DEFAULTS.lspTimeout),
             )}
             {seconds(
               "tools-lsp-max-timeout",
@@ -653,7 +663,7 @@ export function ToolGroupControls({
                 update("integrations", {
                   lsp: { ...groups.integrations?.lsp, max_timeout_secs },
                 }),
-              "300",
+              String(TOOL_LIMIT_DEFAULTS.maxLspTimeout),
             )}
             {seconds(
               "tools-lsp-rpc-timeout",

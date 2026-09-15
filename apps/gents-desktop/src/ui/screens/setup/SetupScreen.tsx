@@ -397,12 +397,15 @@ export function SetupScreen({
     const nextDeployment = next.client?.deployments[0];
     const steward = nextDeployment ? setupStewardPatches(nextDeployment) : [];
     if (steward.length && nextDeployment) {
-      await api.patchConfigComponents({
-        agentDid: nextDeployment.agentDid,
-        patches: steward,
-      });
+      await shell.applyConfig((configApi) =>
+        configApi.patchConfigComponents({
+          agentDid: nextDeployment.agentDid,
+          patches: steward,
+        }),
+      );
+    } else {
+      await shell.refreshSnapshot();
     }
-    await shell.refreshSnapshot();
     setStep("inference");
   };
 
@@ -659,9 +662,9 @@ export function SetupScreen({
       recommendation: selectedRecommendation,
       settings,
     });
-    await api.applyConfigComponents({ document: plan.document });
-
-    await shell.refreshSnapshot();
+    await shell.applyConfig((configApi) =>
+      configApi.applyConfigComponents({ document: plan.document }),
+    );
     return plan;
   };
 

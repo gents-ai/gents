@@ -124,7 +124,7 @@ describe("canonical tool selections", () => {
     ]);
     await user.type(
       screen.getByRole("textbox", { name: "Service A tool names" }),
-      "read\n*",
+      "read\nse?rch",
     );
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("exact names");
@@ -247,6 +247,69 @@ describe("canonical tool selections", () => {
       "Subagent wait timeout maximum",
     );
     expect(api.saveToolsConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["bash", { host: { bash: { max_timeout_secs: 5 } } }, "Bash timeout"],
+    [
+      "bash wait",
+      { host: { bash: { max_wait_timeout_secs: 5 } } },
+      "Bash wait timeout",
+    ],
+    ["subagent wait", { subagents: { max_wait_timeout_secs: 5 } }, "Subagent wait"],
+    [
+      "language server",
+      { integrations: { lsp: { max_timeout_secs: 5 } } },
+      "Language server timeout",
+    ],
+    [
+      "remote wait",
+      {
+        remote: {
+          services: [{ mcp_service_id: "service-a", max_wait_timeout_secs: 5 }],
+        },
+      },
+      "Remote wait timeout",
+    ],
+  ])(
+    "rejects a %s ceiling below its canonical effective default",
+    async (_name, groups, message) => {
+      const { api, shell } = harness();
+      const user = userEvent.setup();
+      render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+      fireEvent.change(screen.getByRole("textbox", { name: "Canonical JSON" }), {
+        target: { value: JSON.stringify(groups) },
+      });
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(message);
+      expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves valid independent remote call and stale-health caps", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Canonical JSON" }), {
+      target: {
+        value: JSON.stringify({
+          remote: {
+            services: [
+              {
+                mcp_service_id: "service-a",
+                timeout_secs: 1,
+                stale_timeout_secs: 120,
+              },
+            ],
+          },
+        }),
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(api.saveToolsConfig).toHaveBeenCalledTimes(1);
+    expect(api.saveToolsConfig.mock.calls[0][0].document.remote.services[0]).toEqual(
+      expect.objectContaining({ timeout_secs: 1, stale_timeout_secs: 120 }),
+    );
   });
 
   it("keeps malformed JSON editable and blocks persistence", async () => {
