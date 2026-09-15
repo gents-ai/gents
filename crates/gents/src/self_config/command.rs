@@ -564,11 +564,11 @@ Only bundled packages are accepted. Variables must be declared uppercase environ
                 "duplicate pack variable {name:?}"
             );
         }
-        InstallPackTool {
+        PackInstaller {
             core: self.core.clone(),
             node: self.node.clone(),
         }
-        .install(InstallPackParams { package, variables })
+        .install(PackInstallParams { package, variables })
         .await
     }
 

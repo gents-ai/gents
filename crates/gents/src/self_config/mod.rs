@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::agent::p2p_reconcile::{GraphqlPersonaRequestStore, PersonaRequestStore};
 use crate::agent::persona_ops::{
@@ -38,15 +38,6 @@ use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL
 use ops::{decode_merged, guard_selection_keeps_gate, validate_merged_selection, ApplyRequest};
 
 pub const CONFIG_TOOL_NAME: &str = "config";
-const GET_MY_CONFIG_TOOL_NAME: &str = "get_my_config";
-const CONFIGURE_BEHAVIOR_TOOL_NAME: &str = "configure_behavior";
-const CONFIGURE_TOOLS_TOOL_NAME: &str = "configure_tools";
-const CONFIGURE_PROFILE_TOOL_NAME: &str = "configure_profile";
-const CONFIGURE_BACKEND_TOOL_NAME: &str = "configure_backend";
-const CONFIGURE_MCP_SERVICE_TOOL_NAME: &str = "configure_mcp_service";
-const CONFIGURE_AUTOMATION_TOOL_NAME: &str = "configure_automation";
-const CONFIGURE_BEHAVIORS_TOOL_NAME: &str = "configure_behaviors";
-const INSTALL_PACK_TOOL_NAME: &str = "install_pack";
 pub const LIST_GRAPHS_TOOL_NAME: &str = "list_graphs";
 pub const RUN_GRAPH_TOOL_NAME: &str = "run_graph";
 pub const GET_GRAPH_RUN_TOOL_NAME: &str = "get_graph_run";
@@ -87,39 +78,6 @@ impl From<anyhow::Error> for SelfConfigError {
     }
 }
 
-/// A category patch as the model supplies it: writable field → new value,
-/// JSON `null` clears the field.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(transparent)]
-pub struct PatchArg(pub Map<String, Value>);
-
-impl PatchArg {
-    fn into_patch(self) -> SelfConfigPatch {
-        self.0
-            .into_iter()
-            .map(|(field, value)| match value {
-                Value::Null => (field, None),
-                other => (field, Some(other)),
-            })
-            .collect()
-    }
-}
-
-fn patch_parameter_schema(target: SelfConfigTarget) -> Value {
-    json!({
-        "type": "object",
-        "description": format!(
-            "Partial update for the {} document: map of writable field to its new \
-             value; JSON null clears a field. Writable fields: {}. All other \
-             fields (identity keys, owner DID, runtime-owned status, secrets) \
-             are protected and rejected.",
-            target.collection_name(),
-            target.writable_fields().join(", "),
-        ),
-        "additionalProperties": true,
-    })
-}
-
 fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
     serde_json::to_string_pretty(outcome).map_err(|error| anyhow!("serialize outcome: {error}"))
 }
@@ -141,6 +99,7 @@ fn anchored_request(
     });
     request
 }
+#[cfg(test)]
 fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let id = core.behavior_id().to_owned();
     let mut request = ApplyRequest::new(SelfConfigTarget::AgentBehavior, patch);
@@ -303,434 +262,8 @@ fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
 }
 
 // ---------------------------------------------------------------------------
-// Tools
+// Behavior request transport
 // ---------------------------------------------------------------------------
-
-pub struct GetMyConfigTool {
-    core: SelfConfigCore,
-    categories: BTreeSet<String>,
-    no_lockout: bool,
-    dry_run: bool,
-    allow_pack_install: bool,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GetMyConfigParams {
-    /// Dry-run preview (requires `self_config_dry_run`): the diff a patch
-    /// would produce, without committing.
-    #[serde(default)]
-    pub preview: Option<PreviewParams>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreviewParams {
-    pub category: String,
-    /// Target id for categories that need one (`mcp_service` service_id,
-    /// `automation` task/schedule/trigger id).
-    #[serde(default)]
-    pub id: Option<String>,
-    /// Automation kind (`task` | `schedule` | `trigger`).
-    #[serde(default)]
-    pub kind: Option<String>,
-    pub patch: PatchArg,
-}
-
-impl Tool for GetMyConfigTool {
-    const NAME: &'static str = GET_MY_CONFIG_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = GetMyConfigParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let mut properties = serde_json::Map::new();
-        if self.dry_run {
-            properties.insert(
-                "preview".to_string(),
-                json!({
-                    "type": "object",
-                    "description": "Optional dry-run: preview the field-level diff a configure_* patch would produce, without committing.",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "enum": self.categories.iter().collect::<Vec<_>>(),
-                        },
-                        "kind": {
-                            "type": "string",
-                            "enum": ["behavior", "context", "profile", "sampling", "execution", "retry_policy", "compaction", "task", "schedule", "trigger", "event_source"],
-                            "description": "Target within the selected behavior, profile, or automation category.",
-                        },
-                        "id": {
-                            "type": "string",
-                            "description": "Target id (mcp_service service_id or automation doc id).",
-                        },
-                        "patch": { "type": "object" },
-                    },
-                    "required": ["category", "patch"],
-                }),
-            );
-        }
-        ToolDefinition {
-            name: GET_MY_CONFIG_TOOL_NAME.to_string(),
-            description: format!(
-                "Read this agent's own effective configuration documents: behavior, tool \
-                 selection, inference profile, backend (secrets excluded), owned skills and \
-                 automation. Enabled self-config categories: {}.{} {}",
-                self.categories
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                if self.dry_run {
-                    " Supports dry-run patch previews via the preview parameter."
-                } else {
-                    ""
-                },
-                EFFECT_TIMING_NOTE,
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": properties,
-                "required": [],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        match args.preview {
-            None => {
-                let config = self
-                    .core
-                    .read_effective_config(&self.categories, self.no_lockout, self.dry_run)
-                    .await?;
-                serde_json::to_string_pretty(&config)
-                    .map_err(|error| SelfConfigError(anyhow!("serialize config: {error}")))
-            }
-            Some(preview) => {
-                if !self.dry_run {
-                    return Err(SelfConfigError(anyhow!(
-                        "dry-run preview is not enabled for this behavior \
-                         (Tools.self_config_dry_run)"
-                    )));
-                }
-                if !self.categories.contains(&preview.category) {
-                    return Err(SelfConfigError(anyhow!(
-                        "category {:?} is not enabled for self-config (enabled: {})",
-                        preview.category,
-                        self.categories
-                            .iter()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    )));
-                }
-                let patch = preview.patch.into_patch();
-                let request = match preview.category.as_str() {
-                    "behavior" => match preview.kind.as_deref().unwrap_or("behavior") {
-                        "behavior" => behavior_request(&self.core, patch),
-                        "context" => {
-                            anchored_request(SelfConfigTarget::AgentContext, "context_id", patch)
-                        }
-                        other => return Err(anyhow!("unknown behavior target {other:?}").into()),
-                    },
-                    "tools" => tools_request(&self.core, patch, self.allow_pack_install),
-                    "profile" => profile_target_request(preview.kind.as_deref(), patch)?,
-                    "backend" => backend_request(patch),
-                    "mcp_service" => {
-                        let id = preview.id.ok_or_else(|| {
-                            SelfConfigError(anyhow!("preview.id (service_id) is required"))
-                        })?;
-                        mcp_service_request(id, patch)
-                    }
-                    "automation" => {
-                        let kind = preview.kind.as_deref().ok_or_else(|| {
-                            SelfConfigError(anyhow!("preview.kind is required for automation"))
-                        })?;
-                        let id = preview.id.ok_or_else(|| {
-                            SelfConfigError(anyhow!("preview.id is required for automation"))
-                        })?;
-                        automation_request(&self.core, automation_target(kind)?, id, patch)
-                    }
-                    "persona" => {
-                        return Err(SelfConfigError(anyhow!(
-                            "behavior catalog actions are request-based; no patch preview is available \
-                             — call configure_behaviors with action \"preview\""
-                        )));
-                    }
-                    other => {
-                        return Err(SelfConfigError(anyhow!("unknown category {other:?}")));
-                    }
-                };
-                let outcome = self.core.preview(request).await?;
-                Ok(outcome_text(&outcome)?)
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PatchOnlyParams {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub patch: PatchArg,
-}
-
-pub struct ConfigureBehaviorTool {
-    core: SelfConfigCore,
-}
-
-impl Tool for ConfigureBehaviorTool {
-    const NAME: &'static str = CONFIGURE_BEHAVIOR_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = PatchOnlyParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_BEHAVIOR_TOOL_NAME.to_string(),
-            description: format!(
-                "Patch the bound behavior or context document. Context owns prompt, tools, skills and compaction references. Identity fields are immutable. {EFFECT_TIMING_NOTE}"
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": { "target": {"type":"string","enum":["behavior","context"],"default":"behavior"}, "patch": {"type":"object","description":"Writable fields of the selected canonical behavior or context document."} },
-                "required": ["patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let request = match args.target.as_deref().unwrap_or("behavior") {
-            "behavior" => behavior_request(&self.core, args.patch.into_patch()),
-            "context" => anchored_request(
-                SelfConfigTarget::AgentContext,
-                "context_id",
-                args.patch.into_patch(),
-            ),
-            other => return Err(anyhow!("unknown behavior target {other:?}").into()),
-        };
-        let outcome = self.core.apply(request).await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureToolsTool {
-    core: SelfConfigCore,
-    allow_pack_install: bool,
-}
-
-impl Tool for ConfigureToolsTool {
-    const NAME: &'static str = CONFIGURE_TOOLS_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = PatchOnlyParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_TOOLS_TOOL_NAME.to_string(),
-            description: format!(
-                "Patch the bound Tools document using its canonical nested groups and explicit permissions. {EFFECT_TIMING_NOTE}"
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": { "patch": patch_parameter_schema(SelfConfigTarget::Tools) },
-                "required": ["patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.target.is_some() {
-            return Err(anyhow!("configure_tools has no target selector").into());
-        }
-        let request = tools_request(&self.core, args.patch.into_patch(), self.allow_pack_install);
-        let outcome = self.core.apply(request).await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureProfileTool {
-    core: SelfConfigCore,
-}
-
-impl Tool for ConfigureProfileTool {
-    const NAME: &'static str = CONFIGURE_PROFILE_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = PatchOnlyParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_PROFILE_TOOL_NAME.to_string(),
-            description: format!(
-                "Patch the selected bound inference or compaction document. Shared references within this principal observe the committed change. \
-                 {EFFECT_TIMING_NOTE}"
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": { "target": {"type":"string","enum":["profile","sampling","execution","retry_policy","compaction"],"default":"profile"}, "patch": {"type":"object","description":"Writable fields of the selected canonical inference or compaction document."} },
-                "required": ["patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let outcome = self
-            .core
-            .apply(profile_target_request(
-                args.target.as_deref(),
-                args.patch.into_patch(),
-            )?)
-            .await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureBackendTool {
-    core: SelfConfigCore,
-}
-
-impl Tool for ConfigureBackendTool {
-    const NAME: &'static str = CONFIGURE_BACKEND_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = PatchOnlyParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_BACKEND_TOOL_NAME.to_string(),
-            description: format!("Patch the backend selected by the bound inference profile. Endpoint, auth references, discovery limits and concurrency are configurable; raw keys and observations remain protected. {EFFECT_TIMING_NOTE}"),
-            parameters: json!({
-                "type": "object",
-                "properties": { "patch": patch_parameter_schema(SelfConfigTarget::InferenceBackend) },
-                "required": ["patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.target.is_some() {
-            return Err(anyhow!("configure_backend has no target selector").into());
-        }
-        let outcome = self
-            .core
-            .apply(backend_request(args.patch.into_patch()))
-            .await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureMcpServiceTool {
-    core: SelfConfigCore,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigureMcpServiceParams {
-    pub service_id: String,
-    pub patch: PatchArg,
-}
-
-impl Tool for ConfigureMcpServiceTool {
-    const NAME: &'static str = CONFIGURE_MCP_SERVICE_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = ConfigureMcpServiceParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_MCP_SERVICE_TOOL_NAME.to_string(),
-            description: format!(
-                "Patch a ToolServiceRegistry document (MCP service host/port/path, \
-                 send_agent_did, status). The service must already exist; registry \
-                 version/updated_at are runtime-owned. {EFFECT_TIMING_NOTE}"
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "service_id": { "type": "string" },
-                    "patch": patch_parameter_schema(SelfConfigTarget::ToolServiceRegistry),
-                },
-                "required": ["service_id", "patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let request = mcp_service_request(args.service_id, args.patch.into_patch());
-        let outcome = self.core.apply(request).await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureAutomationTool {
-    core: SelfConfigCore,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigureAutomationParams {
-    /// `task` | `schedule` | `trigger`.
-    pub kind: String,
-    /// The document's unique id (created if absent).
-    pub id: String,
-    pub patch: PatchArg,
-}
-
-impl Tool for ConfigureAutomationTool {
-    const NAME: &'static str = CONFIGURE_AUTOMATION_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = ConfigureAutomationParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_AUTOMATION_TOOL_NAME.to_string(),
-            description: format!("Create or patch Task, Trigger, Schedule, or EventSource documents owned by this principal. Tasks and trigger task links are scoped to this behavior. Schedule owns cadence; Trigger owns task, source and concurrency. Runtime observations are protected. {EFFECT_TIMING_NOTE}"),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "enum": ["task", "schedule", "trigger", "event_source"] },
-                    "id": { "type": "string" },
-                    "patch": {
-                        "type": "object",
-                        "description": format!(
-                            "Writable fields — task: {}; schedule: {}; trigger: {}.",
-                            SelfConfigTarget::Task.writable_fields().join(", "),
-                            SelfConfigTarget::Schedule.writable_fields().join(", "),
-                            SelfConfigTarget::Trigger.writable_fields().join(", "),
-                        ),
-                        "additionalProperties": true,
-                    },
-                },
-                "required": ["kind", "id", "patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let target = automation_target(&args.kind)?;
-        let request = automation_request(&self.core, target, args.id, args.patch.into_patch());
-        let outcome = self.core.apply(request).await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-/// Manage SIBLING personas of this agent through the `PersonaConfigRequest`
-/// channel — see the module doc for why this tool, alone in the family, is
-/// not "self only" at the behavior level. Unlike the patch-based tools above,
-/// this one authors a request document and lets the existing persona
-/// reconciler (`crate::agent::p2p_reconcile::persona_requests`) admit and
-/// materialize it, so admission can never drift between this tool, the
-/// P2P-replicated path, and the `gents` CLI.
-pub struct ConfigurePersonaTool {
-    node: Arc<EmbeddedNode>,
-    agent_did: String,
-    identity: Arc<dyn AgentIdentity>,
-    process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
-}
 
 /// Model-facing tri-state for behavior edits. Serde invokes `Default` only
 /// when the property is absent; a present JSON null reaches the deserializer
@@ -830,7 +363,7 @@ pub struct ConfigurePersonaParams {
     pub network_mode: Option<crate::toolset::CommandNetworkMode>,
 }
 
-/// How long [`ConfigurePersonaTool`] polls a freshly-authored
+/// How long the `config behavior` command polls a freshly-authored
 /// `PersonaConfigRequest` row before returning it still-`pending`: the
 /// in-process reconciler sweeps on every `Update` event, so a healthy node
 /// converges well inside this window.
@@ -1445,195 +978,17 @@ async fn persona_mutate(
         .map_err(|error| anyhow!("serialize behavior configuration outcome: {error}"))
 }
 
-impl Tool for ConfigurePersonaTool {
-    const NAME: &'static str = CONFIGURE_BEHAVIORS_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = ConfigurePersonaParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_BEHAVIORS_TOOL_NAME.to_string(),
-            description: "Preview, list, inspect, create, clone, edit, or disable this principal's canonical behaviors through the signed command owner. Choose an existing profile and a complete system_prompt for a preset-based create. Then use the separate configure_tools action with an existing behavior_id to select LSP/native graph capabilities or disable host-command network access through the canonical config patch owner. Creation and tool selection are distinct commits; retry only the failed operation. Setup and shared tool references are protected. Inspect configured grants and test a new request after reconciliation before claiming readiness.".to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["list", "inspect", "preview", "create", "edit", "clone", "disable", "configure_tools"],
-                    },
-                    "operation": {
-                        "type": "string",
-                        "enum": ["create", "edit", "clone", "disable"],
-                        "description": "Mutation to validate when action is preview.",
-                    },
-                    "display_name": {
-                        "type": ["string", "null"],
-                        "description": "Display name for create/edit. On edit, omit to preserve or use null to clear.",
-                    },
-                    "description": {
-                        "type": ["string", "null"],
-                        "description": "Concise purpose for the behavior and context. On edit, omit to preserve or use null to clear.",
-                    },
-                    "system_prompt": {
-                        "type": ["string", "null"],
-                        "description": "Complete operating instructions. Required for a preset-based create. On edit, omit to preserve or use null to clear; a supplied string must not be blank.",
-                    },
-                    "behavior_id": {
-                        "type": "string",
-                        "description": "Exact behavior_id (required for inspect/edit/disable).",
-                    },
-                    "clone_from": {
-                        "type": "string",
-                        "description": "Exact sibling behavior_id to clone from.",
-                    },
-                    "root": {
-                        "type": ["string", "null"],
-                        "description": "Workspace root narrowing. It must be a published allowed_root. On edit, omit to preserve or use null to clear and widen to the process ceiling.",
-                    },
-                    "preset": {
-                        "type": "string",
-                        "description": "Built-in permission preset for create/edit. Omit on edit to preserve Tools; it cannot be cleared because presets are materialization choices, not stored fields. Clone rejects it.",
-                    },
-                    "profile_id": {
-                        "type": ["string", "null"],
-                        "description": "Exact inference profile_id owned by this principal. On edit, omit to preserve; null is rejected because a behavior must remain bound.",
-                    },
-                    "make_default": {
-                        "type": "boolean",
-                        "description": "For create/edit, atomically promote the applied behavior to this principal's default. Must be false for disable.",
-                        "default": false,
-                    },
-                    "enable_lsp": {
-                        "type": "boolean",
-                        "description": "Only for action configure_tools on an existing sibling. Select LSP in canonical Tools; omit to preserve, false disables. This is a separate committed operation after create/clone/edit, not an atomic creation option. Test the server before claiming readiness."
-                    },
-                    "enable_graph_tools": {
-                        "type": "boolean",
-                        "description": "Only for action configure_tools on an existing sibling. Select native list_graphs/run_graph/get_graph_run/get_graph_result/cancel_graph_run on this node/principal, without pack installation or self-configuration. Omit to preserve; false disables. Graph caller admission still applies."
-                    },
-                    "network_mode": {
-                        "type": "string",
-                        "enum": ["disabled"],
-                        "description": "Only for action configure_tools on an existing sibling. Set disabled to narrow canonical host bash commands to no network; omit to preserve the current policy. This control cannot widen network access. Inspect the effective report and test enforcement before claiming isolation."
-                    },
-                },
-                "required": ["action"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.action != "configure_tools"
-            && (args.enable_lsp.is_some()
-                || args.enable_graph_tools.is_some()
-                || args.network_mode.is_some())
-        {
-            return Err(anyhow!("tool selections require the separate configure_tools action with an existing behavior_id; create/clone/edit remains a signed atomic behavior command").into());
-        }
-        match args.action.as_str() {
-            "configure_tools" => {
-                let behavior_id = args
-                    .behavior_id
-                    .as_deref()
-                    .context("configure_tools requires behavior_id")?;
-                let core = SelfConfigCore::new(
-                    self.node.clone(),
-                    self.agent_did.clone(),
-                    behavior_id.into(),
-                )?
-                .with_process_ceiling(self.process_ceiling.clone());
-                let outcome = core
-                    .select_sibling_tools(
-                        args.enable_lsp,
-                        args.enable_graph_tools,
-                        args.network_mode,
-                    )
-                    .await?;
-                let effective = core
-                    .read_effective_config(&BTreeSet::new(), false, false)
-                    .await?;
-                for (requested, name) in [
-                    (args.enable_lsp, "lsp"),
-                    (args.enable_graph_tools, "native_graph_tools"),
-                ] {
-                    if let Some(requested) = requested {
-                        if effective["tool_grants"]["configured"][name].as_bool() != Some(requested)
-                        {
-                            return Err(
-                                anyhow!("committed tool selection did not verify {name}").into()
-                            );
-                        }
-                    }
-                }
-                if let Some(requested) = args.network_mode {
-                    if effective["tool_grants"]["configured"]["network_mode"].as_str()
-                        != Some(requested.as_str())
-                    {
-                        return Err(anyhow!(
-                            "committed tool selection did not verify network_mode"
-                        )
-                        .into());
-                    }
-                }
-                Ok(serde_json::to_string_pretty(&json!({
-                    "outcome": outcome, "behavior_id": behavior_id,
-                    "requested": {"enable_lsp": args.enable_lsp, "enable_graph_tools": args.enable_graph_tools, "network_mode": args.network_mode},
-                    "effective_config": effective,
-                    "effect": "Tool selection committed separately from behavior creation. Existing IDs and prompt are unchanged; test a new request after reconciliation.",
-                })).context("serialize sibling tool selection")?)
-            }
-            "list" => {
-                Ok(
-                    persona_list(&self.node, &self.agent_did, &self.process_ceiling, 20, None)
-                        .await?,
-                )
-            }
-            "inspect" => {
-                let behavior_id = args
-                    .behavior_id
-                    .as_deref()
-                    .context("inspect requires behavior_id")?;
-                Ok(persona_inspect(
-                    &self.node,
-                    &self.agent_did,
-                    behavior_id,
-                    &self.process_ceiling,
-                )
-                .await?)
-            }
-            "preview" => {
-                Ok(
-                    persona_preview(&self.node, &self.agent_did, &args, &self.process_ceiling)
-                        .await?,
-                )
-            }
-            "create" | "edit" | "clone" | "disable" => Ok(persona_mutate(
-                &self.node,
-                &self.agent_did,
-                self.identity.as_ref(),
-                &args,
-                &self.process_ceiling,
-            )
-            .await?),
-            other => Err(SelfConfigError(anyhow!(
-                "unknown action {other:?}; use list|inspect|preview|create|edit|clone|disable"
-            ))),
-        }
-    }
-}
-
 /// Install bundled graph packs through the canonical package and activation
 /// owners. The running principal is always the install owner; callers cannot
 /// select another DID, filesystem distribution, or control-plane endpoint.
-pub struct InstallPackTool {
+struct PackInstaller {
     core: SelfConfigCore,
     node: Arc<EmbeddedNode>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct InstallPackParams {
+struct PackInstallParams {
     /// Bundled graph pack name, such as `code_review`.
     pub package: String,
     /// Optional interpolation overrides declared by the selected pack. Setup's
@@ -1643,8 +998,8 @@ pub struct InstallPackParams {
     pub variables: BTreeMap<String, String>,
 }
 
-impl InstallPackTool {
-    async fn install(&self, args: InstallPackParams) -> anyhow::Result<String> {
+impl PackInstaller {
+    async fn install(&self, args: PackInstallParams) -> anyhow::Result<String> {
         let package_name = args.package.trim();
         anyhow::ensure!(!package_name.is_empty(), "pack name must not be blank");
         anyhow::ensure!(
@@ -1742,41 +1097,6 @@ impl InstallPackTool {
     }
 }
 
-impl Tool for InstallPackTool {
-    const NAME: &'static str = INSTALL_PACK_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = InstallPackParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Install and activate one known bundled graph pack for the current principal. Uses Setup's current inference model and endpoint for pack model/endpoint variables by default. This writes durable package configuration; it cannot install arbitrary paths, URLs, or another principal's pack. Installation does not run the graph.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "package": {
-                        "type": "string",
-                        "description": "Exact bundled graph pack name, for example code_review.",
-                    },
-                    "variables": {
-                        "type": "object",
-                        "description": "Optional pack interpolation overrides keyed by the exact declared environment-style variable name. Omit for the current Setup inference model/endpoint. Use only values the user requested.",
-                        "additionalProperties": {"type": "string"},
-                        "default": {},
-                    },
-                },
-                "required": ["package"],
-                "additionalProperties": false,
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.install(args).await.map_err(SelfConfigError::from)
-    }
-}
-
 fn graph_access(node: &Arc<EmbeddedNode>) -> crate::config_client::ConfigAccess {
     crate::config_client::ConfigAccess::Local(node.clone())
 }
@@ -1786,10 +1106,14 @@ pub struct ListGraphsTool {
     node: Arc<EmbeddedNode>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListGraphsParams {}
+
 impl Tool for ListGraphsTool {
     const NAME: &'static str = LIST_GRAPHS_TOOL_NAME;
     type Error = SelfConfigError;
-    type Args = GetMyConfigParams;
+    type Args = ListGraphsParams;
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -1800,10 +1124,7 @@ impl Tool for ListGraphsTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.preview.is_some() {
-            return Err(anyhow!("list_graphs accepts no parameters").into());
-        }
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
         let owner = escape_graphql_string(self.core.agent_did());
         let access = graph_access(&self.node);
         let response = access
@@ -1952,7 +1273,9 @@ impl Tool for RunGraphTool {
             )
             .await?
             .with_context(|| {
-                format!("package {package:?} is not installed; call install_pack first")
+                format!(
+                    "package {package:?} is not installed; run config pack install {package} first"
+                )
             })?;
             let attribution = plan
                 .package
