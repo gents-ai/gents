@@ -13,6 +13,7 @@ const REPOSITORY_ROOT = resolve(APP_ROOT, "..", "..");
 const DEFAULT_RUNS = 5;
 const DEFAULT_PORT = 1427;
 const VIEWPORT = { width: 390, height: 844 };
+const TYPING_NEXT_PAINT_BUDGET_MS = 50;
 
 const args = process.argv.slice(2);
 const runs = integerArgument("--runs", DEFAULT_RUNS);
@@ -234,6 +235,32 @@ async function runSample(browserInstance, sampleIndex) {
   );
 
   scenarios.push(
+    await measureScenario(
+      page,
+      cdp,
+      "grow_long_transcript_to_typing_size",
+      async () => {
+        const additionalPages = fixture.typingLoadedPages - 2;
+        for (let index = 0; index < additionalPages; index += 1) {
+          const expectedRows = (index + 3) * fixture.transcriptPageSize;
+          await page.locator('[data-testid="transcript-load-older"]').click();
+          await page.waitForFunction(
+            (count) =>
+              document.querySelectorAll(
+                '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
+              ).length === count,
+            expectedRows,
+          );
+        }
+      },
+      async () => ({
+        loadedPages: fixture.typingLoadedPages,
+        expectedLoadedRows: fixture.typingLoadedPages * fixture.transcriptPageSize,
+      }),
+    ),
+  );
+
+  scenarios.push(
     await measureScenario(page, cdp, "sustained_streamed_response", async () => {
       const count = fixture.streamUpdateCount;
       for (let index = 0; index < count; index += 1) {
@@ -259,6 +286,38 @@ async function runSample(browserInstance, sampleIndex) {
         .waitFor();
     }),
   );
+
+  const typingText = Array.from({ length: fixture.typingBurstCharacters }, (_, index) =>
+    String.fromCharCode(97 + (index % 26)),
+  ).join("");
+  scenarios.push(
+    await measureScenario(
+      page,
+      cdp,
+      "typing_burst_streaming_long_transcript",
+      () => typeBurstToNextPaint(page, typingText),
+      () => typingPaintEvidence(page, typingText.length, fixture.typingLoadedPages),
+    ),
+  );
+  await page.getByRole("textbox", { name: "Message" }).fill("");
+  await settleRender(page);
+
+  await page.evaluate(() => {
+    window.__GENTS_MOBILE_PERFORMANCE__.finishStreaming();
+  });
+  await page.getByRole("button", { name: "Stop" }).waitFor({ state: "detached" });
+  await settleRender(page);
+  scenarios.push(
+    await measureScenario(
+      page,
+      cdp,
+      "typing_burst_idle_long_transcript",
+      () => typeBurstToNextPaint(page, typingText),
+      () => typingPaintEvidence(page, typingText.length, fixture.typingLoadedPages),
+    ),
+  );
+  await page.getByRole("textbox", { name: "Message" }).fill("");
+  await settleRender(page);
 
   const navigationHeapSamples = [];
   scenarios.push(
@@ -347,6 +406,48 @@ async function measureScenario(page, cdp, id, action, extra = async () => ({})) 
   };
 }
 
+async function typeBurstToNextPaint(page, text) {
+  await page.evaluate(() => {
+    const samples = [];
+    Object.defineProperty(window, "__GENTS_TYPING_PAINT_SAMPLES__", {
+      value: samples,
+      configurable: true,
+    });
+    const input = document.querySelector('textarea[aria-label="Message"]');
+    if (!(input instanceof HTMLTextAreaElement)) {
+      throw new Error("mobile performance composer is unavailable");
+    }
+    document.addEventListener(
+      "input",
+      (event) => {
+        const eventAt = event.timeStamp;
+        requestAnimationFrame(() => {
+          setTimeout(() => samples.push(performance.now() - eventAt), 0);
+        });
+      },
+      { capture: true },
+    );
+  });
+  const input = page.getByRole("textbox", { name: "Message" });
+  await input.focus();
+  await input.pressSequentially(text, { delay: 1 });
+  await page.waitForFunction(
+    () => (window.__GENTS_TYPING_PAINT_SAMPLES__?.length ?? 0) > 0,
+  );
+}
+
+async function typingPaintEvidence(page, expectedCharacters, loadedPages) {
+  const samples = await page.evaluate(
+    () => window.__GENTS_TYPING_PAINT_SAMPLES__ ?? [],
+  );
+  return {
+    typedCharacters: samples.length,
+    expectedCharacters,
+    loadedPages,
+    eventToNextPaintMs: distribution(samples),
+  };
+}
+
 async function browserMetrics(page, cdp) {
   const response = await cdp.send("Performance.getMetrics");
   const metrics = Object.fromEntries(
@@ -426,6 +527,9 @@ function summarizeDistributions(samples) {
     const transcriptRows = scenarios.map(
       (scenario) => scenario.dom.transcriptTurnBlocks,
     );
+    const eventToNextPaintP95 = scenarios
+      .map((scenario) => scenario.eventToNextPaintMs?.p95)
+      .filter(Number.isFinite);
     const navigationHeapHighWater = scenarios
       .map((scenario) => scenario.navigationHeapHighWaterBytes)
       .filter(Number.isFinite);
@@ -441,6 +545,9 @@ function summarizeDistributions(samples) {
       jsHeapGrowthBytes: distribution(heapGrowth),
       longTaskCount: distribution(longTasks),
       transcriptTurnBlocks: distribution(transcriptRows),
+      ...(eventToNextPaintP95.length
+        ? { eventToNextPaintP95Ms: distribution(eventToNextPaintP95) }
+        : {}),
       ...(navigationHeapHighWater.length
         ? { navigationHeapHighWaterBytes: distribution(navigationHeapHighWater) }
         : {}),
@@ -455,6 +562,9 @@ function evaluateStructuralAssertions(samples) {
   const pageOlder = all("page_older_transcript_rows");
   const sustained = all("sustained_streamed_response");
   const burst = all("update_coalescing_burst");
+  const typingStreaming = all("typing_burst_streaming_long_transcript");
+  const typingIdle = all("typing_burst_idle_long_transcript");
+  const typing = [...typingStreaming, ...typingIdle];
   return [
     {
       id: "large_tip_mounts_one_page",
@@ -475,6 +585,50 @@ function evaluateStructuralAssertions(samples) {
       passed: pageOlder.every(
         (scenario) =>
           scenario.dom.transcriptTurnBlocks <= 80 && scenario.retainedRowStillMounted,
+      ),
+    },
+    {
+      id: "typing_bursts_mount_five_pages",
+      policy: "hard",
+      limit:
+        samples[0].fixture.typingLoadedPages * samples[0].fixture.transcriptPageSize,
+      observedMax: Math.max(
+        ...typing.map((scenario) => scenario.dom.transcriptTurnBlocks),
+      ),
+      passed: typing.every(
+        (scenario) =>
+          scenario.loadedPages === samples[0].fixture.typingLoadedPages &&
+          scenario.dom.transcriptTurnBlocks ===
+            samples[0].fixture.typingLoadedPages *
+              samples[0].fixture.transcriptPageSize,
+      ),
+    },
+    {
+      id: "typing_bursts_capture_every_character",
+      policy: "hard",
+      limit: samples[0].fixture.typingBurstCharacters,
+      observedMax: Math.max(...typing.map((scenario) => scenario.typedCharacters)),
+      passed: typing.every(
+        (scenario) =>
+          scenario.typedCharacters === samples[0].fixture.typingBurstCharacters,
+      ),
+    },
+    {
+      id: "typing_has_no_bridge_calls",
+      policy: "hard",
+      limit: 0,
+      observedMax: Math.max(...typing.map((scenario) => scenario.bridge.callCount)),
+      passed: typing.every((scenario) => scenario.bridge.callCount === 0),
+    },
+    {
+      id: "typing_event_to_next_paint_p95",
+      policy: "responsive-budget",
+      limit: TYPING_NEXT_PAINT_BUDGET_MS,
+      observedMax: Math.max(
+        ...typing.map((scenario) => scenario.eventToNextPaintMs.p95),
+      ),
+      passed: typing.every(
+        (scenario) => scenario.eventToNextPaintMs.p95 <= TYPING_NEXT_PAINT_BUDGET_MS,
       ),
     },
     {
@@ -545,7 +699,7 @@ function evaluateStructuralAssertions(samples) {
 function humanSummary(artifact) {
   const rows = artifact.distributions.map(
     (entry) =>
-      `| ${entry.id} | ${entry.sampleCount} | ${format(entry.elapsedMs.median)} | ${format(entry.elapsedMs.p95)} | ${formatBytes(entry.bridgeResponseBytes.median)} | ${format(entry.renderCommitDurationMs.median)} |`,
+      `| ${entry.id} | ${entry.sampleCount} | ${format(entry.elapsedMs.median)} | ${format(entry.elapsedMs.p95)} | ${entry.eventToNextPaintP95Ms ? format(entry.eventToNextPaintP95Ms.median) : "—"} | ${formatBytes(entry.bridgeResponseBytes.median)} | ${format(entry.renderCommitDurationMs.median)} |`,
   );
   const assertions = artifact.structuralAssertions.map(
     (entry) =>
@@ -561,8 +715,8 @@ function humanSummary(artifact) {
     `Measurement class: ${artifact.measurementClass}.`,
     `Cold browser-process shell proxy (n=1, not a trend): ${format(artifact.coldBrowserProcessSample.scenarios[0].elapsedMs)} ms.`,
     "",
-    "| Scenario | n | median ms | p95 ms | median bridge response | median React commit ms |",
-    "| --- | ---: | ---: | ---: | ---: | ---: |",
+    "| Scenario | n | median ms | p95 ms | median input→paint p95 ms | median bridge response | median React commit ms |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows,
     "",
     "## Deterministic structural assertions",

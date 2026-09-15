@@ -142,6 +142,7 @@ export type MobilePerformanceHarnessController = {
   reset(): void;
   snapshot(): MobilePerformanceHarnessSnapshot;
   recordCommit(commit: MobilePerformanceCommit): void;
+  finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
 };
@@ -168,6 +169,8 @@ export const MOBILE_PERFORMANCE_FIXTURE = {
   shortSessionTimelineItems: 1,
   largeSessionTimelineItems: 600,
   transcriptPageSize: 40,
+  typingBurstCharacters: 160,
+  typingLoadedPages: 5,
   streamUpdateCount: 50,
   repeatedNavigationCount: 10,
 } as const;
@@ -2412,6 +2415,36 @@ export function createDesktopUiHarness(
           },
           recordCommit(commit) {
             commits.push(commit);
+          },
+          finishStreaming() {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const timelineItems = session.timelineItems.map((item, index) =>
+              item.kind === "liveAssistant" && item.itemKey === "large-live"
+                ? {
+                    kind: "assistantMessage" as const,
+                    itemKey: item.itemKey,
+                    sequence: index,
+                    content: item.content,
+                    reasoning: item.reasoning,
+                    timestamp: STARTED_AT,
+                  }
+                : item,
+            );
+            sessions.set("session-large", {
+              ...session,
+              status: "completed",
+              turnState: "completed",
+              timelineItems,
+              latestResponse: session.latestResponse
+                ? { ...session.latestResponse, status: "completed" }
+                : null,
+              activeResponseOverlay: null,
+            });
+            syncSessions();
+            notify("store");
           },
           streamUpdate() {
             const sequence = appendStreamChunk();
