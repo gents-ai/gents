@@ -154,6 +154,19 @@ test.describe("kit shell", () => {
     await expect(confirm).toHaveCount(0);
   });
 
+  test("seeded skills satisfy the canonical editor shape", async ({ page }) => {
+    await gotoHarness(page);
+    await openConfig(page);
+    await openConfigSection(page, /^Skills\b/);
+    await page.getByRole("link", { name: /Fleet summary/ }).click();
+
+    await expect(page.getByRole("textbox", { name: "Tool dependencies" })).toHaveValue(
+      "mcp-observability.fleet_status",
+    );
+    await expect(page.getByRole("textbox", { name: "Tags" })).toBeVisible();
+    await expect(page.getByTestId("error-banner")).toHaveCount(0);
+  });
+
   test("session context details have an explicit close control", async ({ page }) => {
     await gotoHarness(page);
     await page
