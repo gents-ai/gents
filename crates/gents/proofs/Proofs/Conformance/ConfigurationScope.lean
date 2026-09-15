@@ -1,4 +1,5 @@
 import Proofs.Configuration
+import Proofs.ConfigDefaults
 import Lean
 
 namespace Conformance.ConfigurationScope
@@ -30,6 +31,21 @@ private def caseJson (owner : String) : Json := Json.mkObj
       [("instructions", toJson s.context.instructions), ("model", toJson s.inference.model),
        ("backend_id", toJson s.inference.backendId)]) |>.getD Json.null)]
 
+private def contextBoundsCases : List (Option Int × Option Int × Option Int) := [
+  (some 872000, some 272000, some 872000),
+  (some 872001, some 272000, some 872000),
+  (some 872001, some 272000, none),
+  (some 872001, some 272000, some 0),
+  (some 872001, some 272000, some 128000),
+  (none, some 272000, some 872000),
+  (some 872001, none, some 872000),
+  (some 872001, some (-1), some 872000)]
+
+private def contextBoundsJson : Json := toJson (contextBoundsCases.map fun (selected, modelDefault, maximum) =>
+  Json.mkObj [("selected", toJson selected), ("default", toJson modelDefault),
+    ("maximum", toJson maximum),
+    ("allowed", toJson (ConfigDefaults.contextOverrideAllowed selected modelDefault maximum))])
+
 /-- Export the actual shared-label input documents as well as computed results. -/
 def casesJson : String := (Json.mkObj
   [("documents", toJson (["alice", "bob"].map fun owner => Json.mkObj
@@ -38,7 +54,8 @@ def casesJson : String := (Json.mkObj
        ("profile_id", toJson "profile"), ("backend_id", toJson "backend"),
        ("instructions", toJson owner), ("model", toJson (owner ++ "-model")),
        ("enabled", toJson true)])),
-   ("cases", toJson (["alice", "bob", "absent"].map caseJson))]).compress
+   ("cases", toJson (["alice", "bob", "absent"].map caseJson)),
+   ("context_bounds", contextBoundsJson)]).compress
 
 /-- These scope fixtures advertise one model with unknown capabilities. Backend
 owner comes from the containing document, independently of credential scope. -/

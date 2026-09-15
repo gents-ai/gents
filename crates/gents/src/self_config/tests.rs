@@ -11,6 +11,9 @@ fn config(categories: &[&str]) -> SelfConfigToolConfig {
         categories: categories.iter().map(|c| c.to_string()).collect(),
         no_lockout: false,
         dry_run: false,
+        enable_pack_install: false,
+        enable_graph_tools: false,
+        process_ceiling: Default::default(),
     }
 }
 
@@ -30,6 +33,20 @@ fn tool_names_follow_enabled_categories() {
 
     let disabled = SelfConfigToolConfig::default();
     assert!(self_config_tool_names(&disabled).is_empty());
+}
+
+#[test]
+fn pack_install_requires_its_separate_opt_in() {
+    let without_install = config(&["behavior"]);
+    assert!(!self_config_tool_names(&without_install)
+        .iter()
+        .any(|name| name == INSTALL_PACK_TOOL_NAME));
+
+    let mut with_install = without_install;
+    with_install.enable_pack_install = true;
+    assert!(self_config_tool_names(&with_install)
+        .iter()
+        .any(|name| name == INSTALL_PACK_TOOL_NAME));
 }
 
 #[test]
@@ -82,7 +99,271 @@ async fn build_registers_gated_family() {
     assert!(!tools.is_empty(), "a gated config must register tools");
 }
 
-// -- configure_persona (#Task 5) --
+#[tokio::test]
+async fn pack_install_uses_current_principal_and_inference_chain() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("pack-install");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+
+    let mut tool_config = config(&[]);
+    tool_config.behavior_id = "setup".to_string();
+    tool_config.enable_pack_install = true;
+    tool_config.enable_graph_tools = true;
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity),
+        &tool_config,
+    );
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == INSTALL_PACK_TOOL_NAME)
+        .expect("install_pack registered");
+    for name in [
+        LIST_GRAPHS_TOOL_NAME,
+        RUN_GRAPH_TOOL_NAME,
+        GET_GRAPH_RUN_TOOL_NAME,
+        GET_GRAPH_RESULT_TOOL_NAME,
+        CANCEL_GRAPH_RUN_TOOL_NAME,
+    ] {
+        assert!(
+            tools.iter().any(|tool| tool.name() == name),
+            "{name} must share the explicit graph authority gate"
+        );
+    }
+    let output = tool
+        .call(serde_json::json!({"package": "code_review"}).to_string())
+        .await
+        .expect("bundled pack installs");
+    let output: serde_json::Value = serde_json::from_str(&output).expect("JSON receipt");
+    assert_eq!(output["install"]["package_name"], "code_review");
+    assert_eq!(output["activation"]["graph_id"], "code-review");
+    assert_eq!(
+        output["activation"]["active_digest"],
+        output["install"]["revision_digest"]
+    );
+
+    let response = node
+        .execute(&format!(
+            "{{ GraphDefinition(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{graph_id agent_did active_revision_digest}} }}",
+            crate::graphql::escape_graphql_string(&agent_did)
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let definitions = response.data.unwrap()["GraphDefinition"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0]["agent_did"], agent_did);
+    assert_eq!(definitions[0]["graph_id"], "code-review");
+    assert_eq!(
+        definitions[0]["active_revision_digest"],
+        output["install"]["revision_digest"]
+    );
+    let list = tools
+        .iter()
+        .find(|tool| tool.name() == LIST_GRAPHS_TOOL_NAME)
+        .unwrap()
+        .call("{}".to_owned())
+        .await
+        .expect("installed graph is discoverable on the same node");
+    let list: Value = serde_json::from_str(&list).unwrap();
+    assert_eq!(list["node_bound"], true);
+    assert_eq!(list["agent_did"], agent_did);
+    assert_eq!(list["graphs"][0]["definition"]["graph_id"], "code-review");
+    assert_eq!(
+        list["graphs"][0]["active_plan"]["digest"],
+        output["install"]["revision_digest"]
+    );
+    let run_error = tools
+        .iter()
+        .find(|tool| tool.name() == RUN_GRAPH_TOOL_NAME)
+        .unwrap()
+        .call(json!({"package": "code_review"}).to_string())
+        .await
+        .expect_err("code review cannot bypass this behavior's disabled file authority");
+    assert!(
+        run_error
+            .to_string()
+            .contains("requires effective read authority"),
+        "{run_error:#}"
+    );
+    let runs = node
+        .execute(&format!(
+            r#"{{ GraphRun(filter: {{owner_did: {{_eq: "{}"}}}}) {{run_id}} }}"#,
+            crate::graphql::escape_graphql_string(&agent_did)
+        ))
+        .await;
+    assert!(!runs.has_errors(), "{:?}", runs.errors);
+    assert!(runs.data.unwrap()["GraphRun"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("graph-tools");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let repository = tempfile::tempdir().expect("repository");
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--quiet"]);
+    git(&["config", "user.email", "test@example.invalid"]);
+    git(&["config", "user.name", "Graph Tool Test"]);
+    std::fs::write(repository.path().join("review.txt"), "before\n").unwrap();
+    git(&["add", "review.txt"]);
+    git(&["commit", "--quiet", "-m", "base"]);
+    std::fs::write(repository.path().join("review.txt"), "after\n").unwrap();
+    git(&["add", "review.txt"]);
+    git(&["commit", "--quiet", "-m", "head"]);
+
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "setup".to_owned();
+    tool_config.enable_pack_install = true;
+    tool_config.enable_graph_tools = true;
+    tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
+        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tool_surface::BashMode::Off,
+        root: Some(repository.path().to_owned()),
+    };
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &tool_config,
+    );
+    let call = |name: &str, args: Value| {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        tool.call(args.to_string())
+    };
+
+    call(
+        CONFIGURE_TOOLS_TOOL_NAME,
+        json!({"patch": {"host": {
+            "root": repository.path().to_string_lossy(),
+            "files": {"mode": "ReadOnly"}
+        }}}),
+    )
+    .await
+    .expect("current behavior receives explicit read authority");
+    call(INSTALL_PACK_TOOL_NAME, json!({"package": "code_review"}))
+        .await
+        .expect("code-review pack installs");
+    // Running an admitted pack needs neither installation nor self-config.
+    tool_config.enabled = false;
+    tool_config.enable_pack_install = false;
+    let tools = build_self_config_tools(node, agent_did.clone(), Some(identity), &tool_config);
+    assert!(!tools
+        .iter()
+        .any(|t| t.name() == INSTALL_PACK_TOOL_NAME || t.name() == GET_MY_CONFIG_TOOL_NAME));
+    let call = |name: &str, args: Value| {
+        tools
+            .iter()
+            .find(|t| t.name() == name)
+            .expect("native graph tool")
+            .call(args.to_string())
+    };
+    let started = call(
+        RUN_GRAPH_TOOL_NAME,
+        json!({
+            "package": "code_review",
+            "repository": repository.path().to_string_lossy(),
+            "base": "HEAD^",
+            "head": "HEAD",
+            "focus": "Review the changed text.",
+        }),
+    )
+    .await
+    .expect("node-bound graph starts");
+    let started: Value = serde_json::from_str(&started).unwrap();
+    assert_eq!(started["node_bound"], true);
+    assert_eq!(started["principal"], agent_did);
+    assert_eq!(started["observed"]["status"], "running");
+    let run_id = started["receipt"]["run_id"].as_str().unwrap();
+
+    let observed = call(GET_GRAPH_RUN_TOOL_NAME, json!({"run_id": run_id}))
+        .await
+        .expect("same-node status is readable");
+    let observed: Value = serde_json::from_str(&observed).unwrap();
+    assert_eq!(observed["run_id"], run_id);
+    assert_eq!(observed["owner_did"], agent_did);
+    assert_eq!(observed["status"], "running");
+
+    let not_yet_a_result = call(GET_GRAPH_RESULT_TOOL_NAME, json!({"run_id": run_id}))
+        .await
+        .expect("nonterminal result view remains inspectable");
+    let not_yet_a_result: Value = serde_json::from_str(&not_yet_a_result).unwrap();
+    assert_eq!(not_yet_a_result["status"], "running");
+    assert_eq!(not_yet_a_result["result_contract_satisfied"], false);
+
+    let cancelled = call(
+        CANCEL_GRAPH_RUN_TOOL_NAME,
+        json!({"run_id": run_id, "reason": "test cleanup"}),
+    )
+    .await
+    .expect("same-node cancellation is persisted");
+    let cancelled: Value = serde_json::from_str(&cancelled).unwrap();
+    assert_eq!(cancelled["run_id"], run_id);
+    assert_eq!(cancelled["cancellation_requested_by"], agent_did);
+    assert_eq!(cancelled["cancellation_reason"], "test cleanup");
+    assert_ne!(cancelled["status"], "succeeded");
+}
+
+#[tokio::test]
+async fn configure_tools_cannot_self_grant_pack_install() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("pack-self-grant");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "setup".to_string();
+    let tools = build_self_config_tools(node, agent_did, Some(identity), &tool_config);
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIGURE_TOOLS_TOOL_NAME)
+        .expect("configure_tools registered");
+    let error = tool
+        .call(
+            serde_json::json!({
+                "patch": {
+                    "self_config": {
+                        "enable_self_config": true,
+                        "enable_pack_install": true
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .await
+        .expect_err("pack install cannot be self-granted");
+    assert!(
+        error.to_string().contains("cannot be self-granted"),
+        "{error:#}"
+    );
+}
+
+// -- configure_behaviors (#Task 5) --
 
 async fn build_persona_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -111,8 +392,8 @@ async fn call_persona_tool(
 ) -> Result<String, String> {
     let tool = tools
         .iter()
-        .find(|tool| tool.name() == CONFIGURE_PERSONA_TOOL_NAME)
-        .expect("configure_persona registered");
+        .find(|tool| tool.name() == CONFIGURE_BEHAVIORS_TOOL_NAME)
+        .expect("configure_behaviors registered");
     tool.call(args.to_string())
         .await
         .map_err(|error| format!("{error:#}"))
@@ -133,8 +414,8 @@ async fn persona_category_gates_the_tool() {
     assert!(
         without_persona
             .iter()
-            .all(|tool| tool.name() != CONFIGURE_PERSONA_TOOL_NAME),
-        "configure_persona must not register without the persona category"
+            .all(|tool| tool.name() != CONFIGURE_BEHAVIORS_TOOL_NAME),
+        "configure_behaviors must not register without the persona category"
     );
 
     let with_persona =
@@ -142,8 +423,8 @@ async fn persona_category_gates_the_tool() {
     assert!(
         with_persona
             .iter()
-            .any(|tool| tool.name() == CONFIGURE_PERSONA_TOOL_NAME),
-        "configure_persona must register when the persona category is enabled"
+            .any(|tool| tool.name() == CONFIGURE_BEHAVIORS_TOOL_NAME),
+        "configure_behaviors must register when the persona category is enabled"
     );
 }
 
@@ -165,6 +446,166 @@ async fn persona_unknown_action_errors_cleanly() {
         error.contains("unknown action"),
         "error should name the bad action: {error}"
     );
+}
+
+#[tokio::test]
+async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_foreign_targets() {
+    // Lean siblingToolsAllowed: real transaction observations.
+    let node = build_persona_node().await;
+    let identity = persona_identity("sibling-tools");
+    let owner = identity.did().to_string();
+    for behavior in ["working", "other"] {
+        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    }
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "working".into()).unwrap();
+    core.apply(tools_request(
+        &core,
+        vec![
+            (
+                "integrations".into(),
+                Some(json!({"lsp":{"timeout_secs":25}})),
+            ),
+            ("host".into(), Some(json!({"files":{"mode":"ReadOnly"}}))),
+        ],
+        false,
+    ))
+    .await
+    .unwrap();
+    core.select_sibling_tools(None, Some(true), None)
+        .await
+        .unwrap();
+    core.select_sibling_tools(None, Some(true), None)
+        .await
+        .unwrap();
+    let inspect = core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        inspect["documents"]["Tools"]["integrations"]["lsp"]["timeout_secs"],
+        25
+    );
+    assert_eq!(
+        inspect["documents"]["Tools"]["host"]["files"]["mode"],
+        "ReadOnly"
+    );
+    assert!(inspect["documents"]["Tools"]["self_config"].is_null());
+    core.select_sibling_tools(
+        None,
+        None,
+        Some(crate::toolset::CommandNetworkMode::Disabled),
+    )
+    .await
+    .unwrap();
+    // An omitted network selection preserves the canonical narrowing across
+    // a later focused tool update.
+    core.select_sibling_tools(Some(false), None, None)
+        .await
+        .unwrap();
+    let inspect = core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        inspect["documents"]["Tools"]["host"]["bash"]["network_mode"],
+        "disabled"
+    );
+    assert_eq!(
+        inspect["runtime_effective"]["effective"]["network_mode"],
+        "disabled"
+    );
+    assert!(
+        inspect["runtime_effective"]["effective"]["network_enforcement"]
+            .as_str()
+            .is_some_and(|note| note.contains("execution"))
+    );
+    assert!(core
+        .select_sibling_tools(
+            None,
+            None,
+            Some(crate::toolset::CommandNetworkMode::Enabled),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("only narrow"));
+    core.select_sibling_tools(Some(false), Some(false), None)
+        .await
+        .unwrap();
+    let inspect = core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        inspect["tool_grants"]["configured"],
+        json!({"lsp":false,"native_graph_tools":false,"network_mode":"disabled"})
+    );
+    core.apply(behavior_request(
+        &core,
+        vec![(
+            "tags".into(),
+            Some(json!([
+                crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+            ])),
+        )],
+    ))
+    .await
+    .unwrap();
+    assert!(core
+        .select_sibling_tools(None, Some(true), None)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("protected"));
+    core.apply(behavior_request(&core, vec![("tags".into(), None)]))
+        .await
+        .unwrap();
+    let other = SelfConfigCore::new(node.clone(), owner.clone(), "other".into()).unwrap();
+    other
+        .apply(anchored_request(
+            SelfConfigTarget::AgentContext,
+            "context_id",
+            vec![("tools_id".into(), Some(json!("working:tools")))],
+        ))
+        .await
+        .unwrap();
+    assert!(core
+        .select_sibling_tools(None, Some(true), None)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("unshared"));
+    other
+        .apply(anchored_request(
+            SelfConfigTarget::AgentContext,
+            "context_id",
+            vec![("tools_id".into(), Some(json!("other:tools")))],
+        ))
+        .await
+        .unwrap();
+    other
+        .apply(behavior_request(
+            &other,
+            vec![("context_id".into(), Some(json!("working:context")))],
+        ))
+        .await
+        .unwrap();
+    assert!(core
+        .select_sibling_tools(None, Some(true), None)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("unshared"));
+    let foreign = SelfConfigCore::new(
+        node,
+        persona_identity("foreign").did().into(),
+        "working".into(),
+    )
+    .unwrap();
+    assert!(foreign
+        .select_sibling_tools(None, Some(true), None)
+        .await
+        .is_err());
 }
 
 #[derive(serde::Deserialize)]
@@ -211,7 +652,7 @@ async fn load_persona_rows_for_test(
 }
 
 /// Owns the tool as `Box<dyn ToolDyn>` so it can be moved into a spawned
-/// task: `configure_persona` polls for up to 5s internally, and this test
+/// task: `configure_behaviors` polls for up to 5s internally, and this test
 /// must run a manual reconciler tick concurrently — NOT a background task —
 /// while that poll is in flight, so the tool's own call observes the
 /// converged status instead of timing out at "pending".
@@ -220,8 +661,8 @@ fn take_persona_tool(
 ) -> Box<dyn crate::llm::tool::ToolDyn> {
     tools
         .into_iter()
-        .find(|tool| tool.name() == CONFIGURE_PERSONA_TOOL_NAME)
-        .expect("configure_persona registered")
+        .find(|tool| tool.name() == CONFIGURE_BEHAVIORS_TOOL_NAME)
+        .expect("configure_behaviors registered")
 }
 
 #[tokio::test]
@@ -239,15 +680,64 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         Some(identity.clone()),
         &config(&["persona"]),
     );
+    let rejected_preview = call_persona_tool(
+        &tools,
+        json!({
+            "action": "preview",
+            "operation": "create",
+            "display_name": "Research Assistant",
+            "preset": "write",
+            "profile_id": profile_id,
+        }),
+    )
+    .await
+    .expect("invalid preview is an inspectable no-write result");
+    let rejected_preview: Value = serde_json::from_str(&rejected_preview).unwrap();
+    assert_eq!(rejected_preview["committed"], false);
+    assert_eq!(rejected_preview["admitted"], false);
+    assert!(rejected_preview["rejection"]
+        .as_str()
+        .unwrap()
+        .contains("system_prompt is required"));
+    let admitted_preview = call_persona_tool(
+        &tools,
+        json!({
+            "action": "preview",
+            "operation": "create",
+            "display_name": "Research Assistant",
+            "description": "Researches a focused question",
+            "system_prompt": "Research the question and cite evidence.",
+            "preset": "write",
+            "profile_id": profile_id,
+            "make_default": true,
+        }),
+    )
+    .await
+    .expect("complete preview succeeds");
+    let admitted_preview: Value = serde_json::from_str(&admitted_preview).unwrap();
+    assert_eq!(admitted_preview["committed"], false);
+    assert_eq!(admitted_preview["admitted"], true);
+    assert!(admitted_preview.get("preset_requested").is_some());
+    assert!(admitted_preview.get("preset_effective").is_none());
+    assert!(admitted_preview["note"]
+        .as_str()
+        .unwrap()
+        .contains("does not verify materialization"));
+    assert!(load_persona_rows_for_test(&node, &agent_did)
+        .await
+        .is_empty());
     let tool = take_persona_tool(tools);
 
     let args = serde_json::json!({
         "action": "create",
-        "persona_name": "Research Assistant",
+        "display_name": "Research Assistant",
+        "description": "Researches a focused question",
+        "system_prompt": "Research the question and cite evidence.",
         "preset": "write",
         // Short id — profile IDs are preserved exactly as authored; the
         // request row carries this value verbatim to admission.
         "profile_id": profile_id,
+        "make_default": true,
     })
     .to_string();
 
@@ -273,12 +763,29 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    let request_key = request_key.expect("configure_persona authors a PersonaConfigRequest row");
+    let request_key = request_key.expect("configure_behaviors authors a PersonaConfigRequest row");
+    // Existing home/queued command compatibility: retain schema genesis and
+    // leave the existing signed pending row consumable after ensure.
+    let before_schema = node
+        .get_collection("PersonaConfigRequest")
+        .unwrap()
+        .unwrap()
+        .version_id;
+    crate::ensure_runtime_schemas(&node)
+        .await
+        .expect("existing schema remains valid");
+    assert_eq!(
+        node.get_collection("PersonaConfigRequest")
+            .unwrap()
+            .unwrap()
+            .version_id,
+        before_schema
+    );
 
     let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
         node.clone(),
         None,
-        identity,
+        identity.clone(),
     );
     let outcome = crate::agent::p2p_reconcile::reconcile_persona_tick(&store, &node)
         .await
@@ -300,16 +807,131 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         created[0].display_name,
         Some("Research Assistant".to_string())
     );
+    let context_id = crate::graphql::escape_graphql_string(
+        created[0]
+            .context_id
+            .as_deref()
+            .expect("created behavior has context"),
+    );
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentContext(filter: {{ context_id: {{ _eq: "{context_id}" }} }}) {{ description system_prompt }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query failed: {:?}",
+        response.errors
+    );
+    let prompt = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentContext"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("system_prompt"))
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(prompt, Some("Research the question and cite evidence."));
+    let description = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentContext"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("description"))
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(description, Some("Researches a focused question"));
 
     let output = call_handle
         .await
         .expect("tool call task joins")
-        .expect("configure_persona call succeeds");
+        .expect("configure_behaviors call succeeds");
     assert!(
         output.contains("\"status\": \"applied\""),
         "the tool's own poll must observe the manual tick's outcome: {output}"
     );
     assert!(output.contains(&request_key), "{output}");
+    let output: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(
+        output["materialized_ids"]["behavior_id"],
+        created[0].behavior_id
+    );
+    assert_eq!(
+        output["effective"]["effective_config"]["context"]["system_prompt"],
+        "Research the question and cite evidence."
+    );
+    assert_eq!(output["activation"]["durable"], "confirmed");
+    assert_eq!(
+        output["effective"]["effective_config"]["tool_grants"]["configured"],
+        json!({"lsp": false, "native_graph_tools": false, "network_mode": "inherit"})
+    );
+    let grant_tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &config(&["persona"]),
+    );
+    let selected = call_persona_tool(
+        &grant_tools,
+        json!({
+            "action": "configure_tools", "behavior_id": created[0].behavior_id,
+            "enable_lsp": true, "enable_graph_tools": true,
+            "network_mode": "disabled",
+        }),
+    )
+    .await
+    .expect("explicit second operation grants sibling tools");
+    let selected: Value = serde_json::from_str(&selected).unwrap();
+    assert_eq!(
+        selected["effective_config"]["tool_grants"]["configured"],
+        json!({"lsp": true, "native_graph_tools": true, "network_mode": "disabled"})
+    );
+    assert_eq!(
+        selected["effective_config"]["runtime_effective"]["effective"]["network_mode"],
+        "disabled"
+    );
+
+    let snapshot = crate::agent::resolve_document_runtime_snapshot(
+        node.as_ref(),
+        &crate::agent::DocumentResolveContext {
+            identity,
+            tool_ceiling: crate::tool_surface::ToolCeiling::readonly(),
+            backend_health: Default::default(),
+        },
+    )
+    .await
+    .expect("restart-style runtime resolution accepts the materialized behavior");
+    assert_eq!(snapshot.default_behavior_id, created[0].behavior_id);
+    let runtime_behavior = snapshot
+        .behaviors
+        .get(&created[0].behavior_id)
+        .unwrap_or_else(|| {
+            panic!(
+                "new default is runnable after re-resolution: {:?}",
+                snapshot.unavailable_behaviors
+            )
+        });
+    assert_eq!(
+        runtime_behavior.system_prompt,
+        "Research the question and cite evidence."
+    );
+    let names = runtime_behavior
+        .tools
+        .resolve(node.as_ref(), &agent_did)
+        .await
+        .expect("new behavior tool surface resolves after restart")
+        .tool_names();
+    assert!(names.iter().any(|name| name == "lsp"), "{names:?}");
+    assert!(
+        names.iter().any(|name| name == RUN_GRAPH_TOOL_NAME),
+        "{names:?}"
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|name| name == INSTALL_PACK_TOOL_NAME || name == GET_MY_CONFIG_TOOL_NAME),
+        "{names:?}"
+    );
 }
 
 #[tokio::test]
@@ -330,7 +952,7 @@ async fn persona_clone_accepts_sibling_behavior_id() {
     let tool = take_persona_tool(tools);
     let args = serde_json::json!({
         "action": "clone",
-        "persona_name": "Cloned Persona",
+        "display_name": "Cloned Persona",
         // Short ids are preserved exactly as authored; the request row
         // carries `clone_from` verbatim to admission.
         "clone_from": "sibling-behavior",
@@ -355,7 +977,7 @@ async fn persona_clone_accepts_sibling_behavior_id() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    let request_key = request_key.expect("configure_persona authors a PersonaConfigRequest row");
+    let request_key = request_key.expect("configure_behaviors authors a PersonaConfigRequest row");
 
     let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
         node.clone(),
@@ -373,7 +995,7 @@ async fn persona_clone_accepts_sibling_behavior_id() {
     let output = call_handle
         .await
         .expect("tool call task joins")
-        .expect("configure_persona clone call succeeds");
+        .expect("configure_behaviors clone call succeeds");
     assert!(output.contains("\"status\": \"applied\""), "{output}");
 }
 
@@ -393,7 +1015,7 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         Some(json!({"enable_self_config":true})),
     )];
     let preview = core
-        .preview(tools_request(&core, patch.clone()))
+        .preview(tools_request(&core, patch.clone(), false))
         .await
         .unwrap();
     assert!(!preview.committed);
@@ -402,10 +1024,16 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .await
         .unwrap();
     assert!(read["documents"]["Tools"]["self_config"].is_null());
-    core.apply(tools_request(&core, patch)).await.unwrap();
+    core.apply(tools_request(&core, patch, false))
+        .await
+        .unwrap();
     let guarded = core.clone().with_no_lockout(true);
     assert!(guarded
-        .apply(tools_request(&guarded, vec![("self_config".into(), None)]))
+        .apply(tools_request(
+            &guarded,
+            vec![("self_config".into(), None)],
+            false,
+        ))
         .await
         .is_err());
     assert!(guarded
@@ -426,7 +1054,8 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
     assert!(core
         .preview(tools_request(
             &core,
-            vec![("host".into(), Some(json!({"unexpected":true})))]
+            vec![("host".into(), Some(json!({"unexpected":true})))],
+            false,
         ))
         .await
         .is_err());

@@ -6,6 +6,7 @@ use crate::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
+use std::path::Path;
 
 impl SelfConfigCore {
     pub(crate) async fn read_effective_config(
@@ -61,6 +62,63 @@ impl SelfConfigCore {
                 }
             }
         }
+        let tools = documents.get(SelfConfigTarget::Tools.collection_name());
+        let canonical_tools = tools
+            .cloned()
+            .map(serde_json::from_value::<crate::document_config::Tools>)
+            .transpose()?;
+        let selection = canonical_tools
+            .as_ref()
+            .map(crate::tool_surface::ResolvedToolSelection::from_document)
+            .transpose()?;
+        let lsp_selected = selection.as_ref().is_some_and(|s| s.enable_lsp);
+        let graph_selected = selection.as_ref().is_some_and(|s| s.enable_graph_tools);
+        let configured_network_mode = canonical_tools
+            .as_ref()
+            .and_then(|tools| tools.host.as_ref())
+            .and_then(|host| host.bash.as_ref())
+            .and_then(|bash| bash.network_mode)
+            .unwrap_or(crate::toolset::CommandNetworkMode::Inherit);
+        let effective_network_mode = selection
+            .as_ref()
+            .and_then(|selection| selection.command_policy.as_ref())
+            .map(|policy| policy.network_mode)
+            .unwrap_or(configured_network_mode);
+        let network_enforcement = selection
+            .as_ref()
+            .and_then(|selection| selection.command_policy.as_ref())
+            .map(crate::toolset::CommandExecutionPolicy::network_enforcement_disclosure)
+            .unwrap_or("no host command policy is active");
+        let requested_file_mode = tools
+            .and_then(|tools| tools.pointer("/host/files/mode"))
+            .and_then(Value::as_str)
+            .map(crate::tool_surface::FileToolMode::parse)
+            .transpose()?
+            .unwrap_or_default();
+        let requested_bash_mode = tools
+            .and_then(|tools| tools.pointer("/host/bash/mode"))
+            .and_then(Value::as_str)
+            .map(crate::tool_surface::BashMode::parse)
+            .transpose()?
+            .unwrap_or_default();
+        let configured_root = tools
+            .and_then(|tools| tools.pointer("/host/root"))
+            .and_then(Value::as_str)
+            .filter(|root| !root.trim().is_empty());
+        let process_ceiling = self.process_ceiling();
+        let effective_file_mode = requested_file_mode.meet(process_ceiling.file_mode);
+        let effective_bash_mode = requested_bash_mode.meet(process_ceiling.bash_mode);
+        let effective_root = if effective_file_mode != crate::tool_surface::FileToolMode::Off
+            || effective_bash_mode != crate::tool_surface::BashMode::Off
+        {
+            crate::tool_surface::resolve_effective_tool_root(
+                self.behavior_id(),
+                configured_root.map(Path::new),
+                process_ceiling.root.as_deref(),
+            )?
+        } else {
+            None
+        };
         let mut skills = Vec::new();
         if let Some(ids) = anchor.context.get("skill_ids").and_then(Value::as_array) {
             for id in ids {
@@ -156,6 +214,29 @@ impl SelfConfigCore {
             "behavior": anchor.doc, "context": anchor.context, "inference_profile": anchor.profile,
             "documents": documents, "skills": skills, "automation": automation,
             "self_config": {"categories": categories, "no_lockout": no_lockout, "dry_run": dry_run},
+            "tool_grants": {
+                "configured": { "lsp": lsp_selected, "native_graph_tools": graph_selected, "network_mode": configured_network_mode },
+                "confirmed_by": "canonical Tools selection decoded from durable configuration",
+                "activation": "Applies after reconciliation to later dispatched requests. Tool registration and successful execution must be tested in the working behavior.",
+                "lsp_readiness": "Selection does not prove a language server is installed, started, or indexed.",
+                "graph_readiness": "Selection does not install a pack or grant graph caller admission. Use native list_graphs/run_graph on this node; do not adopt another runtime home or rebuild a CLI.",
+            },
+            "runtime_effective": {
+                "process_ceiling": process_ceiling,
+                "behavior_narrowing": {
+                    "requested_file_mode": requested_file_mode,
+                    "requested_bash_mode": requested_bash_mode,
+                    "configured_root": configured_root,
+                },
+                "effective": {
+                    "file_mode": effective_file_mode,
+                    "bash_mode": effective_bash_mode,
+                    "root": effective_root,
+                    "network_mode": effective_network_mode,
+                    "network_enforcement": network_enforcement,
+                },
+                "confirmed_by": "resolved host policy; sandbox availability and command enforcement are checked at execution time",
+            },
             "effect_timing": EFFECT_TIMING_NOTE,
         }))
     }

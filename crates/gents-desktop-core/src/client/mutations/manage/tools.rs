@@ -1,13 +1,14 @@
 use anyhow::Result;
+#[cfg(test)]
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
-use gents::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+#[cfg(test)]
+use gents::config_client::read_desired_state_record_in_txn;
+use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::document_config::ToolServiceRegistry;
 use gents::Tools;
 
+#[cfg(test)]
 pub async fn upsert_tools(node: &EmbeddedNode, document: &Tools) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -15,16 +16,20 @@ pub async fn upsert_tools(node: &EmbeddedNode, document: &Tools) -> Result<()> {
         add: value.clone(),
         update: value,
     }])?;
-    ConfigAccess::transact_local(node, None, "desktop.tools.save", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(())
-        })
-    })
-    .await
+    super::apply_plan_local(node, "desktop.tools.save", plan).await
 }
 
+pub async fn upsert_tools_on(access: &ConfigAccess, document: &Tools) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Tools,
+        add: value.clone(),
+        update: value,
+    }])?;
+    super::apply_plan(access, "desktop.tools.save", plan).await
+}
+
+#[cfg(test)]
 pub async fn upsert_tool_service_registry(
     node: &EmbeddedNode,
     document: &ToolServiceRegistry,
@@ -35,60 +40,73 @@ pub async fn upsert_tool_service_registry(
         add: value.clone(),
         update: value,
     }])?;
-    ConfigAccess::transact_local(node, None, "desktop.tool_service.save", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(())
-        })
-    })
-    .await
+    super::apply_plan_local(node, "desktop.tool_service.save", plan).await
 }
 
+pub async fn upsert_tool_service_registry_on(
+    access: &ConfigAccess,
+    document: &ToolServiceRegistry,
+) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::ToolServiceRegistry,
+        add: value.clone(),
+        update: value,
+    }])?;
+    super::apply_plan(access, "desktop.tool_service.save", plan).await
+}
+
+#[cfg(test)]
 pub async fn delete_tools(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
-    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+    super::delete_scoped_document_local(
+        node,
+        "desktop.tools.delete",
         Collection::Tools,
-        agent_did.to_owned(),
-        id.to_owned(),
-    )])?;
-    ConfigAccess::transact_local(node, None, "desktop.tools.delete", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            let existed = read_desired_state_record_in_txn(txn, Collection::Tools, agent_did, id)
-                .await?
-                .is_some();
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(usize::from(existed))
-        })
-    })
+        agent_did,
+        id,
+    )
     .await
 }
 
+pub async fn delete_tools_on(access: &ConfigAccess, agent_did: &str, id: &str) -> Result<usize> {
+    super::delete_scoped_document(
+        access,
+        "desktop.tools.delete",
+        Collection::Tools,
+        agent_did,
+        id,
+    )
+    .await
+}
+
+#[cfg(test)]
 pub async fn delete_tool_service_registry(
     node: &EmbeddedNode,
     agent_did: &str,
     id: &str,
 ) -> Result<usize> {
-    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+    super::delete_scoped_document_local(
+        node,
+        "desktop.tool_service.delete",
         Collection::ToolServiceRegistry,
-        agent_did.to_owned(),
-        id.to_owned(),
-    )])?;
-    ConfigAccess::transact_local(node, None, "desktop.tool_service.delete", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            let existed = read_desired_state_record_in_txn(
-                txn,
-                Collection::ToolServiceRegistry,
-                agent_did,
-                id,
-            )
-            .await?
-            .is_some();
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(usize::from(existed))
-        })
-    })
+        agent_did,
+        id,
+    )
+    .await
+}
+
+pub async fn delete_tool_service_registry_on(
+    access: &ConfigAccess,
+    agent_did: &str,
+    id: &str,
+) -> Result<usize> {
+    super::delete_scoped_document(
+        access,
+        "desktop.tool_service.delete",
+        Collection::ToolServiceRegistry,
+        agent_did,
+        id,
+    )
     .await
 }
 

@@ -691,6 +691,9 @@ structure PromptAssemblyClaudeBodyCase where
   tools : List String
   system : List String
   toolsPresent : Bool
+  supportedEfforts : Option (List String) := none
+  effort : Option String := none
+  selectedEffort : Option String := none
   deriving Repr
 
 private def msgTag : PromptAssembly.ClaudeMap.Msg → String
@@ -718,6 +721,15 @@ def promptAssemblyClaudeBodyCases : List PromptAssemblyClaudeBodyCase :=
   , claudeBodyCase "empty-tools-omitted" (some "P") [.other "user"] []
   , claudeBodyCase "two-tools-present" none [.other "user"] ["echo", "list_files"]
   ]
+  ++ ([none, some "low", some "medium", some "high", some "xhigh", some "max", some "ultra"].map fun effort =>
+    { (claudeBodyCase ("effort-" ++ effort.getD "absent") none [.other "user"] []) with
+      supportedEfforts := some ["low", "medium", "high", "xhigh", "max"]
+      effort := effort
+      selectedEffort := PromptAssembly.ClaudeMap.selectedEffort
+        (some ["low", "medium", "high", "xhigh", "max"]) effort })
+  ++ [{ (claudeBodyCase "effort-unknown-metadata" none [.other "user"] []) with
+        effort := some "high"
+        selectedEffort := PromptAssembly.ClaudeMap.selectedEffort none (some "high") }]
 
 /-! ## Claude Messages SSE stream (single wire)
 

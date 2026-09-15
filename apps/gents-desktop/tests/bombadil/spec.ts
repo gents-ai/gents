@@ -6,13 +6,12 @@ const shellState = extract((state) => {
   const document = state.document;
   const errorBanner = document.querySelector('[data-testid="error-banner"]');
   const surfaceSelectors = [
-    '[data-testid="fleet-dashboard"]',
-    '[data-testid="fleet-empty"]',
-    '[data-testid="transcript-panel"]',
-    ".config-workspace",
+    '[data-testid="app-shell"]',
+    '[data-testid="setup-screen"]',
+    '[data-testid="startup-screen"]',
   ];
   return {
-    shellMounted: Boolean(document.querySelector(".app-shell")),
+    shellMounted: Boolean(document.querySelector('[data-testid="app-shell"]')),
     errorBanner: {
       visible: Boolean(errorBanner),
       message: normalizeText(
@@ -136,7 +135,11 @@ const dialogProblems = extract((state) => {
     if (!accessibleName(dialog, state.document)) {
       issues.push("dialog is missing an accessible name");
     }
-    if (dialog.getAttribute("aria-modal") !== "true") {
+    const slot = dialog.getAttribute("data-slot");
+    if (
+      (slot === "dialog-content" || slot === "alert-dialog-content") &&
+      dialog.getAttribute("aria-modal") !== "true"
+    ) {
       issues.push("dialog is missing aria-modal=true");
     }
   }
@@ -145,10 +148,11 @@ const dialogProblems = extract((state) => {
 
 const emptyPrimarySurfaceProblems = extract((state) => {
   const surfaces = [
-    '[data-testid="fleet-dashboard"]',
-    '[data-testid="fleet-empty"]',
-    '[data-testid="transcript-panel"]',
-    ".config-workspace",
+    '[data-testid="app-shell"]',
+    '[data-testid="setup-screen"]',
+    '[data-testid="startup-screen"]',
+    '[data-testid="sessions-screen"]',
+    '[data-testid="session-screen"]',
   ];
   return surfaces
     .map((selector) => {

@@ -1633,6 +1633,109 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
+async fn interruption_cascades_only_to_exact_parent_background_workers() {
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(dir.path())
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    hook.on_completion_call(&user_text_message("background work"), &[])
+        .await;
+    let session_id = hook.session_id().await.unwrap();
+    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(&node, &hook, "parent", &session_id, deadline).await;
+    let parent_doc = hook.active_request_doc_id().await.unwrap();
+    let mut reservations = Vec::new();
+    let mut tokens = Vec::new();
+    for (id, physical, detached) in [
+        ("owned", parent_doc.as_str(), false),
+        ("detached", parent_doc.as_str(), true),
+        ("unrelated", "another-parent-doc", false),
+    ] {
+        let mut lifecycle = ToolCallLifecycle::new_background_tool(
+            node.clone(),
+            "parent".into(),
+            session_id.clone(),
+            "did:test:general".into(),
+            id.into(),
+            1,
+            "bash".into(),
+            "{}".into(),
+            deadline,
+        )
+        .with_request_doc_id(Some(physical.into()));
+        if detached {
+            lifecycle.cancel_policy = crate::tool_call_lifecycle::CancelPolicy::Detach;
+        }
+        lifecycle.start_running().await.unwrap();
+        let token = CancellationToken::new();
+        reservations.push(hook.background_executions.reserve(id.into(), token.clone()));
+        tokens.push(token);
+    }
+    let process_name = format!("background-parent-cascade-{}", uuid::Uuid::new_v4());
+    let name = process_name.clone();
+    let token = tokens[0].clone();
+    let worker = tokio::spawn(async move {
+        crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
+            argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
+            cwd: std::env::temp_dir(),
+            deadline_at: Some(Utc::now() + chrono::Duration::seconds(10)),
+            cancellation_token: token,
+            max_output_bytes: 1024,
+            stdin: Vec::new(),
+            environment: None,
+            tool_name: Some(name),
+            live_output: None,
+        })
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !crate::active_native_executors()
+            .iter()
+            .any(|p| p.tool_name.as_deref() == Some(process_name.as_str()))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
+    assert!(tokens[0].is_cancelled());
+    match tokio::time::timeout(Duration::from_secs(5), worker)
+        .await
+        .unwrap()
+        .unwrap()
+    {
+        crate::managed_exec::ManagedExecOutcome::Cancelled { kill, .. } => assert!(kill.reaped),
+        other => panic!("expected cancelled managed process, got {other:?}"),
+    }
+    assert!(!tokens[1].is_cancelled());
+    assert!(!tokens[2].is_cancelled());
+    let row = fetch_tool_call_row(&node, &session_id, "owned").await;
+    assert_eq!(row["lifecycle_state"], "cancelled");
+    assert_eq!(row["cancel_cause"], "interrupted");
+    for id in ["detached", "unrelated"] {
+        assert_eq!(
+            fetch_tool_call_row(&node, &session_id, id).await["lifecycle_state"],
+            "running"
+        );
+    }
+    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 0);
+}
+
+#[tokio::test]
 async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-hook-cascade-cancel-{}",

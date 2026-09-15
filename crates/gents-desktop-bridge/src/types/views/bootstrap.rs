@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::types::ManagedServerToolCeiling;
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedPeerView {
@@ -51,5 +53,15 @@ pub struct ManagedServerStatus {
     pub agent_name: Option<String>,
     pub agent_did: Option<String>,
     pub graphql: Option<String>,
+    pub effective_tool_ceiling: Option<ManagedServerToolCeiling>,
+    pub effective_tool_root: Option<String>,
+    pub suggested_tool_root: Option<String>,
+    pub pairing_ready: bool,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedServerRootValidation {
+    pub canonical_path: String,
 }

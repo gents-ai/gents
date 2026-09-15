@@ -50,7 +50,7 @@ def step
   | .mutation (.submitted sid req) =>
       { s with
           selection := { s.selection with session := some sid },
-          workflow  := .awaiting sid req }
+          workflow  := snapshotAdvanceWorkflow (.awaiting sid req) store }
   | .mutation (.failed r) =>
       { s with workflow := .blocked r }
   | .transport _ => s

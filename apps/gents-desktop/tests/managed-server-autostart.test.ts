@@ -21,6 +21,10 @@ describe("managed server launch restoration", () => {
       agentName: null,
       agentDid: null,
       graphql: null,
+      effectiveToolCeiling: null,
+      effectiveToolRoot: null,
+      suggestedToolRoot: "/Users/test",
+      pairingReady: false,
       error: null,
     });
 
@@ -36,6 +40,10 @@ describe("managed server launch restoration", () => {
       agentName: "Workshop Agent",
       agentDid: null,
       graphql: null,
+      effectiveToolCeiling: null,
+      effectiveToolRoot: null,
+      suggestedToolRoot: "/Users/test",
+      pairingReady: false,
       error: null,
     });
 
@@ -56,6 +64,10 @@ describe("managed server launch restoration", () => {
       agentName: "Workshop Agent",
       agentDid: null,
       graphql: null,
+      effectiveToolCeiling: null,
+      effectiveToolRoot: null,
+      suggestedToolRoot: "/Users/test",
+      pairingReady: false,
       error: null,
     });
     vi.mocked(api.startManagedServer).mockImplementation(async () => {
@@ -66,6 +78,10 @@ describe("managed server launch restoration", () => {
         agentName: "Workshop Agent",
         agentDid: null,
         graphql: null,
+        effectiveToolCeiling: "readwrite",
+        effectiveToolRoot: "/Users/test",
+        suggestedToolRoot: "/Users/test",
+        pairingReady: true,
         error: null,
       };
     });

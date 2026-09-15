@@ -46,6 +46,12 @@ export function useDesktopProjectionEffects({
   setError,
 }: DesktopProjectionEffectsArgs) {
   useEffect(() => {
+    // There is no bounded desktop projection to observe until the client is
+    // running. Starting this owner during configuration bootstrap races the
+    // lifecycle's authoritative snapshot read and can clear its failure while
+    // leaving startupPhase at configuration-error.
+    if (!clientAvailable) return;
+
     let disposed = false;
     let unlisten: (() => void) | undefined;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;

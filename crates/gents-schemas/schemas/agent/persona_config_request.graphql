@@ -34,10 +34,15 @@ type PersonaConfigRequest @branchable {
     behavior_id: String @immutable
     clone_from: String @immutable
     persona_name: String @immutable
+    description: String @immutable
+    system_prompt: String @immutable
     backend_model: String @immutable
     root: String @immutable
     preset: String @immutable
     profile_id: String @immutable
+    # When true, an admitted create/edit atomically promotes the applied
+    # behavior to AgentPrincipal.default_behavior_id. Disable may not set it.
+    make_default: Boolean @immutable
     created_at: DateTime @immutable
     # Server-written outcome. pending | applied | rejected.
     status: String @index

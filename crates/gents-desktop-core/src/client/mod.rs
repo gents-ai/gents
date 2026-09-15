@@ -30,7 +30,8 @@ pub use peer_directory::{initialize_local_standard_peer, load_peer_records, Peer
 pub use principal_identity::PrincipalIdentity;
 pub use query::{
     fetch_doc_patch, load_agent_scoped_snapshot, load_session_context_store,
-    load_session_diagnostics_store, load_session_transcript_page, SessionTranscriptQueryPage,
+    load_session_context_store_on, load_session_diagnostics_store, load_session_transcript_page,
+    load_session_transcript_page_on, SessionTranscriptQueryPage,
     DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE, MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use store::{ClientStore, ClientStoreRows, TaskRecentRuns, TranscriptView};

@@ -1,9 +1,7 @@
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import type {
   DesktopApiAdapter,
-  DesktopClientSnapshot,
-  DesktopSessionSnapshot,
   EventSourceSaveRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
@@ -12,36 +10,56 @@ import type {
   TaskSaveRequest,
   TriggerSaveRequest,
 } from "@source-inc/gents-desktop-client";
+import { logShellEvent } from "./desktopShellRuntime";
 
 type TaskActionParams = {
+  acceptsComposeIntent: (capturedGeneration: number) => boolean;
   api: DesktopApiAdapter;
-  refreshSession: (
-    nextSessionId: string | null,
-  ) => Promise<DesktopSessionSnapshot | null>;
+  captureComposeIntent: () => number;
+  mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
+  runningTaskCountRef: MutableRefObject<number>;
   setError: Dispatch<SetStateAction<string | null>>;
   setRunningTask: Dispatch<SetStateAction<boolean>>;
   setSavingConfig: Dispatch<SetStateAction<boolean>>;
-  setSelectedSessionId: Dispatch<SetStateAction<string | null>>;
-  setSnapshot: Dispatch<SetStateAction<DesktopClientSnapshot | null>>;
 };
 
 export function createDesktopShellTaskActions({
+  acceptsComposeIntent,
   api,
-  refreshSession,
+  captureComposeIntent,
+  mutateSnapshot,
   refreshSnapshot,
+  runningTaskCountRef,
   setError,
   setRunningTask,
   setSavingConfig,
-  setSelectedSessionId,
-  setSnapshot,
 }: TaskActionParams) {
+  function beginTaskRun() {
+    runningTaskCountRef.current += 1;
+    setRunningTask(true);
+  }
+
+  function finishTaskRun() {
+    runningTaskCountRef.current = Math.max(0, runningTaskCountRef.current - 1);
+    if (runningTaskCountRef.current === 0) setRunningTask(false);
+  }
+
+  async function observeAcceptedRun(kind: "task" | "schedule") {
+    try {
+      await refreshSnapshot();
+    } catch (error) {
+      logShellEvent(
+        `${kind} run accepted but observation refresh failed: ${String(error)}`,
+      );
+    }
+  }
+
   async function onSaveTaskConfig(request: TaskSaveRequest) {
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveTaskConfig(request);
-      setSnapshot(next);
+      const next = await mutateSnapshot(() => api.saveTaskConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -55,8 +73,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveScheduleConfig(request);
-      setSnapshot(next);
+      const next = await mutateSnapshot(() => api.saveScheduleConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -67,21 +84,18 @@ export function createDesktopShellTaskActions({
   }
 
   async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
-    setRunningTask(true);
+    const intentGeneration = captureComposeIntent();
+    beginTaskRun();
     setError(null);
     try {
       const result = await api.runSchedule(request);
-      await refreshSnapshot();
-      if (result.sessionId) {
-        setSelectedSessionId(result.sessionId);
-        await refreshSession(result.sessionId);
-      }
+      await observeAcceptedRun("schedule");
       return result;
     } catch (err) {
-      setError(String(err));
+      if (acceptsComposeIntent(intentGeneration)) setError(String(err));
       throw err;
     } finally {
-      setRunningTask(false);
+      finishTaskRun();
     }
   }
 
@@ -89,8 +103,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveTriggerConfig(request);
-      setSnapshot(next);
+      const next = await mutateSnapshot(() => api.saveTriggerConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -104,8 +117,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveEventSourceConfig(request);
-      setSnapshot(next);
+      const next = await mutateSnapshot(() => api.saveEventSourceConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -116,21 +128,18 @@ export function createDesktopShellTaskActions({
   }
 
   async function onRunTask(request: TaskRunRequest): Promise<TaskRunResult> {
-    setRunningTask(true);
+    const intentGeneration = captureComposeIntent();
+    beginTaskRun();
     setError(null);
     try {
       const result = await api.runTask(request);
-      await refreshSnapshot();
-      if (result.sessionId) {
-        setSelectedSessionId(result.sessionId);
-        await refreshSession(result.sessionId);
-      }
+      await observeAcceptedRun("task");
       return result;
     } catch (err) {
-      setError(String(err));
+      if (acceptsComposeIntent(intentGeneration)) setError(String(err));
       throw err;
     } finally {
-      setRunningTask(false);
+      finishTaskRun();
     }
   }
 

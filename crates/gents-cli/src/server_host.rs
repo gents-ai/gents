@@ -8,11 +8,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use gents_protocol::enrollment::{
+    EnrollmentOperatorAction, DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{oneshot, watch};
 
 use crate::cli::{Cli, Command};
+
+pub use crate::cli::args::ToolCeilingArg as ManagedToolCeiling;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -39,7 +44,8 @@ impl ServerConfig {
 pub struct ProvisionOptions {
     pub home: PathBuf,
     pub agent_name: String,
-    pub tool_root: PathBuf,
+    pub tool_ceiling: ManagedToolCeiling,
+    pub tool_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +57,8 @@ pub struct ServerReady {
     pub p2p_transport: String,
     pub p2p_peer_id: Option<String>,
     pub p2p_listen_addresses: Vec<String>,
+    pub tool_ceiling: ManagedToolCeiling,
+    pub tool_root: Option<String>,
 }
 
 pub struct RunningServer {
@@ -96,11 +104,22 @@ pub async fn ensure_standard_home(options: ProvisionOptions) -> Result<()> {
 }
 
 async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
-    if options.home.join(crate::INIT_CONFIG_FILE_NAME).is_file() {
+    if let Some(mut stored) = crate::read_init_config(&options.home)? {
+        stored.tool_ceiling = options.tool_ceiling;
+        stored.tool_root = options
+            .tool_root
+            .map(|path| path.to_string_lossy().into_owned());
+        crate::write_init_config(&options.home, &stored)?;
         return Ok(());
     }
 
-    let argv = vec![
+    let tool_package = match options.tool_ceiling {
+        ManagedToolCeiling::MetaOnly => "minimal",
+        ManagedToolCeiling::Readonly => "readonly",
+        ManagedToolCeiling::Readwrite => "yolo",
+    };
+
+    let mut argv = vec![
         "gents".to_string(),
         "init".to_string(),
         "--home".to_string(),
@@ -108,14 +127,15 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         "--agent-name".to_string(),
         options.agent_name,
         "--tool-package".to_string(),
-        "readonly".to_string(),
-        "--tool-root".to_string(),
-        options.tool_root.display().to_string(),
+        tool_package.to_string(),
+        "--setup-steward".to_string(),
         "--inference-url".to_string(),
         crate::DEFAULT_INIT_ENDPOINT.to_string(),
-        "--model-name".to_string(),
-        crate::DEFAULT_INIT_MODEL_NAME.to_string(),
     ];
+    if let Some(tool_root) = options.tool_root {
+        argv.push("--tool-root".to_string());
+        argv.push(tool_root.display().to_string());
+    }
     let cli = Cli::try_parse_from(argv).context("building standard Gents provision request")?;
     let Command::Init(args) = cli.command else {
         unreachable!("standard provision argv must parse as init")
@@ -175,6 +195,31 @@ pub async fn start_server(config: ServerConfig) -> Result<RunningServer> {
     })
 }
 
+/// Approve the desktop client enrollment using the identity owned by a
+/// co-hosted managed runtime. The signed durable enrollment documents remain
+/// the route authority; this helper only drives the existing operator API.
+pub async fn approve_managed_client_enrollment(
+    home: &Path,
+    graphql: &str,
+    request_id: &str,
+) -> Result<()> {
+    let request_id = request_id.trim();
+    anyhow::ensure!(
+        !request_id.is_empty(),
+        "managed enrollment request id is empty"
+    );
+    crate::commands::p2p::enrollment_admin::submit_enrollment_decision(
+        home,
+        graphql,
+        request_id,
+        EnrollmentOperatorAction::Approve,
+        DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+    )
+    .await
+    .context("approving desktop enrollment on managed runtime")?;
+    Ok(())
+}
+
 async fn join_server_thread(thread: std::thread::JoinHandle<Result<()>>) -> Result<()> {
     tokio::task::spawn_blocking(move || {
         thread
@@ -203,6 +248,18 @@ fn ready_from_output(output: &Value) -> Result<ServerReady> {
             .filter_map(Value::as_str)
             .map(ToOwned::to_owned)
             .collect(),
+        tool_ceiling: match required_string(output, "tool_ceiling")?.as_str() {
+            "meta-only" => ManagedToolCeiling::MetaOnly,
+            "readonly" => ManagedToolCeiling::Readonly,
+            "readwrite" => ManagedToolCeiling::Readwrite,
+            value => {
+                anyhow::bail!("managed server readiness returned unknown tool_ceiling {value}")
+            }
+        },
+        tool_root: output
+            .get("tool_root")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
     })
 }
 
@@ -238,11 +295,55 @@ mod tests {
             "graphql": "http://127.0.0.1:9191/api/v0/graphql",
             "p2p_transport": "iroh",
             "p2p_peer_id": "peer-local",
-            "p2p_listen_addresses": ["iroh://peer-local"]
+            "p2p_listen_addresses": ["iroh://peer-local"],
+            "tool_ceiling": "readwrite",
+            "tool_root": "/Users/test"
         }))
         .unwrap();
         assert_eq!(ready.agent_did, "did:key:zLocal");
         assert_eq!(ready.p2p_peer_id.as_deref(), Some("peer-local"));
         assert_eq!(ready.p2p_listen_addresses, ["iroh://peer-local"]);
+        assert_eq!(ready.tool_ceiling, ManagedToolCeiling::Readwrite);
+        assert_eq!(ready.tool_root.as_deref(), Some("/Users/test"));
+    }
+
+    #[tokio::test]
+    async fn reprovisioning_changes_only_the_existing_homes_process_ceiling() {
+        let temp = tempfile::tempdir().unwrap();
+        let first_root = temp.path().join("first root");
+        let second_root = temp.path().join("second root");
+        std::fs::create_dir(&first_root).unwrap();
+        std::fs::create_dir(&second_root).unwrap();
+        crate::write_init_config(
+            temp.path(),
+            &crate::shared::StoredInitConfig {
+                home: temp.path().display().to_string(),
+                agent_name: "Forge".to_string(),
+                agent_did: "did:key:zPreserved".to_string(),
+                key_path: Some(temp.path().join("agent.key").display().to_string()),
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: Some(crate::cli::args::ToolPackageArg::Yolo),
+                tool_ceiling: ManagedToolCeiling::Readwrite,
+                tool_root: Some(first_root.display().to_string()),
+            },
+        )
+        .unwrap();
+
+        ensure_standard_home_inner(ProvisionOptions {
+            home: temp.path().to_path_buf(),
+            agent_name: "A different ignored name".to_string(),
+            tool_ceiling: ManagedToolCeiling::Readonly,
+            tool_root: Some(second_root.clone()),
+        })
+        .await
+        .unwrap();
+
+        let stored = crate::read_init_config(temp.path()).unwrap().unwrap();
+        assert_eq!(stored.agent_name, "Forge");
+        assert_eq!(stored.agent_did, "did:key:zPreserved");
+        assert_eq!(stored.tool_ceiling, ManagedToolCeiling::Readonly);
+        assert_eq!(stored.tool_root.as_deref(), second_root.to_str());
     }
 }

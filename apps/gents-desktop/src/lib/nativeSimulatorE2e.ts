@@ -90,7 +90,14 @@ async function runNativeSimulatorE2e() {
 
   try {
     await reportStatus({ stage: "starting" });
-    await waitForText("Fleet Dashboard", 30_000);
+    await waitFor(
+      () =>
+        /Sessions|Let’s get set up|Agents/.test(document.body.textContent ?? "")
+          ? document.body
+          : null,
+      30_000,
+      "kit shell",
+    );
     await reportStatus({ stage: "shell-interactive" });
     if (document.querySelector('[data-testid="fleet-connect-local"]')) {
       throw new Error("Mobile shell exposed unsupported local runtime setup");
@@ -154,7 +161,9 @@ async function runNativeSimulatorE2e() {
 
     const composer = await waitFor(
       () =>
-        document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]'),
+        document.querySelector<HTMLTextAreaElement>(
+          '[data-testid="composer"] textarea, textarea[aria-label="Message"]',
+        ),
       30_000,
       "chat composer",
     );
@@ -164,7 +173,7 @@ async function runNativeSimulatorE2e() {
     const sendButton = await waitFor(
       () => {
         const button = document.querySelector<HTMLButtonElement>(
-          '[data-testid="composer-send"]',
+          '[data-testid="composer"] button[aria-label="Send"], button[aria-label="Send"]',
         );
         return button && !button.disabled ? button : null;
       },
@@ -274,14 +283,6 @@ function setControlledValue(
   setter.call(element, value);
   element.dispatchEvent(new Event("input", { bubbles: true }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
-}
-
-async function waitForText(expected: string, timeoutMs: number) {
-  await waitFor(
-    () => (document.body.textContent?.includes(expected) ? document.body : null),
-    timeoutMs,
-    `visible text ${expected}`,
-  );
 }
 
 async function waitFor<T>(

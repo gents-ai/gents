@@ -141,6 +141,7 @@ pub struct ResolvedToolSelection {
     /// Enables the session-owned durable goal read/update tools independently
     /// of generic MCP discovery and dispatch.
     pub enable_goal_tools: bool,
+    pub enable_graph_tools: bool,
     /// Enables model-originated durable goal creation. Creation is an
     /// additional capability: it is effective only when `enable_goal_tools`
     /// is also enabled.
@@ -162,6 +163,7 @@ pub struct ResolvedToolSelection {
     pub self_config_categories: Option<Vec<String>>,
     pub self_config_no_lockout: bool,
     pub self_config_dry_run: bool,
+    pub enable_pack_install: bool,
     pub enable_lsp: bool,
     pub lsp_config: Option<String>,
     pub eth_queries: Vec<crate::eth::ResolvedEthQuery>,
@@ -178,6 +180,7 @@ impl Default for ResolvedToolSelection {
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
             enable_goal_tools: true,
+            enable_graph_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             remote_tools: None,
@@ -194,6 +197,7 @@ impl Default for ResolvedToolSelection {
             self_config_categories: None,
             self_config_no_lockout: false,
             self_config_dry_run: false,
+            enable_pack_install: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -298,6 +302,9 @@ impl ResolvedToolSelection {
             cli_tool_names,
             enable_meta_tools,
             enable_goal_tools,
+            enable_graph_tools: built_ins
+                .and_then(|built| built.enable_graph_tools)
+                .unwrap_or(false),
             enable_goal_creation,
             allowed_mcp_service_ids,
             remote_tools: tools.remote.clone(),
@@ -341,6 +348,9 @@ impl ResolvedToolSelection {
                 .unwrap_or(false),
             self_config_dry_run: self_config_group
                 .and_then(|group| group.self_config_dry_run)
+                .unwrap_or(false),
+            enable_pack_install: self_config_group
+                .and_then(|group| group.enable_pack_install)
                 .unwrap_or(false),
             enable_lsp: integrations
                 .map(|group| group.lsp.is_some())

@@ -29,8 +29,10 @@ export {
 export { createDesktopApiAdapter } from "./api/adapter.js";
 export type {
   DesktopApiAdapter,
+  ManagedServerAuthorityInput,
   ManagedServerStatus,
 } from "./api/types.js";
+export type { ManagedServerToolCeiling } from "./generated/ManagedServerToolCeiling.js";
 export * from "./events.js";
 export * from "./operationalState.js";
 export * from "./turnState.js";

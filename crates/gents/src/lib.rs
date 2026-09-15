@@ -45,6 +45,7 @@ pub mod health_checker;
 pub mod hook;
 pub mod identity;
 pub mod inference_http;
+pub mod inference_setup;
 pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
@@ -62,6 +63,7 @@ pub mod provider_budget {
     pub use crate::provider_input::budget::{effective_input_budget, threshold_budget};
 }
 pub(crate) mod provider_usage;
+pub mod starter_recipes;
 pub mod startup_readiness;
 pub mod startup_recovery;
 pub mod storage_backend;

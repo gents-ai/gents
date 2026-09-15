@@ -5,6 +5,11 @@
  */
 export type BuiltInTools = {
 /**
+ * Native graph discovery/run/status/result/cancel, independent of self-config
+ * and pack installation. Existing graph caller admission still applies.
+ */
+enable_graph_tools?: boolean | null,
+/**
  * Independent goal get/update capability. Unset is disabled.
  */
 enable_goal_tools?: boolean | null,

@@ -27,6 +27,9 @@ import type { DesktopOperationsSnapshot } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
 import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
+import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
+import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
+import type { InferenceModelRecommendation } from "../generated/InferenceModelRecommendation.js";
 
 export function createDesktopApiAdapter(
   transport: DesktopTransport,
@@ -48,10 +51,23 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_client_shutdown"),
     managedServerStatus: () =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_status"),
-    startManagedServer: (agentName) =>
+    startManagedServer: (agentName, authority) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_start", {
-        request: { agentName },
+        request: {
+          agentName,
+          toolCeiling: authority?.toolCeiling ?? null,
+          toolRoot: authority?.toolRoot ?? null,
+        },
       }),
+    restartManagedServer: (agentName, authority) =>
+      invokeDesktop<ManagedServerStatus>("desktop_managed_server_restart", {
+        request: { agentName, ...authority },
+      }),
+    validateManagedServerRoot: (path) =>
+      invokeDesktop<{ canonicalPath: string }>(
+        "desktop_managed_server_validate_root",
+        { request: { path } },
+      ).then((result) => result.canonicalPath),
     commitManagedServerAutoStart: (agentName) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_start", {
         request: { agentName },
@@ -197,12 +213,35 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_behavior_delete", {
         request,
       }),
+    deleteContextConfig: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_context_delete", {
+        request,
+      }),
     saveBackendConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_backend_save", { request }),
     probeInferenceEndpoint: (endpoint) =>
       invokeDesktop<InferenceProbeResult>("desktop_probe_inference_endpoint", {
         request: { endpoint },
       }),
+    getInferenceSetupCatalog: () =>
+      invokeDesktop<InferenceSetupCatalog>("desktop_inference_setup_catalog"),
+    discoverInferenceModels: (request) =>
+      invokeDesktop<InferenceDiscoveryResult>(
+        "desktop_inference_models_discover",
+        {
+          request,
+        },
+      ),
+    getInferenceModelRecommendation: (request) =>
+      invokeDesktop<InferenceModelRecommendation>(
+        "desktop_inference_model_recommendation",
+        { request },
+      ),
+    getInferenceBackendRecommendation: (request) =>
+      invokeDesktop<InferenceModelRecommendation>(
+        "desktop_inference_backend_recommendation",
+        { request },
+      ),
     codexLogin: (agentDid, provider) =>
       invokeDesktop<CodexLoginResult>("desktop_codex_login", {
         request: { agentDid, provider: provider ?? null },
@@ -216,6 +255,13 @@ export function createDesktopApiAdapter(
         },
       ),
     cancelGrokLogin: () => invokeDesktop<void>("desktop_grok_login_cancel"),
+    claudeLogin: (agentDid, provider) =>
+      invokeDesktop<
+        import("../generated/ClaudeLoginResult.js").ClaudeLoginResult
+      >("desktop_claude_login", {
+        request: { agentDid, provider: provider ?? null },
+      }),
+    cancelClaudeLogin: () => invokeDesktop<void>("desktop_claude_login_cancel"),
     listProviderAccounts: (agentDid) =>
       invokeDesktop<ProviderAccountView[]>("desktop_provider_accounts_list", {
         request: { agentDid },

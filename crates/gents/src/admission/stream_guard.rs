@@ -4,6 +4,8 @@ use rig::completion::{CompletionError, GetTokenUsage, Usage};
 use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamingCompletionResponse,
 };
+use tokio_util::task::AbortOnDropHandle;
+use tracing::Instrument;
 
 pub(crate) trait StreamGuardLifecycle {
     fn mark_stream_success(&mut self, _usage: Option<Usage>) {}
@@ -16,6 +18,27 @@ pub(crate) trait StreamGuardLifecycle {
     {
         Box::pin(async { Ok(()) })
     }
+}
+
+/// The stream consumer also performs response writes. It may stop polling
+/// `next()` to await one of those writes while finalization owns the same gate.
+/// Independently schedule the owner so that both storage completion and its
+/// timeout continue to be polled. This does not make storage preemptible.
+/// The stream still owns cancellation: dropping it aborts this worker and lets
+/// the existing guard Drop path perform terminal repair.
+async fn finish_guard<G>(guard: G) -> Result<(), CompletionError>
+where
+    G: StreamGuardLifecycle + Send + 'static,
+{
+    AbortOnDropHandle::new(tokio::spawn(
+        guard.finish_stream().instrument(tracing::Span::current()),
+    ))
+    .await
+    .map_err(|error| {
+        CompletionError::ProviderError(format!(
+            "inference-call finalization worker failed: {error}"
+        ))
+    })?
 }
 
 pub(crate) fn hold_stream_guard<R, G>(
@@ -40,7 +63,7 @@ where
                         // The owned loop charges from the terminal item, while
                         // crash rehydrate charges from the InferenceCall row.
                         // Persist before publishing so the two cannot diverge.
-                        terminal_guard.finish_stream().await?;
+                        finish_guard(terminal_guard).await?;
                     }
                     for choice in streamed_item_to_raw_choices(item) {
                         yield choice;
@@ -49,7 +72,7 @@ where
                 Err(error) => {
                     if let Some(mut terminal_guard) = guard.take() {
                         terminal_guard.mark_stream_error(&error);
-                        terminal_guard.finish_stream().await?;
+                        finish_guard(terminal_guard).await?;
                     }
                     Err(error)?;
                 }
@@ -57,7 +80,7 @@ where
         }
         if let Some(mut terminal_guard) = guard.take() {
             terminal_guard.mark_stream_success(None);
-            terminal_guard.finish_stream().await?;
+            finish_guard(terminal_guard).await?;
         }
         if let Some(message_id) = inner.message_id {
             yield RawStreamingChoice::MessageId(message_id);
@@ -112,3 +135,6 @@ where
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod conformance;

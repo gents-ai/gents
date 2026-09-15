@@ -5,10 +5,10 @@ import type {
   BackendSaveRequest,
   ConfigComponentsPatchRequest,
   ConfigComponentsApplyRequest,
+  ContextDeleteRequest,
   BehaviorSaveRequest,
   CodexLoginResult,
   DesktopApiAdapter,
-  DesktopClientSnapshot,
   InferenceProbeResult,
   InferenceProfileSaveRequest,
   SkillDeleteRequest,
@@ -33,9 +33,7 @@ type ConfigActionParams = {
   setError: Dispatch<SetStateAction<string | null>>;
   setSavingBehaviorConfig: Dispatch<SetStateAction<boolean>>;
   setSavingConfig: Dispatch<SetStateAction<boolean>>;
-  setSelectedAgentDid: Dispatch<SetStateAction<string | null>>;
-  setSelectedBehaviorId: Dispatch<SetStateAction<string | null>>;
-  setSnapshot: Dispatch<SetStateAction<DesktopClientSnapshot | null>>;
+  mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export function createDesktopShellConfigActions({
@@ -43,18 +41,13 @@ export function createDesktopShellConfigActions({
   setError,
   setSavingBehaviorConfig,
   setSavingConfig,
-  setSelectedAgentDid,
-  setSelectedBehaviorId,
-  setSnapshot,
+  mutateSnapshot,
 }: ConfigActionParams) {
   async function onSaveAgentConfig(request: AgentConfigSaveRequest) {
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveAgentConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.document.agent_did);
-      setSelectedBehaviorId(request.document.default_behavior_id ?? null);
+      const next = await mutateSnapshot(() => api.saveAgentConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -69,10 +62,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveBehaviorConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.document.agent_did);
-      setSelectedBehaviorId(request.document.behavior_id);
+      const next = await mutateSnapshot(() => api.saveBehaviorConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -87,9 +77,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveSkillConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.document.agent_did);
+      const next = await mutateSnapshot(() => api.saveSkillConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -103,10 +91,21 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteSkillConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() => api.deleteSkillConfig(request));
       return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteContextConfig(request: ContextDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      return await mutateSnapshot(() => api.deleteContextConfig(request));
     } catch (err) {
       setError(String(err));
       throw err;
@@ -119,9 +118,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteTaskConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() => api.deleteTaskConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -135,9 +132,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteScheduleConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() => api.deleteScheduleConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -151,9 +146,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteEventSourceConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() => api.deleteEventSourceConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -167,9 +160,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteTriggerConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() => api.deleteTriggerConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -183,9 +174,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteBackendConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() => api.deleteBackendConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -201,9 +190,9 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteInferenceProfileConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() =>
+        api.deleteInferenceProfileConfig(request),
+      );
       return next;
     } catch (err) {
       setError(String(err));
@@ -217,9 +206,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteToolsConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() => api.deleteToolsConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -233,9 +220,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteToolServiceConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() => api.deleteToolServiceConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -249,9 +234,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteBehaviorConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      const next = await mutateSnapshot(() => api.deleteBehaviorConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -265,8 +248,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveBackendConfig(request);
-      setSnapshot(next);
+      const next = await mutateSnapshot(() => api.saveBackendConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -280,8 +262,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.patchConfigComponents(request);
-      setSnapshot(next);
+      const next = await mutateSnapshot(() => api.patchConfigComponents(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -295,8 +276,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.applyConfigComponents(request);
-      setSnapshot(next);
+      const next = await mutateSnapshot(() => api.applyConfigComponents(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -350,8 +330,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveInferenceProfileConfig(request);
-      setSnapshot(next);
+      const next = await mutateSnapshot(() => api.saveInferenceProfileConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -365,9 +344,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveToolsConfig(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.document.agent_did);
+      const next = await mutateSnapshot(() => api.saveToolsConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -381,8 +358,7 @@ export function createDesktopShellConfigActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveToolServiceConfig(request);
-      setSnapshot(next);
+      const next = await mutateSnapshot(() => api.saveToolServiceConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -411,6 +387,7 @@ export function createDesktopShellConfigActions({
     onApplyConfigComponents,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteContextConfig,
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
     onDeleteEventSourceConfig,

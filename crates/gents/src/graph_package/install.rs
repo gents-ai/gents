@@ -101,6 +101,26 @@ pub async fn default_bundled_graph_package_install_bindings(
     Ok(options)
 }
 
+/// Bind a known bundled graph distribution to its current owner without
+/// consulting ambient interpolation inputs. Runtime tools supply those inputs
+/// through a request-scoped resolver before installation.
+pub(crate) async fn bundled_graph_package_install_bindings_for_owner(
+    access: &ConfigAccess,
+    package_name: &str,
+    owner_did: &str,
+) -> Result<GraphPackageInstallBindings> {
+    let distribution = crate::pack::resolve_pack(package_name)?;
+    anyhow::ensure!(
+        distribution.manifest.metadata.kind == crate::pack::PackKind::Graph,
+        "pack is not a graph"
+    );
+    let options = GraphPackageInstallBindings {
+        agent_did: owner_did.to_owned(),
+    };
+    validate_owner(access, owner_did).await?;
+    Ok(options)
+}
+
 /// Select installed package state without re-reading installation environment.
 /// The runtime plan reader retains principal, revision and digest verification.
 pub async fn load_installed_package_plan(

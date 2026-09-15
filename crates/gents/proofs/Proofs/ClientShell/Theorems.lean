@@ -1,5 +1,52 @@
 import Proofs.ClientShell.Projection
 
+/-- Once the matching request is observed terminal, a snapshot retires the local
+awaiting latch and permits a follow-up under the ordinary admission premises.
+This is a projection guarantee, not a transport delivery deadline. -/
+theorem matching_terminal_snapshot_allows_follow_up
+    (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
+    (sid : SessionId) (req : RequestId) (obs : SessionObservation)
+    (turn : ClientTurnState)
+    (hsel : s.selection.session = some sid)
+    (hagent : s.selection.agent.isNone = false)
+    (hw : s.workflow = .awaiting sid req)
+    (hfind : store.find sid = some obs)
+    (hreq : obs.latestObservedRequest = some req)
+    (hturn : obs.latestTurn = some turn)
+    (hterminal : turn.isTerminal = true)
+    (hclient : ctx.clientAvailable = true)
+    (htext : ctx.composerNonEmpty = true)
+    (hbehavior : behaviorMismatch store sid ctx.requestedBehavior = false) :
+    projectSendDecision (step s (.snapshot store) store .healthy ctx) store ctx = .ready := by
+  simp [step, snapshotAdvanceWorkflow, hw, hfind, hreq, projectSendDecision,
+    hsel, hagent, hclient, htext, hbehavior, hturn, hterminal]
+
+/-- A terminal observation for another request cannot acknowledge this submit. -/
+theorem unrelated_terminal_does_not_retire_awaiting
+    (store : LocalStore) (sid : SessionId) (req : RequestId)
+    (obs : SessionObservation) (hfind : store.find sid = some obs)
+    (hother : obs.latestObservedRequest ≠ some req) :
+    snapshotAdvanceWorkflow (.awaiting sid req) store = .awaiting sid req := by
+  simp [snapshotAdvanceWorkflow, hfind, hother]
+
+/-- A locally observed request can precede its mutation acknowledgment. The
+acknowledgment consumes the current observation instead of reinstating a latch
+that would need another notification to clear. -/
+theorem observed_before_ack_retires_without_another_snapshot
+    (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
+    (sid : SessionId) (req : RequestId) (obs : SessionObservation)
+    (hfind : store.find sid = some obs)
+    (hreq : obs.latestObservedRequest = some req) :
+    (step s (.mutation (.submitted sid req)) store .healthy ctx).workflow = .idle := by
+  simp [step, snapshotAdvanceWorkflow, hfind, hreq]
+
+theorem acknowledgment_and_matching_snapshot_commute
+    (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
+    (sid : SessionId) (req : RequestId) :
+    (step s (.mutation (.submitted sid req)) store .healthy ctx).workflow =
+      (step { s with workflow := .awaiting sid req }
+        (.snapshot store) store .healthy ctx).workflow := rfl
+
 theorem snapshot_preserves_selection
     (s : ShellState) (store store' : LocalStore) (h : TransportHealth)
     (ctx : SubmitContext) :

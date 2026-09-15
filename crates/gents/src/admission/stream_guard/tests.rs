@@ -20,6 +20,103 @@ impl Drop for DropProbe {
 
 impl super::StreamGuardLifecycle for DropProbe {}
 
+struct ContendedFinalizeProbe {
+    gate: Arc<tokio::sync::Mutex<()>>,
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+    finished: Arc<AtomicBool>,
+    drop_probe: Option<DropProbe>,
+}
+
+impl super::StreamGuardLifecycle for ContendedFinalizeProbe {
+    fn finish_stream(self) -> BoxFuture<'static, Result<(), CompletionError>> {
+        Box::pin(async move {
+            let _drop_probe = self.drop_probe;
+            let _guard = self.gate.lock().await;
+            let _ = self.entered.send(());
+            let _ = self.release.await;
+            self.finished.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
+/// The daemon can select a response-flush branch while stream finalization owns
+/// the same write gate. The finalizer must progress without stream.next() polls.
+#[tokio::test]
+async fn terminal_persistence_progresses_while_consumer_waits_for_shared_write_gate() {
+    let gate = Arc::new(tokio::sync::Mutex::new(()));
+    let (entered_tx, mut entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let finished = Arc::new(AtomicBool::new(false));
+    let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(vec![Ok(
+        RawStreamingChoice::FinalResponse(()),
+    )])));
+    let mut stream = hold_stream_guard(
+        inner,
+        ContendedFinalizeProbe {
+            gate: gate.clone(),
+            entered: entered_tx,
+            release: release_rx,
+            finished: finished.clone(),
+            drop_probe: None,
+        },
+    );
+    tokio::select! {
+        result = &mut entered_rx => result.expect("finalization entered"),
+        _ = stream.next() => panic!("terminal item escaped before persistence"),
+    }
+    release_tx.send(()).expect("release finalizer");
+    // Intentionally do not poll stream: mirrors the selected flush branch.
+    let waiter = tokio::time::timeout(Duration::from_millis(250), gate.lock()).await;
+    assert!(
+        waiter.is_ok(),
+        "finalization stranded its write gate when consumer stopped polling"
+    );
+    drop(waiter);
+    assert!(finished.load(Ordering::SeqCst));
+    assert!(matches!(
+        stream.next().await,
+        Some(Ok(rig::streaming::StreamedAssistantContent::Final(_)))
+    ));
+}
+
+#[tokio::test]
+async fn dropping_stream_aborts_owned_finalizer_and_releases_its_gate() {
+    let gate = Arc::new(tokio::sync::Mutex::new(()));
+    let (entered_tx, mut entered_rx) = tokio::sync::oneshot::channel();
+    let (_release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let finished = Arc::new(AtomicBool::new(false));
+    let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(vec![Ok(
+        RawStreamingChoice::FinalResponse(()),
+    )])));
+    let mut stream = hold_stream_guard(
+        inner,
+        ContendedFinalizeProbe {
+            gate: gate.clone(),
+            entered: entered_tx,
+            release: release_rx,
+            finished: finished.clone(),
+            drop_probe: Some(DropProbe {
+                drops: drops.clone(),
+            }),
+        },
+    );
+    tokio::select! {
+        result = &mut entered_rx => result.expect("finalization entered"),
+        _ = stream.next() => panic!("terminal item escaped before persistence"),
+    }
+    drop(stream);
+    let waiter = tokio::time::timeout(Duration::from_millis(250), gate.lock()).await;
+    assert!(
+        waiter.is_ok(),
+        "dropped stream must not leave detached lock owner"
+    );
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(!finished.load(Ordering::SeqCst));
+}
+
 #[tokio::test]
 async fn holds_guard_until_stream_eof_and_preserves_final_response_metadata() {
     let drops = Arc::new(AtomicUsize::new(0));

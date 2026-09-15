@@ -21,6 +21,99 @@ use gents::agent::persona_ops::{
 };
 use gents::agent::persona_presets;
 
+/// Lean selectedToolFlag omission/explicit laws, through the production
+/// canonical Tools adapter rather than a second test materializer.
+#[test]
+fn sibling_tool_selection_preserves_or_explicitly_overrides() {
+    for existing in [false, true] {
+        for requested in [None, Some(false), Some(true)] {
+            let mut tools = gents::document_config::Tools::default();
+            gents::self_config::apply_tool_grant_selection(
+                &mut tools,
+                Some(existing),
+                Some(existing),
+                None,
+            );
+            gents::self_config::apply_tool_grant_selection(&mut tools, requested, requested, None);
+            let expected = requested.unwrap_or(existing);
+            assert_eq!(
+                tools
+                    .integrations
+                    .as_ref()
+                    .and_then(|v| v.lsp.as_ref())
+                    .is_some(),
+                expected
+            );
+            assert_eq!(
+                tools
+                    .built_ins
+                    .as_ref()
+                    .and_then(|v| v.enable_graph_tools)
+                    .unwrap_or(false),
+                expected
+            );
+            assert!(tools.self_config.is_none());
+        }
+    }
+}
+
+/// Lean `networkSelectionAllowed`, omission preservation, and no-widening
+/// laws through the production admission fence and canonical Tools writer.
+#[test]
+fn sibling_network_selection_only_admits_omission_or_disabled_narrowing() {
+    use gents::toolset::CommandNetworkMode::{Disabled, Enabled, Inherit};
+
+    for existing in [Disabled, Inherit, Enabled] {
+        for requested in [None, Some(Disabled), Some(Inherit), Some(Enabled)] {
+            let admitted = gents::self_config::validate_tool_network_selection(requested).is_ok();
+            assert_eq!(
+                admitted,
+                requested.is_none_or(|mode| mode == Disabled),
+                "admission mismatch for existing={existing:?} requested={requested:?}"
+            );
+            if !admitted {
+                continue;
+            }
+
+            let mut tools = gents::document_config::Tools::default();
+            gents::self_config::apply_tool_grant_selection(&mut tools, None, None, Some(existing));
+            gents::self_config::apply_tool_grant_selection(&mut tools, None, None, requested);
+            let selected = tools
+                .host
+                .as_ref()
+                .and_then(|host| host.bash.as_ref())
+                .and_then(|bash| bash.network_mode)
+                .expect("existing network mode is materialized");
+            let expected = requested.unwrap_or(existing);
+            assert_eq!(selected, expected);
+            assert!(selected.meet(existing) == selected, "selection widened");
+        }
+    }
+}
+
+#[test]
+fn graph_presentation_is_independent_of_configuration_and_installation() {
+    for requested in [false, true] {
+        for enabled in [false, true] {
+            for install in [false, true] {
+                let names = gents::self_config::self_config_tool_names(
+                    &gents::tool_surface::SelfConfigToolConfig {
+                        enabled,
+                        enable_pack_install: install,
+                        enable_graph_tools: requested,
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(names.iter().any(|v| v == "run_graph"), requested);
+                assert_eq!(
+                    names.iter().any(|v| v == "install_pack"),
+                    enabled && install
+                );
+            }
+        }
+    }
+}
+
 fn catalog_with(
     roots: &[&str],
     profiles: &[&str],
@@ -35,7 +128,15 @@ fn catalog_with(
         known_agent_dids: BTreeSet::from(["did:key:agent".to_string()]),
         behaviors: behaviors
             .iter()
-            .map(|(id, enabled)| (id.to_string(), BehaviorRef { enabled: *enabled }))
+            .map(|(id, enabled)| {
+                (
+                    id.to_string(),
+                    BehaviorRef {
+                        enabled: *enabled,
+                        protected: false,
+                    },
+                )
+            })
             .collect::<BTreeMap<_, _>>(),
         ..Default::default()
     }
@@ -60,6 +161,8 @@ fn create_doc(op: PersonaOp) -> PersonaRequestDoc {
         op_raw: "create".to_string(),
         op: Some(op),
         persona_name: Some("Research Assistant".to_string()),
+        description: Some("Researches a focused question".to_string()),
+        system_prompt: Some("Research the question and cite evidence.".to_string()),
         root: None,
         preset: Some(persona_presets::PRESET_WRITE.to_string()),
         profile_id: Some("profile-1".to_string()),
@@ -120,6 +223,31 @@ fn admission_matrix_mirrors_lean_admits() {
         PersonaVerdict::Admit
     );
 
+    let mut promoted_disable = happy_disable.clone();
+    promoted_disable.make_default = true;
+    assert_eq!(
+        decide_persona_request(&promoted_disable, &cat),
+        PersonaVerdict::Reject("disable must not request make_default".to_string())
+    );
+
+    let mut protected_catalog = cat.clone();
+    protected_catalog
+        .behaviors
+        .get_mut("existing-enabled")
+        .expect("fixture behavior")
+        .protected = true;
+    let mut protected_edit = create_doc(PersonaOp::Edit);
+    protected_edit.op_raw = "edit".to_string();
+    protected_edit.behavior_id = Some("existing-enabled".to_string());
+    assert!(matches!(
+        decide_persona_request(&protected_edit, &protected_catalog),
+        PersonaVerdict::Reject(_)
+    ));
+    assert!(matches!(
+        decide_persona_request(&happy_disable, &protected_catalog),
+        PersonaVerdict::Reject(_)
+    ));
+
     // Reject branch (Lean `admits` = false → no candidate resolution): one
     // row per failing conjunct.
     let mut rejects: Vec<PersonaRequestDoc> = Vec::new();
@@ -156,6 +284,10 @@ fn admission_matrix_mirrors_lean_admits() {
     let mut bad_name = create_doc(PersonaOp::Create { clone_from: None });
     bad_name.persona_name = Some(String::new());
     rejects.push(bad_name);
+    // createPromptOk: a preset-based create must be useful on its first turn.
+    let mut missing_prompt = create_doc(PersonaOp::Create { clone_from: None });
+    missing_prompt.system_prompt = None;
+    rejects.push(missing_prompt);
     // createModeOk: clone must omit preset.
     let mut clone_with_preset = create_doc(PersonaOp::Create {
         clone_from: Some("existing-enabled".to_string()),

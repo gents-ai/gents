@@ -843,6 +843,12 @@ pub(crate) struct InitArgs {
     pub(crate) tool_package: Option<ToolPackageArg>,
     #[arg(
         long,
+        default_value_t = false,
+        help = "Seed the default behavior as a first-run setup steward with self-config tools"
+    )]
+    pub(crate) setup_steward: bool,
+    #[arg(
+        long,
         help = "Root directory for local file/bash tools. Defaults to the current working directory"
     )]
     pub(crate) tool_root: Option<PathBuf>,
@@ -1702,7 +1708,7 @@ pub(crate) enum ConfigCommand {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
-pub(crate) enum ToolCeilingArg {
+pub enum ToolCeilingArg {
     MetaOnly,
     Readonly,
     Readwrite,
@@ -2012,6 +2018,13 @@ pub(crate) struct BehaviorCreateArgs {
     pub(crate) agent_did: String,
     #[arg(long, help = "Persona display name")]
     pub(crate) display_name: String,
+    #[arg(long, help = "Concise purpose for the created behavior")]
+    pub(crate) description: Option<String>,
+    #[arg(
+        long,
+        help = "Complete behavior instructions; required with --preset and optional as a clone override"
+    )]
+    pub(crate) system_prompt: Option<String>,
     #[arg(
         long,
         help = "Built-in permission preset (readonly|write); mutually exclusive with --clone-from"
@@ -2045,6 +2058,10 @@ pub(crate) struct BehaviorCloneArgs {
     pub(crate) source_behavior_id: String,
     #[arg(long, help = "Display name for the cloned persona")]
     pub(crate) display_name: String,
+    #[arg(long, help = "Override the source behavior/context description")]
+    pub(crate) description: Option<String>,
+    #[arg(long, help = "Override the source context system prompt")]
+    pub(crate) system_prompt: Option<String>,
     #[arg(long, help = "Override the source's workspace root scope")]
     pub(crate) root: Option<String>,
     #[arg(

@@ -1,6 +1,277 @@
 use super::*;
 
+fn replace_agent_rows<T>(
+    dest: &mut Vec<T>,
+    incoming: Vec<T>,
+    agent_did: &str,
+    row_agent: impl Fn(&T) -> &str,
+) {
+    dest.retain(|row| row_agent(row) != agent_did);
+    dest.extend(
+        incoming
+            .into_iter()
+            .filter(|row| row_agent(row) == agent_did),
+    );
+}
+
+fn replace_agent_rows_with_sources<T>(
+    dest: &mut Vec<T>,
+    sources: &mut Vec<Option<String>>,
+    incoming: Vec<T>,
+    agent_did: &str,
+    row_agent: impl Fn(&T) -> &str,
+) {
+    retain_rows_and_sources(dest, sources, |row, _source| row_agent(row) != agent_did);
+    let incoming = incoming
+        .into_iter()
+        .filter(|row| row_agent(row) == agent_did)
+        .collect::<Vec<_>>();
+    sources.extend(std::iter::repeat_n(
+        Some(agent_did.to_string()),
+        incoming.len(),
+    ));
+    dest.extend(incoming);
+}
+
 impl ClientStore {
+    /// Replace this agent's operator-owned config and runtime readiness with
+    /// rows loaded from the runtime GraphQL endpoint. Local-only leftovers
+    /// (wizard writes that never reached the agent) are dropped so the desktop
+    /// matches the process that will actually run inference.
+    pub fn overlay_agent_operator_config(&self, agent_did: &str, incoming: &ClientStore) -> Self {
+        let mut rows = self.to_rows();
+        let remote = incoming.to_rows();
+        replace_agent_rows(
+            &mut rows.agent_principals,
+            remote.agent_principals,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows(&mut rows.behaviors, remote.behaviors, agent_did, |row| {
+            row.agent_did.as_str()
+        });
+        replace_agent_rows(&mut rows.runtimes, remote.runtimes, agent_did, |row| {
+            row.agent_did.as_str()
+        });
+        replace_agent_rows(
+            &mut rows.behavior_readiness,
+            remote.behavior_readiness,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.contexts,
+            &mut rows.context_source_agent_dids,
+            remote.contexts,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.tools,
+            &mut rows.tools_source_agent_dids,
+            remote.tools,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        let target_backend_ids = rows
+            .inference_backends
+            .iter()
+            .filter(|row| row.agent_did == agent_did)
+            .map(|row| row.backend_id.clone())
+            .chain(
+                remote
+                    .inference_backends
+                    .iter()
+                    .filter(|row| row.agent_did == agent_did)
+                    .map(|row| row.backend_id.clone()),
+            )
+            .collect::<HashSet<_>>();
+        let shared_backend_ids = rows
+            .inference_backends
+            .iter()
+            .filter(|row| row.agent_did != agent_did)
+            .map(|row| row.backend_id.clone())
+            .filter(|backend_id| target_backend_ids.contains(backend_id))
+            .collect::<HashSet<_>>();
+        let incoming_backend_ids = remote
+            .inference_backends
+            .iter()
+            .filter(|row| row.agent_did == agent_did)
+            .map(|row| row.backend_id.clone())
+            .collect::<HashSet<_>>();
+        replace_agent_rows_with_sources(
+            &mut rows.inference_backends,
+            &mut rows.inference_backend_source_agent_dids,
+            remote.inference_backends,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        retain_rows_and_sources(
+            &mut rows.backend_observations,
+            &mut rows.backend_observation_source_agent_dids,
+            |row, source| {
+                source != Some(agent_did)
+                    && !(source.is_none()
+                        && target_backend_ids.contains(&row.backend_id)
+                        && !shared_backend_ids.contains(&row.backend_id))
+            },
+        );
+        let backend_observations = remote
+            .backend_observations
+            .into_iter()
+            .filter(|row| incoming_backend_ids.contains(&row.backend_id))
+            .collect::<Vec<_>>();
+        rows.backend_observation_source_agent_dids
+            .extend(std::iter::repeat_n(
+                Some(agent_did.to_string()),
+                backend_observations.len(),
+            ));
+        rows.backend_observations.extend(backend_observations);
+        replace_agent_rows_with_sources(
+            &mut rows.inference_profiles,
+            &mut rows.inference_profile_source_agent_dids,
+            remote.inference_profiles,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.inference_sampling,
+            &mut rows.inference_sampling_source_agent_dids,
+            remote.inference_sampling,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.inference_execution,
+            &mut rows.inference_execution_source_agent_dids,
+            remote.inference_execution,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.tasks,
+            &mut rows.task_source_agent_dids,
+            remote.tasks,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.schedules,
+            &mut rows.schedule_source_agent_dids,
+            remote.schedules,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        let incoming_trigger_ids = remote
+            .triggers
+            .iter()
+            .filter(|row| row.agent_did == agent_did)
+            .map(|row| row.trigger_id.clone())
+            .collect::<HashSet<_>>();
+        retain_rows_and_sources(
+            &mut rows.schedule_observations,
+            &mut rows.schedule_observation_source_agent_dids,
+            |_row, source| source != Some(agent_did),
+        );
+        let schedule_observations = remote
+            .schedule_observations
+            .into_iter()
+            .filter(|row| incoming_trigger_ids.contains(&row.trigger_id))
+            .collect::<Vec<_>>();
+        rows.schedule_observation_source_agent_dids
+            .extend(std::iter::repeat_n(
+                Some(agent_did.to_string()),
+                schedule_observations.len(),
+            ));
+        rows.schedule_observations.extend(schedule_observations);
+        replace_agent_rows_with_sources(
+            &mut rows.triggers,
+            &mut rows.trigger_source_agent_dids,
+            remote.triggers,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        retain_rows_and_sources(
+            &mut rows.trigger_observations,
+            &mut rows.trigger_observation_source_agent_dids,
+            |_row, source| source != Some(agent_did),
+        );
+        let trigger_observations = remote
+            .trigger_observations
+            .into_iter()
+            .filter(|row| incoming_trigger_ids.contains(&row.trigger_id))
+            .collect::<Vec<_>>();
+        rows.trigger_observation_source_agent_dids
+            .extend(std::iter::repeat_n(
+                Some(agent_did.to_string()),
+                trigger_observations.len(),
+            ));
+        rows.trigger_observations.extend(trigger_observations);
+        replace_agent_rows_with_sources(
+            &mut rows.skills,
+            &mut rows.skill_source_agent_dids,
+            remote.skills,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.compactions,
+            &mut rows.compaction_source_agent_dids,
+            remote.compactions,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.tool_service_registries,
+            &mut rows.tool_service_registry_source_agent_dids,
+            remote.tool_service_registries,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.event_sources,
+            &mut rows.event_source_source_agent_dids,
+            remote.event_sources,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.subagent_targets,
+            &mut rows.subagent_target_source_agent_dids,
+            remote.subagent_targets,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.datastore_tool_surfaces,
+            &mut rows.datastore_tool_surface_source_agent_dids,
+            remote.datastore_tool_surfaces,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.chain_key_bindings,
+            &mut rows.chain_key_binding_source_agent_dids,
+            remote.chain_key_bindings,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows_with_sources(
+            &mut rows.sessions,
+            &mut rows.session_source_agent_dids,
+            remote.sessions,
+            agent_did,
+            |row| row.agent_did.as_str(),
+        );
+        replace_agent_rows(&mut rows.requests, remote.requests, agent_did, |row| {
+            row.agent_did.as_deref().unwrap_or_default()
+        });
+        replace_agent_rows(&mut rows.responses, remote.responses, agent_did, |row| {
+            row.agent_did.as_deref().unwrap_or_default()
+        });
+        Self::from_rows(rows)
+    }
+
     pub fn merge_snapshot(&self, snapshot: ClientStore) -> Self {
         let mut rows = self.to_rows();
         let incoming = snapshot.to_rows();
@@ -414,6 +685,29 @@ impl ClientStore {
         let mut rows = self.to_rows();
         let patch_rows = patch.to_rows();
 
+        // Operator GraphQL supplies the canonical agent scope after a local
+        // submit may already have installed an unscoped optimistic row. Let
+        // the scoped document replace that placeholder; keeping both makes
+        // agent-aware turn lookup select the older processing row first.
+        let scoped_request_ids = patch_rows
+            .requests
+            .iter()
+            .filter(|row| row.agent_did.is_some())
+            .map(|row| row.request_id.clone())
+            .collect::<HashSet<_>>();
+        rows.requests.retain(|row| {
+            row.agent_did.is_some() || !scoped_request_ids.contains(row.request_id.as_str())
+        });
+        let scoped_response_keys = patch_rows
+            .responses
+            .iter()
+            .filter(|row| row.agent_did.is_some())
+            .map(|row| row.response_key.clone())
+            .collect::<HashSet<_>>();
+        rows.responses.retain(|row| {
+            row.agent_did.is_some() || !scoped_response_keys.contains(row.response_key.as_str())
+        });
+
         upsert_rows_by_key(&mut rows.requests, patch_rows.requests, request_merge_key);
         upsert_rows_by_key(
             &mut rows.responses,
@@ -531,5 +825,237 @@ impl ClientStore {
                 .clone(),
             chain_key_binding_source_agent_dids: self.chain_key_binding_source_agent_dids.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+    use gents::document_config::{
+        AgentBehavior, AgentPrincipal, InferenceBackend, InferenceBackendObservation, Task,
+    };
+    use gents_protocol::row::{AgentBehaviorReadinessRow, AgentRuntimeRow};
+
+    #[test]
+    fn overlay_replaces_this_agent_and_keeps_others() {
+        let local = ClientStore::from_rows(ClientStoreRows {
+            agent_principals: vec![
+                principal("did:test:local", "Desktop leftover"),
+                principal("did:test:other", "Other"),
+            ],
+            behaviors: vec![behavior("did:test:local", "ghost")],
+            runtimes: vec![runtime("did:test:local", "desktop")],
+            behavior_readiness: vec![readiness("did:test:local", "desktop")],
+            inference_backends: vec![
+                backend("did:test:local", "Desktop backend"),
+                backend("did:test:other", "Other backend"),
+            ],
+            inference_backend_source_agent_dids: vec![
+                Some("did:test:local".to_string()),
+                Some("did:test:other".to_string()),
+            ],
+            backend_observations: vec![
+                backend_observation("stale"),
+                backend_observation("other-healthy"),
+            ],
+            backend_observation_source_agent_dids: vec![
+                Some("did:test:local".to_string()),
+                Some("did:test:other".to_string()),
+            ],
+            tasks: vec![task("did:test:local", "stale-task", false)],
+            ..ClientStoreRows::default()
+        });
+        let remote = ClientStore::from_rows(ClientStoreRows {
+            agent_principals: vec![principal("did:test:local", "Mandrake")],
+            behaviors: vec![behavior("did:test:local", "Default")],
+            runtimes: vec![runtime("did:test:local", "agent")],
+            behavior_readiness: vec![readiness("did:test:local", "agent")],
+            inference_backends: vec![backend("did:test:local", "Agent backend")],
+            backend_observations: vec![backend_observation("healthy")],
+            tasks: vec![task("did:test:local", "canonical-task", true)],
+            ..ClientStoreRows::default()
+        });
+        let overlayed = local.overlay_agent_operator_config("did:test:local", &remote);
+        assert_eq!(overlayed.agent_principals.len(), 2);
+        assert_eq!(
+            overlayed
+                .agent_principals
+                .iter()
+                .find(|row| row.agent_did == "did:test:local")
+                .and_then(|row| row.display_name.as_deref()),
+            Some("Mandrake")
+        );
+        assert_eq!(
+            overlayed
+                .agent_principals
+                .iter()
+                .find(|row| row.agent_did == "did:test:other")
+                .and_then(|row| row.display_name.as_deref()),
+            Some("Other")
+        );
+        assert_eq!(overlayed.behaviors.len(), 1);
+        assert_eq!(
+            overlayed.behaviors[0].display_name.as_deref(),
+            Some("Default")
+        );
+        assert_eq!(
+            overlayed.runtimes[0].reconcile_phase.as_deref(),
+            Some("agent")
+        );
+        assert_eq!(overlayed.behavior_readiness[0].snapshot_json, "agent");
+        assert_eq!(overlayed.inference_backends.len(), 2);
+        let observations = overlayed
+            .backend_observations
+            .iter()
+            .zip(&overlayed.backend_observation_source_agent_dids)
+            .map(|(row, source)| {
+                (
+                    source.as_deref().expect("observation source"),
+                    row.probe_status.as_deref().expect("probe status"),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(observations.get("did:test:local"), Some(&"healthy"));
+        assert_eq!(observations.get("did:test:other"), Some(&"other-healthy"));
+        assert_eq!(overlayed.tasks.len(), 1);
+        assert_eq!(overlayed.tasks[0].task_id, "canonical-task");
+        assert!(overlayed.tasks[0].enabled);
+        assert_eq!(
+            overlayed.task_source_agent_dids[0].as_deref(),
+            Some("did:test:local")
+        );
+    }
+
+    fn principal(agent_did: &str, display_name: &str) -> AgentPrincipal {
+        AgentPrincipal {
+            agent_did: agent_did.to_string(),
+            display_name: Some(display_name.to_string()),
+            default_behavior_id: None,
+            enabled: true,
+            created_at: None,
+            created_by: None,
+            tags: Vec::new(),
+        }
+    }
+
+    fn behavior(agent_did: &str, display_name: &str) -> AgentBehavior {
+        serde_json::from_value(serde_json::json!({
+            "agent_did": agent_did,
+            "behavior_id": format!("{agent_did}:default"),
+            "display_name": display_name,
+            "enabled": true,
+            "inference_profile_id": format!("{agent_did}:profile"),
+        }))
+        .expect("behavior")
+    }
+
+    fn task(agent_did: &str, task_id: &str, enabled: bool) -> Task {
+        serde_json::from_value(serde_json::json!({
+            "agent_did": agent_did,
+            "task_id": task_id,
+            "behavior_id": "behavior",
+            "prompt_template": "Do the thing",
+            "enabled": enabled,
+        }))
+        .expect("task")
+    }
+
+    fn runtime(agent_did: &str, reconcile_phase: &str) -> AgentRuntimeRow {
+        AgentRuntimeRow {
+            agent_did: agent_did.to_string(),
+            reconcile_phase: Some(reconcile_phase.to_string()),
+            behavior_executor_capacity: None,
+            behavior_executor_queue_depth: None,
+            behavior_executor_status_json: None,
+            last_reconcile_result: None,
+            last_reconcile_error: None,
+            last_reconcile_completed_at: None,
+            updated_at: None,
+        }
+    }
+
+    fn readiness(agent_did: &str, snapshot_json: &str) -> AgentBehaviorReadinessRow {
+        AgentBehaviorReadinessRow {
+            agent_did: agent_did.to_string(),
+            snapshot_json: snapshot_json.to_string(),
+            updated_at: "2026-09-12T00:00:00Z".to_string(),
+        }
+    }
+
+    fn backend(agent_did: &str, name: &str) -> InferenceBackend {
+        serde_json::from_value(serde_json::json!({
+            "agent_did": agent_did,
+            "backend_id": "backend",
+            "name": name,
+            "provider_kind": "OpenAiCompatible",
+            "openai_wire_api": "chat_completions",
+            "endpoint": "http://localhost:8000/v1",
+            "auth": {"kind": "unauthenticated"},
+            "enabled": true,
+        }))
+        .expect("backend")
+    }
+
+    fn backend_observation(probe_status: &str) -> InferenceBackendObservation {
+        InferenceBackendObservation {
+            backend_id: "backend".to_string(),
+            catalogs: Vec::new(),
+            probe_status: Some(probe_status.to_string()),
+            last_probe: None,
+        }
+    }
+
+    #[test]
+    fn scoped_chat_patch_replaces_unscoped_optimistic_rows() {
+        let local = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![request(None, "processing")],
+            responses: vec![response(None, "streaming")],
+            ..ClientStoreRows::default()
+        });
+        let remote = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![request(Some("did:test:agent"), "completed")],
+            responses: vec![response(Some("did:test:agent"), "complete")],
+            ..ClientStoreRows::default()
+        });
+
+        let merged = local.merge_chat_patch(remote);
+
+        assert_eq!(merged.requests.len(), 1);
+        assert_eq!(merged.responses.len(), 1);
+        assert_eq!(
+            merged.requests[0].agent_did.as_deref(),
+            Some("did:test:agent")
+        );
+        assert!(merged.requests[0].is_terminal());
+        assert_eq!(
+            merged.responses[0].agent_did.as_deref(),
+            Some("did:test:agent")
+        );
+        assert_eq!(merged.responses[0].status.as_deref(), Some("complete"));
+    }
+
+    fn request(agent_did: Option<&str>, lifecycle_state: &str) -> AgentRequestRow {
+        serde_json::from_value(serde_json::json!({
+            "request_id": "request",
+            "agent_did": agent_did,
+            "session_id": "session",
+            "content": "hello",
+            "lifecycle_state": lifecycle_state,
+            "created_at": "2026-09-12T00:00:00Z",
+        }))
+        .expect("request")
+    }
+
+    fn response(agent_did: Option<&str>, status: &str) -> AgentResponseRow {
+        serde_json::from_value(serde_json::json!({
+            "response_key": "request",
+            "request_id": "request",
+            "agent_did": agent_did,
+            "session_id": "session",
+            "content": "hello",
+            "status": status,
+            "created_at": "2026-09-12T00:00:00Z",
+        }))
+        .expect("response")
     }
 }

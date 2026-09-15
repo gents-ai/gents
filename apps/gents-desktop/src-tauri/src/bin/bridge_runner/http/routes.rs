@@ -132,6 +132,9 @@ pub(super) fn handle_request(
             let snapshot = runtime.block_on(build_desktop_client_snapshot(fixture));
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
+        ("GET", "/desktop/inference/setup/catalog") => Ok(HttpResponse::json_ok(
+            serde_json::to_string(&gents::inference_setup::inference_setup_catalog())?,
+        )),
         ("POST", "/desktop/init") => Ok(HttpResponse::json_ok(serde_json::to_string(
             &fixture.init_summary(),
         )?)),
@@ -543,7 +546,7 @@ pub(super) fn handle_request(
                 "decoding component apply request",
             )?;
             runtime.block_on(gents_desktop_bridge::commands::apply_config_components(
-                fixture.desktop_core().as_ref(),
+                fixture.remote_core().as_ref(),
                 request,
             ))?;
             Ok(snapshot_response(runtime, fixture)?)
@@ -554,7 +557,7 @@ pub(super) fn handle_request(
                 "decoding component patch request",
             )?;
             runtime.block_on(gents_desktop_bridge::commands::patch_config_components(
-                fixture.desktop_core().as_ref(),
+                fixture.remote_core().as_ref(),
                 request,
             ))?;
             Ok(snapshot_response(runtime, fixture)?)

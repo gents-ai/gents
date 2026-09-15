@@ -53,6 +53,25 @@ pub async fn cancel_background_tool_call(
     session_id: &str,
     tool_call_id: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
+    cancel_background_tool_call_with_cause(
+        node,
+        background_executions,
+        agent_did,
+        session_id,
+        tool_call_id,
+        CancelCause::UserCancelled,
+    )
+    .await
+}
+
+pub(crate) async fn cancel_background_tool_call_with_cause(
+    node: Arc<EmbeddedNode>,
+    background_executions: &BackgroundExecutionRegistry,
+    agent_did: &str,
+    session_id: &str,
+    tool_call_id: &str,
+    cause: CancelCause,
+) -> Result<CancelBackgroundToolCallOutcome> {
     let Some(mut lifecycle) =
         ToolCallLifecycle::load(node.clone(), session_id, tool_call_id).await?
     else {
@@ -69,7 +88,7 @@ pub async fn cancel_background_tool_call(
     }
 
     let persisted = lifecycle
-        .cancel_during_run_with_cascade_dispatch(CancelCause::UserCancelled, agent_did)
+        .cancel_during_run_with_cascade_dispatch(cause, agent_did)
         .await;
     // Persist the operator-authored terminal cause before signalling the live
     // worker. Otherwise the worker can observe cancellation first and win the

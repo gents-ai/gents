@@ -219,6 +219,7 @@ fn validate_raw_persona_document(doc: &PersonaRequestDoc) -> Result<()> {
     use gents_protocol::canonical::{
         parse_utc_seconds, require_enum, require_identifier, require_optional_identifier,
     };
+    use gents_protocol::persona::MAX_PERSONA_FIELD_BYTES;
     require_identifier("persona document id", &doc.doc_id)?;
     for (name, value) in [
         ("request_key", doc.request_key.as_str()),
@@ -228,6 +229,10 @@ fn validate_raw_persona_document(doc: &PersonaRequestDoc) -> Result<()> {
         ("op", doc.op_raw.as_str()),
     ] {
         require_identifier(name, value)?;
+        anyhow::ensure!(
+            value.len() <= MAX_PERSONA_FIELD_BYTES,
+            "{name} exceeds maximum length"
+        );
     }
     require_enum(
         "persona authority_kind",
@@ -248,7 +253,21 @@ fn validate_raw_persona_document(doc: &PersonaRequestDoc) -> Result<()> {
         ("preset", doc.preset.as_deref()),
         ("profile_id", doc.profile_id.as_deref()),
     ] {
+        anyhow::ensure!(
+            value.is_none_or(|value| value.len() <= MAX_PERSONA_FIELD_BYTES),
+            "{name} exceeds maximum length"
+        );
         require_optional_identifier(name, value)?;
+    }
+    for (name, value) in [
+        ("persona_name", doc.persona_name.as_deref()),
+        ("description", doc.description.as_deref()),
+        ("system_prompt", doc.system_prompt.as_deref()),
+    ] {
+        anyhow::ensure!(
+            value.is_none_or(|value| value.len() <= MAX_PERSONA_FIELD_BYTES),
+            "{name} exceeds maximum length"
+        );
     }
     let created_at = doc
         .created_at
@@ -429,9 +448,12 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
                 behavior_id
                 clone_from
                 persona_name
+                description
+                system_prompt
                 root
                 preset
                 profile_id
+                make_default
                 created_at
                 status
                 status_detail
@@ -541,6 +563,7 @@ async fn load_catalog_view_from_node(
             AgentBehavior(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
                 behavior_id
                 enabled
+                tags
             }}
         }}"#
     );
@@ -591,6 +614,9 @@ async fn load_catalog_view_from_node(
                     behavior_id,
                     BehaviorRef {
                         enabled: row.enabled.unwrap_or(true),
+                        protected: row.tags.as_deref().unwrap_or_default().iter().any(|tag| {
+                            tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+                        }),
                     },
                 ))
             })
@@ -631,9 +657,12 @@ fn persona_request_doc_from_row(row: PersonaRequestRow) -> Option<PersonaRequest
         op,
         behavior_id: row.behavior_id,
         persona_name: row.persona_name,
+        description: row.description,
+        system_prompt: row.system_prompt,
         root: row.root,
         preset: row.preset,
         profile_id: row.profile_id,
+        make_default: row.make_default.unwrap_or(false),
         created_at: row.created_at,
         status: row.status,
         status_detail: row.status_detail,
@@ -656,9 +685,12 @@ fn local_persona_record(doc: &PersonaRequestDoc) -> LocalPersonaRequestRecord {
             _ => None,
         },
         persona_name: doc.persona_name.clone(),
+        description: doc.description.clone(),
+        system_prompt: doc.system_prompt.clone(),
         root: doc.root.clone(),
         preset: doc.preset.clone(),
         profile_id: doc.profile_id.clone(),
+        make_default: doc.make_default,
         created_at: doc.created_at.clone().unwrap_or_default(),
         local_signature: doc.local_signature.clone(),
     }
@@ -735,11 +767,17 @@ struct PersonaRequestRow {
     #[serde(default)]
     persona_name: Option<String>,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    system_prompt: Option<String>,
+    #[serde(default)]
     root: Option<String>,
     #[serde(default)]
     preset: Option<String>,
     #[serde(default)]
     profile_id: Option<String>,
+    #[serde(default)]
+    make_default: Option<bool>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
@@ -780,6 +818,8 @@ struct AgentBehaviorCatalogRow {
     behavior_id: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -844,6 +884,33 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn catalog_marks_the_setup_steward_as_protected() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = build_apply_node(&tempdir).await;
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentBehavior(input: {{
+                    agent_did: "did:key:agent",
+                    behavior_id: "setup",
+                    display_name: "Setup",
+                    inference_profile_id: "profile-1",
+                    enabled: true,
+                    tags: ["{}"]
+                }}) {{ _docID }}
+            }}"#,
+            crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+        );
+        ensure_no_errors(&node.execute(&mutation).await, "seed protected Setup")?;
+
+        let catalog = load_catalog_view_from_node(&node, "did:key:agent", None).await?;
+        assert!(catalog
+            .behaviors
+            .get("setup")
+            .is_some_and(|behavior| behavior.protected));
+        Ok(())
+    }
+
     fn happy_catalog(agent_did: &str) -> PersonaCatalogView {
         PersonaCatalogView {
             allowed_roots: BTreeSet::new(),
@@ -869,6 +936,8 @@ mod tests {
             op_raw: "create".to_string(),
             op: Some(PersonaOp::Create { clone_from: None }),
             persona_name: Some("Research Assistant".to_string()),
+            description: Some("Researches a focused question".to_string()),
+            system_prompt: Some("Research the question and cite evidence.".to_string()),
             preset: Some(crate::agent::persona_presets::PRESET_WRITE.to_string()),
             profile_id: Some("profile-1".to_string()),
             created_at: Some("2026-08-30T00:00:00Z".to_string()),
@@ -917,6 +986,11 @@ mod tests {
             opaque_name.persona_name.as_deref(),
             Some("  Display Name  ")
         );
+
+        let mut oversized_prompt = pending_create_doc("oversized-prompt", "did:key:agent");
+        oversized_prompt.system_prompt =
+            Some("x".repeat(gents_protocol::persona::MAX_PERSONA_FIELD_BYTES + 1));
+        assert!(validate_raw_persona_document(&oversized_prompt).is_err());
     }
 
     #[test]
@@ -1238,6 +1312,10 @@ mod tests {
                 behavior.behavior_id.clone(),
                 BehaviorRef {
                     enabled: behavior.enabled,
+                    protected: behavior
+                        .tags
+                        .iter()
+                        .any(|tag| tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG),
                 },
             );
         }
@@ -1316,9 +1394,12 @@ mod tests {
             behavior_id: None,
             clone_from: None,
             persona_name: Some("Research Assistant".to_string()),
+            description: Some("Researches a focused question".to_string()),
+            system_prompt: Some("Research the question and cite evidence.".to_string()),
             root: Some("/repo/allowed".to_string()),
             preset: Some("write".to_string()),
             profile_id: Some("profile-1".to_string()),
+            make_default: true,
             created_at: "2026-07-23T00:00:00Z".to_string(),
             local_signature: Vec::new(),
         };
@@ -1347,6 +1428,12 @@ mod tests {
             Some("Research Assistant".to_string())
         );
         assert!(behavior.enabled);
+        assert_eq!(
+            crate::load_agent_principal(&node, &agent_did)
+                .await?
+                .and_then(|principal| principal.default_behavior_id),
+            Some(behavior_id.clone())
+        );
         let (context, tools) = crate::config_client::ConfigAccess::transact_local(
             &node,
             None,

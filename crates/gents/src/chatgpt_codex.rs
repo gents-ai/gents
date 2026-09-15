@@ -120,7 +120,7 @@ pub fn chatgpt_codex_client_version() -> String {
 // version, so an old default silently hides newer model families (#982).
 // Keep this at a current codex CLI release when bumping the vendored codex
 // crate rev; GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides it at runtime.
-const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.144.4";
+const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.154.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
 /// [`crate::oauth_http::OAuthHttpPolicy`] policy for the ChatGPT Codex

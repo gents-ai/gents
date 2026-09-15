@@ -305,6 +305,7 @@ async fn write_webhook_event(node: &EmbeddedNode, external_id: &str, kind: &str)
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn event_trigger_fires_on_source_doc_create_end_to_end() {
+    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("event-trigger-e2e").await;
 
     register_webhook_event_schema(db.node.as_ref()).await;

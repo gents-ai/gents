@@ -45,6 +45,14 @@
       "permissionSet": "runtime-admin"
     },
     {
+      "name": "desktop_managed_server_restart",
+      "permissionSet": "runtime-admin"
+    },
+    {
+      "name": "desktop_managed_server_validate_root",
+      "permissionSet": "runtime-admin"
+    },
+    {
       "name": "desktop_session_snapshot",
       "permissionSet": "session-read"
     },
@@ -205,6 +213,10 @@
       "permissionSet": "config-write"
     },
     {
+      "name": "desktop_context_delete",
+      "permissionSet": "config-write"
+    },
+    {
       "name": "desktop_backend_save",
       "permissionSet": "config-write"
     },
@@ -229,6 +241,22 @@
       "permissionSet": "config-write"
     },
     {
+      "name": "desktop_inference_setup_catalog",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_inference_models_discover",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_inference_model_recommendation",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_inference_backend_recommendation",
+      "permissionSet": "config-write"
+    },
+    {
       "name": "desktop_codex_login",
       "permissionSet": "config-write"
     },
@@ -242,6 +270,14 @@
     },
     {
       "name": "desktop_grok_login_cancel",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_claude_login",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_claude_login_cancel",
       "permissionSet": "config-write"
     },
     {
@@ -289,7 +325,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "7.1",
+  "contractVersion": "7.8",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -314,10 +350,11 @@
     "desktop://client-updated",
     "desktop://codex-login-url",
     "desktop://grok-login-url",
+    "desktop://claude-login-url",
     "desktop://managed-server-updated",
     "desktop://managed-server-tray-stop"
   ],
-  "packageVersion": "0.16.4",
+  "packageVersion": "0.17.0",
   "permissionSets": [
     {
       "kind": "bundle",
@@ -416,5 +453,5 @@
       "name": "full"
     }
   ],
-  "wireSchemaHash": "ca91687078715ce91788ea04cb72e3a6d0eae8a845bfb84a7c7cf1b6acbc04da"
+  "wireSchemaHash": "e5ff21ba8b9a75532ebe0506db35136cd2c7220b44c64846ea51b41b306ad52d"
 }

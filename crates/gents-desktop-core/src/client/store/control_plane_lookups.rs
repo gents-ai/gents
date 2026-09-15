@@ -22,7 +22,7 @@ impl ClientStore {
             .iter()
             .filter(|row| row.enabled)
             .collect::<Vec<_>>();
-        (enabled.len() == 1).then_some(enabled[0].behavior_id.as_str())
+        (enabled.len() == 1).then(|| enabled[0].behavior_id.as_str())
     }
 
     pub fn behavior_rows(&self, agent_did: &str) -> Vec<&AgentBehavior> {

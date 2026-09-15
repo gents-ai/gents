@@ -336,6 +336,26 @@ impl CommandExecutionPolicy {
     pub fn deny_git_metadata_writes(&self) -> bool {
         self.deny_git_metadata_writes
     }
+
+    /// User-facing disclosure derived beside the execution-time network
+    /// validator. It describes the enforcement boundary, not observed sandbox
+    /// availability; launch still fails closed when enforcement is unavailable.
+    pub fn network_enforcement_disclosure(&self) -> &'static str {
+        if self.network_mode != CommandNetworkMode::Disabled {
+            return "network is not disabled by this behavior policy";
+        }
+        match self.mode {
+            CommandExecutionMode::Unrestricted => {
+                "fail_closed: unrestricted commands are denied because disabled network cannot be enforced"
+            }
+            CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite => {
+                "required_at_execution: command sandbox must enforce disabled network or the command is denied"
+            }
+            CommandExecutionMode::ReadOnly => {
+                "validated_at_execution: known network commands are denied"
+            }
+        }
+    }
 }
 
 /// Bash-independent spawn constraints projected from the effective policy meet.
@@ -1682,4 +1702,48 @@ fn shell_quote(arg: &str) -> String {
         return arg.to_string();
     }
     format!("'{}'", arg.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod network_enforcement_disclosure_tests {
+    use super::*;
+
+    #[test]
+    fn disclosure_tracks_the_execution_time_network_validator() {
+        let unrestricted = CommandExecutionPolicy::write_capable()
+            .with_mode(CommandExecutionMode::Unrestricted)
+            .with_network_mode(CommandNetworkMode::Disabled);
+        assert!(validate_network_mode("echo", &[], &unrestricted).is_err());
+        assert!(unrestricted
+            .network_enforcement_disclosure()
+            .starts_with("fail_closed:"));
+
+        for mode in [
+            CommandExecutionMode::WorkspaceWrite,
+            CommandExecutionMode::ArtifactWrite,
+        ] {
+            let sandboxed = CommandExecutionPolicy::write_capable()
+                .with_mode(mode)
+                .with_network_mode(CommandNetworkMode::Disabled);
+            assert!(validate_network_mode("echo", &[], &sandboxed).is_ok());
+            assert!(sandboxed
+                .network_enforcement_disclosure()
+                .starts_with("required_at_execution:"));
+        }
+
+        let read_only = CommandExecutionPolicy::read_only(vec!["curl".into()])
+            .with_network_mode(CommandNetworkMode::Disabled);
+        assert!(validate_network_mode("curl", &[], &read_only).is_err());
+        assert!(validate_network_mode("echo", &[], &read_only).is_ok());
+        assert!(read_only
+            .network_enforcement_disclosure()
+            .starts_with("validated_at_execution:"));
+
+        let inherited = CommandExecutionPolicy::read_only(Vec::new());
+        assert!(validate_network_mode("curl", &[], &inherited).is_ok());
+        assert_eq!(
+            inherited.network_enforcement_disclosure(),
+            "network is not disabled by this behavior policy"
+        );
+    }
 }

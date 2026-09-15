@@ -39,6 +39,7 @@ describe("desktop bridge contract", () => {
       "4.2",
       "5.1",
       "6.0",
+      "7.1",
       "5",
       "5.0.0",
       " 5.0",
@@ -52,9 +53,7 @@ describe("desktop bridge contract", () => {
 
   it("keeps package release identity exact", () => {
     expect(() =>
-      assertExactBridgeContract(
-        contract(BRIDGE_CONTRACT_VERSION, "0.13.0"),
-      ),
+      assertExactBridgeContract(contract(BRIDGE_CONTRACT_VERSION, "0.13.0")),
     ).toThrow("Gents desktop package mismatch");
   });
 
@@ -126,6 +125,45 @@ describe("desktop bridge contract", () => {
     ).resolves.toEqual(enrollment);
     expect(transport.calls.map(({ command }) => command)).toEqual([
       "desktop_peer_enroll_status",
+    ]);
+  });
+
+  it("invokes managed runtime restart with the exact reviewed authority", async () => {
+    const restarted = {
+      state: "running",
+      autoStart: true,
+      agentName: "Workshop Agent",
+      agentDid: "did:key:agent",
+      graphql: "http://127.0.0.1:9191/graphql",
+      effectiveToolCeiling: "meta-only",
+      effectiveToolRoot: null,
+      suggestedToolRoot: "/Users/test",
+      pairingReady: false,
+      error: null,
+    };
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_managed_server_restart: (args) => {
+          expect(args).toEqual({
+            request: {
+              agentName: "Workshop Agent",
+              toolCeiling: "meta-only",
+              toolRoot: null,
+            },
+          });
+          return restarted;
+        },
+      },
+    });
+
+    await expect(
+      createDesktopClient(transport).api.restartManagedServer("Workshop Agent", {
+        toolCeiling: "meta-only",
+        toolRoot: null,
+      }),
+    ).resolves.toEqual(restarted);
+    expect(transport.calls.map(({ command }) => command)).toEqual([
+      "desktop_managed_server_restart",
     ]);
   });
 });

@@ -418,7 +418,7 @@ describe("projectChatShell", () => {
     "matches generated Lean ClientShell projection contracts",
     async () => {
       const contractCases = await loadLeanClientShellCases();
-      expect(contractCases).toHaveLength(16);
+      expect(contractCases).toHaveLength(26);
 
       for (const contractCase of contractCases) {
         const projection = projectChatShell({

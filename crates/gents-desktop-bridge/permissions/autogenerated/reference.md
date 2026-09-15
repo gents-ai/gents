@@ -232,6 +232,58 @@ Denies the desktop_chat_send command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-claude-login`
+
+</td>
+<td>
+
+Enables the desktop_claude_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-claude-login`
+
+</td>
+<td>
+
+Denies the desktop_claude_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-claude-login-cancel`
+
+</td>
+<td>
+
+Enables the desktop_claude_login_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-claude-login-cancel`
+
+</td>
+<td>
+
+Denies the desktop_claude_login_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-client-shutdown`
 
 </td>
@@ -414,6 +466,32 @@ Denies the desktop_config_components_patch command without any pre-configured sc
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-context-delete`
+
+</td>
+<td>
+
+Enables the desktop_context_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-context-delete`
+
+</td>
+<td>
+
+Denies the desktop_context_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-event-source-delete`
 
 </td>
@@ -518,6 +596,84 @@ Denies the desktop_grok_login_cancel command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-inference-backend-recommendation`
+
+</td>
+<td>
+
+Enables the desktop_inference_backend_recommendation command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-inference-backend-recommendation`
+
+</td>
+<td>
+
+Denies the desktop_inference_backend_recommendation command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-inference-model-recommendation`
+
+</td>
+<td>
+
+Enables the desktop_inference_model_recommendation command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-inference-model-recommendation`
+
+</td>
+<td>
+
+Denies the desktop_inference_model_recommendation command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-inference-models-discover`
+
+</td>
+<td>
+
+Enables the desktop_inference_models_discover command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-inference-models-discover`
+
+</td>
+<td>
+
+Denies the desktop_inference_models_discover command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-inference-profile-delete`
 
 </td>
@@ -563,6 +719,32 @@ Enables the desktop_inference_profile_save command without any pre-configured sc
 <td>
 
 Denies the desktop_inference_profile_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-inference-setup-catalog`
+
+</td>
+<td>
+
+Enables the desktop_inference_setup_catalog command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-inference-setup-catalog`
+
+</td>
+<td>
+
+Denies the desktop_inference_setup_catalog command without any pre-configured scope.
 
 </td>
 </tr>
@@ -778,6 +960,32 @@ Denies the desktop_mailbox_start_request command without any pre-configured scop
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-managed-server-restart`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_restart command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-restart`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_restart command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-managed-server-start`
 
 </td>
@@ -849,6 +1057,32 @@ Enables the desktop_managed_server_stop command without any pre-configured scope
 <td>
 
 Denies the desktop_managed_server_stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-managed-server-validate-root`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_validate_root command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-validate-root`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_validate_root command without any pre-configured scope.
 
 </td>
 </tr>
