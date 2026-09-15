@@ -18,6 +18,7 @@ import type {
   DesktopSessionSnapshot,
   GoalView,
 } from "@source-inc/gents-desktop-client";
+import type { SendStatus } from "@source-inc/gents-desktop-chat";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import {
@@ -59,7 +60,6 @@ import {
 import { Markdown } from "./Markdown";
 import { ToolBody } from "./tool-views";
 import { toolSummary } from "./tool-summary";
-import { sendStatus } from "@/lib/send-status";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
@@ -77,6 +77,16 @@ function formatTokens(value: number) {
 }
 
 const TRANSCRIPT_FOLLOW_THRESHOLD_PX = 64;
+
+/** Add only local composer emptiness; every other blocker belongs to ClientShell. */
+export function presentedComposerSendStatus(
+  draft: string,
+  canonicalNonEmptyStatus: SendStatus,
+): SendStatus {
+  return draft.trim()
+    ? canonicalNonEmptyStatus
+    : { kind: "disabled", reason: "composerEmpty", hint: "Type a message to send" };
+}
 
 function transcriptViewport(owner: HTMLDivElement | null) {
   return owner?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]") ?? null;
@@ -378,14 +388,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       (e) => e.behaviorId === choice.behaviorId,
     );
     const chosenName = behaviorName(choice.behaviorId, deployment);
-    const startStatus = sendStatus({
-      clientOnline: Boolean(shell.snapshot?.client),
-      deployment,
-      behaviorId: choice.behaviorId,
-      sending: shell.sending,
-      inFlight: false,
-      turnState: null,
-    });
+    const startStatus = presentedComposerSendStatus(
+      draft,
+      shell.nonEmptyContentSendStatus,
+    );
     return (
       <div
         key={shell.selectedAgentDid ?? "new"}
@@ -411,7 +417,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             onChange={setDraft}
             onSend={send}
             models={[]}
-            disabled={startStatus.kind === "disabled"}
+            disabled={shell.nonEmptyContentSendStatus.kind === "disabled"}
             above={
               <SlashSkillMenu
                 items={startSlash.items}
@@ -546,15 +552,8 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       if (el) el.scrollTop += el.scrollHeight - before;
     });
   };
-  /* whether a message can go, in the desktop's words */
-  const status = sendStatus({
-    clientOnline: Boolean(shell.snapshot?.client),
-    deployment,
-    behaviorId: session?.behaviorId ?? null,
-    sending: shell.sending,
-    inFlight,
-    turnState: session?.turnState,
-  });
+  /* Local text plus the canonical shell admission decision. */
+  const status = presentedComposerSendStatus(draft, shell.nonEmptyContentSendStatus);
 
   /* PROTOTYPE ONLY: fork this session and open the copy */
   const fork = async () => {
@@ -877,7 +876,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     onChange={setDraft}
                     onSend={send}
                     models={[]}
-                    disabled={status.kind === "disabled" && !inFlight}
+                    disabled={
+                      shell.nonEmptyContentSendStatus.kind === "disabled" && !inFlight
+                    }
                     above={
                       <SlashSkillMenu
                         items={slash.items}

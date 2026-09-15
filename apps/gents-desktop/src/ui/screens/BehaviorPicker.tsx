@@ -13,7 +13,7 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
 import { createBehavior } from "./agent/createBehavior";
 import { BehaviorAvatar } from "./parts";
-import { behaviorReadiness } from "@/lib/send-status";
+import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
 /* the access modes at a glance, short enough for one line */

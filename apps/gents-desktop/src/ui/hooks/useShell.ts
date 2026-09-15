@@ -86,6 +86,7 @@ export function useShell(
       snapshot: d.snapshot,
       error: d.error,
       activityStatus: d.activityStatus,
+      nonEmptyContentSendStatus: d.nonEmptyContentSendStatus,
       interruptVisible: d.interruptVisible,
       activeRequestId: d.activeRequestId,
       sending: d.sending || chatSubmitting,

@@ -369,6 +369,7 @@ export function useDesktopShell({
     activityStatus: shellProjection.activityStatus,
     submitContent,
     sendStatus: shellProjection.sendStatus,
+    nonEmptyContentSendStatus: shellProjection.nonEmptyContentSendStatus,
     retryStatus: retryShellProjection.nonEmptyContentSendStatus,
     setSelectedAgentDid: selectAgent,
     setSelectedSessionId: selectSession,
