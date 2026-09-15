@@ -2,7 +2,7 @@
    markdown, a header on every code block with its language and a copy
    button. Styling comes from the kit's prose-app utility; the block
    header is the one thing added here. */
-import { isValidElement, useRef, useState, type ReactNode } from "react";
+import { isValidElement, memo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
@@ -54,10 +54,10 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-export function Markdown({ children }: { children: string }) {
+export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
       {children}
     </ReactMarkdown>
   );
-}
+});

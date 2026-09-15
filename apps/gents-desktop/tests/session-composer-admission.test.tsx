@@ -12,6 +12,14 @@ import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import { useDesktopChatProjectionState } from "../src/hooks/useDesktopChatProjectionState";
 
 const navigate = vi.hoisted(() => vi.fn());
+const markdownRender = vi.hoisted(() => vi.fn());
+vi.mock("../src/ui/screens/Markdown", () => ({
+  CopyButton: () => null,
+  Markdown: ({ children }: { children: string }) => {
+    markdownRender(children);
+    return <div>{children}</div>;
+  },
+}));
 vi.mock("@/lib/router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/ui/lib/router")>()),
   navigate,
@@ -109,6 +117,26 @@ function OwnedSessionScreen({ shell }: { shell: Shell }) {
 }
 
 describe("SessionScreen canonical composer admission", () => {
+  it("keeps transcript markdown out of real context-owned draft updates", async () => {
+    const shell = existingSessionShell({ kind: "ready" });
+    shell.selectedSession!.timelineItems = [
+      {
+        kind: "assistantMessage",
+        itemKey: "assistant-stable",
+        sequence: 1,
+        content: "Stable transcript",
+        reasoning: null,
+        timestamp: null,
+      },
+    ];
+    markdownRender.mockClear();
+    render(<OwnedSessionScreen shell={shell} />);
+    expect(markdownRender).toHaveBeenCalledTimes(1);
+    await userEvent.type(screen.getByLabelText("Message"), "a real draft");
+    expect(screen.getByLabelText("Message")).toHaveValue("a real draft");
+    expect(markdownRender).toHaveBeenCalledTimes(1);
+  });
+
   it("does not erase text edited while the prior draft is being accepted", async () => {
     let resolve!: (result: { sessionId: string; requestId: string }) => void;
     const pending = new Promise<{ sessionId: string; requestId: string }>((done) => {

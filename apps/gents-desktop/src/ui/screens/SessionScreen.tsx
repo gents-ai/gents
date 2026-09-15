@@ -2,7 +2,15 @@
    Built from the kit's conversation patterns over the desktop app's
    session projection: the timeline items are the bridge's own
    RenderedTimelineItem, rendered as they arrive. */
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import {
   ArrowDown,
   ArrowLeft,
@@ -17,6 +25,7 @@ import { toast } from "sonner";
 import type {
   DesktopSessionSnapshot,
   GoalView,
+  RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
 import { Button } from "@gents/ui/components/button";
@@ -275,12 +284,194 @@ export function SessionSubmissionStatus({
   );
 }
 
+function copyActions(text: string | null | undefined) {
+  return [
+    {
+      label: "Copy",
+      icon: <Copy />,
+      onClick: () => {
+        void navigator.clipboard?.writeText(text ?? "");
+        toast("Copied");
+      },
+    },
+  ];
+}
+
+const TranscriptItem = memo(function TranscriptItem({
+  item,
+}: {
+  item: RenderedTimelineItem;
+}) {
+  switch (item.kind) {
+    case "userMessage":
+    case "pendingUserTurn":
+      return (
+        <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
+      );
+    case "assistantMessage":
+      return (
+        <AssistantMessage actions={copyActions(item.content)}>
+          {item.reasoning && <Reasoning text={item.reasoning} />}
+          <Markdown>{item.content ?? ""}</Markdown>
+        </AssistantMessage>
+      );
+    case "toolGroup":
+      return (
+        <ToolSteps title="Activity">
+          {item.tools.map((tool) => {
+            const summary = toolSummary(tool);
+            return (
+              <ToolStep
+                key={tool.itemKey}
+                label={`${summary.kind} ${summary.primary}`.trim()}
+                status={stepStatus(tool.statusKind)}
+              >
+                {tool.statusKind !== "running" && tool.statusKind !== "held" ? (
+                  <ToolBody tool={tool} />
+                ) : undefined}
+              </ToolStep>
+            );
+          })}
+        </ToolSteps>
+      );
+    case "liveAssistant":
+      return (
+        <AssistantMessage>
+          {item.content && <Markdown>{item.content}</Markdown>}
+          <Thinking />
+        </AssistantMessage>
+      );
+  }
+});
+
+type TranscriptActions = Pick<Shell, "loadOlderSessionTimeline" | "retryMessage">;
+
+export const TranscriptPanel = memo(function TranscriptPanel({
+  actionsRef,
+  holdsCount,
+  inFlight,
+  ownerRef,
+  session,
+}: {
+  actionsRef: RefObject<TranscriptActions>;
+  holdsCount: number;
+  inFlight: boolean;
+  ownerRef: RefObject<HTMLDivElement | null>;
+  session: DesktopSessionSnapshot | null;
+}) {
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const sessionIdRef = useRef(session?.sessionId ?? null);
+  useLayoutEffect(() => {
+    sessionIdRef.current = session?.sessionId ?? null;
+  }, [session?.sessionId]);
+
+  const latest = session?.latestResponse;
+  const live = session?.timelineItems.find((item) => item.kind === "liveAssistant");
+  const wasInterrupted =
+    session?.turnState === "interrupted" ||
+    Boolean(latest?.interruptedAt) ||
+    latest?.cancelCause?.cause === "interrupted" ||
+    latest?.cancelCause?.cause === "userCancelled";
+  const responseError =
+    latest?.errorMessage?.trim() ||
+    (session?.turnState === "failed"
+      ? "The request failed before a response was available. Check the request trace for details."
+      : "");
+  const showError = Boolean(responseError) && !wasInterrupted && !inFlight;
+
+  const loadOlder = async () => {
+    const viewport = transcriptViewport(ownerRef.current);
+    const heightBefore = viewport?.scrollHeight ?? 0;
+    const sessionId = session?.sessionId ?? null;
+    setLoadingOlder(true);
+    try {
+      if (!(await actionsRef.current.loadOlderSessionTimeline())) return;
+    } finally {
+      setLoadingOlder(false);
+    }
+    requestAnimationFrame(() => {
+      if (viewport && sessionIdRef.current === sessionId) {
+        viewport.scrollTop += viewport.scrollHeight - heightBefore;
+      }
+    });
+  };
+
+  const retry = async () => {
+    const requestId = session?.latestRequestId;
+    if (!requestId) return;
+    setRetrying(true);
+    try {
+      await actionsRef.current.retryMessage(requestId);
+    } catch (error) {
+      toast(`Couldn't retry: ${String(error)}`);
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <div className="mt-6 grid gap-5" data-testid="transcript-panel">
+      {session?.timelinePage?.hasOlder && (
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid="transcript-load-older"
+          className="justify-self-center text-muted-foreground"
+          disabled={loadingOlder}
+          onClick={loadOlder}
+        >
+          {loadingOlder ? "Loading older messages…" : "Load older messages"}
+        </Button>
+      )}
+      {session?.timelineItems.map((item) => (
+        <TranscriptItem key={item.itemKey} item={item} />
+      ))}
+      {wasInterrupted && !inFlight && (
+        <p className="px-2 text-xs text-muted-foreground">
+          Interrupted
+          {latest?.cancelCause
+            ? ` · ${latest.cancelCause.cause} (${latest.cancelCause.source}, ${latest.cancelCause.confidence} confidence)`
+            : ""}
+          {latest?.cancelCause?.evidence.length
+            ? ` · ${latest.cancelCause.evidence.join("; ")}`
+            : ""}
+        </p>
+      )}
+      {showError && (
+        <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <p className="text-sm font-medium">
+            The assistant could not finish this turn.
+          </p>
+          <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
+            {responseError}
+          </pre>
+          {session?.retryEligibility?.eligible && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3"
+              disabled={retrying}
+              onClick={retry}
+            >
+              {retrying ? "Retrying…" : "Retry"}
+            </Button>
+          )}
+        </div>
+      )}
+      {inFlight && !live && holdsCount === 0 && (
+        <AssistantMessage>
+          <Thinking />
+        </AssistantMessage>
+      )}
+    </div>
+  );
+});
+
 export function SessionScreen({ shell }: { shell: Shell }) {
   const session = shell.selectedSession;
   const { draft, setDraft } = shell;
   const [cascadeFor, setCascadeFor] = useState<string | null>(null);
-  const [retrying, setRetrying] = useState(false);
-  const [loadingOlder, setLoadingOlder] = useState(false);
   const [forked, setForked] = useState<{ sessionId: string; title: string } | null>(
     null,
   );
@@ -291,25 +482,39 @@ export function SessionScreen({ shell }: { shell: Shell }) {
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement>(null);
   const viewport = () => transcriptViewport(column.current);
-  const transcriptContentSignal = (session?.timelineItems ?? [])
-    .map((item) => {
-      switch (item.kind) {
-        case "assistantMessage":
-        case "liveAssistant":
-          return `${item.itemKey}:${item.content?.length ?? 0}:${item.reasoning?.length ?? 0}`;
-        case "userMessage":
-        case "pendingUserTurn":
-          return `${item.itemKey}:${item.content.length}`;
-        case "toolGroup":
-          return `${item.itemKey}:${item.tools
-            .map(
-              (tool) =>
-                `${tool.itemKey}:${tool.statusKind}:${tool.partialOutputSeq ?? 0}:${tool.partialOutputTail?.length ?? 0}`,
-            )
-            .join(",")}`;
-      }
-    })
-    .join("|");
+  const transcriptContentSignal = useMemo(
+    () =>
+      (session?.timelineItems ?? [])
+        .map((item) => {
+          switch (item.kind) {
+            case "assistantMessage":
+            case "liveAssistant":
+              return `${item.itemKey}:${item.content?.length ?? 0}:${item.reasoning?.length ?? 0}`;
+            case "userMessage":
+            case "pendingUserTurn":
+              return `${item.itemKey}:${item.content.length}`;
+            case "toolGroup":
+              return `${item.itemKey}:${item.tools
+                .map(
+                  (tool) =>
+                    `${tool.itemKey}:${tool.statusKind}:${tool.partialOutputSeq ?? 0}:${tool.partialOutputTail?.length ?? 0}`,
+                )
+                .join(",")}`;
+          }
+        })
+        .join("|"),
+    [session?.timelineItems],
+  );
+  const transcriptActions = useRef<TranscriptActions>({
+    loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
+    retryMessage: shell.retryMessage,
+  });
+  useLayoutEffect(() => {
+    transcriptActions.current = {
+      loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
+      retryMessage: shell.retryMessage,
+    };
+  }, [shell.loadOlderSessionTimeline, shell.retryMessage]);
   /* away from the bottom, a button offers the way back; scrolling is the cue */
   const { atBottom, toBottom } = useTranscriptFollow(
     column,
@@ -463,7 +668,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
 
   /* ---- an existing session ---- */
   const holdsHere = shell.holds.filter((h) => h.sessionId === session?.sessionId);
-  const live = session?.timelineItems.find((i) => i.kind === "liveAssistant");
   const inFlight = shell.interruptVisible ?? Boolean(shell.selectedTrackedRequestId);
 
   /* stop: the desktop previews the cascade first; with no children it
@@ -501,46 +705,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     }
   };
 
-  /* retry after an error, as the desktop offers it */
-  const latest = session?.latestResponse;
-  const wasInterrupted =
-    session?.turnState === "interrupted" ||
-    Boolean(latest?.interruptedAt) ||
-    latest?.cancelCause?.cause === "interrupted" ||
-    latest?.cancelCause?.cause === "userCancelled";
-  const responseError =
-    latest?.errorMessage?.trim() ||
-    (session?.turnState === "failed"
-      ? "The request failed before a response was available. Check the request trace for details."
-      : "");
-  const showError = Boolean(responseError) && !wasInterrupted && !inFlight;
-  const retry = async () => {
-    const requestId = session?.latestRequestId;
-    if (!requestId) return;
-    setRetrying(true);
-    try {
-      await shell.retryMessage(requestId);
-    } catch (e) {
-      toast(`Couldn't retry: ${String(e)}`);
-    } finally {
-      setRetrying(false);
-    }
-  };
-
-  /* older pages prepend; the viewport keeps its place */
-  const loadOlder = async () => {
-    const el = viewport();
-    const before = el?.scrollHeight ?? 0;
-    setLoadingOlder(true);
-    try {
-      await shell.loadOlderSessionTimeline();
-    } finally {
-      setLoadingOlder(false);
-    }
-    requestAnimationFrame(() => {
-      if (el) el.scrollTop += el.scrollHeight - before;
-    });
-  };
   /* Local text plus the canonical shell admission decision. */
   const status = presentedComposerSendStatus(draft, shell.nonEmptyContentSendStatus);
 
@@ -555,18 +719,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       toast(`Couldn't fork: ${String(e)}`);
     }
   };
-
-  /* the desktop offers one action on a message: copy */
-  const copyOnly = (text: string | null | undefined) => [
-    {
-      label: "Copy",
-      icon: <Copy />,
-      onClick: () => {
-        void navigator.clipboard?.writeText(text ?? "");
-        toast("Copied");
-      },
-    },
-  ];
 
   return (
     <div
@@ -694,108 +846,13 @@ export function SessionScreen({ shell }: { shell: Shell }) {
 
               {session?.goal && <Goal goal={session.goal} />}
               <div ref={headerEnd} aria-hidden="true" />
-              <div className="mt-6 grid gap-5" data-testid="transcript-panel">
-                {session?.timelinePage?.hasOlder && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    data-testid="transcript-load-older"
-                    className="justify-self-center text-muted-foreground"
-                    disabled={loadingOlder}
-                    onClick={loadOlder}
-                  >
-                    {loadingOlder ? "Loading older messages…" : "Load older messages"}
-                  </Button>
-                )}
-                {session?.timelineItems.map((item) => {
-                  switch (item.kind) {
-                    case "userMessage":
-                    case "pendingUserTurn":
-                      return (
-                        <UserMessage
-                          key={item.itemKey}
-                          actions={copyOnly(item.content)}
-                        >
-                          {item.content}
-                        </UserMessage>
-                      );
-                    case "assistantMessage":
-                      return (
-                        <AssistantMessage
-                          key={item.itemKey}
-                          actions={copyOnly(item.content)}
-                        >
-                          {item.reasoning && <Reasoning text={item.reasoning} />}
-                          <Markdown>{item.content ?? ""}</Markdown>
-                        </AssistantMessage>
-                      );
-                    case "toolGroup":
-                      return (
-                        <ToolSteps key={item.itemKey} title="Activity">
-                          {item.tools.map((t) => {
-                            const sum = toolSummary(t);
-                            return (
-                              <ToolStep
-                                key={t.itemKey}
-                                label={`${sum.kind} ${sum.primary}`.trim()}
-                                status={stepStatus(t.statusKind)}
-                              >
-                                {t.statusKind !== "running" &&
-                                t.statusKind !== "held" ? (
-                                  <ToolBody tool={t} />
-                                ) : undefined}
-                              </ToolStep>
-                            );
-                          })}
-                        </ToolSteps>
-                      );
-                    case "liveAssistant":
-                      return (
-                        <AssistantMessage key={item.itemKey}>
-                          {item.content && <Markdown>{item.content}</Markdown>}
-                          <Thinking />
-                        </AssistantMessage>
-                      );
-                  }
-                })}
-                {wasInterrupted && !inFlight && (
-                  <p className="px-2 text-xs text-muted-foreground">
-                    Interrupted
-                    {latest?.cancelCause
-                      ? ` · ${latest.cancelCause.cause} (${latest.cancelCause.source}, ${latest.cancelCause.confidence} confidence)`
-                      : ""}
-                    {latest?.cancelCause?.evidence.length
-                      ? ` · ${latest.cancelCause.evidence.join("; ")}`
-                      : ""}
-                  </p>
-                )}
-                {showError && (
-                  <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
-                    <p className="text-sm font-medium">
-                      The assistant could not finish this turn.
-                    </p>
-                    <pre className="mt-1 font-mono text-[11px] whitespace-pre-wrap text-muted-foreground">
-                      {responseError}
-                    </pre>
-                    {session?.retryEligibility?.eligible && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="mt-3"
-                        disabled={retrying}
-                        onClick={retry}
-                      >
-                        {retrying ? "Retrying…" : "Retry"}
-                      </Button>
-                    )}
-                  </div>
-                )}
-                {inFlight && !live && holdsHere.length === 0 && (
-                  <AssistantMessage>
-                    <Thinking />
-                  </AssistantMessage>
-                )}
-              </div>
+              <TranscriptPanel
+                actionsRef={transcriptActions}
+                holdsCount={holdsHere.length}
+                inFlight={inFlight}
+                ownerRef={column}
+                session={session}
+              />
               <div className="sticky bottom-0 mt-auto bg-background pt-6 pb-6">
                 {/* the way back sits on the footer's top edge, whatever the footer holds */}
                 {!atBottom && (
