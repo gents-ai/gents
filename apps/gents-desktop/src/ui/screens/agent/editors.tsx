@@ -1,8 +1,20 @@
 /* Shared configuration editor rows plus explicit Save/Cancel actions.
    Fields only update their local draft; persistence is user-controlled. */
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { XIcon } from "lucide-react";
 import { Input } from "@gents/ui/components/input";
 import { Button } from "@gents/ui/components/button";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+} from "@gents/ui/components/combobox";
 import {
   Select,
   SelectContent,
@@ -12,7 +24,7 @@ import {
 } from "@gents/ui/components/select";
 import { Switch } from "@gents/ui/components/switch";
 import { Textarea } from "@gents/ui/components/textarea";
-import { Fact, Row } from "./rows";
+import { Fact, Row, StackedRow } from "./rows";
 
 export type Choice = { value: string; label: string };
 
@@ -43,7 +55,7 @@ export function DraftActions({
           Cancel
         </Button>
         <Button variant="brand" disabled={!dirty || saving} onClick={onSave}>
-          {saving ? "Saving…" : "Save changes"}
+          {saving ? "Saving…" : "Save"}
         </Button>
       </div>
     </div>
@@ -131,6 +143,7 @@ export function AreaRow({
   placeholder,
   rows = 3,
   mono,
+  stacked,
 }: Common & {
   value: string;
   onChange: (v: string) => void;
@@ -138,19 +151,48 @@ export function AreaRow({
   placeholder?: string;
   rows?: number;
   mono?: boolean;
+  stacked?: boolean;
 }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const element = ref.current;
+    if (!stacked || !element) return;
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() =>
+      setOverflowing(element.scrollHeight > element.clientHeight + 1),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [stacked, value, expanded]);
+  const clipped = stacked && !expanded;
+  const Wrap = stacked ? StackedRow : Row;
   return (
-    <Row label={label} description={description} htmlFor={id}>
+    <Wrap label={label} description={description} htmlFor={id}>
       <Textarea
+        ref={ref}
         id={id}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onCommit}
         placeholder={placeholder}
         rows={rows}
-        className={`w-96 max-md:w-full ${mono ? "font-mono text-xs" : ""}`}
+        style={clipped ? { maxHeight: `calc(${rows}lh + 1rem + 2px)` } : undefined}
+        className={`${stacked ? "w-full" : "w-96 max-md:w-full"} ${mono ? "font-mono text-xs" : ""}`}
       />
-    </Row>
+      {stacked && (overflowing || expanded) && (
+        <div className="-mt-1 flex justify-end">
+          <Button
+            variant="quiet"
+            size="sm"
+            onClick={() => setExpanded((open) => !open)}
+          >
+            {expanded ? "Show less" : "Show all"}
+          </Button>
+        </div>
+      )}
+    </Wrap>
   );
 }
 
@@ -183,6 +225,146 @@ export function ChoiceRow({
           ))}
         </SelectContent>
       </Select>
+    </Row>
+  );
+}
+
+export function ChipsRow({
+  id,
+  label,
+  description,
+  value,
+  onChange,
+  items,
+  placeholder = "Add",
+  empty = "No match.",
+}: Common & {
+  value: string[];
+  onChange: (value: string[]) => void;
+  items: Choice[];
+  placeholder?: string;
+  empty?: string;
+}) {
+  const name = (value: string) =>
+    items.find((item) => item.value === value)?.label ?? value;
+  return (
+    <Row label={label} description={description} htmlFor={id}>
+      <Combobox
+        multiple
+        items={items.map((item) => item.value)}
+        itemToStringLabel={name}
+        value={value}
+        onValueChange={(next) => onChange(next ?? [])}
+      >
+        <ComboboxChips className="w-96 max-md:w-full">
+          <ComboboxValue>
+            {(values: string[]) =>
+              values.map((selected) => (
+                <ComboboxChip key={selected} showRemove={false}>
+                  {name(selected)}
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`Remove ${name(selected)}`}
+                    className="-ml-0.5 size-4.5 opacity-50 hover:opacity-100"
+                    onClick={() => onChange(value.filter((item) => item !== selected))}
+                  >
+                    <XIcon />
+                  </Button>
+                </ComboboxChip>
+              ))
+            }
+          </ComboboxValue>
+          <ComboboxChipsInput id={id} placeholder={value.length ? "" : placeholder} />
+        </ComboboxChips>
+        <ComboboxContent>
+          <ComboboxEmpty>{empty}</ComboboxEmpty>
+          <ComboboxList>
+            {(item: string) => (
+              <ComboboxItem key={item} value={item}>
+                {name(item)}
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
+    </Row>
+  );
+}
+
+export function TagsRow({
+  id,
+  label,
+  description,
+  value,
+  onChange,
+  placeholder = "Add a tag",
+}: Common & {
+  value: string[];
+  onChange: (value: string[]) => void;
+  placeholder?: string;
+}) {
+  const [text, setText] = useState("");
+  const add = (raw: string) => {
+    const next = Array.from(
+      new Set(
+        raw
+          .split(/[\n,]/)
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      ),
+    ).filter((tag) => !value.includes(tag));
+    if (next.length) onChange([...value, ...next]);
+    setText("");
+  };
+  return (
+    <Row label={label} description={description} htmlFor={id}>
+      <div
+        className="flex min-h-8 w-96 flex-wrap items-center gap-1 rounded-2xl border border-transparent bg-input/50 bg-clip-padding px-2.5 py-1 text-sm focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30 max-md:w-full"
+        onClick={(event) =>
+          (
+            event.currentTarget.querySelector("input") as HTMLInputElement | null
+          )?.focus()
+        }
+      >
+        {value.map((tag) => (
+          <span
+            key={tag}
+            className="flex h-[calc(--spacing(5.25))] items-center gap-1 rounded-2xl bg-input px-1.5 pr-0.5 text-xs font-medium whitespace-nowrap dark:bg-input/60"
+          >
+            {tag}
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Remove ${tag}`}
+              className="-ml-0.5 size-4.5 opacity-50 hover:opacity-100"
+              onClick={() => onChange(value.filter((item) => item !== tag))}
+            >
+              <XIcon />
+            </Button>
+          </span>
+        ))}
+        <input
+          id={id}
+          value={text}
+          placeholder={value.length ? "" : placeholder}
+          onChange={(event) =>
+            event.target.value.includes(",")
+              ? add(event.target.value)
+              : setText(event.target.value)
+          }
+          onBlur={() => text.trim() && add(text)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add(text);
+            } else if (event.key === "Backspace" && !text && value.length) {
+              onChange(value.slice(0, -1));
+            }
+          }}
+          className="min-w-16 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+        />
+      </div>
     </Row>
   );
 }

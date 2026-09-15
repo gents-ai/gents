@@ -231,7 +231,7 @@ export function createDesktopUiHarness(
           itemKey: "mailbox-mobile-key",
           requesterDid: "did:key:z6MkRequesterWithAnUnbrokenIdentifierForMobile",
           agentDid: AGENT_DID,
-          status: "pending",
+          status: "open",
           kind: "notification",
           action: "ack",
           title:
@@ -1347,8 +1347,10 @@ export function createDesktopUiHarness(
             instructions: document.instructions ?? null,
             toolRefs: document.tool_refs ?? [],
             displayName: document.display_name ?? null,
+            interfaceJson: document.interface_json ?? null,
             enabled: document.enabled ?? true,
             createdAt: document.created_at ?? null,
+            tags: document.tags ?? [],
           })),
         ],
         inferenceProfiles: [
@@ -1573,8 +1575,10 @@ export function createDesktopUiHarness(
           instructions: document.instructions ?? null,
           toolRefs: document.tool_refs ?? [],
           displayName: document.display_name?.trim() || name,
+          interfaceJson: document.interface_json ?? null,
           enabled: document.enabled ?? true,
           createdAt: document.created_at ?? STARTED_AT,
+          tags: document.tags ?? [],
         }),
       };
       return snapshot();
@@ -2907,8 +2911,10 @@ function createDeployment(): DeploymentView {
         instructions: "Inspect host health, telemetry freshness, and recent errors.",
         toolRefs: ["mcp-observability.inspect_host", "mcp-observability.query_logs"],
         displayName: "Host diagnostics",
+        interfaceJson: null,
         enabled: true,
         createdAt: STARTED_AT,
+        tags: [],
       },
       {
         skillId: "fleet-summary",
@@ -2919,8 +2925,10 @@ function createDeployment(): DeploymentView {
           "Compare backend health, silent hosts, and posted steward status.",
         toolRefs: ["mcp-observability.fleet_status"],
         displayName: "Fleet summary",
+        interfaceJson: null,
         enabled: true,
         createdAt: STARTED_AT,
+        tags: [],
       },
     ],
     tasks: [

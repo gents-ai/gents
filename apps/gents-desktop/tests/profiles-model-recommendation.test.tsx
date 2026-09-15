@@ -132,7 +132,7 @@ describe("profile model recommendation ownership", () => {
     const name = screen.getByLabelText("Display name");
     await user.clear(name);
     await user.type(name, "Invalid profile");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Context window must be between 1 and 100",
@@ -161,7 +161,7 @@ describe("profile model recommendation ownership", () => {
     const name = screen.getByLabelText("Display name");
     await user.clear(name);
     await user.type(name, "Renamed");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.applyConfigComponents).toHaveBeenCalledWith(
       expect.objectContaining({
         document: expect.objectContaining({
@@ -224,7 +224,7 @@ describe("profile model recommendation ownership", () => {
     );
     expect(await screen.findByLabelText("Context window")).toHaveValue(131072);
     expect(screen.getByLabelText("Max output tokens")).toHaveValue(1000);
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 
     view.rerender(
       <ProfilesPanel
@@ -241,7 +241,7 @@ describe("profile model recommendation ownership", () => {
       />,
     );
     expect(await screen.findByLabelText("Context window")).toHaveValue(222222);
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it("materializes a sampling ID when an advanced-only value is present", async () => {
@@ -274,7 +274,7 @@ describe("profile model recommendation ownership", () => {
     const name = screen.getByLabelText("Display name");
     await user.clear(name);
     await user.type(name, "Advanced profile");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(api.applyConfigComponents).toHaveBeenCalledWith(
       expect.objectContaining({

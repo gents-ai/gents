@@ -217,7 +217,7 @@ describe("configuration panels", () => {
     const user = userEvent.setup();
     await user.clear(screen.getByLabelText("Display name"));
     await user.type(screen.getByLabelText("Display name"), "Renamed profile");
-    await user.click(screen.getByRole("button", { name: "Save changes", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Save", exact: true }));
     await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalled());
     expect(
       api.applyConfigComponents.mock.calls[0]![0].document.inference_profiles[0]
@@ -267,9 +267,7 @@ describe("configuration panels", () => {
       const user = userEvent.setup();
       await user.clear(screen.getByLabelText("Display name"));
       await user.type(screen.getByLabelText("Display name"), "Renamed Grok");
-      await user.click(
-        screen.getByRole("button", { name: "Save changes", exact: true }),
-      );
+      await user.click(screen.getByRole("button", { name: "Save", exact: true }));
       await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalled());
       const document = api.applyConfigComponents.mock.calls[0]![0].document;
       if (existingSampling) {
@@ -469,7 +467,7 @@ describe("configuration panels", () => {
     expectFields(["Display name", "Default behaviour", "Enabled", "Tags"]);
 
     const user = await replace("Display name", " ");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Display name is required",
     );
@@ -477,7 +475,7 @@ describe("configuration panels", () => {
 
     await replace("Display name", "Acceptance Agent");
     await replace("Tags", "acceptance\ndesktop");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveAgentConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         document: expect.objectContaining({
@@ -501,7 +499,7 @@ describe("configuration panels", () => {
       "Tags",
     ]);
     const user = await replace("Display name", " ");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Display name is required",
     );
@@ -559,12 +557,21 @@ describe("configuration panels", () => {
       "Compaction",
       "Tags",
     ]);
-    expect(screen.getByRole("textbox", { name: "Search skills" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Skills" })).toBeInTheDocument();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "Delete context" }));
     expect(api.deleteContextConfig).not.toHaveBeenCalled();
-    expect(screen.getByText(/Delete .+\?/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Delete now" }));
+    expect(
+      screen.getByText(/Ops uses it and will be left without a context/),
+    ).toBeInTheDocument();
+    const confirm = screen.getByRole("textbox", {
+      name: "Type Ops context to confirm",
+    });
+    await user.type(confirm, "wrong");
+    expect(screen.getByRole("button", { name: "Delete context" })).toBeDisabled();
+    await user.clear(confirm);
+    await user.type(confirm, "Ops context");
+    await user.click(screen.getByRole("button", { name: "Delete context" }));
     expect(api.deleteContextConfig).toHaveBeenCalledWith({
       contextId: "context-b",
       agentDid: deployment.agentDid,
@@ -605,7 +612,7 @@ describe("configuration panels", () => {
     ]);
     const user = await replace("Endpoint", "file:///tmp/model");
     await replace("Max concurrent", "0");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Endpoint must use http or https",
     );
@@ -683,7 +690,7 @@ describe("configuration panels", () => {
     const topP = screen.getByLabelText("Top-p");
     await user.clear(topP);
     await user.type(topP, "1.5");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Top-p must be between 0 and 1",
     );
@@ -702,7 +709,7 @@ describe("configuration panels", () => {
       "Canonical JSON",
     ]);
     const user = await replace("Workspace root", "relative/repo");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Workspace root must be an absolute path",
     );
@@ -727,7 +734,7 @@ describe("configuration panels", () => {
       "Tags",
     ]);
     const user = await replace("MCP port", "70000");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "MCP port must be 65535 or less",
     );
@@ -754,7 +761,7 @@ describe("configuration panels", () => {
       "Tags",
     ]);
     const user = await replace("Interface JSON", "not-json");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Interface JSON must be valid JSON",
     );
@@ -778,7 +785,7 @@ describe("configuration panels", () => {
       "Args",
     ]);
     const user = await replace("Prompt template", " ");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Prompt template is required",
     );
@@ -818,14 +825,14 @@ describe("configuration panels", () => {
     render(<SchedulesPanel shell={shell} deployment={deployment} item="timer-a" />);
     expectFields(["Display name", "Cadence", "Interval seconds", "Tags"]);
     const user = await replace("Interval seconds", "0");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Interval seconds must be 1 or more",
     );
     expect(api.saveScheduleConfig).not.toHaveBeenCalled();
 
     await replace("Interval seconds", "90");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveScheduleConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         document: expect.objectContaining({
@@ -865,7 +872,7 @@ describe("configuration panels", () => {
       "Tags",
     ]);
     const user = await replace("Expected count", "2");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Grouped events require a correlation field",
     );
@@ -984,7 +991,7 @@ describe("configuration panels", () => {
           await screen.findByLabelText("Temperature");
         }
         const user = await replace(testCase.field, testCase.value);
-        await user.click(screen.getByRole("button", { name: "Save changes" }));
+        await user.click(screen.getByRole("button", { name: "Save" }));
         expect(api[testCase.method], testCase.method).toHaveBeenCalledTimes(1);
         view.unmount();
       });
@@ -1073,9 +1080,19 @@ describe("configuration panels", () => {
       const { api, shell } = harness();
       const view = render(testCase.renderPanel(shell));
       const user = userEvent.setup();
-      await user.click(screen.getByRole("button", { name: "Delete" }));
+      await user.click(
+        screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
+      );
       expect(api[testCase.method], testCase.method).not.toHaveBeenCalled();
-      await user.click(screen.getByRole("button", { name: "Delete now" }));
+      const confirmation = screen.getByRole("textbox", {
+        name: /^Type .+ to confirm$/,
+      });
+      const accessibleName = confirmation.getAttribute("aria-label")!;
+      await user.type(
+        confirmation,
+        accessibleName.replace(/^Type /, "").replace(/ to confirm$/, ""),
+      );
+      await user.click(screen.getByRole("button", { name: /^Delete / }));
       expect(api[testCase.method], testCase.method).toHaveBeenCalledWith(
         testCase.request,
       );

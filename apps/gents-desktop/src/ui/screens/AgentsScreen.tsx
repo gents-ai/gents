@@ -74,7 +74,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
           </p>
         )}
         {pending && pending.length > 0 && (
-          <ul className="mt-4 grid gap-3">
+          <ul className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-3">
             {pending.map((r) => (
               <li
                 key={r.requestId}
@@ -95,7 +95,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
             ))}
           </ul>
         )}
-        <ul className="mt-4 grid gap-3">
+        <ul className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-3">
           {shell.deployments.map((d) => {
             const name = d.agentPrincipal.displayName ?? d.label;
             const online = d.dialSucceeded;
@@ -129,14 +129,14 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                   href={href({ name: "sessions" })}
                   onClick={() => shell.selectAgent(d.agentDid)}
                   aria-label={`${name} sessions`}
-                  className="flex min-w-0 flex-1 items-center gap-3"
+                  className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden"
                 >
                   <AgentHoverCard
                     deployment={d}
                     root={shell.snapshot?.bootstrap.initToolRoot}
                     ceiling={shell.snapshot?.bootstrap.initToolCeiling}
                   >
-                    <span className="block">
+                    <span className="block shrink-0">
                       <AgentAvatar name={name} className="size-8" />
                     </span>
                   </AgentHoverCard>
@@ -148,19 +148,21 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                     aria-label={online ? "online" : "offline"}
                     role="img"
                   />
-                  <span className="truncate font-heading text-base font-medium text-heading">
-                    {name}
+                  <span className="grid min-w-0 flex-1 auto-cols-[minmax(0,max-content)] grid-flow-col items-baseline justify-start gap-3">
+                    <span className="truncate font-heading text-base font-medium text-heading">
+                      {name}
+                    </span>
+                    {d.label !== name && (
+                      <span className="min-w-0 truncate text-xs text-muted-foreground">
+                        {d.label}
+                      </span>
+                    )}
+                    {!online && d.lastError && (
+                      <span className="min-w-0 truncate text-xs text-muted-foreground">
+                        {d.lastError}
+                      </span>
+                    )}
                   </span>
-                  {d.label !== name && (
-                    <span className="truncate text-xs text-muted-foreground">
-                      {d.label}
-                    </span>
-                  )}
-                  {!online && d.lastError && (
-                    <span className="truncate text-xs text-muted-foreground">
-                      {d.lastError}
-                    </span>
-                  )}
                 </a>
                 {isLocalAgent(d, shell.snapshot?.bootstrap.initAgentDid) &&
                   !inferenceIsConfigured(d) && (

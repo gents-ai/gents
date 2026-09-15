@@ -1,7 +1,8 @@
 /* Delayed cards on avatars: what a reader most wants to know without
    opening anything. The agent: online, what it may touch, how much it
    has, its DID. A behaviour: what it is for, what it runs on, its access. */
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
+import { ArrowUpRight } from "lucide-react";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import {
   HoverCard,
@@ -9,6 +10,8 @@ import {
   HoverCardTrigger,
 } from "@gents/ui/components/hover-card";
 import { cn } from "@gents/ui/lib/utils";
+import { href } from "@/lib/router";
+import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { access, bashAccess, behaviorName, fileAccess, network } from "./behavior";
 
 function Line({ label, children }: { label: string; children: React.ReactNode }) {
@@ -88,13 +91,31 @@ export function BehaviorHoverCard({
   description?: string;
   children: ReactElement;
 }) {
+  const [open, setOpen] = useState(false);
   const b = deployment?.behaviors.find((x) => x.behaviorId === behaviorId);
   const env = deployment?.behaviorEnvironments.find((e) => e.behaviorId === behaviorId);
-  if (!b) return children;
+  if (!deployment || !b) return children;
+  const readiness = behaviorReadiness(deployment, b.behaviorId);
+  const hasInstructions = Boolean(
+    b.contextId &&
+    deployment.contexts.some((context) => context.context_id === b.contextId),
+  );
+  const sharing = hasInstructions
+    ? deployment.behaviors.filter(
+        (behavior) =>
+          behavior.contextId === b.contextId && behavior.behaviorId !== b.behaviorId,
+      )
+    : [];
+  const summary = description || b.description || undefined;
   return (
-    <HoverCard>
-      <HoverCardTrigger delay={500} render={children} />
-      <HoverCardContent side="right" align="start" className="w-80">
+    <HoverCard open={open} onOpenChange={setOpen}>
+      <HoverCardTrigger delay={500} render={children} onFocus={() => setOpen(true)} />
+      <HoverCardContent
+        side="right"
+        align="start"
+        className="w-80"
+        data-testid="behaviour-hover-card"
+      >
         <div className="flex items-baseline justify-between gap-3">
           <span className="font-heading text-lg font-medium text-heading">
             {behaviorName(behaviorId, deployment)}
@@ -103,16 +124,43 @@ export function BehaviorHoverCard({
             <span className="text-xs text-muted-foreground">Default</span>
           )}
         </div>
-        {description && (
-          <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>
-        )}
+        {summary && <p className="mt-1.5 text-sm text-muted-foreground">{summary}</p>}
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+          <Line label="Status">
+            {!b.enabled
+              ? "Disabled"
+              : readiness.ready
+                ? "Enabled"
+                : `Enabled, can’t run: ${readiness.reason}`}
+          </Line>
           <Line label="Runs on">{env?.modelName ?? "no backend"}</Line>
           <Line label="Files">{fileAccess(env?.fileAccess ?? "off")}</Line>
           <Line label="Commands">{bashAccess(env?.bashAccess ?? "off")}</Line>
           <Line label="Network">{network(env?.networkAccess)}</Line>
+          {(!hasInstructions || sharing.length > 0) && (
+            <Line label="Instructions">
+              {!hasInstructions
+                ? "None yet"
+                : `Shared with ${
+                    sharing.length <= 2
+                      ? sharing.map((behavior) => behavior.displayName).join(" and ")
+                      : `${sharing[0]!.displayName} and ${sharing.length - 1} more`
+                  }`}
+            </Line>
+          )}
           <Line label="Sessions">{env?.sessionCount ?? 0}</Line>
         </dl>
+        <a
+          href={href({
+            name: "agent",
+            agentDid: deployment.agentDid,
+            section: "behaviors",
+            item: b.behaviorId,
+          })}
+          className="mt-3 inline-flex items-center gap-1 text-sm text-foreground underline-offset-2 hover:underline"
+        >
+          Settings <ArrowUpRight className="size-3.5" />
+        </a>
       </HoverCardContent>
     </HoverCard>
   );

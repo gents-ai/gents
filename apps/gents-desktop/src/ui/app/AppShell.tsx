@@ -35,6 +35,7 @@ import { Button } from "@gents/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { cn } from "@gents/ui/lib/utils";
 import { href, type Route } from "@/lib/router";
+import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { applyTheme, themePreference, type ThemePreference } from "@/theme";
 import { navPreference, saveNavPreference, type NavMode } from "@/nav";
 import { useMediaQuery } from "@/lib/media";
@@ -43,6 +44,7 @@ import { AgentHoverCard } from "@/screens/HoverCards";
 import type { DeploymentView, SyncHealthView } from "@source-inc/gents-desktop-client";
 import { Mark } from "./Mark";
 import { SyncHealth } from "./SyncHealth";
+import { WindowControls } from "./WindowControls";
 import { NavPanel, RailFlyout } from "./RailFlyout";
 import {
   Sheet,
@@ -187,6 +189,7 @@ export function AppShell({
   const [nav, setNav] = useState<NavMode>(navPreference);
   const [menuOpen, setMenuOpen] = useState(false);
   const wide = useMediaQuery("(min-width: 768px)");
+  const windowBar = headerIsWindowBar();
   const onNav = (mode: NavMode) => {
     saveNavPreference(mode);
     setNav(mode);
@@ -231,7 +234,10 @@ export function AppShell({
       className="viewport-frame grid grid-rows-[auto_1fr] bg-background text-foreground"
       data-testid="app-shell"
     >
-      <header className="flex h-12 items-center gap-4 px-4">
+      <header
+        className="app-titlebar flex h-12 items-center gap-4 px-4"
+        data-tauri-drag-region={windowBar ? "" : undefined}
+      >
         {/* below md the rail is gone; the menu opens the same panel as a sheet */}
         <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
           <SheetTrigger
@@ -276,17 +282,31 @@ export function AppShell({
         </a>
         <Breadcrumb>
           <BreadcrumbList>
-            <BreadcrumbItem>
-              <BreadcrumbLink href={href({ name: "agents" })}>Agents</BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator />
-            <BreadcrumbItem>
-              <BreadcrumbPage>{agentName ?? "…"}</BreadcrumbPage>
-            </BreadcrumbItem>
+            {route.name === "agents" ? (
+              <BreadcrumbItem>
+                <BreadcrumbPage>Agents</BreadcrumbPage>
+              </BreadcrumbItem>
+            ) : (
+              <>
+                <BreadcrumbItem>
+                  <BreadcrumbLink href={href({ name: "agents" })}>
+                    Agents
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  <BreadcrumbPage>{agentName ?? "…"}</BreadcrumbPage>
+                </BreadcrumbItem>
+              </>
+            )}
           </BreadcrumbList>
         </Breadcrumb>
-        <span className="ml-auto" />
+        <span
+          className="ml-auto self-stretch"
+          data-tauri-drag-region={windowBar ? "" : undefined}
+        />
         <SyncHealth syncHealth={syncHealth} />
+        {isWindowsTauriShell() && <WindowControls />}
       </header>
       <div
         className={cn(

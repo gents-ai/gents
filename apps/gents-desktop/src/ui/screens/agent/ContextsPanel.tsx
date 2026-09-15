@@ -1,11 +1,18 @@
 import type { AgentContext, DeploymentView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { AreaRow, ChoiceRow, DraftActions, FactRow, TextRow } from "./editors";
-import { fromLines, fromLinesOrNull, newId, toLines, useDraft } from "./draft";
+import {
+  AreaRow,
+  ChipsRow,
+  ChoiceRow,
+  DraftActions,
+  FactRow,
+  TagsRow,
+  TextRow,
+} from "./editors";
+import { newId, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
-import { DocumentSelection } from "./DocumentSelection";
 
 function Editor({
   shell,
@@ -27,8 +34,8 @@ function Editor({
     systemPrompt: context.system_prompt ?? "",
     toolsId: context.tools_id ?? "",
     compactionId: context.compaction_id ?? "",
-    skillIds: toLines(context.skill_ids ?? []),
-    tags: toLines(context.tags ?? []),
+    skillIds: context.skill_ids ?? [],
+    tags: context.tags ?? [],
   };
   const d = useDraft(saved, async (next) => {
     if (next.toolsId && !deployment.tools.some((row) => row.tools_id === next.toolsId))
@@ -38,7 +45,7 @@ function Editor({
       !deployment.compactions.some((row) => row.compaction_id === next.compactionId)
     )
       throw new Error("Choose an existing compaction document");
-    const skillIds = fromLines(next.skillIds);
+    const skillIds = next.skillIds;
     const missingSkill = skillIds.find(
       (skillId) => !deployment.skills.some((row) => row.skillId === skillId),
     );
@@ -57,7 +64,7 @@ function Editor({
               tools_id: next.toolsId || null,
               compaction_id: next.compactionId || null,
               skill_ids: skillIds.length ? skillIds : null,
-              tags: fromLinesOrNull(next.tags),
+              tags: next.tags.length ? next.tags : null,
             },
           },
         ],
@@ -65,6 +72,9 @@ function Editor({
     );
   });
   const id = (f: string) => `${context.context_id}-${f}`;
+  const users = deployment.behaviors.filter(
+    (behavior) => behavior.contextId === context.context_id,
+  );
   return (
     <>
       <Group title={context.display_name ?? context.context_id}>
@@ -93,7 +103,8 @@ function Editor({
           value={d.draft.systemPrompt}
           onChange={(v) => d.set("systemPrompt", v)}
           onCommit={d.commit}
-          rows={8}
+          rows={6}
+          stacked
         />
         <ChoiceRow
           id={id("tools")}
@@ -138,24 +149,24 @@ function Editor({
             </p>
           </div>
         )}
-        <DocumentSelection
+        <ChipsRow
+          id={id("skills")}
           label="Skills"
-          options={deployment.skills.map((skill) => ({
+          description="None means the context runs without skills."
+          items={deployment.skills.map((skill) => ({
             value: skill.skillId,
             label: skill.displayName ?? skill.name ?? skill.skillId,
-            description: skill.description,
           }))}
-          selected={fromLines(d.draft.skillIds)}
-          onChange={(values) => d.set("skillIds", toLines(values))}
+          value={d.draft.skillIds}
+          onChange={(values) => d.set("skillIds", values)}
+          placeholder="Add a skill"
+          empty="No skill by that name."
         />
-        <AreaRow
+        <TagsRow
           id={id("tags")}
           label="Tags"
-          description="One per line."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          rows={3}
         />
       </Group>
       <DraftActions
@@ -168,6 +179,13 @@ function Editor({
       <DeleteButton
         label={context.display_name ?? context.context_id}
         base={base}
+        warning={
+          users.length === 0
+            ? undefined
+            : users.length === 1
+              ? `${users[0]!.displayName} uses it and will be left without a context.`
+              : `${users.length} behaviours use it and will be left without a context.`
+        }
         onDelete={() =>
           shell.applyConfig((api) =>
             api.deleteContextConfig({
@@ -203,6 +221,7 @@ export function ContextsPanel({
         id: c.context_id,
         title: c.display_name ?? c.context_id,
         meta: c.tools_id ?? "no tools",
+        tags: c.tags,
       }))}
       createLabel="New context"
       empty="No contexts. A context is the prompt, tools and skills a behaviour runs with."

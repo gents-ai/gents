@@ -103,17 +103,31 @@ export async function openChat(page: Page) {
 
 export async function openConfig(page: Page) {
   await expect(page.getByTestId("app-shell")).toBeVisible();
-  const configLink = page.getByRole("link", { name: /configuration/i });
-  if (await configLink.first().isVisible()) {
+  const configLink = page
+    .getByRole("link", { name: /configuration|configure/i })
+    .filter({ visible: true });
+  if ((await configLink.count()) > 0) {
     await configLink.first().click();
   } else {
     await page.getByRole("button", { name: "Menu" }).click();
     await page
       .getByRole("link", { name: /configuration|Configure/i })
+      .filter({ visible: true })
       .first()
       .click();
   }
   await expect(page.getByTestId("agent-screen")).toBeVisible();
+}
+
+export async function openConfigSection(page: Page, name: RegExp) {
+  const sectionPicker = page.getByRole("combobox", { name: "Section" });
+  if (await sectionPicker.isVisible()) {
+    await sectionPicker.click();
+    await page.getByRole("option", { name }).click();
+    return;
+  }
+  await page.mouse.move(page.viewportSize()!.width - 30, 100);
+  await page.getByRole("link", { name }).click();
 }
 
 export async function primarySurfaceCount(page: Page) {
@@ -233,6 +247,25 @@ export async function captureStableScreenshot(
   testInfo: TestInfo,
   name: string,
 ): Promise<{ attachmentName: string; path: string }> {
+  await page.evaluate(async () => {
+    const styleId = "playwright-stable-screenshot-style";
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement("style");
+      style.id = styleId;
+      style.textContent = `
+        *, *::before, *::after {
+          animation: none !important;
+          caret-color: transparent !important;
+          transition: none !important;
+        }
+      `;
+      document.head.append(style);
+    }
+    await document.fonts.ready;
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  });
   const path = testInfo.outputPath(`${name}.png`);
   await page.screenshot({ fullPage: true, path });
   const attachmentName = `${name}.png`;

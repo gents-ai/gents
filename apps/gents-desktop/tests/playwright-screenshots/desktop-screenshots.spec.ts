@@ -6,6 +6,7 @@ import {
   gotoHarness,
   openChat,
   openConfig,
+  openConfigSection,
   test,
   type TestInfo,
 } from "../playwright/desktopTest";
@@ -64,5 +65,37 @@ test.describe("desktop stable screenshot states", () => {
       path,
       contentType: "text/markdown",
     });
+  });
+
+  test("captures reconciliation states", async ({ page }, testInfo) => {
+    await gotoHarness(page);
+    await openConfig(page);
+    await openConfigSection(page, /^Contexts\b/);
+    await page.getByRole("link", { name: /Default context/ }).click();
+    await page.getByRole("button", { name: "Delete context" }).click();
+    await expect(
+      page.getByRole("textbox", { name: "Type Default context to confirm" }),
+    ).toBeFocused();
+    await captureStableScreenshot(page, testInfo, "reconciliation-delete-confirmation");
+    await expect(page.getByRole("alertdialog")).toHaveCSS("opacity", "1");
+
+    await gotoHarness(page, "mailbox-overflow");
+    const mailbox = page.getByRole("link", { name: "Mailbox" });
+    if (!(await mailbox.first().isVisible())) {
+      await page.getByRole("button", { name: "Menu" }).click();
+    }
+    await page.getByRole("link", { name: "Mailbox" }).last().click();
+    await expect(page.getByTestId("mailbox-screen")).toBeVisible();
+    const mobileNavigation = page.getByRole("dialog", { name: "Navigation" });
+    await expect(mobileNavigation).not.toBeVisible();
+    await captureStableScreenshot(page, testInfo, "reconciliation-mailbox-overflow");
+
+    await gotoHarness(page, "coding");
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    await expect(page.getByTestId("session-screen")).toBeVisible();
+    await captureStableScreenshot(page, testInfo, "reconciliation-code-output");
   });
 });

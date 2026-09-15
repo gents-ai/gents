@@ -56,7 +56,9 @@ export function SyncHealth({
       </PopoverTrigger>
       <PopoverContent
         ref={popover.popupRef}
-        aria-label="Database sync details"
+        role={popover.open ? "dialog" : "presentation"}
+        aria-label={popover.open ? "Database sync details" : undefined}
+        aria-hidden={popover.open ? undefined : true}
         align="end"
         className="w-96"
       >

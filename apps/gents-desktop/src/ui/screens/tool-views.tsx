@@ -51,7 +51,7 @@ function Payload({ label, value }: { label: string; value?: string | null }) {
   if (!value?.trim()) return null;
   const text = pretty(value);
   return (
-    <div className="grid gap-1">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
       <div className="flex items-center justify-between">
         <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
           {label}
@@ -59,7 +59,7 @@ function Payload({ label, value }: { label: string; value?: string | null }) {
         <CopyButton getText={() => text} />
       </div>
       <ScrollArea className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
-        <pre className="px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-foreground">
+        <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
           {text}
         </pre>
       </ScrollArea>
@@ -142,7 +142,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       {p.kind === "fileEdit" && (
         <>
           {p.diff.length > 0 && (
-            <div className="grid gap-1">
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
               <div className="flex items-center justify-between">
                 <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
                   diff
@@ -156,7 +156,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
                 />
               </div>
               <ScrollArea className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
-                <pre className="py-2 font-mono text-[11px] leading-relaxed">
+                <pre className="w-max min-w-full py-2 font-mono text-[11px] leading-relaxed">
                   {p.diff.map((l, i) => (
                     <span
                       key={i}
@@ -212,12 +212,12 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
         </>
       )}
       {live && (
-        <div className="grid gap-1">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
           <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
             live output
           </span>
           <ScrollArea className="max-h-40 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
-            <pre className="px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+            <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed">
               {live}
             </pre>
           </ScrollArea>

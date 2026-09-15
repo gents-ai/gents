@@ -1,14 +1,45 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { applyShellPlatform, isMobileTauriShell } from "../src/lib/shellPlatform";
+import {
+  applyShellPlatform,
+  headerIsWindowBar,
+  isLinuxTauriShell,
+  isMacTauriShell,
+  isMobileTauriShell,
+  isWindowsTauriShell,
+} from "../src/lib/shellPlatform";
+
+const windowMocks = vi.hoisted(() => ({
+  isFullscreen: vi.fn().mockResolvedValue(false),
+  onResized: vi.fn().mockResolvedValue(vi.fn()),
+}));
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => windowMocks,
+}));
 
 const originalPlatform = navigator.platform;
 const originalUserAgent = navigator.userAgent;
+const originalMaxTouchPoints = navigator.maxTouchPoints;
 
-describe("macOS shell classifier", () => {
+function enterTauri(platform: string, userAgent = originalUserAgent, touchPoints = 0) {
+  (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  Object.defineProperty(navigator, "platform", { configurable: true, value: platform });
+  Object.defineProperty(navigator, "userAgent", {
+    configurable: true,
+    value: userAgent,
+  });
+  Object.defineProperty(navigator, "maxTouchPoints", {
+    configurable: true,
+    value: touchPoints,
+  });
+}
+
+describe("native shell classifier", () => {
   afterEach(() => {
     delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
     delete document.documentElement.dataset.shell;
+    delete document.documentElement.dataset.windowFullscreen;
     Object.defineProperty(navigator, "platform", {
       configurable: true,
       value: originalPlatform,
@@ -17,19 +48,64 @@ describe("macOS shell classifier", () => {
       configurable: true,
       value: originalUserAgent,
     });
+    Object.defineProperty(navigator, "maxTouchPoints", {
+      configurable: true,
+      value: originalMaxTouchPoints,
+    });
+    vi.clearAllMocks();
   });
 
-  it("stamps the shell only inside the macOS Tauri app", () => {
+  it("does not stamp a browser shell", () => {
     applyShellPlatform();
-    expect(document.documentElement.dataset.shell).toBeUndefined();
 
-    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
-    Object.defineProperty(navigator, "platform", {
-      configurable: true,
-      value: "MacIntel",
-    });
+    expect(document.documentElement.dataset.shell).toBeUndefined();
+    expect(headerIsWindowBar()).toBe(false);
+  });
+
+  it("classifies macOS and tracks its fullscreen state", async () => {
+    enterTauri("MacIntel");
+    windowMocks.isFullscreen.mockResolvedValueOnce(true);
+
     applyShellPlatform();
+
+    expect(isMacTauriShell()).toBe(true);
+    expect(headerIsWindowBar()).toBe(true);
     expect(document.documentElement.dataset.shell).toBe("mac");
+    await vi.waitFor(() => {
+      expect(document.documentElement.dataset.windowFullscreen).toBe("true");
+    });
+    expect(windowMocks.onResized).toHaveBeenCalledOnce();
+  });
+
+  it("classifies Windows as a custom window bar", () => {
+    enterTauri("Win32");
+
+    applyShellPlatform();
+
+    expect(isWindowsTauriShell()).toBe(true);
+    expect(headerIsWindowBar()).toBe(true);
+    expect(document.documentElement.dataset.shell).toBe("windows");
+  });
+
+  it("classifies Linux without replacing its native window bar", () => {
+    enterTauri("Linux x86_64");
+
+    applyShellPlatform();
+
+    expect(isLinuxTauriShell()).toBe(true);
+    expect(headerIsWindowBar()).toBe(false);
+    expect(document.documentElement.dataset.shell).toBe("linux");
+  });
+
+  it("does not mistake a touch-capable iPad for macOS", () => {
+    enterTauri("MacIntel", "Mozilla/5.0 (iPad; CPU OS 26_5 like Mac OS X)", 5);
+
+    applyShellPlatform();
+
+    expect(isMobileTauriShell()).toBe(true);
+    expect(isMacTauriShell()).toBe(false);
+    expect(headerIsWindowBar()).toBe(false);
+    expect(document.documentElement.dataset.shell).toBeUndefined();
   });
 
   it("classifies mobile only inside a mobile Tauri shell", () => {
@@ -41,11 +117,5 @@ describe("macOS shell classifier", () => {
 
     (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     expect(isMobileTauriShell()).toBe(true);
-
-    Object.defineProperty(navigator, "userAgent", {
-      configurable: true,
-      value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0)",
-    });
-    expect(isMobileTauriShell()).toBe(false);
   });
 });
