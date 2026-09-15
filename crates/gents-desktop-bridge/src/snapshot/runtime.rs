@@ -251,6 +251,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     display_name: normalize_optional(row.display_name.as_deref()),
                     enabled: Some(row.enabled),
                     created_at: normalize_optional(row.created_at.as_deref()),
+                    tags: row.tags.clone(),
                 })
                 .collect::<Vec<_>>();
             skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
@@ -952,6 +953,7 @@ mod behavior_environment_tests {
             display_name: Some("Host diagnostics".to_string()),
             enabled: Some(true),
             created_at: None,
+            tags: vec![],
         }
     }
 

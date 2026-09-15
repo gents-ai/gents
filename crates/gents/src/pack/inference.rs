@@ -188,7 +188,9 @@ pub async fn preview_pack_inference_bindings(
     })
 }
 
-/// Bind authored slot markers to retained principal-owned profiles.
+/// Bind authored slot markers and stamp provenance on every pack-authored
+/// configuration type that owns tags. User inference documents are rejected,
+/// so referenced profiles/backends can never acquire pack provenance here.
 pub fn bind_pack_install_config(
     manifest: &PackManifest,
     config: &PackConfig,
@@ -210,7 +212,7 @@ pub fn bind_pack_install_config(
         bindings.len() == manifest.metadata.inference_slots.len(),
         "inference slot binding map does not exactly match the pack declaration"
     );
-    Ok(bound)
+    super::provenance::stamp_pack_origin(manifest, &bound)
 }
 
 /// Publish bound document-pack configuration without replacing its principal
@@ -219,23 +221,7 @@ pub async fn install_pack_documents(
     access: &ConfigAccess,
     config: &PackConfig,
 ) -> Result<crate::config_client::DesiredStateApplyCounts> {
-    let bundle = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
-    let documents = bundle
-        .documents()
-        .iter()
-        .filter(|document| document.collection != Collection::AgentPrincipal)
-        .cloned()
-        .collect::<Vec<_>>();
-    let plan = crate::config_client::DesiredStateApplyPlan::new(documents)?;
-    access
-        .transact("pack.documents.install", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                crate::config_client::validate_desired_state_plan(txn, plan).await?;
-                crate::config_client::apply_desired_state_plan(txn, plan).await
-            })
-        })
-        .await
+    super::provenance::apply_pack_documents(access, config).await
 }
 
 pub(super) fn validate_pack_inference_authoring(
@@ -328,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn binding_replaces_slot_markers_without_authoring_inference_documents() {
+    fn binding_replaces_slot_markers_and_stamps_only_pack_owned_documents() {
         let bound = bind_pack_install_config(
             &two_slots(),
             &config(),
@@ -340,7 +326,18 @@ mod tests {
         .unwrap();
         assert_eq!(bound.agent_behaviors[0].inference_profile_id, "claude");
         assert_eq!(bound.agent_behaviors[1].inference_profile_id, "glm");
-        assert_eq!(bound.agent_behaviors[0].tags, ["authored"]);
+        for tags in [
+            &bound.agent_behaviors[0].tags,
+            &bound.agent_behaviors[1].tags,
+            &bound.contexts[0].tags,
+            &bound.tasks[0].tags,
+        ] {
+            assert!(tags.contains(&"gents:pack:test_pack".to_owned()));
+        }
+        assert_eq!(
+            bound.agent_behaviors[0].tags,
+            ["authored", "gents:pack:test_pack"]
+        );
         assert!(bound.agent_principal.tags.is_empty());
         assert!(bound.inference_profiles.is_empty());
         assert!(bound.inference_backends.is_empty());

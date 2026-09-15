@@ -217,6 +217,12 @@ Every authored behavior references its slot as
 `InferenceProfile`, sampling, execution, or retry documents and do not use
 endpoint/model environment substitutions as a second inference owner.
 
+Installation stamps `gents:pack:<pack_name>` onto every pack-authored document
+whose canonical type has tags, merging it with authored discovery tags. This
+tag supports UI filtering and provenance inspection only: references determine
+execution and tags grant no deletion or authorization authority. User profiles
+and backends referenced by slot bindings are never stamped.
+
 A README must explain purpose, installation, bindings/prerequisites, tool and
 workspace authority, inputs/outputs, completion/failure semantics, validation,
 and operational history. Graphs must include a Mermaid diagram. Refresh and

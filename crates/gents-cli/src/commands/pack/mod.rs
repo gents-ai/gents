@@ -49,7 +49,21 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         }
         PackCommand::Show(args) => {
             let pack = resolve_pack(&args.package)?;
+            let dependency_origins = pack
+                .manifest
+                .metadata
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    Ok(json!({
+                        "pack": dependency,
+                        "origin_tag": gents::pack::pack_origin_tag(dependency)?,
+                    }))
+                })
+                .collect::<Result<Vec<_>>>()?;
             crate::print_json(&json!({
+                "origin_tag": gents::pack::pack_origin_tag(&pack.manifest.name)?,
+                "dependency_origins": dependency_origins,
                 "manifest": pack.manifest,
                 "digest": pack.digest,
             }))
@@ -489,6 +503,7 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                 &authored,
                 &inference.bindings,
             )?;
+            let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
             if args.preview {
                 return crate::print_json(&json!({
                     "pack": pack.manifest().name,
@@ -497,6 +512,7 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                     "owner": owner,
                     "inference": inference,
                     "dependency_inference": dependency_inference,
+                    "origin_tag": origin_tag,
                     "dependencies": pack.manifest().metadata.dependencies,
                     "would_write": false,
                 }));
@@ -533,6 +549,7 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                 "owner": owner,
                 "inference": inference,
                 "dependency_inference": dependency_inference,
+                "origin_tag": origin_tag,
                 "dependencies": pack.manifest().metadata.dependencies,
                 "schemas": schemas,
                 "apply": apply,

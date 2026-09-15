@@ -66,6 +66,7 @@ export function BehaviorConfigPanel({
         items={deployment.behaviorConfigs.map((entry) => ({
           id: entry.behavior_id,
           title: entry.display_name ?? entry.behavior_id,
+          tags: entry.tags,
           meta:
             deployment.agentPrincipal.defaultBehaviorId === entry.behavior_id
               ? "default"

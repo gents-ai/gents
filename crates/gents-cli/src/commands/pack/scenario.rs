@@ -3635,6 +3635,10 @@ mod tests {
             .agent_behaviors
             .iter()
             .all(|behavior| behavior.inference_profile_id == "default-profile"));
+        assert!(config
+            .agent_behaviors
+            .iter()
+            .all(|behavior| behavior.tags.contains(&"gents:pack:pipeline".to_owned())));
         assert!(config.inference_profiles.is_empty());
         assert!(config.inference_backends.is_empty());
     }

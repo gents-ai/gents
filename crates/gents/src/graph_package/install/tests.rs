@@ -163,6 +163,14 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
     let first = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
         .await
         .unwrap();
+    let user_tag = node
+        .execute(
+            r#"mutation { update_AgentBehavior(filter: {
+        agent_did: {_eq: "did:key:package-owner"}, behavior_id: {_eq: "review-recon"}
+    }, input: {tags: ["gents:pack:code_review", "user-label"]}) {_docID} }"#,
+        )
+        .await;
+    assert!(!user_tag.has_errors(), "{:?}", user_tag.errors);
     let second = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
         .await
         .unwrap();
@@ -225,6 +233,45 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
             continue;
         };
         assert_eq!(behavior["inference_profile_id"], *profile_id);
+        assert!(behavior["tags"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("gents:pack:code_review")));
+    }
+    let review_recon = data["AgentBehavior"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|behavior| behavior["behavior_id"] == "review-recon")
+        .unwrap();
+    assert!(review_recon["tags"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("user-label")));
+    for (collection, id_field, retained_ids) in [
+        (
+            &data["AgentContext"],
+            "context_id",
+            &["claude:context", "glm:context", "grok:context"][..],
+        ),
+        (
+            &data["Tools"],
+            "tools_id",
+            &["claude:tools", "glm:tools", "grok:tools"][..],
+        ),
+        (&data["Task"], "task_id", &["unrelated-task"][..]),
+        (&data["GraphDefinition"], "graph_id", &[][..]),
+    ] {
+        for document in collection.as_array().unwrap() {
+            if retained_ids.contains(&document[id_field].as_str().unwrap()) {
+                assert!(document["tags"].is_null());
+                continue;
+            }
+            assert!(document["tags"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("gents:pack:code_review")));
+        }
     }
     assert_eq!(data["InferenceProfile"].as_array().unwrap().len(), 3);
     assert_eq!(

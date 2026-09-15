@@ -403,6 +403,7 @@ mod tests {
                         display_name: Some("Skill A".into()),
                         enabled: Some(true),
                         created_at: None,
+                        tags: vec!["gents:pack:test".into()],
                     }],
                     tasks: vec![],
                     schedules: vec![],

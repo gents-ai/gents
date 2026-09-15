@@ -49,6 +49,7 @@ export function ToolsConfigPanel({
         items={deployment.tools.map((entry) => ({
           id: entry.tools_id,
           title: entry.display_name ?? entry.tools_id,
+          tags: entry.tags,
           meta: entry.host ? "Host tools" : "Tools",
         }))}
         selectedId={selectedToolsId}

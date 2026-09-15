@@ -300,6 +300,7 @@ pub struct SkillView {
     pub display_name: Option<String>,
     pub enabled: Option<bool>,
     pub created_at: Option<String>,
+    pub tags: Vec<String>,
 }
 
 /// Authored trigger and its observed delivery state share one read-only envelope.

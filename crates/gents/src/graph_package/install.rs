@@ -314,7 +314,7 @@ async fn prepare_package(
                 .as_str()
                 .context("configuration logical ID missing")?
                 .to_owned(),
-            content_digest: crate::config_client::desired_state_document_digest(&document.add)?,
+            content_digest: crate::pack::pack_artifact_document_digest(&document.add)?,
         });
     }
     artifacts.sort();
@@ -394,8 +394,9 @@ async fn prepare_package(
     access
         .transact("graph_package.install_preflight", |txn| {
             Box::pin(async move {
-                crate::config_client::verify_existing_desired_state_plan(txn, desired).await?;
-                crate::config_client::validate_desired_state_plan(txn, desired).await
+                let effective =
+                    crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
+                crate::config_client::validate_desired_state_plan(txn, &effective).await
             })
         })
         .await?;
@@ -519,8 +520,10 @@ pub(crate) async fn install_loaded_graph_package(
     access
         .transact("graph_package.install", |txn| {
             Box::pin(async move {
-                crate::config_client::verify_existing_desired_state_plan(txn, desired).await?;
-                apply_desired_state_plan(txn, desired).await?;
+                let effective =
+                    crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
+                crate::config_client::validate_desired_state_plan(txn, &effective).await?;
+                apply_desired_state_plan(txn, &effective).await?;
                 crate::graph_pipeline::materialize_graph_revision_in_txn(txn, owner, plan).await?;
                 Ok(())
             })

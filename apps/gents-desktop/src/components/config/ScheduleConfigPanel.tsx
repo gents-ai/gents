@@ -63,6 +63,7 @@ export function ScheduleConfigPanel({
         items={deployment.schedules.map((schedule) => ({
           id: schedule.schedule_id,
           title: schedule.display_name ?? schedule.schedule_id,
+          tags: schedule.tags,
           meta: describeCadence(schedule.cadence),
         }))}
         selectedId={selectedScheduleId}

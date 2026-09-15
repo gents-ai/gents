@@ -103,6 +103,7 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
             "pack": package.manifest.name,
             "owner": owner_did,
             "inference": preview,
+            "origin_tag": gents::pack::pack_origin_tag(&package.manifest.name)?,
             "would_write": false,
         }));
     }

@@ -267,6 +267,18 @@
     overflow: hidden;
   }
 
+  .config-list-controls {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .config-origin-filter {
+    display: grid;
+    gap: var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
   .config-workspace .panel-header {
     align-items: flex-start;
     padding-bottom: var(--space-4);

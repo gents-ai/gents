@@ -55,6 +55,7 @@ export function TriggerConfigPanel({
         items={deployment.triggers.map((trigger) => ({
           id: trigger.config.trigger_id,
           title: trigger.config.display_name ?? trigger.config.trigger_id,
+          tags: trigger.config.tags,
           meta: describeSource(trigger),
         }))}
         selectedId={selectedTriggerId}

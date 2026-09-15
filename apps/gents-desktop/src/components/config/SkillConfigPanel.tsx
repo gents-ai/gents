@@ -51,6 +51,7 @@ export function SkillConfigPanel({
             id: skill.skillId,
             title,
             meta: "skill",
+            tags: skill.tags,
           };
         })}
         selectedId={selectedSkillId}

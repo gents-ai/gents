@@ -52,6 +52,7 @@ export function EventSourceConfigPanel({
         items={deployment.eventSources.map((source) => ({
           id: source.event_source_id,
           title: source.display_name ?? source.event_source_id,
+          tags: source.tags,
           meta: `${source.source_collection} / ${source.event_kind ?? "created"}`,
         }))}
         selectedId={selectedEventSourceId}

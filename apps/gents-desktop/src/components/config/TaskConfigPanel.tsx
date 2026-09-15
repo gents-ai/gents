@@ -74,6 +74,7 @@ export function TaskConfigPanel({
           return {
             id: task.taskId,
             title,
+            tags: task.tags,
             meta: title === task.taskId ? "task" : task.taskId,
           };
         })}
