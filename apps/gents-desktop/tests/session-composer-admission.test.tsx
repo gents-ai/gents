@@ -51,6 +51,13 @@ function newSessionShell(
       agentDid: "did:key:agent",
       agentPrincipal: { displayName: "Agent" },
       behaviors: [{ behaviorId: "behavior", isDefault: true }],
+      behaviorReadiness: {
+        source: { state: "current" },
+        activeGeneration: 1,
+        routerGeneration: 1,
+        updatedAt: null,
+        behaviors: [{ state: "ready", behaviorId: "behavior" }],
+      },
       behaviorEnvironments: [],
       contexts: [],
       skills: [],
