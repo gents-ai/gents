@@ -679,7 +679,21 @@ pub async fn apply_persona_request(
         let preset = doc.preset.as_deref().unwrap_or("").trim();
         let effective_name = behavior.display_name.as_deref().unwrap_or(&behavior.behavior_id);
         let mut tools = if create && !preset.is_empty() || doc.edits("preset") {
-            Some(tools_from_preset(tools_id.clone(), owner, effective_name, preset, root.clone())?)
+            let preset_root = if create || doc.edits("root") {
+                root.clone()
+            } else {
+                existing_tools
+                    .as_ref()
+                    .and_then(|tools| tools.host.as_ref())
+                    .and_then(|host| host.root.clone())
+            };
+            Some(tools_from_preset(
+                tools_id.clone(),
+                owner,
+                effective_name,
+                preset,
+                preset_root,
+            )?)
         } else { existing_tools.clone() };
         // Omitted edit fields preserve their canonical values. A present root
         // with a null payload explicitly clears only the root narrowing.
@@ -1376,6 +1390,35 @@ mod tests {
         .await?;
         assert_eq!(
             renamed_tools
+                .host
+                .as_ref()
+                .and_then(|host| host.root.as_deref()),
+            Some("/original")
+        );
+
+        // Replacing only the permission preset preserves the existing root.
+        doc.request_key = "preset-preserves-root".into();
+        doc.preset = Some("readonly".into());
+        doc.edit_fields = vec!["preset".into()];
+        apply_persona_request(&node, &doc, &catalog).await?;
+        let preset_behavior: AgentBehaviorDocument =
+            read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
+        let preset_context: AgentContext = read(
+            &node,
+            Collection::AgentContext,
+            owner,
+            preset_behavior.context_id.as_deref().unwrap(),
+        )
+        .await?;
+        let preset_tools: Tools = read(
+            &node,
+            Collection::Tools,
+            owner,
+            preset_context.tools_id.as_deref().unwrap(),
+        )
+        .await?;
+        assert_eq!(
+            preset_tools
                 .host
                 .as_ref()
                 .and_then(|host| host.root.as_deref()),
