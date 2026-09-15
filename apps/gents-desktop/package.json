@@ -11,6 +11,7 @@
     "format": "prettier --write \"src/**/*.{css,json,ts,tsx}\" \"tests/**/*.{html,mjs,ts,tsx}\" \"*.{json,ts}\"",
     "format:check": "prettier --check \"src/**/*.{css,json,ts,tsx}\" \"tests/**/*.{html,mjs,ts,tsx}\" \"*.{json,ts}\"",
     "test": "vitest run",
+    "test:lean-conformance": "vitest run --config vitest.lean-conformance.config.ts",
     "test:ui": "npm run format:check && npm run build && npm run test:ui:unit && npm run test:ui:e2e && npm run test:ui:fuzz -- --time-limit 20s",
     "test:ui:qa-sweep": "npm run format:check && npm run build && npm run test:ui:unit && npm run test:ui:e2e && npm run test:ui:screenshots && npm run test:ui:fuzz -- --time-limit 2m",
     "test:ui:unit": "vitest run",
