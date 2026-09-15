@@ -1,7 +1,7 @@
 /* Delayed cards on avatars: what a reader most wants to know without
    opening anything. The agent: online, what it may touch, how much it
    has, its DID. A behaviour: what it is for, what it runs on, its access. */
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import { ArrowUpRight } from "lucide-react";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import {
@@ -91,6 +91,7 @@ export function BehaviorHoverCard({
   description?: string;
   children: ReactElement;
 }) {
+  const [open, setOpen] = useState(false);
   const b = deployment?.behaviors.find((x) => x.behaviorId === behaviorId);
   const env = deployment?.behaviorEnvironments.find((e) => e.behaviorId === behaviorId);
   if (!deployment || !b) return children;
@@ -107,8 +108,8 @@ export function BehaviorHoverCard({
     : [];
   const summary = description || b.description || undefined;
   return (
-    <HoverCard>
-      <HoverCardTrigger delay={500} render={children} />
+    <HoverCard open={open} onOpenChange={setOpen}>
+      <HoverCardTrigger delay={500} render={children} onFocus={() => setOpen(true)} />
       <HoverCardContent
         side="right"
         align="start"

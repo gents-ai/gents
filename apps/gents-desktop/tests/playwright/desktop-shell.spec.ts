@@ -95,6 +95,30 @@ test.describe("kit shell", () => {
     await expect(page.getByTestId("context-details")).not.toBeVisible();
   });
 
+  test("condensed session behavior details are keyboard accessible", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 800, height: 300 });
+    await gotoHarness(page, "coding");
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    const viewport = page
+      .getByTestId("session-screen")
+      .locator("[data-slot=scroll-area-viewport]")
+      .last();
+    await viewport.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+
+    const trigger = page.getByRole("button", { name: "About Default behavior" });
+    await expect(trigger).toBeVisible();
+    await trigger.focus();
+    await expect(trigger).toBeFocused();
+    await expect(page.getByTestId("behaviour-hover-card")).toBeVisible();
+  });
+
   test("context and sync popovers never overlap as dialog portals", async ({
     page,
   }) => {
