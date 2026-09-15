@@ -362,7 +362,9 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const sessionIdRef = useRef(session?.sessionId ?? null);
-  sessionIdRef.current = session?.sessionId ?? null;
+  useLayoutEffect(() => {
+    sessionIdRef.current = session?.sessionId ?? null;
+  }, [session?.sessionId]);
 
   const latest = session?.latestResponse;
   const live = session?.timelineItems.find((item) => item.kind === "liveAssistant");
@@ -384,7 +386,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     const sessionId = session?.sessionId ?? null;
     setLoadingOlder(true);
     try {
-      await actionsRef.current.loadOlderSessionTimeline();
+      if (!(await actionsRef.current.loadOlderSessionTimeline())) return;
     } finally {
       setLoadingOlder(false);
     }
@@ -507,10 +509,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
     retryMessage: shell.retryMessage,
   });
-  transcriptActions.current = {
-    loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
-    retryMessage: shell.retryMessage,
-  };
+  useLayoutEffect(() => {
+    transcriptActions.current = {
+      loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
+      retryMessage: shell.retryMessage,
+    };
+  }, [shell.loadOlderSessionTimeline, shell.retryMessage]);
   /* away from the bottom, a button offers the way back; scrolling is the cue */
   const { atBottom, toBottom } = useTranscriptFollow(
     column,
