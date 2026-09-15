@@ -85,12 +85,15 @@ function Editor({
   const id = (f: string) => `${schedule.schedule_id}-${f}`;
   const run = async () => {
     setRunning(true);
+    const pending = shell.runSchedule({ scheduleId: schedule.schedule_id });
+    const intentGeneration = shell.captureComposeIntent();
     try {
-      const result = await shell.api.runSchedule({ scheduleId: schedule.schedule_id });
+      const result = await pending;
+      if (!shell.acceptsComposeIntent(intentGeneration)) return;
       setLastRun(result.requestId);
       toast(`Schedule started · ${result.requestId}`);
-      await shell.refreshSnapshot();
     } catch (error) {
+      if (!shell.acceptsComposeIntent(intentGeneration)) return;
       toast(
         `Schedule failed to start: ${error instanceof Error ? error.message : String(error)}`,
       );

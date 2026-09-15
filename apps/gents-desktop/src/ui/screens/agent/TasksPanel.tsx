@@ -130,12 +130,15 @@ function Editor({
       return;
     }
     setRunning(true);
+    const pending = shell.runTask({ taskId: task.taskId, args: parsed });
+    const intentGeneration = shell.captureComposeIntent();
     try {
-      const r = await shell.api.runTask({ taskId: task.taskId, args: parsed });
+      const r = await pending;
+      if (!shell.acceptsComposeIntent(intentGeneration)) return;
       setLastRun(r.requestId);
       toast(`Task started · ${r.requestId}`);
-      await shell.refreshSnapshot();
     } catch (error) {
+      if (!shell.acceptsComposeIntent(intentGeneration)) return;
       toast(
         `Task failed to start: ${error instanceof Error ? error.message : String(error)}`,
       );

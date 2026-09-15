@@ -50,8 +50,36 @@ and deferred-callback tests bind these laws to actual callback admission.
 Proofs do not establish wall-clock delivery, UI frame scheduling, or ordering
 across independent native process lifetimes. Store/reconcile versions are not
 globally ordered identities and must not be compared across restarts as if they
-were. Full-snapshot versus live-delta ordering and lifecycle snapshot commits
-remain separate audit obligations, not guarantees established by these laws.
+were. Full-session-snapshot versus live-delta ordering remains a separate audit
+obligation, not a guarantee established by these laws.
+
+## Frontend ownership follow-up
+
+The follow-up above #1495 applies the existing contracts at previously bypassed
+frontend boundaries, with one commit per ownership area:
+
+- Session selection changes through explicit navigation. Snapshot reconciliation
+  cannot replace a fresh composer with the first existing session or clear a
+  selected session whose row is temporarily missing (`snapshot_preserves_selection`).
+- The behavior picker displays the same effective behavior selection as composer
+  admission; it has no separate picked/default behavior state.
+- The kit composer uses the shell's agent/session/behavior-keyed draft owner.
+  Accepted sends clear only unchanged submitted text, not a subsequently edited draft.
+- All send and retry entry points share synchronous submission admission, including
+  before React renders busy state (`start_submit_gated`). The kit adapter has no
+  separate submission latch or busy state.
+- One lifecycle-owned publication generation orders configuration snapshots from
+  refresh, startup, restart, config saves, and peer operations. Current publication
+  resolves loading/startup presentation without waiting for obsolete fetches.
+- Task/schedule panels call the shell actions. Late results cannot select a session
+  after compose intent changes; accepted mutations remain accepted if observation
+  fails. Overlapping task/schedule operations share an activity count.
+
+The last two areas reuse `ClientObservationOrdering`'s current-generation acceptance
+and stale-completion rejection laws. Deferred real-hook/action tests exercise crossed
+completions, and rendered composer tests exercise canonical draft and selection
+consumption. These are implementation conformance fixes, not new legal transitions;
+no Lean or Rust semantics changed. They do not establish a cause or fix for #1493.
 
 ## Validation and limitations
 

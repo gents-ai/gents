@@ -40,6 +40,7 @@ export function useDesktopShell({
   const [addingPeer, setAddingPeer] = useState(false);
   const [repairingP2P, setRepairingP2P] = useState(false);
   const [runningTask, setRunningTask] = useState(false);
+  const runningTaskCountRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const {
     session,
@@ -320,10 +321,14 @@ export function useDesktopShell({
     onSaveTaskConfig,
     onSaveTriggerConfig,
   } = createDesktopShellTaskActions({
+    acceptsComposeIntent,
+    advanceComposeIntent,
     api,
     beginSnapshotPublication,
+    captureComposeIntent,
     refreshSession,
     refreshSnapshot,
+    runningTaskCountRef,
     setError,
     setRunningTask,
     setSavingConfig,

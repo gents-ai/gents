@@ -73,6 +73,7 @@ function harness() {
     deleteTriggerConfig: vi.fn().mockResolvedValue({}),
     deleteInferenceProfileConfig: vi.fn().mockResolvedValue({}),
   };
+  const refreshSnapshot = vi.fn().mockResolvedValue(undefined);
   const shell = {
     api: api as unknown as DesktopApiAdapter,
     snapshot: { bootstrap },
@@ -80,7 +81,19 @@ function harness() {
     saveBehaviorConfig: api.saveBehaviorConfig,
     applyConfig: (run: (bridge: DesktopApiAdapter) => Promise<unknown>) =>
       run(api as unknown as DesktopApiAdapter),
-    refreshSnapshot: vi.fn().mockResolvedValue(undefined),
+    refreshSnapshot,
+    runTask: async (request: Parameters<typeof api.runTask>[0]) => {
+      const result = await api.runTask(request);
+      await refreshSnapshot();
+      return result;
+    },
+    runSchedule: async (request: Parameters<typeof api.runSchedule>[0]) => {
+      const result = await api.runSchedule(request);
+      await refreshSnapshot();
+      return result;
+    },
+    captureComposeIntent: () => 0,
+    acceptsComposeIntent: (captured: number) => captured === 0,
   } as unknown as Shell;
   return { api, shell };
 }
@@ -655,6 +668,34 @@ describe("configuration panels", () => {
       "Prompt template is required",
     );
     expect(api.saveTaskConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a task result after the user changes compose intent", async () => {
+    const { shell } = harness();
+    let generation = 0;
+    let resolve!: (result: { requestId: string; sessionId: string }) => void;
+    const pending = new Promise<{ requestId: string; sessionId: string }>((next) => {
+      resolve = next;
+    });
+    Object.assign(shell, {
+      runTask: vi.fn(() => pending),
+      captureComposeIntent: () => generation,
+      acceptsComposeIntent: (captured: number) => captured === generation,
+    });
+    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Run task" }).click();
+      await Promise.resolve();
+    });
+    generation += 1;
+    await act(async () => {
+      resolve({ requestId: "stale-request", sessionId: "stale-session" });
+      await pending;
+    });
+
+    expect(screen.queryByText("stale-request")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run task" })).toBeEnabled();
   });
 
   it("preserves interval cadence and rejects non-positive intervals", async () => {

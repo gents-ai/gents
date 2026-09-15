@@ -99,6 +99,8 @@ export function useShell(
       captureComposeIntent: d.captureComposeIntent,
       acceptsComposeIntent: d.acceptsComposeIntent,
       retryMessage: d.onRetryMessage,
+      runTask: d.onRunTask,
+      runSchedule: d.onRunSchedule,
       resolveHold: async (_id: string, _approve: boolean) => {},
       dismissMailboxItem: d.onDismissMailboxItem,
       openMailboxItem: d.onOpenMailboxItem,
