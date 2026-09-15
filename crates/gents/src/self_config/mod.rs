@@ -5,6 +5,7 @@
 //! cannot be changed or returned. Optional no-lockout checks the candidate config
 //! chain. Persona requests reuse the existing signed admission and reconciliation path.
 
+mod command;
 mod ops;
 mod read;
 #[cfg(test)]
@@ -20,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::agent::p2p_reconcile::{GraphqlPersonaRequestStore, PersonaRequestStore};
 use crate::agent::persona_ops::{
@@ -36,55 +37,23 @@ use defra_node::EmbeddedNode;
 use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL_SELF};
 use ops::{decode_merged, guard_selection_keeps_gate, validate_merged_selection, ApplyRequest};
 
-pub const GET_MY_CONFIG_TOOL_NAME: &str = "get_my_config";
-pub const CONFIGURE_BEHAVIOR_TOOL_NAME: &str = "configure_behavior";
-pub const CONFIGURE_TOOLS_TOOL_NAME: &str = "configure_tools";
-pub const CONFIGURE_PROFILE_TOOL_NAME: &str = "configure_profile";
-pub const CONFIGURE_BACKEND_TOOL_NAME: &str = "configure_backend";
-pub const CONFIGURE_MCP_SERVICE_TOOL_NAME: &str = "configure_mcp_service";
-pub const CONFIGURE_AUTOMATION_TOOL_NAME: &str = "configure_automation";
-/// Model-facing behavior catalog/mutation surface. `PersonaConfigRequest`
-/// remains the private signed transport used by paired clients and is not a
-/// second runtime configuration model.
-pub const CONFIGURE_BEHAVIORS_TOOL_NAME: &str = "configure_behaviors";
-pub const INSTALL_PACK_TOOL_NAME: &str = "install_pack";
+pub const CONFIG_TOOL_NAME: &str = "config";
 pub const LIST_GRAPHS_TOOL_NAME: &str = "list_graphs";
 pub const RUN_GRAPH_TOOL_NAME: &str = "run_graph";
 pub const GET_GRAPH_RUN_TOOL_NAME: &str = "get_graph_run";
 pub const GET_GRAPH_RESULT_TOOL_NAME: &str = "get_graph_result";
 pub const CANCEL_GRAPH_RUN_TOOL_NAME: &str = "cancel_graph_run";
 
-/// Every tool name of the family, for reserved-name checks and surfacing.
-pub const SELF_CONFIG_TOOL_NAMES: [&str; 14] = [
-    GET_MY_CONFIG_TOOL_NAME,
-    CONFIGURE_BEHAVIOR_TOOL_NAME,
-    CONFIGURE_TOOLS_TOOL_NAME,
-    CONFIGURE_PROFILE_TOOL_NAME,
-    CONFIGURE_BACKEND_TOOL_NAME,
-    CONFIGURE_MCP_SERVICE_TOOL_NAME,
-    CONFIGURE_AUTOMATION_TOOL_NAME,
-    CONFIGURE_BEHAVIORS_TOOL_NAME,
-    INSTALL_PACK_TOOL_NAME,
+/// Model-facing names reserved by the runtime. Configuration is one coherent
+/// argv-style surface; graph execution remains a separate operational surface.
+pub const SELF_CONFIG_TOOL_NAMES: [&str; 6] = [
+    CONFIG_TOOL_NAME,
     LIST_GRAPHS_TOOL_NAME,
     RUN_GRAPH_TOOL_NAME,
     GET_GRAPH_RUN_TOOL_NAME,
     GET_GRAPH_RESULT_TOOL_NAME,
     CANCEL_GRAPH_RUN_TOOL_NAME,
 ];
-
-/// The `configure_*` tool advertised for a category, if any.
-pub fn configure_tool_name_for_category(category: &str) -> Option<&'static str> {
-    match category {
-        "behavior" => Some(CONFIGURE_BEHAVIOR_TOOL_NAME),
-        "tools" => Some(CONFIGURE_TOOLS_TOOL_NAME),
-        "profile" => Some(CONFIGURE_PROFILE_TOOL_NAME),
-        "backend" => Some(CONFIGURE_BACKEND_TOOL_NAME),
-        "mcp_service" => Some(CONFIGURE_MCP_SERVICE_TOOL_NAME),
-        "automation" => Some(CONFIGURE_AUTOMATION_TOOL_NAME),
-        "persona" => Some(CONFIGURE_BEHAVIORS_TOOL_NAME),
-        _ => None,
-    }
-}
 
 /// Error wrapper mirroring `DefraQueryError`: render the full anyhow chain to
 /// the model.
@@ -107,39 +76,6 @@ impl From<anyhow::Error> for SelfConfigError {
     fn from(error: anyhow::Error) -> Self {
         Self(error)
     }
-}
-
-/// A category patch as the model supplies it: writable field → new value,
-/// JSON `null` clears the field.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(transparent)]
-pub struct PatchArg(pub Map<String, Value>);
-
-impl PatchArg {
-    fn into_patch(self) -> SelfConfigPatch {
-        self.0
-            .into_iter()
-            .map(|(field, value)| match value {
-                Value::Null => (field, None),
-                other => (field, Some(other)),
-            })
-            .collect()
-    }
-}
-
-fn patch_parameter_schema(target: SelfConfigTarget) -> Value {
-    json!({
-        "type": "object",
-        "description": format!(
-            "Partial update for the {} document: map of writable field to its new \
-             value; JSON null clears a field. Writable fields: {}. All other \
-             fields (identity keys, owner DID, runtime-owned status, secrets) \
-             are protected and rejected.",
-            target.collection_name(),
-            target.writable_fields().join(", "),
-        ),
-        "additionalProperties": true,
-    })
 }
 
 fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
@@ -173,6 +109,95 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
             "no-lockout guard: behavior must remain enabled"
         );
         Ok(())
+    });
+    request
+}
+
+/// Model-facing patches may target any owned working behavior, but never the
+/// protected Setup configurator. Keep that policy inside the same transaction
+/// as validation/publication so a stale preflight cannot authorize a write.
+fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
+    let target = request.target;
+    let validate = request.validate;
+    request.validate = Box::new(move |txn, anchor, stored, merged| {
+        let validation = validate(txn, anchor, stored, merged);
+        let protected = anchor
+            .doc
+            .get("tags")
+            .and_then(Value::as_array)
+            .is_some_and(|tags| {
+                tags.iter().any(|tag| {
+                    tag.as_str() == Some(crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG)
+                })
+            });
+        if protected {
+            return Box::pin(async {
+                bail!("target behavior is the protected Setup configurator; select a working behavior")
+            });
+        }
+        Box::pin(async move {
+            // Context and Tools are reusable documents. A targeted edit must
+            // not mutate another behavior (especially Setup) through a shared
+            // reference. Keep the observation and rejection in the same
+            // transaction as the canonical patch publication, matching the
+            // Lean siblingToolsAllowed contract.
+            let owner = anchor
+                .doc
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .context("selected behavior is missing agent_did")?;
+            let behavior_id = anchor
+                .doc
+                .get("behavior_id")
+                .and_then(Value::as_str)
+                .context("selected behavior is missing behavior_id")?;
+            let context_id = anchor
+                .context
+                .get("context_id")
+                .and_then(Value::as_str)
+                .context("selected behavior context is missing context_id")?;
+            let require_only_referrer = |response: &Value,
+                                         collection: &str,
+                                         unique: &str,
+                                         expected: &str| {
+                let rows = response
+                    .get("data")
+                    .and_then(|data| data.get(collection))
+                    .and_then(Value::as_array)
+                    .with_context(|| format!("{collection} reference query missing rows"))?;
+                anyhow::ensure!(
+                        rows.len() == 1
+                            && rows[0].get(unique).and_then(Value::as_str) == Some(expected),
+                        "targeted configuration requires an unshared Context and Tools; clone the working behavior before editing shared configuration"
+                    );
+                Ok::<_, anyhow::Error>(())
+            };
+            if target == SelfConfigTarget::AgentContext || target == SelfConfigTarget::Tools {
+                let escaped_owner = escape_graphql_string(owner);
+                let escaped_context = escape_graphql_string(context_id);
+                let response = txn
+                    .execute(&format!(
+                        r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{escaped_owner}"}}, context_id: {{_eq: "{escaped_context}"}}}}) {{behavior_id}} }}"#
+                    ))
+                    .await?;
+                require_only_referrer(&response, "AgentBehavior", "behavior_id", behavior_id)?;
+            }
+            if target == SelfConfigTarget::Tools {
+                let tools_id = stored
+                    .get("tools_id")
+                    .and_then(Value::as_str)
+                    .context("selected Tools is missing tools_id")?;
+                let escaped_owner = escape_graphql_string(owner);
+                let escaped_tools = escape_graphql_string(tools_id);
+                let response = txn
+                    .execute(&format!(
+                        r#"{{ AgentContext(filter: {{agent_did: {{_eq: "{escaped_owner}"}}, tools_id: {{_eq: "{escaped_tools}"}}}}) {{context_id}} }}"#
+                    ))
+                    .await?;
+                require_only_referrer(&response, "AgentContext", "context_id", context_id)?;
+            }
+            validation.await
+        })
     });
     request
 }
@@ -210,6 +235,23 @@ fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
         "inference_profile_id",
         patch,
     )
+}
+fn profile_create_request(
+    owner: String,
+    profile_id: String,
+    patch: SelfConfigPatch,
+) -> ApplyRequest<'static> {
+    let mut request = ApplyRequest::new(SelfConfigTarget::InferenceProfile, patch);
+    request.allow_create = true;
+    request.require_create = true;
+    request.guard_selected_chain = false;
+    request.resolve_unique = Box::new(move |_| Ok(profile_id.clone()));
+    request.on_create = Box::new(move |id, merged| {
+        merged.insert("profile_id".into(), json!(id));
+        merged.insert("agent_did".into(), json!(owner));
+        Ok(())
+    });
+    request
 }
 fn profile_target_request(
     target: Option<&str>,
@@ -325,436 +367,65 @@ fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
 }
 
 // ---------------------------------------------------------------------------
-// Tools
+// Behavior request transport
 // ---------------------------------------------------------------------------
 
-pub struct GetMyConfigTool {
-    core: SelfConfigCore,
-    categories: BTreeSet<String>,
-    no_lockout: bool,
-    dry_run: bool,
-    allow_pack_install: bool,
+/// Model-facing tri-state for behavior edits. Serde invokes `Default` only
+/// when the property is absent; a present JSON null reaches the deserializer
+/// and becomes `Clear`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum StringUpdate {
+    #[default]
+    Omitted,
+    Clear,
+    Set(String),
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GetMyConfigParams {
-    /// Dry-run preview (requires `self_config_dry_run`): the diff a patch
-    /// would produce, without committing.
-    #[serde(default)]
-    pub preview: Option<PreviewParams>,
+impl<'de> serde::Deserialize<'de> for StringUpdate {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer).map(|value| match value {
+            Some(value) => Self::Set(value),
+            None => Self::Clear,
+        })
+    }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreviewParams {
-    pub category: String,
-    /// Target id for categories that need one (`mcp_service` service_id,
-    /// `automation` task/schedule/trigger id).
-    #[serde(default)]
-    pub id: Option<String>,
-    /// Automation kind (`task` | `schedule` | `trigger`).
-    #[serde(default)]
-    pub kind: Option<String>,
-    pub patch: PatchArg,
-}
+impl StringUpdate {
+    fn is_present(&self) -> bool {
+        !matches!(self, Self::Omitted)
+    }
 
-impl Tool for GetMyConfigTool {
-    const NAME: &'static str = GET_MY_CONFIG_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = GetMyConfigParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let mut properties = serde_json::Map::new();
-        if self.dry_run {
-            properties.insert(
-                "preview".to_string(),
-                json!({
-                    "type": "object",
-                    "description": "Optional dry-run: preview the field-level diff a configure_* patch would produce, without committing.",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "enum": self.categories.iter().collect::<Vec<_>>(),
-                        },
-                        "kind": {
-                            "type": "string",
-                            "enum": ["behavior", "context", "profile", "sampling", "execution", "retry_policy", "compaction", "task", "schedule", "trigger", "event_source"],
-                            "description": "Target within the selected behavior, profile, or automation category.",
-                        },
-                        "id": {
-                            "type": "string",
-                            "description": "Target id (mcp_service service_id or automation doc id).",
-                        },
-                        "patch": { "type": "object" },
-                    },
-                    "required": ["category", "patch"],
-                }),
-            );
-        }
-        ToolDefinition {
-            name: GET_MY_CONFIG_TOOL_NAME.to_string(),
-            description: format!(
-                "Read this agent's own effective configuration documents: behavior, tool \
-                 selection, inference profile, backend (secrets excluded), owned skills and \
-                 automation. Enabled self-config categories: {}.{} {}",
-                self.categories
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                if self.dry_run {
-                    " Supports dry-run patch previews via the preview parameter."
-                } else {
-                    ""
-                },
-                EFFECT_TIMING_NOTE,
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": properties,
-                "required": [],
-            }),
+    fn value(&self) -> Option<&str> {
+        match self {
+            Self::Set(value) => Some(value),
+            Self::Omitted | Self::Clear => None,
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        match args.preview {
-            None => {
-                let config = self
-                    .core
-                    .read_effective_config(&self.categories, self.no_lockout, self.dry_run)
-                    .await?;
-                serde_json::to_string_pretty(&config)
-                    .map_err(|error| SelfConfigError(anyhow!("serialize config: {error}")))
-            }
-            Some(preview) => {
-                if !self.dry_run {
-                    return Err(SelfConfigError(anyhow!(
-                        "dry-run preview is not enabled for this behavior \
-                         (Tools.self_config_dry_run)"
-                    )));
-                }
-                if !self.categories.contains(&preview.category) {
-                    return Err(SelfConfigError(anyhow!(
-                        "category {:?} is not enabled for self-config (enabled: {})",
-                        preview.category,
-                        self.categories
-                            .iter()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    )));
-                }
-                let patch = preview.patch.into_patch();
-                let request = match preview.category.as_str() {
-                    "behavior" => match preview.kind.as_deref().unwrap_or("behavior") {
-                        "behavior" => behavior_request(&self.core, patch),
-                        "context" => {
-                            anchored_request(SelfConfigTarget::AgentContext, "context_id", patch)
-                        }
-                        other => return Err(anyhow!("unknown behavior target {other:?}").into()),
-                    },
-                    "tools" => tools_request(&self.core, patch, self.allow_pack_install),
-                    "profile" => profile_target_request(preview.kind.as_deref(), patch)?,
-                    "backend" => backend_request(patch),
-                    "mcp_service" => {
-                        let id = preview.id.ok_or_else(|| {
-                            SelfConfigError(anyhow!("preview.id (service_id) is required"))
-                        })?;
-                        mcp_service_request(id, patch)
-                    }
-                    "automation" => {
-                        let kind = preview.kind.as_deref().ok_or_else(|| {
-                            SelfConfigError(anyhow!("preview.kind is required for automation"))
-                        })?;
-                        let id = preview.id.ok_or_else(|| {
-                            SelfConfigError(anyhow!("preview.id is required for automation"))
-                        })?;
-                        automation_request(&self.core, automation_target(kind)?, id, patch)
-                    }
-                    "persona" => {
-                        return Err(SelfConfigError(anyhow!(
-                            "behavior catalog actions are request-based; no patch preview is available \
-                             — call configure_behaviors with action \"preview\""
-                        )));
-                    }
-                    other => {
-                        return Err(SelfConfigError(anyhow!("unknown category {other:?}")));
-                    }
-                };
-                let outcome = self.core.preview(request).await?;
-                Ok(outcome_text(&outcome)?)
-            }
-        }
+    fn owned_value(&self) -> Option<String> {
+        self.value().map(ToOwned::to_owned)
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PatchOnlyParams {
-    #[serde(default)]
-    pub target: Option<String>,
-    pub patch: PatchArg,
+fn persona_edit_fields(args: &ConfigurePersonaParams) -> Vec<String> {
+    [
+        ("display_name", &args.display_name),
+        ("description", &args.description),
+        ("system_prompt", &args.system_prompt),
+        ("root", &args.root),
+        ("preset", &args.preset),
+        ("profile_id", &args.profile_id),
+    ]
+    .into_iter()
+    .filter(|(_, value)| value.is_present())
+    .map(|(field, _)| field.to_owned())
+    .collect()
 }
 
-pub struct ConfigureBehaviorTool {
-    core: SelfConfigCore,
-}
-
-impl Tool for ConfigureBehaviorTool {
-    const NAME: &'static str = CONFIGURE_BEHAVIOR_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = PatchOnlyParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_BEHAVIOR_TOOL_NAME.to_string(),
-            description: format!(
-                "Patch the bound behavior or context document. Context owns prompt, tools, skills and compaction references. Identity fields are immutable. {EFFECT_TIMING_NOTE}"
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": { "target": {"type":"string","enum":["behavior","context"],"default":"behavior"}, "patch": {"type":"object","description":"Writable fields of the selected canonical behavior or context document."} },
-                "required": ["patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let request = match args.target.as_deref().unwrap_or("behavior") {
-            "behavior" => behavior_request(&self.core, args.patch.into_patch()),
-            "context" => anchored_request(
-                SelfConfigTarget::AgentContext,
-                "context_id",
-                args.patch.into_patch(),
-            ),
-            other => return Err(anyhow!("unknown behavior target {other:?}").into()),
-        };
-        let outcome = self.core.apply(request).await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureToolsTool {
-    core: SelfConfigCore,
-    allow_pack_install: bool,
-}
-
-impl Tool for ConfigureToolsTool {
-    const NAME: &'static str = CONFIGURE_TOOLS_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = PatchOnlyParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_TOOLS_TOOL_NAME.to_string(),
-            description: format!(
-                "Patch the bound Tools document using its canonical nested groups and explicit permissions. {EFFECT_TIMING_NOTE}"
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": { "patch": patch_parameter_schema(SelfConfigTarget::Tools) },
-                "required": ["patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.target.is_some() {
-            return Err(anyhow!("configure_tools has no target selector").into());
-        }
-        let request = tools_request(&self.core, args.patch.into_patch(), self.allow_pack_install);
-        let outcome = self.core.apply(request).await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureProfileTool {
-    core: SelfConfigCore,
-}
-
-impl Tool for ConfigureProfileTool {
-    const NAME: &'static str = CONFIGURE_PROFILE_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = PatchOnlyParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_PROFILE_TOOL_NAME.to_string(),
-            description: format!(
-                "Patch the selected bound inference or compaction document. Shared references within this principal observe the committed change. \
-                 {EFFECT_TIMING_NOTE}"
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": { "target": {"type":"string","enum":["profile","sampling","execution","retry_policy","compaction"],"default":"profile"}, "patch": {"type":"object","description":"Writable fields of the selected canonical inference or compaction document."} },
-                "required": ["patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let outcome = self
-            .core
-            .apply(profile_target_request(
-                args.target.as_deref(),
-                args.patch.into_patch(),
-            )?)
-            .await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureBackendTool {
-    core: SelfConfigCore,
-}
-
-impl Tool for ConfigureBackendTool {
-    const NAME: &'static str = CONFIGURE_BACKEND_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = PatchOnlyParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_BACKEND_TOOL_NAME.to_string(),
-            description: format!("Patch the backend selected by the bound inference profile. Endpoint, auth references, discovery limits and concurrency are configurable; raw keys and observations remain protected. {EFFECT_TIMING_NOTE}"),
-            parameters: json!({
-                "type": "object",
-                "properties": { "patch": patch_parameter_schema(SelfConfigTarget::InferenceBackend) },
-                "required": ["patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.target.is_some() {
-            return Err(anyhow!("configure_backend has no target selector").into());
-        }
-        let outcome = self
-            .core
-            .apply(backend_request(args.patch.into_patch()))
-            .await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureMcpServiceTool {
-    core: SelfConfigCore,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigureMcpServiceParams {
-    pub service_id: String,
-    pub patch: PatchArg,
-}
-
-impl Tool for ConfigureMcpServiceTool {
-    const NAME: &'static str = CONFIGURE_MCP_SERVICE_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = ConfigureMcpServiceParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_MCP_SERVICE_TOOL_NAME.to_string(),
-            description: format!(
-                "Patch a ToolServiceRegistry document (MCP service host/port/path, \
-                 send_agent_did, status). The service must already exist; registry \
-                 version/updated_at are runtime-owned. {EFFECT_TIMING_NOTE}"
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "service_id": { "type": "string" },
-                    "patch": patch_parameter_schema(SelfConfigTarget::ToolServiceRegistry),
-                },
-                "required": ["service_id", "patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let request = mcp_service_request(args.service_id, args.patch.into_patch());
-        let outcome = self.core.apply(request).await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-pub struct ConfigureAutomationTool {
-    core: SelfConfigCore,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigureAutomationParams {
-    /// `task` | `schedule` | `trigger`.
-    pub kind: String,
-    /// The document's unique id (created if absent).
-    pub id: String,
-    pub patch: PatchArg,
-}
-
-impl Tool for ConfigureAutomationTool {
-    const NAME: &'static str = CONFIGURE_AUTOMATION_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = ConfigureAutomationParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_AUTOMATION_TOOL_NAME.to_string(),
-            description: format!("Create or patch Task, Trigger, Schedule, or EventSource documents owned by this principal. Tasks and trigger task links are scoped to this behavior. Schedule owns cadence; Trigger owns task, source and concurrency. Runtime observations are protected. {EFFECT_TIMING_NOTE}"),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "enum": ["task", "schedule", "trigger", "event_source"] },
-                    "id": { "type": "string" },
-                    "patch": {
-                        "type": "object",
-                        "description": format!(
-                            "Writable fields — task: {}; schedule: {}; trigger: {}.",
-                            SelfConfigTarget::Task.writable_fields().join(", "),
-                            SelfConfigTarget::Schedule.writable_fields().join(", "),
-                            SelfConfigTarget::Trigger.writable_fields().join(", "),
-                        ),
-                        "additionalProperties": true,
-                    },
-                },
-                "required": ["kind", "id", "patch"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let target = automation_target(&args.kind)?;
-        let request = automation_request(&self.core, target, args.id, args.patch.into_patch());
-        let outcome = self.core.apply(request).await?;
-        Ok(outcome_text(&outcome)?)
-    }
-}
-
-/// Manage SIBLING personas of this agent through the `PersonaConfigRequest`
-/// channel — see the module doc for why this tool, alone in the family, is
-/// not "self only" at the behavior level. Unlike the patch-based tools above,
-/// this one authors a request document and lets the existing persona
-/// reconciler (`crate::agent::p2p_reconcile::persona_requests`) admit and
-/// materialize it, so admission can never drift between this tool, the
-/// P2P-replicated path, and the `gents` CLI.
-pub struct ConfigurePersonaTool {
-    node: Arc<EmbeddedNode>,
-    agent_did: String,
-    identity: Arc<dyn AgentIdentity>,
-    process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigurePersonaParams {
     /// `list` | `inspect` | `preview` | `create` | `edit` | `clone` | `disable`.
@@ -763,15 +434,15 @@ pub struct ConfigurePersonaParams {
     #[serde(default)]
     pub operation: Option<String>,
     #[serde(default)]
-    pub display_name: Option<String>,
+    pub display_name: StringUpdate,
     /// User-facing summary for the working behavior and its context.
     #[serde(default)]
-    pub description: Option<String>,
+    pub description: StringUpdate,
     /// Complete operating instructions for the working behavior. Required
     /// when creating from a permission preset; optional overrides a clone or
     /// an existing behavior.
     #[serde(default)]
-    pub system_prompt: Option<String>,
+    pub system_prompt: StringUpdate,
     /// Exact behavior_id of the sibling behavior (required for edit/disable).
     #[serde(default)]
     pub behavior_id: Option<String>,
@@ -779,12 +450,12 @@ pub struct ConfigurePersonaParams {
     #[serde(default)]
     pub clone_from: Option<String>,
     #[serde(default)]
-    pub root: Option<String>,
+    pub root: StringUpdate,
     #[serde(default)]
-    pub preset: Option<String>,
+    pub preset: StringUpdate,
     /// Exact owner-scoped inference profile ID.
     #[serde(default)]
-    pub profile_id: Option<String>,
+    pub profile_id: StringUpdate,
     /// Promote the applied behavior to this principal's default behavior.
     #[serde(default)]
     pub make_default: bool,
@@ -797,23 +468,12 @@ pub struct ConfigurePersonaParams {
     pub network_mode: Option<crate::toolset::CommandNetworkMode>,
 }
 
-/// How long [`ConfigurePersonaTool`] polls a freshly-authored
+/// How long the `config behavior` command polls a freshly-authored
 /// `PersonaConfigRequest` row before returning it still-`pending`: the
 /// in-process reconciler sweeps on every `Update` event, so a healthy node
 /// converges well inside this window.
 const PERSONA_REQUEST_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 const PERSONA_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(200);
-
-#[derive(Debug, Clone, Default, serde::Serialize)]
-struct PersonaCatalogSnapshot {
-    process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
-    allowed_roots: Vec<String>,
-    permission_presets: Vec<String>,
-    available_profile_ids: Vec<String>,
-    default_behavior_id: Option<String>,
-    behaviors: BTreeMap<String, Value>,
-    activation: Value,
-}
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct PersonaRequestRowOut {
@@ -830,8 +490,6 @@ struct PersonaRequestRowOut {
     #[serde(default)]
     clone_from: Option<String>,
     #[serde(default)]
-    persona_name: Option<String>,
-    #[serde(default)]
     description: Option<String>,
     #[serde(default)]
     system_prompt: Option<String>,
@@ -841,6 +499,8 @@ struct PersonaRequestRowOut {
     preset: Option<String>,
     #[serde(default)]
     profile_id: Option<String>,
+    #[serde(default)]
+    edit_fields: Option<Vec<String>>,
     #[serde(default)]
     make_default: Option<bool>,
     #[serde(default)]
@@ -871,12 +531,12 @@ async fn load_persona_request_row(
                 op
                 behavior_id
                 clone_from
-                persona_name
                 description
                 system_prompt
                 root
                 preset
                 profile_id
+                edit_fields
                 make_default
                 created_at
                 status
@@ -986,13 +646,27 @@ async fn persona_list(
     node: &Arc<EmbeddedNode>,
     agent_did: &str,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    limit: usize,
+    cursor: Option<&str>,
 ) -> Result<String> {
+    anyhow::ensure!(
+        (1..=50).contains(&limit),
+        "--limit must be between 1 and 50"
+    );
     let store =
         GraphqlPersonaRequestStore::with_ceiling(node.clone(), process_ceiling.root.clone());
     let catalog = store.load_catalog_view(agent_did).await?;
     let default_behavior_id = principal_default_behavior(node, agent_did).await?;
-    let mut behaviors = BTreeMap::new();
-    for (behavior_id, reference) in &catalog.behaviors {
+    let total = catalog.behaviors.len();
+    let selected = catalog
+        .behaviors
+        .iter()
+        .filter(|(behavior_id, _)| cursor.is_none_or(|cursor| behavior_id.as_str() > cursor))
+        .take(limit + 1)
+        .collect::<Vec<_>>();
+    let truncated = selected.len() > limit;
+    let mut behaviors = Vec::new();
+    for (behavior_id, reference) in selected.into_iter().take(limit) {
         let snapshot = match behavior_snapshot(
             node,
             agent_did,
@@ -1003,7 +677,22 @@ async fn persona_list(
         )
         .await
         {
-            Ok(snapshot) => snapshot,
+            Ok(snapshot) => {
+                let effective = &snapshot["effective_config"];
+                json!({
+                    "behavior_id": behavior_id,
+                    "display_name": effective.pointer("/behavior/display_name"),
+                    "description": effective.pointer("/behavior/description"),
+                    "enabled": reference.enabled,
+                    "protected": reference.protected,
+                    "is_default": default_behavior_id.as_deref() == Some(behavior_id.as_str()),
+                    "context_id": effective.pointer("/behavior/context_id"),
+                    "profile_id": effective.pointer("/behavior/inference_profile_id"),
+                    "backend_id": effective.pointer("/inference_profile/backend_id"),
+                    "model_name": effective.pointer("/inference_profile/model_name"),
+                    "reasoning_effort": effective.pointer("/inference_profile/reasoning_effort"),
+                })
+            }
             Err(error) => json!({
                 "behavior_id": behavior_id,
                 "enabled": reference.enabled,
@@ -1012,25 +701,38 @@ async fn persona_list(
                 "configuration_error": format!("{error:#}"),
             }),
         };
-        behaviors.insert(behavior_id.clone(), snapshot);
+        behaviors.push(snapshot);
     }
-    let snapshot = PersonaCatalogSnapshot {
-        process_ceiling: process_ceiling.clone(),
-        allowed_roots: catalog.allowed_roots.into_iter().collect(),
-        permission_presets: crate::agent::persona_presets::builtin_preset_names()
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect(),
-        available_profile_ids: catalog.available_profile_ids.into_iter().collect(),
-        default_behavior_id,
-        behaviors,
-        activation: json!({
+    let next_cursor = truncated
+        .then(|| {
+            behaviors
+                .last()?
+                .get("behavior_id")?
+                .as_str()
+                .map(ToOwned::to_owned)
+        })
+        .flatten();
+    let snapshot = json!({
+        "page": {
+            "limit": limit,
+            "total": total,
+            "returned": behaviors.len(),
+            "truncated": truncated,
+            "next_cursor": next_cursor,
+        },
+        "process_ceiling": process_ceiling,
+        "allowed_roots": catalog.allowed_roots,
+        "permission_presets": crate::agent::persona_presets::builtin_preset_names(),
+        "available_profile_ids": catalog.available_profile_ids,
+        "default_behavior_id": default_behavior_id,
+        "behaviors": behaviors,
+        "activation": {
             "durable_config": "after the admitted transaction commits",
             "running_generation": "after the runtime reconciler generation swap",
             "session": "select the behavior in a new session; existing sessions remain bound to their original behavior",
             "pairing_and_restart": "canonical documents and request outcomes replicate to authorized paired clients and are reloaded after restart",
-        }),
-    };
+        },
+    });
     serde_json::to_string_pretty(&snapshot).map_err(|error| anyhow!("serialize catalog: {error}"))
 }
 
@@ -1045,7 +747,7 @@ async fn persona_inspect(
     let catalog = store.load_catalog_view(agent_did).await?;
     let reference = catalog.behaviors.get(behavior_id).with_context(|| {
         format!(
-            "unknown behavior_id {behavior_id:?}; call configure_behaviors with action \"list\""
+            "unknown behavior_id {behavior_id:?}; run config behavior list and use an exact returned ID"
         )
     })?;
     let default_behavior_id = principal_default_behavior(node, agent_did).await?;
@@ -1107,12 +809,15 @@ async fn persona_preview(
         op_raw: op_raw.to_owned(),
         op: Some(op.clone()),
         behavior_id: args.behavior_id.clone(),
-        persona_name: args.display_name.clone(),
-        description: args.description.clone(),
-        system_prompt: args.system_prompt.clone(),
-        root: args.root.clone(),
-        preset: args.preset.clone(),
-        profile_id: args.profile_id.clone(),
+        persona_name: args.display_name.owned_value(),
+        description: args.description.owned_value(),
+        system_prompt: args.system_prompt.owned_value(),
+        root: args.root.owned_value(),
+        preset: args.preset.owned_value(),
+        profile_id: args.profile_id.owned_value(),
+        edit_fields: (operation == "edit")
+            .then(|| persona_edit_fields(args))
+            .unwrap_or_default(),
         make_default: args.make_default,
         ..Default::default()
     };
@@ -1124,7 +829,7 @@ async fn persona_preview(
     let behavior_id = match &op {
         PersonaOp::Create { .. } => args
             .display_name
-            .as_deref()
+            .value()
             .map(|name| derive_behavior_id(agent_did, name, &catalog.behaviors)),
         PersonaOp::Edit | PersonaOp::Disable => args.behavior_id.clone(),
     };
@@ -1151,7 +856,7 @@ async fn persona_preview(
         }
         _ => None,
     };
-    let preset_requested = args.preset.as_deref().and_then(|preset| {
+    let preset_requested = args.preset.value().and_then(|preset| {
         crate::agent::persona_presets::preset_fields(preset).map(|fields| {
             json!({
                 "file_mode": fields.file_tools_mode,
@@ -1169,15 +874,16 @@ async fn persona_preview(
             "behavior_id": behavior_id,
             "context_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("context-{request_key}")),
             "tools_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("tools-{request_key}")),
-            "profile_id": args.profile_id,
+            "profile_id": args.profile_id.value(),
         },
         "proposed_values": {
-            "display_name": args.display_name,
-            "description": args.description,
-            "context_description": args.description,
-            "system_prompt": args.system_prompt,
-            "root": args.root,
-            "preset": args.preset,
+            "display_name": args.display_name.value(),
+            "description": args.description.value(),
+            "context_description": args.description.value(),
+            "system_prompt": args.system_prompt.value(),
+            "root": args.root.value(),
+            "preset": args.preset.value(),
+            "edit_fields": (operation == "edit").then(|| persona_edit_fields(args)),
             "make_default": args.make_default,
         },
         "preset_requested": preset_requested,
@@ -1195,8 +901,13 @@ async fn persona_mutate(
     args: &ConfigurePersonaParams,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
+    anyhow::ensure!(
+        identity.did() == agent_did,
+        "behavior writes require the exact local principal signer; signer {:?} cannot configure principal {agent_did:?}",
+        identity.did()
+    );
     let resolved_behavior_id = args.behavior_id.as_deref().map(str::to_owned);
-    let resolved_profile_id = args.profile_id.as_deref().map(str::to_owned);
+    let resolved_profile_id = args.profile_id.owned_value();
 
     let required_behavior_id = |action: &str| -> Result<()> {
         if resolved_behavior_id
@@ -1214,7 +925,7 @@ async fn persona_mutate(
         "clone" => {
             let preset_given = args
                 .preset
-                .as_deref()
+                .value()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .is_some();
@@ -1254,12 +965,15 @@ async fn persona_mutate(
         op: op.to_string(),
         behavior_id: resolved_behavior_id,
         clone_from,
-        persona_name: args.display_name.clone(),
-        description: args.description.clone(),
-        system_prompt: args.system_prompt.clone(),
-        root: args.root.clone(),
-        preset: args.preset.clone(),
+        persona_name: args.display_name.owned_value(),
+        description: args.description.owned_value(),
+        system_prompt: args.system_prompt.owned_value(),
+        root: args.root.owned_value(),
+        preset: args.preset.owned_value(),
         profile_id: resolved_profile_id,
+        edit_fields: (args.action == "edit")
+            .then(|| persona_edit_fields(args))
+            .unwrap_or_default(),
         make_default: args.make_default,
         created_at: now,
         local_signature: Vec::new(),
@@ -1324,11 +1038,11 @@ async fn persona_mutate(
         let profile_id = required_materialized_id("/inference_profile/profile_id", "profile_id")?;
         let requires_tools = args
             .preset
-            .as_deref()
+            .value()
             .is_some_and(|preset| !preset.trim().is_empty())
             || args
                 .root
-                .as_deref()
+                .value()
                 .is_some_and(|root| !root.trim().is_empty());
         let tools_id = if !requires_tools {
             effective_config
@@ -1348,6 +1062,58 @@ async fn persona_mutate(
                     .and_then(Value::as_str)
                     .is_some_and(|prompt| !prompt.trim().is_empty()),
                 "applied behavior request reported success without effective system instructions"
+            );
+        }
+        let verify_string = |pointer: &str, update: &StringUpdate, field: &str| -> Result<()> {
+            if update.is_present() {
+                anyhow::ensure!(
+                    effective_config.pointer(pointer).and_then(Value::as_str) == update.value(),
+                    "applied behavior request reported success but {field} does not match the requested value"
+                );
+            }
+            Ok(())
+        };
+        verify_string("/behavior/display_name", &args.display_name, "display_name")?;
+        verify_string(
+            "/behavior/description",
+            &args.description,
+            "behavior description",
+        )?;
+        verify_string(
+            "/context/description",
+            &args.description,
+            "context description",
+        )?;
+        verify_string(
+            "/context/system_prompt",
+            &args.system_prompt,
+            "system_prompt",
+        )?;
+        verify_string("/documents/Tools/host/root", &args.root, "root")?;
+        verify_string(
+            "/behavior/inference_profile_id",
+            &args.profile_id,
+            "profile_id",
+        )?;
+        if let Some(preset) = args.preset.value() {
+            let fields = crate::agent::persona_presets::preset_fields(preset)
+                .context("applied behavior request used an unknown preset")?;
+            anyhow::ensure!(
+                effective_config
+                    .pointer("/documents/Tools/host/files/mode")
+                    .and_then(Value::as_str)
+                    == Some(fields.file_tools_mode.as_str())
+                    && effective_config
+                        .pointer("/documents/Tools/host/bash/mode")
+                        .and_then(Value::as_str)
+                        == Some(fields.bash_mode.as_str()),
+                "applied behavior request reported success but effective Tools do not match preset {preset:?}"
+            );
+        }
+        if args.make_default {
+            anyhow::ensure!(
+                effective["is_default"].as_bool() == Some(true),
+                "applied behavior request reported success but did not select the behavior as principal default"
             );
         }
         output["materialized_ids"] = json!({
@@ -1374,206 +1140,91 @@ async fn persona_mutate(
         .map_err(|error| anyhow!("serialize behavior configuration outcome: {error}"))
 }
 
-impl Tool for ConfigurePersonaTool {
-    const NAME: &'static str = CONFIGURE_BEHAVIORS_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = ConfigurePersonaParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: CONFIGURE_BEHAVIORS_TOOL_NAME.to_string(),
-            description: "Preview, list, inspect, create, clone, edit, or disable this principal's canonical behaviors through the signed command owner. Choose an existing profile and a complete system_prompt for a preset-based create. Then use the separate configure_tools action with an existing behavior_id to select LSP/native graph capabilities or disable host-command network access through the canonical config patch owner. Creation and tool selection are distinct commits; retry only the failed operation. Setup and shared tool references are protected. Inspect configured grants and test a new request after reconciliation before claiming readiness.".to_owned(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["list", "inspect", "preview", "create", "edit", "clone", "disable", "configure_tools"],
-                    },
-                    "operation": {
-                        "type": "string",
-                        "enum": ["create", "edit", "clone", "disable"],
-                        "description": "Mutation to validate when action is preview.",
-                    },
-                    "display_name": {
-                        "type": "string",
-                        "description": "Display name for the working behavior (create/edit).",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Concise user-facing purpose for the working behavior and context.",
-                    },
-                    "system_prompt": {
-                        "type": "string",
-                        "description": "Complete operating instructions. Required for a preset-based create; optional to override a clone or edit. Must describe the requested role, scope, tools, constraints, and verification expectations.",
-                    },
-                    "behavior_id": {
-                        "type": "string",
-                        "description": "Exact behavior_id (required for inspect/edit/disable).",
-                    },
-                    "clone_from": {
-                        "type": "string",
-                        "description": "Exact sibling behavior_id to clone from.",
-                    },
-                    "root": {
-                        "type": "string",
-                        "description": "Workspace root narrowing, if any. It must be a published allowed_root within the managed process ceiling. CAUTION on edit: omitting root clears the existing narrowing, so inspect and resend it unless widening to the process ceiling is explicitly intended.",
-                    },
-                    "preset": {
-                        "type": "string",
-                        "description": "Built-in permission preset for create/edit. Clone inherits permissions and rejects this field.",
-                    },
-                    "profile_id": {
-                        "type": "string",
-                        "description": "Exact inference profile_id owned by this principal.",
-                    },
-                    "make_default": {
-                        "type": "boolean",
-                        "description": "For create/edit, atomically promote the applied behavior to this principal's default. Must be false for disable.",
-                        "default": false,
-                    },
-                    "enable_lsp": {
-                        "type": "boolean",
-                        "description": "Only for action configure_tools on an existing sibling. Select LSP in canonical Tools; omit to preserve, false disables. This is a separate committed operation after create/clone/edit, not an atomic creation option. Test the server before claiming readiness."
-                    },
-                    "enable_graph_tools": {
-                        "type": "boolean",
-                        "description": "Only for action configure_tools on an existing sibling. Select native list_graphs/run_graph/get_graph_run/get_graph_result/cancel_graph_run on this node/principal, without pack installation or self-configuration. Omit to preserve; false disables. Graph caller admission still applies."
-                    },
-                    "network_mode": {
-                        "type": "string",
-                        "enum": ["disabled"],
-                        "description": "Only for action configure_tools on an existing sibling. Set disabled to narrow canonical host bash commands to no network; omit to preserve the current policy. This control cannot widen network access. Inspect the effective report and test enforcement before claiming isolation."
-                    },
-                },
-                "required": ["action"],
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.action != "configure_tools"
-            && (args.enable_lsp.is_some()
-                || args.enable_graph_tools.is_some()
-                || args.network_mode.is_some())
-        {
-            return Err(anyhow!("tool selections require the separate configure_tools action with an existing behavior_id; create/clone/edit remains a signed atomic behavior command").into());
-        }
-        match args.action.as_str() {
-            "configure_tools" => {
-                let behavior_id = args
-                    .behavior_id
-                    .as_deref()
-                    .context("configure_tools requires behavior_id")?;
-                let core = SelfConfigCore::new(
-                    self.node.clone(),
-                    self.agent_did.clone(),
-                    behavior_id.into(),
-                )?
-                .with_process_ceiling(self.process_ceiling.clone());
-                let outcome = core
-                    .select_sibling_tools(
-                        args.enable_lsp,
-                        args.enable_graph_tools,
-                        args.network_mode,
-                    )
-                    .await?;
-                let effective = core
-                    .read_effective_config(&BTreeSet::new(), false, false)
-                    .await?;
-                for (requested, name) in [
-                    (args.enable_lsp, "lsp"),
-                    (args.enable_graph_tools, "native_graph_tools"),
-                ] {
-                    if let Some(requested) = requested {
-                        if effective["tool_grants"]["configured"][name].as_bool() != Some(requested)
-                        {
-                            return Err(
-                                anyhow!("committed tool selection did not verify {name}").into()
-                            );
-                        }
-                    }
-                }
-                if let Some(requested) = args.network_mode {
-                    if effective["tool_grants"]["configured"]["network_mode"].as_str()
-                        != Some(requested.as_str())
-                    {
-                        return Err(anyhow!(
-                            "committed tool selection did not verify network_mode"
-                        )
-                        .into());
-                    }
-                }
-                Ok(serde_json::to_string_pretty(&json!({
-                    "outcome": outcome, "behavior_id": behavior_id,
-                    "requested": {"enable_lsp": args.enable_lsp, "enable_graph_tools": args.enable_graph_tools, "network_mode": args.network_mode},
-                    "effective_config": effective,
-                    "effect": "Tool selection committed separately from behavior creation. Existing IDs and prompt are unchanged; test a new request after reconciliation.",
-                })).context("serialize sibling tool selection")?)
-            }
-            "list" => Ok(persona_list(&self.node, &self.agent_did, &self.process_ceiling).await?),
-            "inspect" => {
-                let behavior_id = args
-                    .behavior_id
-                    .as_deref()
-                    .context("inspect requires behavior_id")?;
-                Ok(persona_inspect(
-                    &self.node,
-                    &self.agent_did,
-                    behavior_id,
-                    &self.process_ceiling,
-                )
-                .await?)
-            }
-            "preview" => {
-                Ok(
-                    persona_preview(&self.node, &self.agent_did, &args, &self.process_ceiling)
-                        .await?,
-                )
-            }
-            "create" | "edit" | "clone" | "disable" => Ok(persona_mutate(
-                &self.node,
-                &self.agent_did,
-                self.identity.as_ref(),
-                &args,
-                &self.process_ceiling,
-            )
-            .await?),
-            other => Err(SelfConfigError(anyhow!(
-                "unknown action {other:?}; use list|inspect|preview|create|edit|clone|disable"
-            ))),
-        }
-    }
-}
-
-/// Install bundled graph packs through the canonical package and activation
-/// owners. The running principal is always the install owner; callers cannot
-/// select another DID, filesystem distribution, or control-plane endpoint.
-pub struct InstallPackTool {
+/// Install bundled or registry graph packs through the canonical resolver,
+/// package publication, and activation owners. The running principal is always
+/// the install owner; callers cannot select another DID, filesystem
+/// distribution, registry endpoint, or control-plane endpoint.
+struct PackInstaller {
     core: SelfConfigCore,
     node: Arc<EmbeddedNode>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct InstallPackParams {
-    /// Bundled graph pack name, such as `code_review`.
+#[derive(Debug, Clone)]
+struct PackInstallParams {
     pub package: String,
-    /// Optional interpolation overrides declared by the selected pack. Setup's
-    /// current inference model and endpoint supply `*_MODEL`/`*_ENDPOINT` by
-    /// default, without changing process-global environment variables.
-    #[serde(default)]
     pub variables: BTreeMap<String, String>,
+    pub inference_slots: crate::pack::PackInferenceBindings,
+    pub expected_digest: Option<String>,
 }
 
-impl InstallPackTool {
-    async fn install(&self, args: InstallPackParams) -> anyhow::Result<String> {
-        let package_name = args.package.trim();
-        anyhow::ensure!(!package_name.is_empty(), "pack name must not be blank");
+enum ConfigPackDistribution {
+    Bundled(crate::pack::ResolvedPack),
+    Registry(crate::pack_registry::RegistryPack),
+}
+
+impl ConfigPackDistribution {
+    fn manifest(&self) -> &crate::pack::PackManifest {
+        match self {
+            Self::Bundled(pack) => &pack.manifest,
+            Self::Registry(pack) => pack.archive.manifest(),
+        }
+    }
+
+    fn digest(&self) -> &str {
+        match self {
+            Self::Bundled(pack) => &pack.digest,
+            Self::Registry(pack) => &pack.digest,
+        }
+    }
+
+    fn source(&self) -> &'static str {
+        match self {
+            Self::Bundled(_) => "bundled",
+            Self::Registry(_) => "registry",
+        }
+    }
+
+    fn registry_artifact_digest(&self) -> Option<&str> {
+        match self {
+            Self::Bundled(_) => None,
+            Self::Registry(pack) => Some(&pack.artifact_digest),
+        }
+    }
+
+    fn load_graph(
+        &self,
+        options: &crate::pack::PackInstallOptions,
+        environment: &dyn Fn(&str) -> Option<String>,
+    ) -> anyhow::Result<crate::graph_package::LoadedGraphPackage> {
+        match self {
+            Self::Bundled(pack) => {
+                crate::graph_package::load_resolved_graph_package_with_environment(
+                    pack,
+                    options,
+                    environment,
+                )
+            }
+            Self::Registry(pack) => {
+                crate::graph_package::load_archive_graph_package_with_environment(
+                    &pack.archive,
+                    options,
+                    environment,
+                )
+            }
+        }
+    }
+}
+
+impl PackInstaller {
+    fn validate(&self, args: &PackInstallParams) -> anyhow::Result<()> {
+        let coordinate = args.package.trim();
+        anyhow::ensure!(!coordinate.is_empty(), "pack name must not be blank");
+        let (namespace, package_name) = crate::pack_registry::split_pack_coordinate(coordinate);
         anyhow::ensure!(
-            crate::pack::is_valid_pack_name(package_name),
-            "invalid pack name {package_name:?}; bundled pack names use snake_case"
+            !namespace.contains('/')
+                && crate::pack::is_valid_pack_name(namespace)
+                && crate::pack::is_valid_pack_name(package_name),
+            "invalid pack coordinate {coordinate:?}; namespace and pack name use snake_case"
         );
         anyhow::ensure!(
             args.variables.len() <= 32,
@@ -1589,54 +1240,303 @@ impl InstallPackTool {
                     }),
                 "invalid or protected pack variable name {name:?}"
             );
+            anyhow::ensure!(
+                !name.ends_with("_MODEL") && !name.ends_with("_ENDPOINT"),
+                "inference variable {name:?} is unsupported; bind declared roles with --inference-slot NAME=PROFILE_ID"
+            );
             anyhow::ensure!(value.len() <= 4096, "pack variable {name:?} is too large");
         }
+        anyhow::ensure!(
+            args.inference_slots.len() <= 32,
+            "pack inference slot bindings exceed the 32-entry limit"
+        );
+        Ok(())
+    }
 
-        let effective = self
-            .core
-            .read_effective_config(&BTreeSet::new(), false, false)
-            .await?;
-        let model = effective
-            .pointer("/inference_profile/model_name")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned);
-        let endpoint = effective
-            .pointer("/documents/InferenceBackend/endpoint")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned);
-        let variables = args.variables;
-        let environment = |name: &str| {
-            variables
-                .get(name)
-                .cloned()
-                .or_else(|| name.ends_with("_MODEL").then(|| model.clone()).flatten())
-                .or_else(|| {
-                    name.ends_with("_ENDPOINT")
-                        .then(|| endpoint.clone())
-                        .flatten()
-                })
-                .or_else(|| std::env::var(name).ok())
+    async fn resolve(&self, args: &PackInstallParams) -> anyhow::Result<ConfigPackDistribution> {
+        self.validate(args)?;
+        let coordinate = args.package.trim();
+        let distribution = match crate::pack::resolve_pack(coordinate) {
+            Ok(pack) => ConfigPackDistribution::Bundled(pack),
+            Err(bundled_error) => {
+                let (namespace, name) = crate::pack_registry::split_pack_coordinate(coordinate);
+                let base_url = crate::pack_registry::resolve_registry_url(None);
+                let client = crate::pack_registry::RegistryClient::new(base_url.clone());
+                let pack = crate::pack_registry::fetch_pack(&client, None, namespace, name)
+                    .await
+                    .map_err(|registry_error| {
+                        anyhow!(
+                            "{coordinate} is not compiled into this runtime ({bundled_error}) and registry resolution at {base_url} failed: {registry_error}"
+                        )
+                    })?;
+                ConfigPackDistribution::Registry(pack)
+            }
         };
+        anyhow::ensure!(
+            distribution.manifest().metadata.kind == crate::pack::PackKind::Graph,
+            "pack {:?} is {:?}; the model-facing installer supports graph packs only",
+            distribution.manifest().name,
+            distribution.manifest().metadata.kind
+        );
+        Ok(distribution)
+    }
 
+    async fn installed(
+        &self,
+        package: &str,
+    ) -> anyhow::Result<Option<crate::graph_pipeline::GraphPlan>> {
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
-        let bindings = crate::graph_package::bundled_graph_package_install_bindings_for_owner(
+        crate::graph_package::load_installed_package_plan(&access, package, self.core.agent_did())
+            .await
+    }
+
+    async fn list(&self, limit: usize, cursor: Option<&str>) -> anyhow::Result<String> {
+        anyhow::ensure!(
+            (1..=50).contains(&limit),
+            "--limit must be between 1 and 50"
+        );
+        let mut catalog = crate::pack::pack_catalog()?;
+        catalog.sort_by(|left, right| left.name.cmp(&right.name));
+        let total = catalog.len();
+        let mut selected = catalog
+            .into_iter()
+            .filter(|manifest| cursor.is_none_or(|cursor| manifest.name.as_str() > cursor))
+            .take(limit + 1)
+            .collect::<Vec<_>>();
+        let truncated = selected.len() > limit;
+        selected.truncate(limit);
+        let next_cursor = truncated
+            .then(|| selected.last().map(|manifest| manifest.name.clone()))
+            .flatten();
+        let mut items = Vec::with_capacity(selected.len());
+        for manifest in selected {
+            let distribution = crate::pack::resolve_pack(&manifest.name)?;
+            let installed = if manifest.metadata.kind == crate::pack::PackKind::Graph {
+                self.installed(&manifest.name).await?
+            } else {
+                None
+            };
+            items.push(json!({
+                "name": manifest.name,
+                "version": manifest.version,
+                "description": manifest.description,
+                "kind": manifest.metadata.kind,
+                "artifact_digest": distribution.digest,
+                "inference_slots": manifest.metadata.inference_slots,
+                "installable": manifest.metadata.kind == crate::pack::PackKind::Graph,
+                "installed": installed.as_ref().map(|plan| json!({
+                    "graph_id": plan.graph_id,
+                    "revision_digest": plan.digest,
+                })),
+            }));
+        }
+        Ok(serde_json::to_string_pretty(&json!({
+            "source": "bundled",
+            "page": {
+                "limit": limit,
+                "total": total,
+                "returned": items.len(),
+                "truncated": truncated,
+                "next_cursor": next_cursor,
+            },
+            "items": items,
+            "registry_lookup": "Use pack get NAMESPACE/NAME for exact registry discovery; list is the bounded bundled catalog.",
+        }))?)
+    }
+
+    async fn get(&self, package: &str) -> anyhow::Result<String> {
+        let args = PackInstallParams {
+            package: package.to_owned(),
+            variables: BTreeMap::new(),
+            inference_slots: BTreeMap::new(),
+            expected_digest: None,
+        };
+        self.validate(&args)?;
+        let distribution = self.resolve(&args).await?;
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
-            package_name,
+            distribution.manifest(),
             self.core.agent_did(),
+            &BTreeMap::new(),
         )
         .await?;
-        let distribution = crate::pack::resolve_pack(package_name)?;
-        let scope = crate::pack::PackInstallOptions {
-            agent_did: bindings.agent_did.clone(),
+        let installable = distribution.manifest().metadata.kind == crate::pack::PackKind::Graph;
+        let installed = if installable {
+            self.installed(&distribution.manifest().name).await?
+        } else {
+            None
         };
-        let package = crate::graph_package::load_resolved_graph_package_with_environment(
-            &distribution,
-            &scope,
-            &environment,
+        Ok(serde_json::to_string_pretty(&json!({
+            "source": distribution.source(),
+            "manifest": distribution.manifest(),
+            "artifact_digest": distribution.digest(),
+            "registry_artifact_digest": distribution.registry_artifact_digest(),
+            "inference": inference,
+            "installed": installed,
+            "installable": installable,
+            "supported_operations": installable.then_some(["preview install", "install", "preview update", "update"]),
+            "unsupported": {"remove": "installation records do not distinguish created artifacts from reused matching documents; provenance tags and ACL are not deletion authority"},
+        }))?)
+    }
+
+    async fn preview(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
+        let distribution = self.resolve(&args).await?;
+        if let Some(expected) = args.expected_digest.as_deref() {
+            anyhow::ensure!(
+                expected == distribution.digest(),
+                "pack digest changed: requested {expected:?}, resolved {:?}; preview again",
+                distribution.digest()
+            );
+        }
+        let installed = self.installed(&distribution.manifest().name).await?;
+        anyhow::ensure!(
+            operation != "update" || installed.is_some(),
+            "pack {:?} is not installed; preview install instead",
+            distribution.manifest().name
+        );
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let inspected = crate::pack::inspect_pack_inference_bindings(
+            &access,
+            distribution.manifest(),
+            self.core.agent_did(),
+            &args.inference_slots,
+        )
+        .await?;
+        let missing_slots = inspected
+            .slots
+            .iter()
+            .filter(|slot| !args.inference_slots.contains_key(&slot.name))
+            .map(|slot| slot.name.clone())
+            .collect::<Vec<_>>();
+        if !missing_slots.is_empty() {
+            return Ok(serde_json::to_string_pretty(&json!({
+                "committed": false,
+                "ready": false,
+                "operation": operation,
+                "package": distribution.manifest().name,
+                "version": distribution.manifest().version,
+                "source": distribution.source(),
+                "artifact_digest": distribution.digest(),
+                "registry_artifact_digest": distribution.registry_artifact_digest(),
+                "inference": inspected,
+                "missing_inference_slots": missing_slots,
+                "installed": installed,
+                "next": "repeat --inference-slot NAME=PROFILE_ID for every missing slot, using exact eligible profile IDs",
+            }))?);
+        }
+        let inference = crate::pack::preview_pack_inference_bindings(
+            &access,
+            distribution.manifest(),
+            self.core.agent_did(),
+            &args.inference_slots,
+        )
+        .await?;
+        let scope = crate::pack::PackInstallOptions {
+            agent_did: self.core.agent_did().to_owned(),
+        };
+        let environment = |name: &str| args.variables.get(name).cloned();
+        let package = distribution.load_graph(&scope, &environment)?;
+        let bindings = crate::graph_package::GraphPackageInstallBindings {
+            agent_did: self.core.agent_did().to_owned(),
+            inference_slots: inference.bindings.clone(),
+        };
+        let prepared = crate::graph_package::prepare_loaded_graph_package_install(
+            &access, &package, &bindings,
+        )
+        .await?;
+        let materialized_ids = prepared
+            .desired_state
+            .documents()
+            .iter()
+            .map(|document| {
+                json!({
+                    "collection": document.collection.graphql_type(),
+                    "id": document.add[document.collection.unique_field()],
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::to_string_pretty(&json!({
+            "committed": false,
+            "ready": true,
+            "operation": operation,
+            "package": package.manifest.name,
+            "version": package.manifest.version,
+            "source": distribution.source(),
+            "artifact_digest": distribution.digest(),
+            "registry_artifact_digest": distribution.registry_artifact_digest(),
+            "inference": inference,
+            "external_dependencies": package.manifest.external_dependencies,
+            "plugins": package.manifest.metadata.plugins,
+            "plan": {
+                "graph_id": prepared.plan.graph_id,
+                "revision_digest": prepared.plan.digest,
+                "predecessor_revision_digest": prepared.plan.package.as_ref().and_then(|package| package.predecessor_revision_digest.as_ref()),
+                "materialized_ids": materialized_ids,
+                "schema_digests": prepared.schema_digests,
+            },
+            "installed": installed,
+            "apply_with": {
+                "argv_prefix": ["pack", operation, args.package, "--digest", distribution.digest()],
+                "repeat_inference_slots": inference.bindings,
+                "repeat_variables": args.variables,
+            },
+        }))?)
+    }
+
+    async fn apply(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
+        let distribution = self.resolve(&args).await?;
+        let expected = args.expected_digest.as_deref().context(
+            "pack install/update requires --digest from config pack preview; preview pins the exact artifact being authorized",
         )?;
+        anyhow::ensure!(
+            expected == distribution.digest(),
+            "pack digest changed: preview authorized {expected:?}, resolved {:?}; preview again",
+            distribution.digest()
+        );
+        let previous = self.installed(&distribution.manifest().name).await?;
+        anyhow::ensure!(
+            operation != "update" || previous.is_some(),
+            "pack {:?} is not installed; use pack install",
+            distribution.manifest().name
+        );
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let missing_slots = distribution
+            .manifest()
+            .metadata
+            .inference_slots
+            .iter()
+            .filter(|slot| !args.inference_slots.contains_key(&slot.name))
+            .map(|slot| slot.name.as_str())
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            missing_slots.is_empty(),
+            "pack {:?} requires explicit --inference-slot bindings for: {}; preview the pack and bind every declared role",
+            distribution.manifest().name,
+            missing_slots.join(", ")
+        );
+        let inference = crate::pack::preview_pack_inference_bindings(
+            &access,
+            distribution.manifest(),
+            self.core.agent_did(),
+            &args.inference_slots,
+        )
+        .await?;
+        let scope = crate::pack::PackInstallOptions {
+            agent_did: self.core.agent_did().to_owned(),
+        };
+        let environment = |name: &str| args.variables.get(name).cloned();
+        let package = distribution.load_graph(&scope, &environment)?;
+        anyhow::ensure!(
+            package.package_digest == expected,
+            "resolved package content does not match the previewed artifact digest"
+        );
+        let bindings = crate::graph_package::GraphPackageInstallBindings {
+            agent_did: self.core.agent_did().to_owned(),
+            inference_slots: inference.bindings.clone(),
+        };
         let external_dependencies = package.manifest.external_dependencies.clone();
+        let plugins = package.manifest.metadata.plugins.clone();
         let receipt = crate::graph_package::install_loaded_graph_package(
             &access,
             self.core.agent_did(),
@@ -1645,62 +1545,39 @@ impl InstallPackTool {
             None,
         )
         .await?;
-        let previous = crate::graph_pipeline::load_active_graph_plan_with_access(
-            &access,
-            self.core.agent_did(),
-            &receipt.graph_id,
-        )
-        .await?
-        .map(|plan| plan.digest);
         let activation = crate::graph_pipeline::activate_graph_revision_with_access(
             &access,
             self.core.agent_did(),
             &receipt.graph_id,
             &receipt.revision_digest,
-            previous.as_deref(),
+            previous.as_ref().map(|plan| plan.digest.as_str()),
         )
         .await?;
+        let effective = self
+            .installed(&receipt.package_name)
+            .await?
+            .context("installed package is not discoverable after activation")?;
+        anyhow::ensure!(
+            effective.digest == receipt.revision_digest
+                && effective
+                    .package
+                    .as_ref()
+                    .is_some_and(|package| package.package_digest == expected),
+            "installed package failed effective digest verification"
+        );
         Ok(serde_json::to_string_pretty(&json!({
+            "operation": operation,
+            "source": distribution.source(),
+            "artifact_digest": expected,
+            "registry_artifact_digest": distribution.registry_artifact_digest(),
+            "inference": inference,
             "install": receipt,
             "activation": activation,
             "external_dependencies": external_dependencies,
-            "effect": "The bundled graph is installed and active. Installation did not start a graph run.",
+            "plugins": plugins,
+            "effective": effective,
+            "effect": "The graph package is installed and active. Installation did not start a graph run.",
         }))?)
-    }
-}
-
-impl Tool for InstallPackTool {
-    const NAME: &'static str = INSTALL_PACK_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = InstallPackParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Install and activate one known bundled graph pack for the current principal. Uses Setup's current inference model and endpoint for pack model/endpoint variables by default. This writes durable package configuration; it cannot install arbitrary paths, URLs, or another principal's pack. Installation does not run the graph.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "package": {
-                        "type": "string",
-                        "description": "Exact bundled graph pack name, for example code_review.",
-                    },
-                    "variables": {
-                        "type": "object",
-                        "description": "Optional pack interpolation overrides keyed by the exact declared environment-style variable name. Omit for the current Setup inference model/endpoint. Use only values the user requested.",
-                        "additionalProperties": {"type": "string"},
-                        "default": {},
-                    },
-                },
-                "required": ["package"],
-                "additionalProperties": false,
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.install(args).await.map_err(SelfConfigError::from)
     }
 }
 
@@ -1713,10 +1590,14 @@ pub struct ListGraphsTool {
     node: Arc<EmbeddedNode>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListGraphsParams {}
+
 impl Tool for ListGraphsTool {
     const NAME: &'static str = LIST_GRAPHS_TOOL_NAME;
     type Error = SelfConfigError;
-    type Args = GetMyConfigParams;
+    type Args = ListGraphsParams;
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -1727,10 +1608,7 @@ impl Tool for ListGraphsTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.preview.is_some() {
-            return Err(anyhow!("list_graphs accepts no parameters").into());
-        }
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
         let owner = escape_graphql_string(self.core.agent_did());
         let access = graph_access(&self.node);
         let response = access
@@ -1879,7 +1757,9 @@ impl Tool for RunGraphTool {
             )
             .await?
             .with_context(|| {
-                format!("package {package:?} is not installed; call install_pack first")
+                format!(
+                    "package {package:?} is not installed; run config pack install {package} first"
+                )
             })?;
             let attribution = plan
                 .package
@@ -2160,49 +2040,17 @@ pub fn build_self_config_tools(
     if !config.enabled {
         return tools;
     }
-    tools.push(Box::new(GetMyConfigTool {
-        core: core.clone(),
+    tools.push(Box::new(command::ConfigCommandTool {
+        node,
+        agent_did,
+        identity,
+        core,
         categories: config.categories.clone(),
         no_lockout: config.no_lockout,
         dry_run: config.dry_run,
         allow_pack_install: config.enable_pack_install,
+        process_ceiling: config.process_ceiling.clone(),
     }));
-    if config.enable_pack_install {
-        tools.push(Box::new(InstallPackTool {
-            core: core.clone(),
-            node: node.clone(),
-        }));
-    }
-    for category in &config.categories {
-        match category.as_str() {
-            "behavior" => tools.push(Box::new(ConfigureBehaviorTool { core: core.clone() })),
-            "tools" => tools.push(Box::new(ConfigureToolsTool {
-                core: core.clone(),
-                allow_pack_install: config.enable_pack_install,
-            })),
-            "profile" => tools.push(Box::new(ConfigureProfileTool { core: core.clone() })),
-            "backend" => tools.push(Box::new(ConfigureBackendTool { core: core.clone() })),
-            "mcp_service" => tools.push(Box::new(ConfigureMcpServiceTool { core: core.clone() })),
-            "automation" => tools.push(Box::new(ConfigureAutomationTool { core: core.clone() })),
-            "persona" => match identity.clone() {
-                Some(identity) if identity.did() == agent_did => {
-                    tools.push(Box::new(ConfigurePersonaTool {
-                        node: node.clone(),
-                        agent_did: agent_did.clone(),
-                        identity,
-                        process_ceiling: config.process_ceiling.clone(),
-                    }))
-                }
-                _ => tracing::warn!(
-                    agent_did = %agent_did,
-                    "configure_behaviors requires the exact local principal signer; skipping"
-                ),
-            },
-            other => {
-                tracing::warn!(category = %other, "unknown self-config category; skipping");
-            }
-        }
-    }
     tools
 }
 
@@ -2221,16 +2069,6 @@ pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     if !config.enabled {
         return names;
     }
-    names.push(GET_MY_CONFIG_TOOL_NAME.to_string());
-    if config.enable_pack_install {
-        names.push(INSTALL_PACK_TOOL_NAME.to_string());
-    }
-    names.extend(
-        config
-            .categories
-            .iter()
-            .filter_map(|category| configure_tool_name_for_category(category))
-            .map(ToOwned::to_owned),
-    );
+    names.push(CONFIG_TOOL_NAME.to_string());
     names
 }

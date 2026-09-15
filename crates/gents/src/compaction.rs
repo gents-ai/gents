@@ -257,6 +257,10 @@ pub enum CompactionStrategy {
     StripThenSummarize,
 }
 
+impl CompactionStrategy {
+    pub const ALL: [Self; 2] = [Self::StripToolResults, Self::StripThenSummarize];
+}
+
 /// Canonical runtime behavior after accepting the durable configuration
 /// vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

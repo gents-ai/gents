@@ -82,3 +82,7 @@ pub enum ConcurrencyMode {
     Serial,
     LatestOnly,
 }
+
+impl ConcurrencyMode {
+    pub const ALL: [Self; 3] = [Self::Parallel, Self::Serial, Self::LatestOnly];
+}

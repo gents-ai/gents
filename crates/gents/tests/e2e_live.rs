@@ -2,6 +2,8 @@ mod support;
 
 #[path = "e2e_live/backend_auth_live.rs"]
 mod backend_auth_live;
+#[path = "e2e_live/configurator_live.rs"]
+mod configurator_live;
 #[path = "e2e_live/edit_file_live.rs"]
 mod edit_file_live;
 #[path = "e2e_live/eth_tool_live.rs"]

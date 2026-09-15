@@ -105,10 +105,8 @@ fn graph_presentation_is_independent_of_configuration_and_installation() {
                     },
                 );
                 assert_eq!(names.iter().any(|v| v == "run_graph"), requested);
-                assert_eq!(
-                    names.iter().any(|v| v == "install_pack"),
-                    enabled && install
-                );
+                assert_eq!(names.iter().any(|v| v == "config"), enabled);
+                assert!(!names.iter().any(|v| v == "install_pack"));
             }
         }
     }
@@ -203,10 +201,21 @@ fn admission_matrix_mirrors_lean_admits() {
     let mut happy_edit = create_doc(PersonaOp::Edit);
     happy_edit.op_raw = "edit".to_string();
     happy_edit.behavior_id = Some("existing-enabled".to_string());
+    happy_edit.persona_name = Some("Renamed".to_string());
+    happy_edit.profile_id = None;
+    happy_edit.edit_fields = vec!["display_name".to_string()];
     assert_eq!(
         decide_persona_request(&happy_edit, &cat),
         PersonaVerdict::Admit
     );
+
+    let mut clear_profile = happy_edit.clone();
+    clear_profile.persona_name = None;
+    clear_profile.edit_fields = vec!["profile_id".to_string()];
+    assert!(matches!(
+        decide_persona_request(&clear_profile, &cat),
+        PersonaVerdict::Reject(detail) if detail.contains("unknown profile")
+    ));
 
     let happy_disable = PersonaRequestDoc {
         agent_did: "did:key:agent".to_string(),

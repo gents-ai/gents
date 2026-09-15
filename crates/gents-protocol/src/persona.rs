@@ -13,8 +13,16 @@ pub const PERSONA_AUTHORITY_LOCAL_SELF: &str = "local-self";
 // `make_default` is part of the signed semantic envelope. This request shape
 // was introduced on the onboarding branch, so use a fresh domain instead of
 // accepting signatures authored against the earlier field set.
-const LOCAL_PERSONA_SIGNATURE_DOMAIN: &str = "gents-persona-local-self-signature-v3";
+const LOCAL_PERSONA_SIGNATURE_DOMAIN: &str = "gents-persona-local-self-signature-v4";
 pub const MAX_PERSONA_FIELD_BYTES: usize = 16 * 1024;
+pub const PERSONA_EDIT_FIELDS: [&str; 6] = [
+    "display_name",
+    "description",
+    "system_prompt",
+    "root",
+    "preset",
+    "profile_id",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +41,9 @@ pub struct LocalPersonaRequestRecord {
     pub root: Option<String>,
     pub preset: Option<String>,
     pub profile_id: Option<String>,
+    /// Exact model-facing fields supplied by an edit. A listed field with a
+    /// null value is an explicit clear; an unlisted field is preserved.
+    pub edit_fields: Vec<String>,
     pub make_default: bool,
     pub created_at: String,
     pub local_signature: Vec<u8>,
@@ -75,6 +86,31 @@ impl LocalPersonaRequestRecord {
             );
             require_optional_identifier(name, value)?;
         }
+        let mut edit_fields = self.edit_fields.clone();
+        edit_fields.sort();
+        edit_fields.dedup();
+        anyhow::ensure!(
+            edit_fields.len() == self.edit_fields.len(),
+            "edit_fields contains duplicates"
+        );
+        anyhow::ensure!(
+            self.edit_fields
+                .iter()
+                .all(|field| PERSONA_EDIT_FIELDS.contains(&field.as_str())),
+            "edit_fields contains an unknown field; accepted names: {}",
+            PERSONA_EDIT_FIELDS.join(", ")
+        );
+        if self.op == "edit" {
+            anyhow::ensure!(
+                !self.edit_fields.is_empty() || self.make_default,
+                "edit requires at least one changed field or make_default=true"
+            );
+        } else {
+            anyhow::ensure!(
+                self.edit_fields.is_empty(),
+                "edit_fields is only valid for edit"
+            );
+        }
         for (name, value) in [
             ("persona_name", self.persona_name.as_deref()),
             ("description", self.description.as_deref()),
@@ -116,6 +152,7 @@ impl LocalPersonaRequestRecord {
             option(self.root.as_deref()),
             option(self.preset.as_deref()),
             option(self.profile_id.as_deref()),
+            self.edit_fields.join("\u{1f}"),
             self.make_default.to_string(),
             self.created_at.clone(),
         ];
@@ -146,6 +183,7 @@ mod tests {
             root: None,
             preset: Some("write".into()),
             profile_id: Some("profile-1".into()),
+            edit_fields: Vec::new(),
             make_default: true,
             created_at: "2026-08-29T00:00:00Z".into(),
             local_signature: vec![0; 64],
@@ -168,6 +206,9 @@ mod tests {
         assert_ne!(payload, changed.signing_payload());
         changed = base.clone();
         changed.system_prompt = Some("Different instructions".into());
+        assert_ne!(payload, changed.signing_payload());
+        changed = base.clone();
+        changed.edit_fields = vec!["display_name".into()];
         assert_ne!(payload, changed.signing_payload());
     }
 

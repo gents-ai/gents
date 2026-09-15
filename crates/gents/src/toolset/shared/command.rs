@@ -46,6 +46,15 @@ pub enum CommandExecutionMode {
 }
 
 impl CommandExecutionMode {
+    pub const ALL: [Self; 4] = [
+        Self::ReadOnly,
+        Self::WorkspaceWrite,
+        Self::ArtifactWrite,
+        Self::Unrestricted,
+    ];
+}
+
+impl CommandExecutionMode {
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim() {
             "" | "read_only" | "ReadOnly" => Ok(Self::ReadOnly),
@@ -203,6 +212,8 @@ pub enum CommandNetworkMode {
 }
 
 impl CommandNetworkMode {
+    pub const ALL: [Self; 3] = [Self::Inherit, Self::Disabled, Self::Enabled];
+
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim() {
             "" | "inherit" | "Inherit" => Ok(Self::Inherit),

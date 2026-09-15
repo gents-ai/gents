@@ -19,7 +19,7 @@ self_config_categories?: Array<string> | null,
  */
 self_config_no_lockout?: boolean | null,
 /**
- * Opt-in guardrail: `get_my_config` accepts a patch preview.
+ * Opt-in guardrail: `config` accepts document patch previews.
  */
 self_config_dry_run?: boolean | null,
 /**

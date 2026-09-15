@@ -40,6 +40,13 @@ type PersonaConfigRequest @branchable {
     root: String @immutable
     preset: String @immutable
     profile_id: String @immutable
+    # Exact model-facing edit field-presence mask. A listed nullable value is
+    # an explicit clear; omission from this list preserves the canonical value.
+    # Included in the local-self signature payload. DefraDB cannot mark list
+    # fields @immutable, so local-self post-signature changes fail reconciliation.
+    # Enrollment authority is the separately verified current enrollment grant;
+    # it does not claim a per-request signature over this field.
+    edit_fields: [String]
     # When true, an admitted create/edit atomically promotes the applied
     # behavior to AgentPrincipal.default_behavior_id. Disable may not set it.
     make_default: Boolean @immutable

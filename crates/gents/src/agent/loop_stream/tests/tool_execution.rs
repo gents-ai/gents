@@ -419,7 +419,7 @@ async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
 /// terminal state) using the proven `Running → Failed` edge with the existing
 /// `FailureClass::ArgumentInvalid`.
 #[tokio::test]
-async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
+async fn missing_tool_args_notify_model_and_terminalize_failed() {
     use crate::llm::tool::{Tool, ToolDefinition};
 
     struct StrictArgsTool;
@@ -453,8 +453,8 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
 
     let (node, hook) = test_hook().await;
 
-    // Valid JSON, but missing the required `findings` field: a Malformed parse
-    // failure that no repair can recover into the typed args.
+    // Valid JSON missing the required `findings` field is classified precisely
+    // so the model can repair the call without being told its JSON was malformed.
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
@@ -482,7 +482,7 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
     futures::pin_mut!(stream);
 
     // The model is notified via a tool result (no error ends the stream); it sees
-    // the clean notice and answers on the next turn.
+    // the actionable missing-field notice and answers on the next turn.
     let mut tool_results = Vec::new();
     while let Some(item) = stream.next().await {
         if let LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
@@ -500,8 +500,9 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
     assert!(
         tool_results
             .iter()
-            .any(|r| r.contains("could not be parsed")),
-        "the model must be notified with a clean parse-failure notice, got: {tool_results:?}"
+            .any(|r| r.contains("arguments were rejected (missing field)")
+                && r.contains("missing field `findings`")),
+        "the model must be notified with a precise missing-field notice, got: {tool_results:?}"
     );
     assert!(
         !tool_results

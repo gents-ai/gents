@@ -77,13 +77,73 @@ async fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<String, String> {
+    let argv = legacy_test_call_as_config_argv(name, &args);
     tools
         .iter()
-        .find(|tool| tool.name() == name)
-        .unwrap_or_else(|| panic!("missing tool {name}"))
-        .call(args.to_string())
+        .find(|tool| tool.name() == "config")
+        .unwrap_or_else(|| panic!("missing config tool for {name}"))
+        .call(json!({"argv": argv}).to_string())
         .await
         .map_err(|error| format!("{error:#}"))
+}
+
+fn legacy_test_call_as_config_argv(name: &str, args: &Value) -> Vec<String> {
+    let patch = |mut argv: Vec<String>, value: &Value| {
+        for (field, value) in value.as_object().expect("patch object") {
+            argv.extend(["--set".into(), format!("{field}={value}")]);
+        }
+        argv
+    };
+    match name {
+        "get_my_config" if args.get("preview").is_none() => vec!["get".into()],
+        "get_my_config" => {
+            let preview = &args["preview"];
+            let category = preview["category"].as_str().unwrap();
+            let kind = preview.get("kind").and_then(Value::as_str);
+            let head = match (category, kind) {
+                ("behavior", Some("context")) => {
+                    vec!["behavior".into(), "context".into(), "preview".into()]
+                }
+                ("tools", _) => vec!["tools".into(), "preview".into()],
+                ("profile", target) => {
+                    let mut head = vec!["profile".into(), "preview".into()];
+                    if let Some(target) = target {
+                        head.push(target.replace('_', "-"));
+                    }
+                    head
+                }
+                ("backend", _) => vec!["backend".into(), "preview".into()],
+                _ => panic!("unsupported preview in config e2e: {preview}"),
+            };
+            patch(head, &preview["patch"])
+        }
+        "configure_behavior" => {
+            assert_eq!(args.get("target").and_then(Value::as_str), Some("context"));
+            patch(
+                vec!["behavior".into(), "context".into(), "edit".into()],
+                &args["patch"],
+            )
+        }
+        "configure_tools" => patch(vec!["tools".into(), "edit".into()], &args["patch"]),
+        "configure_profile" => {
+            let mut head = vec!["profile".into(), "edit".into()];
+            if let Some(target) = args.get("target").and_then(Value::as_str) {
+                head.push(target.replace('_', "-"));
+            }
+            patch(head, &args["patch"])
+        }
+        "configure_backend" => patch(vec!["backend".into(), "edit".into()], &args["patch"]),
+        "configure_automation" => patch(
+            vec![
+                "automation".into(),
+                "edit".into(),
+                args["kind"].as_str().unwrap().replace('_', "-"),
+                args["id"].as_str().unwrap().into(),
+            ],
+            &args["patch"],
+        ),
+        _ => panic!("unsupported test call {name}: {args}"),
+    }
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 use crate::graph_pipeline::{EntryBinding, ResultContract};
 pub use crate::pack::PackageExternalDependency;
@@ -24,25 +25,24 @@ pub struct GraphPackageCatalogEntry {
 }
 
 #[derive(Clone, Debug)]
-pub struct BundledGraphPackage {
+pub struct LoadedGraphPackage {
     pub manifest: GraphPackageManifest,
     pub config: crate::document_config::PackConfig,
     pub package_digest: String,
-    asset_paths: Vec<String>,
+    assets: BTreeMap<String, Vec<u8>>,
 }
 
-impl BundledGraphPackage {
-    pub fn asset(&self, path: &str) -> Result<&'static [u8]> {
-        anyhow::ensure!(
-            self.asset_paths.iter().any(|declared| declared == path),
-            "asset {path:?} is not declared by package {}",
-            self.manifest.name
-        );
-        bundled_pack_asset(&self.manifest.name, path)
-            .with_context(|| format!("bundled asset {path:?} is missing"))
+impl LoadedGraphPackage {
+    pub fn asset(&self, path: &str) -> Result<&[u8]> {
+        self.assets.get(path).map(Vec::as_slice).with_context(|| {
+            format!(
+                "asset {path:?} is not declared by package {}",
+                self.manifest.name
+            )
+        })
     }
 
-    pub fn asset_text(&self, path: &str) -> Result<&'static str> {
+    pub fn asset_text(&self, path: &str) -> Result<&str> {
         std::str::from_utf8(self.asset(path)?)
             .with_context(|| format!("bundled asset {path:?} is not UTF-8"))
     }
@@ -89,26 +89,59 @@ pub(crate) fn load_package(
     distribution: &crate::pack::ResolvedPack,
     options: &PackInstallOptions,
     environment: &dyn Fn(&str) -> Option<String>,
-) -> Result<BundledGraphPackage> {
-    crate::pack::validate_pack_manifest(&distribution.manifest)?;
-    anyhow::ensure!(
-        distribution.manifest.metadata.kind == crate::pack::PackKind::Graph,
-        "pack is not a graph"
-    );
-    let manifest = distribution.manifest.clone();
-    let config = crate::pack::load_pack_config(
-        &manifest,
+) -> Result<LoadedGraphPackage> {
+    load_package_from_assets(
+        distribution.manifest.clone(),
+        distribution.digest.clone(),
         options,
         &|path| Ok(distribution.asset(path)?.to_vec()),
         environment,
-    )?;
+    )
+}
+
+pub(crate) fn load_archive_graph_package_with_environment(
+    archive: &crate::pack_archive::PackArchive,
+    options: &PackInstallOptions,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<LoadedGraphPackage> {
+    load_package_from_assets(
+        archive.manifest().clone(),
+        archive.digest()?,
+        options,
+        &|path| Ok(archive.asset(path)?.to_vec()),
+        environment,
+    )
+}
+
+fn load_package_from_assets(
+    manifest: crate::pack::PackManifest,
+    package_digest: String,
+    options: &PackInstallOptions,
+    asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<LoadedGraphPackage> {
+    crate::pack::validate_pack_manifest(&manifest)?;
+    anyhow::ensure!(
+        manifest.metadata.kind == crate::pack::PackKind::Graph,
+        "pack is not a graph"
+    );
+    let config = crate::pack::load_pack_config(&manifest, options, asset, environment)?;
     let mut asset_paths = manifest.metadata.assets.clone();
     asset_paths.push("manifest.json".to_owned());
     asset_paths.sort();
     asset_paths.dedup();
-    let package_digest = digest_assets(&manifest.name, &asset_paths)?;
+    let assets = asset_paths
+        .iter()
+        .map(|path| Ok((path.clone(), asset(path)?)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let resolved_digest = crate::pack::digest_declared_assets(&manifest, |path| {
+        assets
+            .get(path)
+            .map(Vec::as_slice)
+            .with_context(|| format!("resolved graph package is missing asset {path:?}"))
+    })?;
     anyhow::ensure!(
-        package_digest == distribution.digest,
+        resolved_digest == package_digest,
         "graph distribution digest changed after resolution"
     );
     // Capabilities reference the same owned Task documents as ordinary packs.
@@ -139,18 +172,18 @@ pub(crate) fn load_package(
             capability.task_id
         );
     }
-    Ok(BundledGraphPackage {
+    Ok(LoadedGraphPackage {
         manifest,
         config,
         package_digest,
-        asset_paths,
+        assets,
     })
 }
 
 pub fn load_bundled_graph_package(
     name: &str,
     options: &PackInstallOptions,
-) -> Result<BundledGraphPackage> {
+) -> Result<LoadedGraphPackage> {
     anyhow::ensure!(
         BUNDLED_GRAPH_PACKAGE_NAMES.contains(&name),
         "unknown bundled graph package {name:?}"
@@ -163,7 +196,7 @@ pub fn load_bundled_graph_package(
 pub fn load_resolved_graph_package(
     distribution: &crate::pack::ResolvedPack,
     options: &PackInstallOptions,
-) -> Result<BundledGraphPackage> {
+) -> Result<LoadedGraphPackage> {
     load_package(distribution, options, &|name| std::env::var(name).ok())
 }
 
@@ -171,7 +204,7 @@ pub(crate) fn load_resolved_graph_package_with_environment(
     distribution: &crate::pack::ResolvedPack,
     options: &PackInstallOptions,
     environment: &dyn Fn(&str) -> Option<String>,
-) -> Result<BundledGraphPackage> {
+) -> Result<LoadedGraphPackage> {
     load_package(distribution, options, environment)
 }
 
@@ -198,7 +231,7 @@ mod tests {
             agent_did: "did:key:fixture".to_owned(),
         }
     }
-    fn fixture_package(name: &str) -> Result<BundledGraphPackage> {
+    fn fixture_package(name: &str) -> Result<LoadedGraphPackage> {
         load_package(
             &crate::pack::resolve_pack(name)?,
             &options(),
@@ -213,7 +246,47 @@ mod tests {
             },
         )
     }
-    fn task<'a>(package: &'a BundledGraphPackage, capability: &StageCapability) -> &'a Task {
+
+    #[test]
+    fn verified_archive_uses_the_same_graph_loader_and_content_digest() {
+        let distribution = crate::pack::resolve_pack("code_review").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        for path in std::iter::once("manifest.json").chain(
+            distribution
+                .manifest
+                .metadata
+                .assets
+                .iter()
+                .map(String::as_str),
+        ) {
+            let destination = root.path().join(path);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::write(destination, distribution.asset(path).unwrap()).unwrap();
+        }
+        let (bytes, _) = crate::pack_archive::pack_dir(root.path()).unwrap();
+        let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let environment =
+            |name: &str| (name == "GENTS_REVIEW_MODEL").then(|| "test-model".to_owned());
+        let bundled = load_package(&distribution, &options(), &environment).unwrap();
+        let resolved =
+            load_archive_graph_package_with_environment(&archive, &options(), &environment)
+                .unwrap();
+        assert_eq!(resolved.package_digest, bundled.package_digest);
+        assert_eq!(
+            serde_json::to_value(&resolved.manifest).unwrap(),
+            serde_json::to_value(&bundled.manifest).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&resolved.config).unwrap(),
+            serde_json::to_value(&bundled.config).unwrap()
+        );
+        for path in std::iter::once("manifest.json")
+            .chain(resolved.manifest.metadata.assets.iter().map(String::as_str))
+        {
+            assert_eq!(resolved.asset(path).unwrap(), bundled.asset(path).unwrap());
+        }
+    }
+    fn task<'a>(package: &'a LoadedGraphPackage, capability: &StageCapability) -> &'a Task {
         let rows = package
             .config
             .tasks
@@ -225,7 +298,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         rows[0]
     }
-    fn tools<'a>(package: &'a BundledGraphPackage, capability: &StageCapability) -> &'a Tools {
+    fn tools<'a>(package: &'a LoadedGraphPackage, capability: &StageCapability) -> &'a Tools {
         let task = task(package, capability);
         let behavior = package
             .config
@@ -251,7 +324,7 @@ mod tests {
             })
             .unwrap()
     }
-    fn surface_entries<'a>(package: &'a BundledGraphPackage, id: &str) -> &'a [SurfaceToolDecl] {
+    fn surface_entries<'a>(package: &'a LoadedGraphPackage, id: &str) -> &'a [SurfaceToolDecl] {
         package
             .config
             .datastore_tool_surfaces
@@ -286,7 +359,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(catalog.len() >= 2);
         assert!(package.package_digest.starts_with("sha256:"));
-        for path in &package.asset_paths {
+        for path in package.assets.keys() {
             assert!(!package.asset(path).unwrap().is_empty(), "{path}");
         }
         let plan = compile_graph(
@@ -340,7 +413,7 @@ mod tests {
         let dependency = &package.manifest.external_dependencies[0];
         assert_eq!(dependency.service_id, "web-research-mcp");
         assert_eq!(dependency.install_command, "./scripts/stack install-mcp");
-        for path in &package.asset_paths {
+        for path in package.assets.keys() {
             assert!(!package.asset(path).unwrap().is_empty(), "{path}");
         }
         let capabilities = package
@@ -567,8 +640,8 @@ mod tests {
         assert!(!evidence_schema.contains("content_hash"));
 
         let all_assets = package
-            .asset_paths
-            .iter()
+            .assets
+            .keys()
             .map(|path| package.asset_text(path).unwrap())
             .collect::<String>();
         assert!(!all_assets.contains("evidence_json"));

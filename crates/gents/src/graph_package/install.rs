@@ -1,4 +1,4 @@
-use super::{load_bundled_graph_package, BundledGraphPackage};
+use super::{load_bundled_graph_package, LoadedGraphPackage};
 use crate::config_client::{
     apply_desired_state_plan, collection_schema_contract_digest, ConfigAccess,
     DesiredStateApplyPlan,
@@ -50,13 +50,11 @@ pub struct PreparedGraphPackageInstall {
 }
 
 fn selected_intent<'a>(
-    package: &'a BundledGraphPackage,
+    graph_intents: &'a [GraphIntent],
     graph_id: Option<&str>,
 ) -> Result<&'a GraphIntent> {
     if let Some(graph_id) = graph_id {
-        let mut matches = package
-            .config
-            .graph_intents
+        let mut matches = graph_intents
             .iter()
             .filter(|intent| intent.graph_id == graph_id);
         let selected = matches.next().context("selected graph is not in package")?;
@@ -66,7 +64,7 @@ fn selected_intent<'a>(
         );
         return Ok(selected);
     }
-    match package.config.graph_intents.as_slice() {
+    match graph_intents {
         [intent] => Ok(intent),
         [] => anyhow::bail!("package contains no graph intent"),
         _ => anyhow::bail!(
@@ -124,27 +122,6 @@ pub async fn default_bundled_graph_package_install_bindings(
         agent_did: owner_did.to_owned(),
         inference_slots: preview.bindings,
     })
-}
-
-/// Bind a known bundled graph distribution to its current owner without
-/// consulting ambient interpolation inputs. Runtime tools supply those inputs
-/// through a request-scoped resolver before installation.
-pub(crate) async fn bundled_graph_package_install_bindings_for_owner(
-    access: &ConfigAccess,
-    package_name: &str,
-    owner_did: &str,
-) -> Result<GraphPackageInstallBindings> {
-    let distribution = crate::pack::resolve_pack(package_name)?;
-    anyhow::ensure!(
-        distribution.manifest.metadata.kind == crate::pack::PackKind::Graph,
-        "pack is not a graph"
-    );
-    let options = GraphPackageInstallBindings {
-        agent_did: owner_did.to_owned(),
-        inference_slots: BTreeMap::new(),
-    };
-    validate_owner(access, owner_did).await?;
-    Ok(options)
 }
 
 /// Select installed package state without re-reading installation environment.
@@ -284,9 +261,20 @@ pub async fn prepare_bundled_graph_package_install_for_graph(
     prepare_package(access, &package, options, Some(graph_id)).await
 }
 
+/// Read-only canonical plan owner for an already resolved bundled graph.
+/// Callers pin the distribution digest before passing the package here; this
+/// function revalidates inference references and the complete desired state.
+pub(crate) async fn prepare_loaded_graph_package_install(
+    access: &ConfigAccess,
+    package: &LoadedGraphPackage,
+    options: &GraphPackageInstallBindings,
+) -> Result<PreparedGraphPackageInstall> {
+    prepare_package(access, package, options, None).await
+}
+
 async fn prepare_package(
     access: &ConfigAccess,
-    package: &BundledGraphPackage,
+    package: &LoadedGraphPackage,
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
 ) -> Result<PreparedGraphPackageInstall> {
@@ -298,21 +286,19 @@ async fn prepare_package(
         &options.inference_slots,
     )
     .await?;
-    let mut package = package.clone();
-    package.config = crate::pack::bind_pack_install_config(
+    let config = crate::pack::bind_pack_install_config(
         &package.manifest,
         &package.config,
         &preview.bindings,
     )?;
-    let package = &package;
-    let intent = selected_intent(package, graph_id)?;
+    let intent = selected_intent(&config.graph_intents, graph_id)?;
     anyhow::ensure!(
         intent.agent_did == options.agent_did,
         "graph owner differs from installation scope"
     );
     // The existing principal is shared identity, never graph-owned replacement
     // configuration. Every other authored document uses the ordinary apply owner.
-    let bundle = DesiredStateApplyPlan::from_pack_config(&package.config)?;
+    let bundle = DesiredStateApplyPlan::from_pack_config(&config)?;
     let desired_state = DesiredStateApplyPlan::new(
         bundle
             .documents()
@@ -323,7 +309,7 @@ async fn prepare_package(
     )?;
     let base = compile_graph(
         intent,
-        &package.config.graph_capabilities,
+        &config.graph_capabilities,
         &options.agent_did,
         &CompilerPolicy::default(),
     )?;
@@ -374,8 +360,7 @@ async fn prepare_package(
             binary_version: env!("CARGO_PKG_VERSION").into(),
             build_commit: option_env!("VERGEN_GIT_SHA").unwrap_or("unknown").into(),
         },
-        workspace_authority: package
-            .config
+        workspace_authority: config
             .graph_capabilities
             .iter()
             .filter_map(|capability| {
@@ -428,10 +413,7 @@ async fn prepare_package(
     })
 }
 
-async fn ensure_package_schemas(
-    access: &ConfigAccess,
-    package: &BundledGraphPackage,
-) -> Result<()> {
+async fn ensure_package_schemas(access: &ConfigAccess, package: &LoadedGraphPackage) -> Result<()> {
     // Check every already-visible contract before any additive schema write.
     let mut missing_paths = Vec::new();
     for path in &package.manifest.schemas {
@@ -525,7 +507,7 @@ async fn install_package(
 pub(crate) async fn install_loaded_graph_package(
     access: &ConfigAccess,
     actor_did: &str,
-    package: &BundledGraphPackage,
+    package: &LoadedGraphPackage,
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
 ) -> Result<GraphPackageInstallReceipt> {

@@ -46,6 +46,10 @@ pub enum ToolError {
 pub enum UnparseableArgsKind {
     Truncated,
     Malformed,
+    UnknownField,
+    MissingField,
+    WrongType,
+    Schema,
 }
 
 impl std::fmt::Display for UnparseableArgsKind {
@@ -53,6 +57,10 @@ impl std::fmt::Display for UnparseableArgsKind {
         match self {
             UnparseableArgsKind::Truncated => f.write_str("truncated"),
             UnparseableArgsKind::Malformed => f.write_str("malformed"),
+            UnparseableArgsKind::UnknownField => f.write_str("unknown field"),
+            UnparseableArgsKind::MissingField => f.write_str("missing field"),
+            UnparseableArgsKind::WrongType => f.write_str("wrong type"),
+            UnparseableArgsKind::Schema => f.write_str("schema mismatch"),
         }
     }
 }
@@ -132,28 +140,22 @@ pub(crate) fn parse_tool_args<A>(args: &str) -> Result<A, ToolError>
 where
     A: for<'de> Deserialize<'de>,
 {
-    let first_error = match serde_json::from_str::<A>(args) {
-        Ok(value) => return Ok(value),
-        Err(error) => error,
+    let value = match serde_json::from_str::<serde_json::Value>(args) {
+        Ok(value) => value,
+        Err(first_error) => {
+            // Repair only JSON syntax. Once an object is valid JSON, typed
+            // deserialization below reports its schema problem directly instead
+            // of suggesting irrelevant escaping retries.
+            if let Some(repaired) = repair_tool_arguments(args) {
+                serde_json::from_str::<serde_json::Value>(&repaired)
+                    .map_err(|second_error| unparseable_args_error(&second_error))?
+            } else {
+                return Err(unparseable_args_error(&first_error));
+            }
+        }
     };
 
-    // Attempt one tolerant repair pass, then re-parse into `Args`. The repair is
-    // deliberately ESCAPE-ONLY: it doubles lone backslashes the model emitted raw
-    // (`\d`, `C:\temp`) but does NOT close a truncated value. That is the safety
-    // property — a payload cut mid-value (`finish_reason == "length"`) can never
-    // be "completed" by the repair into something that deserializes, so a
-    // truncated value is never run; it always falls through to the typed error
-    // below. (An earlier version also closed dangling strings/brackets, which let
-    // a value truncated inside its last field deserialize and run — a silent
-    // half-written commit. Escape-only repair removes that class entirely.)
-    if let Some(repaired) = repair_tool_arguments(args) {
-        match serde_json::from_str::<A>(&repaired) {
-            Ok(value) => return Ok(value),
-            Err(second_error) => return Err(unparseable_args_error(&second_error)),
-        }
-    }
-
-    Err(unparseable_args_error(&first_error))
+    serde_json::from_value::<A>(value).map_err(schema_args_error)
 }
 
 /// Map a failing [`serde_json::Error`] to the typed [`ToolError::UnparseableArgs`].
@@ -169,6 +171,37 @@ fn unparseable_args_error(error: &serde_json::Error) -> ToolError {
         kind,
         reason: error.to_string(),
     }
+}
+
+fn schema_args_error(error: serde_json::Error) -> ToolError {
+    let raw = error.to_string();
+    let kind = if raw.starts_with("unknown field") {
+        UnparseableArgsKind::UnknownField
+    } else if raw.starts_with("missing field") {
+        UnparseableArgsKind::MissingField
+    } else if raw.starts_with("invalid type") {
+        UnparseableArgsKind::WrongType
+    } else {
+        UnparseableArgsKind::Schema
+    };
+    // Unknown/missing-field diagnostics contain only schema vocabulary and
+    // are the most useful correction. Type/value diagnostics can echo the
+    // supplied value, so retain only the declared expectation. Never reflect
+    // arbitrary argument contents (which may include credentials) in retry
+    // guidance.
+    let reason = match kind {
+        UnparseableArgsKind::UnknownField | UnparseableArgsKind::MissingField => raw,
+        UnparseableArgsKind::WrongType => raw
+            .split_once(", expected ")
+            .map(|(_, expected)| format!("wrong JSON type; expected {expected}"))
+            .unwrap_or_else(|| "wrong JSON type for a declared field".to_string()),
+        UnparseableArgsKind::Schema => {
+            "arguments do not match the declared tool schema".to_string()
+        }
+        UnparseableArgsKind::Truncated | UnparseableArgsKind::Malformed => unreachable!(),
+    };
+    let reason = reason.chars().take(512).collect();
+    ToolError::UnparseableArgs { kind, reason }
 }
 
 /// Conservatively repair a tool-call `arguments` string the model emitted in a
@@ -464,20 +497,52 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_args_malformed_reports_malformed_kind() {
-        // A complete-but-malformed object the repair cannot make deserialize into
-        // the typed args (here `findings` is a string, not an array — a non-Eof,
-        // non-repairable shape) is classified Malformed.
+    fn parse_tool_args_wrong_type_reports_schema_kind() {
+        // Valid JSON with the wrong schema is not malformed JSON and should tell
+        // the model exactly which correction class to make.
         let raw = r#"{"report_type":"steward","body":"ok","findings":"not-an-array"}"#;
         let error =
             parse_tool_args::<Sample>(raw).expect_err("type-mismatched payload must not parse");
         assert!(matches!(
             error,
             ToolError::UnparseableArgs {
-                kind: UnparseableArgsKind::Malformed,
+                kind: UnparseableArgsKind::WrongType,
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parse_tool_args_distinguishes_unknown_and_missing_fields() {
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            #[allow(dead_code)]
+            argv: Vec<String>,
+        }
+
+        for (raw, expected) in [
+            (
+                r#"{"persona_name":"review"}"#,
+                UnparseableArgsKind::UnknownField,
+            ),
+            (r#"{}"#, UnparseableArgsKind::MissingField),
+        ] {
+            let error = parse_tool_args::<Args>(raw).expect_err("schema must reject");
+            assert!(matches!(
+                error,
+                ToolError::UnparseableArgs { kind, .. } if kind == expected
+            ));
+        }
+
+        let error = parse_tool_args::<Args>(r#"{"argv":"credential-like-value"}"#)
+            .expect_err("wrong type must reject");
+        let ToolError::UnparseableArgs { kind, reason } = error else {
+            panic!("typed schema error required")
+        };
+        assert_eq!(kind, UnparseableArgsKind::WrongType);
+        assert!(reason.contains("expected a sequence"), "{reason}");
+        assert!(!reason.contains("credential-like-value"), "{reason}");
     }
 
     #[test]

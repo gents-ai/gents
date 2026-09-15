@@ -82,6 +82,19 @@ pub async fn bind_d4f_backend(
     node: &EmbeddedNode,
     identity: &dyn AgentIdentity,
 ) -> (String, String) {
+    bind_d4f_backend_for_model(node, identity, &d4f_model()).await
+}
+
+/// Bind one isolated live-test principal to an explicit model.
+///
+/// Eval harnesses use this entry point instead of mutating process environment
+/// so multiple model trials remain deterministic and can eventually run in
+/// parallel safely.
+pub async fn bind_d4f_backend_for_model(
+    node: &EmbeddedNode,
+    identity: &dyn AgentIdentity,
+    model: &str,
+) -> (String, String) {
     let agent_did = identity.did().to_string();
     let mut principal = ensure_agent_principal(node, &agent_did)
         .await
@@ -94,7 +107,7 @@ pub async fn bind_d4f_backend(
         agent_did: agent_did.clone(),
         profile_id: profile_id.clone(),
         backend_id: D4F_BACKEND_ID.to_string(),
-        model_name: d4f_model(),
+        model_name: model.to_owned(),
         ..Default::default()
     };
     let behavior = AgentBehavior {
@@ -171,11 +184,19 @@ async fn apply_d4f_documents(
 }
 
 pub async fn boot_d4f_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
+    boot_d4f_agent_with_ceiling(db, identity, ToolCeiling::meta_only()).await
+}
+
+pub async fn boot_d4f_agent_with_ceiling(
+    db: &TestDb,
+    identity: Arc<dyn AgentIdentity>,
+    tool_ceiling: ToolCeiling,
+) -> Result<BootedAgent> {
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::meta_only(),
+            tool_ceiling,
             ..Default::default()
         },
     )

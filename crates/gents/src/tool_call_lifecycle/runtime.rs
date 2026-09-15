@@ -69,14 +69,27 @@ impl ToolOutcome {
                          arguments object"
                     }
                     UnparseableArgsKind::Malformed => {
-                        "the arguments were not valid JSON; re-call the tool with valid JSON \
-                         (escape any backslash as \\\\)"
+                        "the arguments were not valid JSON; re-call the tool with one complete JSON object"
+                    }
+                    UnparseableArgsKind::UnknownField => {
+                        "the JSON contains an unknown field; remove or rename it using the tool's accepted parameter names"
+                    }
+                    UnparseableArgsKind::MissingField => {
+                        "the JSON is missing a required field; add the required field shown below"
+                    }
+                    UnparseableArgsKind::WrongType => {
+                        "a field has the wrong JSON type; use the expected type shown below"
+                    }
+                    UnparseableArgsKind::Schema => {
+                        "the JSON does not match the tool's argument schema; correct the field described below"
                     }
                 };
                 Self::Failed {
                     class: FailureClass::ArgumentInvalid,
                     denial: None,
-                    text: format!("tool '{name}' arguments could not be parsed: {guidance}."),
+                    text: format!(
+                        "tool '{name}' arguments were rejected ({kind}): {guidance}. Detail: {reason}"
+                    ),
                 }
             }
             Err(ToolError::JsonError(error)) => Self::Failed {
@@ -820,6 +833,20 @@ mod tests {
                 ..
             }
         ));
+
+        let schema = ToolOutcome::from_dispatch(
+            "config",
+            Err(ToolError::UnparseableArgs {
+                kind: UnparseableArgsKind::UnknownField,
+                reason: "unknown field `persona_name`, expected `argv`".to_string(),
+            }),
+        );
+        let ToolOutcome::Failed { text, .. } = schema else {
+            panic!("schema mismatch must fail")
+        };
+        assert!(text.contains("unknown field `persona_name`"), "{text}");
+        assert!(text.contains("expected `argv`"), "{text}");
+        assert!(!text.contains("backslash"), "{text}");
 
         let json_error = serde_json::from_str::<serde_json::Value>("{oops")
             .expect_err("malformed JSON must fail to parse");
