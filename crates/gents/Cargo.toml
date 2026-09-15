@@ -110,8 +110,11 @@ windows-sys = { version = "0.61.2", features = [
 [dev-dependencies]
 acp.workspace = true
 axum = "0.8"
+db.workspace = true
 defra-node.workspace = true
+document.workspace = true
 proptest = "1"
+schema.workspace = true
 storage.workspace = true
 tar = "0.4"
 zstd = "0.13"
