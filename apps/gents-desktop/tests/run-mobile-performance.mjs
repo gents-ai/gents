@@ -14,6 +14,7 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_PORT = 1427;
 const VIEWPORT = { width: 390, height: 844 };
 const TYPING_NEXT_PAINT_BUDGET_MS = 50;
+const TYPING_REACT_BUDGET_MS_PER_CHARACTER = 12;
 
 const args = process.argv.slice(2);
 const runs = integerArgument("--runs", DEFAULT_RUNS);
@@ -417,16 +418,19 @@ async function typeBurstToNextPaint(page, text) {
     if (!(input instanceof HTMLTextAreaElement)) {
       throw new Error("mobile performance composer is unavailable");
     }
-    document.addEventListener(
-      "input",
-      (event) => {
-        const eventAt = event.timeStamp;
-        requestAnimationFrame(() => {
-          setTimeout(() => samples.push(performance.now() - eventAt), 0);
-        });
-      },
-      { capture: true },
-    );
+    if (window.__GENTS_TYPING_INPUT_HANDLER__) {
+      document.removeEventListener("input", window.__GENTS_TYPING_INPUT_HANDLER__, {
+        capture: true,
+      });
+    }
+    const recordNextPaint = (event) => {
+      const eventAt = event.timeStamp;
+      requestAnimationFrame(() => {
+        setTimeout(() => samples.push(performance.now() - eventAt), 0);
+      });
+    };
+    window.__GENTS_TYPING_INPUT_HANDLER__ = recordNextPaint;
+    document.addEventListener("input", recordNextPaint, { capture: true });
   });
   const input = page.getByRole("textbox", { name: "Message" });
   await input.focus();
@@ -629,6 +633,22 @@ function evaluateStructuralAssertions(samples) {
       ),
       passed: typing.every(
         (scenario) => scenario.eventToNextPaintMs.p95 <= TYPING_NEXT_PAINT_BUDGET_MS,
+      ),
+    },
+    {
+      id: "typing_react_work_per_character",
+      policy: "responsive-budget",
+      limit: TYPING_REACT_BUDGET_MS_PER_CHARACTER,
+      observedMax: Math.max(
+        ...typing.map(
+          (scenario) =>
+            scenario.render.totalCommitDurationMs / scenario.typedCharacters,
+        ),
+      ),
+      passed: typing.every(
+        (scenario) =>
+          scenario.render.totalCommitDurationMs / scenario.typedCharacters <=
+          TYPING_REACT_BUDGET_MS_PER_CHARACTER,
       ),
     },
     {
