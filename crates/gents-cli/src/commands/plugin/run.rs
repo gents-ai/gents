@@ -7,13 +7,12 @@
 //! `afterburner::afb_run::run_afb_bytes` and refuses admission outright
 //! when the real artifact would dispatch through a path that cannot honor
 //! every declared bound (see that module's own doc, rule 4). This file's
-//! job is narrower: find the installed bytes by name, build the
-//! [`gents::pack::PackPlugin`] declaration `PluginRunner` needs, and turn
+//! job is narrower: find the installed bytes and retained
+//! [`gents::pack::PackPlugin`] declaration by name, and turn
 //! its typed [`gents::plugin::PluginOutcome`] into either the plugin's own
 //! JSON value or a clear refusal naming which bound was hit.
 
 use anyhow::{Context, Result};
-use gents::pack::PackPlugin;
 use gents::plugin::{PluginBudget, PluginRunner, PluginVerdict};
 
 use crate::cli::args::PluginRunArgs;
@@ -59,13 +58,8 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
 /// Admits and calls one installed plugin, returning its own JSON result or
 /// an error naming which bound was hit.
 ///
-/// The declaration passed to [`PluginRunner::compile`] is synthesized from
-/// what an installed-by-name plugin actually carries: its own artifact
-/// bytes (for the manifold `run_afb_bytes` grants) and the record this
-/// module's own store wrote at install time. `input_schema` is never
-/// consulted by the runner (rule 6 in its own doc, "input_schema describes
-/// the arguments, not the result"), so a permissive placeholder here costs
-/// nothing real.
+/// Admission uses the declaration retained at installation. Artifact capability
+/// metadata is not a substitute for a pack author's narrower declaration.
 fn run_plugin(
     bytes: &[u8],
     record: &InstalledPlugin,
@@ -73,20 +67,8 @@ fn run_plugin(
 ) -> Result<serde_json::Value> {
     let afb =
         afterburner_cloud::Afb::from_bytes(bytes).context("this is not a readable plugin .afb")?;
-    let plugin = PackPlugin {
-        name: record.name.clone(),
-        description: format!("installed plugin {}/{}", record.namespace, record.name),
-        artifact: format!("plugins/{}.afb", record.name),
-        source: None,
-        language: record.language.clone(),
-        input_schema: serde_json::json!({ "type": "object" }),
-        manifold: Some(
-            serde_json::to_value(&afb.manifold).context("encoding the plugin's own manifold")?,
-        ),
-    };
-
     let coordinate = format!("{}/{}", record.namespace, record.name);
-    let runner = PluginRunner::compile(bytes, &plugin)
+    let runner = PluginRunner::compile(bytes, &record.declaration)
         .with_context(|| format!("admitting plugin {coordinate}"))?;
     // The default budget for *this* artifact, not the generic one: a
     // plugin that has to boot an interpreter needs a memory ceiling its
@@ -147,6 +129,10 @@ mod tests {
             version: "0.1.0".to_owned(),
             digest: format!("sha256:{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes)),
             language: "rust".to_owned(),
+            declaration: store::declaration_from_artifact(
+                &afterburner_cloud::Afb::from_bytes(bytes).unwrap(),
+            )
+            .unwrap(),
         }
     }
 
@@ -165,6 +151,46 @@ mod tests {
         let output =
             run_plugin(&bytes, &sample_record(&bytes), &serde_json::Value::Null).expect("must run");
         assert_eq!(output, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn installed_pack_retains_authored_admission_metadata() {
+        let bytes = build_echo_plugin();
+        let home = tempfile::tempdir().unwrap();
+        let mut declaration = sample_record(&bytes).declaration;
+        declaration.description = "Authored pack description".into();
+        declaration.input_schema = serde_json::json!({
+            "type": "object", "required": ["message"],
+            "properties": {"message": {"type": "string"}},
+        });
+        // No declared authority: never replace this with artifact capabilities.
+        declaration.manifold = None;
+        super::super::install_from_pack(home.path(), "team", "1.0.0", &declaration, &bytes)
+            .unwrap();
+        let record = store::read_record(home.path(), "team", "echo").unwrap();
+        assert_eq!(record.declaration, declaration);
+        let runner = PluginRunner::compile(&bytes, &record.declaration).unwrap();
+        assert_eq!(runner.definition(), &declaration);
+        assert_eq!(
+            run_plugin(&bytes, &record, &serde_json::json!({"message": "ok"})).unwrap(),
+            serde_json::json!({"message": "ok"})
+        );
+
+        // An invalid authored admission declaration must fail, not get silently
+        // replaced by the valid manifold embedded in the artifact.
+        let mut invalid = record;
+        invalid.declaration.manifold = Some(serde_json::json!({"fs": "invalid"}));
+        assert!(run_plugin(&bytes, &invalid, &serde_json::Value::Null).is_err());
+        let empty_home = tempfile::tempdir().unwrap();
+        assert!(super::super::install_from_pack(
+            empty_home.path(),
+            "team",
+            "1.0.0",
+            &invalid.declaration,
+            &bytes
+        )
+        .is_err());
+        assert!(store::list_records(empty_home.path()).unwrap().is_empty());
     }
 
     #[tokio::test]

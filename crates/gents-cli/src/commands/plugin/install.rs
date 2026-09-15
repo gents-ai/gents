@@ -11,6 +11,25 @@ use crate::commands::pack::registry::{resolve_registry_url, verify_digest, Regis
 
 use super::store::{self, InstalledPlugin};
 
+fn verify_plugin_coordinate(
+    afb: &afterburner_cloud::Afb,
+    namespace: &str,
+    name: &str,
+    version: &str,
+) -> Result<()> {
+    let package = &afb.manifest.package;
+    anyhow::ensure!(
+        package.namespace == namespace && package.name == name && package.version == version,
+        "the registry returned plugin {}/{name_in_artifact}@{version_in_artifact} for requested \
+         coordinate {namespace}/{name}@{version}; refusing to install an artifact under a \
+         different identity",
+        package.namespace,
+        name_in_artifact = package.name,
+        version_in_artifact = package.version,
+    );
+    Ok(())
+}
+
 pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
     let base_url = resolve_registry_url(args.registry.as_deref());
@@ -56,6 +75,10 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     let afb = afterburner_cloud::Afb::from_bytes(&bytes).with_context(|| {
         format!("{namespace}/{name}@{version} from the registry is not a readable plugin")
     })?;
+    verify_plugin_coordinate(&afb, namespace, name, &version)?;
+    let declaration = store::declaration_from_artifact(&afb)?;
+    gents::plugin::PluginRunner::compile(&bytes, &declaration)
+        .with_context(|| format!("admitting plugin {namespace}/{name}@{version}"))?;
 
     // The registry advertises (and `verify_digest` checks) the bare
     // artifact digest, matching `Afb::artifact_digest`'s own bare-hex
@@ -71,6 +94,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         version,
         digest: format!("sha256:{advertised}"),
         language: afb.manifest.package.language.clone(),
+        declaration,
     };
     store::write_record(&home, &record)?;
 
@@ -109,6 +133,38 @@ mod tests {
         );
         let digest = crate::commands::plugin::testing::digest_of(&bytes);
         (bytes, digest)
+    }
+
+    #[test]
+    fn a_plugin_manifest_must_match_the_requested_coordinate() {
+        let (bytes, _) = sample_plugin_afb();
+        let afb = afterburner_cloud::Afb::from_bytes(&bytes).unwrap();
+        let package = &afb.manifest.package;
+
+        verify_plugin_coordinate(&afb, &package.namespace, &package.name, &package.version)
+            .unwrap();
+        for (namespace, name, version) in [
+            (
+                "someone_else",
+                package.name.as_str(),
+                package.version.as_str(),
+            ),
+            (
+                package.namespace.as_str(),
+                "another_plugin",
+                package.version.as_str(),
+            ),
+            (package.namespace.as_str(), package.name.as_str(), "99.0.0"),
+        ] {
+            let error = verify_plugin_coordinate(&afb, namespace, name, version)
+                .expect_err("every coordinate component is identity-bearing");
+            let message = format!("{error:#}");
+            assert!(message.contains("different identity"), "{message}");
+            assert!(
+                message.contains(&format!("{namespace}/{name}@{version}")),
+                "{message}"
+            );
+        }
     }
 
     struct FakeRegistryState {
@@ -207,6 +263,27 @@ mod tests {
             !store::read_record(home.path(), "gents", "echo").is_ok(),
             "nothing must be recorded on a refused install"
         );
+    }
+
+    #[tokio::test]
+    async fn a_coordinate_mismatch_is_refused_before_any_plugin_record_is_written() {
+        let (bytes, digest) = sample_plugin_afb();
+        let (base_url, _downloads) = start_fake_registry(bytes, digest).await;
+        let home = tempfile::tempdir().unwrap();
+
+        let error = install(PluginInstallArgs {
+            name: "someone_else/echo".to_owned(),
+            version: None,
+            registry: Some(base_url),
+            home: Some(home.path().to_owned()),
+        })
+        .await
+        .expect_err("an artifact from another namespace must be refused");
+        assert!(
+            format!("{error:#}").contains("different identity"),
+            "{error:#}"
+        );
+        assert!(store::list_records(home.path()).unwrap().is_empty());
     }
 
     #[tokio::test]

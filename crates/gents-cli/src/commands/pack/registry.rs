@@ -10,6 +10,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use gents::pack::PackManifest;
 use gents::pack_archive::PackArchive;
 use serde_json::Value;
 
@@ -252,6 +253,26 @@ pub(crate) fn verify_digest(bytes: &[u8], advertised: &str, coordinate: &str) ->
     Ok(())
 }
 
+fn verify_pack_coordinate(
+    manifest: &PackManifest,
+    namespace: &str,
+    name: &str,
+    version: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        manifest.metadata.namespace == namespace
+            && manifest.name == name
+            && manifest.version == version,
+        "the registry returned pack {}/{name_in_manifest}@{version_in_manifest} for requested \
+         coordinate {namespace}/{name}@{version}; refusing to install an artifact under a \
+         different identity",
+        manifest.metadata.namespace,
+        name_in_manifest = manifest.name,
+        version_in_manifest = manifest.version,
+    );
+    Ok(())
+}
+
 /// Downloads `namespace/name`'s latest version, checks it against the
 /// digest the registry advertised before opening it, caches the verified
 /// bytes content-addressed under `home`, and parses the result.
@@ -296,7 +317,8 @@ pub(crate) async fn fetch_pack(
     let cache_path = cache_dir.join(format!("{advertised}.tar.gz"));
     let coordinate = format!("{namespace}/{name}@{version}");
 
-    let bytes = if cache_path.is_file() {
+    let cache_hit = cache_path.is_file();
+    let bytes = if cache_hit {
         let cached = std::fs::read(&cache_path)
             .with_context(|| format!("reading the cached pack {}", cache_path.display()))?;
         verify_digest(&cached, &advertised, &coordinate)?;
@@ -307,13 +329,19 @@ pub(crate) async fn fetch_pack(
         // did not earn.
         let downloaded = client.download(namespace, name, &version).await?;
         verify_digest(&downloaded, &advertised, &coordinate)?;
-        stage_and_persist(&cache_dir, &cache_path, &downloaded)?;
         downloaded
     };
 
     let archive = PackArchive::from_bytes(&bytes).with_context(|| {
         format!("{namespace}/{name}@{version} from the registry is not a readable pack")
     })?;
+    verify_pack_coordinate(archive.manifest(), namespace, name, &version)?;
+    if !cache_hit {
+        // Coordinate identity is part of admission just like the digest:
+        // bytes for another valid pack must never be persisted under the
+        // requested coordinate's advertised digest.
+        stage_and_persist(&cache_dir, &cache_path, &bytes)?;
+    }
     let digest = archive.digest().with_context(|| {
         format!("{namespace}/{name}@{version} from the registry failed its own content check")
     })?;
@@ -626,6 +654,29 @@ mod tests {
         gents::pack_archive::pack_dir(&root).unwrap()
     }
 
+    #[test]
+    fn a_pack_manifest_must_match_the_requested_coordinate() {
+        let (bytes, _) = sample_pack();
+        let archive = PackArchive::from_bytes(&bytes).unwrap();
+        let manifest = archive.manifest();
+
+        verify_pack_coordinate(manifest, "gents", "plain_pack", "1.0.0").unwrap();
+        for (namespace, name, version) in [
+            ("someone_else", "plain_pack", "1.0.0"),
+            ("gents", "another_pack", "1.0.0"),
+            ("gents", "plain_pack", "2.0.0"),
+        ] {
+            let error = verify_pack_coordinate(manifest, namespace, name, version)
+                .expect_err("every coordinate component is identity-bearing");
+            let message = format!("{error:#}");
+            assert!(message.contains("different identity"), "{message}");
+            assert!(
+                message.contains(&format!("{namespace}/{name}@{version}")),
+                "{message}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn fetch_pack_downloads_verifies_and_caches() {
         let (bytes, digest) = sample_pack();
@@ -679,6 +730,28 @@ mod tests {
             .join("packs")
             .join("registry-cache")
             .join(format!("{wrong_digest}.tar.gz"))
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn a_coordinate_mismatch_is_refused_before_the_pack_is_cached() {
+        let (bytes, digest) = sample_pack();
+        let (base_url, _downloads) = start_fake_registry(bytes, digest.clone()).await;
+        let client = RegistryClient::new(base_url);
+        let home = tempfile::tempdir().unwrap();
+
+        let error = fetch_pack(&client, home.path(), "someone_else", "plain_pack")
+            .await
+            .expect_err("a manifest from another namespace must be refused");
+        assert!(
+            format!("{error:#}").contains("different identity"),
+            "{error:#}"
+        );
+        assert!(!home
+            .path()
+            .join("packs")
+            .join("registry-cache")
+            .join(format!("{digest}.tar.gz"))
             .exists());
     }
 

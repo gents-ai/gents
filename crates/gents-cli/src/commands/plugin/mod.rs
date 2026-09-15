@@ -53,6 +53,8 @@ pub(crate) fn install_from_pack(
     artifact_bytes: &[u8],
 ) -> Result<store::InstalledPlugin> {
     use sha2::{Digest, Sha256};
+    gents::plugin::PluginRunner::compile(artifact_bytes, plugin)
+        .with_context(|| format!("admitting pack plugin {}", plugin.name))?;
     let digest_hex = format!("{:x}", Sha256::digest(artifact_bytes));
     store::store_bytes(home, &digest_hex, artifact_bytes)?;
     let record = store::InstalledPlugin {
@@ -61,6 +63,7 @@ pub(crate) fn install_from_pack(
         version: pack_version.to_owned(),
         digest: format!("sha256:{digest_hex}"),
         language: plugin.language.clone(),
+        declaration: plugin.clone(),
     };
     store::write_record(home, &record)?;
     Ok(record)
