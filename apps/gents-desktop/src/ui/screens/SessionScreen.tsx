@@ -752,11 +752,17 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               deployment={deployment}
               behaviorId={session?.behaviorId ?? null}
             >
-              <BehaviorAvatar
-                name={behaviorName(session?.behaviorId ?? null, deployment)}
-                behaviorId={session?.behaviorId}
-                className="size-6 cursor-default text-[10px]"
-              />
+              <button
+                type="button"
+                aria-label={`About ${behaviorName(session?.behaviorId ?? null, deployment)} behavior`}
+                className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <BehaviorAvatar
+                  name={behaviorName(session?.behaviorId ?? null, deployment)}
+                  behaviorId={session?.behaviorId}
+                  className="size-6 text-[10px]"
+                />
+              </button>
             </BehaviorHoverCard>
             <span className="min-w-0 flex-1 truncate font-heading text-sm font-medium text-heading">
               {session?.title}
