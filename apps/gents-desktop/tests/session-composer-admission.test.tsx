@@ -239,7 +239,7 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendMessage).toHaveBeenCalledWith("hello", "behavior");
   });
 
-  it("preserves the newer draft and route when an old send acknowledgment arrives", async () => {
+  it("clears accepted text only in its origin after navigating away", async () => {
     navigate.mockClear();
     let resolve!: (value: { sessionId: string; requestId: string }) => void;
     const sendMessage = vi.fn(
@@ -248,23 +248,30 @@ describe("SessionScreen canonical composer admission", () => {
           resolve = next;
         }),
     );
-    const shell = newSessionShell({ kind: "ready" }, sendMessage) as Shell & {
+    const origin = newSessionShell({ kind: "ready" }, sendMessage) as Shell & {
       advanceComposeIntentForTest: () => void;
     };
-    render(<OwnedSessionScreen shell={shell} />);
+    const other = { ...origin, selectedAgentDid: "other-agent" };
+    const { rerender } = render(<OwnedSessionScreen shell={origin} />);
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "keep this draft" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    shell.advanceComposeIntentForTest();
+    origin.advanceComposeIntentForTest();
+    rerender(<OwnedSessionScreen shell={other} />);
+    fireEvent.change(screen.getByLabelText("Message"), {
+      target: { value: "unrelated draft" },
+    });
     await act(async () => {
       resolve({ sessionId: "old-session", requestId: "old-request" });
       await Promise.resolve();
     });
 
     expect(sendMessage).toHaveBeenCalledOnce();
-    expect(screen.getByLabelText("Message")).toHaveValue("keep this draft");
+    expect(screen.getByLabelText("Message")).toHaveValue("unrelated draft");
     expect(navigate).not.toHaveBeenCalled();
+    rerender(<OwnedSessionScreen shell={origin} />);
+    expect(screen.getByLabelText("Message")).toHaveValue("");
   });
 
   it("preserves a canonical blocker for a non-empty local draft", () => {

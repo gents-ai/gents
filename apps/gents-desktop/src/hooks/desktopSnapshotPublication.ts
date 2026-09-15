@@ -5,25 +5,30 @@ export type SnapshotPublication = {
   publish: (snapshot: DesktopClientSnapshot) => boolean;
 };
 
-/**
- * One ordering owner for every asynchronous desktop snapshot producer.
- * Capturing is the operation's issuance point; only the newest capture may
- * publish, regardless of completion order.
- */
+/** Orders reads, not mutations: only the newest issued read may publish. */
 export function createSnapshotPublicationOwner(
   publish: (snapshot: DesktopClientSnapshot) => void,
 ) {
   let generation = 0;
+  let latest: DesktopClientSnapshot | null = null;
+  function checkpoint() {
+    const captured = generation;
+    return () => captured === generation;
+  }
 
   return {
+    get snapshot() {
+      return latest;
+    },
+    checkpoint,
     begin(): SnapshotPublication {
       generation += 1;
-      const captured = generation;
-      const isCurrent = () => captured === generation;
+      const isCurrent = checkpoint();
       return {
         isCurrent,
         publish: (snapshot) => {
           if (!isCurrent()) return false;
+          latest = snapshot;
           publish(snapshot);
           return true;
         },

@@ -60,3 +60,68 @@ theorem other_pending_marker_preserved (current : Option Nat) (owned : Nat)
   simp [releaseOwned, h]
 
 end ClientObservationOrdering
+
+/-!
+Accepted submission cleanup is scoped to the draft context that originated the
+mutation. Navigation does not revoke cleanup of the submitted text, while an
+edit in that origin context remains authoritative.
+-/
+namespace ClientDraftOwnership
+
+variable {Key Text : Type} [DecidableEq Key] [DecidableEq Text]
+
+def clearAcceptedOrigin
+    (drafts : Key → Option Text) (origin : Key) (submitted : Text) :
+    Key → Option Text :=
+  fun key =>
+    if key = origin ∧ drafts origin = some submitted then none else drafts key
+
+theorem accepted_origin_text_clears
+    (drafts : Key → Option Text) (origin : Key) (submitted : Text)
+    (h : drafts origin = some submitted) :
+    clearAcceptedOrigin drafts origin submitted origin = none := by
+  simp [clearAcceptedOrigin, h]
+
+theorem edited_origin_text_is_preserved
+    (drafts : Key → Option Text) (origin : Key) (submitted edited : Text)
+    (hDraft : drafts origin = some edited) (hEdit : edited ≠ submitted) :
+    clearAcceptedOrigin drafts origin submitted origin = some edited := by
+  simp [clearAcceptedOrigin, hDraft, hEdit]
+
+theorem unrelated_draft_is_preserved
+    (drafts : Key → Option Text) (origin other : Key) (submitted : Text)
+    (h : other ≠ origin) :
+    clearAcceptedOrigin drafts origin submitted other = drafts other := by
+  simp [clearAcceptedOrigin, h]
+
+end ClientDraftOwnership
+
+namespace ClientSnapshotObservation
+
+open ClientObservationOrdering
+
+variable {α : Type}
+
+/-- Only issuing a read advances observation order. Mutation payloads are not
+published: successful mutations request a fresh read; failures leave it alone. -/
+def beginRead (s : View α) : View α := { s with epoch := s.epoch + 1 }
+
+def mutationCompleted (s : View α) (succeeded : Bool) : View α :=
+  if succeeded then beginRead s else s
+
+theorem failed_mutation_preserves_pending_read (s : View α) (result : α) :
+    finish (mutationCompleted s false) s.epoch result = { s with value := result } := by
+  simp [mutationCompleted, finish, accepts]
+
+theorem mutation_refresh_rejects_precompletion_read (s : View α) (stale : α) :
+    finish (mutationCompleted s true) s.epoch stale = mutationCompleted s true := by
+  simp [mutationCompleted, beginRead, finish, accepts]
+
+theorem fresh_read_after_mutation_replaces_intermediate_state
+    (s : View α) (intermediate authoritative : α) :
+    let observed := finish s s.epoch intermediate
+    let refresh := mutationCompleted observed true
+    (finish refresh refresh.epoch authoritative).value = authoritative := by
+  simp [finish, accepts]
+
+end ClientSnapshotObservation

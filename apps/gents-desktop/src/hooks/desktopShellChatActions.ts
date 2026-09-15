@@ -159,8 +159,8 @@ export function createDesktopShellChatActions({
 
   async function onSendMessage(event: FormEvent) {
     event.preventDefault();
-    const intentGeneration = captureComposeIntent();
-    if ((await submitContent(draft)) && acceptsComposeIntent(intentGeneration)) {
+    const result = await submitContent(draft);
+    if (result) {
       setDraft((current) => (current === draft ? "" : current));
     }
   }

@@ -212,14 +212,11 @@ describe("desktop startup screen", () => {
     const initial = deferred<DesktopClientSnapshot>();
     const started = deferred<DesktopClientSnapshot>();
     const startDesktopClient = vi.fn(() => started.promise);
-    render(
-      <App
-        bridge={bridge(
-          vi.fn(() => initial.promise),
-          startDesktopClient,
-        )}
-      />,
-    );
+    const fetchDesktopSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValue(started.promise);
+    render(<App bridge={bridge(fetchDesktopSnapshot, startDesktopClient)} />);
 
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
       "Reading saved connections",

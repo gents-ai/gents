@@ -29,6 +29,7 @@ function fixture(
     setOptimisticPendingTurn: vi.fn(),
     setSelectedSessionId: vi.fn(),
     setPendingMailboxCauseId: vi.fn(),
+    setDraft: vi.fn(),
     refreshSession: vi.fn(async () => {
       throw new Error("observation unavailable");
     }),
@@ -45,6 +46,7 @@ function fixture(
     },
     captureComposeIntent: () => intentGeneration,
     api: { sendChatMessage: send, retryRequest: retry },
+    draft: "review this",
     selectedDeployment: { agentDid: "agent" },
     deployments: [],
     selectedSessionId: "session",
@@ -247,6 +249,24 @@ describe("canonical chat submission acceptance", () => {
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
     expect(f.setError).not.toHaveBeenCalled();
     expect(f.setSending).toHaveBeenLastCalledWith(false);
+  });
+
+  it("clears accepted form text after intent changes without erasing an edit", async () => {
+    const accepted = {
+      sessionId: "origin-session",
+      requestId: "request",
+      agentDid: "agent",
+      behaviorId: "coding",
+    };
+    const f = fixture(async () => accepted);
+    const sending = f.actions.onSendMessage({ preventDefault: vi.fn() } as never);
+    f.advanceComposeIntent();
+    await sending;
+
+    const cleanup = f.setDraft.mock.calls.at(-1)?.[0];
+    expect(cleanup).toBeTypeOf("function");
+    expect(cleanup("review this")).toBe("");
+    expect(cleanup("new edit")).toBe("new edit");
   });
 
   it("ignores a stale retry acknowledgment after selection changes", async () => {

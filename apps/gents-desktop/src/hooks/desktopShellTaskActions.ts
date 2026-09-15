@@ -2,8 +2,6 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import type {
   DesktopApiAdapter,
-  DesktopClientSnapshot,
-  DesktopSessionSnapshot,
   EventSourceSaveRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
@@ -12,39 +10,30 @@ import type {
   TaskSaveRequest,
   TriggerSaveRequest,
 } from "@source-inc/gents-desktop-client";
-import type { SnapshotPublication } from "./desktopSnapshotPublication";
 import { logShellEvent } from "./desktopShellRuntime";
 
 type TaskActionParams = {
   acceptsComposeIntent: (capturedGeneration: number) => boolean;
-  advanceComposeIntent: () => void;
   api: DesktopApiAdapter;
   captureComposeIntent: () => number;
-  refreshSession: (
-    nextSessionId: string | null,
-  ) => Promise<DesktopSessionSnapshot | null>;
+  mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
   runningTaskCountRef: MutableRefObject<number>;
   setError: Dispatch<SetStateAction<string | null>>;
   setRunningTask: Dispatch<SetStateAction<boolean>>;
   setSavingConfig: Dispatch<SetStateAction<boolean>>;
-  setSelectedSessionId: Dispatch<SetStateAction<string | null>>;
-  beginSnapshotPublication: () => SnapshotPublication;
 };
 
 export function createDesktopShellTaskActions({
   acceptsComposeIntent,
-  advanceComposeIntent,
   api,
   captureComposeIntent,
-  refreshSession,
+  mutateSnapshot,
   refreshSnapshot,
   runningTaskCountRef,
   setError,
   setRunningTask,
   setSavingConfig,
-  setSelectedSessionId,
-  beginSnapshotPublication,
 }: TaskActionParams) {
   function beginTaskRun() {
     runningTaskCountRef.current += 1;
@@ -56,17 +45,9 @@ export function createDesktopShellTaskActions({
     if (runningTaskCountRef.current === 0) setRunningTask(false);
   }
 
-  async function observeAcceptedRun(
-    kind: "task" | "schedule",
-    result: TaskRunResult,
-    intentGeneration: number,
-  ) {
+  async function observeAcceptedRun(kind: "task" | "schedule") {
     try {
       await refreshSnapshot();
-      if (result.sessionId && acceptsComposeIntent(intentGeneration)) {
-        setSelectedSessionId(result.sessionId);
-        await refreshSession(result.sessionId);
-      }
     } catch (error) {
       logShellEvent(
         `${kind} run accepted but observation refresh failed: ${String(error)}`,
@@ -74,19 +55,11 @@ export function createDesktopShellTaskActions({
     }
   }
 
-  async function publishSnapshotResult(
-    operation: () => Promise<DesktopClientSnapshot>,
-  ) {
-    const publication = beginSnapshotPublication();
-    const next = await operation();
-    publication.publish(next);
-    return next;
-  }
   async function onSaveTaskConfig(request: TaskSaveRequest) {
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await publishSnapshotResult(() => api.saveTaskConfig(request));
+      const next = await mutateSnapshot(() => api.saveTaskConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -100,7 +73,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await publishSnapshotResult(() => api.saveScheduleConfig(request));
+      const next = await mutateSnapshot(() => api.saveScheduleConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -111,13 +84,12 @@ export function createDesktopShellTaskActions({
   }
 
   async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
-    advanceComposeIntent();
     const intentGeneration = captureComposeIntent();
     beginTaskRun();
     setError(null);
     try {
       const result = await api.runSchedule(request);
-      await observeAcceptedRun("schedule", result, intentGeneration);
+      await observeAcceptedRun("schedule");
       return result;
     } catch (err) {
       if (acceptsComposeIntent(intentGeneration)) setError(String(err));
@@ -131,7 +103,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await publishSnapshotResult(() => api.saveTriggerConfig(request));
+      const next = await mutateSnapshot(() => api.saveTriggerConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -145,9 +117,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await publishSnapshotResult(() =>
-        api.saveEventSourceConfig(request),
-      );
+      const next = await mutateSnapshot(() => api.saveEventSourceConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -158,13 +128,12 @@ export function createDesktopShellTaskActions({
   }
 
   async function onRunTask(request: TaskRunRequest): Promise<TaskRunResult> {
-    advanceComposeIntent();
     const intentGeneration = captureComposeIntent();
     beginTaskRun();
     setError(null);
     try {
       const result = await api.runTask(request);
-      await observeAcceptedRun("task", result, intentGeneration);
+      await observeAcceptedRun("task");
       return result;
     } catch (err) {
       if (acceptsComposeIntent(intentGeneration)) setError(String(err));

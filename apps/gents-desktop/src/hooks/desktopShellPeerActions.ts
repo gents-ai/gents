@@ -5,14 +5,14 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import type { SnapshotPublication } from "./desktopSnapshotPublication";
 
 type PeerActionParams = {
   api: DesktopApiAdapter;
   snapshot: DesktopClientSnapshot | null;
   /** Shared single-flight start used by autostart and peer actions. */
   ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot | null>;
-  beginSnapshotPublication: () => SnapshotPublication;
+  mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
+  refreshSnapshot: () => Promise<void>;
   setAddingPeer: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
   setRepairingP2P: Dispatch<SetStateAction<boolean>>;
@@ -24,22 +24,14 @@ export function createDesktopShellPeerActions({
   api,
   snapshot,
   ensureDesktopClientStarted,
-  beginSnapshotPublication,
+  mutateSnapshot,
+  refreshSnapshot,
   setAddingPeer,
   setError,
   setRepairingP2P,
   setSelectedAgentDid,
   setStarting,
 }: PeerActionParams) {
-  async function publishSnapshotResult(
-    operation: () => Promise<DesktopClientSnapshot>,
-  ) {
-    const publication = beginSnapshotPublication();
-    const next = await operation();
-    publication.publish(next);
-    return next;
-  }
-
   async function onInitLocalRuntime(label?: string | null) {
     const clientWasRunning = Boolean(snapshot?.client);
     setAddingPeer(true);
@@ -47,7 +39,7 @@ export function createDesktopShellPeerActions({
     setError(null);
     try {
       if (snapshot?.client) {
-        await publishSnapshotResult(() => api.shutdownDesktopClient());
+        await mutateSnapshot(() => api.shutdownDesktopClient());
       }
       const summary = await api.initLocalStandardRuntime({
         label: label?.trim() || "Local Agent",
@@ -65,7 +57,7 @@ export function createDesktopShellPeerActions({
     } catch (err) {
       if (clientWasRunning) {
         try {
-          await publishSnapshotResult(() => api.startDesktopClient());
+          await mutateSnapshot(() => api.startDesktopClient());
         } catch {
           // Preserve the provisioning error that caused the rollback.
         }
@@ -100,7 +92,7 @@ export function createDesktopShellPeerActions({
         }
       }
       const request = await api.requestStatusEnrollment(serverAddress);
-      await publishSnapshotResult(() => api.fetchDesktopSnapshot());
+      await refreshSnapshot();
       return request;
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
@@ -112,7 +104,7 @@ export function createDesktopShellPeerActions({
   async function onRemovePeer(peerId: string) {
     setError(null);
     try {
-      const next = await publishSnapshotResult(() => api.removePeer(peerId));
+      const next = await mutateSnapshot(() => api.removePeer(peerId));
       return next;
     } catch (err) {
       const message = formatPeerConnectionError(err, "remove-peer");
@@ -124,7 +116,7 @@ export function createDesktopShellPeerActions({
   async function onRenamePeer(peerId: string, label: string) {
     setError(null);
     try {
-      const next = await publishSnapshotResult(() => api.renamePeer(peerId, label));
+      const next = await mutateSnapshot(() => api.renamePeer(peerId, label));
       return next;
     } catch (err) {
       const message = formatPeerConnectionError(err, "rename-peer");
@@ -137,7 +129,7 @@ export function createDesktopShellPeerActions({
     setRepairingP2P(true);
     setError(null);
     try {
-      const next = await publishSnapshotResult(() => api.repairP2P());
+      const next = await mutateSnapshot(() => api.repairP2P());
       return next;
     } catch (err) {
       const message = formatPeerConnectionError(err, "repair-p2p");

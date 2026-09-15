@@ -27,8 +27,9 @@ const initialDeployment = {
 function useSelection(
   deployment: DeploymentView | null,
   initialSession: string | null,
+  initialAgent: string | null = "agent",
 ) {
-  const [agent, setAgent] = useState<string | null>("agent");
+  const [agent, setAgent] = useState<string | null>(initialAgent);
   const [behavior, setBehavior] = useState<string | null>("setup");
   const [selected, setSelected] = useState<string | null>(initialSession);
   const [workflow, setWorkflow] = useState<ChatWorkflowState>({ kind: "ready" });
@@ -103,17 +104,34 @@ function useSelection(
     sending: false,
     setLocalWorkflow: setWorkflow,
     setError: vi.fn(),
-    setSelectedAgentDid: setAgent,
+    setSelectedAgentDid: route.selectAgent,
     setSelectedBehaviorId: setBehavior,
     snapshot: null,
     starting: false,
     stopping: false,
     onStartClient: async () => {},
   });
-  return { selected, behavior, actions, route, sendChatMessage };
+  return { agent, selected, behavior, actions, route, sendChatMessage };
 }
 
 describe("explicit session selection", () => {
+  it("initializes an empty agent selection through the route owner", () => {
+    const { result } = renderHook(() =>
+      useSelection(initialDeployment, "old-session", null),
+    );
+    expect(result.current.agent).toBe("agent");
+    expect(result.current.selected).toBeNull();
+  });
+
+  it("preserves agent and session selection across a temporary missing snapshot", () => {
+    const { result, rerender } = renderHook(
+      ({ deployment }) => useSelection(deployment, "first-setup"),
+      { initialProps: { deployment: initialDeployment as DeploymentView | null } },
+    );
+    rerender({ deployment: null });
+    expect(result.current.agent).toBe("agent");
+    expect(result.current.selected).toBe("first-setup");
+  });
   it("uses the principal default instead of a conflicting marked default", () => {
     const deployment = {
       ...initialDeployment,

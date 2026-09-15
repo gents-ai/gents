@@ -31,7 +31,7 @@ function fixture(runTask: () => Promise<unknown>, runSchedule = runTask) {
       generation += 1;
     },
     api: { runTask, runSchedule },
-    beginSnapshotPublication: vi.fn(),
+    mutateSnapshot: async <T>(operation: () => Promise<T>) => operation(),
     captureComposeIntent: () => generation,
     runningTaskCountRef: { current: 0 },
   } as unknown as Parameters<typeof createDesktopShellTaskActions>[0]);
@@ -80,7 +80,7 @@ describe("task and schedule async intent ordering", () => {
     expect(f.setSelectedSessionId).not.toHaveBeenCalled();
   });
 
-  it("selects and hydrates the session while the run intent is current", async () => {
+  it("does not navigate to the result session while the run intent is current", async () => {
     const f = fixture(async () => ({
       requestId: "request-current",
       sessionId: "session-current",
@@ -88,8 +88,8 @@ describe("task and schedule async intent ordering", () => {
 
     await f.actions.onRunTask({ taskId: "task-a", args: {} });
 
-    expect(f.setSelectedSessionId).toHaveBeenCalledWith("session-current");
-    expect(f.refreshSession).toHaveBeenCalledWith("session-current");
+    expect(f.setSelectedSessionId).not.toHaveBeenCalled();
+    expect(f.refreshSession).not.toHaveBeenCalled();
   });
 
   it("keeps running state active until every overlapping run completes", async () => {

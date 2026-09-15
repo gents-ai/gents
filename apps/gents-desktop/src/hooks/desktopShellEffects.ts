@@ -179,19 +179,12 @@ export function useDesktopShellEffects({
   });
 
   useEffect(() => {
-    if (!deployments.length) {
-      setSelectedAgentDid(null);
-      return;
+    // Snapshot absence is not an explicit navigation intent. Preserve an
+    // existing principal selection while bounded observations catch up; only
+    // initialize an empty selection through the route owner.
+    if (!selectedAgentDid && deployments.length) {
+      setSelectedAgentDid(deployments[0].agentDid);
     }
-
-    if (
-      selectedAgentDid &&
-      deployments.some((deployment) => deployment.agentDid === selectedAgentDid)
-    ) {
-      return;
-    }
-
-    setSelectedAgentDid(deployments[0].agentDid);
   }, [deployments, selectedAgentDid, setSelectedAgentDid]);
 
   useEffect(() => {

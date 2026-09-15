@@ -17,9 +17,16 @@ describe("desktop client restart selection ordering", () => {
   it("does not let an older startup refresh replace a newer client-start snapshot", async () => {
     const refresh = deferred<Record<string, unknown>>();
     const start = deferred<Record<string, unknown>>();
+    const newer = {
+      bootstrap: { clientStateExists: true, savedPeers: [] },
+      client: {},
+    };
     const selectedSessionIdRef = { current: null as string | null };
     const api = {
-      fetchDesktopSnapshot: vi.fn(() => refresh.promise),
+      fetchDesktopSnapshot: vi
+        .fn()
+        .mockReturnValueOnce(refresh.promise)
+        .mockResolvedValue(newer),
       startDesktopClient: vi.fn(() => start.promise),
     };
     const { result } = renderHook(() =>
@@ -38,10 +45,6 @@ describe("desktop client restart selection ordering", () => {
     act(() => {
       starting = result.current.ensureDesktopClientStarted();
     });
-    const newer = {
-      bootstrap: { clientStateExists: true, savedPeers: [] },
-      client: {},
-    };
     start.resolve(newer);
     await act(async () => starting);
     expect(result.current.snapshot).toBe(newer);
@@ -57,6 +60,51 @@ describe("desktop client restart selection ordering", () => {
     expect(result.current.startupPhase).toBe("ready");
     expect(result.current.loading).toBe(false);
   });
+
+  it.each(["start", "restart"])(
+    "observes successful %s after an intervening stopped refresh",
+    async (operation) => {
+      const start = deferred<Record<string, unknown>>();
+      const stopped = {
+        bootstrap: { clientStateExists: true, savedPeers: [{}] },
+        client: null,
+      };
+      const ready = { ...stopped, client: {} };
+      const api = {
+        fetchDesktopSnapshot: vi.fn().mockResolvedValue(stopped),
+        shutdownDesktopClient: vi.fn(async () => stopped),
+        startDesktopClient: vi.fn(() => start.promise),
+      };
+      const { result } = renderHook(() =>
+        useDesktopClientLifecycle({
+          api,
+          supportsManagedServer: false,
+          refreshSession: vi.fn(async () => null),
+          selectedSessionIdRef: { current: null },
+          setError: vi.fn(),
+          setSession: vi.fn(),
+        } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
+      );
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      let pending!: Promise<unknown>;
+      act(() => {
+        pending =
+          operation === "start"
+            ? result.current.ensureDesktopClientStarted()
+            : result.current.restartDesktopClient("test");
+      });
+      await waitFor(() => expect(api.startDesktopClient).toHaveBeenCalledOnce());
+      await act(async () => result.current.refreshSnapshot());
+      expect(result.current.snapshot).toBe(stopped);
+      api.fetchDesktopSnapshot.mockResolvedValue(ready);
+      start.resolve(ready);
+      await act(async () => pending);
+      expect(result.current.snapshot).toBe(ready);
+      expect(result.current.startupPhase).toBe("ready");
+      expect(result.current.starting).toBe(false);
+      expect(api.fetchDesktopSnapshot).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it("does not let an older failed start replace a newer refresh success", async () => {
     const start = deferred<Record<string, unknown>>();
@@ -99,6 +147,40 @@ describe("desktop client restart selection ordering", () => {
     expect(result.current.snapshot).toBe(refreshed);
     expect(result.current.startupPhase).toBe("ready");
     expect(setError).not.toHaveBeenCalledWith("Error: stale start failed");
+  });
+
+  it("reports a failed start when a newer read only observed the stopped client", async () => {
+    const start = deferred<Record<string, unknown>>();
+    const stopped = {
+      bootstrap: { clientStateExists: true, savedPeers: [{}] },
+      client: null,
+    };
+    const setError = vi.fn();
+    const api = {
+      fetchDesktopSnapshot: vi.fn().mockResolvedValue(stopped),
+      startDesktopClient: vi.fn(() => start.promise),
+    };
+    const { result } = renderHook(() =>
+      useDesktopClientLifecycle({
+        api,
+        supportsManagedServer: false,
+        refreshSession: vi.fn(async () => null),
+        selectedSessionIdRef: { current: null },
+        setError,
+        setSession: vi.fn(),
+      } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let pending!: Promise<unknown>;
+    act(() => {
+      pending = result.current.ensureDesktopClientStarted();
+    });
+    await act(async () => result.current.refreshSnapshot());
+    start.reject(new Error("start failed"));
+    await act(async () => pending);
+    expect(result.current.startupPhase).toBe("client-error");
+    expect(result.current.starting).toBe(false);
+    expect(setError).toHaveBeenCalledWith("Error: start failed");
   });
 
   it("does not clear a session selected while a restart from new-compose is pending", async () => {

@@ -64,7 +64,7 @@ export function useDesktopShell({
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
     snapshot,
-    beginSnapshotPublication,
+    mutateSnapshot,
     startupPhase,
     loading,
     starting,
@@ -197,7 +197,7 @@ export function useDesktopShell({
     sending,
     setLocalWorkflow,
     setError,
-    setSelectedAgentDid,
+    setSelectedAgentDid: selectAgent,
     setSelectedBehaviorId,
     snapshot,
     starting,
@@ -213,7 +213,8 @@ export function useDesktopShell({
     onRepairP2P,
   } = createDesktopShellPeerActions({
     api,
-    beginSnapshotPublication,
+    mutateSnapshot,
+    refreshSnapshot,
     snapshot,
     ensureDesktopClientStarted,
     setAddingPeer,
@@ -270,12 +271,10 @@ export function useDesktopShell({
     onTestToolService,
   } = createDesktopShellConfigActions({
     api,
-    beginSnapshotPublication,
+    mutateSnapshot,
     setError,
     setSavingBehaviorConfig,
     setSavingConfig,
-    setSelectedAgentDid,
-    setSelectedBehaviorId,
   });
 
   const {
@@ -322,17 +321,14 @@ export function useDesktopShell({
     onSaveTriggerConfig,
   } = createDesktopShellTaskActions({
     acceptsComposeIntent,
-    advanceComposeIntent,
     api,
-    beginSnapshotPublication,
+    mutateSnapshot,
     captureComposeIntent,
-    refreshSession,
     refreshSnapshot,
     runningTaskCountRef,
     setError,
     setRunningTask,
     setSavingConfig,
-    setSelectedSessionId,
   });
 
   function onDismissError() {

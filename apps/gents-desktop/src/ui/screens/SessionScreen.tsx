@@ -345,12 +345,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
 
   const send = async (text: string) => {
     const pending = shell.sendMessage(text, session?.behaviorId ?? choice.behaviorId);
-    // sendMessage may synchronously select the chosen behavior. Capture after
-    // that intended change, but before its asynchronous acknowledgment.
     const intentGeneration = shell.captureComposeIntent();
     const result = await pending;
-    if (!shell.acceptsComposeIntent(intentGeneration)) return;
     if (result) setDraft((current) => (current === text ? "" : current));
+    if (!shell.acceptsComposeIntent(intentGeneration)) return;
     if (result && result.sessionId !== shell.selectedSessionId) {
       navigate({ name: "session", sessionId: result.sessionId });
     }
