@@ -1,10 +1,191 @@
+//! Pure command-policy vocabulary shared between the loop's tool-dispatch
+//! outcome (`ToolOutcome::Failed { denial, .. }`) and `gents`'s native
+//! command-execution enforcement (`toolset::shared::command`).
+//!
+//! Everything here is data and pure classification: no process spawn, no
+//! filesystem, no DefraDB. The enforcement itself (building a
+//! `CommandExecutionPolicy`, running `sandbox-exec`, spawning `managed_exec`)
+//! stays in `gents`, which re-exports these types so its own call sites are
+//! unchanged.
+
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::shared::{CommandExecutionMode, CommandNetworkMode};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum CommandExecutionMode {
+    ReadOnly,
+    WorkspaceWrite,
+    ArtifactWrite,
+    Unrestricted,
+}
+
+impl CommandExecutionMode {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "" | "read_only" | "ReadOnly" => Ok(Self::ReadOnly),
+            "workspace_write" | "WorkspaceWrite" | "managed_write" | "ManagedWrite" => {
+                Ok(Self::WorkspaceWrite)
+            }
+            "artifact_write" | "ArtifactWrite" => Ok(Self::ArtifactWrite),
+            "unrestricted" | "Unrestricted" => Ok(Self::Unrestricted),
+            other => bail!("unknown command execution policy mode {other}"),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::WorkspaceWrite => "workspace_write",
+            Self::ArtifactWrite => "artifact_write",
+            Self::Unrestricted => "unrestricted",
+        }
+    }
+
+    /// Intersect effects: source writes and private artifact writes are incomparable.
+    pub fn meet(self, other: Self) -> Self {
+        if self == other {
+            return self;
+        }
+        match (self, other) {
+            (Self::Unrestricted, mode) | (mode, Self::Unrestricted) => mode,
+            _ => Self::ReadOnly,
+        }
+    }
+}
+
+/// Request `workspace_authority`. ReadWrite meets command mode to WorkspaceWrite,
+/// never Unrestricted. Integrate is inspect-only (no bash writes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum WorkspaceAuthority {
+    ReadOnly,
+    ReadWrite,
+    Integrate,
+}
+
+impl WorkspaceAuthority {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "readOnly" | "ReadOnly" | "read_only" => Ok(Self::ReadOnly),
+            "readWrite" | "ReadWrite" | "read_write" => Ok(Self::ReadWrite),
+            "integrate" | "Integrate" => Ok(Self::Integrate),
+            other => bail!("unknown workspace authority {other}"),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "readOnly",
+            Self::ReadWrite => "readWrite",
+            Self::Integrate => "integrate",
+        }
+    }
+
+    pub fn command_mode(self) -> CommandExecutionMode {
+        match self {
+            Self::ReadOnly | Self::Integrate => CommandExecutionMode::ReadOnly,
+            Self::ReadWrite => CommandExecutionMode::WorkspaceWrite,
+        }
+    }
+
+    pub fn allows_file_writes(self) -> bool {
+        matches!(self, Self::ReadWrite)
+    }
+
+    /// Greatest lower bound. Child spawn cannot outrank a bound parent.
+    pub fn infimum(self, other: Self) -> Self {
+        if self.rank() <= other.rank() {
+            self
+        } else {
+            other
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::ReadOnly => 0,
+            Self::Integrate => 1,
+            Self::ReadWrite => 2,
+        }
+    }
+
+    pub fn bindable_lifecycle_state(self, state: &str) -> bool {
+        matches!(
+            (self, normalize_workspace_lifecycle_state(state)),
+            (Self::ReadWrite, Some("ready"))
+                | (Self::ReadOnly, Some("ready" | "sealed"))
+                | (Self::Integrate, Some("sealed"))
+        )
+    }
+}
+
+pub fn normalize_workspace_lifecycle_state(value: &str) -> Option<&'static str> {
+    match value.trim() {
+        "provisioning" | "Provisioning" => Some("provisioning"),
+        "ready" | "Ready" => Some("ready"),
+        "provisionFailed" | "provision_failed" | "ProvisionFailed" => Some("provisionFailed"),
+        "sealed" | "Sealed" => Some("sealed"),
+        "cleaning" | "Cleaning" => Some("cleaning"),
+        "cleaned" | "Cleaned" => Some("cleaned"),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum CommandNetworkMode {
+    Inherit,
+    Disabled,
+    Enabled,
+}
+
+impl CommandNetworkMode {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "" | "inherit" | "Inherit" => Ok(Self::Inherit),
+            "disabled" | "Disabled" | "off" | "Off" => Ok(Self::Disabled),
+            "enabled" | "Enabled" | "on" | "On" => Ok(Self::Enabled),
+            other => bail!("unknown command network mode {other}"),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inherit => "inherit",
+            Self::Disabled => "disabled",
+            Self::Enabled => "enabled",
+        }
+    }
+
+    pub fn allows_network(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    /// More restrictive mode wins: Disabled < Inherit < Enabled.
+    pub fn meet(self, other: Self) -> Self {
+        if self.rank() <= other.rank() {
+            self
+        } else {
+            other
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Disabled => 0,
+            Self::Inherit => 1,
+            Self::Enabled => 2,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum DenialReason {
+pub enum DenialReason {
     ForbiddenPrefix { matched: Vec<String> },
     AllowedPrefixRequired { argv: Vec<String> },
     ReadOnlyCommandNotAllowlisted { command: String },
@@ -21,7 +202,7 @@ pub(crate) enum DenialReason {
 }
 
 impl DenialReason {
-    pub(crate) fn to_contract(&self) -> &'static str {
+    pub fn to_contract(&self) -> &'static str {
         match self {
             Self::ForbiddenPrefix { .. } => "forbiddenPrefix",
             Self::AllowedPrefixRequired { .. } => "allowedPrefixRequired",
@@ -39,21 +220,21 @@ impl DenialReason {
         }
     }
 
-    pub(crate) fn matched_prefix(&self) -> Option<&[String]> {
+    pub fn matched_prefix(&self) -> Option<&[String]> {
         match self {
             Self::ForbiddenPrefix { matched } => Some(matched),
             _ => None,
         }
     }
 
-    pub(crate) fn denied_argv(&self) -> Option<&[String]> {
+    pub fn denied_argv(&self) -> Option<&[String]> {
         match self {
             Self::AllowedPrefixRequired { argv } => Some(argv),
             _ => None,
         }
     }
 
-    pub(crate) fn denied_command(&self) -> Option<&str> {
+    pub fn denied_command(&self) -> Option<&str> {
         match self {
             Self::ReadOnlyCommandNotAllowlisted { command }
             | Self::ReadOnlyArgumentNotAllowed { command, .. }
@@ -66,14 +247,14 @@ impl DenialReason {
         }
     }
 
-    pub(crate) fn denied_argument(&self) -> Option<&str> {
+    pub fn denied_argument(&self) -> Option<&str> {
         match self {
             Self::ReadOnlyArgumentNotAllowed { argument, .. } => Some(argument),
             _ => None,
         }
     }
 
-    pub(crate) fn denied_subcommand(&self) -> Option<&str> {
+    pub fn denied_subcommand(&self) -> Option<&str> {
         match self {
             Self::ReadOnlySubcommandNotAllowlisted { subcommand, .. }
             | Self::GitMetadataWriteDenied { subcommand, .. } => Some(subcommand),
@@ -81,7 +262,7 @@ impl DenialReason {
         }
     }
 
-    pub(crate) fn diagnostic(&self) -> String {
+    pub fn diagnostic(&self) -> String {
         match self {
             Self::ForbiddenPrefix { matched } => format!(
                 "command is forbidden by command execution policy prefix: {}",
@@ -192,7 +373,7 @@ impl DenialReason {
         }
     }
 
-    pub(crate) fn from_contract_fields(
+    pub fn from_contract_fields(
         reason: &str,
         matched_prefix: Option<Vec<String>>,
         denied_argv: Option<Vec<String>>,
@@ -240,13 +421,13 @@ impl DenialReason {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandPolicyDenial {
-    pub(crate) reason: DenialReason,
-    pub(crate) policy_mode: String,
-    pub(crate) policy_network: String,
+    pub reason: DenialReason,
+    pub policy_mode: String,
+    pub policy_network: String,
 }
 
 impl CommandPolicyDenial {
-    pub(crate) fn new(
+    pub fn new(
         reason: DenialReason,
         mode: CommandExecutionMode,
         network_mode: CommandNetworkMode,
@@ -258,15 +439,15 @@ impl CommandPolicyDenial {
         }
     }
 
-    pub(crate) fn to_contract(&self) -> &'static str {
+    pub fn to_contract(&self) -> &'static str {
         self.reason.to_contract()
     }
 
-    pub(crate) fn diagnostic(&self) -> String {
+    pub fn diagnostic(&self) -> String {
         self.reason.diagnostic()
     }
 
-    pub(crate) fn payload_value(&self) -> Value {
+    pub fn payload_value(&self) -> Value {
         json!({
             "ok": false,
             "failure_class": "policyDenied",
@@ -282,11 +463,11 @@ impl CommandPolicyDenial {
         })
     }
 
-    pub(crate) fn tool_error_payload(&self) -> String {
+    pub fn tool_error_payload(&self) -> String {
         serde_json::to_string(&self.payload_value()).unwrap_or_else(|_| self.diagnostic())
     }
 
-    pub(crate) fn from_payload_value(value: &Value) -> Option<Self> {
+    pub fn from_payload_value(value: &Value) -> Option<Self> {
         let reason = value.get("denial_reason")?.as_str()?;
         let matched_prefix = string_vec_field(value, "denied_prefix");
         let denied_argv = string_vec_field(value, "denied_argv");

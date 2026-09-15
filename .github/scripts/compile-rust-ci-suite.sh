@@ -13,7 +13,9 @@ separate_package=""
 
 case "${suite}" in
   runtime)
-    packages=(gents)
+    # gents-loop is the completion loop `gents` is built on. It belongs on
+    # this shard rather than support: its tests are the runtime's own.
+    packages=(gents gents-loop)
     ;;
   cli)
     packages=(

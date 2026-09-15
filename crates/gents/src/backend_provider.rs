@@ -1,78 +1,34 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::Instrument;
 
 use crate::document_config::AdvertisedModel;
 
-#[derive(Debug, thiserror::Error)]
-#[error("{provider} model discovery failed at {url}: {status} {body}")]
-pub struct ModelDiscoveryHttpError {
-    pub provider: String,
-    pub url: String,
-    pub status: u16,
-    pub body: String,
+// The enum itself (and its pure parse/as_str/is_agent_scoped_oauth/Display)
+// moved to gents-loop (G-1): the loop's provider_input layer switches on it
+// with no reqwest dependency. This crate re-exports it and adds the two
+// OAuth-guidance methods below through an extension trait, since only the
+// type's defining crate may add inherent methods to it.
+pub use gents_loop::backend_provider::BackendProviderKind;
+
+/// OAuth-credential guidance for a backend provider kind: which
+/// `OAuthCredential.provider` it authenticates with, and how to render an
+/// auth problem for it. Kept here (not on the moved enum) because both touch
+/// native, agent-scoped OAuth modules the guest never links.
+pub(crate) trait BackendProviderOauthExt {
+    fn oauth_provider(self) -> Option<&'static str>;
+    fn oauth_auth_guidance(
+        self,
+        agent_did: &str,
+        provider: &str,
+        problem: &crate::oauth_credential::OAuthAuthProblem,
+    ) -> String;
 }
 
-impl ModelDiscoveryHttpError {
-    pub fn is_auth(&self) -> bool {
-        matches!(self.status, 401 | 403)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub enum BackendProviderKind {
-    #[default]
-    #[serde(rename = "OpenAiCompatible")]
-    OpenAiCompatible,
-    #[serde(rename = "OpenRouter")]
-    OpenRouter,
-    #[serde(rename = "ChatGptCodex")]
-    ChatGptCodex,
-    #[serde(rename = "XaiGrokOAuth")]
-    XaiGrokOAuth,
-    /// Claude subscription over Messages HTTP, authenticated with an
-    /// agent-scoped `OAuthCredential` (`claude-subscription`) written by
-    /// `gents claude-login`.
-    #[serde(rename = "ClaudeCliSubscription")]
-    ClaudeCliSubscription,
-}
-
-impl BackendProviderKind {
-    pub fn parse_optional(value: Option<&str>) -> Result<Self> {
-        match value.map(str::trim).filter(|value| !value.is_empty()) {
-            None => anyhow::bail!("backend provider kind is required"),
-            Some("OpenAiCompatible") => Ok(Self::OpenAiCompatible),
-            Some("OpenRouter") => Ok(Self::OpenRouter),
-            Some("ChatGptCodex") => Ok(Self::ChatGptCodex),
-            Some("XaiGrokOAuth") => Ok(Self::XaiGrokOAuth),
-            Some("ClaudeCliSubscription") => Ok(Self::ClaudeCliSubscription),
-            Some(other) => anyhow::bail!("unknown backend provider kind {other}"),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::OpenAiCompatible => "OpenAiCompatible",
-            Self::OpenRouter => "OpenRouter",
-            Self::ChatGptCodex => "ChatGptCodex",
-            Self::XaiGrokOAuth => "XaiGrokOAuth",
-            Self::ClaudeCliSubscription => "ClaudeCliSubscription",
-        }
-    }
-
-    /// Backends that authenticate with agent-scoped `OAuthCredential` documents
-    /// rather than a fleet-global API key. These must not be fleet-probed.
-    pub fn is_agent_scoped_oauth(self) -> bool {
-        matches!(
-            self,
-            Self::ChatGptCodex | Self::XaiGrokOAuth | Self::ClaudeCliSubscription
-        )
-    }
-
+impl BackendProviderOauthExt for BackendProviderKind {
     /// The `OAuthCredential.provider` value an agent-scoped kind authenticates with.
-    pub fn oauth_provider(self) -> Option<&'static str> {
+    fn oauth_provider(self) -> Option<&'static str> {
         match self {
             Self::ChatGptCodex => Some(crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER),
             Self::XaiGrokOAuth => Some(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER),
@@ -81,7 +37,7 @@ impl BackendProviderKind {
         }
     }
 
-    pub fn oauth_auth_guidance(
+    fn oauth_auth_guidance(
         self,
         agent_did: &str,
         provider: &str,
@@ -102,9 +58,18 @@ impl BackendProviderKind {
     }
 }
 
-impl std::fmt::Display for BackendProviderKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+#[derive(Debug, thiserror::Error)]
+#[error("{provider} model discovery failed at {url}: {status} {body}")]
+pub struct ModelDiscoveryHttpError {
+    pub provider: String,
+    pub url: String,
+    pub status: u16,
+    pub body: String,
+}
+
+impl ModelDiscoveryHttpError {
+    pub fn is_auth(&self) -> bool {
+        matches!(self.status, 401 | 403)
     }
 }
 

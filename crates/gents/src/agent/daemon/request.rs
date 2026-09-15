@@ -105,12 +105,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 request.doc_id
             )
         })?;
-        let capture_context = crate::rendered_request::RenderedRequestContext::for_claimed_request(
+        let capture_context = crate::rendered_request::context_for_claimed_request(
             &request,
             request_commit_cid,
             self.behavior.model_name.clone(),
         );
-        let capture_scope = crate::rendered_request::scope::scope_from_factory(
+        let capture_scope = crate::rendered_request::scope_from_factory(
             capture_context.clone(),
             self.rendered_request_capture_factory.as_ref(),
         );

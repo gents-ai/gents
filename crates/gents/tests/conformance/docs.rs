@@ -119,17 +119,21 @@ fn visit_lean(dir: &Path, offenders: &mut Vec<String>) {
 #[test]
 fn rig_vocabulary_confined_to_the_seam() {
     let root = repo_root();
+    // The seam moved into `gents-loop`, it did not widen: the three files
+    // that convert, project and drive rig types are the same three, at
+    // their new paths. The shims left behind in this crate
+    // (`llm::rig_compat`, `provider_input`, `agent::stream_processor`) are
+    // re-exports carrying no rig vocabulary of their own, so they are off
+    // this list rather than on it dead.
     let allowed: BTreeSet<&str> = [
-        "crates/gents/src/llm/rig_compat.rs",
+        "crates/gents-loop/src/rig_compat.rs",
+        "crates/gents-loop/src/provider_input.rs",
+        "crates/gents-loop/src/loop_stream.rs",
         "crates/gents/tests/conformance/docs.rs",
-        "crates/gents/src/agent/loop_stream.rs",
-        "crates/gents/src/agent/stream_processor.rs",
-        "crates/gents/src/agent/loop_stream/tests.rs",
         "crates/gents/src/agent/loop_stream/tests/budgeting.rs",
-        "crates/gents/src/agent/stream_processor/tests.rs",
+        "crates/gents/src/agent/stream_processor_tests.rs",
         "crates/gents/src/compaction/tests.rs",
         "crates/gents/src/completion_factory/tests.rs",
-        "crates/gents/src/provider_input.rs",
         "crates/gents/src/provider_input/tests.rs",
         "crates/gents-protocol/src/message.rs",
     ]

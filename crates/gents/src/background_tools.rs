@@ -1,6 +1,5 @@
 #![allow(dead_code)] // R4b lands these helpers one task ahead of their tool integrations.
 
-mod buffer;
 pub(crate) mod r4c_args;
 pub(crate) mod subagent_control;
 mod transcript_render;
@@ -32,9 +31,6 @@ use gents_protocol::row::AgentRequestRow;
 
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 
-pub(crate) use self::buffer::{
-    LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputSnapshot, LiveToolOutputWriter,
-};
 use self::r4c_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
@@ -43,6 +39,10 @@ use self::r4c_args::{
 };
 use self::transcript_render::{
     render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
+};
+pub(crate) use gents_loop::live_output::{
+    LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputSnapshot, LiveToolOutputWriter,
+    STDERR_BOUNDARY,
 };
 
 /// Immutable identity boundary used by `list_processes`, `read_process`,
@@ -1046,11 +1046,6 @@ pub(crate) async fn read_tool_output_slice(
         exit_code,
     }))
 }
-
-/// Boundary inserted between captured stdout and stderr in the combined buffer.
-/// Only present when BOTH streams have content, so single-stream output is
-/// served verbatim.
-const STDERR_BOUNDARY: &str = "\n--- stderr ---\n";
 
 /// Concatenate captured stdout and stderr into one logical buffer behind a
 /// single byte cursor. stdout first; if both streams are non-empty a labeled

@@ -226,32 +226,9 @@ fn parse_request_deadline(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
-pub(crate) fn merge_optional_params(
-    left: Option<serde_json::Value>,
-    right: Option<serde_json::Value>,
-) -> Option<serde_json::Value> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(merge_json_values(left, right)),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
-    }
-}
-
-fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde_json::Value {
-    match (left, right) {
-        (serde_json::Value::Object(mut left), serde_json::Value::Object(right)) => {
-            for (key, right_value) in right {
-                let value = left
-                    .remove(&key)
-                    .map(|left_value| merge_json_values(left_value, right_value.clone()))
-                    .unwrap_or(right_value);
-                left.insert(key, value);
-            }
-            serde_json::Value::Object(left)
-        }
-        (_, right) => right,
-    }
-}
+// Moved to gents-loop (G-1): compaction's per-turn summary request also
+// merges additional_params, with no dependency on AgentBehavior otherwise.
+pub(crate) use gents_loop::compaction::merge_optional_params;
 
 /// Maps the inference profile's reasoning effort into each provider's wire
 /// contract. An absent profile setting injects no reasoning default, except for
@@ -422,11 +399,13 @@ pub(crate) async fn build_compaction_engine(
     let backend_id = inference.backend.backend_id.clone();
     let engine = crate::llm::backend_client::with_backend_client!(client, |client| {
         let model = std::sync::Arc::new(build_admitted_model(client, admission, &summary));
-        std::sync::Arc::new(
-            crate::compaction::ProviderReductionEngine::new(model, config)
-                .with_source_input_counter(source_counter)
-                .with_backend_id(backend_id)
-                .with_summary_output_limit(inference.max_output_tokens()?),
+        crate::compaction::backend_scoped_reduction_engine(
+            std::sync::Arc::new(
+                crate::compaction::ProviderReductionEngine::new(model, config)
+                    .with_source_input_counter(source_counter)
+                    .with_summary_output_limit(inference.max_output_tokens()?),
+            ),
+            backend_id,
         ) as std::sync::Arc<dyn crate::compaction::ReductionEngine>
     });
     Ok(Some(engine))

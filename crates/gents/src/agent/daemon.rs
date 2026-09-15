@@ -181,7 +181,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             model.clone(),
             compaction_config,
         ));
-        let compaction_options = ReductionOptions::for_behavior(&behavior)?;
+        let compaction_options = crate::compaction::reduction_options_for_behavior(&behavior)?;
 
         Ok(Self {
             node,
