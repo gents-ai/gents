@@ -221,7 +221,16 @@ function Editor({
         <AreaRow
           id={id("hooks")}
           label="Task hooks"
-          description='Canonical JSON array. Commands are argv arrays, for example [{"hook_id":"verify","phase":"after_success","command":["cargo","test"],"timeout_secs":120}].'
+          description={
+            <>
+              Canonical JSON array. Commands are argv arrays, for example:
+              <code className="mt-1 block w-0 min-w-full overflow-x-auto font-mono text-xs whitespace-pre">
+                {
+                  '[{"hook_id":"verify","phase":"after_success","command":["cargo","test"],"timeout_secs":120}]'
+                }
+              </code>
+            </>
+          }
           value={d.draft.hooks}
           onChange={(v) => d.set("hooks", v)}
           onCommit={d.commit}

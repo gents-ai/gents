@@ -346,11 +346,12 @@ function Editor({
         <AreaRow
           id={id("advanced")}
           label="Canonical JSON"
+          stacked
           description="Host limits, MCP grants, subagents, built-ins, datastore, integrations, self-config, and tags. Invalid or unknown fields are rejected before persistence."
           value={d.draft.advanced}
           onChange={(v) => d.set("advanced", v)}
           onCommit={d.commit}
-          rows={18}
+          rows={12}
           mono
         />
       </Group>

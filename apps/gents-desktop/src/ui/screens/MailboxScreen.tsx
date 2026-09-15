@@ -60,7 +60,7 @@ export function MailboxScreen({ shell }: { shell: Shell }) {
           </h1>
         )}
         {items.length > 0 && (
-          <ol className="relative mt-5 grid gap-5 pl-10">
+          <ol className="relative mt-5 grid grid-cols-[minmax(0,1fr)] gap-5 pl-10">
             <span
               aria-hidden="true"
               className="absolute top-3 bottom-3 left-[11px] w-px bg-border"
@@ -138,6 +138,8 @@ function Item({
       : overdue
         ? "overdue"
         : `due in ${span(deadline - openedAt)}`;
+  const openable = Boolean(m.sessionId) || !acknowledge;
+  const age = when(m.createdAt);
   return (
     <li className="relative">
       <span
@@ -150,49 +152,68 @@ function Item({
         <Icon className="size-4" />
       </span>
       <article className="rounded-2xl border border-border/60 bg-raised px-4 pt-3 pb-5">
-        <div className="flex items-start gap-3">
-          <BehaviorHoverCard
-            deployment={shell.selectedDeployment}
-            behaviorId={m.targetBehaviorId}
-          >
-            <BehaviorAvatar
-              name={behavior}
+        <div
+          className={cn(
+            "grid items-start gap-x-3 max-md:gap-y-2",
+            openable
+              ? "grid-cols-[auto_minmax(0,1fr)_auto]"
+              : "grid-cols-[auto_minmax(0,1fr)]",
+          )}
+        >
+          <div className="col-start-1 row-start-1 max-md:self-center md:mt-0.5">
+            <BehaviorHoverCard
+              deployment={shell.selectedDeployment}
               behaviorId={m.targetBehaviorId}
-              className="mt-0.5 cursor-default"
-            />
-          </BehaviorHoverCard>
-          <div className="min-w-0 flex-1">
+            >
+              <BehaviorAvatar
+                name={behavior}
+                behaviorId={m.targetBehaviorId}
+                className="cursor-default"
+              />
+            </BehaviorHoverCard>
+          </div>
+          <span className="col-start-2 row-start-1 self-center justify-self-end text-xs text-muted-foreground md:hidden">
+            {age}
+          </span>
+          <div className="min-w-0 max-md:col-span-full max-md:row-start-2 md:col-start-2 md:row-start-1">
             <div className="flex items-baseline gap-3">
-              <h2 className="min-w-0 flex-1 truncate font-heading text-sm font-medium text-heading">
+              <h2 className="min-w-0 flex-1 font-heading text-sm font-medium text-pretty wrap-break-word text-heading">
                 {m.title}
               </h2>
-              <span className="shrink-0 text-xs text-muted-foreground">
-                {when(m.createdAt)}
+              <span className="shrink-0 text-xs text-muted-foreground max-md:hidden">
+                {age}
               </span>
             </div>
             {m.summary && (
               <p className="mt-0.5 text-sm text-muted-foreground">{m.summary}</p>
             )}
-            <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+            <p className="mt-1.5 font-mono text-[11px] wrap-anywhere text-muted-foreground">
               {kind.label.toLowerCase()} · {m.sourceKind} · {m.sourceId}
               {m.action === "write_document" && m.expectedCollection
                 ? ` · expects ${m.expectedCollection}`
                 : ""}
               {due && (
-                <span className={cn(overdue && "text-destructive")}> · {due}</span>
+                <span
+                  className={cn("whitespace-nowrap", overdue && "text-destructive")}
+                >
+                  {" "}
+                  · {due}
+                </span>
               )}
             </p>
             {m.payload && (
-              <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-surface px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-foreground">
-                {pretty(m.payload)}
-              </pre>
+              <ScrollArea className="mt-2 max-h-40 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
+                <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
+                  {pretty(m.payload)}
+                </pre>
+              </ScrollArea>
             )}
           </div>
-          {(m.sessionId || !acknowledge) && (
+          {openable && (
             <Button
               size="icon-sm"
               variant="ghost"
-              className="-mr-1 self-center"
+              className="col-start-3 row-start-1 -mr-1 self-center"
               aria-label={
                 acknowledge
                   ? "Open source"

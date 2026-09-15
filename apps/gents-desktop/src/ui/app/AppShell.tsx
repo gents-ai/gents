@@ -276,13 +276,23 @@ export function AppShell({
         </a>
         <Breadcrumb>
           <BreadcrumbList>
-            <BreadcrumbItem>
-              <BreadcrumbLink href={href({ name: "agents" })}>Agents</BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator />
-            <BreadcrumbItem>
-              <BreadcrumbPage>{agentName ?? "…"}</BreadcrumbPage>
-            </BreadcrumbItem>
+            {route.name === "agents" ? (
+              <BreadcrumbItem>
+                <BreadcrumbPage>Agents</BreadcrumbPage>
+              </BreadcrumbItem>
+            ) : (
+              <>
+                <BreadcrumbItem>
+                  <BreadcrumbLink href={href({ name: "agents" })}>
+                    Agents
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  <BreadcrumbPage>{agentName ?? "…"}</BreadcrumbPage>
+                </BreadcrumbItem>
+              </>
+            )}
           </BreadcrumbList>
         </Breadcrumb>
         <span className="ml-auto" />

@@ -93,7 +93,8 @@ function Editor({
           value={d.draft.systemPrompt}
           onChange={(v) => d.set("systemPrompt", v)}
           onCommit={d.commit}
-          rows={8}
+          rows={6}
+          stacked
         />
         <ChoiceRow
           id={id("tools")}

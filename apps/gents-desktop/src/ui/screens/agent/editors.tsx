@@ -1,6 +1,6 @@
 /* Shared configuration editor rows plus explicit Save/Cancel actions.
    Fields only update their local draft; persistence is user-controlled. */
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Input } from "@gents/ui/components/input";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -12,7 +12,7 @@ import {
 } from "@gents/ui/components/select";
 import { Switch } from "@gents/ui/components/switch";
 import { Textarea } from "@gents/ui/components/textarea";
-import { Fact, Row } from "./rows";
+import { Fact, Row, StackedRow } from "./rows";
 
 export type Choice = { value: string; label: string };
 
@@ -131,6 +131,7 @@ export function AreaRow({
   placeholder,
   rows = 3,
   mono,
+  stacked,
 }: Common & {
   value: string;
   onChange: (v: string) => void;
@@ -138,19 +139,47 @@ export function AreaRow({
   placeholder?: string;
   rows?: number;
   mono?: boolean;
+  stacked?: boolean;
 }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const element = ref.current;
+    if (!stacked || !element) return;
+    const observer = new ResizeObserver(() =>
+      setOverflowing(element.scrollHeight > element.clientHeight + 1),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [stacked, value, expanded]);
+  const clipped = stacked && !expanded;
+  const Wrap = stacked ? StackedRow : Row;
   return (
-    <Row label={label} description={description} htmlFor={id}>
+    <Wrap label={label} description={description} htmlFor={id}>
       <Textarea
+        ref={ref}
         id={id}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onCommit}
         placeholder={placeholder}
         rows={rows}
-        className={`w-96 max-md:w-full ${mono ? "font-mono text-xs" : ""}`}
+        style={clipped ? { maxHeight: `calc(${rows}lh + 1rem + 2px)` } : undefined}
+        className={`${stacked ? "w-full" : "w-96 max-md:w-full"} ${mono ? "font-mono text-xs" : ""}`}
       />
-    </Row>
+      {stacked && (overflowing || expanded) && (
+        <div className="-mt-1 flex justify-end">
+          <Button
+            variant="quiet"
+            size="sm"
+            onClick={() => setExpanded((open) => !open)}
+          >
+            {expanded ? "Show less" : "Show all"}
+          </Button>
+        </div>
+      )}
+    </Wrap>
   );
 }
 

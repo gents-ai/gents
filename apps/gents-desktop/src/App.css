@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "@gents/ui/styles.css";
 @source "./**/*.{ts,tsx}";
+@source inline("max-h-[calc(100dvh-2rem)]");
 
 html,
 body,
