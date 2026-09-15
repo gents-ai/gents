@@ -1,5 +1,34 @@
 import Proofs.ClientShell.Projection
 
+/-- Once the matching request is observed terminal, a snapshot retires the local
+awaiting latch and permits a follow-up under the ordinary admission premises.
+This is a projection guarantee, not a transport delivery deadline. -/
+theorem matching_terminal_snapshot_allows_follow_up
+    (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
+    (sid : SessionId) (req : RequestId) (obs : SessionObservation)
+    (turn : ClientTurnState)
+    (hsel : s.selection.session = some sid)
+    (hagent : s.selection.agent.isNone = false)
+    (hw : s.workflow = .awaiting sid req)
+    (hfind : store.find sid = some obs)
+    (hreq : obs.latestObservedRequest = some req)
+    (hturn : obs.latestTurn = some turn)
+    (hterminal : turn.isTerminal = true)
+    (hclient : ctx.clientAvailable = true)
+    (htext : ctx.composerNonEmpty = true)
+    (hbehavior : behaviorMismatch store sid ctx.requestedBehavior = false) :
+    projectSendDecision (step s (.snapshot store) store .healthy ctx) store ctx = .ready := by
+  simp [step, snapshotAdvanceWorkflow, hw, hfind, hreq, projectSendDecision,
+    hsel, hagent, hclient, htext, hbehavior, hturn, hterminal]
+
+/-- A terminal observation for another request cannot acknowledge this submit. -/
+theorem unrelated_terminal_does_not_retire_awaiting
+    (store : LocalStore) (sid : SessionId) (req : RequestId)
+    (obs : SessionObservation) (hfind : store.find sid = some obs)
+    (hother : obs.latestObservedRequest ≠ some req) :
+    snapshotAdvanceWorkflow (.awaiting sid req) store = .awaiting sid req := by
+  simp [snapshotAdvanceWorkflow, hfind, hother]
+
 theorem snapshot_preserves_selection
     (s : ShellState) (store store' : LocalStore) (h : TransportHealth)
     (ctx : SubmitContext) :

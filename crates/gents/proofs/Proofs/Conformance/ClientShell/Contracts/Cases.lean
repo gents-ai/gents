@@ -398,6 +398,21 @@ def clientShellCases : List ClientShellContractCase :=
       "terminal_follow_up_allowed"
       "terminal_follow_up_allowance"
       pre input storeNewCompleted .healthy ctxReady pre pre storeNewCompleted
-  ]
+  ] ++ ([ClientTurnState.completed, .failed, .superseded, .interrupted].flatMap fun turn =>
+    let terminalStore := storeWith [sessionObs sid1 (some reqNew) (some turn)]
+    let oldTerminalStore := storeWith [sessionObs sid1 (some reqOld) (some turn)]
+    let input := ShellInput.snapshot terminalStore
+    let post := step awaitingNew input emptyStore .healthy ctxReady
+    let staleInput := ShellInput.snapshot oldTerminalStore
+    let stalePost := step awaitingNew staleInput emptyStore .healthy ctxReady
+    [ clientShellCaseFromStep
+        ("matching_terminal_retires_" ++ clientTurnStateName turn)
+        "matching_terminal_snapshot_allows_follow_up"
+        awaitingNew input emptyStore .healthy ctxReady awaitingNew post terminalStore
+    , clientShellCaseFromStep
+        ("unrelated_terminal_keeps_awaiting_" ++ clientTurnStateName turn)
+        "unrelated_terminal_does_not_retire_awaiting"
+        awaitingNew staleInput emptyStore .healthy ctxReady awaitingNew stalePost oldTerminalStore
+    ])
 
 end Conformance.ClientShellContracts
