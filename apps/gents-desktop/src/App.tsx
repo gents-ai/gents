@@ -13,9 +13,13 @@ import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
 import type { DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
-import { isMobileTauriShell } from "./lib/shellPlatform";
-import { applyShellPlatform } from "./lib/shellPlatform";
+import {
+  applyShellPlatform,
+  isMobileTauriShell,
+  isWindowsTauriShell,
+} from "./lib/shellPlatform";
 import { AppShell } from "./ui/app/AppShell";
+import { WindowControls } from "./ui/app/WindowControls";
 import { BehaviorColorsContext } from "./ui/screens/behavior-colors";
 import { AgentScreen } from "./ui/screens/agent/AgentScreen";
 import { AgentsScreen } from "./ui/screens/AgentsScreen";
@@ -95,7 +99,9 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   const [setup, setSetup] = useState<"unknown" | "active" | "done">("unknown");
 
   const titlebar = (
-    <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
+    <div className="titlebar-drag-region" data-tauri-drag-region>
+      {isWindowsTauriShell() && <WindowControls />}
+    </div>
   );
 
   /* First-run owns its own starting page. Do not swap it for the global
@@ -161,7 +167,6 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
 
   return (
     <>
-      {titlebar}
       <TooltipProvider>
         <BehaviorColorsContext.Provider value={shell.behaviorColors}>
           <AppShell
