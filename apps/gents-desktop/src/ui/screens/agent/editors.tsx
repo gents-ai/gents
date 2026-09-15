@@ -306,10 +306,14 @@ export function TagsRow({
 }) {
   const [text, setText] = useState("");
   const add = (raw: string) => {
-    const next = raw
-      .split(/[\n,]/)
-      .map((tag) => tag.trim())
-      .filter((tag) => tag && !value.includes(tag));
+    const next = Array.from(
+      new Set(
+        raw
+          .split(/[\n,]/)
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      ),
+    ).filter((tag) => !value.includes(tag));
     if (next.length) onChange([...value, ...next]);
     setText("");
   };
