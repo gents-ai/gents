@@ -17,7 +17,10 @@ const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["mcp-service", "preview"|"edit", SERVICE_ID, PATCH_FLAGS]
   ["automation", "get", task|schedule|trigger|event-source, ID]
   ["automation", "preview"|"edit", KIND, ID, PATCH_FLAGS]
-  ["pack", "install", PACKAGE, [--var NAME=VALUE]]
+  ["pack", "list", ["--limit", N] ["--cursor", NAME]]
+  ["pack", "get", PACKAGE]
+  ["pack", "preview", "install"|"update", PACKAGE, [--inference-slot NAME=PROFILE_ID] [--var NAME=VALUE]]
+  ["pack", "install"|"update", PACKAGE, --digest SHA256, [--inference-slot NAME=PROFILE_ID] [--var NAME=VALUE]]
 
 Behavior flags: --id, --from, --display-name, --description, --system-prompt,
 --root, --preset, --profile, --default, and repeated --clear FIELD. Omitted edit
@@ -25,7 +28,7 @@ fields preserve their values. Clearable fields: display_name, description,
 system_prompt, root. PATCH_FLAGS are repeated --set FIELD=JSON and --clear FIELD.
 Use config help RESOURCE before a write."#;
 
-const DATA_MODEL: &str = "A principal owns exact-ID configuration documents. Requests, tasks, and sessions select a Behavior. Behavior -> Context controls the system prompt, selected skills, compaction, and one Tools document; Tools contains nested host, built-in, integration, MCP, and self-config settings. Behavior -> InferenceProfile -> Backend controls model execution; the profile selects model and reasoning effort and may reference sampling and execution settings. A Trigger selects a Task and a Schedule or EventSource. Reads never mutate. Writes are sparse patches: omission preserves, explicit --clear removes an optional value, and preview/apply validate the complete same-principal reference chain atomically. Credentials and OAuth consent remain operator-owned and are never returned by config.";
+const DATA_MODEL: &str = "A principal owns exact-ID configuration documents. Requests, tasks, and sessions select a Behavior. Behavior -> Context controls the system prompt, selected skills, compaction, and one Tools document; Tools contains nested host, built-in, integration, MCP, and self-config settings. Behavior -> InferenceProfile -> Backend controls model execution; the profile selects model and reasoning effort and may reference sampling and execution settings. A Trigger selects a Task and a Schedule or EventSource. A Pack declares configuration and inference roles; installation binds every role to an existing principal-owned profile, then publishes the pack's documents and graph revision without copying inference configuration. Reads never mutate. Writes are sparse patches: omission preserves, explicit --clear removes an optional value, and preview/apply validate the complete same-principal reference chain atomically. Credentials and OAuth consent remain operator-owned and are never returned by config.";
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -118,6 +121,7 @@ impl ConfigCommandTool {
                     .await?;
                 Ok(serde_json::to_string_pretty(&value)?)
             }
+            "get" => bail!("config get accepts no arguments; use config behavior get BEHAVIOR_ID for a targeted behavior read"),
             "behavior" => self.behavior(&argv[1..]).await,
             "tools" => self.bound_document("tools", &argv[1..]).await,
             "profile" => self.profile(&argv[1..]).await,
@@ -189,8 +193,11 @@ Tasks belong to this behavior. Triggers may reference only its tasks. Schedules 
             }
             Some("pack") if self.allow_pack_install => {
                 r#"pack commands:
-  install PACKAGE [--var NAME=VALUE]
-Only bundled packages are accepted. Variables must be declared uppercase environment-style names. Installation activates configuration but does not run a graph."#
+  list [--limit N] [--cursor NAME]
+  get PACKAGE
+  preview install|update PACKAGE [--inference-slot NAME=PROFILE_ID] [--var NAME=VALUE]
+  install|update PACKAGE --digest SHA256 [--inference-slot NAME=PROFILE_ID] [--var NAME=VALUE]
+Only bundled graph packages are installable. Preview is read-only and returns the exact digest required by install/update. Repeat --inference-slot for every declared slot; values are existing principal-owned profile IDs. Non-inference variables remain explicit --var NAME=VALUE. Registry graph install and pack removal are unavailable until their canonical adapters exist. Installation activates configuration but does not run a graph."#
             }
             Some(other) => bail!(
                 "unknown config help resource {other:?}; enabled resources: {}",
@@ -236,7 +243,10 @@ Only bundled packages are accepted. Variables must be declared uppercase environ
             }
             "get" => {
                 let flags = ParsedArgs::parse(&argv[1..])?;
-                flags.reject_mutation_flags()?;
+                anyhow::ensure!(
+                    flags.switches.is_empty() && flags.options.is_empty(),
+                    "behavior get accepts only an optional behavior_id; run config help behavior"
+                );
                 let id = flags
                     .positionals
                     .first()
@@ -244,7 +254,7 @@ Only bundled packages are accepted. Variables must be declared uppercase environ
                     .unwrap_or(self.core.behavior_id());
                 anyhow::ensure!(
                     flags.positionals.len() <= 1,
-                    "behavior get accepts one behavior_id"
+                    "behavior get accepts at most one behavior_id"
                 );
                 self.ensure_behavior_catalog("get", Some(id))?;
                 persona_inspect(&self.node, &self.agent_did, id, &self.process_ceiling).await
@@ -255,6 +265,7 @@ Only bundled packages are accepted. Variables must be declared uppercase environ
                     .context("behavior preview requires create|edit|clone|disable")?;
                 let params = behavior_params("preview", Some(operation.clone()), &argv[2..])?;
                 self.ensure_behavior_operation(operation, params.behavior_id.as_deref())?;
+                self.ensure_default_selection(&params)?;
                 persona_preview(&self.node, &self.agent_did, &params, &self.process_ceiling).await
             }
             "create" | "edit" | "clone" | "disable" => {
@@ -263,6 +274,7 @@ Only bundled packages are accepted. Variables must be declared uppercase environ
                 )?;
                 let params = behavior_params(verb, None, &argv[1..])?;
                 self.ensure_behavior_operation(verb, params.behavior_id.as_deref())?;
+                self.ensure_default_selection(&params)?;
                 persona_mutate(
                     &self.node,
                     &self.agent_did,
@@ -533,43 +545,46 @@ Only bundled packages are accepted. Variables must be declared uppercase environ
 
     async fn pack(&self, argv: &[String]) -> Result<String> {
         anyhow::ensure!(self.allow_pack_install, "pack installation is not granted");
-        anyhow::ensure!(
-            argv.first().map(String::as_str) == Some("install"),
-            "pack accepts only: install PACKAGE [--var NAME=VALUE]"
-        );
-        let package = argv
-            .get(1)
-            .context("pack install requires PACKAGE")?
-            .clone();
-        let parsed = ParsedArgs::parse(&argv[2..])?;
-        anyhow::ensure!(
-            parsed.positionals.is_empty() && parsed.switches.is_empty(),
-            "unexpected pack install argument; run config help pack"
-        );
-        for name in parsed.options.keys() {
-            anyhow::ensure!(
-                name == "var",
-                "unknown pack install option --{name}; accepted: --var NAME=VALUE"
-            );
-        }
-        let mut variables = BTreeMap::new();
-        for binding in parsed.options.get("var").into_iter().flatten() {
-            let (name, value) = binding
-                .split_once('=')
-                .context("--var must be NAME=VALUE")?;
-            anyhow::ensure!(
-                variables
-                    .insert(name.to_owned(), value.to_owned())
-                    .is_none(),
-                "duplicate pack variable {name:?}"
-            );
-        }
-        PackInstaller {
+        let installer = PackInstaller {
             core: self.core.clone(),
             node: self.node.clone(),
+        };
+        let verb = argv
+            .first()
+            .map(String::as_str)
+            .context("pack command is required; run config help pack")?;
+        match verb {
+            "list" => {
+                let parsed = ParsedArgs::parse(&argv[1..])?;
+                parsed.reject_mutation_flags()?;
+                installer
+                    .list(parse_limit(&parsed)?, parsed.one("cursor")?)
+                    .await
+            }
+            "get" => {
+                anyhow::ensure!(argv.len() == 2, "pack get requires exactly one PACKAGE");
+                installer.get(&argv[1]).await
+            }
+            "preview" => {
+                let operation = argv
+                    .get(1)
+                    .context("pack preview requires install or update")?;
+                anyhow::ensure!(
+                    matches!(operation.as_str(), "install" | "update"),
+                    "pack preview supports install and update; remove is unavailable because canonical cleanup ownership is not implemented"
+                );
+                installer
+                    .preview(operation, parse_pack_change(&argv[2..])?)
+                    .await
+            }
+            "install" | "update" => {
+                installer.apply(verb, parse_pack_change(&argv[1..])?).await
+            }
+            "remove" => bail!(
+                "pack remove is unavailable: provenance tags are not deletion authority and no canonical installation cleanup owner exists"
+            ),
+            other => bail!("unknown pack command {other:?}; run config help pack"),
         }
-        .install(PackInstallParams { package, variables })
-        .await
     }
 
     fn ensure_resource(&self, resource: &str) -> Result<()> {
@@ -600,6 +615,14 @@ Only bundled packages are accepted. Variables must be declared uppercase environ
         anyhow::ensure!(
             self.categories.contains("persona") || current_edit,
             "behavior {operation} is not granted; only editing the current behavior is allowed without the behavior catalog grant"
+        );
+        Ok(())
+    }
+
+    fn ensure_default_selection(&self, params: &ConfigurePersonaParams) -> Result<()> {
+        anyhow::ensure!(
+            !params.make_default || self.categories.contains("persona"),
+            "--default changes the principal's behavior selection and requires the behavior catalog grant"
         );
         Ok(())
     }
@@ -810,6 +833,47 @@ fn parse_limit(parsed: &ParsedArgs) -> Result<usize> {
         .map(|limit| limit.unwrap_or(20))
 }
 
+fn parse_pack_change(argv: &[String]) -> Result<PackInstallParams> {
+    let package = argv
+        .first()
+        .context("pack operation requires PACKAGE")?
+        .clone();
+    let parsed = ParsedArgs::parse(&argv[1..])?;
+    anyhow::ensure!(
+        parsed.positionals.is_empty() && parsed.switches.is_empty(),
+        "unexpected pack argument; run config help pack"
+    );
+    for name in parsed.options.keys() {
+        anyhow::ensure!(
+            matches!(name.as_str(), "var" | "inference-slot" | "digest"),
+            "unknown pack option --{name}; accepted: --inference-slot, --var, --digest"
+        );
+    }
+    let pairs = |name: &str| -> Result<BTreeMap<String, String>> {
+        let mut values = BTreeMap::new();
+        for binding in parsed.options.get(name).into_iter().flatten() {
+            let (key, value) = binding
+                .split_once('=')
+                .with_context(|| format!("--{name} must be NAME=VALUE"))?;
+            anyhow::ensure!(
+                !key.is_empty() && !value.is_empty(),
+                "--{name} requires non-empty NAME and VALUE"
+            );
+            anyhow::ensure!(
+                values.insert(key.to_owned(), value.to_owned()).is_none(),
+                "duplicate --{name} name {key:?}"
+            );
+        }
+        Ok(values)
+    };
+    Ok(PackInstallParams {
+        package,
+        variables: pairs("var")?,
+        inference_slots: pairs("inference-slot")?,
+        expected_digest: parsed.one("digest")?.map(ToOwned::to_owned),
+    })
+}
+
 fn parse_patch(argv: &[String], target: SelfConfigTarget) -> Result<SelfConfigPatch> {
     let parsed = ParsedArgs::parse(argv)?;
     anyhow::ensure!(
@@ -933,7 +997,7 @@ impl ParsedArgs {
     }
 }
 
-fn behavior_params(
+pub(super) fn behavior_params(
     action: &str,
     operation: Option<String>,
     argv: &[String],

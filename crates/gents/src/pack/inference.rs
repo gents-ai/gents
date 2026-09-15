@@ -32,10 +32,11 @@ pub struct PackInferenceBindingPreview {
     pub automatic: bool,
 }
 
-/// Resolve every declared slot against the principal's retained inference
-/// documents. This is read-only and is the preview used by CLI/configurator
-/// adapters before they authorize the canonical installer transaction.
-pub async fn preview_pack_inference_bindings(
+/// Inspect declared slots and the principal's retained inference documents.
+/// Requested bindings are validated when present, while missing slots remain
+/// visible so a model can discover the exact choices before constructing an
+/// install preview.
+pub async fn inspect_pack_inference_bindings(
     access: &ConfigAccess,
     manifest: &PackManifest,
     agent_did: &str,
@@ -122,46 +123,7 @@ pub async fn preview_pack_inference_bindings(
             manifest.name
         );
     }
-    if slots.is_empty() {
-        anyhow::ensure!(requested.is_empty(), "pack has no inference slots");
-        return Ok(PackInferenceBindingPreview {
-            slots,
-            profiles: options,
-            bindings: BTreeMap::new(),
-            automatic: false,
-        });
-    }
-
-    let usable = options
-        .iter()
-        .filter(|profile| profile.usable)
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        !usable.is_empty(),
-        "pack {} requires configured inference, but principal {agent_did} has no usable profile; finish Setup or use the existing inference configuration tools first",
-        manifest.name
-    );
-    let (bindings, automatic) = if requested.is_empty() && slots.len() == 1 && usable.len() == 1 {
-        (
-            BTreeMap::from([(slots[0].name.clone(), usable[0].profile_id.clone())]),
-            true,
-        )
-    } else {
-        let missing = slots
-            .iter()
-            .filter(|slot| !requested.contains_key(&slot.name))
-            .map(|slot| slot.name.clone())
-            .collect::<Vec<_>>();
-        anyhow::ensure!(
-            missing.is_empty(),
-            "pack {} requires explicit inference slot bindings for: {}; inspect the preview and bind each slot to an existing profile",
-            manifest.name,
-            missing.join(", ")
-        );
-        (requested.clone(), false)
-    };
-
-    for (slot, profile_id) in &bindings {
+    for (slot, profile_id) in requested {
         let profile = options
             .iter()
             .find(|profile| profile.profile_id == *profile_id)
@@ -183,9 +145,55 @@ pub async fn preview_pack_inference_bindings(
     Ok(PackInferenceBindingPreview {
         slots,
         profiles: options,
-        bindings,
-        automatic,
+        bindings: requested.clone(),
+        automatic: false,
     })
+}
+
+/// Resolve every declared slot against the principal's retained inference
+/// documents. This is read-only and is the strict preview used immediately
+/// before an authorized canonical installer transaction.
+pub async fn preview_pack_inference_bindings(
+    access: &ConfigAccess,
+    manifest: &PackManifest,
+    agent_did: &str,
+    requested: &PackInferenceBindings,
+) -> Result<PackInferenceBindingPreview> {
+    let mut preview =
+        inspect_pack_inference_bindings(access, manifest, agent_did, requested).await?;
+    if preview.slots.is_empty() {
+        return Ok(preview);
+    }
+    let usable = preview
+        .profiles
+        .iter()
+        .filter(|profile| profile.usable)
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        !usable.is_empty(),
+        "pack {} requires configured inference, but principal {agent_did} has no usable profile; finish Setup or use the existing inference configuration tools first",
+        manifest.name
+    );
+    if requested.is_empty() && preview.slots.len() == 1 && usable.len() == 1 {
+        preview
+            .bindings
+            .insert(preview.slots[0].name.clone(), usable[0].profile_id.clone());
+        preview.automatic = true;
+        return Ok(preview);
+    }
+    let missing = preview
+        .slots
+        .iter()
+        .filter(|slot| !requested.contains_key(&slot.name))
+        .map(|slot| slot.name.clone())
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        missing.is_empty(),
+        "pack {} requires explicit inference slot bindings for: {}; inspect the preview and bind each slot to an existing profile",
+        manifest.name,
+        missing.join(", ")
+    );
+    Ok(preview)
 }
 
 /// Bind authored slot markers and stamp provenance on every pack-authored

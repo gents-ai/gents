@@ -5,9 +5,7 @@ mod run_adapter;
 #[cfg(test)]
 pub(crate) use catalog::load_package;
 pub(crate) use catalog::{digest_assets, load_resolved_graph_package_with_environment};
-pub(crate) use install::{
-    bundled_graph_package_install_bindings_for_owner, install_loaded_graph_package,
-};
+pub(crate) use install::{install_loaded_graph_package, prepare_loaded_graph_package_install};
 
 pub use catalog::{
     graph_package_catalog, load_bundled_graph_package, load_resolved_graph_package,

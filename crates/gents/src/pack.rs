@@ -9,8 +9,8 @@ pub mod interpolate;
 mod loader;
 mod provenance;
 pub use inference::{
-    bind_pack_install_config, install_pack_documents, preview_pack_inference_bindings,
-    PackInferenceBindingPreview, PackInferenceProfileOption,
+    bind_pack_install_config, inspect_pack_inference_bindings, install_pack_documents,
+    preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
 pub use loader::{decode_pack_config, load_pack_config};
 pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};

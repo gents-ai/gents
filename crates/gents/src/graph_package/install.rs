@@ -126,27 +126,6 @@ pub async fn default_bundled_graph_package_install_bindings(
     })
 }
 
-/// Bind a known bundled graph distribution to its current owner without
-/// consulting ambient interpolation inputs. Runtime tools supply those inputs
-/// through a request-scoped resolver before installation.
-pub(crate) async fn bundled_graph_package_install_bindings_for_owner(
-    access: &ConfigAccess,
-    package_name: &str,
-    owner_did: &str,
-) -> Result<GraphPackageInstallBindings> {
-    let distribution = crate::pack::resolve_pack(package_name)?;
-    anyhow::ensure!(
-        distribution.manifest.metadata.kind == crate::pack::PackKind::Graph,
-        "pack is not a graph"
-    );
-    let options = GraphPackageInstallBindings {
-        agent_did: owner_did.to_owned(),
-        inference_slots: BTreeMap::new(),
-    };
-    validate_owner(access, owner_did).await?;
-    Ok(options)
-}
-
 /// Select installed package state without re-reading installation environment.
 /// The runtime plan reader retains principal, revision and digest verification.
 pub async fn load_installed_package_plan(
@@ -282,6 +261,17 @@ pub async fn prepare_bundled_graph_package_install_for_graph(
 ) -> Result<PreparedGraphPackageInstall> {
     let package = load_bundled_graph_package(package_name, &options.scope())?;
     prepare_package(access, &package, options, Some(graph_id)).await
+}
+
+/// Read-only canonical plan owner for an already resolved bundled graph.
+/// Callers pin the distribution digest before passing the package here; this
+/// function revalidates inference references and the complete desired state.
+pub(crate) async fn prepare_loaded_graph_package_install(
+    access: &ConfigAccess,
+    package: &BundledGraphPackage,
+    options: &GraphPackageInstallBindings,
+) -> Result<PreparedGraphPackageInstall> {
+    prepare_package(access, package, options, None).await
 }
 
 async fn prepare_package(

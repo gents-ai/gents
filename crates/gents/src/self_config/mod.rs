@@ -796,6 +796,11 @@ async fn persona_mutate(
     args: &ConfigurePersonaParams,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
+    anyhow::ensure!(
+        identity.did() == agent_did,
+        "behavior writes require the exact local principal signer; signer {:?} cannot configure principal {agent_did:?}",
+        identity.did()
+    );
     let resolved_behavior_id = args.behavior_id.as_deref().map(str::to_owned);
     let resolved_profile_id = args.profile_id.owned_value();
 
@@ -954,6 +959,58 @@ async fn persona_mutate(
                 "applied behavior request reported success without effective system instructions"
             );
         }
+        let verify_string = |pointer: &str, update: &StringUpdate, field: &str| -> Result<()> {
+            if update.is_present() {
+                anyhow::ensure!(
+                    effective_config.pointer(pointer).and_then(Value::as_str) == update.value(),
+                    "applied behavior request reported success but {field} does not match the requested value"
+                );
+            }
+            Ok(())
+        };
+        verify_string("/behavior/display_name", &args.display_name, "display_name")?;
+        verify_string(
+            "/behavior/description",
+            &args.description,
+            "behavior description",
+        )?;
+        verify_string(
+            "/context/description",
+            &args.description,
+            "context description",
+        )?;
+        verify_string(
+            "/context/system_prompt",
+            &args.system_prompt,
+            "system_prompt",
+        )?;
+        verify_string("/documents/Tools/host/root", &args.root, "root")?;
+        verify_string(
+            "/behavior/inference_profile_id",
+            &args.profile_id,
+            "profile_id",
+        )?;
+        if let Some(preset) = args.preset.value() {
+            let fields = crate::agent::persona_presets::preset_fields(preset)
+                .context("applied behavior request used an unknown preset")?;
+            anyhow::ensure!(
+                effective_config
+                    .pointer("/documents/Tools/host/files/mode")
+                    .and_then(Value::as_str)
+                    == Some(fields.file_tools_mode.as_str())
+                    && effective_config
+                        .pointer("/documents/Tools/host/bash/mode")
+                        .and_then(Value::as_str)
+                        == Some(fields.bash_mode.as_str()),
+                "applied behavior request reported success but effective Tools do not match preset {preset:?}"
+            );
+        }
+        if args.make_default {
+            anyhow::ensure!(
+                effective["is_default"].as_bool() == Some(true),
+                "applied behavior request reported success but did not select the behavior as principal default"
+            );
+        }
         output["materialized_ids"] = json!({
             "behavior_id": applied_behavior_id,
             "context_id": context_id,
@@ -986,20 +1043,16 @@ struct PackInstaller {
     node: Arc<EmbeddedNode>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 struct PackInstallParams {
-    /// Bundled graph pack name, such as `code_review`.
     pub package: String,
-    /// Optional interpolation overrides declared by the selected pack. Setup's
-    /// current inference model and endpoint supply `*_MODEL`/`*_ENDPOINT` by
-    /// default, without changing process-global environment variables.
-    #[serde(default)]
     pub variables: BTreeMap<String, String>,
+    pub inference_slots: crate::pack::PackInferenceBindings,
+    pub expected_digest: Option<String>,
 }
 
 impl PackInstaller {
-    async fn install(&self, args: PackInstallParams) -> anyhow::Result<String> {
+    fn validate(&self, args: &PackInstallParams) -> anyhow::Result<()> {
         let package_name = args.package.trim();
         anyhow::ensure!(!package_name.is_empty(), "pack name must not be blank");
         anyhow::ensure!(
@@ -1020,54 +1073,293 @@ impl PackInstaller {
                     }),
                 "invalid or protected pack variable name {name:?}"
             );
+            anyhow::ensure!(
+                !name.ends_with("_MODEL") && !name.ends_with("_ENDPOINT"),
+                "inference variable {name:?} is unsupported; bind declared roles with --inference-slot NAME=PROFILE_ID"
+            );
             anyhow::ensure!(value.len() <= 4096, "pack variable {name:?} is too large");
         }
+        anyhow::ensure!(
+            args.inference_slots.len() <= 32,
+            "pack inference slot bindings exceed the 32-entry limit"
+        );
+        Ok(())
+    }
 
-        let effective = self
-            .core
-            .read_effective_config(&BTreeSet::new(), false, false)
-            .await?;
-        let model = effective
-            .pointer("/inference_profile/model_name")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned);
-        let endpoint = effective
-            .pointer("/documents/InferenceBackend/endpoint")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned);
-        let variables = args.variables;
-        let environment = |name: &str| {
-            variables
-                .get(name)
-                .cloned()
-                .or_else(|| name.ends_with("_MODEL").then(|| model.clone()).flatten())
-                .or_else(|| {
-                    name.ends_with("_ENDPOINT")
-                        .then(|| endpoint.clone())
-                        .flatten()
-                })
-                .or_else(|| std::env::var(name).ok())
-        };
+    fn resolve(&self, args: &PackInstallParams) -> anyhow::Result<crate::pack::ResolvedPack> {
+        self.validate(args)?;
+        let distribution = crate::pack::resolve_pack(args.package.trim())?;
+        anyhow::ensure!(
+            distribution.manifest.metadata.kind == crate::pack::PackKind::Graph,
+            "pack {:?} is {:?}; the model-facing installer currently supports bundled graph packs only",
+            distribution.manifest.name,
+            distribution.manifest.metadata.kind
+        );
+        Ok(distribution)
+    }
 
+    async fn installed(
+        &self,
+        package: &str,
+    ) -> anyhow::Result<Option<crate::graph_pipeline::GraphPlan>> {
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
-        let bindings = crate::graph_package::bundled_graph_package_install_bindings_for_owner(
+        crate::graph_package::load_installed_package_plan(&access, package, self.core.agent_did())
+            .await
+    }
+
+    async fn list(&self, limit: usize, cursor: Option<&str>) -> anyhow::Result<String> {
+        anyhow::ensure!(
+            (1..=50).contains(&limit),
+            "--limit must be between 1 and 50"
+        );
+        let mut catalog = crate::pack::pack_catalog()?;
+        catalog.sort_by(|left, right| left.name.cmp(&right.name));
+        let total = catalog.len();
+        let mut selected = catalog
+            .into_iter()
+            .filter(|manifest| cursor.is_none_or(|cursor| manifest.name.as_str() > cursor))
+            .take(limit + 1)
+            .collect::<Vec<_>>();
+        let truncated = selected.len() > limit;
+        selected.truncate(limit);
+        let next_cursor = truncated
+            .then(|| selected.last().map(|manifest| manifest.name.clone()))
+            .flatten();
+        let mut items = Vec::with_capacity(selected.len());
+        for manifest in selected {
+            let distribution = crate::pack::resolve_pack(&manifest.name)?;
+            let installed = if manifest.metadata.kind == crate::pack::PackKind::Graph {
+                self.installed(&manifest.name).await?
+            } else {
+                None
+            };
+            items.push(json!({
+                "name": manifest.name,
+                "version": manifest.version,
+                "description": manifest.description,
+                "kind": manifest.metadata.kind,
+                "artifact_digest": distribution.digest,
+                "inference_slots": manifest.metadata.inference_slots,
+                "installable": manifest.metadata.kind == crate::pack::PackKind::Graph,
+                "installed": installed.as_ref().map(|plan| json!({
+                    "graph_id": plan.graph_id,
+                    "revision_digest": plan.digest,
+                })),
+            }));
+        }
+        Ok(serde_json::to_string_pretty(&json!({
+            "source": "bundled",
+            "page": {
+                "limit": limit,
+                "total": total,
+                "returned": items.len(),
+                "truncated": truncated,
+                "next_cursor": next_cursor,
+            },
+            "items": items,
+            "registry_graph_install": "unsupported",
+        }))?)
+    }
+
+    async fn get(&self, package: &str) -> anyhow::Result<String> {
+        let args = PackInstallParams {
+            package: package.to_owned(),
+            variables: BTreeMap::new(),
+            inference_slots: BTreeMap::new(),
+            expected_digest: None,
+        };
+        self.validate(&args)?;
+        let distribution = crate::pack::resolve_pack(package)?;
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
-            package_name,
+            &distribution.manifest,
             self.core.agent_did(),
+            &BTreeMap::new(),
         )
         .await?;
-        let distribution = crate::pack::resolve_pack(package_name)?;
-        let scope = crate::pack::PackInstallOptions {
-            agent_did: bindings.agent_did.clone(),
+        let installable = distribution.manifest.metadata.kind == crate::pack::PackKind::Graph;
+        let installed = if installable {
+            self.installed(package).await?
+        } else {
+            None
         };
+        Ok(serde_json::to_string_pretty(&json!({
+            "source": "bundled",
+            "manifest": distribution.manifest,
+            "artifact_digest": distribution.digest,
+            "inference": inference,
+            "installed": installed,
+            "installable": installable,
+            "supported_operations": installable.then_some(["preview install", "install", "preview update", "update"]),
+            "unsupported": {
+                "registry_graph_install": "the shared registry-to-graph adapter is not implemented",
+                "remove": "canonical installation cleanup ownership is not implemented; provenance tags are not deletion authority",
+            },
+        }))?)
+    }
+
+    async fn preview(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
+        let distribution = self.resolve(&args)?;
+        if let Some(expected) = args.expected_digest.as_deref() {
+            anyhow::ensure!(
+                expected == distribution.digest,
+                "pack digest changed: requested {expected:?}, resolved {:?}; preview again",
+                distribution.digest
+            );
+        }
+        let installed = self.installed(&distribution.manifest.name).await?;
+        anyhow::ensure!(
+            operation != "update" || installed.is_some(),
+            "pack {:?} is not installed; preview install instead",
+            distribution.manifest.name
+        );
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let inspected = crate::pack::inspect_pack_inference_bindings(
+            &access,
+            &distribution.manifest,
+            self.core.agent_did(),
+            &args.inference_slots,
+        )
+        .await?;
+        let missing_slots = inspected
+            .slots
+            .iter()
+            .filter(|slot| !args.inference_slots.contains_key(&slot.name))
+            .map(|slot| slot.name.clone())
+            .collect::<Vec<_>>();
+        if !missing_slots.is_empty() {
+            return Ok(serde_json::to_string_pretty(&json!({
+                "committed": false,
+                "ready": false,
+                "operation": operation,
+                "package": distribution.manifest.name,
+                "version": distribution.manifest.version,
+                "artifact_digest": distribution.digest,
+                "inference": inspected,
+                "missing_inference_slots": missing_slots,
+                "installed": installed,
+                "next": "repeat --inference-slot NAME=PROFILE_ID for every missing slot, using exact eligible profile IDs",
+            }))?);
+        }
+        let inference = crate::pack::preview_pack_inference_bindings(
+            &access,
+            &distribution.manifest,
+            self.core.agent_did(),
+            &args.inference_slots,
+        )
+        .await?;
+        let scope = crate::pack::PackInstallOptions {
+            agent_did: self.core.agent_did().to_owned(),
+        };
+        let environment = |name: &str| args.variables.get(name).cloned();
         let package = crate::graph_package::load_resolved_graph_package_with_environment(
             &distribution,
             &scope,
             &environment,
         )?;
+        let bindings = crate::graph_package::GraphPackageInstallBindings {
+            agent_did: self.core.agent_did().to_owned(),
+            inference_slots: inference.bindings.clone(),
+        };
+        let prepared = crate::graph_package::prepare_loaded_graph_package_install(
+            &access, &package, &bindings,
+        )
+        .await?;
+        let materialized_ids = prepared
+            .desired_state
+            .documents()
+            .iter()
+            .map(|document| {
+                json!({
+                    "collection": document.collection.graphql_type(),
+                    "id": document.add[document.collection.unique_field()],
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::to_string_pretty(&json!({
+            "committed": false,
+            "ready": true,
+            "operation": operation,
+            "package": package.manifest.name,
+            "version": package.manifest.version,
+            "artifact_digest": distribution.digest,
+            "inference": inference,
+            "external_dependencies": package.manifest.external_dependencies,
+            "plugins": package.manifest.metadata.plugins,
+            "plan": {
+                "graph_id": prepared.plan.graph_id,
+                "revision_digest": prepared.plan.digest,
+                "predecessor_revision_digest": prepared.plan.package.as_ref().and_then(|package| package.predecessor_revision_digest.as_ref()),
+                "materialized_ids": materialized_ids,
+                "schema_digests": prepared.schema_digests,
+            },
+            "installed": installed,
+            "apply_with": {
+                "argv_prefix": ["pack", operation, package.manifest.name, "--digest", distribution.digest],
+                "repeat_inference_slots": inference.bindings,
+                "repeat_variables": args.variables,
+            },
+        }))?)
+    }
+
+    async fn apply(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
+        let distribution = self.resolve(&args)?;
+        let expected = args.expected_digest.as_deref().context(
+            "pack install/update requires --digest from config pack preview; preview pins the exact artifact being authorized",
+        )?;
+        anyhow::ensure!(
+            expected == distribution.digest,
+            "pack digest changed: preview authorized {expected:?}, resolved {:?}; preview again",
+            distribution.digest
+        );
+        let previous = self.installed(&distribution.manifest.name).await?;
+        anyhow::ensure!(
+            operation != "update" || previous.is_some(),
+            "pack {:?} is not installed; use pack install",
+            distribution.manifest.name
+        );
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let missing_slots = distribution
+            .manifest
+            .metadata
+            .inference_slots
+            .iter()
+            .filter(|slot| !args.inference_slots.contains_key(&slot.name))
+            .map(|slot| slot.name.as_str())
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            missing_slots.is_empty(),
+            "pack {:?} requires explicit --inference-slot bindings for: {}; preview the pack and bind every declared role",
+            distribution.manifest.name,
+            missing_slots.join(", ")
+        );
+        let inference = crate::pack::preview_pack_inference_bindings(
+            &access,
+            &distribution.manifest,
+            self.core.agent_did(),
+            &args.inference_slots,
+        )
+        .await?;
+        let scope = crate::pack::PackInstallOptions {
+            agent_did: self.core.agent_did().to_owned(),
+        };
+        let environment = |name: &str| args.variables.get(name).cloned();
+        let package = crate::graph_package::load_resolved_graph_package_with_environment(
+            &distribution,
+            &scope,
+            &environment,
+        )?;
+        anyhow::ensure!(
+            package.package_digest == expected,
+            "resolved package content does not match the previewed artifact digest"
+        );
+        let bindings = crate::graph_package::GraphPackageInstallBindings {
+            agent_did: self.core.agent_did().to_owned(),
+            inference_slots: inference.bindings.clone(),
+        };
         let external_dependencies = package.manifest.external_dependencies.clone();
+        let plugins = package.manifest.metadata.plugins.clone();
         let receipt = crate::graph_package::install_loaded_graph_package(
             &access,
             self.core.agent_did(),
@@ -1076,25 +1368,35 @@ impl PackInstaller {
             None,
         )
         .await?;
-        let previous = crate::graph_pipeline::load_active_graph_plan_with_access(
-            &access,
-            self.core.agent_did(),
-            &receipt.graph_id,
-        )
-        .await?
-        .map(|plan| plan.digest);
         let activation = crate::graph_pipeline::activate_graph_revision_with_access(
             &access,
             self.core.agent_did(),
             &receipt.graph_id,
             &receipt.revision_digest,
-            previous.as_deref(),
+            previous.as_ref().map(|plan| plan.digest.as_str()),
         )
         .await?;
+        let effective = self
+            .installed(&receipt.package_name)
+            .await?
+            .context("installed package is not discoverable after activation")?;
+        anyhow::ensure!(
+            effective.digest == receipt.revision_digest
+                && effective
+                    .package
+                    .as_ref()
+                    .is_some_and(|package| package.package_digest == expected),
+            "installed package failed effective digest verification"
+        );
         Ok(serde_json::to_string_pretty(&json!({
+            "operation": operation,
+            "artifact_digest": expected,
+            "inference": inference,
             "install": receipt,
             "activation": activation,
             "external_dependencies": external_dependencies,
+            "plugins": plugins,
+            "effective": effective,
             "effect": "The bundled graph is installed and active. Installation did not start a graph run.",
         }))?)
     }
