@@ -49,6 +49,19 @@ describe("settings polish", () => {
     expect(onChange).toHaveBeenLastCalledWith(["new-tag"]);
   });
 
+  it("deduplicates tags within one pasted value", async () => {
+    const onChange = vi.fn();
+    render(<TagsRow id="behavior-tags" label="Tags" value={[]} onChange={onChange} />);
+    const user = userEvent.setup();
+    const input = screen.getByRole("textbox", { name: "Tags" });
+
+    await user.click(input);
+    await user.paste("coding,coding");
+
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledWith(["coding"]);
+  });
+
   it("explains behavior readiness and links to the canonical settings route", async () => {
     render(
       <BehaviorHoverCard deployment={deployment} behaviorId="default">
