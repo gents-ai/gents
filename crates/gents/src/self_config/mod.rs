@@ -117,8 +117,10 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
 /// protected Setup configurator. Keep that policy inside the same transaction
 /// as validation/publication so a stale preflight cannot authorize a write.
 fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
+    let target = request.target;
     let validate = request.validate;
     request.validate = Box::new(move |txn, anchor, stored, merged| {
+        let validation = validate(txn, anchor, stored, merged);
         let protected = anchor
             .doc
             .get("tags")
@@ -133,7 +135,69 @@ fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<
                 bail!("target behavior is the protected Setup configurator; select a working behavior")
             });
         }
-        validate(txn, anchor, stored, merged)
+        Box::pin(async move {
+            // Context and Tools are reusable documents. A targeted edit must
+            // not mutate another behavior (especially Setup) through a shared
+            // reference. Keep the observation and rejection in the same
+            // transaction as the canonical patch publication, matching the
+            // Lean siblingToolsAllowed contract.
+            let owner = anchor
+                .doc
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .context("selected behavior is missing agent_did")?;
+            let behavior_id = anchor
+                .doc
+                .get("behavior_id")
+                .and_then(Value::as_str)
+                .context("selected behavior is missing behavior_id")?;
+            let context_id = anchor
+                .context
+                .get("context_id")
+                .and_then(Value::as_str)
+                .context("selected behavior context is missing context_id")?;
+            let require_only_referrer = |response: &Value,
+                                         collection: &str,
+                                         unique: &str,
+                                         expected: &str| {
+                let rows = response
+                    .get("data")
+                    .and_then(|data| data.get(collection))
+                    .and_then(Value::as_array)
+                    .with_context(|| format!("{collection} reference query missing rows"))?;
+                anyhow::ensure!(
+                        rows.len() == 1
+                            && rows[0].get(unique).and_then(Value::as_str) == Some(expected),
+                        "targeted configuration requires an unshared Context and Tools; clone the working behavior before editing shared configuration"
+                    );
+                Ok::<_, anyhow::Error>(())
+            };
+            if target == SelfConfigTarget::AgentContext || target == SelfConfigTarget::Tools {
+                let escaped_owner = escape_graphql_string(owner);
+                let escaped_context = escape_graphql_string(context_id);
+                let response = txn
+                    .execute(&format!(
+                        r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{escaped_owner}"}}, context_id: {{_eq: "{escaped_context}"}}}}) {{behavior_id}} }}"#
+                    ))
+                    .await?;
+                require_only_referrer(&response, "AgentBehavior", "behavior_id", behavior_id)?;
+            }
+            if target == SelfConfigTarget::Tools {
+                let tools_id = stored
+                    .get("tools_id")
+                    .and_then(Value::as_str)
+                    .context("selected Tools is missing tools_id")?;
+                let escaped_owner = escape_graphql_string(owner);
+                let escaped_tools = escape_graphql_string(tools_id);
+                let response = txn
+                    .execute(&format!(
+                        r#"{{ AgentContext(filter: {{agent_did: {{_eq: "{escaped_owner}"}}, tools_id: {{_eq: "{escaped_tools}"}}}}) {{context_id}} }}"#
+                    ))
+                    .await?;
+                require_only_referrer(&response, "AgentContext", "context_id", context_id)?;
+            }
+            validation.await
+        })
     });
     request
 }
@@ -171,6 +235,23 @@ fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
         "inference_profile_id",
         patch,
     )
+}
+fn profile_create_request(
+    owner: String,
+    profile_id: String,
+    patch: SelfConfigPatch,
+) -> ApplyRequest<'static> {
+    let mut request = ApplyRequest::new(SelfConfigTarget::InferenceProfile, patch);
+    request.allow_create = true;
+    request.require_create = true;
+    request.guard_selected_chain = false;
+    request.resolve_unique = Box::new(move |_| Ok(profile_id.clone()));
+    request.on_create = Box::new(move |id, merged| {
+        merged.insert("profile_id".into(), json!(id));
+        merged.insert("agent_did".into(), json!(owner));
+        Ok(())
+    });
+    request
 }
 fn profile_target_request(
     target: Option<&str>,
@@ -344,7 +425,7 @@ fn persona_edit_fields(args: &ConfigurePersonaParams) -> Vec<String> {
     .collect()
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigurePersonaParams {
     /// `list` | `inspect` | `preview` | `create` | `edit` | `clone` | `disable`.

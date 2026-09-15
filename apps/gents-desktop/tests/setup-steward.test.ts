@@ -74,8 +74,22 @@ describe("setup steward patches", () => {
     expect(SETUP_STEWARD_PROMPT).toContain("config pack install");
     expect(SETUP_STEWARD_PROMPT).toContain("--inference-slot NAME=PROFILE_ID");
     expect(SETUP_STEWARD_PROMPT).toContain("--digest DIGEST");
-    expect(SETUP_STEWARD_PROMPT).toContain("--lsp on");
-    expect(SETUP_STEWARD_PROMPT).toContain("--graphs on");
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "config tools preview --behavior BEHAVIOR_ID",
+    );
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "config tools edit --behavior BEHAVIOR_ID",
+    );
+    expect(SETUP_STEWARD_PROMPT).toContain("enable_graph_tools=true");
+    expect(SETUP_STEWARD_PROMPT).toContain('bash.network_mode="disabled"');
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "config behavior preview edit BEHAVIOR_ID --set FIELD=JSON",
+    );
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "config behavior default BEHAVIOR_ID",
+    );
+    expect(SETUP_STEWARD_PROMPT).not.toContain("config behavior tools");
+    expect(SETUP_STEWARD_PROMPT).not.toContain("behavior edit --id");
     expect(SETUP_STEWARD_PROMPT).not.toContain("get_my_config");
     expect(SETUP_STEWARD_PROMPT).not.toContain("configure_behaviors");
     expect(SETUP_STEWARD_PROMPT).not.toContain("install_pack");

@@ -40,6 +40,7 @@ pub struct SelfConfigCore {
     node: Arc<EmbeddedNode>,
     agent_did: String,
     behavior_id: String,
+    lockout_behavior_id: String,
     no_lockout: bool,
     process_ceiling: SelfConfigProcessCeiling,
 }
@@ -89,6 +90,7 @@ impl SelfConfigCore {
         Ok(Self {
             node,
             agent_did,
+            lockout_behavior_id: behavior_id.clone(),
             behavior_id,
             no_lockout: false,
             process_ceiling: SelfConfigProcessCeiling::default(),
@@ -97,6 +99,15 @@ impl SelfConfigCore {
 
     pub fn with_no_lockout(mut self, no_lockout: bool) -> Self {
         self.no_lockout = no_lockout;
+        self
+    }
+
+    /// Preserve the invoking behavior as the recoverability anchor while a
+    /// catalog-authorized command targets a sibling behavior. Candidate reads
+    /// still incorporate a shared document being patched, so edits to shared
+    /// inference configuration cannot indirectly lock out the invoker.
+    pub(crate) fn with_lockout_behavior_id(mut self, behavior_id: String) -> Self {
+        self.lockout_behavior_id = behavior_id;
         self
     }
 
@@ -244,6 +255,10 @@ impl SelfConfigCore {
 
         let stored = read_owned_doc(txn, request.target, &self.agent_did, &unique_value).await?;
         let (_doc_id, stored_doc, creating) = match stored {
+            Some(_) if request.require_create => bail!(
+                "{} {unique_value:?} already exists; use edit with its exact ID",
+                request.target.collection_name()
+            ),
             Some((doc_id, doc)) => (Some(doc_id), doc, false),
             None if request.allow_create => (None, Map::new(), true),
             None => bail!(
@@ -259,8 +274,10 @@ impl SelfConfigCore {
 
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
 
-        if self.no_lockout {
-            (request.guard)(&anchor, &merged)?;
+        if self.no_lockout && request.guard_selected_chain {
+            if self.lockout_behavior_id == self.behavior_id {
+                (request.guard)(&anchor, &merged)?;
+            }
             self.guard_candidate_chain(txn, request.target, &merged)
                 .await?;
         }
@@ -293,7 +310,7 @@ impl SelfConfigCore {
             txn,
             self.agent_did(),
             SelfConfigTarget::AgentBehavior,
-            self.behavior_id(),
+            &self.lockout_behavior_id,
             target,
             merged,
         )
@@ -387,6 +404,10 @@ impl SelfConfigCore {
         let unique_value = (request.resolve_unique)(&anchor)?;
         let stored = read_owned_doc(txn, request.target, &self.agent_did, &unique_value).await?;
         let (stored_doc, creating) = match stored {
+            Some(_) if request.require_create => bail!(
+                "{} {unique_value:?} already exists; use edit with its exact ID",
+                request.target.collection_name()
+            ),
             Some((_, doc)) => (doc, false),
             None if request.allow_create => (Map::new(), true),
             None => bail!(
@@ -399,8 +420,10 @@ impl SelfConfigCore {
             (request.on_create)(&unique_value, &mut merged)?;
         }
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
-        if self.no_lockout {
-            (request.guard)(&anchor, &merged)?;
+        if self.no_lockout && request.guard_selected_chain {
+            if self.lockout_behavior_id == self.behavior_id {
+                (request.guard)(&anchor, &merged)?;
+            }
             self.guard_candidate_chain(txn, request.target, &merged)
                 .await?;
         }
@@ -464,6 +487,8 @@ pub(crate) struct ApplyRequest<'a> {
     pub(crate) target: SelfConfigTarget,
     pub(crate) patch: SelfConfigPatch,
     pub(crate) allow_create: bool,
+    pub(crate) require_create: bool,
+    pub(crate) guard_selected_chain: bool,
     pub(crate) resolve_unique: Box<dyn Fn(&BehaviorAnchor) -> Result<String> + Send + Sync + 'a>,
     pub(crate) on_create:
         Box<dyn Fn(&str, &mut Map<String, Value>) -> Result<()> + Send + Sync + 'a>,
@@ -490,6 +515,8 @@ impl<'a> ApplyRequest<'a> {
             target,
             patch,
             allow_create: false,
+            require_create: false,
+            guard_selected_chain: true,
             resolve_unique: Box::new(|_| bail!("resolve_unique not set (internal bug)")),
             on_create: Box::new(|_, _| Ok(())),
             validate: Box::new(|_, _, _, _| Box::pin(async { Ok(()) })),

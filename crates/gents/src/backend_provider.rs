@@ -40,6 +40,14 @@ pub enum BackendProviderKind {
 }
 
 impl BackendProviderKind {
+    pub const ALL: [Self; 5] = [
+        Self::OpenAiCompatible,
+        Self::OpenRouter,
+        Self::ChatGptCodex,
+        Self::XaiGrokOAuth,
+        Self::ClaudeCliSubscription,
+    ];
+
     pub fn parse_optional(value: Option<&str>) -> Result<Self> {
         match value.map(str::trim).filter(|value| !value.is_empty()) {
             None => anyhow::bail!("backend provider kind is required"),

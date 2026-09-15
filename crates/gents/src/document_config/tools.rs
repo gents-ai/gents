@@ -202,6 +202,10 @@ pub enum RemoteToolStyle {
     Discovery,
 }
 
+impl RemoteToolStyle {
+    pub const ALL: [Self; 2] = [Self::Flat, Self::Discovery];
+}
+
 /// Select MCP services with per-service settings. Empty means no remote tools.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]

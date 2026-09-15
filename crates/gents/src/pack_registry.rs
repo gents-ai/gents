@@ -146,7 +146,7 @@ impl RegistryClient {
             "/{}/{namespace}/{name}/{version}/download",
             self.kind.path()
         ));
-        let response = self.http.get(&url).send().await.with_context(|| {
+        let mut response = self.http.get(&url).send().await.with_context(|| {
             format!(
                 "downloading {url}; if this machine cannot reach the registry, fetch it by hand with `{} -o {name}-{version}.tar.gz` and install that file",
                 Self::curl_equivalent(&url, false)
@@ -157,11 +157,31 @@ impl RegistryClient {
             status.is_success(),
             "downloading {namespace}/{name}@{version} from the registry failed ({status})"
         );
-        Ok(response
-            .bytes()
+        let limit = crate::pack_archive::MAX_PACK_BYTES;
+        if let Some(advertised) = response.content_length() {
+            anyhow::ensure!(
+                advertised <= limit as u64,
+                "registry pack {namespace}/{name}@{version} advertises {advertised} bytes, over the {limit} byte compressed bound"
+            );
+        }
+        let mut bytes = Vec::with_capacity(
+            response
+                .content_length()
+                .unwrap_or_default()
+                .min(limit as u64) as usize,
+        );
+        while let Some(chunk) = response
+            .chunk()
             .await
             .with_context(|| format!("reading the download body from {url}"))?
-            .to_vec())
+        {
+            anyhow::ensure!(
+                bytes.len().saturating_add(chunk.len()) <= limit,
+                "registry pack {namespace}/{name}@{version} exceeds the {limit} byte compressed bound"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     }
 
     pub async fn publish(&self, token: &str, bytes: Vec<u8>) -> Result<Value> {

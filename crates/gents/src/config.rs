@@ -176,6 +176,17 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
+    pub const ALL: [Self; 8] = [
+        Self::None,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::XHigh,
+        Self::Max,
+        Self::Ultra,
+    ];
+
     pub fn parse(value: &str) -> anyhow::Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "none" => Ok(Self::None),

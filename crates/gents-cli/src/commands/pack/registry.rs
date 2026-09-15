@@ -215,6 +215,15 @@ mod tests {
         state.bytes.clone()
     }
 
+    async fn fake_oversized_download() -> Response {
+        let body = vec![0_u8; gents::pack_archive::MAX_PACK_BYTES + 1];
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_LENGTH, body.len().to_string())
+            .body(axum::body::Body::from(body))
+            .unwrap()
+    }
+
     /// The two surfaces the registry actually serves, asserted by name.
     ///
     /// A client that asks the wrong one gets a correct 404 and an error
@@ -401,5 +410,29 @@ mod tests {
             .await
             .expect_err("unknown pack must be refused, not silently substituted");
         assert!(format!("{error:#}").contains("nothing at"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn download_rejects_an_oversized_body_before_buffering_it() {
+        let app = Router::new().route(
+            "/api/v1/packs/{ns}/{name}/{version}/download",
+            get(fake_oversized_download),
+        );
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let client = RegistryClient::new(format!("http://{address}"));
+        let error = client
+            .download("gents", "oversized", "1.0.0")
+            .await
+            .expect_err("advertised bodies over the archive limit must not be buffered");
+        assert!(
+            format!("{error:#}").contains("compressed bound"),
+            "{error:#}"
+        );
     }
 }

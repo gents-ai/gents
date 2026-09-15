@@ -2,7 +2,7 @@
 //! (identity-scoped writes, reconcile pickup) lives in
 //! `tests/e2e_runtime/self_config_tools.rs`.
 
-use super::command::behavior_params;
+use super::command::{behavior_params, help_patch_contracts};
 use super::*;
 
 fn config(categories: &[&str]) -> SelfConfigToolConfig {
@@ -47,6 +47,177 @@ fn every_tool_name_is_reserved_builtin() {
         assert!(
             crate::document_config::is_reserved_builtin_tool_name(name),
             "{name} must be reserved so write_tools declarations cannot shadow it"
+        );
+    }
+}
+
+#[test]
+fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
+    let all_contracts = [
+        "behavior",
+        "tools",
+        "profile",
+        "backend",
+        "mcp-service",
+        "automation",
+    ]
+    .into_iter()
+    .flat_map(|resource| {
+        help_patch_contracts(Some(resource))
+            .as_array()
+            .unwrap()
+            .clone()
+    })
+    .collect::<Vec<_>>();
+    for target in crate::config_client::patch::ALL_SELF_CONFIG_TARGETS {
+        let contract = all_contracts
+            .iter()
+            .find(|contract| contract["collection"] == target.collection_name())
+            .unwrap_or_else(|| panic!("missing help contract for {}", target.collection_name()));
+        let described = contract["field_shapes"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let writable = target
+            .writable_fields()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            described,
+            writable,
+            "{} help drift",
+            target.collection_name()
+        );
+    }
+
+    let tools = all_contracts
+        .iter()
+        .find(|contract| contract["collection"] == "Tools")
+        .unwrap();
+    let shapes = &tools["field_shapes"];
+    let assert_fields = |shape: &Value, canonical: &[&str], name: &str| {
+        let described = shape
+            .as_object()
+            .unwrap_or_else(|| panic!("{name} help shape must be an object"))
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let canonical = canonical.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(described, canonical, "{name} nested help drift");
+    };
+    use crate::config_client::canonical_struct_fields;
+    use crate::document_config::*;
+    assert_fields(
+        &shapes["host"],
+        canonical_struct_fields::<HostTools>().unwrap(),
+        "host",
+    );
+    assert_fields(
+        &shapes["host"]["files"],
+        canonical_struct_fields::<FileTools>().unwrap(),
+        "files",
+    );
+    assert_fields(
+        &shapes["host"]["bash"],
+        canonical_struct_fields::<BashTools>().unwrap(),
+        "bash",
+    );
+    assert_fields(
+        &shapes["remote"],
+        canonical_struct_fields::<RemoteTools>().unwrap(),
+        "remote",
+    );
+    assert_fields(
+        &shapes["subagents"],
+        canonical_struct_fields::<SubagentTools>().unwrap(),
+        "subagents",
+    );
+    assert_fields(
+        &shapes["built_ins"],
+        canonical_struct_fields::<BuiltInTools>().unwrap(),
+        "built_ins",
+    );
+    assert_fields(
+        &shapes["datastore"],
+        canonical_struct_fields::<DatastoreTools>().unwrap(),
+        "datastore",
+    );
+    assert_fields(
+        &shapes["integrations"],
+        canonical_struct_fields::<IntegrationTools>().unwrap(),
+        "integrations",
+    );
+    assert_fields(
+        &shapes["integrations"]["lsp"],
+        canonical_struct_fields::<LspTools>().unwrap(),
+        "lsp",
+    );
+    assert_fields(
+        &shapes["self_config"],
+        canonical_struct_fields::<SelfConfigTools>().unwrap(),
+        "self_config",
+    );
+
+    let rendered = serde_json::to_string(&all_contracts).unwrap();
+    let serialized_values = crate::backend_provider::BackendProviderKind::ALL
+        .into_iter()
+        .map(|value| value.as_str())
+        .chain(
+            crate::config::ReasoningEffort::ALL
+                .into_iter()
+                .map(|value| value.as_str()),
+        )
+        .chain(
+            crate::openai_wire::OpenAiWireApi::ALL
+                .into_iter()
+                .map(|value| value.as_str()),
+        )
+        .chain(
+            crate::toolset::CommandNetworkMode::ALL
+                .into_iter()
+                .map(|value| value.as_str()),
+        );
+    for value in serialized_values {
+        assert!(
+            rendered.contains(value),
+            "canonical enum value {value:?} missing from help"
+        );
+    }
+    for value in crate::tool_surface::FileToolMode::ALL
+        .into_iter()
+        .map(|value| serde_json::to_value(value).unwrap())
+        .chain(
+            crate::tool_surface::BashMode::ALL
+                .into_iter()
+                .map(|value| serde_json::to_value(value).unwrap()),
+        )
+        .chain(
+            crate::toolset::CommandExecutionMode::ALL
+                .into_iter()
+                .map(|value| serde_json::to_value(value).unwrap()),
+        )
+        .chain(
+            crate::document_config::RemoteToolStyle::ALL
+                .into_iter()
+                .map(|value| serde_json::to_value(value).unwrap()),
+        )
+        .chain(
+            crate::document_config::ConcurrencyMode::ALL
+                .into_iter()
+                .map(|value| serde_json::to_value(value).unwrap()),
+        )
+        .chain(
+            crate::compaction::CompactionStrategy::ALL
+                .into_iter()
+                .map(|value| serde_json::to_value(value).unwrap()),
+        )
+    {
+        let value = value.as_str().unwrap();
+        assert!(
+            rendered.contains(value),
+            "canonical enum value {value:?} missing from help"
         );
     }
 }
@@ -768,11 +939,23 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         ))
         .await
         .unwrap();
+    setup
+        .apply(tools_request(
+            &setup,
+            vec![(
+                "self_config".into(),
+                Some(json!({"enable_self_config": true})),
+            )],
+            false,
+        ))
+        .await
+        .unwrap();
 
     let mut tool_config = config(&["persona", "behavior", "tools", "profile", "backend"]);
     tool_config.behavior_id = "setup".into();
     tool_config.dry_run = true;
-    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &tool_config);
+    tool_config.no_lockout = true;
+    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &tool_config);
 
     call_config_tool(
         &tools,
@@ -846,6 +1029,48 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         false
     );
     assert!(working["documents"]["Tools"]["remote"]["services"].is_null());
+    assert!(
+        working["documents"]["Tools"]["self_config"].is_null(),
+        "targeting a sibling must protect the invoking Setup chain without granting config to the sibling"
+    );
+    let working_core = SelfConfigCore::new(node.clone(), owner.clone(), "working".into()).unwrap();
+    working_core
+        .apply(behavior_request(
+            &working_core,
+            vec![(
+                "inference_profile_id".into(),
+                Some(json!("setup:inference")),
+            )],
+        ))
+        .await
+        .unwrap();
+    let shared_backend = call_config_tool(
+        &tools,
+        vec![
+            "backend".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "working".into(),
+            "--set".into(),
+            "enabled=false".into(),
+        ],
+    )
+    .await
+    .expect_err("a sibling edit must not disable the invoking Setup backend");
+    assert!(
+        shared_backend.contains("backend disabled"),
+        "{shared_backend}"
+    );
+    working_core
+        .apply(behavior_request(
+            &working_core,
+            vec![(
+                "inference_profile_id".into(),
+                Some(json!("working:inference")),
+            )],
+        ))
+        .await
+        .unwrap();
     assert_eq!(
         working["inference_profile"]["display_name"],
         "Working profile"
@@ -866,6 +1091,73 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         .get("target_ids")
         .is_some());
 
+    let create_profile_args = vec![
+        "profile".into(),
+        "preview".into(),
+        "create".into(),
+        "review-profile".into(),
+        "--set".into(),
+        "backend_id=\"working:backend\"".into(),
+        "--set".into(),
+        "model_name=\"review-model\"".into(),
+        "--set".into(),
+        "display_name=\"Review profile\"".into(),
+    ];
+    let preview: Value = serde_json::from_str(
+        &call_config_tool(&tools, create_profile_args.clone())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["committed"], false);
+    assert!(call_config_tool(
+        &tools,
+        vec!["profile".into(), "get".into(), "review-profile".into()]
+    )
+    .await
+    .is_err());
+    let mut create_profile_args = create_profile_args;
+    create_profile_args.remove(1);
+    let created: Value = serde_json::from_str(
+        &call_config_tool(&tools, create_profile_args.clone())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(created["committed"], true);
+    assert!(call_config_tool(&tools, create_profile_args)
+        .await
+        .unwrap_err()
+        .contains("already exists"));
+    let profile: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec!["profile".into(), "get".into(), "review-profile".into()],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(profile["document"]["model_name"], "review-model");
+
+    let default_preview: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec![
+                "behavior".into(),
+                "preview".into(),
+                "default".into(),
+                "working".into(),
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(default_preview["committed"], false);
+    assert_eq!(default_preview["admitted"], true);
+    assert_eq!(default_preview["proposed_values"]["make_default"], true);
+
     let setup_error = call_config_tool(
         &tools,
         vec![
@@ -880,6 +1172,68 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     .await
     .unwrap_err();
     assert!(setup_error.to_string().contains("protected Setup"));
+
+    // Lean siblingToolsAllowed: both reference observations happen in the
+    // same patch transaction. Sharing either the Context or Tools with Setup
+    // must reject without mutating the shared document.
+    working_core
+        .apply(anchored_request(
+            SelfConfigTarget::AgentContext,
+            "context_id",
+            vec![("tools_id".into(), Some(json!("setup:tools")))],
+        ))
+        .await
+        .unwrap();
+    let shared_tools = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "working".into(),
+            "--set".into(),
+            "display_name=\"must not land\"".into(),
+        ],
+    )
+    .await
+    .expect_err("Tools shared with Setup must be protected transactionally");
+    assert!(
+        shared_tools.contains("unshared Context and Tools"),
+        "{shared_tools}"
+    );
+    working_core
+        .apply(anchored_request(
+            SelfConfigTarget::AgentContext,
+            "context_id",
+            vec![("tools_id".into(), Some(json!("working:tools")))],
+        ))
+        .await
+        .unwrap();
+    working_core
+        .apply(behavior_request(
+            &working_core,
+            vec![("context_id".into(), Some(json!("setup:context")))],
+        ))
+        .await
+        .unwrap();
+    let shared_context = call_config_tool(
+        &tools,
+        vec![
+            "behavior".into(),
+            "context".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "working".into(),
+            "--set".into(),
+            "display_name=\"must not land\"".into(),
+        ],
+    )
+    .await
+    .expect_err("Context shared with Setup must be protected transactionally");
+    assert!(
+        shared_context.contains("unshared Context and Tools"),
+        "{shared_context}"
+    );
 }
 
 #[tokio::test]
@@ -1013,6 +1367,7 @@ async fn load_persona_rows_for_test(
     node: &defra_node::EmbeddedNode,
     agent_did: &str,
 ) -> Vec<PersonaRequestRowForTest> {
+    let agent_did = crate::graphql::escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
             PersonaConfigRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
@@ -1055,6 +1410,81 @@ fn take_persona_tool(
         .into_iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered")
+}
+
+#[tokio::test]
+async fn behavior_default_uses_the_signed_persona_request_owner() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("behavior-default");
+    let agent_did = identity.did().to_string();
+    for behavior in ["seed", "working"] {
+        crate::test_support::install_test_behavior(&node, &agent_did, behavior).await;
+    }
+    let mut tool_config = config(&["persona"]);
+    tool_config.behavior_id = "seed".into();
+    tool_config.dry_run = true;
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &tool_config,
+    );
+    let preview: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec![
+                "behavior".into(),
+                "preview".into(),
+                "default".into(),
+                "working".into(),
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["admitted"], true);
+    assert!(load_persona_rows_for_test(&node, &agent_did)
+        .await
+        .is_empty());
+
+    let tool = take_persona_tool(tools);
+    let call = tokio::spawn(async move {
+        tool.call(json!({"argv":["behavior", "default", "working"]}).to_string())
+            .await
+    });
+    let mut request_key = None;
+    for _ in 0..50 {
+        if let Some(row) = load_persona_rows_for_test(&node, &agent_did)
+            .await
+            .into_iter()
+            .next()
+        {
+            assert!(row.edit_fields.as_deref().unwrap_or_default().is_empty());
+            request_key = row.request_key;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let request_key = request_key.expect("config behavior default authors a request row");
+    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
+        node.clone(),
+        None,
+        identity,
+    );
+    let outcome = crate::agent::p2p_reconcile::reconcile_persona_tick(&store, &node)
+        .await
+        .unwrap();
+    assert!(outcome.applied.contains(&request_key), "{outcome:?}");
+    let output: Value = serde_json::from_str(&call.await.unwrap().unwrap()).unwrap();
+    assert_eq!(output["effective"]["is_default"], true);
+    assert_eq!(
+        principal_default_behavior(&node, &agent_did)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("working")
+    );
 }
 
 #[tokio::test]

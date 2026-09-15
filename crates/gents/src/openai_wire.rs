@@ -13,6 +13,8 @@ pub enum OpenAiWireApi {
 }
 
 impl OpenAiWireApi {
+    pub const ALL: [Self; 2] = [Self::Responses, Self::ChatCompletions];
+
     pub fn parse_optional(value: Option<&str>) -> Result<Option<Self>> {
         match value.map(str::trim).filter(|value| !value.is_empty()) {
             None => Ok(None),

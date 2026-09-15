@@ -39,15 +39,19 @@ impl<'de> serde::Deserializer<'de> for &mut RootFields {
     serde::forward_to_deserialize_any! { bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string bytes byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map enum identifier ignored_any }
 }
 
+pub(crate) fn canonical_struct_fields<T: DeserializeOwned>() -> Result<&'static [&'static str]> {
+    let mut fields = RootFields::default();
+    let _ = T::deserialize(&mut fields);
+    fields
+        .0
+        .filter(|fields| !fields.is_empty())
+        .context("canonical configuration root has no struct fields")
+}
+
 fn project<T: DeserializeOwned + Serialize>(
     value: Option<&Value>,
 ) -> Result<(&'static [&'static str], Option<Value>)> {
-    let mut fields = RootFields::default();
-    let _ = T::deserialize(&mut fields);
-    let fields = fields
-        .0
-        .filter(|fields| !fields.is_empty())
-        .context("canonical configuration root has no struct fields")?;
+    let fields = canonical_struct_fields::<T>()?;
     let normalized = value
         .map(|value| -> Result<Value> {
             let config: T = serde_json::from_value(value.clone())

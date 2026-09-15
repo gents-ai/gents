@@ -6,10 +6,13 @@ const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["behavior", "list", "--limit", N, "--cursor", ID]
   ["behavior", "get", BEHAVIOR_ID]
   ["behavior", "preview", "edit", BEHAVIOR_ID, PATCH_FLAGS]
-  ["behavior", "preview", "create"|"clone"|"disable", ...flags]
+  ["behavior", "preview", "create"|"clone"|"disable"|"default", ...flags]
   ["behavior", "edit", BEHAVIOR_ID, PATCH_FLAGS]
   ["behavior", "create"|"clone"|"disable", ...flags]
+  ["behavior", "default", BEHAVIOR_ID]
   ["profile"|"backend", "list", "--limit", N, "--cursor", ID]
+  ["profile", "preview", "create", PROFILE_ID, PATCH_FLAGS]
+  ["profile", "create", PROFILE_ID, PATCH_FLAGS]
   ["tools", "get"|"preview"|"edit", [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]]
   ["backend", "get", [BACKEND_ID], [--behavior BEHAVIOR_ID]]
   ["backend", "preview"|"edit", [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]]
@@ -154,10 +157,12 @@ impl ConfigCommandTool {
   context preview|edit [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
   preview edit BEHAVIOR_ID [--set FIELD=JSON] [--clear FIELD]
   preview create|clone|disable FLAGS
+  preview default BEHAVIOR_ID
   create --display-name NAME --system-prompt TEXT --preset readonly|write --profile PROFILE_ID [--description TEXT] [--root PATH] [--default]
   clone --from BEHAVIOR_ID --display-name NAME --profile PROFILE_ID [overrides]
   edit BEHAVIOR_ID [--set FIELD=JSON] [--clear FIELD]
   disable --id BEHAVIOR_ID
+  default BEHAVIOR_ID
 Behavior edit patches the canonical AgentBehavior document, including display_name, description, context_id, inference_profile_id, enabled, and tags. Context prompt/skills and all tool groups are edited through their own targeted commands. Omitted fields preserve and --clear removes an optional field. All IDs come from list/get; never guess IDs."#
             }
             Some("tools") => {
@@ -170,11 +175,13 @@ This targets the Tools document referenced by the selected owned working behavio
             Some("profile") => {
                 r#"profile commands:
   list [--limit N] [--cursor PROFILE_ID]
+  preview create PROFILE_ID --set backend_id=JSON --set model_name=JSON [PATCH_FLAGS]
+  create PROFILE_ID --set backend_id=JSON --set model_name=JSON [PATCH_FLAGS]
   get [profile|sampling|execution|retry-policy|compaction] [--behavior BEHAVIOR_ID]
   get PROFILE_ID
   preview [TARGET] [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
   edit [TARGET] [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
-The profile selects backend/model/effort. Optional sampling and execution documents own their respective controls; compaction is referenced by Context."#
+The profile selects backend/model/effort. Creation requires an unused exact ID plus an existing same-principal backend_id and model_name; it does not bind a behavior. Use behavior edit to select it. Optional sampling and execution documents own their respective controls; compaction is referenced by Context."#
             }
             Some("backend") => {
                 r#"backend commands:
@@ -226,7 +233,6 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             "patch_contracts": help_patch_contracts(resource),
             "current_limitations": {
                 "pack_remove": "unavailable because installation records do not yet distinguish documents created by an install from matching documents the install reused",
-                "profile_create": "unavailable; config only lists, inspects, and patches existing profiles",
             },
         }))?)
     }
@@ -281,7 +287,25 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             "preview" => {
                 let operation = argv
                     .get(1)
-                    .context("behavior preview requires create|edit|clone|disable")?;
+                    .context("behavior preview requires create|edit|clone|disable|default")?;
+                if operation == "default" {
+                    let behavior_id = argv
+                        .get(2)
+                        .context("behavior preview default requires BEHAVIOR_ID")?;
+                    anyhow::ensure!(
+                        argv.len() == 3,
+                        "behavior preview default accepts exactly one BEHAVIOR_ID"
+                    );
+                    self.ensure_behavior_catalog("preview default", Some(behavior_id))?;
+                    let params = default_behavior_params("preview", behavior_id);
+                    return persona_preview(
+                        &self.node,
+                        &self.agent_did,
+                        &params,
+                        &self.process_ceiling,
+                    )
+                    .await;
+                }
                 if operation == "edit" {
                     let behavior_id = argv.get(2).context(
                         "behavior preview edit requires BEHAVIOR_ID followed by patch flags",
@@ -328,6 +352,27 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                     &self.agent_did,
                     identity,
                     &params,
+                    &self.process_ceiling,
+                )
+                .await
+            }
+            "default" => {
+                let behavior_id = argv
+                    .get(1)
+                    .context("behavior default requires BEHAVIOR_ID")?;
+                anyhow::ensure!(
+                    argv.len() == 2,
+                    "behavior default accepts exactly one BEHAVIOR_ID"
+                );
+                self.ensure_behavior_catalog("default", Some(behavior_id))?;
+                let identity = self.identity.as_deref().context(
+                    "behavior writes require the exact local principal signer; reads remain available",
+                )?;
+                persona_mutate(
+                    &self.node,
+                    &self.agent_did,
+                    identity,
+                    &default_behavior_params("edit", behavior_id),
                     &self.process_ceiling,
                 )
                 .await
@@ -444,6 +489,34 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                     SelfConfigTarget::InferenceProfile,
                     parse_limit(&parsed)?,
                     parsed.one("cursor")?,
+                )
+                .await;
+        }
+        let create_args = match verb {
+            "create" => Some(&argv[1..]),
+            "preview" if argv.get(1).map(String::as_str) == Some("create") => Some(&argv[2..]),
+            _ => None,
+        };
+        if let Some(create_args) = create_args {
+            let profile_id = create_args
+                .first()
+                .filter(|value| !value.starts_with("--"))
+                .context("profile create requires PROFILE_ID followed by patch flags")?;
+            let patch = parse_patch(&create_args[1..], SelfConfigTarget::InferenceProfile)?;
+            let fields = patch
+                .iter()
+                .filter_map(|(field, value)| value.as_ref().map(|_| field.as_str()))
+                .collect::<BTreeSet<_>>();
+            anyhow::ensure!(
+                fields.contains("backend_id") && fields.contains("model_name"),
+                "profile create requires --set backend_id=JSON and --set model_name=JSON"
+            );
+            let request = profile_create_request(self.agent_did.clone(), profile_id.clone(), patch);
+            return self
+                .patch(
+                    &self.core,
+                    if verb == "preview" { "preview" } else { "edit" },
+                    request,
                 )
                 .await;
         }
@@ -807,13 +880,15 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
     fn target_core(&self, behavior_id: Option<&str>, operation: &str) -> Result<SelfConfigCore> {
         let behavior_id = behavior_id.unwrap_or(self.core.behavior_id());
         self.ensure_behavior_catalog(operation, Some(behavior_id))?;
+        let invoking_behavior_id = self.core.behavior_id().to_owned();
         SelfConfigCore::new(
             self.node.clone(),
             self.agent_did.clone(),
             behavior_id.to_owned(),
         )
         .map(|core| {
-            core.with_no_lockout(self.no_lockout)
+            core.with_lockout_behavior_id(invoking_behavior_id)
+                .with_no_lockout(self.no_lockout)
                 .with_process_ceiling(self.process_ceiling.clone())
         })
     }
@@ -1023,6 +1098,16 @@ fn cleanup_plan_digest(owner: &str, targets: &[Value]) -> Result<String> {
     ))
 }
 
+fn default_behavior_params(action: &str, behavior_id: &str) -> ConfigurePersonaParams {
+    ConfigurePersonaParams {
+        action: action.to_owned(),
+        operation: (action == "preview").then(|| "edit".to_owned()),
+        behavior_id: Some(behavior_id.to_owned()),
+        make_default: true,
+        ..Default::default()
+    }
+}
+
 fn cleanup_target(name: &str) -> Result<SelfConfigTarget> {
     match name {
         "behavior" => Ok(SelfConfigTarget::AgentBehavior),
@@ -1105,11 +1190,12 @@ fn patch_contract(target: SelfConfigTarget, field_shapes: Value) -> Value {
         "writable_fields": target.writable_fields(),
         "protected_fields": target.protected_fields(),
         "field_shapes": field_shapes,
+        "contract_source": "Top-level fields come from canonical serde configuration metadata. Nested field inventories and advertised enum values are conformance-tested against the canonical Rust types; every preview/apply performs full typed decode and validation.",
         "semantics": "--set replaces one top-level field with the supplied JSON value; nested objects are complete typed values, not recursive merge patches. --clear removes an optional top-level field. Omitted fields are preserved.",
     })
 }
 
-fn help_patch_contracts(resource: Option<&str>) -> Value {
+pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
     let contracts = match resource {
         Some("behavior") => vec![
             patch_contract(
@@ -1140,7 +1226,7 @@ fn help_patch_contracts(resource: Option<&str>) -> Value {
             SelfConfigTarget::Tools,
             json!({
                 "display_name": "string|null",
-                "host": {"root":"string|null; absent uses runtime cwd", "files":{"mode":"Off|ReadOnly|ReadWrite (default Off)","timeout_secs":"positive integer|null"}, "bash":{"mode":"Off|ReadOnly|Unrestricted (default Off)","execution_mode":"restricted|unrestricted|null","network_mode":"inherit|disabled|enabled|null","allowed_argv_prefixes":"array<array<string>>|null","forbidden_argv_prefixes":"array<array<string>>|null","read_only_commands":"array<string>|null","background_enabled":"boolean; default false","timeout_secs":"positive integer|null; default 120","max_timeout_secs":"positive integer|null","background_timeout_secs":"positive integer|null; default 36000","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600"}, "cli":"array<{name:string,timeout_secs?:positive integer}>; default []"},
+                "host": {"root":"string|null; absent uses runtime cwd", "files":{"mode":"Off|ReadOnly|ReadWrite (default Off)","timeout_secs":"positive integer|null"}, "bash":{"mode":"Off|ReadOnly|Unrestricted (default Off)","execution_mode":"read_only|workspace_write|artifact_write|unrestricted|null","network_mode":"inherit|disabled|enabled|null","allowed_argv_prefixes":"array<array<string>>|null","forbidden_argv_prefixes":"array<array<string>>|null","read_only_commands":"array<string>|null","background_enabled":"boolean; default false","timeout_secs":"positive integer|null; default 120","max_timeout_secs":"positive integer|null","background_timeout_secs":"positive integer|null; default 36000","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600"}, "cli":"array<{name:string,timeout_secs?:positive integer}>; default []"},
                 "remote": {"services":"array<{mcp_service_id:string,tool_names:array<string>,style:flat|discovery(default),required:boolean(default false),background_tool_names:array<string>,connect_timeout_secs?:integer,discovery_timeout_secs?:integer,timeout_secs?:integer,stale_timeout_secs?:integer,background_timeout_secs?:integer,wait_timeout_secs?:integer,max_wait_timeout_secs?:integer}>; default []"},
                 "subagents": {"target_ids":"array<existing same-principal SubagentTarget ID>; default []","spawn_enabled":"boolean|null","steering_enabled":"boolean|null","background_enabled":"boolean|null","default_await_mode":"foreground|background|null","allow_cross_principal":"boolean|null","cross_principal_spawn_timeout_secs":"positive integer|null; default 60","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600"},
                 "built_ins": {"enable_graph_tools":"boolean|null","enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_memory":"boolean|null","enable_session_history_tool":"boolean|null","enable_context_budget":"boolean|null","timeout_secs":"positive integer|null; absent uses enclosing request deadline"},

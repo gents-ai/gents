@@ -43,6 +43,8 @@ pub mod patch;
 
 pub use agent_behavior::write_agent_behavior_document;
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
+#[cfg(test)]
+pub(crate) use desired_state::canonical_struct_fields;
 pub use desired_state::read_record as read_desired_state_record_in_txn;
 pub use desired_state::{
     apply_desired_state_plan, config_projection, DesiredStateApplyCounts,
