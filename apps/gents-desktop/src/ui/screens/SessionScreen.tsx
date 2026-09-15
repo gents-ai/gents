@@ -55,6 +55,7 @@ import { useSlashSkills } from "./useSlashSkills";
 import { Thinking } from "./Thinking";
 import { TracePanel } from "./TracePanel";
 import { BehaviorAvatar, BehaviorChip } from "./parts";
+import { BehaviorHoverCard } from "./HoverCards";
 import { CascadeDialog } from "./CascadeDialog";
 import {
   AlertDialog,
@@ -317,7 +318,7 @@ const TranscriptItem = memo(function TranscriptItem({
       );
     case "toolGroup":
       return (
-        <ToolSteps title="Activity">
+        <ToolSteps>
           {item.tools.map((tool) => {
             const summary = toolSummary(tool);
             return (
@@ -747,11 +748,16 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             >
               <ArrowLeft className="size-4" />
             </a>
-            <BehaviorAvatar
-              name={behaviorName(session?.behaviorId ?? null, deployment)}
-              behaviorId={session?.behaviorId}
-              className="size-6 text-[10px]"
-            />
+            <BehaviorHoverCard
+              deployment={deployment}
+              behaviorId={session?.behaviorId ?? null}
+            >
+              <BehaviorAvatar
+                name={behaviorName(session?.behaviorId ?? null, deployment)}
+                behaviorId={session?.behaviorId}
+                className="size-6 cursor-default text-[10px]"
+              />
+            </BehaviorHoverCard>
             <span className="min-w-0 flex-1 truncate font-heading text-sm font-medium text-heading">
               {session?.title}
             </span>

@@ -42,11 +42,11 @@ describe("canonical tool selections", () => {
       fireEvent.change(timeout, { target: { value: invalid } });
       expect(timeout).toHaveValue(invalid);
       expect(screen.getByRole("alert")).toHaveTextContent("positive whole number");
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       expect(api.saveToolsConfig).not.toHaveBeenCalled();
     }
     fireEvent.change(timeout, { target: { value: "15" } });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveToolsConfig.mock.calls[0][0].document.host.files.timeout_secs).toBe(
       15,
     );
@@ -75,7 +75,7 @@ describe("canonical tool selections", () => {
     ).not.toBeChecked();
     await user.click(screen.getByRole("switch", { name: "Graph tools" }));
     expect(api.saveToolsConfig).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     const tools = api.saveToolsConfig.mock.calls[0][0].document;
     expect(tools.built_ins).toEqual({ enable_graph_tools: true });
     expect(tools.self_config).toBeNull();
@@ -98,7 +98,7 @@ describe("canonical tool selections", () => {
     await user.click(await screen.findByRole("option", { name: "Ops" }));
     await user.click(screen.getByRole("checkbox", { name: /Ops/ }));
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
     const pack = api.applyConfigComponents.mock.calls[0][0].document;
     expect(pack.subagent_targets[0]).toMatchObject({
@@ -118,7 +118,7 @@ describe("canonical tool selections", () => {
     const user = userEvent.setup();
     render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
     await user.click(screen.getByRole("checkbox", { name: "Service A" }));
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveToolsConfig.mock.calls[0][0].document.remote.services).toEqual([
       { mcp_service_id: "service-a", tool_names: null },
     ]);
@@ -126,7 +126,7 @@ describe("canonical tool selections", () => {
       screen.getByRole("textbox", { name: "Service A tool names" }),
       "read\nse?rch",
     );
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("exact names");
     expect(api.saveToolsConfig).toHaveBeenCalledTimes(1);
   });
@@ -142,7 +142,7 @@ describe("canonical tool selections", () => {
     await user.click(screen.getByRole("checkbox", { name: "Service A" }));
     await user.click(screen.getByRole("button", { name: "Discover remote tools" }));
     expect(await screen.findByRole("checkbox", { name: /search/ })).not.toBeChecked();
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveToolsConfig.mock.calls[0][0].document.remote.services).toEqual([
       { mcp_service_id: "service-a", tool_names: null },
     ]);
@@ -161,7 +161,7 @@ describe("canonical tool selections", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "service handshake failed",
     );
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveToolsConfig.mock.calls[0][0].document.remote.services[0]).toEqual({
       mcp_service_id: "service-a",
       tool_names: null,
@@ -188,7 +188,7 @@ describe("canonical tool selections", () => {
       <ToolsPanel shell={shell} deployment={view} item="tools-a" />,
     );
     await user.click(screen.getByRole("switch", { name: "Memory" }));
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     const saved = api.saveToolsConfig.mock.calls[0][0].document;
     expect(saved.host.cli).toEqual([{ name: "git", timeout_secs: 12 }]);
     expect(saved.host.bash.allowed_argv_prefixes).toEqual([["git", "status"]]);
@@ -228,7 +228,7 @@ describe("canonical tool selections", () => {
       />,
     );
     await user.clear(screen.getByRole("textbox", { name: "Service A tool names" }));
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(
       api.saveToolsConfig.mock.calls[0][0].document.remote.services[0],
     ).toMatchObject({ tool_names: null, background_tool_names: null });
@@ -242,7 +242,7 @@ describe("canonical tool selections", () => {
     const advanced = JSON.parse((editor as HTMLTextAreaElement).value);
     advanced.subagents = { wait_timeout_secs: 60, max_wait_timeout_secs: 30 };
     fireEvent.change(editor, { target: { value: JSON.stringify(advanced) } });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Subagent wait timeout maximum",
     );
@@ -280,7 +280,7 @@ describe("canonical tool selections", () => {
       fireEvent.change(screen.getByRole("textbox", { name: "Canonical JSON" }), {
         target: { value: JSON.stringify(groups) },
       });
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(message);
       expect(api.saveToolsConfig).not.toHaveBeenCalled();
     },
@@ -305,7 +305,7 @@ describe("canonical tool selections", () => {
         }),
       },
     });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveToolsConfig).toHaveBeenCalledTimes(1);
     expect(api.saveToolsConfig.mock.calls[0][0].document.remote.services[0]).toEqual(
       expect.objectContaining({ timeout_secs: 1, stale_timeout_secs: 120 }),
@@ -318,7 +318,7 @@ describe("canonical tool selections", () => {
     render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
     await user.clear(screen.getByRole("textbox", { name: "Canonical JSON" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Repair");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveToolsConfig).not.toHaveBeenCalled();
   });
 
@@ -341,9 +341,9 @@ describe("canonical tool selections", () => {
         item="context-b"
       />,
     );
-    await user.type(screen.getByRole("textbox", { name: "Search skills" }), "review");
-    await user.click(screen.getByRole("checkbox", { name: /Code review/ }));
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.type(screen.getByRole("combobox", { name: "Skills" }), "review");
+    await user.click(screen.getByRole("option", { name: "Code review" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(
       api.patchConfigComponents.mock.calls[0][0].patches[0].changes.skill_ids,
     ).toContain("skill-doc");

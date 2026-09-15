@@ -61,6 +61,27 @@ test.describe("kit shell", () => {
     await expect(page.getByText("Agent details")).toBeVisible();
   });
 
+  test("requires a document name before configuration deletion", async ({ page }) => {
+    await gotoHarness(page);
+    await openConfig(page);
+    await page.mouse.move(page.viewportSize()!.width - 30, 100);
+    await page.getByRole("link", { name: /^Contexts\b/ }).click();
+    await page.getByRole("link", { name: /Default context/ }).click();
+
+    await expect(page.getByRole("combobox", { name: "Skills" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Tags" })).toBeVisible();
+    await page.getByRole("button", { name: "Delete context" }).click();
+    const confirm = page.getByRole("textbox", {
+      name: "Type Default context to confirm",
+    });
+    await expect(confirm).toBeFocused();
+    await expect(page.getByRole("button", { name: "Delete context" })).toBeDisabled();
+    await confirm.fill("Default context");
+    await expect(page.getByRole("button", { name: "Delete context" })).toBeEnabled();
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect(confirm).toHaveCount(0);
+  });
+
   test("session context details have an explicit close control", async ({ page }) => {
     await gotoHarness(page);
     await page

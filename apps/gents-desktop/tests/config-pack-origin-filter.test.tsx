@@ -44,4 +44,49 @@ describe("pack origin configuration filters", () => {
     expect(screen.queryByText("Review scanner")).toBeNull();
     expect(screen.getByText("User coder")).toBeTruthy();
   });
+
+  it("composes text and provenance filters on long lists", () => {
+    render(
+      <ListDetail
+        base={{ name: "agent", agentDid: "did:key:test", section: "skills" }}
+        createLabel="New skill"
+        detail={() => null}
+        empty="No skills."
+        rows={[
+          {
+            id: "review-scan",
+            title: "Review scanner",
+            meta: "enabled",
+            tags: ["gents:pack:code_review"],
+          },
+          {
+            id: "review-summary",
+            title: "Review summary",
+            meta: "enabled",
+            tags: ["gents:pack:reporting"],
+          },
+          ...Array.from({ length: 7 }, (_, index) => ({
+            id: `user-${index}`,
+            title: `User skill ${index}`,
+            meta: "enabled",
+            tags: ["custom"],
+          })),
+        ]}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter the list" }), {
+      target: { value: "Review" },
+    });
+    expect(screen.getByText("Review scanner")).toBeTruthy();
+    expect(screen.getByText("Review summary")).toBeTruthy();
+    expect(screen.queryByText("User skill 0")).toBeNull();
+
+    fireEvent.change(screen.getByTestId("skills-origin-filter"), {
+      target: { value: "code_review" },
+    });
+    expect(screen.getByText("Review scanner")).toBeTruthy();
+    expect(screen.queryByText("Review summary")).toBeNull();
+    expect(screen.getByText("1 of 9")).toBeTruthy();
+  });
 });

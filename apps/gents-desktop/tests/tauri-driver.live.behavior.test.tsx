@@ -40,7 +40,7 @@ describeLive("Tauri app live bridge runner behavior config", () => {
       });
 
       await driver.replaceContextSystemPrompt(systemPrompt);
-      await driver.user.click(screen.getByRole("button", { name: "Save changes" }));
+      await driver.user.click(screen.getByRole("button", { name: "Save" }));
 
       await waitForBehaviorConfig(
         runner,
