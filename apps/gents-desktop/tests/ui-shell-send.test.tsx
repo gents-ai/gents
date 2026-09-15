@@ -41,7 +41,9 @@ const desktopShell = vi.hoisted(() => ({
   onOpenMailboxItem: vi.fn(),
   onSaveAgentConfig: vi.fn(),
   onSaveBehaviorConfig: vi.fn(),
+  onApplyConfigComponents: vi.fn(),
   onDeleteBehaviorConfig: vi.fn(),
+  onDeleteContextConfig: vi.fn(),
   onRemovePeer: vi.fn(),
   onRenamePeer: vi.fn(),
   retrySessionHydration: vi.fn(),
@@ -79,6 +81,43 @@ vi.mock("../src/hooks/useDesktopShell", () => ({
 import { useShell } from "../src/ui/hooks/useShell";
 
 describe("kit shell chat submission", () => {
+  it("routes config application through the shell mutation owner", async () => {
+    const rawApply = vi.fn();
+    const accepted = { bootstrap: {}, client: null };
+    desktopShell.onApplyConfigComponents.mockResolvedValueOnce(accepted);
+    const bridge = {
+      api: { applyConfigComponents: rawApply },
+      listenToUpdates: vi.fn(),
+    } as never;
+    const { result } = renderHook(() => useShell(bridge, undefined));
+    const request = { document: { agentDid: "did:key:agent" } };
+
+    await expect(
+      result.current.applyConfig((api) => api.applyConfigComponents(request as never)),
+    ).resolves.toBe(accepted);
+    expect(desktopShell.onApplyConfigComponents).toHaveBeenCalledWith(request);
+    expect(rawApply).not.toHaveBeenCalled();
+    expect(desktopShell.refreshSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("routes context deletion through the shell mutation owner", async () => {
+    const rawDelete = vi.fn();
+    const accepted = { bootstrap: {}, client: null };
+    desktopShell.onDeleteContextConfig.mockResolvedValueOnce(accepted);
+    const bridge = {
+      api: { deleteContextConfig: rawDelete },
+      listenToUpdates: vi.fn(),
+    } as never;
+    const { result } = renderHook(() => useShell(bridge, undefined));
+    const request = { agentDid: "did:key:agent", contextId: "context" };
+
+    await expect(
+      result.current.applyConfig((api) => api.deleteContextConfig(request)),
+    ).resolves.toBe(accepted);
+    expect(desktopShell.onDeleteContextConfig).toHaveBeenCalledWith(request);
+    expect(rawDelete).not.toHaveBeenCalled();
+  });
+
   it("admits only one submit while the first Enter is still in flight", async () => {
     let complete!: (value: { sessionId: string; requestId: string }) => void;
     const sendChatMessage = vi.fn(

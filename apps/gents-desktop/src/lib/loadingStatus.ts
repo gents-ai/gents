@@ -14,6 +14,17 @@ export type DesktopStartupPhase =
   | "client-error"
   | "ready";
 
+export function projectStartupPhaseAfterSnapshot(
+  phase: DesktopStartupPhase,
+  running: boolean,
+  pristine: boolean,
+): DesktopStartupPhase {
+  if (phase === "loading-configuration" || phase === "starting-client") {
+    return running || pristine ? "ready" : "starting-client";
+  }
+  return phase === "client-error" && running ? "ready" : phase;
+}
+
 export type LoadingStepState = "active" | "complete" | "pending" | "error";
 
 export type StartupLoadingStatus = {

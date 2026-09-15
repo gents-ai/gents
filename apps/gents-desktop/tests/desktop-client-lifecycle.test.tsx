@@ -222,4 +222,36 @@ describe("desktop client restart selection ordering", () => {
 
     expect(setSession).not.toHaveBeenCalledWith(null);
   });
+
+  it("recovers client-error when a successful start is finally observed after a failed read", async () => {
+    const stopped = {
+      bootstrap: { clientStateExists: true, savedPeers: [{}] },
+      client: null,
+    };
+    const ready = { ...stopped, client: {} };
+    const api = {
+      fetchDesktopSnapshot: vi
+        .fn()
+        .mockResolvedValueOnce(stopped)
+        .mockRejectedValueOnce(new Error("transient IPC read failure"))
+        .mockResolvedValue(ready),
+      startDesktopClient: vi.fn().mockResolvedValue(ready),
+    };
+    const { result } = renderHook(() =>
+      useDesktopClientLifecycle({
+        api,
+        supportsManagedServer: false,
+        refreshSession: vi.fn(async () => null),
+        selectedSessionIdRef: { current: null },
+        setError: vi.fn(),
+        setSession: vi.fn(),
+      } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => result.current.ensureDesktopClientStarted());
+    expect(result.current.startupPhase).toBe("client-error");
+    await act(async () => result.current.refreshSnapshot());
+    expect(result.current.startupPhase).toBe("ready");
+    expect(result.current.snapshot).toBe(ready);
+  });
 });

@@ -124,4 +124,26 @@ theorem fresh_read_after_mutation_replaces_intermediate_state
     (finish refresh refresh.epoch authoritative).value = authoritative := by
   simp [finish, accepts]
 
+inductive StartupPhase where
+  | checkingManagedServer | loadingConfiguration | startingClient
+  | managedServerError | configurationError | clientError | ready
+  deriving DecidableEq, Repr
+
+/-- A client observation can recover a client error, not managed-server authority. -/
+def observeStartup (phase : StartupPhase) (running pristine : Bool) : StartupPhase :=
+  match phase with
+  | .loadingConfiguration | .startingClient =>
+      if running || pristine then .ready else .startingClient
+  | .clientError => if running then .ready else .clientError
+  | other => other
+
+theorem observed_running_client_recovers_client_error (pristine : Bool) :
+    observeStartup .clientError true pristine = .ready := by rfl
+
+theorem stopped_client_does_not_clear_client_error (pristine : Bool) :
+    observeStartup .clientError false pristine = .clientError := by rfl
+
+theorem client_observation_does_not_clear_managed_error (running pristine : Bool) :
+    observeStartup .managedServerError running pristine = .managedServerError := by rfl
+
 end ClientSnapshotObservation

@@ -80,6 +80,10 @@ cleanup without erasing edits or other drafts. Deferred real-hook/action tests
 exercise crossed completions; rendered composer tests exercise draft and selection
 consumption. Neither extension adds a durable runtime lifecycle.
 
+A later running-client observation recovers a transient client startup error;
+it cannot clear a managed-server authority error. The startup projection is
+checked against generated cases from the same observation model.
+
 ## CI handoff
 
 Lean-backed generated consumers run in the proof job, where Lake and the proof

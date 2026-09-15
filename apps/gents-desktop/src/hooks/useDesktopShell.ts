@@ -220,7 +220,8 @@ export function useDesktopShell({
     setAddingPeer,
     setError,
     setRepairingP2P,
-    setSelectedAgentDid,
+    selectedAgentDidRef,
+    selectAgent,
     setStarting,
   });
   const foregroundRepairRef = useRef(onRepairP2P);
@@ -250,6 +251,7 @@ export function useDesktopShell({
     onApplyConfigComponents,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteContextConfig,
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
     onDeleteEventSourceConfig,
@@ -406,6 +408,7 @@ export function useDesktopShell({
     onSaveAgentConfig,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteContextConfig,
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
     onDeleteEventSourceConfig,

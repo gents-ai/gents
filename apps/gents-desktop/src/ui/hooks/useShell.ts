@@ -2,10 +2,7 @@
    keep calling shell.api / applyConfig / saveBehaviorConfig. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type {
-  DesktopApiAdapter,
-  DesktopClientSnapshot,
-} from "@source-inc/gents-desktop-client";
+import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 
 import { useDesktopShell, type DesktopShellBridge } from "../../hooks/useDesktopShell";
 
@@ -35,13 +32,39 @@ export function useShell(
     shell.onSelectSession(routeSessionId);
   }, [routeSessionId]);
 
+  const configApi = useMemo(
+    () => ({
+      applyConfigComponents: d.onApplyConfigComponents,
+      deleteBackendConfig: d.onDeleteBackendConfig,
+      deleteBehaviorConfig: d.onDeleteBehaviorConfig,
+      deleteContextConfig: d.onDeleteContextConfig,
+      deleteEventSourceConfig: d.onDeleteEventSourceConfig,
+      deleteInferenceProfileConfig: d.onDeleteInferenceProfileConfig,
+      deleteScheduleConfig: d.onDeleteScheduleConfig,
+      deleteSkillConfig: d.onDeleteSkillConfig,
+      deleteTaskConfig: d.onDeleteTaskConfig,
+      deleteToolsConfig: d.onDeleteToolsConfig,
+      deleteToolServiceConfig: d.onDeleteToolServiceConfig,
+      deleteTriggerConfig: d.onDeleteTriggerConfig,
+      patchConfigComponents: d.onPatchConfigComponents,
+      saveAgentConfig: d.onSaveAgentConfig,
+      saveBackendConfig: d.onSaveBackendConfig,
+      saveBehaviorConfig: d.onSaveBehaviorConfig,
+      saveEventSourceConfig: d.onSaveEventSourceConfig,
+      saveInferenceProfileConfig: d.onSaveInferenceProfileConfig,
+      saveScheduleConfig: d.onSaveScheduleConfig,
+      saveSkillConfig: d.onSaveSkillConfig,
+      saveTaskConfig: d.onSaveTaskConfig,
+      saveToolsConfig: d.onSaveToolsConfig,
+      saveToolServiceConfig: d.onSaveToolServiceConfig,
+      saveTriggerConfig: d.onSaveTriggerConfig,
+    }),
+    [d],
+  );
+
   const applyConfig = useCallback(
-    async (run: (api: DesktopApiAdapter) => Promise<DesktopClientSnapshot>) => {
-      const snapshot = await run(api);
-      await d.refreshSnapshot();
-      return snapshot;
-    },
-    [api, d],
+    (run: (api: typeof configApi) => Promise<DesktopClientSnapshot>) => run(configApi),
+    [configApi],
   );
 
   const sendMessage = useCallback(

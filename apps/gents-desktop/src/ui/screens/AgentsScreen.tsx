@@ -39,7 +39,7 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
-import { isLocalAgent } from "@/lib/firstRun";
+import { inferenceIsConfigured, isLocalAgent } from "@/lib/firstRun";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { AgentAvatar } from "./AgentAvatar";
@@ -51,9 +51,11 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
   const [renaming, setRenaming] = useState<{ peerId: string; label: string } | null>(
     null,
   );
-  const [removing, setRemoving] = useState<{ peerId: string; label: string } | null>(
-    null,
-  );
+  const [removing, setRemoving] = useState<{
+    agentDid: string;
+    peerId: string;
+    label: string;
+  } | null>(null);
   const [removingBusy, setRemovingBusy] = useState(false);
   const pending = shell.snapshot?.client?.enrollmentRequests;
   return (
@@ -161,7 +163,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                   )}
                 </a>
                 {isLocalAgent(d, shell.snapshot?.bootstrap.initAgentDid) &&
-                  d.inferenceBackends.length === 0 && (
+                  !inferenceIsConfigured(d) && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -244,7 +246,11 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                           <DropdownMenuItem
                             variant="destructive"
                             onClick={() =>
-                              setRemoving({ peerId: d.peerId, label: d.label })
+                              setRemoving({
+                                agentDid: d.agentDid,
+                                peerId: d.peerId,
+                                label: d.label,
+                              })
                             }
                           >
                             Remove peer
@@ -287,7 +293,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 if (!removing) return;
                 setRemovingBusy(true);
                 try {
-                  await shell.removePeer(removing.peerId);
+                  await shell.removePeer(removing.peerId, removing.agentDid);
                   toast("Peer removed");
                   setRemoving(null);
                 } catch (error) {

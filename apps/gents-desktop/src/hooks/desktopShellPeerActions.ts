@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import { formatPeerConnectionError } from "@source-inc/gents-desktop-fleet";
 import type {
@@ -16,7 +16,8 @@ type PeerActionParams = {
   setAddingPeer: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
   setRepairingP2P: Dispatch<SetStateAction<boolean>>;
-  setSelectedAgentDid: Dispatch<SetStateAction<string | null>>;
+  selectedAgentDidRef: MutableRefObject<string | null>;
+  selectAgent: (agentDid: string | null) => void;
   setStarting: Dispatch<SetStateAction<boolean>>;
 };
 
@@ -29,7 +30,8 @@ export function createDesktopShellPeerActions({
   setAddingPeer,
   setError,
   setRepairingP2P,
-  setSelectedAgentDid,
+  selectedAgentDidRef,
+  selectAgent,
   setStarting,
 }: PeerActionParams) {
   async function onInitLocalRuntime(label?: string | null) {
@@ -52,7 +54,7 @@ export function createDesktopShellPeerActions({
       if (!next) {
         throw new Error("desktop client failed to start after local runtime init");
       }
-      setSelectedAgentDid(summary.agentDid);
+      selectAgent(summary.agentDid);
       return summary;
     } catch (err) {
       if (clientWasRunning) {
@@ -101,10 +103,13 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function onRemovePeer(peerId: string) {
+  async function onRemovePeer(peerId: string, agentDid?: string) {
     setError(null);
     try {
       const next = await mutateSnapshot(() => api.removePeer(peerId));
+      if (agentDid && selectedAgentDidRef.current === agentDid) {
+        selectAgent(null);
+      }
       return next;
     } catch (err) {
       const message = formatPeerConnectionError(err, "remove-peer");

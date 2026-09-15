@@ -13,7 +13,10 @@ import type {
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
 import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
-import type { DesktopStartupPhase } from "../lib/loadingStatus";
+import {
+  projectStartupPhaseAfterSnapshot,
+  type DesktopStartupPhase,
+} from "../lib/loadingStatus";
 import { restoreManagedServer } from "./managedServerLifecycle";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 
@@ -71,18 +74,12 @@ export function useDesktopClientLifecycle({
   }
 
   function resolveStartupPhase(next: DesktopClientSnapshot) {
-    if (
-      startupPhaseRef.current !== "loading-configuration" &&
-      startupPhaseRef.current !== "starting-client"
-    ) {
-      return;
-    }
-    setStartupPhase(
-      next.client ||
-        (!next.bootstrap.clientStateExists && next.bootstrap.savedPeers.length === 0)
-        ? "ready"
-        : "starting-client",
+    const phase = projectStartupPhaseAfterSnapshot(
+      startupPhaseRef.current,
+      Boolean(next.client),
+      !next.bootstrap.clientStateExists && next.bootstrap.savedPeers.length === 0,
     );
+    if (phase !== startupPhaseRef.current) setStartupPhase(phase);
   }
 
   async function refreshSnapshot() {

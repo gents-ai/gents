@@ -5,6 +5,7 @@ import type {
   BackendSaveRequest,
   ConfigComponentsPatchRequest,
   ConfigComponentsApplyRequest,
+  ContextDeleteRequest,
   BehaviorSaveRequest,
   CodexLoginResult,
   DesktopApiAdapter,
@@ -92,6 +93,19 @@ export function createDesktopShellConfigActions({
     try {
       const next = await mutateSnapshot(() => api.deleteSkillConfig(request));
       return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteContextConfig(request: ContextDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      return await mutateSnapshot(() => api.deleteContextConfig(request));
     } catch (err) {
       setError(String(err));
       throw err;
@@ -373,6 +387,7 @@ export function createDesktopShellConfigActions({
     onApplyConfigComponents,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
+    onDeleteContextConfig,
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
     onDeleteEventSourceConfig,
