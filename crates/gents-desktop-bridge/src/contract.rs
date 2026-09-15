@@ -7,61 +7,6 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
-// 7.7: additive — canonical runtime execution defaults in the inference setup catalog.
-// 7.6: additive — explicit native graph tool selection in canonical BuiltInTools.
-// 7.5: additive — versioned provider setup catalog, model discovery, and
-//      provider/model recommendation commands.
-// 7.4: additive — managed-runtime root/ceiling launch, validation, restart,
-//      pairing readiness, and runtime-confirmed effective status.
-// 7.3: additive — Context delete plus backend tags and Skill interface/tags.
-// 7.2: additive — Claude subscription login/cancel and desktop://claude-login-url.
-// 7.1: additive — TaskView carries canonical task hooks and tags.
-// 7.0: breaking — canonical session and configuration vocabulary replaces
-//      conversation, tool-selection, and event-trigger command/DTO names.
-// 6.3: additive — BridgeError.endpoint carries the unreachable endpoint as a
-//      structured field for EndpointUnreachable errors, so callers stop
-//      regexing it back out of `message` (#1339).
-// 6.2: additive — MCPServiceHealthView.displayState is the projected
-//      three-state MCP health classification (ToolServiceHealthState::project);
-//      the desktop no longer re-derives a synthetic "stuck" state from status.
-// 6.1: additive — DesktopInitSummary is generated from the Rust struct
-//      (camelCase wire shape) instead of a hand-written TS mirror (#1340).
-// 6.0: breaking — exact-version matching, single-owner client state, and
-//      compatibility aliases removed; includes the 5.2 goal save fields.
-//      Also in 6.0: AgentRequest.status is removed; request state is carried
-//      solely by lifecycle_state (RequestLifecycleState). SubagentNodeView,
-//      TaskRunResult, and TaskRunSummaryView drop their status fields.
-// 5.2: additive — goal capability and Task goal save fields may be omitted to
-//      preserve stored values; explicit null clears the override/declaration.
-// 5.1: additive — durable-goal tool capabilities and Task declarations.
-// 5.0: breaking — sync health exposes DefraDB gauges and removes duplicated
-//      pairing/route retry fields.
-// 4.2: additive — SessionHydrationView.coveredCount distinguishes signed
-//      manifest coverage from all locally merged transcript rows.
-// 4.1: additive — bootstrap reports persisted client state independently from
-//      the materialized peer directory so enrollment recovery can restart.
-// 4.0: breaking — status-first enrollment replaces unauthenticated peer add.
-// 3.0: breaking — runtime-authored behavior readiness is required on every
-//       deployment and duplicate AgentRuntime readiness counters are removed.
-// 2.0: breaking — global sync health no longer embeds selected-session
-//       hydration; hydration wakes use the existing store reason.
-// 1.6: additive — explicit session hydration retry command.
-// 1.5: additive — session hydration / sync-health snapshot fields and
-//       `desktop://client-updated` reason `hydration`.
-// 1.4: additive — owner-scoped mailbox read/start/dismiss commands.
-// 1.3: additive — query-level transcript page evidence and exact-total marker.
-// 1.2: additive — observer response in-place/copy-on-write merge counters.
-// 1.1: additive — revisioned desktop_session_live_delta read and store event metadata.
-// 1.0: breaking — clients submit requests; desktop session-fork projection removed.
-// 0.8: additive — managed-server tray event inventory.
-// 0.7: additive — retry eligibility projection and agent-scoped session rename.
-// 0.6: additive — predecessor-aware desktop_request_retry command.
-// 0.5: additive — inference onboarding (probe endpoint, Codex login/cancel in
-// config-write) merged from main (#871); desktop://codex-login-url event.
-// 0.4: additive — Pairing error code; fingerprint set inventory aligned with
-// grantable [[set]] entries + default (core/client-lifecycle).
-// 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
-// 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
 pub const CONTRACT_VERSION: &str = "7.7";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client

@@ -370,6 +370,17 @@ struct TokenResponse {
     account: Option<serde_json::Value>,
 }
 
+fn account_label(account: &serde_json::Value) -> Option<String> {
+    ["email_address", "uuid"].into_iter().find_map(|key| {
+        account
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
+}
+
 pub(crate) async fn exchange_code(
     options: &LoginOptions,
     redirect_uri: &str,
@@ -412,12 +423,7 @@ pub(crate) async fn exchange_code(
         refresh_token: tokens.refresh_token,
         expires_in: tokens.expires_in,
         scope: tokens.scope,
-        account_id: tokens
-            .account
-            .as_ref()
-            .and_then(|account| account.get("email_address").or_else(|| account.get("uuid")))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned),
+        account_id: tokens.account.as_ref().and_then(account_label),
     })
 }
 
@@ -435,6 +441,29 @@ fn redacted_transport_error(error: reqwest::Error) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_label_prefers_email_and_falls_back_to_a_nonempty_id() {
+        use serde_json::json;
+        assert_eq!(
+            account_label(&json!({"email_address":" person@example.test ","uuid":"account-1"})),
+            Some("person@example.test".into())
+        );
+        for email in [json!(null), json!(" "), json!(false)] {
+            assert_eq!(
+                account_label(&json!({"email_address":email,"uuid":"account-1"})),
+                Some("account-1".into())
+            );
+        }
+        assert_eq!(
+            account_label(&json!({"uuid":"account-1"})),
+            Some("account-1".into())
+        );
+        assert_eq!(
+            account_label(&json!({"email_address":null,"uuid":" "})),
+            None
+        );
+    }
 
     fn options() -> LoginOptions {
         LoginOptions {
