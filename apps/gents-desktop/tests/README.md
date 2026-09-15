@@ -40,8 +40,10 @@ The desktop test stack has three layers:
 - `npm run perf:mobile -- --runs=5` measures deterministic mobile interaction
   fixtures at an iPhone viewport. It writes JSON plus Markdown under
   `test-results/mobile-performance/`; only bounded row, payload, and refresh
-  assertions can fail the command. Elapsed time, React work, JavaScript heap,
-  and CPU-task proxies are evidence, not CI timing gates.
+  assertions plus the retained long-transcript typing budgets can fail the
+  command. Elapsed time, React work, JavaScript heap, and CPU-task proxies are
+  recorded as evidence. See [CHAT_RESPONSIVENESS.md](./CHAT_RESPONSIVENESS.md)
+  for the workload, budgets, reference measurements, and native checklist.
 - `npm run test:ui:native:preflight` runs the non-GUI native Tauri preflight.
 
 Root Makefile shortcuts mirror the common commands, including
