@@ -52,6 +52,28 @@ export function Row({
   );
 }
 
+export function StackedRow({
+  label,
+  description,
+  htmlFor,
+  children,
+}: {
+  label: ReactNode;
+  description?: ReactNode;
+  htmlFor?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <FieldRow className="flex-col items-stretch gap-3">
+      <FieldContent>
+        <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
+        {description && <FieldDescription>{description}</FieldDescription>}
+      </FieldContent>
+      {children}
+    </FieldRow>
+  );
+}
+
 /* a read-only value, in mono when it is an identifier */
 export function Fact({
   children,

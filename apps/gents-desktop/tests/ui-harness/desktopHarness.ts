@@ -231,7 +231,7 @@ export function createDesktopUiHarness(
           itemKey: "mailbox-mobile-key",
           requesterDid: "did:key:z6MkRequesterWithAnUnbrokenIdentifierForMobile",
           agentDid: AGENT_DID,
-          status: "pending",
+          status: "open",
           kind: "notification",
           action: "ack",
           title:

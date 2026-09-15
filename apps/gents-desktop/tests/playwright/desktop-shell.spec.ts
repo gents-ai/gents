@@ -136,6 +136,46 @@ test.describe("kit shell", () => {
     await expect(page.getByTestId("mailbox-screen")).toBeVisible();
   });
 
+  test("keeps dialogs inside short windows", async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 300 });
+    await gotoHarness(page);
+    await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "Add agent" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Add agent" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveCSS("max-height", "268px");
+    await expect(dialog).toHaveCSS("overflow-y", "auto");
+    await dialog.evaluate((element) =>
+      element.getAnimations().forEach((animation) => animation.finish()),
+    );
+    const bounds = await dialog.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.y).toBeGreaterThanOrEqual(15);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(285);
+  });
+
+  test("contains mailbox text and preserves horizontal code scrolling on phones", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoHarness(page, "mailbox-overflow");
+    await page.getByRole("button", { name: "Menu" }).click();
+    await page.getByRole("link", { name: "Mailbox" }).click();
+    await expect(page.getByTestId("mailbox-screen")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
+
+    const payload = page.getByTestId("mailbox-screen").locator("pre");
+    await expect(payload).toBeVisible();
+    const widths = await payload.evaluate((element) => ({
+      lineWidth: element.scrollWidth,
+      viewportWidth: element.parentElement?.clientWidth ?? 0,
+      whiteSpace: getComputedStyle(element).whiteSpace,
+    }));
+    expect(widths.lineWidth).toBeGreaterThan(widths.viewportWidth);
+    expect(widths.whiteSpace).toBe("pre");
+  });
+
   test("empty fleet is the first-run setup", async ({ page }) => {
     await gotoHarness(page, "empty-fleet");
     await expect(page.getByTestId("setup-screen")).toBeVisible();
