@@ -295,9 +295,28 @@ async function runSample(browserInstance, sampleIndex) {
     await measureScenario(
       page,
       cdp,
-      "typing_burst_streaming_long_transcript",
+      "typing_burst_active_turn_no_live_deltas_long_transcript",
       () => typeBurstToNextPaint(page, typingText),
       () => typingPaintEvidence(page, typingText.length, fixture.typingLoadedPages),
+    ),
+  );
+  await page.getByRole("textbox", { name: "Message" }).fill("");
+  await settleRender(page);
+
+  scenarios.push(
+    await measureScenario(
+      page,
+      cdp,
+      "typing_burst_concurrent_stream_deltas_long_transcript",
+      () => typeBurstWithConcurrentStreamDeltas(page, typingText),
+      async () => ({
+        ...(await typingPaintEvidence(
+          page,
+          typingText.length,
+          fixture.typingLoadedPages,
+        )),
+        ...(await page.evaluate(() => window.__GENTS_CONCURRENT_STREAM_EVIDENCE__)),
+      }),
     ),
   );
   await page.getByRole("textbox", { name: "Message" }).fill("");
@@ -408,6 +427,18 @@ async function measureScenario(page, cdp, id, action, extra = async () => ({})) 
 }
 
 async function typeBurstToNextPaint(page, text) {
+  await prepareTypingPaintMeasurement(page);
+  const input = page.getByRole("textbox", { name: "Message" });
+  await input.focus();
+  await input.pressSequentially(text, { delay: 1 });
+  await page.waitForFunction(
+    (expectedCharacters) =>
+      (window.__GENTS_TYPING_PAINT_SAMPLES__?.length ?? 0) === expectedCharacters,
+    text.length,
+  );
+}
+
+async function prepareTypingPaintMeasurement(page) {
   await page.evaluate(() => {
     const samples = [];
     Object.defineProperty(window, "__GENTS_TYPING_PAINT_SAMPLES__", {
@@ -432,11 +463,67 @@ async function typeBurstToNextPaint(page, text) {
     window.__GENTS_TYPING_INPUT_HANDLER__ = recordNextPaint;
     document.addEventListener("input", recordNextPaint, { capture: true });
   });
+}
+
+async function typeBurstWithConcurrentStreamDeltas(page, text) {
+  await prepareTypingPaintMeasurement(page);
+  await page.evaluate((expectedCharacters) => {
+    window.__GENTS_CONCURRENT_STREAM_EVIDENCE__ = {
+      streamUpdateCount: 0,
+      firstStreamUpdateAtMs: null,
+      lastStreamUpdateAtMs: null,
+      typingStartedAtMs: null,
+      typingFinishedAtMs: null,
+      liveDeltaReadsDuringTyping: 0,
+      lastSequence: null,
+    };
+    const evidence = window.__GENTS_CONCURRENT_STREAM_EVIDENCE__;
+    let inputCount = 0;
+    const observeTypingBoundary = (event) => {
+      inputCount += 1;
+      if (inputCount === 1) {
+        evidence.typingStartedAtMs = event.timeStamp;
+        window.__GENTS_CONCURRENT_STREAM_PROMISE__ = (async () => {
+          const count = window.__GENTS_MOBILE_PERFORMANCE__.fixture.streamUpdateCount;
+          for (let index = 0; index < count; index += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 4));
+            const updatedAt = performance.now();
+            evidence.firstStreamUpdateAtMs ??= updatedAt;
+            evidence.lastStreamUpdateAtMs = updatedAt;
+            evidence.lastSequence = window.__GENTS_MOBILE_PERFORMANCE__.streamUpdate();
+            evidence.streamUpdateCount += 1;
+          }
+          return evidence.lastSequence;
+        })();
+      }
+      if (inputCount === expectedCharacters) {
+        evidence.typingFinishedAtMs = event.timeStamp;
+        evidence.liveDeltaReadsDuringTyping = window.__GENTS_MOBILE_PERFORMANCE__
+          .snapshot()
+          .bridgeCalls.filter(
+            (call) => call.command === "fetchSessionLiveDelta",
+          ).length;
+        document.removeEventListener("input", observeTypingBoundary, {
+          capture: true,
+        });
+      }
+    };
+    document.addEventListener("input", observeTypingBoundary, { capture: true });
+  }, text.length);
   const input = page.getByRole("textbox", { name: "Message" });
   await input.focus();
-  await input.pressSequentially(text, { delay: 1 });
+  await input.pressSequentially(text, { delay: 2 });
+  const lastSequence = await page.evaluate(
+    async () => await window.__GENTS_CONCURRENT_STREAM_PROMISE__,
+  );
+  await page
+    .getByText(`stream-chunk-${lastSequence}`, { exact: false })
+    .last()
+    .waitFor();
   await page.waitForFunction(
-    () => (window.__GENTS_TYPING_PAINT_SAMPLES__?.length ?? 0) > 0,
+    (expectedCharacters) =>
+      (window.__GENTS_TYPING_PAINT_SAMPLES__?.length ?? 0) === expectedCharacters,
+    text.length,
   );
 }
 
@@ -566,9 +653,13 @@ function evaluateStructuralAssertions(samples) {
   const pageOlder = all("page_older_transcript_rows");
   const sustained = all("sustained_streamed_response");
   const burst = all("update_coalescing_burst");
-  const typingStreaming = all("typing_burst_streaming_long_transcript");
+  const typingActiveTurn = all(
+    "typing_burst_active_turn_no_live_deltas_long_transcript",
+  );
+  const typingConcurrent = all("typing_burst_concurrent_stream_deltas_long_transcript");
   const typingIdle = all("typing_burst_idle_long_transcript");
-  const typing = [...typingStreaming, ...typingIdle];
+  const typingWithoutLiveDeltas = [...typingActiveTurn, ...typingIdle];
+  const typing = [...typingWithoutLiveDeltas, ...typingConcurrent];
   return [
     {
       id: "large_tip_mounts_one_page",
@@ -618,11 +709,46 @@ function evaluateStructuralAssertions(samples) {
       ),
     },
     {
-      id: "typing_has_no_bridge_calls",
+      id: "active_turn_without_deltas_and_idle_typing_have_no_bridge_calls",
       policy: "hard",
       limit: 0,
-      observedMax: Math.max(...typing.map((scenario) => scenario.bridge.callCount)),
-      passed: typing.every((scenario) => scenario.bridge.callCount === 0),
+      observedMax: Math.max(
+        ...typingWithoutLiveDeltas.map((scenario) => scenario.bridge.callCount),
+      ),
+      passed: typingWithoutLiveDeltas.every(
+        (scenario) => scenario.bridge.callCount === 0,
+      ),
+    },
+    {
+      id: "concurrent_typing_observes_live_deltas_without_snapshots_or_submit",
+      policy: "hard",
+      limit: samples[0].fixture.streamUpdateCount,
+      observedMax: Math.max(
+        ...typingConcurrent.map(
+          (scenario) => scenario.bridge.byCommand.fetchSessionLiveDelta?.count ?? 0,
+        ),
+      ),
+      passed: typingConcurrent.every((scenario) => {
+        const liveDeltaReads =
+          scenario.bridge.byCommand.fetchSessionLiveDelta?.count ?? 0;
+        return (
+          scenario.streamUpdateCount === samples[0].fixture.streamUpdateCount &&
+          scenario.firstStreamUpdateAtMs >= scenario.typingStartedAtMs &&
+          scenario.firstStreamUpdateAtMs < scenario.typingFinishedAtMs &&
+          scenario.lastStreamUpdateAtMs <= scenario.typingFinishedAtMs &&
+          scenario.liveDeltaReadsDuringTyping > 0 &&
+          scenario.liveDeltaReadsDuringTyping === liveDeltaReads &&
+          liveDeltaReads > 0 &&
+          liveDeltaReads <= samples[0].fixture.streamUpdateCount &&
+          scenario.bridge.responseBytes <= 64 * 1024 &&
+          (scenario.bridge.byCommand.fetchSessionLiveDelta?.maxResponseBytes ?? 0) <=
+            2 * 1024 &&
+          (scenario.bridge.byCommand.fetchDesktopSnapshot?.count ?? 0) === 0 &&
+          (scenario.bridge.byCommand.fetchSessionSnapshot?.count ?? 0) === 0 &&
+          (scenario.bridge.byCommand.sendChatMessage?.count ?? 0) === 0 &&
+          scenario.bridge.callCount === liveDeltaReads
+        );
+      }),
     },
     {
       id: "typing_event_to_next_paint_p95",
