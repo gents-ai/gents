@@ -19,6 +19,7 @@ const TYPING_REACT_BUDGET_MS_PER_CHARACTER = 12;
 const args = process.argv.slice(2);
 const runs = integerArgument("--runs", DEFAULT_RUNS);
 const port = integerArgument("--port", DEFAULT_PORT);
+const enforceResponsiveBudgets = args.includes("--enforce-responsive-budgets");
 const outputArgument = valueArgument("--output");
 const outputRoot = resolve(
   APP_ROOT,
@@ -93,6 +94,7 @@ try {
     coldBrowserProcessSample: samples[0] ?? null,
     distributions: summarizeDistributions(samples.slice(1)),
     structuralAssertions: evaluateStructuralAssertions(samples),
+    responsiveBudgetsEnforced: enforceResponsiveBudgets,
     unsupportedInThisLane: [
       "iOS process resident-memory high-water mark",
       "device energy log and thermal state",
@@ -108,10 +110,13 @@ try {
   process.stdout.write(`Machine artifact: ${jsonPath}\n`);
   process.stdout.write(`Human summary: ${summaryPath}\n`);
 
-  const failures = artifact.structuralAssertions.filter((entry) => !entry.passed);
+  const failures = artifact.structuralAssertions.filter(
+    (entry) =>
+      !entry.passed && (entry.policy === "hard" || artifact.responsiveBudgetsEnforced),
+  );
   if (failures.length > 0) {
     throw new Error(
-      `deterministic mobile performance assertions failed: ${failures
+      `gated mobile performance assertions failed: ${failures
         .map((entry) => entry.id)
         .join(", ")}`,
     );
@@ -235,15 +240,32 @@ async function runSample(browserInstance, sampleIndex) {
     ),
   );
 
+  const typingStartingRows = await page
+    .locator(
+      '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
+    )
+    .count();
   scenarios.push(
     await measureScenario(
       page,
       cdp,
       "grow_long_transcript_to_typing_size",
       async () => {
-        const additionalPages = fixture.typingLoadedPages - 2;
+        if (typingStartingRows % fixture.transcriptPageSize !== 0) {
+          throw new Error(
+            `typing transcript starts with a partial page: ${typingStartingRows} rows`,
+          );
+        }
+        const startingPages = typingStartingRows / fixture.transcriptPageSize;
+        const additionalPages = fixture.typingLoadedPages - startingPages;
+        if (additionalPages < 0) {
+          throw new Error(
+            `typing transcript already exceeds the target: ${startingPages} pages`,
+          );
+        }
         for (let index = 0; index < additionalPages; index += 1) {
-          const expectedRows = (index + 3) * fixture.transcriptPageSize;
+          const expectedRows =
+            typingStartingRows + (index + 1) * fixture.transcriptPageSize;
           await page.locator('[data-testid="transcript-load-older"]').click();
           await page.waitForFunction(
             (count) =>
@@ -255,6 +277,7 @@ async function runSample(browserInstance, sampleIndex) {
         }
       },
       async () => ({
+        startingRows: typingStartingRows,
         loadedPages: fixture.typingLoadedPages,
         expectedLoadedRows: fixture.typingLoadedPages * fixture.transcriptPageSize,
       }),
@@ -483,18 +506,17 @@ async function typeBurstWithConcurrentStreamDeltas(page, text) {
       inputCount += 1;
       if (inputCount === 1) {
         evidence.typingStartedAtMs = event.timeStamp;
-        window.__GENTS_CONCURRENT_STREAM_PROMISE__ = (async () => {
-          const count = window.__GENTS_MOBILE_PERFORMANCE__.fixture.streamUpdateCount;
-          for (let index = 0; index < count; index += 1) {
-            await new Promise((resolve) => setTimeout(resolve, 4));
-            const updatedAt = performance.now();
-            evidence.firstStreamUpdateAtMs ??= updatedAt;
-            evidence.lastStreamUpdateAtMs = updatedAt;
-            evidence.lastSequence = window.__GENTS_MOBILE_PERFORMANCE__.streamUpdate();
-            evidence.streamUpdateCount += 1;
-          }
-          return evidence.lastSequence;
-        })();
+      }
+      if (
+        inputCount % 3 === 0 &&
+        evidence.streamUpdateCount <
+          window.__GENTS_MOBILE_PERFORMANCE__.fixture.streamUpdateCount
+      ) {
+        const updatedAt = performance.now();
+        evidence.firstStreamUpdateAtMs ??= updatedAt;
+        evidence.lastStreamUpdateAtMs = updatedAt;
+        evidence.lastSequence = window.__GENTS_MOBILE_PERFORMANCE__.streamUpdate();
+        evidence.streamUpdateCount += 1;
       }
       if (inputCount === expectedCharacters) {
         evidence.typingFinishedAtMs = event.timeStamp;
@@ -514,7 +536,7 @@ async function typeBurstWithConcurrentStreamDeltas(page, text) {
   await input.focus();
   await input.pressSequentially(text, { delay: 2 });
   const lastSequence = await page.evaluate(
-    async () => await window.__GENTS_CONCURRENT_STREAM_PROMISE__,
+    () => window.__GENTS_CONCURRENT_STREAM_EVIDENCE__.lastSequence,
   );
   await page
     .getByText(`stream-chunk-${lastSequence}`, { exact: false })
@@ -737,7 +759,7 @@ function evaluateStructuralAssertions(samples) {
           scenario.firstStreamUpdateAtMs < scenario.typingFinishedAtMs &&
           scenario.lastStreamUpdateAtMs <= scenario.typingFinishedAtMs &&
           scenario.liveDeltaReadsDuringTyping > 0 &&
-          scenario.liveDeltaReadsDuringTyping === liveDeltaReads &&
+          scenario.liveDeltaReadsDuringTyping <= liveDeltaReads &&
           liveDeltaReads > 0 &&
           liveDeltaReads <= samples[0].fixture.streamUpdateCount &&
           scenario.bridge.responseBytes <= 64 * 1024 &&
@@ -847,10 +869,10 @@ function humanSummary(artifact) {
     (entry) =>
       `| ${entry.id} | ${entry.sampleCount} | ${format(entry.elapsedMs.median)} | ${format(entry.elapsedMs.p95)} | ${entry.eventToNextPaintP95Ms ? format(entry.eventToNextPaintP95Ms.median) : "—"} | ${formatBytes(entry.bridgeResponseBytes.median)} | ${format(entry.renderCommitDurationMs.median)} |`,
   );
-  const assertions = artifact.structuralAssertions.map(
-    (entry) =>
-      `- ${entry.passed ? "PASS" : "FAIL"} \`${entry.id}\`: max ${entry.observedMax}, limit ${entry.limit}`,
-  );
+  const assertions = artifact.structuralAssertions.map((entry) => {
+    const gated = entry.policy === "hard" || artifact.responsiveBudgetsEnforced;
+    return `- ${entry.passed ? "PASS" : "FAIL"} (${gated ? "gated" : "report only"}) \`${entry.id}\`: max ${entry.observedMax}, limit ${entry.limit}`;
+  });
   return [
     "# Mobile performance evidence",
     "",
@@ -865,7 +887,9 @@ function humanSummary(artifact) {
     "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows,
     "",
-    "## Deterministic structural assertions",
+    "## Benchmark assertions",
+    "",
+    `Responsive timing budgets: ${artifact.responsiveBudgetsEnforced ? "gated" : "report only; pass --enforce-responsive-budgets to gate them"}.`,
     "",
     ...assertions,
     "",

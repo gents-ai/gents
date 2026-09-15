@@ -5,8 +5,13 @@
 Run the isolated deterministic workload from `apps/gents-desktop`:
 
 ```bash
-npm run perf:mobile -- --runs=5
+npm run perf:mobile -- --runs=5 --enforce-responsive-budgets
 ```
+
+The runner always records the responsive timing budgets. By default, only
+deterministic assertions with `policy: hard` affect its exit code, matching the
+CI lane's shape-contract role. Use `--enforce-responsive-budgets` for a controlled
+local acceptance run where timing failures should fail the command.
 
 The `mobile-interactions-v1` fixture opens a 600-turn session, deliberately loads
 five 40-turn pages, and types 160 characters in the canonical composer in three
@@ -47,6 +52,27 @@ input-to-paint p95 and 4.92 ms of React work per character. Neither historical
 workload made a bridge call, before or after. No long tasks occurred in the
 optimized warm samples. Concurrent-delta measurements must come from a new
 artifact and should not be inferred from this table.
+
+### Concurrent-delta review evidence
+
+The final input-coupled review follow-up ran on 2026-09-15 with five samples and
+`--enforce-responsive-budgets`. It used baseline commit
+`67e67beada6142a0b0a9952add94c3edc5990304` on
+`perf/onboarding-chat-responsiveness`, plus a dirty review tree identified by
+SHA-256 fingerprint
+`8c832d88ac14b0934e060355e83c01eb996161403b7f4e710c372e98ae720020`.
+The local artifact is
+`/tmp/gents-chat-input-coupled-final-5/mobile-performance.json`; preserve or
+publish it separately when durable provenance is required.
+
+Every sample captured all 160 inputs and interleaved exactly 50 streamed updates
+with 50 live-delta bridge reads. The four-sample warm distribution had a 25.20 ms
+median input-to-paint p95 and a 25.64 ms worst sample. Worst React work across all
+five samples was 6.28 ms per character. Each concurrent burst transferred 16,479
+bridge response bytes, with a 331-byte largest response, and made no snapshot or
+submit call. All hard assertions and opt-in responsive budgets passed. This is
+dirty-tree review evidence, not a clean-baseline replacement for the historical
+before/after table above.
 
 ## Native acceptance checklist
 
