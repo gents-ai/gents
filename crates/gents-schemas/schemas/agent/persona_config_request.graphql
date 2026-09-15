@@ -40,6 +40,11 @@ type PersonaConfigRequest @branchable {
     root: String @immutable
     preset: String @immutable
     profile_id: String @immutable
+    # Exact model-facing edit field-presence mask. A listed nullable value is
+    # an explicit clear; omission from this list preserves the canonical value.
+    # Included in the immutable signature payload. DefraDB cannot mark list
+    # fields @immutable, so any post-signature change fails reconciliation.
+    edit_fields: [String]
     # When true, an admitted create/edit atomically promotes the applied
     # behavior to AgentPrincipal.default_behavior_id. Disable may not set it.
     make_default: Boolean @immutable

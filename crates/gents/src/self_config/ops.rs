@@ -1,6 +1,6 @@
 //! DID-parameterized self-configuration core (#654).
 //!
-//! Transport-agnostic operations behind the `get_my_config` / `configure_*`
+//! Transport-agnostic operations behind the model-facing `config` command
 //! tools: every write is a transactional read-modify-write on one owned
 //! document, merged through the Lean-fenced patch layer
 //! (`config_client::patch`), validated wholesale, and executed under the
@@ -55,7 +55,7 @@ pub struct PatchOutcome {
     pub effect: &'static str,
 }
 
-/// Behavior anchor loaded fresh per call, so a prior `configure_behavior`
+/// Behavior anchor loaded fresh per call, so a prior `config behavior` edit
 /// re-pointing `context_id`/`inference_profile_id` is
 /// honored by the next call.
 pub(crate) struct BehaviorAnchor {
@@ -80,7 +80,7 @@ impl BehaviorAnchor {
 
 impl SelfConfigCore {
     /// Select focused sibling capabilities through the same patch transaction
-    /// owner as configure_tools. This is deliberately separate from signed
+    /// owner as `config tools`. This is deliberately separate from signed
     /// creation so the replicated command schema/genesis stays unchanged.
     pub(crate) async fn select_sibling_tools(
         &self,
@@ -90,7 +90,7 @@ impl SelfConfigCore {
     ) -> Result<PatchOutcome> {
         anyhow::ensure!(
             enable_lsp.is_some() || enable_graph_tools.is_some() || network_mode.is_some(),
-            "configure_tools requires an explicit tool selection"
+            "config behavior tools requires an explicit tool selection"
         );
         validate_tool_network_selection(network_mode)?;
         let outcome = ConfigAccess::transact_local(
@@ -518,7 +518,7 @@ pub fn apply_tool_grant_selection(
 pub fn validate_tool_network_selection(network_mode: Option<CommandNetworkMode>) -> Result<()> {
     anyhow::ensure!(
         network_mode.is_none_or(|mode| mode == CommandNetworkMode::Disabled),
-        "configure_tools may only narrow network_mode to disabled"
+        "config behavior tools may only narrow network_mode to disabled"
     );
     Ok(())
 }

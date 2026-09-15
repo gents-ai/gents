@@ -404,9 +404,9 @@ fn explain_builtin_reads(
             crate::self_config::self_config_tool_names(&surface.self_config),
         );
     } else if config.self_config_requested() {
-        builder.unavailable("self_config", crate::self_config::GET_MY_CONFIG_TOOL_NAME);
+        builder.unavailable("self_config", crate::self_config::CONFIG_TOOL_NAME);
     } else {
-        builder.exclude("self_config", crate::self_config::GET_MY_CONFIG_TOOL_NAME);
+        builder.exclude("self_config", crate::self_config::CONFIG_TOOL_NAME);
     }
 
     if surface.lsp.is_some() {

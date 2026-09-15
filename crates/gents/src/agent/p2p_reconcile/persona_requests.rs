@@ -219,7 +219,7 @@ fn validate_raw_persona_document(doc: &PersonaRequestDoc) -> Result<()> {
     use gents_protocol::canonical::{
         parse_utc_seconds, require_enum, require_identifier, require_optional_identifier,
     };
-    use gents_protocol::persona::MAX_PERSONA_FIELD_BYTES;
+    use gents_protocol::persona::{MAX_PERSONA_FIELD_BYTES, PERSONA_EDIT_FIELDS};
     require_identifier("persona document id", &doc.doc_id)?;
     for (name, value) in [
         ("request_key", doc.request_key.as_str()),
@@ -232,6 +232,28 @@ fn validate_raw_persona_document(doc: &PersonaRequestDoc) -> Result<()> {
         anyhow::ensure!(
             value.len() <= MAX_PERSONA_FIELD_BYTES,
             "{name} exceeds maximum length"
+        );
+    }
+    let edit_fields = doc.edit_fields.iter().collect::<BTreeSet<_>>();
+    anyhow::ensure!(
+        edit_fields.len() == doc.edit_fields.len(),
+        "edit_fields contains duplicates"
+    );
+    anyhow::ensure!(
+        doc.edit_fields
+            .iter()
+            .all(|field| PERSONA_EDIT_FIELDS.contains(&field.as_str())),
+        "edit_fields contains an unknown field"
+    );
+    if doc.op_raw == "edit" {
+        anyhow::ensure!(
+            !doc.edit_fields.is_empty() || doc.make_default,
+            "edit requires at least one changed field or make_default=true"
+        );
+    } else {
+        anyhow::ensure!(
+            doc.edit_fields.is_empty(),
+            "edit_fields is only valid for edit"
         );
     }
     require_enum(
@@ -453,6 +475,7 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
                 root
                 preset
                 profile_id
+                edit_fields
                 make_default
                 created_at
                 status
@@ -662,6 +685,7 @@ fn persona_request_doc_from_row(row: PersonaRequestRow) -> Option<PersonaRequest
         root: row.root,
         preset: row.preset,
         profile_id: row.profile_id,
+        edit_fields: row.edit_fields.unwrap_or_default(),
         make_default: row.make_default.unwrap_or(false),
         created_at: row.created_at,
         status: row.status,
@@ -690,6 +714,7 @@ fn local_persona_record(doc: &PersonaRequestDoc) -> LocalPersonaRequestRecord {
         root: doc.root.clone(),
         preset: doc.preset.clone(),
         profile_id: doc.profile_id.clone(),
+        edit_fields: doc.edit_fields.clone(),
         make_default: doc.make_default,
         created_at: doc.created_at.clone().unwrap_or_default(),
         local_signature: doc.local_signature.clone(),
@@ -776,6 +801,8 @@ struct PersonaRequestRow {
     preset: Option<String>,
     #[serde(default)]
     profile_id: Option<String>,
+    #[serde(default)]
+    edit_fields: Option<Vec<String>>,
     #[serde(default)]
     make_default: Option<bool>,
     #[serde(default)]
@@ -1399,6 +1426,7 @@ mod tests {
             root: Some("/repo/allowed".to_string()),
             preset: Some("write".to_string()),
             profile_id: Some("profile-1".to_string()),
+            edit_fields: Vec::new(),
             make_default: true,
             created_at: "2026-07-23T00:00:00Z".to_string(),
             local_signature: Vec::new(),

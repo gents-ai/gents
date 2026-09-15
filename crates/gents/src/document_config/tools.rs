@@ -471,7 +471,7 @@ pub struct SelfConfigTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub self_config_no_lockout: Option<bool>,
-    /// Opt-in guardrail: `get_my_config` accepts a patch preview.
+    /// Opt-in guardrail: `config` accepts document patch previews.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub self_config_dry_run: Option<bool>,

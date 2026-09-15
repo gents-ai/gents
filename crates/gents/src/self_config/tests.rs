@@ -22,13 +22,8 @@ fn tool_names_follow_enabled_categories() {
     let names = self_config_tool_names(&config(&["behavior", "tools", "profile"]));
     assert_eq!(
         names,
-        vec![
-            GET_MY_CONFIG_TOOL_NAME.to_string(),
-            CONFIGURE_BEHAVIOR_TOOL_NAME.to_string(),
-            CONFIGURE_PROFILE_TOOL_NAME.to_string(),
-            CONFIGURE_TOOLS_TOOL_NAME.to_string(),
-        ],
-        "get_my_config always leads; configure tools follow the sorted category set"
+        vec![CONFIG_TOOL_NAME.to_string()],
+        "all granted categories share one model-facing config command"
     );
 
     let disabled = SelfConfigToolConfig::default();
@@ -38,15 +33,11 @@ fn tool_names_follow_enabled_categories() {
 #[test]
 fn pack_install_requires_its_separate_opt_in() {
     let without_install = config(&["behavior"]);
-    assert!(!self_config_tool_names(&without_install)
-        .iter()
-        .any(|name| name == INSTALL_PACK_TOOL_NAME));
+    assert_eq!(self_config_tool_names(&without_install), [CONFIG_TOOL_NAME]);
 
     let mut with_install = without_install;
     with_install.enable_pack_install = true;
-    assert!(self_config_tool_names(&with_install)
-        .iter()
-        .any(|name| name == INSTALL_PACK_TOOL_NAME));
+    assert_eq!(self_config_tool_names(&with_install), [CONFIG_TOOL_NAME]);
 }
 
 #[test]
@@ -96,7 +87,19 @@ async fn build_registers_gated_family() {
         None,
         &config(&["behavior", "backend"]),
     );
-    assert!(!tools.is_empty(), "a gated config must register tools");
+    assert_eq!(
+        tools.len(),
+        1,
+        "self-configuration has one model-facing tool"
+    );
+    assert_eq!(tools[0].name(), CONFIG_TOOL_NAME);
+    let definition = tools[0].definition(String::new()).await;
+    assert!(definition.description.contains("Behavior -> Context"));
+    assert!(definition.description.contains("one Tools document"));
+    assert!(definition
+        .description
+        .contains("Behavior -> InferenceProfile -> Backend"));
+    assert_eq!(definition.parameters["required"], json!(["argv"]));
 }
 
 #[tokio::test]
@@ -118,8 +121,8 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     );
     let tool = tools
         .iter()
-        .find(|tool| tool.name() == INSTALL_PACK_TOOL_NAME)
-        .expect("install_pack registered");
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .expect("config registered");
     for name in [
         LIST_GRAPHS_TOOL_NAME,
         RUN_GRAPH_TOOL_NAME,
@@ -133,7 +136,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         );
     }
     let output = tool
-        .call(serde_json::json!({"package": "code_review"}).to_string())
+        .call(serde_json::json!({"argv": ["pack", "install", "code_review"]}).to_string())
         .await
         .expect("bundled pack installs");
     let output: serde_json::Value = serde_json::from_str(&output).expect("JSON receipt");
@@ -258,24 +261,28 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     };
 
     call(
-        CONFIGURE_TOOLS_TOOL_NAME,
-        json!({"patch": {"host": {
-            "root": repository.path().to_string_lossy(),
-            "files": {"mode": "ReadOnly"}
-        }}}),
+        CONFIG_TOOL_NAME,
+        json!({"argv": [
+            "tools", "edit", "--set",
+            format!("host={}", json!({
+                "root": repository.path().to_string_lossy(),
+                "files": {"mode": "ReadOnly"}
+            }))
+        ]}),
     )
     .await
     .expect("current behavior receives explicit read authority");
-    call(INSTALL_PACK_TOOL_NAME, json!({"package": "code_review"}))
-        .await
-        .expect("code-review pack installs");
+    call(
+        CONFIG_TOOL_NAME,
+        json!({"argv": ["pack", "install", "code_review"]}),
+    )
+    .await
+    .expect("code-review pack installs");
     // Running an admitted pack needs neither installation nor self-config.
     tool_config.enabled = false;
     tool_config.enable_pack_install = false;
     let tools = build_self_config_tools(node, agent_did.clone(), Some(identity), &tool_config);
-    assert!(!tools
-        .iter()
-        .any(|t| t.name() == INSTALL_PACK_TOOL_NAME || t.name() == GET_MY_CONFIG_TOOL_NAME));
+    assert!(!tools.iter().any(|t| t.name() == CONFIG_TOOL_NAME));
     let call = |name: &str, args: Value| {
         tools
             .iter()
@@ -341,17 +348,15 @@ async fn configure_tools_cannot_self_grant_pack_install() {
     let tools = build_self_config_tools(node, agent_did, Some(identity), &tool_config);
     let tool = tools
         .iter()
-        .find(|tool| tool.name() == CONFIGURE_TOOLS_TOOL_NAME)
-        .expect("configure_tools registered");
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .expect("config registered");
     let error = tool
         .call(
             serde_json::json!({
-                "patch": {
-                    "self_config": {
+                "argv": ["tools", "edit", "--set", format!("self_config={}", json!({
                         "enable_self_config": true,
                         "enable_pack_install": true
-                    }
-                }
+                    }))]
             })
             .to_string(),
         )
@@ -364,6 +369,28 @@ async fn configure_tools_cannot_self_grant_pack_install() {
 }
 
 // -- configure_behaviors (#Task 5) --
+
+#[test]
+fn behavior_edit_arguments_distinguish_omission_clear_and_set() {
+    let args: ConfigurePersonaParams = serde_json::from_value(json!({
+        "action": "edit",
+        "behavior_id": "review",
+        "display_name": "Review reconnaissance",
+        "root": null
+    }))
+    .expect("valid sparse edit arguments");
+    assert_eq!(
+        persona_edit_fields(&args),
+        vec!["display_name".to_string(), "root".to_string()]
+    );
+    assert_eq!(
+        args.display_name,
+        StringUpdate::Set("Review reconnaissance".to_string())
+    );
+    assert_eq!(args.root, StringUpdate::Clear);
+    assert_eq!(args.profile_id, StringUpdate::Omitted);
+    assert_eq!(args.system_prompt, StringUpdate::Omitted);
+}
 
 async fn build_persona_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -392,11 +419,67 @@ async fn call_persona_tool(
 ) -> Result<String, String> {
     let tool = tools
         .iter()
-        .find(|tool| tool.name() == CONFIGURE_BEHAVIORS_TOOL_NAME)
-        .expect("configure_behaviors registered");
-    tool.call(args.to_string())
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .expect("config registered");
+    tool.call(json!({"argv": persona_args_to_argv(&args)}).to_string())
         .await
         .map_err(|error| format!("{error:#}"))
+}
+
+fn persona_args_to_argv(args: &Value) -> Vec<String> {
+    let action = args["action"].as_str().expect("persona action");
+    let mut argv = match action {
+        "configure_tools" => vec![
+            "behavior".into(),
+            "tools".into(),
+            args["behavior_id"].as_str().unwrap().into(),
+        ],
+        "inspect" => vec![
+            "behavior".into(),
+            "get".into(),
+            args["behavior_id"].as_str().unwrap().into(),
+        ],
+        "list" => vec!["behavior".into(), "list".into()],
+        "preview" => vec![
+            "behavior".into(),
+            "preview".into(),
+            args["operation"].as_str().unwrap().into(),
+        ],
+        other => vec!["behavior".into(), other.into()],
+    };
+    for (field, flag) in [
+        ("behavior_id", "--id"),
+        ("clone_from", "--from"),
+        ("display_name", "--display-name"),
+        ("description", "--description"),
+        ("system_prompt", "--system-prompt"),
+        ("root", "--root"),
+        ("preset", "--preset"),
+        ("profile_id", "--profile"),
+    ] {
+        if action == "configure_tools" || action == "inspect" {
+            continue;
+        }
+        if let Some(value) = args.get(field) {
+            if value.is_null() {
+                argv.extend(["--clear".into(), field.into()]);
+            } else if let Some(value) = value.as_str() {
+                argv.extend([flag.into(), value.into()]);
+            }
+        }
+    }
+    if args["make_default"].as_bool() == Some(true) {
+        argv.push("--default".into());
+    }
+    for (field, flag) in [("enable_lsp", "--lsp"), ("enable_graph_tools", "--graphs")] {
+        if let Some(value) = args[field].as_bool() {
+            argv.extend([flag.into(), if value { "on" } else { "off" }.into()]);
+        }
+    }
+    if let Some(value) = args["network_mode"].as_str() {
+        argv.extend(["--network".into(), value.into()]);
+    }
+    argv
 }
 
 #[tokio::test]
@@ -411,21 +494,16 @@ async fn persona_category_gates_the_tool() {
         None,
         &config(&["behavior"]),
     );
-    assert!(
-        without_persona
-            .iter()
-            .all(|tool| tool.name() != CONFIGURE_BEHAVIORS_TOOL_NAME),
-        "configure_behaviors must not register without the persona category"
-    );
+    let error = call_persona_tool(&without_persona, json!({"action":"list"}))
+        .await
+        .expect_err("catalog read requires persona grant");
+    assert!(error.contains("catalog grant"), "{error}");
 
     let with_persona =
         build_self_config_tools(node, agent_did, Some(identity), &config(&["persona"]));
-    assert!(
-        with_persona
-            .iter()
-            .any(|tool| tool.name() == CONFIGURE_BEHAVIORS_TOOL_NAME),
-        "configure_behaviors must register when the persona category is enabled"
-    );
+    assert!(with_persona
+        .iter()
+        .any(|tool| tool.name() == CONFIG_TOOL_NAME));
 }
 
 #[tokio::test]
@@ -443,9 +521,63 @@ async fn persona_unknown_action_errors_cleanly() {
         .await
         .expect_err("unknown action must error");
     assert!(
-        error.contains("unknown action"),
+        error.contains("unknown behavior command"),
         "error should name the bad action: {error}"
     );
+}
+
+#[tokio::test]
+async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("config-inventory");
+    let owner = identity.did().to_string();
+    for behavior in ["alpha", "beta", "gamma"] {
+        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    }
+    let mut tool_config = config(&["persona", "profile", "backend"]);
+    tool_config.behavior_id = "alpha".into();
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let config = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+
+    let first: Value = serde_json::from_str(
+        &config
+            .call(json!({"argv":["behavior", "list", "--limit", "1"]}).to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first["page"]["returned"], 1);
+    assert_eq!(first["page"]["truncated"], true);
+    let cursor = first["page"]["next_cursor"].as_str().unwrap();
+    let second: Value = serde_json::from_str(
+        &config
+            .call(
+                json!({"argv":["behavior", "list", "--limit", "1", "--cursor", cursor]})
+                    .to_string(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(first["behaviors"][0], second["behaviors"][0]);
+
+    for resource in ["profile", "backend"] {
+        let inventory: Value = serde_json::from_str(
+            &config
+                .call(json!({"argv":[resource, "list", "--limit", "2"]}).to_string())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(inventory["items"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
+        assert!(inventory["note"].as_str().unwrap().contains("read-only"));
+        assert!(inventory.to_string().find("\"auth\"").is_none());
+    }
 }
 
 #[tokio::test]
@@ -616,6 +748,7 @@ struct PersonaRequestRowForTest {
     op: Option<String>,
     clone_from: Option<String>,
     preset: Option<String>,
+    edit_fields: Option<Vec<String>>,
 }
 
 async fn load_persona_rows_for_test(
@@ -631,6 +764,7 @@ async fn load_persona_rows_for_test(
                 op
                 clone_from
                 preset
+                edit_fields
             }}
         }}"#
     );
@@ -661,8 +795,8 @@ fn take_persona_tool(
 ) -> Box<dyn crate::llm::tool::ToolDyn> {
     tools
         .into_iter()
-        .find(|tool| tool.name() == CONFIGURE_BEHAVIORS_TOOL_NAME)
-        .expect("configure_behaviors registered")
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .expect("config registered")
 }
 
 #[tokio::test]
@@ -728,7 +862,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         .is_empty());
     let tool = take_persona_tool(tools);
 
-    let args = serde_json::json!({
+    let args = json!({"argv": persona_args_to_argv(&serde_json::json!({
         "action": "create",
         "display_name": "Research Assistant",
         "description": "Researches a focused question",
@@ -738,7 +872,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         // request row carries this value verbatim to admission.
         "profile_id": profile_id,
         "make_default": true,
-    })
+    }))})
     .to_string();
 
     // The tool call's internal poll runs to completion in the background
@@ -758,6 +892,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
                 "self-authored requests set requester_did == agent_did"
             );
             assert_eq!(row.agent_did.as_deref(), Some(agent_did.as_str()));
+            assert!(row.edit_fields.as_deref().unwrap_or_default().is_empty());
             request_key = row.request_key;
             break;
         }
@@ -927,9 +1062,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         "{names:?}"
     );
     assert!(
-        !names
-            .iter()
-            .any(|name| name == INSTALL_PACK_TOOL_NAME || name == GET_MY_CONFIG_TOOL_NAME),
+        !names.iter().any(|name| name == CONFIG_TOOL_NAME),
         "{names:?}"
     );
 }
@@ -950,14 +1083,14 @@ async fn persona_clone_accepts_sibling_behavior_id() {
         &config(&["persona"]),
     );
     let tool = take_persona_tool(tools);
-    let args = serde_json::json!({
+    let args = json!({"argv": persona_args_to_argv(&serde_json::json!({
         "action": "clone",
         "display_name": "Cloned Persona",
         // Short ids are preserved exactly as authored; the request row
         // carries `clone_from` verbatim to admission.
         "clone_from": "sibling-behavior",
         "profile_id": profile_id,
-    })
+    }))})
     .to_string();
     let call_handle = tokio::spawn(async move { tool.call(args).await });
 
@@ -1130,24 +1263,26 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
     let mut tool_config = config(&["tools"]);
     tool_config.dry_run = true;
     let tools = build_self_config_tools(node, owner, None, &tool_config);
-    let configure = tools
+    let config = tools
         .iter()
-        .find(|tool| tool.name() == CONFIGURE_TOOLS_TOOL_NAME)
-        .unwrap();
-    let inspect = tools
-        .iter()
-        .find(|tool| tool.name() == GET_MY_CONFIG_TOOL_NAME)
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
     let safe = json!({"integrations":{"lsp":{"config":json!({"servers":{"rust-analyzer":{"disabled":true,"priority":2}}}).to_string()}}});
-    inspect
-        .call(json!({"preview":{"category":"tools","patch":safe}}).to_string())
+    config
+        .call(json!({"argv":["tools", "preview", "--set", format!("integrations={}", safe["integrations"])]}).to_string())
         .await
         .unwrap();
-    configure
-        .call(json!({"patch":safe}).to_string())
+    config
+        .call(json!({"argv":["tools", "edit", "--set", format!("integrations={}", safe["integrations"])]}).to_string())
         .await
         .unwrap();
-    let baseline: Value = serde_json::from_str(&inspect.call("{}".into()).await.unwrap()).unwrap();
+    let baseline: Value = serde_json::from_str(
+        &config
+            .call(json!({"argv":["get"]}).to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         baseline["documents"]["Tools"]["integrations"],
         safe["integrations"]
@@ -1158,17 +1293,23 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
         // Operator configuration keeps its existing broader admission.
         crate::toolset::lsp::LspConfigDocument::parse_operator(Some(&raw)).unwrap();
         let patch = json!({"integrations":{"lsp":{"config":raw}}});
-        let preview = inspect
-            .call(json!({"preview":{"category":"tools","patch":patch}}).to_string())
+        let preview = config
+            .call(json!({"argv":["tools", "preview", "--set", format!("integrations={}", patch["integrations"])]}).to_string())
             .await
             .unwrap_err();
         assert!(preview.to_string().contains(field), "{preview}");
-        let apply = configure
-            .call(json!({"patch":patch}).to_string())
+        let apply = config
+            .call(json!({"argv":["tools", "edit", "--set", format!("integrations={}", patch["integrations"])]}).to_string())
             .await
             .unwrap_err();
         assert!(apply.to_string().contains(field), "{apply}");
-        let after: Value = serde_json::from_str(&inspect.call("{}".into()).await.unwrap()).unwrap();
+        let after: Value = serde_json::from_str(
+            &config
+                .call(json!({"argv":["get"]}).to_string())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(after["documents"]["Tools"], baseline["documents"]["Tools"]);
     }
 }

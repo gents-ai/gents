@@ -109,12 +109,19 @@ pub struct PersonaRequestDoc {
     pub root: Option<String>,
     pub preset: Option<String>,
     pub profile_id: Option<String>,
+    pub edit_fields: Vec<String>,
     pub make_default: bool,
     pub created_at: Option<String>,
     pub status: Option<String>,
     pub status_detail: Option<String>,
     pub applied_behavior_id: Option<String>,
     pub processed_at: Option<String>,
+}
+
+impl PersonaRequestDoc {
+    pub fn edits(&self, field: &str) -> bool {
+        self.edit_fields.iter().any(|candidate| candidate == field)
+    }
 }
 
 /// Render the one canonical local/self request shape. The signature is over
@@ -136,7 +143,7 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
                 authorization_sequence: null, authorization_expires_at: null,
                 op: "{}", behavior_id: {}, clone_from: {},
                 persona_name: {}, description: {}, system_prompt: {},
-                root: {}, preset: {}, profile_id: {}, make_default: {},
+                root: {}, preset: {}, profile_id: {}, edit_fields: {}, make_default: {},
                 created_at: "{}", status: "pending"
             }}) {{ _docID }}
         }}"#,
@@ -155,6 +162,19 @@ pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> Str
         nullable(record.root.as_deref()),
         nullable(record.preset.as_deref()),
         nullable(record.profile_id.as_deref()),
+        if record.edit_fields.is_empty() {
+            "null".to_string()
+        } else {
+            format!(
+                "[{}]",
+                record
+                    .edit_fields
+                    .iter()
+                    .map(|field| format!("\"{}\"", crate::graphql::escape_graphql_string(field)))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        },
         record.make_default,
         crate::graphql::escape_graphql_string(&record.created_at),
     )
@@ -177,7 +197,7 @@ fn validate_persona_name(name: Option<&str>) -> Option<String> {
     let len = name.chars().count();
     if len == 0 || len > PERSONA_NAME_MAX_LEN {
         return Some(format!(
-            r#"persona_name "{name}" must be 1-{PERSONA_NAME_MAX_LEN} characters (got {len})"#
+            r#"display_name "{name}" must be 1-{PERSONA_NAME_MAX_LEN} characters (got {len})"#
         ));
     }
     None
@@ -377,23 +397,43 @@ pub fn decide_persona_request(
             };
             if target.protected {
                 return PersonaVerdict::Reject(format!(
-                    r#"behavior_id "{behavior_id}" is a protected configurator and cannot be edited through configure_behaviors"#
+                    r#"behavior_id "{behavior_id}" is a protected configurator and cannot be edited through config behavior"#
                 ));
             }
-            if let Some(msg) = validate_persona_name(doc.persona_name.as_deref()) {
-                return PersonaVerdict::Reject(msg);
+            if doc.edits("display_name") {
+                if let Some(name) = doc.persona_name.as_deref() {
+                    if let Some(msg) = validate_persona_name(Some(name)) {
+                        return PersonaVerdict::Reject(msg);
+                    }
+                }
             }
-            if let Some(msg) = validate_root(doc.root.as_deref(), catalog) {
-                return PersonaVerdict::Reject(msg);
+            if doc.edits("root") {
+                if let Some(msg) = validate_root(doc.root.as_deref(), catalog) {
+                    return PersonaVerdict::Reject(msg);
+                }
             }
-            if let Some(msg) = validate_profile(doc.profile_id.as_deref(), catalog) {
-                return PersonaVerdict::Reject(msg);
+            if doc.edits("profile_id") {
+                if let Some(msg) = validate_profile(doc.profile_id.as_deref(), catalog) {
+                    return PersonaVerdict::Reject(msg);
+                }
             }
-            if let Some(msg) = validate_system_prompt(doc.system_prompt.as_deref(), false) {
-                return PersonaVerdict::Reject(msg);
+            if doc.edits("system_prompt") {
+                if let Some(msg) = validate_system_prompt(doc.system_prompt.as_deref(), false) {
+                    return PersonaVerdict::Reject(msg);
+                }
             }
-            let preset = doc.preset.as_deref().unwrap_or("").trim();
-            if !preset.is_empty() {
+            if doc.edits("preset") {
+                let Some(preset) = doc
+                    .preset
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                else {
+                    return PersonaVerdict::Reject(
+                        "preset cannot be cleared because it is a materialization choice, not stored configuration; omit it to preserve Tools"
+                            .to_string(),
+                    );
+                };
                 if let Some(msg) = validate_preset_name(preset) {
                     return PersonaVerdict::Reject(msg);
                 }
@@ -589,11 +629,9 @@ pub async fn apply_persona_request(
             apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(vec![replacement(Collection::AgentBehavior, &behavior)?])?).await?;
             return Ok(PersonaApplyOutcome {behavior_id:behavior.behavior_id,repaired:false});
         }
-        let name = doc.persona_name.as_deref().context("persona name missing")?;
-        let profile = doc.profile_id.as_deref().context("persona profile missing")?;
-        anyhow::ensure!(!profile.trim().is_empty(), "persona profile must be explicit");
         let create = matches!(op, PersonaOp::Create {..});
         if create {
+            let name = doc.persona_name.as_deref().context("behavior display_name missing")?;
             let catalog = current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)})).collect();
             behavior.behavior_id = derive_behavior_id(owner, name, &catalog);
             behavior.created_at = None;
@@ -602,13 +640,19 @@ pub async fn apply_persona_request(
                 .tags
                 .retain(|tag| tag != SETUP_STEWARD_BEHAVIOR_TAG);
         }
-        behavior.display_name = Some(name.into());
+        if create || doc.edits("display_name") {
+            behavior.display_name = doc.persona_name.clone();
+        }
         // A clone inherits its source description unless the request supplies
         // an override. A preset-based create has no source to inherit from.
-        if source.is_none() || doc.description.is_some() {
+        if source.is_none() || doc.edits("description") || (create && doc.description.is_some()) {
             behavior.description = doc.description.clone();
         }
-        behavior.inference_profile_id = profile.into();
+        if create || doc.edits("profile_id") {
+            let profile = doc.profile_id.as_deref().context("behavior profile_id cannot be cleared")?;
+            anyhow::ensure!(!profile.trim().is_empty(), "behavior profile_id must not be blank");
+            behavior.inference_profile_id = profile.into();
+        }
         let mut context: AgentContext = match source.as_ref().and_then(|b| b.context_id.as_deref()) {
             Some(id) => load_config(txn, Collection::AgentContext, owner, id).await?,
             None => serde_json::from_value(serde_json::json!({"context_id":context_id,"agent_did":owner}))?,
@@ -617,24 +661,29 @@ pub async fn apply_persona_request(
         let existing_tools: Option<Tools> = match context.tools_id.as_deref() {
             Some(id) => Some(load_config(txn, Collection::Tools, owner, id).await?), None => None,
         };
-        if let Some(system_prompt) = &doc.system_prompt {
-            context.system_prompt = Some(system_prompt.clone());
+        if create {
+            if let Some(system_prompt) = &doc.system_prompt {
+                context.system_prompt = Some(system_prompt.clone());
+            }
+        } else if doc.edits("system_prompt") {
+            context.system_prompt = doc.system_prompt.clone();
         }
         // The command exposes one concise description because Behavior and
         // Context are materialized as one reusable interface. Keep both
         // canonical owners coherent instead of leaving the context opaque in
         // later inspect/edit flows.
-        if source.is_none() || doc.description.is_some() {
+        if source.is_none() || doc.edits("description") || (create && doc.description.is_some()) {
             context.description = doc.description.clone();
         }
         let root = doc.root.as_ref().filter(|root| !root.trim().is_empty()).cloned();
         let preset = doc.preset.as_deref().unwrap_or("").trim();
-        let mut tools = if !preset.is_empty() {
-            Some(tools_from_preset(tools_id.clone(), owner, name, preset, root.clone())?)
+        let effective_name = behavior.display_name.as_deref().unwrap_or(&behavior.behavior_id);
+        let mut tools = if create && !preset.is_empty() || doc.edits("preset") {
+            Some(tools_from_preset(tools_id.clone(), owner, effective_name, preset, root.clone())?)
         } else { existing_tools.clone() };
-        // A cloning request with no root retains its source cwd. An edit's
-        // complete selection may clear root; serde replacement resets it to None.
-        if root.is_some() || !create {
+        // Omitted edit fields preserve their canonical values. A present root
+        // with a null payload explicitly clears only the root narrowing.
+        if root.is_some() || (!create && doc.edits("root")) {
             if tools.is_none() && root.is_some() { tools = Some(Tools {tools_id:tools_id.clone(),agent_did:owner.clone(),..Default::default()}); }
             if let Some(tools) = &mut tools {
                 if let Some(host) = &mut tools.host { host.root = root.clone(); }
@@ -905,7 +954,7 @@ mod tests {
         assert_eq!(
             verdict,
             PersonaVerdict::Reject(
-                r#"persona_name "" must be 1-64 characters (got 0)"#.to_string()
+                r#"display_name "" must be 1-64 characters (got 0)"#.to_string()
             )
         );
     }
@@ -919,7 +968,7 @@ mod tests {
         assert_eq!(
             verdict,
             PersonaVerdict::Reject(format!(
-                r#"persona_name "{name}" must be 1-64 characters (got 65)"#
+                r#"display_name "{name}" must be 1-64 characters (got 65)"#
             ))
         );
     }
@@ -993,11 +1042,43 @@ mod tests {
     }
 
     #[test]
+    fn name_only_edit_does_not_require_profile() {
+        let mut doc = create_doc(PersonaOp::Edit);
+        doc.op_raw = "edit".to_string();
+        doc.behavior_id = Some("existing-enabled".to_string());
+        doc.persona_name = Some("Renamed".to_string());
+        doc.profile_id = None;
+        doc.edit_fields = vec!["display_name".to_string()];
+        assert_eq!(
+            decide_persona_request(&doc, &base_catalog()),
+            PersonaVerdict::Admit
+        );
+    }
+
+    #[test]
+    fn profile_edit_distinguishes_omission_from_clear() {
+        let mut doc = create_doc(PersonaOp::Edit);
+        doc.op_raw = "edit".to_string();
+        doc.behavior_id = Some("existing-enabled".to_string());
+        doc.profile_id = None;
+        assert_eq!(
+            decide_persona_request(&doc, &base_catalog()),
+            PersonaVerdict::Admit
+        );
+        doc.edit_fields = vec!["profile_id".to_string()];
+        assert!(matches!(
+            decide_persona_request(&doc, &base_catalog()),
+            PersonaVerdict::Reject(detail) if detail.contains("unknown profile")
+        ));
+    }
+
+    #[test]
     fn admits_preset_edit_without_context() {
         let mut doc = create_doc(PersonaOp::Edit);
         doc.op_raw = "edit".to_string();
         doc.behavior_id = Some("without-context".to_string());
         doc.preset = Some(persona_presets::PRESET_READONLY.to_string());
+        doc.edit_fields = vec!["preset".to_string()];
         assert_eq!(
             decide_persona_request(&doc, &base_catalog()),
             PersonaVerdict::Admit
@@ -1261,13 +1342,52 @@ mod tests {
         copied_tools.tools_id = source_tools.tools_id.clone();
         assert_eq!(copied_tools, source_tools);
 
-        // Root clearing and preset replacement must not mutate a shared source.
-        doc.request_key = "edit".into();
+        // A sparse rename carries no profile/root/prompt values. The signed
+        // edit mask makes those omissions preserve the canonical chain.
+        doc.request_key = "rename".into();
         doc.op = Some(PersonaOp::Edit);
         doc.behavior_id = Some(cloned.behavior_id.clone());
+        doc.persona_name = Some("Renamed clone".into());
+        doc.description = None;
+        doc.system_prompt = None;
+        doc.root = None;
+        doc.profile_id = None;
+        doc.edit_fields = vec!["display_name".into()];
+        apply_persona_request(&node, &doc, &catalog).await?;
+        let renamed: AgentBehaviorDocument =
+            read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
+        assert_eq!(renamed.display_name.as_deref(), Some("Renamed clone"));
+        assert_eq!(renamed.inference_profile_id, "profile-2");
+        assert_eq!(renamed.context_id, behavior.context_id);
+        let renamed_context: AgentContext = read(
+            &node,
+            Collection::AgentContext,
+            owner,
+            renamed.context_id.as_deref().unwrap(),
+        )
+        .await?;
+        assert_eq!(renamed_context.system_prompt, clone_context.system_prompt);
+        let renamed_tools: Tools = read(
+            &node,
+            Collection::Tools,
+            owner,
+            renamed_context.tools_id.as_deref().unwrap(),
+        )
+        .await?;
+        assert_eq!(
+            renamed_tools
+                .host
+                .as_ref()
+                .and_then(|host| host.root.as_deref()),
+            Some("/original")
+        );
+
+        // Root clearing and preset replacement must not mutate a shared source.
+        doc.request_key = "edit".into();
         doc.root = None;
         doc.description = Some("Edited behavior and context".into());
         doc.system_prompt = Some("Edited literal instructions".into());
+        doc.edit_fields = vec!["description".into(), "system_prompt".into(), "root".into()];
         apply_persona_request(&node, &doc, &catalog).await?;
         let edited: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
@@ -1300,6 +1420,7 @@ mod tests {
         );
         doc.request_key = "preset".into();
         doc.preset = Some("readonly".into());
+        doc.edit_fields = vec!["preset".into()];
         apply_persona_request(&node, &doc, &catalog).await?;
         let preset: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
@@ -1323,6 +1444,7 @@ mod tests {
             crate::tool_surface::FileToolMode::ReadOnly
         );
         doc.op = Some(PersonaOp::Disable);
+        doc.edit_fields.clear();
         apply_persona_request(&node, &doc, &catalog).await?;
         let mut disabled: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;

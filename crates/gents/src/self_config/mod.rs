@@ -5,6 +5,7 @@
 //! cannot be changed or returned. Optional no-lockout checks the candidate config
 //! chain. Persona requests reuse the existing signed admission and reconciliation path.
 
+mod command;
 mod ops;
 mod read;
 #[cfg(test)]
@@ -36,55 +37,32 @@ use defra_node::EmbeddedNode;
 use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL_SELF};
 use ops::{decode_merged, guard_selection_keeps_gate, validate_merged_selection, ApplyRequest};
 
-pub const GET_MY_CONFIG_TOOL_NAME: &str = "get_my_config";
-pub const CONFIGURE_BEHAVIOR_TOOL_NAME: &str = "configure_behavior";
-pub const CONFIGURE_TOOLS_TOOL_NAME: &str = "configure_tools";
-pub const CONFIGURE_PROFILE_TOOL_NAME: &str = "configure_profile";
-pub const CONFIGURE_BACKEND_TOOL_NAME: &str = "configure_backend";
-pub const CONFIGURE_MCP_SERVICE_TOOL_NAME: &str = "configure_mcp_service";
-pub const CONFIGURE_AUTOMATION_TOOL_NAME: &str = "configure_automation";
-/// Model-facing behavior catalog/mutation surface. `PersonaConfigRequest`
-/// remains the private signed transport used by paired clients and is not a
-/// second runtime configuration model.
-pub const CONFIGURE_BEHAVIORS_TOOL_NAME: &str = "configure_behaviors";
-pub const INSTALL_PACK_TOOL_NAME: &str = "install_pack";
+pub const CONFIG_TOOL_NAME: &str = "config";
+const GET_MY_CONFIG_TOOL_NAME: &str = "get_my_config";
+const CONFIGURE_BEHAVIOR_TOOL_NAME: &str = "configure_behavior";
+const CONFIGURE_TOOLS_TOOL_NAME: &str = "configure_tools";
+const CONFIGURE_PROFILE_TOOL_NAME: &str = "configure_profile";
+const CONFIGURE_BACKEND_TOOL_NAME: &str = "configure_backend";
+const CONFIGURE_MCP_SERVICE_TOOL_NAME: &str = "configure_mcp_service";
+const CONFIGURE_AUTOMATION_TOOL_NAME: &str = "configure_automation";
+const CONFIGURE_BEHAVIORS_TOOL_NAME: &str = "configure_behaviors";
+const INSTALL_PACK_TOOL_NAME: &str = "install_pack";
 pub const LIST_GRAPHS_TOOL_NAME: &str = "list_graphs";
 pub const RUN_GRAPH_TOOL_NAME: &str = "run_graph";
 pub const GET_GRAPH_RUN_TOOL_NAME: &str = "get_graph_run";
 pub const GET_GRAPH_RESULT_TOOL_NAME: &str = "get_graph_result";
 pub const CANCEL_GRAPH_RUN_TOOL_NAME: &str = "cancel_graph_run";
 
-/// Every tool name of the family, for reserved-name checks and surfacing.
-pub const SELF_CONFIG_TOOL_NAMES: [&str; 14] = [
-    GET_MY_CONFIG_TOOL_NAME,
-    CONFIGURE_BEHAVIOR_TOOL_NAME,
-    CONFIGURE_TOOLS_TOOL_NAME,
-    CONFIGURE_PROFILE_TOOL_NAME,
-    CONFIGURE_BACKEND_TOOL_NAME,
-    CONFIGURE_MCP_SERVICE_TOOL_NAME,
-    CONFIGURE_AUTOMATION_TOOL_NAME,
-    CONFIGURE_BEHAVIORS_TOOL_NAME,
-    INSTALL_PACK_TOOL_NAME,
+/// Model-facing names reserved by the runtime. Configuration is one coherent
+/// argv-style surface; graph execution remains a separate operational surface.
+pub const SELF_CONFIG_TOOL_NAMES: [&str; 6] = [
+    CONFIG_TOOL_NAME,
     LIST_GRAPHS_TOOL_NAME,
     RUN_GRAPH_TOOL_NAME,
     GET_GRAPH_RUN_TOOL_NAME,
     GET_GRAPH_RESULT_TOOL_NAME,
     CANCEL_GRAPH_RUN_TOOL_NAME,
 ];
-
-/// The `configure_*` tool advertised for a category, if any.
-pub fn configure_tool_name_for_category(category: &str) -> Option<&'static str> {
-    match category {
-        "behavior" => Some(CONFIGURE_BEHAVIOR_TOOL_NAME),
-        "tools" => Some(CONFIGURE_TOOLS_TOOL_NAME),
-        "profile" => Some(CONFIGURE_PROFILE_TOOL_NAME),
-        "backend" => Some(CONFIGURE_BACKEND_TOOL_NAME),
-        "mcp_service" => Some(CONFIGURE_MCP_SERVICE_TOOL_NAME),
-        "automation" => Some(CONFIGURE_AUTOMATION_TOOL_NAME),
-        "persona" => Some(CONFIGURE_BEHAVIORS_TOOL_NAME),
-        _ => None,
-    }
-}
 
 /// Error wrapper mirroring `DefraQueryError`: render the full anyhow chain to
 /// the model.
@@ -754,6 +732,61 @@ pub struct ConfigurePersonaTool {
     process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
 }
 
+/// Model-facing tri-state for behavior edits. Serde invokes `Default` only
+/// when the property is absent; a present JSON null reaches the deserializer
+/// and becomes `Clear`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum StringUpdate {
+    #[default]
+    Omitted,
+    Clear,
+    Set(String),
+}
+
+impl<'de> serde::Deserialize<'de> for StringUpdate {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer).map(|value| match value {
+            Some(value) => Self::Set(value),
+            None => Self::Clear,
+        })
+    }
+}
+
+impl StringUpdate {
+    fn is_present(&self) -> bool {
+        !matches!(self, Self::Omitted)
+    }
+
+    fn value(&self) -> Option<&str> {
+        match self {
+            Self::Set(value) => Some(value),
+            Self::Omitted | Self::Clear => None,
+        }
+    }
+
+    fn owned_value(&self) -> Option<String> {
+        self.value().map(ToOwned::to_owned)
+    }
+}
+
+fn persona_edit_fields(args: &ConfigurePersonaParams) -> Vec<String> {
+    [
+        ("display_name", &args.display_name),
+        ("description", &args.description),
+        ("system_prompt", &args.system_prompt),
+        ("root", &args.root),
+        ("preset", &args.preset),
+        ("profile_id", &args.profile_id),
+    ]
+    .into_iter()
+    .filter(|(_, value)| value.is_present())
+    .map(|(field, _)| field.to_owned())
+    .collect()
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigurePersonaParams {
@@ -763,15 +796,15 @@ pub struct ConfigurePersonaParams {
     #[serde(default)]
     pub operation: Option<String>,
     #[serde(default)]
-    pub display_name: Option<String>,
+    pub display_name: StringUpdate,
     /// User-facing summary for the working behavior and its context.
     #[serde(default)]
-    pub description: Option<String>,
+    pub description: StringUpdate,
     /// Complete operating instructions for the working behavior. Required
     /// when creating from a permission preset; optional overrides a clone or
     /// an existing behavior.
     #[serde(default)]
-    pub system_prompt: Option<String>,
+    pub system_prompt: StringUpdate,
     /// Exact behavior_id of the sibling behavior (required for edit/disable).
     #[serde(default)]
     pub behavior_id: Option<String>,
@@ -779,12 +812,12 @@ pub struct ConfigurePersonaParams {
     #[serde(default)]
     pub clone_from: Option<String>,
     #[serde(default)]
-    pub root: Option<String>,
+    pub root: StringUpdate,
     #[serde(default)]
-    pub preset: Option<String>,
+    pub preset: StringUpdate,
     /// Exact owner-scoped inference profile ID.
     #[serde(default)]
-    pub profile_id: Option<String>,
+    pub profile_id: StringUpdate,
     /// Promote the applied behavior to this principal's default behavior.
     #[serde(default)]
     pub make_default: bool,
@@ -804,17 +837,6 @@ pub struct ConfigurePersonaParams {
 const PERSONA_REQUEST_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 const PERSONA_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
-#[derive(Debug, Clone, Default, serde::Serialize)]
-struct PersonaCatalogSnapshot {
-    process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
-    allowed_roots: Vec<String>,
-    permission_presets: Vec<String>,
-    available_profile_ids: Vec<String>,
-    default_behavior_id: Option<String>,
-    behaviors: BTreeMap<String, Value>,
-    activation: Value,
-}
-
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct PersonaRequestRowOut {
     #[serde(default)]
@@ -830,8 +852,6 @@ struct PersonaRequestRowOut {
     #[serde(default)]
     clone_from: Option<String>,
     #[serde(default)]
-    persona_name: Option<String>,
-    #[serde(default)]
     description: Option<String>,
     #[serde(default)]
     system_prompt: Option<String>,
@@ -841,6 +861,8 @@ struct PersonaRequestRowOut {
     preset: Option<String>,
     #[serde(default)]
     profile_id: Option<String>,
+    #[serde(default)]
+    edit_fields: Option<Vec<String>>,
     #[serde(default)]
     make_default: Option<bool>,
     #[serde(default)]
@@ -871,12 +893,12 @@ async fn load_persona_request_row(
                 op
                 behavior_id
                 clone_from
-                persona_name
                 description
                 system_prompt
                 root
                 preset
                 profile_id
+                edit_fields
                 make_default
                 created_at
                 status
@@ -986,13 +1008,27 @@ async fn persona_list(
     node: &Arc<EmbeddedNode>,
     agent_did: &str,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    limit: usize,
+    cursor: Option<&str>,
 ) -> Result<String> {
+    anyhow::ensure!(
+        (1..=50).contains(&limit),
+        "--limit must be between 1 and 50"
+    );
     let store =
         GraphqlPersonaRequestStore::with_ceiling(node.clone(), process_ceiling.root.clone());
     let catalog = store.load_catalog_view(agent_did).await?;
     let default_behavior_id = principal_default_behavior(node, agent_did).await?;
-    let mut behaviors = BTreeMap::new();
-    for (behavior_id, reference) in &catalog.behaviors {
+    let total = catalog.behaviors.len();
+    let selected = catalog
+        .behaviors
+        .iter()
+        .filter(|(behavior_id, _)| cursor.is_none_or(|cursor| behavior_id.as_str() > cursor))
+        .take(limit + 1)
+        .collect::<Vec<_>>();
+    let truncated = selected.len() > limit;
+    let mut behaviors = Vec::new();
+    for (behavior_id, reference) in selected.into_iter().take(limit) {
         let snapshot = match behavior_snapshot(
             node,
             agent_did,
@@ -1003,7 +1039,22 @@ async fn persona_list(
         )
         .await
         {
-            Ok(snapshot) => snapshot,
+            Ok(snapshot) => {
+                let effective = &snapshot["effective_config"];
+                json!({
+                    "behavior_id": behavior_id,
+                    "display_name": effective.pointer("/behavior/display_name"),
+                    "description": effective.pointer("/behavior/description"),
+                    "enabled": reference.enabled,
+                    "protected": reference.protected,
+                    "is_default": default_behavior_id.as_deref() == Some(behavior_id.as_str()),
+                    "context_id": effective.pointer("/behavior/context_id"),
+                    "profile_id": effective.pointer("/behavior/inference_profile_id"),
+                    "backend_id": effective.pointer("/inference_profile/backend_id"),
+                    "model_name": effective.pointer("/inference_profile/model_name"),
+                    "reasoning_effort": effective.pointer("/inference_profile/reasoning_effort"),
+                })
+            }
             Err(error) => json!({
                 "behavior_id": behavior_id,
                 "enabled": reference.enabled,
@@ -1012,25 +1063,38 @@ async fn persona_list(
                 "configuration_error": format!("{error:#}"),
             }),
         };
-        behaviors.insert(behavior_id.clone(), snapshot);
+        behaviors.push(snapshot);
     }
-    let snapshot = PersonaCatalogSnapshot {
-        process_ceiling: process_ceiling.clone(),
-        allowed_roots: catalog.allowed_roots.into_iter().collect(),
-        permission_presets: crate::agent::persona_presets::builtin_preset_names()
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect(),
-        available_profile_ids: catalog.available_profile_ids.into_iter().collect(),
-        default_behavior_id,
-        behaviors,
-        activation: json!({
+    let next_cursor = truncated
+        .then(|| {
+            behaviors
+                .last()?
+                .get("behavior_id")?
+                .as_str()
+                .map(ToOwned::to_owned)
+        })
+        .flatten();
+    let snapshot = json!({
+        "page": {
+            "limit": limit,
+            "total": total,
+            "returned": behaviors.len(),
+            "truncated": truncated,
+            "next_cursor": next_cursor,
+        },
+        "process_ceiling": process_ceiling,
+        "allowed_roots": catalog.allowed_roots,
+        "permission_presets": crate::agent::persona_presets::builtin_preset_names(),
+        "available_profile_ids": catalog.available_profile_ids,
+        "default_behavior_id": default_behavior_id,
+        "behaviors": behaviors,
+        "activation": {
             "durable_config": "after the admitted transaction commits",
             "running_generation": "after the runtime reconciler generation swap",
             "session": "select the behavior in a new session; existing sessions remain bound to their original behavior",
             "pairing_and_restart": "canonical documents and request outcomes replicate to authorized paired clients and are reloaded after restart",
-        }),
-    };
+        },
+    });
     serde_json::to_string_pretty(&snapshot).map_err(|error| anyhow!("serialize catalog: {error}"))
 }
 
@@ -1045,7 +1109,7 @@ async fn persona_inspect(
     let catalog = store.load_catalog_view(agent_did).await?;
     let reference = catalog.behaviors.get(behavior_id).with_context(|| {
         format!(
-            "unknown behavior_id {behavior_id:?}; call configure_behaviors with action \"list\""
+            "unknown behavior_id {behavior_id:?}; run config behavior list and use an exact returned ID"
         )
     })?;
     let default_behavior_id = principal_default_behavior(node, agent_did).await?;
@@ -1107,12 +1171,15 @@ async fn persona_preview(
         op_raw: op_raw.to_owned(),
         op: Some(op.clone()),
         behavior_id: args.behavior_id.clone(),
-        persona_name: args.display_name.clone(),
-        description: args.description.clone(),
-        system_prompt: args.system_prompt.clone(),
-        root: args.root.clone(),
-        preset: args.preset.clone(),
-        profile_id: args.profile_id.clone(),
+        persona_name: args.display_name.owned_value(),
+        description: args.description.owned_value(),
+        system_prompt: args.system_prompt.owned_value(),
+        root: args.root.owned_value(),
+        preset: args.preset.owned_value(),
+        profile_id: args.profile_id.owned_value(),
+        edit_fields: (operation == "edit")
+            .then(|| persona_edit_fields(args))
+            .unwrap_or_default(),
         make_default: args.make_default,
         ..Default::default()
     };
@@ -1124,7 +1191,7 @@ async fn persona_preview(
     let behavior_id = match &op {
         PersonaOp::Create { .. } => args
             .display_name
-            .as_deref()
+            .value()
             .map(|name| derive_behavior_id(agent_did, name, &catalog.behaviors)),
         PersonaOp::Edit | PersonaOp::Disable => args.behavior_id.clone(),
     };
@@ -1151,7 +1218,7 @@ async fn persona_preview(
         }
         _ => None,
     };
-    let preset_requested = args.preset.as_deref().and_then(|preset| {
+    let preset_requested = args.preset.value().and_then(|preset| {
         crate::agent::persona_presets::preset_fields(preset).map(|fields| {
             json!({
                 "file_mode": fields.file_tools_mode,
@@ -1169,15 +1236,16 @@ async fn persona_preview(
             "behavior_id": behavior_id,
             "context_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("context-{request_key}")),
             "tools_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("tools-{request_key}")),
-            "profile_id": args.profile_id,
+            "profile_id": args.profile_id.value(),
         },
         "proposed_values": {
-            "display_name": args.display_name,
-            "description": args.description,
-            "context_description": args.description,
-            "system_prompt": args.system_prompt,
-            "root": args.root,
-            "preset": args.preset,
+            "display_name": args.display_name.value(),
+            "description": args.description.value(),
+            "context_description": args.description.value(),
+            "system_prompt": args.system_prompt.value(),
+            "root": args.root.value(),
+            "preset": args.preset.value(),
+            "edit_fields": (operation == "edit").then(|| persona_edit_fields(args)),
             "make_default": args.make_default,
         },
         "preset_requested": preset_requested,
@@ -1196,7 +1264,7 @@ async fn persona_mutate(
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
     let resolved_behavior_id = args.behavior_id.as_deref().map(str::to_owned);
-    let resolved_profile_id = args.profile_id.as_deref().map(str::to_owned);
+    let resolved_profile_id = args.profile_id.owned_value();
 
     let required_behavior_id = |action: &str| -> Result<()> {
         if resolved_behavior_id
@@ -1214,7 +1282,7 @@ async fn persona_mutate(
         "clone" => {
             let preset_given = args
                 .preset
-                .as_deref()
+                .value()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .is_some();
@@ -1254,12 +1322,15 @@ async fn persona_mutate(
         op: op.to_string(),
         behavior_id: resolved_behavior_id,
         clone_from,
-        persona_name: args.display_name.clone(),
-        description: args.description.clone(),
-        system_prompt: args.system_prompt.clone(),
-        root: args.root.clone(),
-        preset: args.preset.clone(),
+        persona_name: args.display_name.owned_value(),
+        description: args.description.owned_value(),
+        system_prompt: args.system_prompt.owned_value(),
+        root: args.root.owned_value(),
+        preset: args.preset.owned_value(),
         profile_id: resolved_profile_id,
+        edit_fields: (args.action == "edit")
+            .then(|| persona_edit_fields(args))
+            .unwrap_or_default(),
         make_default: args.make_default,
         created_at: now,
         local_signature: Vec::new(),
@@ -1324,11 +1395,11 @@ async fn persona_mutate(
         let profile_id = required_materialized_id("/inference_profile/profile_id", "profile_id")?;
         let requires_tools = args
             .preset
-            .as_deref()
+            .value()
             .is_some_and(|preset| !preset.trim().is_empty())
             || args
                 .root
-                .as_deref()
+                .value()
                 .is_some_and(|root| !root.trim().is_empty());
         let tools_id = if !requires_tools {
             effective_config
@@ -1397,16 +1468,16 @@ impl Tool for ConfigurePersonaTool {
                         "description": "Mutation to validate when action is preview.",
                     },
                     "display_name": {
-                        "type": "string",
-                        "description": "Display name for the working behavior (create/edit).",
+                        "type": ["string", "null"],
+                        "description": "Display name for create/edit. On edit, omit to preserve or use null to clear.",
                     },
                     "description": {
-                        "type": "string",
-                        "description": "Concise user-facing purpose for the working behavior and context.",
+                        "type": ["string", "null"],
+                        "description": "Concise purpose for the behavior and context. On edit, omit to preserve or use null to clear.",
                     },
                     "system_prompt": {
-                        "type": "string",
-                        "description": "Complete operating instructions. Required for a preset-based create; optional to override a clone or edit. Must describe the requested role, scope, tools, constraints, and verification expectations.",
+                        "type": ["string", "null"],
+                        "description": "Complete operating instructions. Required for a preset-based create. On edit, omit to preserve or use null to clear; a supplied string must not be blank.",
                     },
                     "behavior_id": {
                         "type": "string",
@@ -1417,16 +1488,16 @@ impl Tool for ConfigurePersonaTool {
                         "description": "Exact sibling behavior_id to clone from.",
                     },
                     "root": {
-                        "type": "string",
-                        "description": "Workspace root narrowing, if any. It must be a published allowed_root within the managed process ceiling. CAUTION on edit: omitting root clears the existing narrowing, so inspect and resend it unless widening to the process ceiling is explicitly intended.",
+                        "type": ["string", "null"],
+                        "description": "Workspace root narrowing. It must be a published allowed_root. On edit, omit to preserve or use null to clear and widen to the process ceiling.",
                     },
                     "preset": {
                         "type": "string",
-                        "description": "Built-in permission preset for create/edit. Clone inherits permissions and rejects this field.",
+                        "description": "Built-in permission preset for create/edit. Omit on edit to preserve Tools; it cannot be cleared because presets are materialization choices, not stored fields. Clone rejects it.",
                     },
                     "profile_id": {
-                        "type": "string",
-                        "description": "Exact inference profile_id owned by this principal.",
+                        "type": ["string", "null"],
+                        "description": "Exact inference profile_id owned by this principal. On edit, omit to preserve; null is rejected because a behavior must remain bound.",
                     },
                     "make_default": {
                         "type": "boolean",
@@ -1512,7 +1583,12 @@ impl Tool for ConfigurePersonaTool {
                     "effect": "Tool selection committed separately from behavior creation. Existing IDs and prompt are unchanged; test a new request after reconciliation.",
                 })).context("serialize sibling tool selection")?)
             }
-            "list" => Ok(persona_list(&self.node, &self.agent_did, &self.process_ceiling).await?),
+            "list" => {
+                Ok(
+                    persona_list(&self.node, &self.agent_did, &self.process_ceiling, 20, None)
+                        .await?,
+                )
+            }
             "inspect" => {
                 let behavior_id = args
                     .behavior_id
@@ -2157,49 +2233,17 @@ pub fn build_self_config_tools(
     if !config.enabled {
         return tools;
     }
-    tools.push(Box::new(GetMyConfigTool {
-        core: core.clone(),
+    tools.push(Box::new(command::ConfigCommandTool {
+        node,
+        agent_did,
+        identity,
+        core,
         categories: config.categories.clone(),
         no_lockout: config.no_lockout,
         dry_run: config.dry_run,
         allow_pack_install: config.enable_pack_install,
+        process_ceiling: config.process_ceiling.clone(),
     }));
-    if config.enable_pack_install {
-        tools.push(Box::new(InstallPackTool {
-            core: core.clone(),
-            node: node.clone(),
-        }));
-    }
-    for category in &config.categories {
-        match category.as_str() {
-            "behavior" => tools.push(Box::new(ConfigureBehaviorTool { core: core.clone() })),
-            "tools" => tools.push(Box::new(ConfigureToolsTool {
-                core: core.clone(),
-                allow_pack_install: config.enable_pack_install,
-            })),
-            "profile" => tools.push(Box::new(ConfigureProfileTool { core: core.clone() })),
-            "backend" => tools.push(Box::new(ConfigureBackendTool { core: core.clone() })),
-            "mcp_service" => tools.push(Box::new(ConfigureMcpServiceTool { core: core.clone() })),
-            "automation" => tools.push(Box::new(ConfigureAutomationTool { core: core.clone() })),
-            "persona" => match identity.clone() {
-                Some(identity) if identity.did() == agent_did => {
-                    tools.push(Box::new(ConfigurePersonaTool {
-                        node: node.clone(),
-                        agent_did: agent_did.clone(),
-                        identity,
-                        process_ceiling: config.process_ceiling.clone(),
-                    }))
-                }
-                _ => tracing::warn!(
-                    agent_did = %agent_did,
-                    "configure_behaviors requires the exact local principal signer; skipping"
-                ),
-            },
-            other => {
-                tracing::warn!(category = %other, "unknown self-config category; skipping");
-            }
-        }
-    }
     tools
 }
 
@@ -2218,16 +2262,6 @@ pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     if !config.enabled {
         return names;
     }
-    names.push(GET_MY_CONFIG_TOOL_NAME.to_string());
-    if config.enable_pack_install {
-        names.push(INSTALL_PACK_TOOL_NAME.to_string());
-    }
-    names.extend(
-        config
-            .categories
-            .iter()
-            .filter_map(|category| configure_tool_name_for_category(category))
-            .map(ToOwned::to_owned),
-    );
+    names.push(CONFIG_TOOL_NAME.to_string());
     names
 }
