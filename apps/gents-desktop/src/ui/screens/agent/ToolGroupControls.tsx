@@ -358,8 +358,7 @@ export function ToolGroupControls({
           }}
         />
         <p className="px-4 pb-4 text-sm text-muted-foreground">
-          New targets are created with Save changes. Select the target above to grant
-          access.
+          New targets are created with Save. Select the target above to grant access.
         </p>
       </Group>
       <Group title="Remote Tools">

@@ -4,10 +4,22 @@
    editor). */
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@gents/ui/components/alert-dialog";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { FieldLegend, FieldRows, FieldSet } from "@gents/ui/components/field";
+import { Input } from "@gents/ui/components/input";
 import { toast } from "sonner";
 import { href, navigate, type Route } from "@/lib/router";
+import { Row } from "./rows";
 
 export type ListRow = {
   id: string;
@@ -21,6 +33,7 @@ export type ListRow = {
 
 const PACK_ORIGIN_PREFIX = "gents:pack:";
 const NOT_FROM_PACK_FILTER = "__not_from_pack__";
+const FILTER_AFTER = 8;
 
 export function packOrigin(tags: string[] | null | undefined): string | null {
   const origins = (tags ?? [])
@@ -51,6 +64,7 @@ export function ListDetail({
   const creatingRef = useRef(false);
   const [creating, setCreating] = useState(false);
   const [originFilter, setOriginFilter] = useState("all");
+  const [query, setQuery] = useState("");
   const origins = useMemo(
     () =>
       Array.from(
@@ -68,14 +82,22 @@ export function ListDetail({
     origins.includes(originFilter)
       ? originFilter
       : "all";
+  const filterable = rows.length > FILTER_AFTER;
+  const normalizedQuery = query.trim().toLowerCase();
   const visibleRows = rows.filter((row) => {
     const origin = packOrigin(row.tags);
-    return (
+    const matchesOrigin =
       effectiveOriginFilter === "all" ||
       (effectiveOriginFilter === NOT_FROM_PACK_FILTER
         ? origin === null
-        : origin === effectiveOriginFilter)
-    );
+        : origin === effectiveOriginFilter);
+    const matchesQuery =
+      !filterable ||
+      !normalizedQuery ||
+      [row.title, row.meta, row.badge].some((text) =>
+        text?.toLowerCase().includes(normalizedQuery),
+      );
+    return matchesOrigin && matchesQuery;
   });
   const create = async () => {
     if (!onCreate || creatingRef.current) return;
@@ -105,8 +127,18 @@ export function ListDetail({
   }
   return (
     <div>
-      {(onCreate || origins.length > 0) && (
-        <div className="mb-6 flex items-end justify-between gap-4">
+      {(onCreate || origins.length > 0 || filterable) && (
+        <div className="mb-6 flex flex-wrap items-end gap-3">
+          {filterable && (
+            <Input
+              type="search"
+              aria-label="Filter the list"
+              placeholder={`Filter ${rows.length}`}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="w-72 max-md:w-full"
+            />
+          )}
           {origins.length > 0 ? (
             <label className="grid gap-1 text-xs text-muted-foreground">
               Origin
@@ -125,13 +157,16 @@ export function ListDetail({
                 <option value={NOT_FROM_PACK_FILTER}>Not from a pack</option>
               </select>
             </label>
-          ) : (
-            <span />
-          )}
+          ) : null}
           {onCreate && (
-          <Button variant="outline" disabled={creating} onClick={create}>
-            <Plus /> {creating ? "Creating…" : createLabel}
-          </Button>
+            <Button
+              className="ml-auto"
+              variant="outline"
+              disabled={creating}
+              onClick={create}
+            >
+              <Plus /> {creating ? "Creating…" : createLabel}
+            </Button>
           )}
         </div>
       )}
@@ -139,30 +174,30 @@ export function ListDetail({
         {visibleRows.map((r) => {
           const origin = packOrigin(r.tags);
           return (
-          <li key={r.id}>
-            <a
-              href={href({ ...base, item: r.id })}
-              className="grid grid-cols-[auto_1fr_auto] items-center gap-4 px-4 py-3 hover:bg-accent"
-            >
-              <span className="grid size-8 place-items-center rounded-lg border border-border/60 bg-background">
-                {r.icon ?? <span className="size-2 rounded-full bg-border" />}
-              </span>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{r.title}</p>
-                {r.meta && (
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {r.meta}
-                    {origin ? ` · pack:${origin}` : ""}
-                  </p>
+            <li key={r.id}>
+              <a
+                href={href({ ...base, item: r.id })}
+                className="grid grid-cols-[auto_1fr_auto] items-center gap-4 px-4 py-3 hover:bg-accent"
+              >
+                <span className="grid size-8 place-items-center rounded-lg border border-border/60 bg-background">
+                  {r.icon ?? <span className="size-2 rounded-full bg-border" />}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{r.title}</p>
+                  {r.meta && (
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                      {r.meta}
+                      {origin ? ` · pack:${origin}` : ""}
+                    </p>
+                  )}
+                </div>
+                {r.badge && (
+                  <Badge variant={r.badgeTone === "bad" ? "destructive" : "secondary"}>
+                    {r.badge}
+                  </Badge>
                 )}
-              </div>
-              {r.badge && (
-                <Badge variant={r.badgeTone === "bad" ? "destructive" : "secondary"}>
-                  {r.badge}
-                </Badge>
-              )}
-            </a>
-          </li>
+              </a>
+            </li>
           );
         })}
         {visibleRows.length === 0 && (
@@ -171,59 +206,114 @@ export function ListDetail({
           </li>
         )}
       </ul>
+      {filterable && normalizedQuery && visibleRows.length > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {visibleRows.length} of {rows.length}
+        </p>
+      )}
     </div>
   );
 }
 
-/* the delete control at the end of an editor, confirmed by a second click */
+const NOUNS: Record<string, string> = {
+  behaviors: "behaviour",
+  contexts: "context",
+  skills: "skill",
+  inference: "backend",
+  profiles: "inference profile",
+  tools: "Tools document",
+  "tool-services": "tool service",
+  tasks: "task",
+  schedules: "schedule",
+  "event-sources": "event source",
+  triggers: "trigger",
+};
+
 export function DeleteButton({
   label,
   onDelete,
   base,
+  warning,
 }: {
   label: string;
   onDelete: () => Promise<unknown>;
   base: Extract<Route, { name: "agent" }>;
+  warning?: string;
 }) {
-  const [confirming, setConfirming] = useState(false);
+  const noun = NOUNS[base.section] ?? "item";
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const confirmed = typed.trim() === label.trim();
+  const close = (next: boolean) => {
+    if (deleting) return;
+    setOpen(next);
+    if (!next) setTyped("");
+  };
 
   async function remove() {
+    if (!confirmed || deleting) return;
     setDeleting(true);
     try {
       await onDelete();
-      toast("Deleted");
+      toast(`Deleted ${label}`);
+      setOpen(false);
       navigate({ ...base, item: undefined });
     } catch (error) {
       toast(`Delete failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
       setDeleting(false);
     }
   }
 
   return (
-    <div className="mt-2 flex items-center justify-end gap-2">
-      {confirming ? (
-        <>
-          <span className="mr-1 text-xs text-muted-foreground">
-            Delete {label}? This cannot be undone.
-          </span>
+    <FieldSet className="mt-12 mb-8" data-testid="danger-zone">
+      <FieldLegend variant="eyebrow">Danger zone</FieldLegend>
+      <FieldRows className="ring-destructive/25 dark:ring-destructive/30">
+        <Row
+          label={`Delete this ${noun}`}
+          description="Removes it for good. This cannot be undone."
+        >
           <Button
-            variant="quiet"
-            size="sm"
-            disabled={deleting}
-            onClick={() => setConfirming(false)}
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            onClick={() => setOpen(true)}
           >
-            Cancel
+            <Trash2 /> Delete {noun}
           </Button>
-          <Button variant="destructive" size="sm" disabled={deleting} onClick={remove}>
-            <Trash2 /> {deleting ? "Deleting…" : "Delete now"}
-          </Button>
-        </>
-      ) : (
-        <Button variant="quiet" size="sm" onClick={() => setConfirming(true)}>
-          <Trash2 /> Delete
-        </Button>
-      )}
-    </div>
+        </Row>
+      </FieldRows>
+      <AlertDialog open={open} onOpenChange={close}>
+        <AlertDialogContent aria-modal="true">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {label}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the {noun} for good.{warning ? ` ${warning}` : ""} To
+              confirm, type its name:{" "}
+              <span className="font-medium text-foreground">{label}</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Input
+            autoFocus
+            aria-label={`Type ${label} to confirm`}
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void remove();
+            }}
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              disabled={!confirmed || deleting}
+              onClick={() => void remove()}
+            >
+              {deleting ? "Deleting…" : `Delete ${noun}`}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </FieldSet>
   );
 }

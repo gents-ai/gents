@@ -2,8 +2,15 @@
    skills live on AgentContext (see ContextsPanel). */
 import type { DeploymentView, BehaviorView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
-import { ChoiceRow, DraftActions, FactRow, SwitchRow, TextRow } from "./editors";
-import { fromLinesOrNull, toLines, useDraft } from "./draft";
+import {
+  ChoiceRow,
+  DraftActions,
+  FactRow,
+  SwitchRow,
+  TagsRow,
+  TextRow,
+} from "./editors";
+import { useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { createBehavior } from "./createBehavior";
@@ -29,7 +36,7 @@ function Editor({
     inferenceProfileId: behavior.inferenceProfileId ?? "",
     enabled: behavior.enabled,
     makeDefault: behavior.isDefault,
-    tags: toLines(behavior.tags ?? []),
+    tags: behavior.tags ?? [],
   };
   const d = useDraft(saved, async (next) => {
     if (!next.displayName.trim()) throw new Error("Display name is required");
@@ -51,7 +58,7 @@ function Editor({
           context_id: next.contextId || null,
           inference_profile_id: next.inferenceProfileId,
           enabled: next.enabled,
-          tags: fromLinesOrNull(next.tags),
+          tags: next.tags.length ? next.tags : null,
           created_at: behavior.createdAt,
         },
       }),
@@ -135,14 +142,11 @@ function Editor({
             d.choose("makeDefault", v);
           }}
         />
-        <TextRow
+        <TagsRow
           id={id("tags")}
           label="Tags"
-          description="Comma or newline separated."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          onEnter={d.onEnter}
         />
       </Group>
       <DraftActions

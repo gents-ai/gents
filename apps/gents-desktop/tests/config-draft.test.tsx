@@ -61,14 +61,14 @@ describe("configuration drafts", () => {
 
     await user.click(screen.getByRole("button", { name: "Edit text" }));
     await user.click(screen.getByRole("button", { name: "Edit choice" }));
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Name is required");
     expect(persist).toHaveBeenLastCalledWith({ name: "Draft", enabled: false });
 
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(persist).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it("accepts fresh snapshots without discarding an unsaved draft", async () => {
