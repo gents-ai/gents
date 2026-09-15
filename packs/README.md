@@ -151,13 +151,17 @@ Only document packs currently declare package dependencies, and those must be
 graph packs. Graph/asset dependency lists are rejected; recursive installation
 is not silently implied.
 
-Graph role bindings inherit the target principal's default behavior; use
-`--bindings` for explicit graph bindings. Document packs use their authored
-configuration and `${VAR}` / `${VAR:-default}` substitutions. They bind to the
-target node through existing identity-rebinding checks; concrete DIDs require
-explicit `--force-rebind-concrete-did`. Review plugin declarations and host
-authority before installing untrusted content. External dependency commands
-are documentation, never automatically executed.
+Graph and document packs declare named inference slots in `manifest.json`.
+Inspect them with `pack show`, then use `pack install --preview` to see the
+principal's existing profiles and the effective slot map without writing.
+Bind ambiguous installs explicitly with repeated
+`--inference-slot name=profile_id`. Only a one-slot/one-usable-profile install
+auto-binds. Packs do not author inference backends, profiles, endpoints,
+credentials, models, sampling, or execution settings; the bound user profile
+remains their sole owner. Packs bind to the target node through existing
+identity checks. Review plugin declarations and host authority before
+installing untrusted content. External dependency commands are documentation,
+never automatically executed.
 
 `pack run`, `init`, and `seed` operate `experiment.json` scenarios. A lexically
 normalized source directory with a snake_case leaf name can be used while
@@ -196,6 +200,8 @@ Each `packs/<snake_case_name>/manifest.json` declares:
 - `manifest_version`, `name`, semantic `version`, and `description`;
 - `authors`, `tags`, and `kind` (`graph`, `documents`, or `assets`);
 - explicit `assets` and package-name `dependencies`;
+- `inference_slots`, with a stable name, description, and the behavior IDs
+  assigned to each slot, for every pack that installs behaviors;
 - for graph packs, compiler version, roles, schemas, intent and capabilities.
 
 Register the name in `packs/catalog.json`; adding a pack needs no Rust changes.
@@ -206,8 +212,16 @@ Use snake_case directories and filenames, except conventional ecosystem names
 such as `README.md` and `Cargo.toml`. No old-name aliases are provided. Changing
 filesystem handles does not require renaming Task IDs or database collections.
 Desired-state roots and export use snake_case collection directories too.
-Use loopback defaults or required environment inputs for local inference;
-do not ship enabled backends defaulting to private lab addresses.
+Every authored behavior references its slot as
+`gents:inference-slot:<name>`. Do not ship `InferenceBackend`,
+`InferenceProfile`, sampling, execution, or retry documents and do not use
+endpoint/model environment substitutions as a second inference owner.
+
+Installation stamps `gents:pack:<pack_name>` onto every pack-authored document
+whose canonical type has tags, merging it with authored discovery tags. This
+tag supports UI filtering and provenance inspection only: references determine
+execution and tags grant no deletion or authorization authority. User profiles
+and backends referenced by slot bindings are never stamped.
 
 A README must explain purpose, installation, bindings/prerequisites, tool and
 workspace authority, inputs/outputs, completion/failure semantics, validation,

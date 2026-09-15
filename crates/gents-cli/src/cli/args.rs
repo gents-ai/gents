@@ -338,9 +338,22 @@ pub(crate) struct PackInstallArgs {
     pub(crate) package: String,
     #[arg(
         long,
-        help = "JSON file containing explicit owner, role, deployment, and model bindings"
+        help = "JSON file containing agent_did and an optional inference_slots map"
     )]
     pub(crate) bindings: Option<PathBuf>,
+    #[arg(
+        long = "inference-slot",
+        value_name = "NAME=PROFILE_ID",
+        action = clap::ArgAction::Append,
+        help = "Bind a declared inference slot to an existing principal-owned profile; repeat for every slot"
+    )]
+    pub(crate) inference_slots: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Inspect slots, usable profiles, and effective bindings without writing"
+    )]
+    pub(crate) preview: bool,
     #[command(flatten)]
     pub(crate) scope: GraphScopeArgs,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json,

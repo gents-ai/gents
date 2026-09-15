@@ -5,13 +5,13 @@
       "behavior_id": "background-parent",
       "display_name": "Background delegation parent",
       "context_id": "background-parent-context",
-      "inference_profile_id": "background-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "background-worker",
       "display_name": "Background worker",
       "context_id": "background-worker-context",
-      "inference_profile_id": "background-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     }
   ],
   "contexts": [
@@ -53,45 +53,6 @@
       "behavior_id": "background-worker",
       "name": "worker",
       "description": "Returns one concise analysis result"
-    }
-  ],
-  "inference_backends": [
-    {
-      "backend_id": "background-deepseek",
-      "name": "Background continuation demo backend",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_EXP_ENDPOINT:-http://127.0.0.1:8080/v1}",
-      "auth": {
-        "kind": "unauthenticated"
-      },
-      "max_concurrent": 4,
-      "max_queue_depth": 100
-    }
-  ],
-  "inference_profiles": [
-    {
-      "profile_id": "background-profile",
-      "display_name": "Background continuation demo",
-      "backend_id": "background-deepseek",
-      "model_name": "${GENTS_EXP_MODEL:-d4f}",
-      "max_output_tokens": 4096,
-      "sampling_id": "background-profile-sampling",
-      "execution_id": "background-profile-execution"
-    }
-  ],
-  "inference_sampling": [
-    {
-      "sampling_id": "background-profile-sampling",
-      "display_name": "Background continuation demo sampling",
-      "temperature": 0.1
-    }
-  ],
-  "inference_execution": [
-    {
-      "execution_id": "background-profile-execution",
-      "display_name": "Background continuation demo execution",
-      "max_turns": 8
     }
   ],
   "tasks": [

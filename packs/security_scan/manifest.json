@@ -32,5 +32,29 @@
     "tasks/scan_revalidate_task/prompt.md"
   ],
   "dependencies": [],
-  "config": "pack_config.json"
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "coordinator",
+      "description": "Plans scan batches and produces the final report.",
+      "behaviors": [
+        "scan-plan",
+        "scan-report"
+      ]
+    },
+    {
+      "name": "scanner",
+      "description": "Investigates candidate findings in parallel.",
+      "behaviors": [
+        "scan-investigate"
+      ]
+    },
+    {
+      "name": "verifier",
+      "description": "Adversarially revalidates candidate findings.",
+      "behaviors": [
+        "scan-revalidate"
+      ]
+    }
+  ]
 }

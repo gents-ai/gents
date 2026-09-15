@@ -10,22 +10,63 @@ use anyhow::{Context, Result};
 use gents::pack::{pack_catalog, resolve_pack, PackKind, PackManifest, ResolvedPack};
 use gents::pack_archive::DEFAULT_NAMESPACE;
 use serde_json::json;
+use std::collections::BTreeMap;
 
 const CACHE_MARKER: &str = ".gents-pack-cache-v1";
 const CACHE_LOCK: &str = ".cache.lock";
+
+pub(crate) fn parse_inference_slot_bindings(
+    values: &[String],
+) -> Result<gents::pack::PackInferenceBindings> {
+    let mut bindings = BTreeMap::new();
+    for value in values {
+        let (slot, profile_id) = value.split_once('=').with_context(|| {
+            format!("invalid inference slot binding {value:?}; expected NAME=PROFILE_ID")
+        })?;
+        anyhow::ensure!(
+            !slot.trim().is_empty() && !profile_id.trim().is_empty(),
+            "invalid inference slot binding {value:?}; slot and profile ID must not be blank"
+        );
+        anyhow::ensure!(
+            bindings
+                .insert(slot.trim().to_owned(), profile_id.trim().to_owned())
+                .is_none(),
+            "inference slot {slot:?} was bound more than once"
+        );
+    }
+    Ok(bindings)
+}
 
 pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
     match command {
         PackCommand::List => {
             let entries: Vec<_> = pack_catalog()?.into_iter().map(|pack| json!({
                 "name":pack.name,"version":pack.version,"description":pack.description,
-                "kind":pack.metadata.kind,"authors":pack.metadata.authors,"tags":pack.metadata.tags
+                "kind":pack.metadata.kind,"authors":pack.metadata.authors,"tags":pack.metadata.tags,
+                "inference_slots":pack.metadata.inference_slots
             })).collect();
             crate::print_json(&json!({"packs":entries}))
         }
         PackCommand::Show(args) => {
             let pack = resolve_pack(&args.package)?;
-            crate::print_json(&json!({"manifest": pack.manifest, "digest": pack.digest}))
+            let dependency_origins = pack
+                .manifest
+                .metadata
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    Ok(json!({
+                        "pack": dependency,
+                        "origin_tag": gents::pack::pack_origin_tag(dependency)?,
+                    }))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            crate::print_json(&json!({
+                "origin_tag": gents::pack::pack_origin_tag(&pack.manifest.name)?,
+                "dependency_origins": dependency_origins,
+                "manifest": pack.manifest,
+                "digest": pack.digest,
+            }))
         }
         PackCommand::Install(args) => install(args).await,
         PackCommand::Prune(args) => prune(args),
@@ -330,8 +371,36 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             super::graph::install(args, true).await
         }
         PackKind::Documents => {
-            anyhow::ensure!(args.bindings.is_none() && args.scope.agent_did.is_none(), "document packs bind to the target node; --bindings/--agent-did are graph installation options");
-            // Resolve every dependency before writing any configuration.
+            anyhow::ensure!(
+                args.bindings.is_none(),
+                "document packs use --inference-slot; --bindings is a graph installation option"
+            );
+            let (access, _) = crate::resolve_config_access(
+                args.scope.home.as_deref(),
+                args.scope.graphql.as_deref(),
+            )
+            .await?;
+            let bind_mode = if args.scope.graphql.is_some() {
+                Some(ManifestAgentDidBindingArg::Live)
+            } else {
+                Some(ManifestAgentDidBindingArg::Home)
+            };
+            let owner = super::config::binding::resolve_target_agent_did(
+                args.scope.agent_did.as_deref(),
+                if args.scope.agent_did.is_some() {
+                    None
+                } else {
+                    bind_mode
+                },
+                args.scope.home.as_deref(),
+                args.scope.graphql.as_deref(),
+                Some(&access),
+            )
+            .await?;
+            let requested = parse_inference_slot_bindings(&args.inference_slots)?;
+            // Resolve and preview the complete dependency closure before any
+            // schema or configuration write. Reused slot names intentionally
+            // share one user selection across the root and dependency pack.
             let dependencies = pack
                 .manifest()
                 .metadata
@@ -345,25 +414,117 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                     "only graph dependencies are currently installable"
                 );
             }
+            for slot in requested.keys() {
+                let declared_by_root = pack
+                    .manifest()
+                    .metadata
+                    .inference_slots
+                    .iter()
+                    .any(|declared| declared.name.as_str() == slot.as_str());
+                let declared_by_dependency = dependencies.iter().any(|dependency| {
+                    dependency
+                        .manifest
+                        .metadata
+                        .inference_slots
+                        .iter()
+                        .any(|declared| declared.name.as_str() == slot.as_str())
+                });
+                anyhow::ensure!(
+                    declared_by_root || declared_by_dependency,
+                    "pack {} and its dependencies have no inference slot {slot:?}",
+                    pack.manifest().name
+                );
+            }
+            let root_requested = requested
+                .iter()
+                .filter(|(slot, _)| {
+                    pack.manifest()
+                        .metadata
+                        .inference_slots
+                        .iter()
+                        .any(|declared| declared.name.as_str() == slot.as_str())
+                })
+                .map(|(slot, profile)| (slot.clone(), profile.clone()))
+                .collect();
+            let inference = gents::pack::preview_pack_inference_bindings(
+                &access,
+                pack.manifest(),
+                &owner,
+                &root_requested,
+            )
+            .await?;
+            let mut dependency_inference = BTreeMap::new();
+            for dependency in &dependencies {
+                let dependency_requested = requested
+                    .iter()
+                    .filter(|(slot, _)| {
+                        dependency
+                            .manifest
+                            .metadata
+                            .inference_slots
+                            .iter()
+                            .any(|declared| declared.name.as_str() == slot.as_str())
+                    })
+                    .map(|(slot, profile)| (slot.clone(), profile.clone()))
+                    .collect();
+                let preview = gents::pack::preview_pack_inference_bindings(
+                    &access,
+                    &dependency.manifest,
+                    &owner,
+                    &dependency_requested,
+                )
+                .await?;
+                dependency_inference.insert(dependency.manifest.name.clone(), preview);
+            }
             let temp = tempfile::tempdir()?;
             materialize(&pack, temp.path())?;
-            // Distribution packs are templates: their principal is supplied by
-            // the installation target. Validate through the same scoped loader
-            // used by apply instead of requiring a pack-authored concrete DID.
-            let (_, report) = crate::desired_state::load_manifest_root_for_owner(
-                temp.path(),
-                Some("did:key:zPackInstallValidationOwner"),
-            );
+            let (mut authored, mut report) = crate::desired_state::load_manifest_root(temp.path());
+            if authored.is_none() {
+                (authored, report) =
+                    crate::desired_state::load_manifest_root_for_owner(temp.path(), Some(&owner));
+            }
             anyhow::ensure!(
-                report.errors.is_empty(),
+                authored.is_some(),
                 "invalid pack configuration: {:?}",
                 report.errors
             );
+            let mut authored = authored.expect("checked pack configuration");
+            super::config::binding::rebind_manifest_to_agent(
+                &mut authored,
+                &owner,
+                args.force_rebind_concrete_did,
+            )?;
+            let desired = gents::pack::bind_pack_install_config(
+                pack.manifest(),
+                &authored,
+                &inference.bindings,
+            )?;
+            let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
+            if args.preview {
+                return crate::print_json(&json!({
+                    "pack": pack.manifest().name,
+                    "source": pack.label(),
+                    "digest": pack.digest(),
+                    "owner": owner,
+                    "inference": inference,
+                    "dependency_inference": dependency_inference,
+                    "origin_tag": origin_tag,
+                    "dependencies": pack.manifest().metadata.dependencies,
+                    "would_write": false,
+                }));
+            }
             for dependency in dependencies {
+                let dependency_slots = dependency_inference[&dependency.manifest.name]
+                    .bindings
+                    .iter()
+                    .map(|(slot, profile)| format!("{slot}={profile}"))
+                    .collect();
                 super::graph::install(
                     PackInstallArgs {
                         package: dependency.manifest.name,
                         bindings: None,
+                        inference_slots: dependency_slots,
+                        preview: false,
                         scope: args.scope.clone(),
                         output: args.output,
                         force_rebind_concrete_did: false,
@@ -373,20 +534,22 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                 )
                 .await?;
             }
-            let binding = if args.scope.graphql.is_some() {
-                ManifestAgentDidBindingArg::Live
-            } else {
-                ManifestAgentDidBindingArg::Home
-            };
-            super::config::dispatch(ConfigCommand::Apply(ConfigApplyArgs {
-                root: temp.path().to_owned(),
-                home: args.scope.home,
-                graphql: args.scope.graphql,
-                bind_agent_did: Some(binding),
-                force_rebind_concrete_did: args.force_rebind_concrete_did,
-                prune: false,
+            let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
+                .await
+                .context("pack install schemas")?;
+            let apply = gents::pack::install_pack_documents(&access, &desired).await?;
+            crate::print_json(&json!({
+                "pack": pack.manifest().name,
+                "source": pack.label(),
+                "digest": pack.digest(),
+                "owner": owner,
+                "inference": inference,
+                "dependency_inference": dependency_inference,
+                "origin_tag": origin_tag,
+                "dependencies": pack.manifest().metadata.dependencies,
+                "schemas": schemas,
+                "apply": apply,
             }))
-            .await
         }
         // A plugins pack carries no documents either, just files to
         // materialize (its compiled artifacts), so it installs the same
@@ -395,11 +558,21 @@ async fn install(args: PackInstallArgs) -> Result<()> {
         PackKind::Assets | PackKind::Plugins => {
             anyhow::ensure!(
                 args.bindings.is_none()
+                    && args.inference_slots.is_empty()
                     && args.scope.graphql.is_none()
                     && args.scope.agent_did.is_none()
                     && !args.force_rebind_concrete_did,
                 "asset and plugins packs install locally with --home; identity and graph binding flags do not apply"
             );
+            if args.preview {
+                return crate::print_json(&json!({
+                    "pack": pack.manifest().name,
+                    "source": pack.label(),
+                    "digest": pack.digest(),
+                    "installed_plugins": pack.manifest().metadata.plugins,
+                    "would_write": false,
+                }));
+            }
             let home = args
                 .scope
                 .home
@@ -630,5 +803,21 @@ mod tests {
     fn split_namespace_defaults_to_gents() {
         assert_eq!(split_namespace("mailbox"), ("gents", "mailbox"));
         assert_eq!(split_namespace("acme/widget"), ("acme", "widget"));
+    }
+
+    #[test]
+    fn inference_slot_flags_are_complete_unique_pairs() {
+        let bindings =
+            parse_inference_slot_bindings(&["coordinator=claude".into(), "worker=glm".into()])
+                .unwrap();
+        assert_eq!(bindings["coordinator"], "claude");
+        assert_eq!(bindings["worker"], "glm");
+        for invalid in [
+            vec!["missing-separator".into()],
+            vec!["worker=".into()],
+            vec!["worker=one".into(), "worker=two".into()],
+        ] {
+            assert!(parse_inference_slot_bindings(&invalid).is_err());
+        }
     }
 }

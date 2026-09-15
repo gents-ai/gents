@@ -327,6 +327,7 @@ export function TasksPanel({
         meta: `${deployment.behaviors.find((b) => b.behaviorId === t.behaviorId)?.displayName ?? "no behaviour"} · ${t.recentRuns.totalFires} fires${t.enabled === false ? " · disabled" : ""}`,
         badge: t.recentRuns.lastStatus ?? undefined,
         badgeTone: t.recentRuns.lastStatus === "failed" ? "bad" : "default",
+        tags: t.tags,
       }))}
       createLabel="New task"
       empty="No tasks. A task is a prompt the agent runs on a schedule or a trigger."

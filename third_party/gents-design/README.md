@@ -3,4 +3,3 @@ Packed `@gents/tokens`, `@gents/ui`, and `@gents/shell` from
 
 - Pin: see `PIN` (design repo commit SHA)
 - Refresh: `scripts/refresh-gents-ui.sh` from the gents repo root
-

@@ -1052,8 +1052,14 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
     crate::document_config::ensure_agent_principal(&node, identity.did())
         .await
         .unwrap();
+    crate::test_support::install_test_behavior(&node, identity.did(), "package").await;
     let bindings = GraphPackageInstallBindings {
         agent_did: identity.did().into(),
+        inference_slots: std::collections::BTreeMap::from([
+            ("coordinator".into(), "package:inference".into()),
+            ("worker".into(), "package:inference".into()),
+            ("verifier".into(), "package:inference".into()),
+        ]),
     };
     let access = ConfigAccess::Local(node.clone());
     let installed = install_test_graph_package(&access, identity.did(), "code_review", &bindings)

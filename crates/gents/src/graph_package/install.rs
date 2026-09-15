@@ -9,12 +9,26 @@ use crate::graph_pipeline::{
 };
 use crate::Collection;
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-pub type GraphPackageInstallBindings = crate::pack::PackInstallOptions;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphPackageInstallBindings {
+    pub agent_did: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inference_slots: crate::pack::PackInferenceBindings,
+}
+
+impl GraphPackageInstallBindings {
+    fn scope(&self) -> crate::pack::PackInstallOptions {
+        crate::pack::PackInstallOptions {
+            agent_did: self.agent_did.clone(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct GraphPackageInstallReceipt {
@@ -92,13 +106,24 @@ pub async fn default_bundled_graph_package_install_bindings(
     access: &ConfigAccess,
     package_name: &str,
     owner_did: &str,
+    requested: &crate::pack::PackInferenceBindings,
 ) -> Result<GraphPackageInstallBindings> {
-    let options = GraphPackageInstallBindings {
+    let scope = crate::pack::PackInstallOptions {
         agent_did: owner_did.to_owned(),
     };
-    load_bundled_graph_package(package_name, &options)?;
+    let package = load_bundled_graph_package(package_name, &scope)?;
     validate_owner(access, owner_did).await?;
-    Ok(options)
+    let preview = crate::pack::preview_pack_inference_bindings(
+        access,
+        &package.manifest,
+        owner_did,
+        requested,
+    )
+    .await?;
+    Ok(GraphPackageInstallBindings {
+        agent_did: owner_did.to_owned(),
+        inference_slots: preview.bindings,
+    })
 }
 
 /// Bind a known bundled graph distribution to its current owner without
@@ -116,6 +141,7 @@ pub(crate) async fn bundled_graph_package_install_bindings_for_owner(
     );
     let options = GraphPackageInstallBindings {
         agent_did: owner_did.to_owned(),
+        inference_slots: BTreeMap::new(),
     };
     validate_owner(access, owner_did).await?;
     Ok(options)
@@ -243,7 +269,7 @@ pub async fn prepare_bundled_graph_package_install(
     package_name: &str,
     options: &GraphPackageInstallBindings,
 ) -> Result<PreparedGraphPackageInstall> {
-    let package = load_bundled_graph_package(package_name, options)?;
+    let package = load_bundled_graph_package(package_name, &options.scope())?;
     prepare_package(access, &package, options, None).await
 }
 
@@ -254,7 +280,7 @@ pub async fn prepare_bundled_graph_package_install_for_graph(
     options: &GraphPackageInstallBindings,
     graph_id: &str,
 ) -> Result<PreparedGraphPackageInstall> {
-    let package = load_bundled_graph_package(package_name, options)?;
+    let package = load_bundled_graph_package(package_name, &options.scope())?;
     prepare_package(access, &package, options, Some(graph_id)).await
 }
 
@@ -265,6 +291,20 @@ async fn prepare_package(
     graph_id: Option<&str>,
 ) -> Result<PreparedGraphPackageInstall> {
     validate_owner(access, &options.agent_did).await?;
+    let preview = crate::pack::preview_pack_inference_bindings(
+        access,
+        &package.manifest,
+        &options.agent_did,
+        &options.inference_slots,
+    )
+    .await?;
+    let mut package = package.clone();
+    package.config = crate::pack::bind_pack_install_config(
+        &package.manifest,
+        &package.config,
+        &preview.bindings,
+    )?;
+    let package = &package;
     let intent = selected_intent(package, graph_id)?;
     anyhow::ensure!(
         intent.agent_did == options.agent_did,
@@ -295,7 +335,7 @@ async fn prepare_package(
                 .as_str()
                 .context("configuration logical ID missing")?
                 .to_owned(),
-            content_digest: crate::config_client::desired_state_document_digest(&document.add)?,
+            content_digest: crate::pack::pack_artifact_document_digest(&document.add)?,
         });
     }
     artifacts.sort();
@@ -375,8 +415,9 @@ async fn prepare_package(
     access
         .transact("graph_package.install_preflight", |txn| {
             Box::pin(async move {
-                crate::config_client::verify_existing_desired_state_plan(txn, desired).await?;
-                crate::config_client::validate_desired_state_plan(txn, desired).await
+                let effective =
+                    crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
+                crate::config_client::validate_desired_state_plan(txn, &effective).await
             })
         })
         .await?;
@@ -476,7 +517,7 @@ async fn install_package(
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
 ) -> Result<GraphPackageInstallReceipt> {
-    let package = load_bundled_graph_package(package_name, options)?;
+    let package = load_bundled_graph_package(package_name, &options.scope())?;
     install_loaded_graph_package(access, actor_did, &package, options, graph_id).await
 }
 
@@ -500,8 +541,10 @@ pub(crate) async fn install_loaded_graph_package(
     access
         .transact("graph_package.install", |txn| {
             Box::pin(async move {
-                crate::config_client::verify_existing_desired_state_plan(txn, desired).await?;
-                apply_desired_state_plan(txn, desired).await?;
+                let effective =
+                    crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
+                crate::config_client::validate_desired_state_plan(txn, &effective).await?;
+                apply_desired_state_plan(txn, &effective).await?;
                 crate::graph_pipeline::materialize_graph_revision_in_txn(txn, owner, plan).await?;
                 Ok(())
             })

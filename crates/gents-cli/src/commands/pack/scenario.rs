@@ -896,12 +896,13 @@ async fn install_bundled_graph_dependencies(
     home: &Path,
     graphql: &str,
     agent_did: &str,
+    inference_profile_id: &str,
     packages: &[String],
     environments: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<()> {
     for package in packages {
         tracing::info!(%package, "installing bundled graph dependency");
-        let args = vec![
+        let mut args = vec![
             "pack".to_owned(),
             "install".to_owned(),
             package.clone(),
@@ -914,6 +915,11 @@ async fn install_bundled_graph_dependencies(
             "--output".to_owned(),
             "json".to_owned(),
         ];
+        let graph_pack = gents::pack::resolve_pack(package)?;
+        for slot in &graph_pack.manifest.metadata.inference_slots {
+            args.push("--inference-slot".to_owned());
+            args.push(format!("{}={inference_profile_id}", slot.name));
+        }
         super::cli_process::run_cli_json_with_env(
             bin,
             &args,
@@ -3170,6 +3176,15 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         .and_then(Value::as_str)
         .context("init did not return agent_did")?
         .to_string();
+    let inference_profile_id = init
+        .get("inference_profile_id")
+        .and_then(Value::as_str)
+        .context("init did not return inference_profile_id")?
+        .to_string();
+    // Scenario homes are initialized with exactly one profile. Bind every
+    // declared role explicitly so the scenario remains deterministic without
+    // weakening the ordinary multi-slot install contract.
+    let staged_pack = stage_scenario_pack(&pack, &distribution, &agent_did, &inference_profile_id)?;
 
     let port = args.http_port;
     let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
@@ -3181,7 +3196,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         &home,
         port,
         &log,
-        &pack,
+        staged_pack.path(),
         tool_root.as_deref(),
         manifest.init.tool_root_env_var.as_deref(),
     )?;
@@ -3199,6 +3214,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
             &home,
             &graphql,
             &agent_did,
+            &inference_profile_id,
             &manifest.graph_dependencies,
             &manifest.graph_dependency_environment,
         )
@@ -3535,6 +3551,45 @@ fn spawn_server_with_pack(
     spawn_server_with_args_and_env(bin, home, port, log, &["--apply-root", &root], &environment)
 }
 
+fn stage_scenario_pack(
+    pack: &Path,
+    distribution: &gents::pack::PackManifest,
+    agent_did: &str,
+    inference_profile_id: &str,
+) -> Result<tempfile::TempDir> {
+    let (mut authored, mut report) = crate::desired_state::load_manifest_root(pack);
+    if authored.is_none() {
+        (authored, report) =
+            crate::desired_state::load_manifest_root_for_owner(pack, Some(agent_did));
+    }
+    anyhow::ensure!(
+        authored.is_some(),
+        "invalid scenario pack configuration: {:?}",
+        report.errors
+    );
+    let mut authored = authored.expect("checked scenario pack configuration");
+    super::super::config::binding::rebind_manifest_to_agent(&mut authored, agent_did, true)?;
+    let bindings = distribution
+        .metadata
+        .inference_slots
+        .iter()
+        .map(|slot| (slot.name.clone(), inference_profile_id.to_owned()))
+        .collect();
+    let bound = gents::pack::bind_pack_install_config(distribution, &authored, &bindings)?;
+    let staged = tempfile::tempdir().context("staging bound scenario pack")?;
+    std::fs::write(
+        staged.path().join("pack_config.json"),
+        serde_json::to_vec_pretty(&bound)?,
+    )?;
+    for schema in &distribution.schemas {
+        let destination = staged.path().join(schema);
+        std::fs::create_dir_all(destination.parent().context("scenario schema parent")?)?;
+        std::fs::copy(pack.join(schema), &destination)
+            .with_context(|| format!("staging scenario schema {schema}"))?;
+    }
+    Ok(staged)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3560,6 +3615,32 @@ mod tests {
     fn load_manifest_defaults(pack: &Path) -> Result<ScenarioManifest> {
         let distribution = read_distribution_manifest(pack)?;
         load_manifest_with(pack, &distribution, &|_| None)
+    }
+
+    #[test]
+    fn scenario_staging_explicitly_binds_the_initialized_profile() {
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
+        let distribution = read_distribution_manifest(&pack).unwrap();
+        let staged = stage_scenario_pack(
+            &pack,
+            &distribution,
+            "did:key:scenario-owner",
+            "default-profile",
+        )
+        .unwrap();
+        let (config, report) = crate::desired_state::load_manifest_root(staged.path());
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let config = config.unwrap();
+        assert!(config
+            .agent_behaviors
+            .iter()
+            .all(|behavior| behavior.inference_profile_id == "default-profile"));
+        assert!(config
+            .agent_behaviors
+            .iter()
+            .all(|behavior| behavior.tags.contains(&"gents:pack:pipeline".to_owned())));
+        assert!(config.inference_profiles.is_empty());
+        assert!(config.inference_backends.is_empty());
     }
 
     #[test]

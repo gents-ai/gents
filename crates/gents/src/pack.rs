@@ -2,11 +2,19 @@
 //! graph installer and desired-state installer, not by package resolution.
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+mod inference;
 pub mod interpolate;
 mod loader;
+mod provenance;
+pub use inference::{
+    bind_pack_install_config, install_pack_documents, preview_pack_inference_bindings,
+    PackInferenceBindingPreview, PackInferenceProfileOption,
+};
 pub use loader::{decode_pack_config, load_pack_config};
+pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
+pub use provenance::{pack_origin_from_tags, pack_origin_tag};
 
 #[path = "pack_asset_path.rs"]
 mod asset_path;
@@ -53,6 +61,11 @@ pub struct PackMetadata {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub dependencies: Vec<String>,
+    /// Pack-local inference roles bound to existing principal profiles before
+    /// any document is written. Slot names are authoring/install vocabulary;
+    /// installed behaviors retain only their canonical profile reference.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inference_slots: Vec<PackInferenceSlot>,
     /// The capabilities this pack builds and ships.
     ///
     /// A plugin is a complete, sandboxed Afterburner `.afb`. Naming it
@@ -64,6 +77,27 @@ pub struct PackMetadata {
     /// built, shipped, installed, and called directly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PackPlugin>,
+}
+
+/// One stable, pack-local inference role.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackInferenceSlot {
+    pub name: String,
+    pub description: String,
+    /// Canonical behavior IDs whose authored profile reference names this slot.
+    pub behaviors: Vec<String>,
+}
+
+/// Complete explicit slot-to-existing-profile selection supplied at install.
+pub type PackInferenceBindings = BTreeMap<String, String>;
+
+/// Authored marker used only while decoding a pack. Installation replaces it
+/// with an existing principal-owned profile ID before reference validation.
+pub const INFERENCE_SLOT_REFERENCE_PREFIX: &str = "gents:inference-slot:";
+
+pub fn inference_slot_reference(name: &str) -> String {
+    format!("{INFERENCE_SLOT_REFERENCE_PREFIX}{name}")
 }
 
 fn default_namespace() -> String {
@@ -412,6 +446,49 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
         "a plugins pack must declare at least one plugin"
     );
 
+    let mut slot_names = BTreeSet::new();
+    let mut slot_behaviors = BTreeSet::new();
+    for slot in &manifest.metadata.inference_slots {
+        anyhow::ensure!(
+            is_valid_pack_name(&slot.name),
+            "inference slot name must be snake_case: {:?}",
+            slot.name
+        );
+        anyhow::ensure!(
+            slot_names.insert(slot.name.as_str()),
+            "pack declares inference slot {:?} twice",
+            slot.name
+        );
+        anyhow::ensure!(
+            !slot.description.trim().is_empty(),
+            "inference slot {:?} needs a description",
+            slot.name
+        );
+        anyhow::ensure!(
+            !slot.behaviors.is_empty(),
+            "inference slot {:?} must name at least one behavior",
+            slot.name
+        );
+        let mut local = BTreeSet::new();
+        for behavior in &slot.behaviors {
+            anyhow::ensure!(
+                !behavior.trim().is_empty() && local.insert(behavior.as_str()),
+                "inference slot {:?} repeats or has a blank behavior",
+                slot.name
+            );
+            anyhow::ensure!(
+                slot_behaviors.insert(behavior.as_str()),
+                "behavior {behavior:?} belongs to more than one inference slot"
+            );
+        }
+    }
+    anyhow::ensure!(
+        manifest.metadata.kind == PackKind::Documents
+            || manifest.metadata.kind == PackKind::Graph
+            || manifest.metadata.inference_slots.is_empty(),
+        "asset and plugins packs cannot declare inference slots"
+    );
+
     match manifest.metadata.kind {
         PackKind::Documents | PackKind::Graph => {
             let config = manifest
@@ -524,6 +601,39 @@ mod tests {
         }
         assert!(resolve_pack("code-review").is_err());
         assert!(resolve_pack("../code_review").is_err());
+    }
+
+    #[test]
+    fn every_configuration_pack_declares_slots_and_authors_no_inference_documents() {
+        let options = PackInstallOptions {
+            agent_did: "did:key:catalog-owner".into(),
+        };
+        for manifest in pack_catalog().unwrap() {
+            if !matches!(
+                manifest.metadata.kind,
+                PackKind::Documents | PackKind::Graph
+            ) {
+                continue;
+            }
+            let pack = resolve_pack(&manifest.name).unwrap();
+            let config = pack
+                .load_config(&options)
+                .unwrap_or_else(|error| panic!("{}: {error:#}", manifest.name));
+            assert!(
+                !manifest.metadata.inference_slots.is_empty(),
+                "{}",
+                manifest.name
+            );
+            assert!(config.inference_backends.is_empty(), "{}", manifest.name);
+            assert!(config.inference_profiles.is_empty(), "{}", manifest.name);
+            assert!(config.inference_sampling.is_empty(), "{}", manifest.name);
+            assert!(config.inference_execution.is_empty(), "{}", manifest.name);
+            assert!(
+                config.inference_retry_policies.is_empty(),
+                "{}",
+                manifest.name
+            );
+        }
     }
 
     /// A minimal, otherwise-valid plugin, so each test below changes

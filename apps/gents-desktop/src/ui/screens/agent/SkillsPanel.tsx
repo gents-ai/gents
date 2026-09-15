@@ -183,6 +183,7 @@ export function SkillsPanel({
         id: s.skillId,
         title: s.displayName ?? s.name ?? s.skillId,
         meta: `${s.toolRefs.length} tools${s.enabled === false ? " · disabled" : ""}`,
+        tags: s.tags,
       }))}
       createLabel="New skill"
       empty="No skills yet. A skill is instructions and tool references a behaviour can load by name."

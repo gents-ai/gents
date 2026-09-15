@@ -269,6 +269,7 @@ export function EventSourcesPanel({
         id: s.event_source_id,
         title: s.display_name ?? s.event_source_id,
         meta: s.source_collection,
+        tags: s.tags,
       }))}
       createLabel="New event source"
       empty="No event sources. A trigger binds a task to a reusable source."

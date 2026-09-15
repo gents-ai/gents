@@ -3,13 +3,19 @@
 Reusable reconnaissance, parallel scanning, verification and triage graph.
 Install with `gents pack install code_review --home <home>` and run with
 `gents graph run code_review --repo <repo> --base <base> --head <head>`.
-Use the same home and principal for installation and execution. For the local
-GLM backend:
+Use the same home and principal for installation and execution. Bind the three
+declared slots to profiles already configured for that principal:
 
 ```sh
-export GENTS_REVIEW_MODEL=GLM-5.3-Flash-NVFP4
-export GENTS_REVIEW_ENDPOINT=http://workstation-1:8000/v1
-gents pack install code_review --home ./.gents --agent-did "$REVIEW_AGENT_DID"
+gents pack install code_review --home ./.gents --agent-did "$REVIEW_AGENT_DID" \
+  --preview \
+  --inference-slot coordinator=claude-coordinator \
+  --inference-slot worker=glm-worker \
+  --inference-slot verifier=grok-verifier
+gents pack install code_review --home ./.gents --agent-did "$REVIEW_AGENT_DID" \
+  --inference-slot coordinator=claude-coordinator \
+  --inference-slot worker=glm-worker \
+  --inference-slot verifier=grok-verifier
 gents graph run code_review --home ./.gents --agent-did "$REVIEW_AGENT_DID" \
   --repo . --base origin/main --head HEAD --watch
 ```
@@ -23,21 +29,19 @@ its configured scratch-write sandbox. Unsupported hosts report a policy error.
 
 The graph requests read-only workspace authority. Verification can write
 scratch artifacts through its configured bash tools; reviewed source remains
-read-only. Review output is evidence, not permission to merge. Inference resolves through
-each stage's Task -> Behavior -> InferenceProfile; the bundle declares one shared
-backend and a separate profile per stage targeting `${GENTS_REVIEW_MODEL}` against
-`${GENTS_REVIEW_ENDPOINT:-http://127.0.0.1:8080/v1}`. Installation fills each
-document's owner from the requested `--agent-did`; behavior, context, tools,
+read-only. Review output is evidence, not permission to merge. Inference resolves
+through each stage's Task -> Behavior -> the user profile bound to its named
+slot. The pack declares `coordinator` for recon/triage, `worker` for parallel
+scans, and `verifier` for adversarial verification. Installation creates no
+inference configuration and fills each document's owner from the requested
+`--agent-did`; behavior, context, tools,
 tasks, capabilities and the intent inherit that explicit installation owner.
 Capabilities explicitly permit that installation owner through
 `${GENTS_PACK_AGENT_DID}`, which the common loader binds to `--agent-did`.
-Empty caller lists deny access. The authored documents and their references live in `pack_config.json`; prompt
-files remain literal sidecars. Set `GENTS_REVIEW_MODEL` before installation and
-`GENTS_REVIEW_ENDPOINT` when using a different endpoint. The backend admits eight
-concurrent requests. All four profiles share temperature 1, top-p 0.95, high
-reasoning effort, and a 1,000-turn execution limit; these are explicit configuration
-documents you can edit for the selected model. A turn limit is a ceiling, not a
-completion target. Unsupported explicit provider settings must fail validation.
+Empty caller lists deny access. The authored documents and their references live
+in `pack_config.json`; prompt files remain literal sidecars. Connectivity,
+credentials, model selection, effort, sampling, execution, and concurrency stay
+on the selected user profiles and backends.
 
 ## Inputs, outputs and completion
 

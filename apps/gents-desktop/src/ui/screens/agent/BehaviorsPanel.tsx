@@ -190,6 +190,7 @@ export function BehaviorsPanel({
         id: b.behaviorId,
         title: b.displayName,
         meta: b.isDefault ? "default" : b.enabled ? "enabled" : "disabled",
+        tags: b.tags,
       }))}
       createLabel="New behaviour"
       empty="No behaviours yet."

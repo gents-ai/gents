@@ -148,8 +148,6 @@ details. The page is read-only and does not seed or mutate the campaign.
 Useful controls:
 
 ```bash
-export GENTS_DEFENDING_ENDPOINT=http://127.0.0.1:8000/v1
-export GENTS_DEFENDING_MODEL=GLM-5.2
 export GENTS_DEFENDING_MIN_AREAS=4
 export GENTS_DEFENDING_MAX_AREAS=10
 export GENTS_DEFENDING_MAX_CONCURRENT=8

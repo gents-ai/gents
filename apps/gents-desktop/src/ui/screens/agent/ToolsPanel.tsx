@@ -405,6 +405,7 @@ export function ToolsPanel({
         id: t.tools_id,
         title: t.display_name ?? t.tools_id,
         meta: t.host?.files?.mode ?? "no host tools",
+        tags: t.tags,
       }))}
       createLabel="New tools"
       empty="No Tools documents. A behaviour reaches tools only through its context."
