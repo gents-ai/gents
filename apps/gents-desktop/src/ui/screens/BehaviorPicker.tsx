@@ -33,6 +33,34 @@ export function BehaviorPicker({
   behaviorId: string | null;
   onChange: (behaviorId: string) => void;
 }) {
+  if (!deployment) return null;
+  const behaviours = deployment.behaviors.filter((b) => b.enabled);
+  const chosen = behaviours.find((b) => b.behaviorId === behaviorId) ?? behaviours[0];
+  if (!chosen) return null;
+  return (
+    <MountedBehaviorPicker
+      shell={shell}
+      deployment={deployment}
+      behaviours={behaviours}
+      chosen={chosen}
+      onChange={onChange}
+    />
+  );
+}
+
+function MountedBehaviorPicker({
+  shell,
+  deployment,
+  behaviours,
+  chosen,
+  onChange,
+}: {
+  shell: Shell;
+  deployment: DeploymentView;
+  behaviours: DeploymentView["behaviors"];
+  chosen: DeploymentView["behaviors"][number];
+  onChange: (behaviorId: string) => void;
+}) {
   const [query, setQuery] = useState("");
   /* search is hidden until asked for: the icon in the footer, or typing */
   const [searching, setSearching] = useState(false);
@@ -44,13 +72,10 @@ export function BehaviorPicker({
   useEffect(() => {
     if (searching) input.current?.focus();
   }, [searching]);
-  const behaviours = deployment?.behaviors.filter((b) => b.enabled) ?? [];
-  const chosen = behaviours.find((b) => b.behaviorId === behaviorId) ?? behaviours[0];
-  if (!chosen) return null;
   const describe = (id: string) => shell.behaviorDescriptions[id] ?? "";
   const readiness = (id: string) => behaviorReadiness(deployment, id);
   const env = (id: string) =>
-    deployment?.behaviorEnvironments.find((e) => e.behaviorId === id);
+    deployment.behaviorEnvironments.find((e) => e.behaviorId === id);
   const q = query.trim().toLowerCase();
   const shown = behaviours.filter(
     (b) =>
@@ -192,7 +217,7 @@ export function BehaviorPicker({
         <div className="flex items-center border-t border-border/60 p-1">
           <button
             type="button"
-            onClick={() => deployment && void createBehavior(shell, deployment)}
+            onClick={() => void createBehavior(shell, deployment)}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-accent"
           >
             <span className="grid size-7 place-items-center rounded-full border border-dashed border-border text-muted-foreground">
