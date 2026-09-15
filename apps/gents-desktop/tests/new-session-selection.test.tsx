@@ -56,6 +56,7 @@ function useSelection(
     setSession,
   });
   const actions = createDesktopShellChatActions({
+    submissionInFlight: useRef(false),
     api,
     ...route,
     draft: "",

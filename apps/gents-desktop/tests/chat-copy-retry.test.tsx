@@ -341,6 +341,7 @@ describe("error card retry", () => {
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
     const actions = createDesktopShellChatActions({
+      submissionInFlight: { current: false },
       ...currentIntent,
       api,
       draft: "",
@@ -402,6 +403,7 @@ describe("error card retry", () => {
       operationalState: operationalStateFor(unavailableBehaviorReadiness),
     });
     const common = {
+      submissionInFlight: { current: false },
       ...currentIntent,
       api: { retryRequest } as unknown as DesktopApiAdapter,
       draft: "",
@@ -477,6 +479,7 @@ describe("error card retry", () => {
     const actions = createDesktopShellChatActions({
       ...currentIntent,
       api: { sendChatMessage } as unknown as DesktopApiAdapter,
+      submissionInFlight: { current: false },
       behaviorReadiness: readyBehaviorReadiness,
       draft: "check the upgrade",
       newSessionAgentRef: { current: null },
@@ -509,6 +512,8 @@ describe("error card retry", () => {
         lifecycleState: "pending",
       }),
     );
-    expect(setDraft).toHaveBeenCalledWith("");
+    const clearAccepted = setDraft.mock.calls[0][0] as (current: string) => string;
+    expect(clearAccepted("check the upgrade")).toBe("");
+    expect(clearAccepted("newer draft")).toBe("newer draft");
   });
 });

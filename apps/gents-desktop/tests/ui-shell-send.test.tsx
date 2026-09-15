@@ -1,8 +1,20 @@
 import { act, renderHook } from "@testing-library/react";
+import { useRef, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
 
 const desktopShell = vi.hoisted(() => ({
-  deployments: [{ agentDid: "did:key:agent", behaviors: [] }],
+  deployments: [
+    {
+      agentDid: "did:key:agent",
+      behaviors: [],
+      behaviorReadiness: {
+        source: { state: "current" },
+        behaviors: [{ state: "ready", behaviorId: "coding" }],
+      },
+    },
+  ],
+  behaviorReadiness: { kind: "ready", behaviorId: "coding" },
   selectedDeployment: null,
   selectedAgentDid: "did:key:agent",
   selectedSessionId: null,
@@ -38,7 +50,30 @@ const desktopShell = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/hooks/useDesktopShell", () => ({
-  useDesktopShell: () => desktopShell,
+  useDesktopShell: ({ api }: { api: unknown }) => {
+    const [sending, setSending] = useState(false);
+    const submissionInFlight = useRef(false);
+    // Keep admission real: a mocked submitContent cannot prove that the adapter
+    // and retry share the same synchronous owner.
+    const actions = createDesktopShellChatActions({
+      ...desktopShell,
+      api,
+      selectedDeployment: desktopShell.deployments[0],
+      submissionInFlight,
+      setSending,
+      captureComposeIntent: () => 0,
+      acceptsComposeIntent: () => true,
+      setLocalWorkflow: vi.fn(),
+      setOptimisticPendingTurn: vi.fn(),
+      setPendingMailboxCauseId: vi.fn(),
+      setError: vi.fn(),
+      newSessionAgentRef: { current: null },
+      shellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
+      retryShellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
+    } as unknown as Parameters<typeof createDesktopShellChatActions>[0]);
+    desktopShell.submitContent.mockImplementation(actions.submitContent);
+    return { ...desktopShell, sending, onRetryMessage: actions.onRetryMessage };
+  },
 }));
 
 import { useShell } from "../src/ui/hooks/useShell";
@@ -56,7 +91,6 @@ describe("kit shell chat submission", () => {
       api: { sendChatMessage },
       listenToUpdates: vi.fn(),
     } as never;
-    desktopShell.submitContent.mockImplementation(sendChatMessage);
     const { result } = renderHook(() => useShell(bridge, undefined));
 
     let first!: ReturnType<typeof result.current.sendMessage>;
@@ -77,6 +111,7 @@ describe("kit shell chat submission", () => {
 
     expect(result.current.sending).toBe(false);
     expect(desktopShell.submitContent).toHaveBeenCalledWith("review this", "coding");
+    expect(desktopShell.setSelectedBehaviorId).not.toHaveBeenCalled();
     expect(desktopShell.refreshSession).not.toHaveBeenCalled();
     expect(desktopShell.refreshSnapshot).not.toHaveBeenCalled();
   });

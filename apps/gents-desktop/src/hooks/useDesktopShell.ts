@@ -34,6 +34,7 @@ export function useDesktopShell({
   const selectedAgentDidRef = useRef<string | null>(null);
   const selectedTrackedRequestIdRef = useRef<string | null>(null);
   const [sending, setSending] = useState(false);
+  const submissionInFlight = useRef(false);
   const [savingBehaviorConfig, setSavingBehaviorConfig] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [addingPeer, setAddingPeer] = useState(false);
@@ -285,6 +286,7 @@ export function useDesktopShell({
     onStartNewSession,
   } = createDesktopShellChatActions({
     acceptsComposeIntent,
+    submissionInFlight,
     advanceComposeIntent,
     api,
     behaviorReadiness,

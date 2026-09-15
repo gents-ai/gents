@@ -38,6 +38,7 @@ function fixture(
   };
   const actions = createDesktopShellChatActions({
     ...effects,
+    submissionInFlight: { current: false },
     acceptsComposeIntent: (captured: number) => captured === intentGeneration,
     advanceComposeIntent: () => {
       intentGeneration += 1;
@@ -84,6 +85,25 @@ function deferred<T>() {
 }
 
 describe("canonical chat submission acceptance", () => {
+  it.each(["send", "retry"])(
+    "admits only one mutation before React renders (%s first)",
+    async (first) => {
+      const pending = deferred<unknown>();
+      const send = vi.fn(() => pending.promise);
+      const retry = vi.fn(() => pending.promise);
+      const f = fixture(send, false, retry);
+      const active =
+        first === "send"
+          ? f.actions.submitContent("first")
+          : f.actions.onRetryMessage("predecessor");
+      const duplicateSend = f.actions.submitContent("duplicate");
+      const duplicateRetry = f.actions.onRetryMessage("predecessor");
+      expect(send.mock.calls.length + retry.mock.calls.length).toBe(1);
+      pending.resolve({ sessionId: "session", requestId: "accepted" });
+      await Promise.all([active, duplicateSend, duplicateRetry]);
+      expect(f.setSending.mock.calls).toEqual([[true], [false]]);
+    },
+  );
   it("releases only the submitting workflow owned by the completed callback", () => {
     const owned: ChatWorkflowState = {
       kind: "submittingRequest",

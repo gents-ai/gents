@@ -20,12 +20,6 @@ export function useShell(
   const d = useDesktopShell(bridge);
   const api = bridge.api;
   const shellRef = useRef(d);
-  // The kit screen accepts a value instead of the legacy shell's form event,
-  // so it cannot use `onSendMessage` directly. Keep the same immediate
-  // single-flight guarantee here: React state does not update soon enough to
-  // fence two Enter key events delivered in one render.
-  const chatSubmitInFlight = useRef(false);
-  const [chatSubmitting, setChatSubmitting] = useState(false);
   shellRef.current = d;
 
   useEffect(() => {
@@ -52,20 +46,7 @@ export function useShell(
 
   const sendMessage = useCallback(
     async (content: string, behaviorId: string | null) => {
-      if (chatSubmitInFlight.current) return null;
-      const agentDid = d.selectedAgentDid ?? d.deployments[0]?.agentDid;
-      if (!agentDid) return null;
-      chatSubmitInFlight.current = true;
-      setChatSubmitting(true);
-      try {
-        if (behaviorId) d.setSelectedBehaviorId(behaviorId);
-        // The submission owner records acceptance before observation. A later
-        // refresh failure must never turn an accepted message into a failed send.
-        return await d.submitContent(content, behaviorId);
-      } finally {
-        chatSubmitInFlight.current = false;
-        setChatSubmitting(false);
-      }
+      return d.submitContent(content, behaviorId);
     },
     [api, d],
   );
@@ -89,7 +70,7 @@ export function useShell(
       nonEmptyContentSendStatus: d.nonEmptyContentSendStatus,
       interruptVisible: d.interruptVisible,
       activeRequestId: d.activeRequestId,
-      sending: d.sending || chatSubmitting,
+      sending: d.sending,
       deployments,
       selectedDeployment,
       selectedAgentDid: d.selectedAgentDid ?? selectedDeployment?.agentDid ?? null,
@@ -148,7 +129,7 @@ export function useShell(
       onInitLocalRuntime: d.onInitLocalRuntime,
       startupPhase: d.startupPhase,
     };
-  }, [api, applyConfig, behaviorColors, chatSubmitting, d, sendMessage]);
+  }, [api, applyConfig, behaviorColors, d, sendMessage]);
 }
 
 export type Shell = ReturnType<typeof useShell>;

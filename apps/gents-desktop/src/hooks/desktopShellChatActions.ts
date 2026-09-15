@@ -18,6 +18,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 type ChatActionParams = {
+  submissionInFlight: MutableRefObject<boolean>;
   acceptsComposeIntent: (capturedGeneration: number) => boolean;
   advanceComposeIntent: () => void;
   captureComposeIntent: () => number;
@@ -54,6 +55,7 @@ export function releaseOwnedSubmissionWorkflow(
 }
 
 export function createDesktopShellChatActions({
+  submissionInFlight,
   api,
   behaviorReadiness,
   acceptsComposeIntent,
@@ -83,6 +85,7 @@ export function createDesktopShellChatActions({
     content: string,
     behaviorId?: string | null,
   ): Promise<ChatSendResult | null> {
+    if (submissionInFlight.current) return null;
     const deployment = selectedDeployment ?? deployments[0] ?? null;
     if (!deployment || !content.trim()) {
       return null;
@@ -101,6 +104,9 @@ export function createDesktopShellChatActions({
       return null;
     }
 
+    // Synchronous admission implements startSubmit before React renders sending.
+    // Every send and retry entry point shares this owner.
+    submissionInFlight.current = true;
     const intentGeneration = captureComposeIntent();
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
@@ -147,6 +153,7 @@ export function createDesktopShellChatActions({
         releaseOwnedSubmissionWorkflow(current, ownedWorkflow),
       );
       setSending(false);
+      submissionInFlight.current = false;
     }
   }
 
@@ -154,12 +161,13 @@ export function createDesktopShellChatActions({
     event.preventDefault();
     const intentGeneration = captureComposeIntent();
     if ((await submitContent(draft)) && acceptsComposeIntent(intentGeneration)) {
-      setDraft("");
+      setDraft((current) => (current === draft ? "" : current));
     }
   }
 
   /** Retry the persisted interactive predecessor through the fenced retry API. */
   async function retryRequest(requestId: string) {
+    if (submissionInFlight.current) return;
     if (!selectedDeployment) {
       return;
     }
@@ -167,6 +175,7 @@ export function createDesktopShellChatActions({
       setError(retryShellProjection.nonEmptyContentSendStatus.hint);
       return;
     }
+    submissionInFlight.current = true;
     const intentGeneration = captureComposeIntent();
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
@@ -195,6 +204,7 @@ export function createDesktopShellChatActions({
         releaseOwnedSubmissionWorkflow(current, ownedWorkflow),
       );
       setSending(false);
+      submissionInFlight.current = false;
     }
   }
 
