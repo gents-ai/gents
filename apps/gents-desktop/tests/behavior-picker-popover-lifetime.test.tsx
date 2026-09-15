@@ -137,7 +137,10 @@ describe("BehaviorPicker popover lifetime", () => {
     ).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Behaviour" }));
-    expect(screen.getByRole("dialog", { name: "Database sync details" })).toBeVisible();
+    expect(
+      screen.queryByRole("dialog", { name: "Database sync details" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Database sync")).toBeVisible();
     expect(
       screen.queryByRole("dialog", { name: "Choose behavior" }),
     ).not.toBeInTheDocument();
