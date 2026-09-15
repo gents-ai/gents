@@ -12,6 +12,7 @@ import type {
   TaskSaveRequest,
   TriggerSaveRequest,
 } from "@source-inc/gents-desktop-client";
+import type { SnapshotPublication } from "./desktopSnapshotPublication";
 
 type TaskActionParams = {
   api: DesktopApiAdapter;
@@ -23,7 +24,7 @@ type TaskActionParams = {
   setRunningTask: Dispatch<SetStateAction<boolean>>;
   setSavingConfig: Dispatch<SetStateAction<boolean>>;
   setSelectedSessionId: Dispatch<SetStateAction<string | null>>;
-  setSnapshot: Dispatch<SetStateAction<DesktopClientSnapshot | null>>;
+  beginSnapshotPublication: () => SnapshotPublication;
 };
 
 export function createDesktopShellTaskActions({
@@ -34,14 +35,21 @@ export function createDesktopShellTaskActions({
   setRunningTask,
   setSavingConfig,
   setSelectedSessionId,
-  setSnapshot,
+  beginSnapshotPublication,
 }: TaskActionParams) {
+  async function publishSnapshotResult(
+    operation: () => Promise<DesktopClientSnapshot>,
+  ) {
+    const publication = beginSnapshotPublication();
+    const next = await operation();
+    publication.publish(next);
+    return next;
+  }
   async function onSaveTaskConfig(request: TaskSaveRequest) {
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveTaskConfig(request);
-      setSnapshot(next);
+      const next = await publishSnapshotResult(() => api.saveTaskConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -55,8 +63,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveScheduleConfig(request);
-      setSnapshot(next);
+      const next = await publishSnapshotResult(() => api.saveScheduleConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -89,8 +96,7 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveTriggerConfig(request);
-      setSnapshot(next);
+      const next = await publishSnapshotResult(() => api.saveTriggerConfig(request));
       return next;
     } catch (err) {
       setError(String(err));
@@ -104,8 +110,9 @@ export function createDesktopShellTaskActions({
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveEventSourceConfig(request);
-      setSnapshot(next);
+      const next = await publishSnapshotResult(() =>
+        api.saveEventSourceConfig(request),
+      );
       return next;
     } catch (err) {
       setError(String(err));

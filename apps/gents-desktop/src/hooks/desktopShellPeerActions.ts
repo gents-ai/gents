@@ -5,17 +5,18 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
+import type { SnapshotPublication } from "./desktopSnapshotPublication";
 
 type PeerActionParams = {
   api: DesktopApiAdapter;
   snapshot: DesktopClientSnapshot | null;
   /** Shared single-flight start used by autostart and peer actions. */
   ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot | null>;
+  beginSnapshotPublication: () => SnapshotPublication;
   setAddingPeer: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
   setRepairingP2P: Dispatch<SetStateAction<boolean>>;
   setSelectedAgentDid: Dispatch<SetStateAction<string | null>>;
-  setSnapshot: Dispatch<SetStateAction<DesktopClientSnapshot | null>>;
   setStarting: Dispatch<SetStateAction<boolean>>;
 };
 
@@ -23,13 +24,22 @@ export function createDesktopShellPeerActions({
   api,
   snapshot,
   ensureDesktopClientStarted,
+  beginSnapshotPublication,
   setAddingPeer,
   setError,
   setRepairingP2P,
   setSelectedAgentDid,
-  setSnapshot,
   setStarting,
 }: PeerActionParams) {
+  async function publishSnapshotResult(
+    operation: () => Promise<DesktopClientSnapshot>,
+  ) {
+    const publication = beginSnapshotPublication();
+    const next = await operation();
+    publication.publish(next);
+    return next;
+  }
+
   async function onInitLocalRuntime(label?: string | null) {
     const clientWasRunning = Boolean(snapshot?.client);
     setAddingPeer(true);
@@ -37,8 +47,7 @@ export function createDesktopShellPeerActions({
     setError(null);
     try {
       if (snapshot?.client) {
-        const stopped = await api.shutdownDesktopClient();
-        setSnapshot(stopped);
+        await publishSnapshotResult(() => api.shutdownDesktopClient());
       }
       const summary = await api.initLocalStandardRuntime({
         label: label?.trim() || "Local Agent",
@@ -51,13 +60,12 @@ export function createDesktopShellPeerActions({
       if (!next) {
         throw new Error("desktop client failed to start after local runtime init");
       }
-      setSnapshot(next);
       setSelectedAgentDid(summary.agentDid);
       return summary;
     } catch (err) {
       if (clientWasRunning) {
         try {
-          setSnapshot(await api.startDesktopClient());
+          await publishSnapshotResult(() => api.startDesktopClient());
         } catch {
           // Preserve the provisioning error that caused the rollback.
         }
@@ -92,7 +100,7 @@ export function createDesktopShellPeerActions({
         }
       }
       const request = await api.requestStatusEnrollment(serverAddress);
-      setSnapshot(await api.fetchDesktopSnapshot());
+      await publishSnapshotResult(() => api.fetchDesktopSnapshot());
       return request;
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
@@ -104,8 +112,7 @@ export function createDesktopShellPeerActions({
   async function onRemovePeer(peerId: string) {
     setError(null);
     try {
-      const next = await api.removePeer(peerId);
-      setSnapshot(next);
+      const next = await publishSnapshotResult(() => api.removePeer(peerId));
       return next;
     } catch (err) {
       const message = formatPeerConnectionError(err, "remove-peer");
@@ -117,8 +124,7 @@ export function createDesktopShellPeerActions({
   async function onRenamePeer(peerId: string, label: string) {
     setError(null);
     try {
-      const next = await api.renamePeer(peerId, label);
-      setSnapshot(next);
+      const next = await publishSnapshotResult(() => api.renamePeer(peerId, label));
       return next;
     } catch (err) {
       const message = formatPeerConnectionError(err, "rename-peer");
@@ -131,8 +137,7 @@ export function createDesktopShellPeerActions({
     setRepairingP2P(true);
     setError(null);
     try {
-      const next = await api.repairP2P();
-      setSnapshot(next);
+      const next = await publishSnapshotResult(() => api.repairP2P());
       return next;
     } catch (err) {
       const message = formatPeerConnectionError(err, "repair-p2p");

@@ -63,7 +63,7 @@ export function useDesktopShell({
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
     snapshot,
-    setSnapshot,
+    beginSnapshotPublication,
     startupPhase,
     loading,
     starting,
@@ -212,13 +212,13 @@ export function useDesktopShell({
     onRepairP2P,
   } = createDesktopShellPeerActions({
     api,
+    beginSnapshotPublication,
     snapshot,
     ensureDesktopClientStarted,
     setAddingPeer,
     setError,
     setRepairingP2P,
     setSelectedAgentDid,
-    setSnapshot,
     setStarting,
   });
   const foregroundRepairRef = useRef(onRepairP2P);
@@ -269,12 +269,12 @@ export function useDesktopShell({
     onTestToolService,
   } = createDesktopShellConfigActions({
     api,
+    beginSnapshotPublication,
     setError,
     setSavingBehaviorConfig,
     setSavingConfig,
     setSelectedAgentDid,
     setSelectedBehaviorId,
-    setSnapshot,
   });
 
   const {
@@ -321,13 +321,13 @@ export function useDesktopShell({
     onSaveTriggerConfig,
   } = createDesktopShellTaskActions({
     api,
+    beginSnapshotPublication,
     refreshSession,
     refreshSnapshot,
     setError,
     setRunningTask,
     setSavingConfig,
     setSelectedSessionId,
-    setSnapshot,
   });
 
   function onDismissError() {
