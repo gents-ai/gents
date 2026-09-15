@@ -95,6 +95,7 @@ export function useShell(
       selectedAgentDid: d.selectedAgentDid ?? selectedDeployment?.agentDid ?? null,
       selectAgent: d.setSelectedAgentDid,
       selectBehavior: d.setSelectedBehaviorId,
+      selectedBehaviorId: d.behaviorReadiness.behaviorId,
       selectedSessionId: d.selectedSessionId,
       selectedSession: d.session,
       // `activeRequestId` is the newest durable request even after it has

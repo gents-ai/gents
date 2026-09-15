@@ -113,6 +113,38 @@ function useSelection(
 }
 
 describe("explicit session selection", () => {
+  it("uses the principal default instead of a conflicting marked default", () => {
+    const deployment = {
+      ...initialDeployment,
+      behaviors: initialDeployment.behaviors.map((behavior) => ({
+        ...behavior,
+        isDefault: behavior.behaviorId === "setup",
+      })),
+    };
+    const { result } = renderHook(() => useSelection(deployment, "first-setup"));
+    act(() => result.current.actions.onStartNewSession());
+    expect(result.current.behavior).toBe("coding");
+    expect(result.current.selected).toBeNull();
+  });
+
+  it("uses the canonical enabled fallback and clears selection when none exists", () => {
+    const deployment = {
+      ...initialDeployment,
+      agentPrincipal: { ...initialDeployment.agentPrincipal, defaultBehaviorId: null },
+      behaviors: [
+        { ...initialDeployment.behaviors[0], isDefault: false, enabled: false },
+        { ...initialDeployment.behaviors[1], isDefault: false },
+      ],
+    };
+    const { result, rerender } = renderHook(({ value }) => useSelection(value, null), {
+      initialProps: { value: deployment },
+    });
+    act(() => result.current.actions.onStartNewSession());
+    expect(result.current.behavior).toBe("setup");
+    rerender({ value: { ...deployment, behaviors: [] } });
+    act(() => result.current.actions.onStartNewSession());
+    expect(result.current.behavior).toBeNull();
+  });
   it("resets session selection on explicit agent navigation, not observation", () => {
     const setSelectedSessionId = vi.fn();
     const setSession = vi.fn();

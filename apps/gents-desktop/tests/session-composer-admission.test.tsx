@@ -36,6 +36,7 @@ function newSessionShell(
   return {
     selectedSession: null,
     selectedSessionId: null,
+    selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
     selectedDeployment: {
       agentDid: "did:key:agent",

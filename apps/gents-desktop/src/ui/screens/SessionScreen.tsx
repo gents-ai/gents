@@ -242,27 +242,11 @@ function useTraceOpen() {
 }
 
 export function useBehaviorChoice(shell: Shell) {
-  const behaviours = shell.selectedDeployment?.behaviors ?? [];
-  const [picked, setPicked] = useState<string | null>(null);
-  const previousSessionId = useRef(shell.selectedSessionId);
-  useEffect(() => {
-    if (previousSessionId.current && !shell.selectedSessionId) {
-      setPicked(null);
-    }
-    previousSessionId.current = shell.selectedSessionId;
-  }, [shell.selectedSessionId]);
-  const behaviorId =
-    picked ??
-    shell.mailboxCause?.behaviorId ??
-    behaviours.find((b) => b.isDefault)?.behaviorId ??
-    behaviours[0]?.behaviorId ??
-    null;
   return {
-    behaviorId,
-    setPicked: (id: string | null) => {
-      setPicked(id);
-      shell.selectBehavior(id);
-    },
+    // Read the same effective selection that owns composer admission. Defaults,
+    // mailbox routing, and agent changes are resolved by the shell, not here.
+    behaviorId: shell.selectedBehaviorId,
+    setPicked: shell.selectBehavior,
   };
 }
 

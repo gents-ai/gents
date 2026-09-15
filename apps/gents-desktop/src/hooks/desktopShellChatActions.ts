@@ -1,6 +1,7 @@
 import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
 import {
   selectedBehaviorReadinessDecision,
+  selectedBehaviorIdForDeployment,
   type ChatSendResult,
 } from "@source-inc/gents-desktop-client";
 
@@ -243,16 +244,9 @@ export function createDesktopShellChatActions({
     }
     advanceComposeIntent();
     setPendingMailboxCauseId(null);
-    const nextBehaviorId =
-      behaviorId &&
-      deployment.behaviors.some((behavior) => behavior.behaviorId === behaviorId)
-        ? behaviorId
-        : (deployment.behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
-          deployment.behaviors[0]?.behaviorId ??
-          null);
-    if (nextBehaviorId) {
-      setSelectedBehaviorId(nextBehaviorId);
-    }
+    setSelectedBehaviorId(
+      selectedBehaviorIdForDeployment(deployment, behaviorId ?? null),
+    );
     newSessionAgentRef.current = deployment.agentDid;
     setSelectedSessionId(null);
     setSession(null);
