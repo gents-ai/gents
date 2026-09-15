@@ -6,6 +6,7 @@ import {
   gotoHarness,
   openChat,
   openConfig,
+  openConfigSection,
   primarySurfaceCount,
   sendButton,
   test,
@@ -64,8 +65,7 @@ test.describe("kit shell", () => {
   test("requires a document name before configuration deletion", async ({ page }) => {
     await gotoHarness(page);
     await openConfig(page);
-    await page.mouse.move(page.viewportSize()!.width - 30, 100);
-    await page.getByRole("link", { name: /^Contexts\b/ }).click();
+    await openConfigSection(page, /^Contexts\b/);
     await page.getByRole("link", { name: /Default context/ }).click();
 
     await expect(page.getByRole("combobox", { name: "Skills" })).toBeVisible();
