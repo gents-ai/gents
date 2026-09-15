@@ -12,6 +12,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import {
   applySessionLiveDelta,
+  acceptsAsyncResult,
   sessionLiveDeltaRequest,
   SESSION_TIMELINE_PAGE_SIZE,
 } from "./desktopShellRuntime";
@@ -95,7 +96,7 @@ export function useDesktopSessionProjection({
         { limit: SESSION_TIMELINE_PAGE_SIZE },
       );
       const stillCurrent =
-        refreshSeq.current === currentRefresh &&
+        acceptsAsyncResult(refreshSeq.current, currentRefresh) &&
         selectedSessionIdRef.current === nextSessionId &&
         (!agentDid || selectedAgentDidRef.current === agentDid) &&
         (!next || next.sessionId === nextSessionId);

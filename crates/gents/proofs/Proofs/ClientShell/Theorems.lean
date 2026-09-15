@@ -29,6 +29,24 @@ theorem unrelated_terminal_does_not_retire_awaiting
     snapshotAdvanceWorkflow (.awaiting sid req) store = .awaiting sid req := by
   simp [snapshotAdvanceWorkflow, hfind, hother]
 
+/-- A locally observed request can precede its mutation acknowledgment. The
+acknowledgment consumes the current observation instead of reinstating a latch
+that would need another notification to clear. -/
+theorem observed_before_ack_retires_without_another_snapshot
+    (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
+    (sid : SessionId) (req : RequestId) (obs : SessionObservation)
+    (hfind : store.find sid = some obs)
+    (hreq : obs.latestObservedRequest = some req) :
+    (step s (.mutation (.submitted sid req)) store .healthy ctx).workflow = .idle := by
+  simp [step, snapshotAdvanceWorkflow, hfind, hreq]
+
+theorem acknowledgment_and_matching_snapshot_commute
+    (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
+    (sid : SessionId) (req : RequestId) :
+    (step s (.mutation (.submitted sid req)) store .healthy ctx).workflow =
+      (step { s with workflow := .awaiting sid req }
+        (.snapshot store) store .healthy ctx).workflow := rfl
+
 theorem snapshot_preserves_selection
     (s : ShellState) (store store' : LocalStore) (h : TransportHealth)
     (ctx : SubmitContext) :

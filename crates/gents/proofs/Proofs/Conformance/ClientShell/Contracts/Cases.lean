@@ -413,6 +413,14 @@ def clientShellCases : List ClientShellContractCase :=
         ("unrelated_terminal_keeps_awaiting_" ++ clientTurnStateName turn)
         "unrelated_terminal_does_not_retire_awaiting"
         awaitingNew staleInput emptyStore .healthy ctxReady awaitingNew stalePost oldTerminalStore
-    ])
+    ]) ++ ([ClientTurnState.interrupted, .streaming].map fun turn =>
+    let observed := storeWith [sessionObs sid1 (some reqNew) (some turn)]
+    let pre := selectedShell (some sid1) (.submitting contractAgent (some sid1))
+    let input := ShellInput.mutation (.submitted sid1 reqNew)
+    let post := step pre input observed .healthy ctxReady
+    clientShellCaseFromStep
+      ("observation_before_ack_" ++ clientTurnStateName turn)
+      "observed_before_ack_retires_without_another_snapshot"
+      pre input observed .healthy ctxReady awaitingNew post observed)
 
 end Conformance.ClientShellContracts

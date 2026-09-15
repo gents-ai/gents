@@ -14,6 +14,12 @@ import { copyText } from "@source-inc/gents-desktop-ui";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
+const currentIntent = {
+  acceptsComposeIntent: (captured: number) => captured === 0,
+  advanceComposeIntent: vi.fn(),
+  captureComposeIntent: () => 0,
+};
+
 const readyBehaviorReadiness = {
   kind: "ready",
   behaviorId: "default",
@@ -335,6 +341,7 @@ describe("error card retry", () => {
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
     const actions = createDesktopShellChatActions({
+      ...currentIntent,
       api,
       draft: "",
       behaviorReadiness: readyBehaviorReadiness,
@@ -395,6 +402,7 @@ describe("error card retry", () => {
       operationalState: operationalStateFor(unavailableBehaviorReadiness),
     });
     const common = {
+      ...currentIntent,
       api: { retryRequest } as unknown as DesktopApiAdapter,
       draft: "",
       newSessionAgentRef: { current: null },
@@ -467,6 +475,7 @@ describe("error card retry", () => {
     });
 
     const actions = createDesktopShellChatActions({
+      ...currentIntent,
       api: { sendChatMessage } as unknown as DesktopApiAdapter,
       behaviorReadiness: readyBehaviorReadiness,
       draft: "check the upgrade",

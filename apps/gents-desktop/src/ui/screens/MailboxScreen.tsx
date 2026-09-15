@@ -119,6 +119,7 @@ function Item({
     }
     try {
       const item = await shell.openMailboxItem(m.itemId);
+      if (!item) return;
       navigate(
         item.sessionId
           ? { name: "session", sessionId: item.sessionId }

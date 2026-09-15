@@ -186,7 +186,7 @@ export function useDesktopClientLifecycle({
       if (!next) throw new Error("desktop restart returned no snapshot");
       setSnapshot(next);
       if (sessionId) await refreshSession(sessionId);
-      else setSession(null);
+      else if (selectedSessionIdRef.current === sessionId) setSession(null);
       logShellEvent(`restart complete reason="${reason}"`);
     } catch (error) {
       logShellEvent(`restart failed reason="${reason}" error=${String(error)}`);

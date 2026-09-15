@@ -212,6 +212,14 @@ export async function delay(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Keep async presentation effects attached to the UI intent that started them. */
+export function acceptsAsyncResult(
+  currentGeneration: number,
+  capturedGeneration: number,
+) {
+  return currentGeneration === capturedGeneration;
+}
+
 export function logShellEvent(message: string) {
   console.info(`[live-tauri-shell] ${message}`);
 }

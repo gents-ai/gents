@@ -6,6 +6,7 @@ import type {
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
 import { dismissMailboxItemAndClearMatchingRoute } from "./desktopShellRuntime";
+import { acceptsAsyncResult } from "./desktopShellRuntime";
 
 type MailboxRouteOptions = {
   api: DesktopApiAdapter;
@@ -34,6 +35,7 @@ export function useDesktopMailboxRoute({
   setSession,
 }: MailboxRouteOptions) {
   const newSessionAgentRef = useRef<string | null>(null);
+  const composeIntentGenerationRef = useRef(0);
   const pendingMailboxRouteRef = useRef<{
     itemId: string;
     agentDid: string;
@@ -43,6 +45,18 @@ export function useDesktopMailboxRoute({
   const [pendingMailboxCauseId, setPendingMailboxCauseId] = useState<string | null>(
     null,
   );
+
+  function advanceComposeIntent() {
+    composeIntentGenerationRef.current += 1;
+  }
+
+  function captureComposeIntent() {
+    return composeIntentGenerationRef.current;
+  }
+
+  function acceptsComposeIntent(capturedGeneration: number) {
+    return acceptsAsyncResult(composeIntentGenerationRef.current, capturedGeneration);
+  }
 
   useEffect(() => {
     if (!pendingMailboxCauseId) {
@@ -69,9 +83,12 @@ export function useDesktopMailboxRoute({
     setPendingMailboxCauseId(null);
   }
 
-  async function onOpenMailboxItem(itemId: string): Promise<MailboxItemView> {
+  async function onOpenMailboxItem(itemId: string): Promise<MailboxItemView | null> {
+    advanceComposeIntent();
+    const capturedGeneration = captureComposeIntent();
     try {
       const item = await api.startMailboxRequest(itemId);
+      if (!acceptsComposeIntent(capturedGeneration)) return null;
       pendingMailboxRouteRef.current = {
         itemId: item.itemId,
         agentDid: item.targetAgentDid,
@@ -87,6 +104,7 @@ export function useDesktopMailboxRoute({
       setError(null);
       return item;
     } catch (error) {
+      if (!acceptsComposeIntent(capturedGeneration)) return null;
       setError(String(error));
       throw error;
     }
@@ -108,22 +126,34 @@ export function useDesktopMailboxRoute({
   }
 
   function selectAgent(agentDid: string | null) {
-    if (agentDid !== selectedAgentDid) clearPendingMailboxCause();
+    if (agentDid !== selectedAgentDid) {
+      advanceComposeIntent();
+      clearPendingMailboxCause();
+    }
     setSelectedAgentDid(agentDid);
   }
 
   function selectSession(sessionId: string | null) {
-    if (sessionId !== selectedSessionId) clearPendingMailboxCause();
+    if (sessionId !== selectedSessionId) {
+      advanceComposeIntent();
+      clearPendingMailboxCause();
+    }
     setSelectedSessionId(sessionId);
   }
 
   function selectBehavior(behaviorId: string | null) {
-    if (behaviorId !== selectedBehaviorId) clearPendingMailboxCause();
+    if (behaviorId !== selectedBehaviorId) {
+      advanceComposeIntent();
+      clearPendingMailboxCause();
+    }
     setSelectedBehaviorId(behaviorId);
   }
 
   return {
     newSessionAgentRef,
+    advanceComposeIntent,
+    captureComposeIntent,
+    acceptsComposeIntent,
     pendingMailboxCauseId,
     setPendingMailboxCauseId,
     clearPendingMailboxCause,

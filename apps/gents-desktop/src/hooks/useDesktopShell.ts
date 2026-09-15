@@ -86,6 +86,9 @@ export function useDesktopShell({
   const [selectedBehaviorId, setSelectedBehaviorId] = useState<string | null>(null);
   const {
     newSessionAgentRef,
+    advanceComposeIntent,
+    captureComposeIntent,
+    acceptsComposeIntent,
     pendingMailboxCauseId,
     setPendingMailboxCauseId,
     clearPendingMailboxCause,
@@ -282,8 +285,11 @@ export function useDesktopShell({
     onSendMessage,
     onStartNewSession,
   } = createDesktopShellChatActions({
+    acceptsComposeIntent,
+    advanceComposeIntent,
     api,
     behaviorReadiness,
+    captureComposeIntent,
     draft,
     newSessionAgentRef,
     refreshSession,
@@ -368,6 +374,8 @@ export function useDesktopShell({
       shellProjection.workflow.kind === "turnInProgress",
     activityStatus: shellProjection.activityStatus,
     submitContent,
+    captureComposeIntent,
+    acceptsComposeIntent,
     sendStatus: shellProjection.sendStatus,
     nonEmptyContentSendStatus: shellProjection.nonEmptyContentSendStatus,
     retryStatus: retryShellProjection.nonEmptyContentSendStatus,

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
@@ -14,6 +14,12 @@ import {
   type DeploymentView,
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
+
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/ui/lib/router")>()),
+  navigate,
+}));
 
 vi.stubGlobal(
   "IntersectionObserver",
@@ -68,6 +74,7 @@ function newSessionShell(
   status: Shell["nonEmptyContentSendStatus"],
   sendMessage = vi.fn().mockResolvedValue(null),
 ): Shell {
+  let intentGeneration = 0;
   return {
     selectedSession: null,
     selectedSessionId: null,
@@ -86,6 +93,11 @@ function newSessionShell(
     activityStatus: null,
     nonEmptyContentSendStatus: status,
     sendMessage,
+    captureComposeIntent: () => intentGeneration,
+    acceptsComposeIntent: (captured: number) => captured === intentGeneration,
+    advanceComposeIntentForTest: () => {
+      intentGeneration += 1;
+    },
     selectBehavior: vi.fn(),
   } as unknown as Shell;
 }
@@ -229,6 +241,34 @@ describe("SessionScreen canonical composer admission", () => {
     expect(send).toBeEnabled();
     await user.click(send);
     expect(sendMessage).toHaveBeenCalledWith("hello", "behavior");
+  });
+
+  it("preserves the newer draft and route when an old send acknowledgment arrives", async () => {
+    navigate.mockClear();
+    let resolve!: (value: { sessionId: string; requestId: string }) => void;
+    const sendMessage = vi.fn(
+      () =>
+        new Promise<{ sessionId: string; requestId: string }>((next) => {
+          resolve = next;
+        }),
+    );
+    const shell = newSessionShell({ kind: "ready" }, sendMessage) as Shell & {
+      advanceComposeIntentForTest: () => void;
+    };
+    render(<SessionScreen shell={shell} />);
+    fireEvent.change(screen.getByLabelText("Message"), {
+      target: { value: "keep this draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    shell.advanceComposeIntentForTest();
+    await act(async () => {
+      resolve({ sessionId: "old-session", requestId: "old-request" });
+      await Promise.resolve();
+    });
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText("Message")).toHaveValue("keep this draft");
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("preserves a canonical blocker for a non-empty local draft", () => {

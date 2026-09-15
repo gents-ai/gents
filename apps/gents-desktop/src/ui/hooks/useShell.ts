@@ -112,6 +112,8 @@ export function useShell(
         args: string;
       }[],
       sendMessage,
+      captureComposeIntent: d.captureComposeIntent,
+      acceptsComposeIntent: d.acceptsComposeIntent,
       retryMessage: d.onRetryMessage,
       resolveHold: async (_id: string, _approve: boolean) => {},
       dismissMailboxItem: d.onDismissMailboxItem,

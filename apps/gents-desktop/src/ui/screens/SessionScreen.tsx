@@ -355,10 +355,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const agentName = deployment?.agentPrincipal.displayName ?? "the agent";
 
   const send = async (text: string) => {
-    const result = await shell.sendMessage(
-      text,
-      session?.behaviorId ?? choice.behaviorId,
-    );
+    const pending = shell.sendMessage(text, session?.behaviorId ?? choice.behaviorId);
+    // sendMessage may synchronously select the chosen behavior. Capture after
+    // that intended change, but before its asynchronous acknowledgment.
+    const intentGeneration = shell.captureComposeIntent();
+    const result = await pending;
+    if (!shell.acceptsComposeIntent(intentGeneration)) return;
     if (result) setDraft("");
     if (result && result.sessionId !== shell.selectedSessionId) {
       navigate({ name: "session", sessionId: result.sessionId });
