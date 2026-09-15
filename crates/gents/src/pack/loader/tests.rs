@@ -162,7 +162,7 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
 }
 
 #[test]
-fn bundled_review_loads_with_explicit_inference_and_literal_prompt_assets() {
+fn bundled_review_loads_slot_authoring_and_literal_prompt_assets() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/code_review");
     let manifest: PackManifest =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
@@ -172,21 +172,15 @@ fn bundled_review_loads_with_explicit_inference_and_literal_prompt_assets() {
             agent_did: "did:key:review-owner".into(),
         },
         &|path| Ok(std::fs::read(root.join(path))?),
-        &|name| match name {
-            "GENTS_REVIEW_MODEL" => Some("selected-model".into()),
-            "GENTS_REVIEW_ENDPOINT" => Some("http://inference.example/v1".into()),
-            _ => None,
-        },
+        &|_| None,
     )
     .unwrap();
+    assert!(config.inference_backends.is_empty());
+    assert!(config.inference_profiles.is_empty());
     assert_eq!(
-        config.inference_backends[0].endpoint,
-        "http://inference.example/v1"
+        config.agent_behaviors[0].inference_profile_id,
+        "gents:inference-slot:coordinator"
     );
-    for profile in &config.inference_profiles {
-        assert_eq!(profile.model_name, "selected-model");
-        assert_eq!(profile.agent_did, "did:key:review-owner");
-    }
     let authored: Value =
         serde_json::from_slice(&std::fs::read(root.join("pack_config.json")).unwrap()).unwrap();
     for (field, prompt_field, resolved) in [

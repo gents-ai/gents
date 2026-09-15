@@ -521,6 +521,11 @@ fn pack_catalog_and_install_parse() {
         "code_review",
         "--bindings",
         "/tmp/bindings.json",
+        "--inference-slot",
+        "coordinator=claude",
+        "--inference-slot",
+        "worker=glm",
+        "--preview",
         "--home",
         "/tmp/gents-home",
     ]) {
@@ -534,6 +539,8 @@ fn pack_catalog_and_install_parse() {
                 args.scope.home.as_deref(),
                 Some(std::path::Path::new("/tmp/gents-home"))
             );
+            assert_eq!(args.inference_slots, ["coordinator=claude", "worker=glm"]);
+            assert!(args.preview);
         }
         _ => panic!("expected pack install"),
     }

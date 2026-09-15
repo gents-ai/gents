@@ -125,18 +125,17 @@ output is persisted.
 ### Recovery invariants
 
 The resolved pack environment is part of the run. Do not repair a live run by
-applying this directory with its portable defaults: that can replace the run's
-repository root, endpoint, model, or concurrency settings. Restore the original
-environment first, wait until the affected behavior is runnable, and only then
-reactivate paused goals. Requests retain the tool-policy snapshot they were
+applying this directory directly: use `gents pack install` with the original
+slot bindings so inference remains on the user's existing profiles. Restore the
+original environment first, wait until the affected behavior is runnable, and
+only then reactivate paused goals. Requests retain the tool-policy snapshot they were
 created with, so a policy correction takes effect on a continuation request,
 not an already-processing request.
 
-In particular, every live-home `demo provision` or `config apply` command must
-set `GENTS_GROK_PORT_ENDPOINT_1` to the immutable job `live_endpoint`; the
-obsolete unsuffixed variable is not consumed by this pack. Query the resulting
-`InferenceBackend.endpoint` and require exact equality before launching the
-live probes. Run the checked-in vacancy preflight before launching the live
+In particular, bind `coordinator`, `worker`, and `reviewer` explicitly and query
+the selected profiles' backends before launching live probes. The job's
+immutable `live_endpoint` must equal the effective backend used by the live
+behavior. Run the checked-in vacancy preflight before launching the live
 server. For stock-pager PTY evidence, use a fresh random marker, require its exact echo in the
 correlated durable assistant message, and require a second distinct completed
 turn in the same stock-client session while the pager remains alive. The framed

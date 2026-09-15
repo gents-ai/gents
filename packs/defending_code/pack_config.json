@@ -6,112 +6,112 @@
       "display_name": "Root-cause clusterer",
       "description": "Collapses confirmed consequence findings into a closed remediation-unit ledger.",
       "context_id": "defend-cluster-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "defend-contract-review",
       "display_name": "Contract and specification reviewer",
       "description": "Checks one remediation unit against repository intent, tests, history, and formal specifications.",
       "context_id": "defend-contract-review-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:verifier"
     },
     {
       "behavior_id": "defend-patch",
       "display_name": "Static patch author",
       "description": "Drafts one contract-aware unapplied unified diff for a root-cause cluster.",
       "context_id": "defend-patch-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "defend-patch-integrate",
       "display_name": "Typed integrator",
       "description": "Inspects a sealed accepted patch; the host applies the sealed diff.",
       "context_id": "defend-patch-integrate-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "defend-patch-review",
       "display_name": "Isolated static patch reviewer",
       "description": "Reviews a patch from its location, category, diff, and source without finder or author rationale.",
       "context_id": "defend-patch-review-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:verifier"
     },
     {
       "behavior_id": "defend-patch-security-review",
       "display_name": "Adversarial patch re-attacker",
       "description": "Independently checks whether one reviewed patch closes the exploit family without bypasses.",
       "context_id": "defend-patch-security-review-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:verifier"
     },
     {
       "behavior_id": "defend-patch-skip",
       "display_name": "Skipped-assignment no-patch recorder",
       "description": "Writes an explicit no-patch sentinel for a skipped DefensePatchAssignment.",
       "context_id": "defend-patch-skip-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "defend-patch-validation",
       "display_name": "Isolated patch validator",
       "description": "Applies one draft in a disposable local checkout and records mechanical evidence.",
       "context_id": "defend-patch-validation-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:verifier"
     },
     {
       "behavior_id": "defend-plan",
       "display_name": "Threat-scoped review planner",
       "description": "Partitions the attack surface into a closed, non-overlapping review-area set.",
       "context_id": "defend-plan-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "defend-remediation-plan",
       "display_name": "Remediation work planner",
       "description": "Joins the closed cluster and contract ledgers into one patch assignment per cluster.",
       "context_id": "defend-remediation-plan-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "defend-report",
       "display_name": "Defense campaign reporter",
       "description": "Checks the closed ledgers and publishes one operator-facing report.",
       "context_id": "defend-report-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "defend-scan",
       "display_name": "Static vulnerability discoverer",
       "description": "Reviews one threat-scoped area and records plausible candidates without prematurely filtering them.",
       "context_id": "defend-scan-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "defend-threat-model",
       "display_name": "Threat-model bootstrapper",
       "description": "Maps system context, assets, entry points, trust boundaries, threats, and controls from source.",
       "context_id": "defend-threat-model-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "defend-triage",
       "display_name": "Adversarial triage reducer",
       "description": "Reduces a closed typed verdict ledger into exact counts and confirmed findings.",
       "context_id": "defend-triage-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "defend-verification-plan",
       "display_name": "Verification work planner",
       "description": "Closes the candidate ledger into one durable verification assignment per candidate.",
       "context_id": "defend-verification-plan-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:verifier"
     },
     {
       "behavior_id": "defend-verifier",
       "display_name": "Independent adversarial candidate verifier",
       "description": "Receives exactly one candidate assignment, re-derives it from source, and writes one typed verdict without seeing other verifier reasoning.",
       "context_id": "defend-verifier-context",
-      "inference_profile_id": "defending-profile"
+      "inference_profile_id": "gents:inference-slot:verifier"
     }
   ],
   "contexts": [
@@ -3903,62 +3903,6 @@
           ]
         }
       ]
-    }
-  ],
-  "inference_backends": [
-    {
-      "backend_id": "defending-backend",
-      "name": "Defending-code backend",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_DEFENDING_ENDPOINT:-http://127.0.0.1:8080/v1}",
-      "auth": {
-        "kind": "unauthenticated"
-      },
-      "max_concurrent": 8,
-      "max_queue_depth": 100
-    }
-  ],
-  "inference_profiles": [
-    {
-      "profile_id": "defending-profile",
-      "display_name": "Defending-code profile",
-      "backend_id": "defending-backend",
-      "model_name": "${GENTS_DEFENDING_MODEL:-GLM-5.2}",
-      "context_window": 262144,
-      "max_output_tokens": 65536,
-      "sampling_id": "defending-profile-sampling",
-      "execution_id": "defending-profile-execution"
-    }
-  ],
-  "inference_sampling": [
-    {
-      "sampling_id": "defending-profile-sampling",
-      "display_name": "Defending-code profile sampling",
-      "temperature": 1.0,
-      "top_p": 0.95
-    }
-  ],
-  "inference_execution": [
-    {
-      "execution_id": "defending-profile-execution",
-      "display_name": "Defending-code profile execution",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000,
-      "retry_policy_id": "defending-profile-retry"
-    }
-  ],
-  "inference_retry_policies": [
-    {
-      "retry_policy_id": "defending-profile-retry",
-      "display_name": "Defending-code profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 32
     }
   ],
   "tasks": [

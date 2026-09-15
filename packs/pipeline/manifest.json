@@ -22,5 +22,15 @@
     "tasks/exp_stage2_task/prompt.md"
   ],
   "dependencies": [],
-  "config": "pack_config.json"
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "worker",
+      "description": "Executes both stages of the example pipeline.",
+      "behaviors": [
+        "exp-stage1",
+        "exp-stage2"
+      ]
+    }
+  ]
 }

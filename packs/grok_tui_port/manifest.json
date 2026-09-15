@@ -74,5 +74,40 @@
   "dependencies": [
     "code_review"
   ],
-  "config": "pack_config.json"
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "coordinator",
+      "description": "Reconnaissance, planning, integration, live proof, and publication.",
+      "behaviors": [
+        "port-integrate",
+        "port-integrate-record",
+        "port-live",
+        "port-plan",
+        "port-plan-skip",
+        "port-publish",
+        "port-recon"
+      ]
+    },
+    {
+      "name": "worker",
+      "description": "Parallel implementation, retry, convergence, and live worker tasks.",
+      "behaviors": [
+        "port-converge",
+        "port-implement",
+        "port-live-worker",
+        "port-retry"
+      ]
+    },
+    {
+      "name": "reviewer",
+      "description": "Independent recon, implementation, final, and live review.",
+      "behaviors": [
+        "port-final-review",
+        "port-live-review",
+        "port-recon-audit",
+        "port-review"
+      ]
+    }
+  ]
 }

@@ -54,5 +54,29 @@
     "schemas/research_draft.graphql",
     "schemas/research_result.graphql"
   ],
-  "config": "pack_config.json"
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "coordinator",
+      "description": "Plans research and produces the evidence-grounded report.",
+      "behaviors": [
+        "research-plan",
+        "research-report"
+      ]
+    },
+    {
+      "name": "researcher",
+      "description": "Runs bounded parallel web investigations.",
+      "behaviors": [
+        "research-investigate"
+      ]
+    },
+    {
+      "name": "verifier",
+      "description": "Adjudicates claims and source quality independently.",
+      "behaviors": [
+        "research-adjudicate"
+      ]
+    }
+  ]
 }

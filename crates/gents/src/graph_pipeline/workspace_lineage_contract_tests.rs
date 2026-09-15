@@ -47,6 +47,7 @@ impl Fixture {
         crate::document_config::ensure_agent_principal(&node, identity.did())
             .await
             .unwrap();
+        crate::test_support::install_test_behavior(&node, identity.did(), "package").await;
         let access = ConfigAccess::Local(node.clone());
         let installed = install_test_graph_package(
             &access,
@@ -54,6 +55,11 @@ impl Fixture {
             "code_review",
             &GraphPackageInstallBindings {
                 agent_did: identity.did().into(),
+                inference_slots: std::collections::BTreeMap::from([
+                    ("coordinator".into(), "package:inference".into()),
+                    ("worker".into(), "package:inference".into()),
+                    ("verifier".into(), "package:inference".into()),
+                ]),
             },
         )
         .await
@@ -691,8 +697,13 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     let fx = Fixture::new(true, false).await;
     let package = crate::test_support::load_test_graph_package(
         "code_review",
-        &crate::pack::PackInstallOptions {
+        &crate::graph_package::GraphPackageInstallBindings {
             agent_did: fx.identity.did().into(),
+            inference_slots: std::collections::BTreeMap::from([
+                ("coordinator".into(), "package:inference".into()),
+                ("worker".into(), "package:inference".into()),
+                ("verifier".into(), "package:inference".into()),
+            ]),
         },
     );
     let mut tasks = HashMap::new();

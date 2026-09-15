@@ -78,15 +78,11 @@ graph DSL still supplies the event topology; it does not own goal creation.
      --bind-agent-did home --force-rebind-concrete-did --prune
    ```
 
-3. **Wait up to ~60s for the pack's backend to be probed, then for EventSource
-   to observe the collections.** Both matter, in that order:
-
-   The pack applies *after* the runtime is ready, so `exp-deepseek` is created
-   after the backend prober's first cycle. Until the next cycle (60s interval)
-   it sits at `probe_status: unknown` and both stage behaviors are reported
-   unavailable — the serving JSON says `"status": "serving"` while this is
-   true, so do not treat that as the go-signal. Watch for the reconcile that
-   clears them:
+3. **Verify the profile bound to the pack's `worker` slot is usable, then wait
+   for EventSource to observe the collections.** Both matter, in that order.
+   The pack creates no backend or profile; readiness comes from the user's
+   existing inference owner, and a disabled or missing binding fails before
+   installation writes:
 
    ```text
    runtime reconcile applied generation=3 ... proposed_unavailable_behavior_count=0

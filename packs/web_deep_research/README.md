@@ -4,15 +4,15 @@ Reusable planning, investigation, adjudication and reporting graph.
 Install with `gents pack install web_deep_research --home <home>`.
 Use `gents pack show web_deep_research` for entry/result contracts and external
 dependencies, then `gents graph run web_deep_research --help` for run inputs.
-Set `GENTS_WEB_RESEARCH_MODEL` to a model advertised by the selected endpoint.
-The endpoint defaults to `http://127.0.0.1:8080/v1`; override it with
-`GENTS_WEB_RESEARCH_ENDPOINT`.
+Installation binds its `coordinator`, `researcher`, and `verifier` slots to
+existing profiles owned by the selected principal.
 
 ## Configuration and authority
 
-Inference resolves through each task's behavior and profile. The shared backend,
-sampling, execution, contexts, exact MCP tool names, datastore surfaces, tasks,
-capabilities and graph intent are authored once in `pack_config.json`.
+Inference resolves through each task's behavior and bound user profile. The
+contexts, exact MCP tool names, datastore surfaces, tasks, capabilities and
+graph intent are authored once in `pack_config.json`; inference connectivity
+and model settings remain on existing user configuration.
 Installation binds their owner to the requested principal. Declared external
 services must be provisioned by the operator; installing a pack does not execute
 dependency install commands. The host's tool ceiling still constrains every
