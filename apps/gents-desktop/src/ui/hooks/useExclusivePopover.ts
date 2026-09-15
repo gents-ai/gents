@@ -10,6 +10,7 @@ export function useExclusivePopover(onClose?: () => void) {
   const [open, setOpen] = useState(false);
   const onCloseRef = useRef(onClose);
   const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelPendingOpen = useCallback(() => {
     if (openTimerRef.current !== null) {
@@ -17,6 +18,21 @@ export function useExclusivePopover(onClose?: () => void) {
       openTimerRef.current = null;
     }
   }, []);
+
+  const cancelPendingRelease = useCallback(() => {
+    if (releaseTimerRef.current !== null) {
+      clearTimeout(releaseTimerRef.current);
+      releaseTimerRef.current = null;
+    }
+  }, []);
+
+  const releaseAfterExit = useCallback(() => {
+    cancelPendingRelease();
+    releaseTimerRef.current = setTimeout(() => {
+      releaseTimerRef.current = null;
+      if (activePopoverId === id) activePopoverId = null;
+    }, POPOVER_EXIT_MS);
+  }, [cancelPendingRelease, id]);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -33,13 +49,16 @@ export function useExclusivePopover(onClose?: () => void) {
     return () => {
       document.removeEventListener(POPOVER_OPEN_EVENT, closeForPeer);
       cancelPendingOpen();
+      cancelPendingRelease();
+      // Unmount removes this hook's portal rather than running its exit state.
       if (activePopoverId === id) activePopoverId = null;
     };
-  }, [cancelPendingOpen, id]);
+  }, [cancelPendingOpen, cancelPendingRelease, id]);
 
   const onOpenChange = useCallback(
     (next: boolean) => {
       if (next) {
+        cancelPendingRelease();
         const replacingPeer = activePopoverId !== null && activePopoverId !== id;
         activePopoverId = id;
         document.dispatchEvent(new CustomEvent(POPOVER_OPEN_EVENT, { detail: id }));
@@ -58,12 +77,12 @@ export function useExclusivePopover(onClose?: () => void) {
         }
       } else {
         cancelPendingOpen();
-        if (activePopoverId === id) activePopoverId = null;
+        if (activePopoverId === id) releaseAfterExit();
         setOpen(false);
         onCloseRef.current?.();
       }
     },
-    [cancelPendingOpen, id],
+    [cancelPendingOpen, cancelPendingRelease, id, releaseAfterExit],
   );
 
   return { open, onOpenChange };

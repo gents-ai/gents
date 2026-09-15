@@ -74,6 +74,50 @@ test.describe("kit shell", () => {
     await expect(page.getByTestId("context-details")).not.toBeVisible();
   });
 
+  test("context and sync popovers never overlap as dialog portals", async ({
+    page,
+  }) => {
+    await gotoHarness(page);
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    await page.evaluate(() => {
+      const counts: number[] = [];
+      const record = () =>
+        counts.push(document.querySelectorAll('[role="dialog"]').length);
+      record();
+      const observer = new MutationObserver(record);
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      Object.assign(window, {
+        __gentsDialogTransition: { counts, observer },
+      });
+    });
+
+    await page.getByTestId("context-meter").click();
+    await expect(page.getByTestId("context-details")).toBeVisible();
+    await page.getByRole("button", { name: /Sync healthy/ }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Database sync details" }),
+    ).toBeVisible();
+    await page.waitForTimeout(200);
+
+    const observed = await page.evaluate(() => {
+      const transition = (
+        window as typeof window & {
+          __gentsDialogTransition: {
+            counts: number[];
+            observer: MutationObserver;
+          };
+        }
+      ).__gentsDialogTransition;
+      transition.observer.disconnect();
+      const current = document.querySelectorAll('[role="dialog"]').length;
+      return { current, max: Math.max(...transition.counts, current) };
+    });
+    expect(observed).toEqual({ current: 1, max: 1 });
+  });
+
   test("mailbox is reachable from the rail", async ({ page }) => {
     await gotoHarness(page);
     const mailbox = page.getByRole("link", { name: "Mailbox" });
