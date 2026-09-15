@@ -8,7 +8,6 @@ mod server;
 use crate::cli::*;
 use anyhow::{Context, Result};
 use gents::pack::{pack_catalog, resolve_pack, PackKind, PackManifest, ResolvedPack};
-use gents::pack_archive::DEFAULT_NAMESPACE;
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -140,7 +139,7 @@ impl PackSource {
 /// name carries none (every bundled pack name is bare, so this only matters
 /// for a registry lookup).
 pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
-    name.split_once('/').unwrap_or((DEFAULT_NAMESPACE, name))
+    gents::pack_registry::split_pack_coordinate(name)
 }
 
 /// Resolves a pack compiled into this binary first; only when that fails
@@ -155,7 +154,7 @@ async fn resolve_pack_source(name: &str, registry_override: Option<&str>) -> Res
             let base_url = registry::resolve_registry_url(registry_override);
             let client = registry::RegistryClient::new(base_url.clone());
             let home = crate::home_state::resolve_home_dir(None);
-            let fetched = registry::fetch_pack(&client, &home, namespace, pack_name)
+            let fetched = registry::fetch_pack(&client, Some(&home), namespace, pack_name)
                 .await
                 .map_err(|registry_error| {
                     anyhow::anyhow!(

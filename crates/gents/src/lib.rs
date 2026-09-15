@@ -55,6 +55,7 @@ pub mod openai_wire;
 pub mod p2p_observability;
 pub mod pack;
 pub mod pack_archive;
+pub mod pack_registry;
 pub mod plugin;
 pub(crate) mod provider_input;
 /// Exact provider context-window budget policy shared by compaction,
@@ -113,7 +114,7 @@ pub(crate) mod test_support {
     pub(crate) fn load_test_graph_package(
         name: &str,
         options: &crate::graph_package::GraphPackageInstallBindings,
-    ) -> crate::graph_package::BundledGraphPackage {
+    ) -> crate::graph_package::LoadedGraphPackage {
         let scope = crate::pack::PackInstallOptions {
             agent_did: options.agent_did.clone(),
         };

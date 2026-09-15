@@ -99,7 +99,6 @@ fn anchored_request(
     });
     request
 }
-#[cfg(test)]
 fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let id = core.behavior_id().to_owned();
     let mut request = ApplyRequest::new(SelfConfigTarget::AgentBehavior, patch);
@@ -110,6 +109,31 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
             "no-lockout guard: behavior must remain enabled"
         );
         Ok(())
+    });
+    request
+}
+
+/// Model-facing patches may target any owned working behavior, but never the
+/// protected Setup configurator. Keep that policy inside the same transaction
+/// as validation/publication so a stale preflight cannot authorize a write.
+fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
+    let validate = request.validate;
+    request.validate = Box::new(move |txn, anchor, stored, merged| {
+        let protected = anchor
+            .doc
+            .get("tags")
+            .and_then(Value::as_array)
+            .is_some_and(|tags| {
+                tags.iter().any(|tag| {
+                    tag.as_str() == Some(crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG)
+                })
+            });
+        if protected {
+            return Box::pin(async {
+                bail!("target behavior is the protected Setup configurator; select a working behavior")
+            });
+        }
+        validate(txn, anchor, stored, merged)
     });
     request
 }
@@ -1035,9 +1059,10 @@ async fn persona_mutate(
         .map_err(|error| anyhow!("serialize behavior configuration outcome: {error}"))
 }
 
-/// Install bundled graph packs through the canonical package and activation
-/// owners. The running principal is always the install owner; callers cannot
-/// select another DID, filesystem distribution, or control-plane endpoint.
+/// Install bundled or registry graph packs through the canonical resolver,
+/// package publication, and activation owners. The running principal is always
+/// the install owner; callers cannot select another DID, filesystem
+/// distribution, registry endpoint, or control-plane endpoint.
 struct PackInstaller {
     core: SelfConfigCore,
     node: Arc<EmbeddedNode>,
@@ -1051,13 +1076,74 @@ struct PackInstallParams {
     pub expected_digest: Option<String>,
 }
 
+enum ConfigPackDistribution {
+    Bundled(crate::pack::ResolvedPack),
+    Registry(crate::pack_registry::RegistryPack),
+}
+
+impl ConfigPackDistribution {
+    fn manifest(&self) -> &crate::pack::PackManifest {
+        match self {
+            Self::Bundled(pack) => &pack.manifest,
+            Self::Registry(pack) => pack.archive.manifest(),
+        }
+    }
+
+    fn digest(&self) -> &str {
+        match self {
+            Self::Bundled(pack) => &pack.digest,
+            Self::Registry(pack) => &pack.digest,
+        }
+    }
+
+    fn source(&self) -> &'static str {
+        match self {
+            Self::Bundled(_) => "bundled",
+            Self::Registry(_) => "registry",
+        }
+    }
+
+    fn registry_artifact_digest(&self) -> Option<&str> {
+        match self {
+            Self::Bundled(_) => None,
+            Self::Registry(pack) => Some(&pack.artifact_digest),
+        }
+    }
+
+    fn load_graph(
+        &self,
+        options: &crate::pack::PackInstallOptions,
+        environment: &dyn Fn(&str) -> Option<String>,
+    ) -> anyhow::Result<crate::graph_package::LoadedGraphPackage> {
+        match self {
+            Self::Bundled(pack) => {
+                crate::graph_package::load_resolved_graph_package_with_environment(
+                    pack,
+                    options,
+                    environment,
+                )
+            }
+            Self::Registry(pack) => {
+                crate::graph_package::load_archive_graph_package_with_environment(
+                    &pack.archive,
+                    options,
+                    environment,
+                )
+            }
+        }
+    }
+}
+
 impl PackInstaller {
     fn validate(&self, args: &PackInstallParams) -> anyhow::Result<()> {
-        let package_name = args.package.trim();
-        anyhow::ensure!(!package_name.is_empty(), "pack name must not be blank");
+        let coordinate = args.package.trim();
+        anyhow::ensure!(!coordinate.is_empty(), "pack name must not be blank");
+        let (namespace, package_name) = crate::pack_registry::split_pack_coordinate(coordinate);
         anyhow::ensure!(
-            crate::pack::is_valid_pack_name(package_name),
-            "invalid pack name {package_name:?}; bundled pack names use snake_case"
+            !namespace.contains('/')
+                && crate::pack::is_valid_pack_name(namespace)
+                && crate::pack::is_valid_pack_name(package_name),
+            "invalid pack coordinate {coordinate:?}; namespace and pack name use snake_case"
         );
         anyhow::ensure!(
             args.variables.len() <= 32,
@@ -1086,14 +1172,30 @@ impl PackInstaller {
         Ok(())
     }
 
-    fn resolve(&self, args: &PackInstallParams) -> anyhow::Result<crate::pack::ResolvedPack> {
+    async fn resolve(&self, args: &PackInstallParams) -> anyhow::Result<ConfigPackDistribution> {
         self.validate(args)?;
-        let distribution = crate::pack::resolve_pack(args.package.trim())?;
+        let coordinate = args.package.trim();
+        let distribution = match crate::pack::resolve_pack(coordinate) {
+            Ok(pack) => ConfigPackDistribution::Bundled(pack),
+            Err(bundled_error) => {
+                let (namespace, name) = crate::pack_registry::split_pack_coordinate(coordinate);
+                let base_url = crate::pack_registry::resolve_registry_url(None);
+                let client = crate::pack_registry::RegistryClient::new(base_url.clone());
+                let pack = crate::pack_registry::fetch_pack(&client, None, namespace, name)
+                    .await
+                    .map_err(|registry_error| {
+                        anyhow!(
+                            "{coordinate} is not compiled into this runtime ({bundled_error}) and registry resolution at {base_url} failed: {registry_error}"
+                        )
+                    })?;
+                ConfigPackDistribution::Registry(pack)
+            }
+        };
         anyhow::ensure!(
-            distribution.manifest.metadata.kind == crate::pack::PackKind::Graph,
-            "pack {:?} is {:?}; the model-facing installer currently supports bundled graph packs only",
-            distribution.manifest.name,
-            distribution.manifest.metadata.kind
+            distribution.manifest().metadata.kind == crate::pack::PackKind::Graph,
+            "pack {:?} is {:?}; the model-facing installer supports graph packs only",
+            distribution.manifest().name,
+            distribution.manifest().metadata.kind
         );
         Ok(distribution)
     }
@@ -1157,7 +1259,7 @@ impl PackInstaller {
                 "next_cursor": next_cursor,
             },
             "items": items,
-            "registry_graph_install": "unsupported",
+            "registry_lookup": "Use pack get NAMESPACE/NAME for exact registry discovery; list is the bounded bundled catalog.",
         }))?)
     }
 
@@ -1169,55 +1271,53 @@ impl PackInstaller {
             expected_digest: None,
         };
         self.validate(&args)?;
-        let distribution = crate::pack::resolve_pack(package)?;
+        let distribution = self.resolve(&args).await?;
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
-            &distribution.manifest,
+            distribution.manifest(),
             self.core.agent_did(),
             &BTreeMap::new(),
         )
         .await?;
-        let installable = distribution.manifest.metadata.kind == crate::pack::PackKind::Graph;
+        let installable = distribution.manifest().metadata.kind == crate::pack::PackKind::Graph;
         let installed = if installable {
-            self.installed(package).await?
+            self.installed(&distribution.manifest().name).await?
         } else {
             None
         };
         Ok(serde_json::to_string_pretty(&json!({
-            "source": "bundled",
-            "manifest": distribution.manifest,
-            "artifact_digest": distribution.digest,
+            "source": distribution.source(),
+            "manifest": distribution.manifest(),
+            "artifact_digest": distribution.digest(),
+            "registry_artifact_digest": distribution.registry_artifact_digest(),
             "inference": inference,
             "installed": installed,
             "installable": installable,
             "supported_operations": installable.then_some(["preview install", "install", "preview update", "update"]),
-            "unsupported": {
-                "registry_graph_install": "the shared registry-to-graph adapter is not implemented",
-                "remove": "canonical installation cleanup ownership is not implemented; provenance tags are not deletion authority",
-            },
+            "unsupported": {"remove": "installation records do not distinguish created artifacts from reused matching documents; provenance tags and ACL are not deletion authority"},
         }))?)
     }
 
     async fn preview(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
-        let distribution = self.resolve(&args)?;
+        let distribution = self.resolve(&args).await?;
         if let Some(expected) = args.expected_digest.as_deref() {
             anyhow::ensure!(
-                expected == distribution.digest,
+                expected == distribution.digest(),
                 "pack digest changed: requested {expected:?}, resolved {:?}; preview again",
-                distribution.digest
+                distribution.digest()
             );
         }
-        let installed = self.installed(&distribution.manifest.name).await?;
+        let installed = self.installed(&distribution.manifest().name).await?;
         anyhow::ensure!(
             operation != "update" || installed.is_some(),
             "pack {:?} is not installed; preview install instead",
-            distribution.manifest.name
+            distribution.manifest().name
         );
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let inspected = crate::pack::inspect_pack_inference_bindings(
             &access,
-            &distribution.manifest,
+            distribution.manifest(),
             self.core.agent_did(),
             &args.inference_slots,
         )
@@ -1233,9 +1333,11 @@ impl PackInstaller {
                 "committed": false,
                 "ready": false,
                 "operation": operation,
-                "package": distribution.manifest.name,
-                "version": distribution.manifest.version,
-                "artifact_digest": distribution.digest,
+                "package": distribution.manifest().name,
+                "version": distribution.manifest().version,
+                "source": distribution.source(),
+                "artifact_digest": distribution.digest(),
+                "registry_artifact_digest": distribution.registry_artifact_digest(),
                 "inference": inspected,
                 "missing_inference_slots": missing_slots,
                 "installed": installed,
@@ -1244,7 +1346,7 @@ impl PackInstaller {
         }
         let inference = crate::pack::preview_pack_inference_bindings(
             &access,
-            &distribution.manifest,
+            distribution.manifest(),
             self.core.agent_did(),
             &args.inference_slots,
         )
@@ -1253,11 +1355,7 @@ impl PackInstaller {
             agent_did: self.core.agent_did().to_owned(),
         };
         let environment = |name: &str| args.variables.get(name).cloned();
-        let package = crate::graph_package::load_resolved_graph_package_with_environment(
-            &distribution,
-            &scope,
-            &environment,
-        )?;
+        let package = distribution.load_graph(&scope, &environment)?;
         let bindings = crate::graph_package::GraphPackageInstallBindings {
             agent_did: self.core.agent_did().to_owned(),
             inference_slots: inference.bindings.clone(),
@@ -1283,7 +1381,9 @@ impl PackInstaller {
             "operation": operation,
             "package": package.manifest.name,
             "version": package.manifest.version,
-            "artifact_digest": distribution.digest,
+            "source": distribution.source(),
+            "artifact_digest": distribution.digest(),
+            "registry_artifact_digest": distribution.registry_artifact_digest(),
             "inference": inference,
             "external_dependencies": package.manifest.external_dependencies,
             "plugins": package.manifest.metadata.plugins,
@@ -1296,7 +1396,7 @@ impl PackInstaller {
             },
             "installed": installed,
             "apply_with": {
-                "argv_prefix": ["pack", operation, package.manifest.name, "--digest", distribution.digest],
+                "argv_prefix": ["pack", operation, args.package, "--digest", distribution.digest()],
                 "repeat_inference_slots": inference.bindings,
                 "repeat_variables": args.variables,
             },
@@ -1304,24 +1404,24 @@ impl PackInstaller {
     }
 
     async fn apply(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
-        let distribution = self.resolve(&args)?;
+        let distribution = self.resolve(&args).await?;
         let expected = args.expected_digest.as_deref().context(
             "pack install/update requires --digest from config pack preview; preview pins the exact artifact being authorized",
         )?;
         anyhow::ensure!(
-            expected == distribution.digest,
+            expected == distribution.digest(),
             "pack digest changed: preview authorized {expected:?}, resolved {:?}; preview again",
-            distribution.digest
+            distribution.digest()
         );
-        let previous = self.installed(&distribution.manifest.name).await?;
+        let previous = self.installed(&distribution.manifest().name).await?;
         anyhow::ensure!(
             operation != "update" || previous.is_some(),
             "pack {:?} is not installed; use pack install",
-            distribution.manifest.name
+            distribution.manifest().name
         );
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let missing_slots = distribution
-            .manifest
+            .manifest()
             .metadata
             .inference_slots
             .iter()
@@ -1331,12 +1431,12 @@ impl PackInstaller {
         anyhow::ensure!(
             missing_slots.is_empty(),
             "pack {:?} requires explicit --inference-slot bindings for: {}; preview the pack and bind every declared role",
-            distribution.manifest.name,
+            distribution.manifest().name,
             missing_slots.join(", ")
         );
         let inference = crate::pack::preview_pack_inference_bindings(
             &access,
-            &distribution.manifest,
+            distribution.manifest(),
             self.core.agent_did(),
             &args.inference_slots,
         )
@@ -1345,11 +1445,7 @@ impl PackInstaller {
             agent_did: self.core.agent_did().to_owned(),
         };
         let environment = |name: &str| args.variables.get(name).cloned();
-        let package = crate::graph_package::load_resolved_graph_package_with_environment(
-            &distribution,
-            &scope,
-            &environment,
-        )?;
+        let package = distribution.load_graph(&scope, &environment)?;
         anyhow::ensure!(
             package.package_digest == expected,
             "resolved package content does not match the previewed artifact digest"
@@ -1390,14 +1486,16 @@ impl PackInstaller {
         );
         Ok(serde_json::to_string_pretty(&json!({
             "operation": operation,
+            "source": distribution.source(),
             "artifact_digest": expected,
+            "registry_artifact_digest": distribution.registry_artifact_digest(),
             "inference": inference,
             "install": receipt,
             "activation": activation,
             "external_dependencies": external_dependencies,
             "plugins": plugins,
             "effective": effective,
-            "effect": "The bundled graph is installed and active. Installation did not start a graph run.",
+            "effect": "The graph package is installed and active. Installation did not start a graph run.",
         }))?)
     }
 }

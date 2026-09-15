@@ -748,163 +748,254 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
 }
 
 #[tokio::test]
-async fn sibling_tool_patch_preserves_settings_and_rejects_protected_shared_foreign_targets() {
-    // Lean siblingToolsAllowed: real transaction observations.
+async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     let node = build_persona_node().await;
-    let identity = persona_identity("sibling-tools");
+    let identity = persona_identity("targeted-config");
     let owner = identity.did().to_string();
-    for behavior in ["working", "other"] {
+    for behavior in ["setup", "working"] {
         crate::test_support::install_test_behavior(&node, &owner, behavior).await;
     }
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "working".into()).unwrap();
-    core.apply(tools_request(
-        &core,
+    let setup = SelfConfigCore::new(node.clone(), owner.clone(), "setup".into()).unwrap();
+    setup
+        .apply(behavior_request(
+            &setup,
+            vec![(
+                "tags".into(),
+                Some(json!([
+                    crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+                ])),
+            )],
+        ))
+        .await
+        .unwrap();
+
+    let mut tool_config = config(&["persona", "behavior", "tools", "profile", "backend"]);
+    tool_config.behavior_id = "setup".into();
+    tool_config.dry_run = true;
+    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &tool_config);
+
+    call_config_tool(
+        &tools,
         vec![
-            (
-                "integrations".into(),
-                Some(json!({"lsp":{"timeout_secs":25}})),
-            ),
-            ("host".into(), Some(json!({"files":{"mode":"ReadOnly"}}))),
+            "behavior".into(),
+            "edit".into(),
+            "working".into(),
+            "--set".into(),
+            "tags=[\"ui:review\"]".into(),
         ],
-        false,
-    ))
-    .await
-    .unwrap();
-    core.select_sibling_tools(None, Some(true), None)
-        .await
-        .unwrap();
-    core.select_sibling_tools(None, Some(true), None)
-        .await
-        .unwrap();
-    let inspect = core
-        .read_effective_config(&BTreeSet::new(), false, false)
-        .await
-        .unwrap();
-    assert_eq!(
-        inspect["documents"]["Tools"]["integrations"]["lsp"]["timeout_secs"],
-        25
-    );
-    assert_eq!(
-        inspect["documents"]["Tools"]["host"]["files"]["mode"],
-        "ReadOnly"
-    );
-    assert!(inspect["documents"]["Tools"]["self_config"].is_null());
-    core.select_sibling_tools(
-        None,
-        None,
-        Some(crate::toolset::CommandNetworkMode::Disabled),
     )
     .await
     .unwrap();
-    // An omitted network selection preserves the canonical narrowing across
-    // a later focused tool update.
-    core.select_sibling_tools(Some(false), None, None)
-        .await
-        .unwrap();
-    let inspect = core
-        .read_effective_config(&BTreeSet::new(), false, false)
-        .await
-        .unwrap();
-    assert_eq!(
-        inspect["documents"]["Tools"]["host"]["bash"]["network_mode"],
-        "disabled"
-    );
-    assert_eq!(
-        inspect["runtime_effective"]["effective"]["network_mode"],
-        "disabled"
-    );
-    assert!(
-        inspect["runtime_effective"]["effective"]["network_enforcement"]
-            .as_str()
-            .is_some_and(|note| note.contains("execution"))
-    );
-    assert!(core
-        .select_sibling_tools(
-            None,
-            None,
-            Some(crate::toolset::CommandNetworkMode::Enabled),
+    call_config_tool(
+        &tools,
+        vec![
+            "behavior".into(),
+            "context".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "working".into(),
+            "--set".into(),
+            "system_prompt=\"Review carefully.\"".into(),
+            "--set".into(),
+            "skill_ids=[]".into(),
+        ],
+    )
+    .await
+    .unwrap();
+    call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--behavior=working".into(),
+            "--set".into(),
+            "subagents={\"target_ids\":[],\"spawn_enabled\":false}".into(),
+            "--set".into(),
+            "remote={\"services\":[]}".into(),
+        ],
+    )
+    .await
+    .unwrap();
+    call_config_tool(
+        &tools,
+        vec![
+            "profile".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "working".into(),
+            "--set".into(),
+            "display_name=\"Working profile\"".into(),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let working: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec!["get".into(), "--behavior".into(), "working".into()],
         )
         .await
-        .unwrap_err()
-        .to_string()
-        .contains("only narrow"));
-    core.select_sibling_tools(Some(false), Some(false), None)
-        .await
-        .unwrap();
-    let inspect = core
-        .read_effective_config(&BTreeSet::new(), false, false)
-        .await
-        .unwrap();
-    assert_eq!(
-        inspect["tool_grants"]["configured"],
-        json!({"lsp":false,"native_graph_tools":false,"network_mode":"disabled"})
-    );
-    core.apply(behavior_request(
-        &core,
-        vec![(
-            "tags".into(),
-            Some(json!([
-                crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
-            ])),
-        )],
-    ))
-    .await
-    .unwrap();
-    assert!(core
-        .select_sibling_tools(None, Some(true), None)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("protected"));
-    core.apply(behavior_request(&core, vec![("tags".into(), None)]))
-        .await
-        .unwrap();
-    let other = SelfConfigCore::new(node.clone(), owner.clone(), "other".into()).unwrap();
-    other
-        .apply(anchored_request(
-            SelfConfigTarget::AgentContext,
-            "context_id",
-            vec![("tools_id".into(), Some(json!("working:tools")))],
-        ))
-        .await
-        .unwrap();
-    assert!(core
-        .select_sibling_tools(None, Some(true), None)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("unshared"));
-    other
-        .apply(anchored_request(
-            SelfConfigTarget::AgentContext,
-            "context_id",
-            vec![("tools_id".into(), Some(json!("other:tools")))],
-        ))
-        .await
-        .unwrap();
-    other
-        .apply(behavior_request(
-            &other,
-            vec![("context_id".into(), Some(json!("working:context")))],
-        ))
-        .await
-        .unwrap();
-    assert!(core
-        .select_sibling_tools(None, Some(true), None)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("unshared"));
-    let foreign = SelfConfigCore::new(
-        node,
-        persona_identity("foreign").did().into(),
-        "working".into(),
+        .unwrap(),
     )
     .unwrap();
-    assert!(foreign
-        .select_sibling_tools(None, Some(true), None)
+    assert_eq!(working["behavior"]["tags"], json!(["ui:review"]));
+    assert_eq!(working["context"]["system_prompt"], "Review carefully.");
+    assert_eq!(
+        working["documents"]["Tools"]["subagents"]["spawn_enabled"],
+        false
+    );
+    assert!(working["documents"]["Tools"]["remote"]["services"].is_null());
+    assert_eq!(
+        working["inference_profile"]["display_name"],
+        "Working profile"
+    );
+
+    let help: Value = serde_json::from_str(
+        &call_config_tool(&tools, vec!["help".into(), "tools".into()])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(help["patch_contracts"][0]["writable_fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|field| field == "subagents"));
+    assert!(help["patch_contracts"][0]["field_shapes"]["subagents"]
+        .get("target_ids")
+        .is_some());
+
+    let setup_error = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "setup".into(),
+            "--set".into(),
+            "tags=[\"changed\"]".into(),
+        ],
+    )
+    .await
+    .unwrap_err();
+    assert!(setup_error.to_string().contains("protected Setup"));
+}
+
+#[tokio::test]
+async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("config-cleanup");
+    let owner = identity.did().to_string();
+    for behavior in ["beh-test", "orphan"] {
+        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    }
+    let mut tool_config = config(&["persona", "tools", "profile", "backend"]);
+    tool_config.dry_run = true;
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+
+    let referenced = call_config_tool(
+        &tools,
+        vec![
+            "cleanup".into(),
+            "preview".into(),
+            "--target".into(),
+            "backend=orphan:backend".into(),
+        ],
+    )
+    .await
+    .expect_err("cleanup must reject a retained profile's backend");
+    assert!(
+        referenced.contains("references missing InferenceBackend"),
+        "{referenced}"
+    );
+
+    let targets = [
+        "behavior=orphan",
+        "context=orphan:context",
+        "tools=orphan:tools",
+        "profile=orphan:inference",
+        "backend=orphan:backend",
+    ];
+    let argv = |verb: &str| {
+        let mut argv = vec!["cleanup".to_owned(), verb.to_owned()];
+        for target in targets {
+            argv.push("--target".to_owned());
+            argv.push(target.to_owned());
+        }
+        argv
+    };
+    let preview: Value = serde_json::from_str(
+        &call_config_tool(&tools, argv("preview"))
+            .await
+            .expect("complete unreferenced cycle previews"),
+    )
+    .unwrap();
+    assert_eq!(preview["committed"], false);
+    assert_eq!(preview["targets"].as_array().unwrap().len(), targets.len());
+    call_config_tool(
+        &tools,
+        vec!["behavior".into(), "get".into(), "orphan".into()],
+    )
+    .await
+    .expect("preview performs no writes");
+
+    call_config_tool(
+        &tools,
+        vec![
+            "backend".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "orphan".into(),
+            "--set".into(),
+            "name=\"Changed after preview\"".into(),
+        ],
+    )
+    .await
+    .expect("change one target after preview");
+    let mut stale_argv = argv("remove");
+    stale_argv.push("--digest".into());
+    stale_argv.push(preview["plan_digest"].as_str().unwrap().to_owned());
+    let stale = call_config_tool(&tools, stale_argv)
         .await
-        .is_err());
+        .expect_err("cleanup refuses content that changed after preview");
+    assert!(stale.contains("preview again"), "{stale}");
+
+    let refreshed: Value = serde_json::from_str(
+        &call_config_tool(&tools, argv("preview"))
+            .await
+            .expect("changed target set can be previewed again"),
+    )
+    .unwrap();
+    let mut remove_argv = argv("remove");
+    remove_argv.push("--digest".into());
+    remove_argv.push(refreshed["plan_digest"].as_str().unwrap().to_owned());
+    let removed: Value = serde_json::from_str(
+        &call_config_tool(&tools, remove_argv)
+            .await
+            .expect("complete unreferenced cycle removes atomically"),
+    )
+    .unwrap();
+    assert_eq!(removed["committed"], true);
+    let missing = call_config_tool(
+        &tools,
+        vec!["behavior".into(), "get".into(), "orphan".into()],
+    )
+    .await
+    .expect_err("removed behavior is no longer inspectable");
+    assert!(
+        missing.contains("missing")
+            || missing.contains("no owned")
+            || missing.contains("unknown behavior_id"),
+        "{missing}"
+    );
+
+    call_config_tool(
+        &tools,
+        vec!["get".into(), "--behavior".into(), "beh-test".into()],
+    )
+    .await
+    .expect("cleanup preserves unrelated configuration");
 }
 
 #[derive(serde::Deserialize)]
@@ -1162,31 +1253,44 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         node.clone(),
         agent_did.clone(),
         Some(identity.clone()),
-        &config(&["persona"]),
+        &config(&["persona", "tools"]),
     );
     let selected = call_config_tool(
         &grant_tools,
         vec![
-            "behavior".into(),
             "tools".into(),
+            "edit".into(),
+            "--behavior".into(),
             created[0].behavior_id.clone(),
-            "--lsp".into(),
-            "on".into(),
-            "--graphs".into(),
-            "on".into(),
-            "--network".into(),
-            "disabled".into(),
+            "--set".into(),
+            r#"integrations={"lsp":{}}"#.into(),
+            "--set".into(),
+            r#"built_ins={"enable_graph_tools":true}"#.into(),
+            "--set".into(),
+            r#"host={"files":{"mode":"ReadOnly"},"bash":{"mode":"ReadOnly","network_mode":"disabled"}}"#.into(),
         ],
     )
     .await
     .expect("explicit second operation grants sibling tools");
+    let applied: Value = serde_json::from_str(&selected).unwrap();
+    assert_eq!(applied["committed"], true);
+    let selected = call_config_tool(
+        &grant_tools,
+        vec![
+            "get".into(),
+            "--behavior".into(),
+            created[0].behavior_id.clone(),
+        ],
+    )
+    .await
+    .expect("inspect the selected sibling after the canonical tools patch");
     let selected: Value = serde_json::from_str(&selected).unwrap();
     assert_eq!(
-        selected["effective_config"]["tool_grants"]["configured"],
+        selected["tool_grants"]["configured"],
         json!({"lsp": true, "native_graph_tools": true, "network_mode": "disabled"})
     );
     assert_eq!(
-        selected["effective_config"]["runtime_effective"]["effective"]["network_mode"],
+        selected["runtime_effective"]["effective"]["network_mode"],
         "disabled"
     );
 
