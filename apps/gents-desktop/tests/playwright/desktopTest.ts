@@ -247,6 +247,25 @@ export async function captureStableScreenshot(
   testInfo: TestInfo,
   name: string,
 ): Promise<{ attachmentName: string; path: string }> {
+  await page.evaluate(async () => {
+    const styleId = "playwright-stable-screenshot-style";
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement("style");
+      style.id = styleId;
+      style.textContent = `
+        *, *::before, *::after {
+          animation: none !important;
+          caret-color: transparent !important;
+          transition: none !important;
+        }
+      `;
+      document.head.append(style);
+    }
+    await document.fonts.ready;
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  });
   const path = testInfo.outputPath(`${name}.png`);
   await page.screenshot({ fullPage: true, path });
   const attachmentName = `${name}.png`;
