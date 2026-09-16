@@ -9,6 +9,7 @@
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
+    "core:webview:allow-set-webview-zoom",
     "opener:default",
     "dialog:allow-open",
     "gents-desktop-bridge:default",
