@@ -1076,6 +1076,115 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
 }
 
 #[tokio::test]
+async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("configuration-discovery");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("synthetic-codex");
+    std::fs::create_dir_all(&source).unwrap();
+    let marker = root.path().join("SHOULD_NEVER_RUN");
+    let fixture =
+        include_str!("../../tests/fixtures/configuration_discovery/codex-user/config.toml")
+            .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy());
+    std::fs::write(source.join("config.toml"), fixture).unwrap();
+
+    let mut grants = config(&["tools"]);
+    let denied_tools =
+        build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
+    let command = |args: &[&str]| args.iter().map(|value| (*value).to_owned()).collect();
+    let denied = call_config_tool(
+        &denied_tools,
+        command(&[
+            "discover",
+            "scan",
+            "--source",
+            "codex-user",
+            "codex",
+            "user",
+            source.to_str().unwrap(),
+        ]),
+    )
+    .await
+    .unwrap_err();
+    assert!(denied.contains("file read permission"), "{denied}");
+
+    grants.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
+        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tool_surface::BashMode::Off,
+        root: Some(root.path().into()),
+    };
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    core.apply(tools_request(
+        &core,
+        vec![(
+            "host".into(),
+            Some(json!({
+                "root": root.path().to_str().unwrap(), "files": {"mode": "ReadOnly"}
+            })),
+        )],
+        false,
+    ))
+    .await
+    .unwrap();
+    let before = core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    let tools = build_self_config_tools(node, owner, Some(identity), &grants);
+    let outside = tempfile::tempdir().unwrap();
+    let outside_error = call_config_tool(
+        &tools,
+        command(&[
+            "discover",
+            "scan",
+            "--source",
+            "outside",
+            "codex",
+            "user",
+            outside.path().to_str().unwrap(),
+        ]),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        outside_error.contains("outside the allowed tool root"),
+        "{outside_error}"
+    );
+    let output = call_config_tool(
+        &tools,
+        command(&[
+            "discover",
+            "scan",
+            "--source",
+            "codex-user",
+            "codex",
+            "user",
+            source.to_str().unwrap(),
+        ]),
+    )
+    .await
+    .unwrap();
+    let after = core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+
+    assert_eq!(before, after, "discovery must not mutate configuration");
+    assert!(!marker.exists(), "discovery must not execute MCP commands");
+    assert!(!output.contains("FAKE_DISCOVERY_SECRET_123"));
+    assert!(!output.contains("SHOULD_NEVER_RUN"));
+    let inventory: crate::configuration_discovery::ConfigurationDiscoveryInventory =
+        serde_json::from_str(&output).unwrap();
+    assert_eq!(inventory.schema_version, 1);
+    assert!(inventory.items.iter().any(|item| {
+        item.category == crate::configuration_discovery::DiscoveryCategory::RemoteTool
+            && item.display_label == "shared"
+    }));
+}
+
+#[tokio::test]
 async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     let node = build_persona_node().await;
     let identity = persona_identity("datastore-config");

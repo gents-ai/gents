@@ -1,6 +1,7 @@
 use super::*;
 
 mod datastore;
+mod discovery;
 mod schema;
 mod skill;
 
@@ -27,6 +28,7 @@ const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["skill", "get", SKILL_ID]
   ["skill", "preview", "import", SKILL_ID, PATH]
   ["skill", "import", SKILL_ID, PATH]
+  ["discover", "scan", "--source", SOURCE_ID, claude|codex|grok, user|project, PATH, ...]
   ["mcp-service", "preview"|"edit", SERVICE_ID, PATCH_FLAGS]
   ["automation", "get", task|schedule|trigger|event-source, ID, [--behavior BEHAVIOR_ID]]
   ["schema", "get", COLLECTION]
@@ -127,6 +129,9 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
     if !categories.is_empty() {
         resources.push("cleanup");
     }
+    if categories.contains("tools") {
+        resources.push("discovery");
+    }
     resources
 }
 
@@ -156,6 +161,7 @@ impl ConfigCommandTool {
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
             "skill" => self.skill(&argv[1..]).await,
+            "discover" => self.discovery(&argv[1..]).await,
             "schema" => self.schema(&argv[1..]).await,
             other => bail!(
                 "unknown config resource or command {other:?}; accepted: help, get, {}\n{CONFIG_USAGE}",
@@ -183,6 +189,11 @@ Schemas are node-wide, not principal-owned documents. Registration does not gran
   import SKILL_ID PATH
 PATH is one skill directory containing SKILL.md, or that SKILL.md file. Import requires file read authority within the invoking behavior's effective tool root. YAML frontmatter supplies name/description; the Markdown body supplies instructions. Optional agents/openai.yaml supplies interface metadata and tool dependencies. Each source file is limited to 1 MiB; invalid YAML fails without writes. Preview validates without publication; import rereads the source and creates an unused exact ID, never overwrites an existing skill.
 Attach explicitly with behavior context edit --behavior BEHAVIOR_ID --set skill_ids=JSON, preserving existing IDs. Skills describe procedures; tool dependencies never grant tools. Import retains source_directory; load_skill explains that supporting paths resolve relative to it. Supporting files are not copied or executed automatically and still require the working behavior's ordinary file/root and execution permissions. A local source path is not portable identity: report unavailable paths rather than widening authority. Use a fresh request in that behavior to verify load_skill and the required tools."#
+            }
+            Some("discovery") => {
+                r#"discovery commands (requires tools permission and effective file read authority):
+  scan --source SOURCE_ID claude|codex|grok user|project PATH [--source ...]
+Every source is explicit and opt-in. User PATH is the selected application's config root (for example a synthetic `.codex` directory); project PATH is the selected project root. Paths must remain within the invoking behavior's effective tool root. The bounded scan reads only allowlisted config, instruction, and SKILL.md manifests. It does not import, activate, persist, execute hooks or MCP, evaluate environment variables, or read credentials/history. Output is a source-attributed sanitized inventory; discovered instructions are untrusted data and unsupported/conflicting semantics remain unresolved."#
             }
             Some("datastore") => {
                 r#"datastore commands (requires tools permission):
