@@ -20,8 +20,9 @@ creation, read-only review, improvement and document automation are wired
 sequentially. CLI, desktop and eval use the same Setup prompt and canonical
 self-configuration grant. The completed corrected-prompt cohort exercised ten
 onboarding, Builder readiness, skill and automation cases, but only six reviews
-and five improvements. A supplemental full-chain cohort is collecting the
-remaining dependent-case samples; skips do not count as attempts.
+and five improvements. The completed supplemental cohort brings those counts to
+eleven reviews and eight improvements. Further full-chain trials are collecting
+the remaining improvement samples; skips do not count as attempts.
 An initial coding batch was stopped after
 finding a harness bug reading streamed answers; it is not a valid capability
 measurement. The corrected runner uses the existing streamed-answer reader and
@@ -277,15 +278,42 @@ commands were manually checked for successful script invocation. This is not a
 claim that the bounded v3 checker automatically establishes every compound form.
 Original reports remain unchanged and reassessment sidecars remain separate.
 
-## Supplemental cohort (`681412a0a`, in progress)
+## Completed supplemental cohort (`681412a0a`)
 
-Another ten full-chain trials started on 2026-09-16 at 08:20 UTC, with the same
+Another ten full-chain trials ran on 2026-09-16 at 08:20–09:36 UTC in 4545
+seconds, with the same
 model, task prompts, inference defaults and concurrency two. The runner includes
 the v3 readiness attribution check and browser visible-label whitespace fix.
-This collects additional review/improvement attempts without substituting
-harness-authored projects or skipping upstream work. All additional outcomes
-will be reported, including upstream failures and prerequisite skips; do not
-select only successful trials when combining case counts.
+This collected additional review/improvement attempts without substituting
+harness-authored projects or skipping upstream work. No trial passed every stage;
+the test exited 101.
+
+| Case | Raw passed | Raw failed/inconclusive | Skipped |
+| --- | ---: | ---: | ---: |
+| Onboarding | 10 | 0 | 0 |
+| Builder readiness | 8 | 2 | 0 |
+| Skill import/use (source-relative fixture) | 10 | 0 | 0 |
+| Pagoda creation | 1 | 9 | 0 |
+| Review | 3 | 2 | 5 |
+| Improvement | 1 | 2 | 7 |
+| Model-authored document automation | 8 | 2 | 0 |
+
+Creation had seven deadlines and two animated-scene inconclusive results. Both
+review failures exhausted the invalid-tool-call budget; improvement had one
+deadline and one animated-scene inconclusive result. Automation failed once for
+unrestricted query access and once for punctuation contaminating the exact output.
+Neither broadening grants nor accepting the wrong output would satisfy the case.
+
+The two readiness inconclusive results used compound shell commands outside the
+bounded attribution parser. Manual inspection found successful execution of the
+requested script in both retained command records. Raw results remain unchanged;
+this is not an automatic reassessment or two additional model trials.
+
+Together with the corrected-prompt cohort, these are eleven actual reviews and
+eight improvements. All outcomes count, not only successful prerequisites. A
+five-trial full-chain follow-up at `779b17bbc` uses the same model, task inputs,
+inference defaults and concurrency two, and exercises the new activation fence.
+Its results must be reported separately because the runner has changed.
 
 ## Focused review follow-up
 
