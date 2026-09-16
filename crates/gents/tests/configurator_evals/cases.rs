@@ -506,13 +506,40 @@ pub(super) async fn verify_skill_workflow(
         "This is not the skill's checklist. Do not create a receipt from this file; resolve the reference from the skill's source directory.\n")?;
     std::fs::write(source.join("references/checklist.md"),
         format!("In your working root, write readiness/skill-check.txt containing exactly {marker} followed by a newline. Read it back and report the result.\n"))?;
+    let previewed = stages::execute(
+        activation,
+        node,
+        owner,
+        setup,
+        "skill-preview",
+        &include_str!("../fixtures/configurator_evals/skill_setup.md")
+            .trim_end()
+            .replace("{{SKILL_DIRECTORY}}", &source.to_string_lossy()),
+        evidence,
+    )
+    .await?;
+    previewed.ensure_completed()?;
+    activation.wait().await?;
+    ensure!(
+        builder_before == behavior_configuration(node, owner, None).await?
+            && setup_before == behavior_configuration(node, owner, Some(setup)).await?,
+        "skill preview changed configuration before approval"
+    );
+    let skill_query = format!(
+        r#"{{ Skill(filter: {{agent_did: {{_eq: "{}"}}, skill_id: {{_eq: "eval-coding-check"}}}}) {{source_directory}} }}"#,
+        gents::graphql::escape_graphql_string(owner)
+    );
+    ensure!(
+        rows(node, &skill_query, "Skill").await?.is_empty(),
+        "skill preview imported before approval"
+    );
     let configured = stages::execute(
         activation,
         node,
         owner,
         setup,
-        "skill-setup",
-        &include_str!("../fixtures/configurator_evals/skill_setup.md")
+        "skill-approve",
+        &include_str!("../fixtures/configurator_evals/skill_approve.md")
             .trim_end()
             .replace("{{SKILL_DIRECTORY}}", &source.to_string_lossy()),
         evidence,
@@ -520,10 +547,7 @@ pub(super) async fn verify_skill_workflow(
     .await?;
     configured.ensure_completed()?;
     activation.wait().await?;
-    let imported = rows(node, &format!(
-        r#"{{ Skill(filter: {{agent_did: {{_eq: "{}"}}, skill_id: {{_eq: "eval-coding-check"}}}}) {{source_directory}} }}"#,
-        gents::graphql::escape_graphql_string(owner)
-    ), "Skill").await?;
+    let imported = rows(node, &skill_query, "Skill").await?;
     ensure!(
         imported.len() == 1
             && imported[0]["source_directory"].as_str() == source.canonicalize()?.to_str(),
@@ -596,6 +620,20 @@ pub(super) async fn verify_skill_workflow(
         "Builder did not successfully load its skill"
     );
     Ok(())
+}
+
+#[test]
+fn skill_workflow_separates_preview_from_scoped_approval() {
+    let preview = include_str!("../fixtures/configurator_evals/skill_setup.md");
+    let approval = include_str!("../fixtures/configurator_evals/skill_approve.md");
+    assert!(preview.contains("Do not apply any changes yet"));
+    assert!(approval.contains("Apply those changes now"));
+    for prompt in [preview, approval] {
+        assert!(prompt.contains("{{SKILL_DIRECTORY}}"));
+        assert!(prompt.contains("eval-coding-check"));
+        assert!(prompt.contains("Builder"));
+        assert!(prompt.contains("skill's procedure"));
+    }
 }
 
 pub(super) async fn verify_document_automation(

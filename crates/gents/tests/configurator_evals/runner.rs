@@ -71,6 +71,10 @@ const EVAL_FIXTURES: &[reporting::EvidenceSource] = &[
         include_bytes!("../fixtures/configurator_evals/skill_setup.md"),
     ),
     reporting::EvidenceSource::new(
+        "skill_approve.md",
+        include_bytes!("../fixtures/configurator_evals/skill_approve.md"),
+    ),
+    reporting::EvidenceSource::new(
         "skill_use.md",
         include_bytes!("../fixtures/configurator_evals/skill_use.md"),
     ),
