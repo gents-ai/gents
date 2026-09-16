@@ -60,7 +60,7 @@ jobs:
           fi
       - name: Build desktop installers with embedded managed runtime
         working-directory: apps/gents-desktop
-        run: npm run tauri -- build --bundles deb,appimage
+        run: npm run tauri -- build --ci --bundles deb,appimage -- --locked
       - name: Verify and smoke-test installed package
         run: bash scripts/verify-linux-desktop.sh
       - name: Retain installers and checksums
