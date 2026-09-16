@@ -280,6 +280,8 @@ fn reassessment_distinguishes_skipped_readiness_from_missing_evidence() {
 #[test]
 #[ignore = "offline: set GENTS_EVAL_REASSESS_TRIALS to a platform-separated list of retained trial directories"]
 fn reassess_retained_readiness_evidence() -> Result<()> {
+    use sha2::{Digest, Sha256};
+
     let paths = std::env::var_os("GENTS_EVAL_REASSESS_TRIALS")
         .context("set GENTS_EVAL_REASSESS_TRIALS to retained trial directories")?;
     for trial in std::env::split_paths(&paths) {
@@ -288,20 +290,27 @@ fn reassess_retained_readiness_evidence() -> Result<()> {
             tracing::info!(trial = %trial.display(), "readiness was skipped; no reassessment");
             continue;
         };
-        let tool_evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(
-            evidence.join("builder-readiness-tools.json"),
-        )?)?;
+        let original_bytes = std::fs::read(evidence.join("builder-readiness-acceptance.json"))?;
+        let tool_bytes = std::fs::read(evidence.join("builder-readiness-tools.json"))?;
+        let tool_evidence: serde_json::Value = serde_json::from_slice(&tool_bytes)?;
         let calls = tool_evidence["AgentToolCall"]
             .as_array()
             .context("missing retained tool calls")?;
         let reassessed = reassess_readiness(&original, calls, &trial.join("workspace"));
-        std::fs::write(
-            evidence.join("builder-readiness-reassessment-shell-ast-v4.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "grader":"readiness-shell-ast-v4", "changed":reassessed.is_some(),
+        super::reporting::write_json_new(
+            &evidence.join("builder-readiness-reassessment-shell-ast-v4.json"),
+            &serde_json::json!({
+                "schema_version":1,
+                "grader":{"id":"readiness-shell-ast-v4",
+                    "source_revision":std::env::var("GENTS_EVAL_SOURCE_REVISION").unwrap_or_else(|_| "unknown".into()),
+                    "source_dirty":std::env::var("GENTS_EVAL_SOURCE_DIRTY").map_or(true, |value| value != "false")},
+                "created_at":chrono::Utc::now().to_rfc3339(),
+                "input_sha256":{"original_receipt":format!("{:x}", Sha256::digest(&original_bytes)),
+                    "tool_evidence":format!("{:x}", Sha256::digest(&tool_bytes))},
+                "changed":reassessed.is_some(),
                 "original":original, "reassessed":reassessed.as_ref().unwrap_or(&original),
                 "basis":"Retained request tool calls; original completion, exact script and receipt checks remain required. No inference rerun."
-            }))?,
+            }),
         )?;
     }
     Ok(())
@@ -359,23 +368,27 @@ pub(super) async fn verify_pagoda_sequence(
     let creation = stages::checked(
         stages::CaseId::Pagoda,
         evidence,
-        retain_checked_project(&project, &evidence.join("pagoda-source"), async {
-            let created = stages::execute(
-                activation,
-                node,
-                owner,
-                builder,
-                "pagoda",
-                &prompt(include_str!(
-                    "../fixtures/configurator_evals/voxel_pagoda.md"
-                )),
-                evidence,
-            )
-            .await?;
-            created.ensure_completed()?;
-            check_pagoda_browser(&project, &evidence.join("pagoda-browser")).await?;
-            Ok(())
-        }),
+        stages::acceptance(retain_checked_project(
+            &project,
+            &evidence.join("pagoda-source"),
+            async {
+                let created = stages::execute(
+                    activation,
+                    node,
+                    owner,
+                    builder,
+                    "pagoda",
+                    &prompt(include_str!(
+                        "../fixtures/configurator_evals/voxel_pagoda.md"
+                    )),
+                    evidence,
+                )
+                .await?;
+                created.ensure_completed()?;
+                check_pagoda_browser(&project, &evidence.join("pagoda-browser")).await?;
+                Ok(())
+            },
+        )),
     )
     .await;
     // A failed first attempt can still be reviewed and improved. Retain its
@@ -388,31 +401,35 @@ pub(super) async fn verify_pagoda_sequence(
             "no HTML artifact available for review"
         )));
     }
-    let review = stages::checked(stages::CaseId::Review, evidence, async {
-        let before = project_snapshot(workspace)?;
-        let review = stages::execute(
-            activation,
-            node,
-            owner,
-            reviewer,
-            "review",
-            &prompt(include_str!(
-                "../fixtures/configurator_evals/review_pagoda.md"
-            )),
-            evidence,
-        )
-        .await?;
-        review.ensure_completed()?;
-        ensure!(
-            before == project_snapshot(workspace)?,
-            "Reviewer modified workspace files"
-        );
-        ensure!(
-            !review.answer.trim().is_empty(),
-            "Reviewer returned no feedback"
-        );
-        Ok(review)
-    })
+    let review = stages::checked(
+        stages::CaseId::Review,
+        evidence,
+        stages::acceptance(async {
+            let before = project_snapshot(workspace)?;
+            let review = stages::execute(
+                activation,
+                node,
+                owner,
+                reviewer,
+                "review",
+                &prompt(include_str!(
+                    "../fixtures/configurator_evals/review_pagoda.md"
+                )),
+                evidence,
+            )
+            .await?;
+            review.ensure_completed()?;
+            ensure!(
+                before == project_snapshot(workspace)?,
+                "Reviewer modified workspace files"
+            );
+            ensure!(
+                !review.answer.trim().is_empty(),
+                "Reviewer returned no feedback"
+            );
+            Ok(review)
+        }),
+    )
     .await;
     let review = match review {
         Ok(review) => review,
@@ -421,23 +438,27 @@ pub(super) async fn verify_pagoda_sequence(
     let improvement = stages::checked(
         stages::CaseId::Improve,
         evidence,
-        retain_checked_project(&project, &evidence.join("improve-source"), async {
-            let improved = stages::execute(
-                activation,
-                node,
-                owner,
-                builder,
-                "improve",
-                &prompt(include_str!(
-                    "../fixtures/configurator_evals/improve_pagoda.md"
-                ))
-                .replace("{{REVIEW}}", &review.answer),
-                evidence,
-            )
-            .await?;
-            improved.ensure_completed()?;
-            check_pagoda_browser(&project, &evidence.join("improve-browser")).await
-        }),
+        stages::acceptance(retain_checked_project(
+            &project,
+            &evidence.join("improve-source"),
+            async {
+                let improved = stages::execute(
+                    activation,
+                    node,
+                    owner,
+                    builder,
+                    "improve",
+                    &prompt(include_str!(
+                        "../fixtures/configurator_evals/improve_pagoda.md"
+                    ))
+                    .replace("{{REVIEW}}", &review.answer),
+                    evidence,
+                )
+                .await?;
+                improved.ensure_completed()?;
+                check_pagoda_browser(&project, &evidence.join("improve-browser")).await
+            },
+        )),
     )
     .await;
     combine_case_outcomes(creation, improvement)
@@ -457,7 +478,7 @@ fn combine_case_outcomes(first: Result<()>, second: Result<()>) -> Result<()> {
 fn sequence_summary_retains_both_failures() {
     let error = combine_case_outcomes(
         Err(stages::EvaluationFailure::Deadline("pagoda".into()).into()),
-        Err(stages::EvaluationFailure::ModelRequest("review".into()).into()),
+        Err(stages::EvaluationFailure::Provider("review".into()).into()),
     )
     .unwrap_err();
     let message = format!("{error:#}");
@@ -934,7 +955,7 @@ async fn check_pagoda_browser(project: &std::path::Path, evidence: &std::path::P
                 evidence.join("process.json"),
                 serde_json::to_vec_pretty(&serde_json::json!({"infrastructure_error":reason}))?,
             )?;
-            return Err(stages::EvaluationFailure::Infrastructure(reason).into());
+            return Err(stages::EvaluationFailure::Grader(reason).into());
         }
     };
     std::fs::write(
@@ -962,12 +983,12 @@ fn read_browser_receipt(evidence: &std::path::Path, stderr: &str) -> Result<serd
         .map_err(anyhow::Error::from)
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(Into::into));
     let receipt = decoded.map_err(|error| {
-        stages::EvaluationFailure::Infrastructure(format!(
+        stages::EvaluationFailure::Grader(format!(
             "browser evaluator did not produce a readable receipt: {error}; stderr: {stderr}"
         ))
     })?;
     if !receipt["passed"].is_boolean() {
-        return Err(stages::EvaluationFailure::Infrastructure(format!(
+        return Err(stages::EvaluationFailure::Grader(format!(
             "browser evaluator receipt has no boolean passed field; stderr: {stderr}"
         ))
         .into());
@@ -976,7 +997,7 @@ fn read_browser_receipt(evidence: &std::path::Path, stderr: &str) -> Result<serd
 }
 
 #[test]
-fn missing_or_invalid_browser_receipts_are_infrastructure_failures() {
+fn missing_or_invalid_browser_receipts_are_grader_failures() {
     let evidence = tempfile::tempdir().unwrap();
     for content in [None, Some("not JSON"), Some("null")] {
         if let Some(content) = content {
@@ -985,7 +1006,7 @@ fn missing_or_invalid_browser_receipts_are_infrastructure_failures() {
         let error = read_browser_receipt(evidence.path(), "Chrome unavailable").unwrap_err();
         assert!(matches!(
             error.downcast_ref::<stages::EvaluationFailure>(),
-            Some(stages::EvaluationFailure::Infrastructure(_))
+            Some(stages::EvaluationFailure::Grader(_))
         ));
         assert!(error.to_string().contains("Chrome unavailable"));
     }

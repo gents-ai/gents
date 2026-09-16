@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
 use futures::{FutureExt, StreamExt};
-use gents::document_config::{AgentContext, InferenceProfile, Tools};
+use gents::document_config::{AgentContext, InferenceProfile, InferenceSampling, Tools};
 use gents::{AgentIdentity, Collection};
 use serde::Serialize;
 use serde_json::Value;
@@ -31,6 +31,11 @@ mod reporting;
 mod readiness;
 
 const EVAL_CASE_ID: &str = "progressive-configurator";
+const EVAL_COHORT: &str = "configurator-temperature-1-top-p-0.95-v1";
+const EVAL_GRADER: &str = "configurator-deterministic-v1";
+const EVAL_SAMPLING_ID: &str = "configurator-eval-sampling-v1";
+const EVAL_TEMPERATURE: f64 = 1.0;
+const EVAL_TOP_P: f64 = 0.95;
 const ONBOARDING_PROMPT: &str =
     include_str!("../fixtures/configurator_evals/software_team_and_code_review.md");
 
@@ -72,6 +77,13 @@ impl LiveProvider {
         match self {
             Self::D4f => D4F_BACKEND_ID,
             Self::OpenRouter => OPENROUTER_BACKEND_ID,
+        }
+    }
+
+    fn endpoint(self) -> String {
+        match self {
+            Self::D4f => crate::support::live_inference::d4f_endpoint(),
+            Self::OpenRouter => gents::inference_setup::OPENROUTER_ENDPOINT.to_owned(),
         }
     }
 }
@@ -157,6 +169,7 @@ struct ConfiguratorEvalResult {
     model: String,
     trial: usize,
     passed: bool,
+    trial_failure_kind: Option<String>,
     terminal_state: Option<String>,
     error: Option<String>,
     assistant_answer_excerpt: Option<String>,
@@ -260,8 +273,18 @@ async fn install_eval_profiles(
     agent_did: &str,
     backend_id: &str,
     model: &str,
+    setup_behavior_id: &str,
 ) {
-    let documents = [("high", "High"), ("medium", "Medium"), ("low", "Low")]
+    let sampling = InferenceSampling {
+        agent_did: agent_did.to_owned(),
+        sampling_id: EVAL_SAMPLING_ID.to_owned(),
+        display_name: Some("Configurator eval sampling".to_owned()),
+        temperature: Some(EVAL_TEMPERATURE),
+        top_p: Some(EVAL_TOP_P),
+        ..Default::default()
+    };
+    let setup_profile = gents::default_inference_profile_id_for_behavior(setup_behavior_id);
+    let profiles = [("high", "High"), ("medium", "Medium"), ("low", "Low")]
         .into_iter()
         .map(|(profile_id, display_name)| InferenceProfile {
             agent_did: agent_did.to_owned(),
@@ -269,17 +292,34 @@ async fn install_eval_profiles(
             backend_id: backend_id.to_owned(),
             model_name: model.to_owned(),
             display_name: Some(display_name.to_owned()),
+            sampling_id: Some(EVAL_SAMPLING_ID.to_owned()),
             ..Default::default()
         })
-        .map(|profile| {
-            let value = serde_json::to_value(profile).expect("serialize eval profile");
-            gents::config_client::DesiredStateApplyDocument {
-                collection: Collection::InferenceProfile,
-                add: value.clone(),
-                update: value,
-            }
-        })
-        .collect();
+        .chain(std::iter::once(InferenceProfile {
+            agent_did: agent_did.to_owned(),
+            profile_id: setup_profile,
+            backend_id: backend_id.to_owned(),
+            model_name: model.to_owned(),
+            display_name: Some("Live default behavior".to_owned()),
+            sampling_id: Some(EVAL_SAMPLING_ID.to_owned()),
+            ..Default::default()
+        }));
+    let documents = std::iter::once((
+        Collection::InferenceSampling,
+        serde_json::to_value(sampling).expect("serialize eval sampling"),
+    ))
+    .chain(profiles.map(|profile| {
+        let value = serde_json::to_value(profile).expect("serialize eval profile");
+        (Collection::InferenceProfile, value)
+    }))
+    .map(
+        |(collection, value)| gents::config_client::DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        },
+    )
+    .collect();
     let plan = gents::config_client::DesiredStateApplyPlan::new(documents)
         .expect("build eval profile plan");
     gents::ConfigAccess::transact_local(node, None, "test.live_configurator_profiles", |txn| {
@@ -354,7 +394,7 @@ async fn verify_configuration(
     let profiles = rows(
         node,
         &format!(
-            r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{profile_id backend_id model_name}} }}"#
+            r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{profile_id backend_id model_name sampling_id}} }}"#
         ),
         "InferenceProfile",
     )
@@ -366,7 +406,23 @@ async fn verify_configuration(
             .with_context(|| format!("seeded profile {profile_id:?} disappeared"))?;
         ensure!(profile["backend_id"] == backend_id);
         ensure!(profile["model_name"] == model);
+        ensure!(profile["sampling_id"] == EVAL_SAMPLING_ID);
     }
+    let sampling = rows(
+        node,
+        &format!(
+            r#"{{ InferenceSampling(filter: {{agent_did: {{_eq: "{owner}"}}, sampling_id: {{_eq: "{EVAL_SAMPLING_ID}"}}}}) {{temperature top_p seed}} }}"#
+        ),
+        "InferenceSampling",
+    )
+    .await?;
+    ensure!(
+        sampling.len() == 1,
+        "eval sampling document is missing or duplicated"
+    );
+    ensure!(sampling[0]["temperature"] == EVAL_TEMPERATURE);
+    ensure!(sampling[0]["top_p"] == EVAL_TOP_P);
+    ensure!(sampling[0]["seed"].is_null());
 
     let behaviors = rows(
         node,
@@ -536,7 +592,14 @@ async fn run_eval_trial(
             bind_openrouter_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await
         }
     };
-    install_eval_profiles(db.node.as_ref(), &agent_did, provider.backend_id(), &model).await;
+    install_eval_profiles(
+        db.node.as_ref(),
+        &agent_did,
+        provider.backend_id(),
+        &model,
+        &setup_behavior_id,
+    )
+    .await;
     install_eval_workspace_root(db.node.as_ref(), &user_home).await;
     install_setup_configurator(db.node.as_ref(), &agent_did, &setup_behavior_id, &user_home).await;
     let observer = Arc::new(stages::ActivationObserver::default());
@@ -558,59 +621,23 @@ async fn run_eval_trial(
     let result = AssertUnwindSafe(async {
         let mut terminal = None;
         let mut answer = String::new();
-        let verification = stages::checked(stages::CaseId::Onboarding, &evidence, async {
-            let onboarding = stages::execute(
-                &activation,
-                db.node.as_ref(),
-                &agent_did,
-                &setup_behavior_id,
-                "onboarding",
-                &onboarding_prompt(&user_home),
-                &evidence,
-            )
-            .await?;
-            terminal = Some(onboarding.terminal_state.clone());
-            answer = onboarding.answer.clone();
-            onboarding.ensure_completed()?;
-            verify_configuration(
-                db.node.as_ref(),
-                &agent_did,
-                &setup_behavior_id,
-                &user_home,
-                provider.backend_id(),
-                &model,
-            )
-            .await
-        })
-        .await;
-        let configured = verification.is_ok();
-        let mut failures = verification.err().into_iter().collect::<Vec<_>>();
-        if configured {
-            let result = stages::checked(
-                stages::CaseId::BuilderReadiness,
-                &evidence,
-                cases::verify_builder_execution(
-                    &activation,
-                    db.node.as_ref(),
-                    &agent_did,
-                    &user_home,
-                    &evidence,
-                ),
-            )
-            .await;
-            failures.extend(result.err());
-        }
-        if configured {
-            let result = stages::checked(stages::CaseId::SkillWorkflow, &evidence, async {
-                cases::verify_skill_workflow(
+        let verification = stages::checked(
+            stages::CaseId::Onboarding,
+            &evidence,
+            stages::acceptance(async {
+                let onboarding = stages::execute(
                     &activation,
                     db.node.as_ref(),
                     &agent_did,
                     &setup_behavior_id,
-                    &workspace,
+                    "onboarding",
+                    &onboarding_prompt(&user_home),
                     &evidence,
                 )
                 .await?;
+                terminal = Some(onboarding.terminal_state.clone());
+                answer = onboarding.answer.clone();
+                onboarding.ensure_completed()?;
                 verify_configuration(
                     db.node.as_ref(),
                     &agent_did,
@@ -620,7 +647,51 @@ async fn run_eval_trial(
                     &model,
                 )
                 .await
-            })
+            }),
+        )
+        .await;
+        let configured = verification.is_ok();
+        let mut failures = verification.err().into_iter().collect::<Vec<_>>();
+        if configured {
+            let result = stages::checked(
+                stages::CaseId::BuilderReadiness,
+                &evidence,
+                stages::acceptance(cases::verify_builder_execution(
+                    &activation,
+                    db.node.as_ref(),
+                    &agent_did,
+                    &user_home,
+                    &evidence,
+                )),
+            )
+            .await;
+            failures.extend(result.err());
+        }
+        if configured {
+            let result = stages::checked(
+                stages::CaseId::SkillWorkflow,
+                &evidence,
+                stages::acceptance(async {
+                    cases::verify_skill_workflow(
+                        &activation,
+                        db.node.as_ref(),
+                        &agent_did,
+                        &setup_behavior_id,
+                        &workspace,
+                        &evidence,
+                    )
+                    .await?;
+                    verify_configuration(
+                        db.node.as_ref(),
+                        &agent_did,
+                        &setup_behavior_id,
+                        &user_home,
+                        provider.backend_id(),
+                        &model,
+                    )
+                    .await
+                }),
+            )
             .await;
             failures.extend(result.err());
         }
@@ -638,25 +709,29 @@ async fn run_eval_trial(
         // Automation depends on generated configuration, not on the artwork
         // passing its browser check. Preserve independent failure measurements.
         if configured {
-            let result = stages::checked(stages::CaseId::DocumentAutomation, &evidence, async {
-                cases::verify_document_automation(
-                    &activation,
-                    db.node.as_ref(),
-                    &agent_did,
-                    &setup_behavior_id,
-                    &evidence,
-                )
-                .await?;
-                verify_configuration(
-                    db.node.as_ref(),
-                    &agent_did,
-                    &setup_behavior_id,
-                    &user_home,
-                    provider.backend_id(),
-                    &model,
-                )
-                .await
-            })
+            let result = stages::checked(
+                stages::CaseId::DocumentAutomation,
+                &evidence,
+                stages::acceptance(async {
+                    cases::verify_document_automation(
+                        &activation,
+                        db.node.as_ref(),
+                        &agent_did,
+                        &setup_behavior_id,
+                        &evidence,
+                    )
+                    .await?;
+                    verify_configuration(
+                        db.node.as_ref(),
+                        &agent_did,
+                        &setup_behavior_id,
+                        &user_home,
+                        provider.backend_id(),
+                        &model,
+                    )
+                    .await
+                }),
+            )
             .await;
             failures.extend(result.err());
         }
@@ -666,6 +741,7 @@ async fn run_eval_trial(
             model,
             trial,
             passed: failures.is_empty(),
+            trial_failure_kind: None,
             terminal_state: terminal,
             error: (!failures.is_empty()).then(|| {
                 failures
@@ -766,6 +842,7 @@ async fn run_retained_trial(
             model,
             trial,
             passed: false,
+            trial_failure_kind: Some("infrastructure".into()),
             terminal_state: None,
             error: Some(format!(
                 "eval trial panicked: {}",
@@ -813,6 +890,14 @@ async fn live_configurator_progressive_eval_matrix() {
         provider.name(),
         concurrency,
         stage_timeout.as_secs(),
+        reporting::RunProvenance::current(
+            EVAL_COHORT,
+            EVAL_GRADER,
+            provider.endpoint(),
+            EVAL_SAMPLING_ID,
+            EVAL_TEMPERATURE,
+            EVAL_TOP_P,
+        ),
     );
     run_report.save().expect("initialize run report");
     let trials = models

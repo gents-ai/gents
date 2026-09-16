@@ -77,7 +77,13 @@ export async function runConfigurator({
       ],
       {
         cwd,
-        env: { ...env, GENTS_LIVE_CONFIG: "1", GENTS_EVAL_RUN_DIR: directory },
+        env: {
+          ...env,
+          GENTS_LIVE_CONFIG: "1",
+          GENTS_EVAL_RUN_DIR: directory,
+          GENTS_EVAL_SOURCE_REVISION: execution.revision?.commit || "unknown",
+          GENTS_EVAL_SOURCE_DIRTY: String(execution.revision?.dirty ?? true),
+        },
         stdio: ["ignore", "pipe", "pipe"],
         detached: process.platform !== "win32",
       },
