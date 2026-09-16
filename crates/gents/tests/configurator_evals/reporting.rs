@@ -292,8 +292,11 @@ impl RunReport {
         let all_cases_passed = reported_cases.len() == self.case_catalog.len()
             && result.cases.iter().all(|case| case.status == "passed");
         ensure!(
-            result.passed == all_cases_passed,
-            "trial pass flag disagrees with registered case outcomes"
+            !result.passed
+                || (all_cases_passed
+                    && result.trial_failure_kind.is_none()
+                    && result.error.is_none()),
+            "passing trial must have every registered case passed and no trial failure"
         );
         self.results.push(result);
         Ok(())
@@ -599,4 +602,63 @@ fn report_keeps_model_grader_and_infrastructure_failures_distinct() {
         assert_eq!(summary["trial_failure_kinds"][kind], 1);
         assert_eq!(summary["cases"][0]["failure_kinds"][kind], 1);
     }
+}
+
+#[test]
+fn report_retains_trial_failure_after_all_cases_pass() {
+    const CASES: &[CaseId] = &[CaseId::new("acceptance")];
+    const SOURCES: &[EvidenceSource] = &[EvidenceSource::new("source", b"source")];
+    let directory = tempfile::tempdir().unwrap();
+    let mut report = RunReport::new(
+        directory.path().into(),
+        "test-suite",
+        CASES,
+        vec!["model".into()],
+        1,
+        "d4f",
+        1,
+        1800,
+        RunProvenance::current(
+            "test-cohort",
+            "test-grader",
+            "http://inference.test/v1".into(),
+            "test-sampling",
+            1.0,
+            0.95,
+            SOURCES,
+            SOURCES,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let trial = |passed| TrialResult {
+        case_id: "test-suite",
+        provider: "d4f",
+        model: "model".into(),
+        trial: 1,
+        passed,
+        trial_failure_kind: Some("infrastructure".into()),
+        terminal_state: Some("completed".into()),
+        error: Some("final snapshot could not be retained".into()),
+        assistant_answer_excerpt: None,
+        artifacts: None,
+        cases: vec![CaseResult {
+            case_id: "acceptance".into(),
+            status: "passed".into(),
+            elapsed_ms: 1,
+            error: None,
+            failure_kind: None,
+        }],
+    };
+    assert!(report.record(trial(true)).is_err());
+    report.record(trial(false)).unwrap();
+    report.save().unwrap();
+    let snapshot = report.snapshot();
+    assert_eq!(snapshot["completed"], 1);
+    assert_eq!(snapshot["failed"], 1);
+    assert_eq!(
+        snapshot["summaries"][0]["trial_failure_kinds"]["infrastructure"],
+        1
+    );
+    assert_eq!(snapshot["summaries"][0]["cases"][0]["counts"]["passed"], 1);
 }
