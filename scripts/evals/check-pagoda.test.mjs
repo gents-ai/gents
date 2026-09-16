@@ -47,6 +47,11 @@ for (const [name, controls, expectedError] of [
     null,
   ],
   [
+    "accepts whitespace in a descriptively labelled control",
+    '<button aria-label="Toggle night: change lighting" onclick="document.body.style.background=\'black\'">\n  <span>Toggle</span>\n  <span>night</span>\n</button>',
+    null,
+  ],
+  [
     "rejects an accessible name that hides the visible label",
     '<button aria-label="Night mode">Toggle night</button>',
     /one accessible Toggle night button is required/,

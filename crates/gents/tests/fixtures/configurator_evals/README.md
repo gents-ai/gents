@@ -171,8 +171,9 @@ JavaScript error and one exact-accessible-name rejection. The exact-name case
 had visible text `Toggle night` and an accessible name with a descriptive suffix.
 A focused review identified that rejection as an overstrict oracle. The corrected
 checker accepts a descriptive name extension only when the visible label is
-exact, while preserving unique-control and functional-change checks. Ten browser
-regressions cover that rule, misleading/ambiguous labels, no-op toggles and animation.
+exact after whitespace normalization, while preserving unique-control and
+functional-change checks. Browser regressions cover that rule, multiline labels,
+misleading/ambiguous labels, no-op toggles and animation.
 A separate browser-only reassessment of trial 10's retained creation source
 (`pagoda-browser-label-reassessment`) passed the label check but was inconclusive
 because the scene animates. Neither its original report nor its pass count was

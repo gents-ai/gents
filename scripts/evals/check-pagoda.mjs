@@ -41,7 +41,7 @@ try {
   // Do not admit differently labelled controls or lose the uniqueness check.
   const labelledToggle = page
     .getByRole("button", { name: /^Toggle night\b/ })
-    .filter({ hasText: /^Toggle night$/ });
+    .filter({ hasText: /^\s*Toggle\s+night\s*$/ });
   const toggle = exactToggle.or(labelledToggle);
   assert.equal(
     await toggle.count(),
