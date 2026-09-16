@@ -205,7 +205,7 @@ export function renderDashboard(
     );
   else {
     lines.push(
-      `${report.models.map(text).join(" · ")}   n=${report.runs_per_model}   concurrency=${report.concurrency}`,
+      `${report.models.map(text).join(" · ")}   n=${report.runs_per_model}   concurrency=${report.concurrency}${report.stage_timeout_secs ? `   stage budget=${duration(report.stage_timeout_secs * 1000)}` : ""}`,
     );
     lines.push(
       `Reported tokens  IN ${number(knownInput ? totals.input : null)}  OUT ${number(known ? totals.output : null)}   |   ${totals.calls} inference calls   ${totals.tools} saved tool calls`,

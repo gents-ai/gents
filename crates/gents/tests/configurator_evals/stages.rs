@@ -12,6 +12,41 @@ use serde_json::Value;
 
 pub const INPUT_SCHEMA: &str = "type GentsEvalStageInput { stage: String prompt: String }";
 
+pub fn stage_timeout() -> Result<Duration> {
+    parse_stage_timeout(
+        std::env::var("GENTS_LIVE_CONFIG_STAGE_TIMEOUT_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_stage_timeout(value: Option<&str>) -> Result<Duration> {
+    let seconds = value
+        .unwrap_or("1800")
+        .parse::<u64>()
+        .context("GENTS_LIVE_CONFIG_STAGE_TIMEOUT_SECS must be an integer")?;
+    ensure!(
+        (1..=14400).contains(&seconds),
+        "GENTS_LIVE_CONFIG_STAGE_TIMEOUT_SECS must be between 1 and 14400"
+    );
+    Ok(Duration::from_secs(seconds))
+}
+
+#[test]
+fn stage_budget_defaults_to_thirty_minutes_and_validates_overrides() {
+    assert_eq!(
+        parse_stage_timeout(None).unwrap(),
+        Duration::from_secs(1800)
+    );
+    assert_eq!(
+        parse_stage_timeout(Some("3600")).unwrap(),
+        Duration::from_secs(3600)
+    );
+    for invalid in ["0", "-1", "14401", "forever"] {
+        assert!(parse_stage_timeout(Some(invalid)).is_err());
+    }
+}
+
 // One declaration drives both call-site identifiers and report enumeration.
 macro_rules! case_catalog {
     ($($variant:ident => $id:literal),+ $(,)?) => {
@@ -576,6 +611,7 @@ async fn execute_inner(
     prompt: &str,
     evidence: &Path,
 ) -> Result<StageResult> {
+    let timeout = stage_timeout()?;
     let started = Instant::now();
     std::fs::create_dir_all(evidence)?;
     std::fs::write(
@@ -621,14 +657,14 @@ async fn execute_inner(
             .await;
             next_usage_snapshot = Instant::now() + Duration::from_secs(2);
         }
-        if started.elapsed() > Duration::from_secs(600) {
+        if started.elapsed() > timeout {
             if !observation_timed_out {
                 observation_timed_out = true;
                 gents::interrupt_request(node, &request_id)
                     .await
                     .context("interrupt stage after evaluation deadline")?;
             }
-            if started.elapsed() > Duration::from_secs(630) {
+            if started.elapsed() > timeout + Duration::from_secs(30) {
                 break (format!("nonterminal_after_interrupt:{state}"), session_id);
             }
         }

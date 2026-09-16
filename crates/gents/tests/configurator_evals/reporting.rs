@@ -32,6 +32,7 @@ pub struct RunReport {
     runs: usize,
     provider: &'static str,
     concurrency: usize,
+    stage_timeout_secs: u64,
     started_at: String,
     started: Instant,
     pub results: Vec<ConfiguratorEvalResult>,
@@ -44,6 +45,7 @@ impl RunReport {
         runs: usize,
         provider: &'static str,
         concurrency: usize,
+        stage_timeout_secs: u64,
     ) -> Self {
         Self {
             directory,
@@ -51,6 +53,7 @@ impl RunReport {
             runs,
             provider,
             concurrency,
+            stage_timeout_secs,
             started_at: chrono::Utc::now().to_rfc3339(),
             started: Instant::now(),
             results: Vec::new(),
@@ -111,6 +114,7 @@ impl RunReport {
         serde_json::json!({
             "schema_version": 1, "suite": EVAL_CASE_ID, "provider": self.provider,
             "models": self.models, "runs_per_model": self.runs, "concurrency": self.concurrency,
+            "stage_timeout_secs": self.stage_timeout_secs,
             "started_at": self.started_at, "updated_at": chrono::Utc::now().to_rfc3339(),
             "elapsed_ms": self.started.elapsed().as_millis(),
             "status": if self.results.len() == planned { "completed" } else { "running" },
@@ -137,9 +141,17 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
 #[test]
 fn report_preserves_partial_results_and_failure_categories() {
     let directory = tempfile::tempdir().unwrap();
-    let mut report = RunReport::new(directory.path().into(), vec!["model".into()], 2, "d4f", 1);
+    let mut report = RunReport::new(
+        directory.path().into(),
+        vec!["model".into()],
+        2,
+        "d4f",
+        1,
+        1800,
+    );
     report.save().unwrap();
     let initial = report.snapshot();
+    assert_eq!(initial["stage_timeout_secs"], 1800);
     assert_eq!(initial["unfinished"], 2);
     assert!(initial["summaries"][0]["counts"]["pass_rate"].is_null());
     assert_eq!(

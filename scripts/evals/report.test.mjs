@@ -17,6 +17,7 @@ const counts = {
   pass_rate: 0.5,
 };
 const report = {
+  stage_timeout_secs: 1800,
   schema_version: 1,
   status: "running",
   planned: 4,
@@ -43,6 +44,7 @@ test("saved report displays canonical counts without reclassifying inconclusive 
   const output = await renderReport(directory);
   assert.match(output, /3\/4 completed; 1 passed, 2 failed, 1 unfinished/);
   assert.match(output, /full workflow 50.0%/);
+  assert.match(output, /Stage deadline: 1800s/);
   assert.match(output, /inconclusive: 1/);
   assert.match(output, /Fixture\/harness failures: 1/);
   assert.ok(!output.includes("\x1b"));

@@ -797,6 +797,7 @@ async fn live_configurator_progressive_eval_matrix() {
     let runs = eval_runs();
     let provider = LiveProvider::from_env();
     let concurrency = eval_concurrency();
+    let stage_timeout = stages::stage_timeout().expect("valid stage deadline");
     let directory = std::path::PathBuf::from(
         std::env::var_os("GENTS_EVAL_RUN_DIR")
             .expect("use make live-configurator-eval to allocate a run directory"),
@@ -808,6 +809,7 @@ async fn live_configurator_progressive_eval_matrix() {
         runs,
         provider.name(),
         concurrency,
+        stage_timeout.as_secs(),
     );
     run_report.save().expect("initialize run report");
     let trials = models

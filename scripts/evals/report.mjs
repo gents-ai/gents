@@ -45,6 +45,10 @@ export async function renderReport(directory) {
     lines.push(
       `Eval time: ${(report.elapsed_ms / 1000).toFixed(1)}s (last checkpoint)`,
     );
+    if (report.stage_timeout_secs)
+      lines.push(
+        `Stage deadline: ${report.stage_timeout_secs}s (+30s interrupt grace)`,
+      );
     for (const summary of report.summaries) {
       lines.push(
         `\n${text(summary.model)} — full workflow ${rate(summary.counts.pass_rate)}`,

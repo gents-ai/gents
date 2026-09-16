@@ -139,6 +139,10 @@ Replay a report without inference using `node scripts/evals/report.mjs RUN_DIREC
 Unfinished/unreported work is not a prerequisite skip; inconclusive checks remain
 non-passes with their own failure classification. A nonzero eval exit is preserved.
 Use `GENTS_LIVE_CONFIG_RUNS=1 make live-configurator-eval` for a single-trial diagnostic.
+New runs default to 30 minutes per model-driven stage, plus 30 seconds to observe
+interruption. Override with `GENTS_LIVE_CONFIG_STAGE_TIMEOUT_SECS=3600` for one hour
+(maximum four hours). The budget is saved in `report.json`; earlier ten-minute
+cohorts remain separate measurements. Token limits and tool-error budgets are unchanged.
 
 `GENTS_LIVE_CONFIG_CONCURRENCY` controls concurrent isolated trials (default 1).
 Do not compare older onboarding-only rates to the expanded execution contract
