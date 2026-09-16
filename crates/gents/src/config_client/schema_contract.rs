@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -123,4 +123,97 @@ pub(crate) fn collection_schema_contract_digest(version: &Value) -> Result<Strin
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(&contract)?)
     ))
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct SchemaFieldDelta {
+    pub pending: BTreeSet<String>,
+    pub extra: BTreeSet<String>,
+}
+
+/// Additive differences only. Shared fields and collection-level constraints
+/// remain exact, including immutable/default/CRDT and index metadata.
+pub(crate) fn collection_schema_field_delta(
+    expected: &Value,
+    live: &Value,
+) -> Result<SchemaFieldDelta> {
+    let expected = collection_schema_contract(expected)?;
+    let live = collection_schema_contract(live)?;
+    ensure!(
+        expected.indexes == live.indexes
+            && expected.branchable == live.branchable
+            && expected.embedded_only == live.embedded_only,
+        "collection constraints do not match requested schema"
+    );
+    for (name, field) in &expected.fields {
+        if let Some(existing) = live.fields.get(name) {
+            ensure!(
+                existing == field,
+                "field {name:?} does not match requested schema"
+            );
+        }
+    }
+    Ok(SchemaFieldDelta {
+        pending: expected
+            .fields
+            .keys()
+            .filter(|name| !live.fields.contains_key(*name))
+            .cloned()
+            .collect(),
+        extra: live
+            .fields
+            .keys()
+            .filter(|name| !expected.fields.contains_key(*name))
+            .cloned()
+            .collect(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn additive_delta_rejects_shared_field_and_collection_constraint_drift() {
+        let parsed = query::parse_sdl("type Widget { message: String }").unwrap();
+        let expected = serde_json::to_value(&parsed[0]).unwrap();
+        for (key, changed) in [
+            ("Kind", json!("Int")),
+            ("Typ", json!("changed-crdt")),
+            ("RelationName", json!("changed-relation")),
+            ("IsPrimary", json!(true)),
+            ("DefaultValue", json!("changed-default")),
+            ("Size", json!(27)),
+            ("Immutable", json!(true)),
+        ] {
+            let mut live = expected.clone();
+            let field = live["Fields"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|field| field["Name"] == "message")
+                .unwrap();
+            field[key] = changed;
+            assert!(
+                collection_schema_field_delta(&expected, &live).is_err(),
+                "{key}"
+            );
+        }
+        for (key, changed) in [
+            ("IsBranchable", json!(true)),
+            ("IsEmbeddedOnly", json!(true)),
+            (
+                "Indexes",
+                json!([{"Fields":[{"Name":"message"}], "Unique":true}]),
+            ),
+        ] {
+            let mut live = expected.clone();
+            live[key] = changed;
+            assert!(
+                collection_schema_field_delta(&expected, &live).is_err(),
+                "{key}"
+            );
+        }
+    }
 }

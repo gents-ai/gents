@@ -160,6 +160,17 @@ async fn apply_schema_inputs(
         patch_files.push(apply_patch_file(access, &input.path).await?);
     }
 
+    for input in inputs
+        .iter()
+        .filter(|input| input.kind == SchemaInputKind::Sdl)
+    {
+        let sdl = fs::read_to_string(&input.path)?;
+        gents::config_client::preview_additive_schema_install(access, &sdl)
+            .await?
+            .require_satisfied()
+            .with_context(|| format!("schema series did not satisfy {}", input.path.display()))?;
+    }
+
     Ok(PackSchemaPhase {
         status: "schema_applied",
         root: root.display().to_string(),
@@ -237,12 +248,13 @@ fn classify_schema_input(path: &Path) -> Option<SchemaInputKind> {
 async fn apply_sdl_file(access: &ConfigAccess, path: &Path) -> Result<SchemaApplyFileResult> {
     let sdl = fs::read_to_string(path)
         .with_context(|| format!("reading schema SDL {}", path.display()))?;
-    let plan = gents::config_client::preview_schema_install(access, &sdl)
+    let plan = gents::config_client::preview_additive_schema_install(access, &sdl)
         .await
         .with_context(|| format!("preview schema SDL {}", path.display()))?;
-    let receipt = gents::config_client::apply_schema_install(access, &sdl, &plan.artifact_digest)
-        .await
-        .with_context(|| format!("publish schema SDL {}", path.display()))?;
+    let receipt =
+        gents::config_client::apply_additive_schema_install(access, &sdl, &plan.artifact_digest)
+            .await
+            .with_context(|| format!("publish schema SDL {}", path.display()))?;
     Ok(SchemaApplyFileResult {
         path: path.display().to_string(),
         status: if receipt.requires_publication {
@@ -615,6 +627,21 @@ mod pack_schema_tests {
         .unwrap();
         assert!(apply_sdl_file(&access, &path).await.is_err());
         assert!(node.get_collection("OtherWidget").unwrap().is_none());
+        fs::write(&path, "type Widget { message: String pending: String }").unwrap();
+        let inputs = discover_schema_inputs(dir.path(), &[]).unwrap();
+        let error = apply_schema_inputs(&access, dir.path(), &inputs)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("missing declared fields"),
+            "{error:#}"
+        );
+        assert!(!access
+            .collection_fields("Widget")
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("pending"));
     }
 
     #[test]
