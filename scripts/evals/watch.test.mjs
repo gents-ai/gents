@@ -68,10 +68,13 @@ async function fixture() {
     join(directory, "report.json"),
     JSON.stringify({
       schema_version: 1,
+      updated_at: "2026-09-16T00:00:00Z",
       models: ["model"],
       planned: 2,
+      unfinished: 2,
       runs_per_model: 2,
       concurrency: 1,
+      stage_timeout_secs: 1800,
       summaries: [
         {
           cases: [{ case_id: "onboarding" }, { case_id: "builder-readiness" }],
@@ -120,8 +123,33 @@ test("watching existing receipts preserves verdicts, pending work and interrupte
     finished_at: "2026-09-16T00:01:00Z",
   };
   view = renderDashboard(snapshot, { now: Date.parse("2026-09-16T01:00:00Z") });
-  assert.match(view, /INTERRUPTED  1:00/);
+  assert.match(view, /INTERRUPTED \/ NON-PASSING  1:00/);
   assert.match(view, /unfinished/);
+});
+
+test("stage progress attributes requests and exposes stalled work as non-passing", async () => {
+  const { directory, evidence } = await fixture();
+  await writeFile(
+    join(evidence, "builder-readiness-progress.json"),
+    JSON.stringify({
+      stage: "builder-readiness",
+      phase: "observing",
+      request_id: "request-visible-123",
+      lifecycle_state: "processing",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+    }),
+  );
+  const snapshot = await snapshotRun(directory);
+  assert.equal(snapshot.trials[0].requestId, "request-visible-123");
+  const view = renderDashboard(snapshot, {
+    now: Date.parse("2026-09-16T00:31:00Z"),
+    columns: 160,
+    rows: 30,
+  });
+  assert.match(view, /STALLED \/ NON-PASSING/);
+  assert.match(view, /stalled/);
+  assert.match(view, /request-visi/);
 });
 
 test("TTY display restores the cursor and screen on stop", async () => {

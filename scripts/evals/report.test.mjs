@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { renderReport } from "./report.mjs";
+import { assessRun, renderReport } from "./report.mjs";
 import { runConfigurator } from "./run-configurator.mjs";
 
 const counts = {
@@ -53,6 +53,76 @@ test("saved report displays canonical counts without reclassifying inconclusive 
     JSON.stringify({ ...report, schema_version: 2 }),
   );
   await assert.rejects(renderReport(directory), /Unsupported/);
+});
+
+test("run assessment keeps completed, failed, interrupted, unfinished, and stalled outcomes distinct", () => {
+  const complete = {
+    ...report,
+    status: "completed",
+    planned: 1,
+    completed: 1,
+    passed: 1,
+    failed: 0,
+    unfinished: 0,
+  };
+  assert.equal(
+    assessRun(complete, { status: "exited", exit_code: 0 }),
+    "passed",
+  );
+  assert.equal(
+    assessRun(complete, { status: "exited", exit_code: 101 }),
+    "failed",
+  );
+  assert.equal(
+    assessRun(report, { status: "interrupted", signal: "SIGINT" }),
+    "interrupted",
+  );
+  assert.equal(
+    assessRun(report, { status: "exited", exit_code: 0 }),
+    "unfinished",
+  );
+  assert.equal(
+    assessRun(
+      { ...report, updated_at: "2026-09-16T00:00:00Z" },
+      { status: "running" },
+      Date.parse("2026-09-16T00:31:00Z"),
+    ),
+    "stalled",
+  );
+  assert.equal(
+    assessRun(
+      { ...report, updated_at: "2026-09-16T00:30:45Z" },
+      { status: "running" },
+      Date.parse("2026-09-16T00:31:00Z"),
+    ),
+    "running",
+  );
+});
+
+test("report renders provenance without treating missing sampling as zero", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "gents-provenance-test-"));
+  await writeFile(
+    join(directory, "report.json"),
+    JSON.stringify({
+      ...report,
+      models: ["model"],
+      provenance: {
+        cohort: "new-cohort",
+        source: { commit: "abc123", dirty: true },
+        grader: { id: "grader-v1", sha256: "def456" },
+        inference: {
+          endpoint: "http://inference.test/v1",
+          effective_sampling: { temperature: 1, top_p: 0.95, seed: null },
+        },
+        fixture_sha256: { "fixture.md": "123" },
+      },
+    }),
+  );
+  const output = await renderReport(directory);
+  assert.match(output, /Cohort: new-cohort/);
+  assert.match(output, /Source: abc123 \(dirty\)/);
+  assert.match(output, /temperature=1, top_p=0.95, seed=provider default/);
+  assert.match(output, /Fixture hashes: 1/);
 });
 
 async function fakeRun(script) {

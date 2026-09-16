@@ -17,7 +17,34 @@ const rate = (value) =>
 export const text = (value) =>
   String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
 
-export async function renderReport(directory) {
+export function assessRun(report, execution, now = Date.now()) {
+  if (execution?.status === "interrupted" || execution?.signal)
+    return "interrupted";
+  if (
+    execution?.status === "error" ||
+    (Number.isInteger(execution?.exit_code) && execution.exit_code !== 0)
+  )
+    return "failed";
+  if (execution?.status === "running") {
+    const updated = Date.parse(report?.updated_at || "");
+    const budget = ((report?.stage_timeout_secs || 0) + 30) * 1000;
+    if (report?.unfinished > 0 && budget > 30_000 && now - updated > budget)
+      return "stalled";
+    return "running";
+  }
+  if (
+    report?.status === "completed" &&
+    report.planned > 0 &&
+    report.completed === report.planned &&
+    report.failed === 0 &&
+    report.unfinished === 0 &&
+    execution?.exit_code === 0
+  )
+    return "passed";
+  return "unfinished";
+}
+
+export async function renderReport(directory, { now = Date.now() } = {}) {
   const [report, execution] = await Promise.all([
     readJson(join(directory, "report.json")),
     readJson(join(directory, "execution.json")),
@@ -28,6 +55,10 @@ export async function renderReport(directory) {
       throw new Error("Unsupported eval report version");
   }
   const lines = [`\nConfigurator eval — ${text(directory)}`];
+  const outcome = assessRun(report, execution, now);
+  lines.push(
+    `Outcome: ${outcome}${outcome === "passed" ? "" : " (non-passing)"}`,
+  );
   if (execution) {
     lines.push(
       `Process: ${execution.status}${execution.exit_code !== null ? ` (exit ${execution.exit_code})` : ""}${execution.signal ? ` (${execution.signal})` : ""}`,
@@ -49,6 +80,19 @@ export async function renderReport(directory) {
       lines.push(
         `Stage deadline: ${report.stage_timeout_secs}s (+30s interrupt grace)`,
       );
+    if (report.provenance) {
+      const source = report.provenance.source;
+      const inference = report.provenance.inference;
+      const sampling = inference?.effective_sampling || {};
+      lines.push(
+        `Cohort: ${text(report.provenance.cohort)}`,
+        `Source: ${text(source?.commit || "unknown")}${source?.dirty ? " (dirty)" : ""}`,
+        `Grader: ${text(report.provenance.grader?.id || "unknown")} ${text(report.provenance.grader?.sha256 || "unknown")}`,
+        `Inference: ${report.models.map(text).join(", ")} @ ${text(inference?.endpoint || "unknown")}`,
+        `Sampling: temperature=${sampling.temperature ?? "provider default"}, top_p=${sampling.top_p ?? "provider default"}, seed=${sampling.seed ?? "provider default"}`,
+        `Fixture hashes: ${Object.keys(report.provenance.fixture_sha256 || {}).length}`,
+      );
+    }
     for (const summary of report.summaries) {
       lines.push(
         `\n${text(summary.model)} — full workflow ${rate(summary.counts.pass_rate)}`,
@@ -70,6 +114,11 @@ export async function renderReport(directory) {
       if (summary.fixture_or_harness_failures)
         lines.push(
           `  Fixture/harness failures: ${summary.fixture_or_harness_failures}`,
+        );
+      const trialKinds = Object.entries(summary.trial_failure_kinds || {});
+      if (trialKinds.length)
+        lines.push(
+          `  Trial failures: ${trialKinds.map(([kind, count]) => `${text(kind)}: ${count}`).join(", ")}`,
         );
     }
     lines.push(
