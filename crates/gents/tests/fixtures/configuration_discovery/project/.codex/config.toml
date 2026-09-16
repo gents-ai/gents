@@ -1,0 +1,5 @@
+model = "project-model"
+
+[mcp_servers.shared]
+url = "https://user:FAKE_DISCOVERY_SECRET_123@example.invalid/mcp?token=FAKE_DISCOVERY_SECRET_123"
+enabled = false
