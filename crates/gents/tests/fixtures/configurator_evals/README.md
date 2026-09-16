@@ -85,6 +85,9 @@ Ten-minute stage deadlines are also part of the current measurement: early
 coding trials reached that deadline, including one that emitted over 82,000
 completion tokens across its calls while creating/debugging the page. Do not
 interpret those deadline outcomes as provider outages or completed coding work.
+The stage clock includes native definition publication, activation and request
+materialization; it is not ten minutes of inference-only time. Input and request
+timestamps are retained so that overhead can be inspected separately.
 The fixture leaves inference-profile sampling/output settings at runtime defaults;
 the three profile names are binding choices, not distinct reasoning-effort levels.
 The current default output allowance is 32,768 tokens per completion. In the
@@ -276,3 +279,20 @@ This collects additional review/improvement attempts without substituting
 harness-authored projects or skipping upstream work. All additional outcomes
 will be reported, including upstream failures and prerequisite skips; do not
 select only successful trials when combining case counts.
+
+## Focused review follow-up
+
+The supplemental cohort remains frozen at its starting commit. Subsequent harness
+hardening distinguishes execution/observation infrastructure errors from model
+acceptance failures, preserves an original verdict when evidence retention also
+fails, limits automation request diagnostics to triggers watching the application
+input collection, and retains both creation and review/improvement failures in
+the aggregate error. Offline reassessment skips explicitly skipped readiness
+cases without treating missing evidence from an attempted case as a skip.
+
+Still pending: replace the timestamp-only activation predicate with an exact
+runtime/event-source readiness acknowledgement, and tie the reported case catalog
+to checked case identifiers so new cases cannot be silently omitted. A reconcile
+completion timestamp alone can race a preceding configuration read, and snapshot
+publication alone does not prove subscription seeding has finished. Current live
+outcomes must not be represented as proof that those races are impossible.

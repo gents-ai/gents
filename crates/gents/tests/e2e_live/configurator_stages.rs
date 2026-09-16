@@ -35,6 +35,44 @@ impl EvaluationFailure {
     }
 }
 
+pub fn infrastructure(error: anyhow::Error) -> anyhow::Error {
+    if error.downcast_ref::<EvaluationFailure>().is_some() {
+        error
+    } else {
+        EvaluationFailure::Infrastructure(format!("{error:#}")).into()
+    }
+}
+
+/// Evidence failures invalidate a pass, but never replace an existing verdict.
+pub fn retain_outcome<T>(result: Result<T>, retention: Result<()>) -> Result<T> {
+    match (result, retention) {
+        (result, Ok(())) => result,
+        (Ok(_), Err(error)) => Err(infrastructure(error)),
+        (Err(error), Err(retention)) => {
+            Err(error.context(format!("evidence retention also failed: {retention:#}")))
+        }
+    }
+}
+
+#[test]
+fn evidence_failure_preserves_primary_verdict_and_invalidates_pass() {
+    let error = retain_outcome::<()>(
+        Err(EvaluationFailure::Deadline("stage".into()).into()),
+        Err(anyhow::anyhow!("disk full")),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<EvaluationFailure>().unwrap().kind(),
+        "deadline"
+    );
+    assert!(format!("{error:#}").contains("disk full"));
+    let error = retain_outcome(Ok(()), Err(anyhow::anyhow!("disk full"))).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<EvaluationFailure>().unwrap().kind(),
+        "infrastructure"
+    );
+}
+
 #[derive(Debug, Serialize)]
 pub struct StageResult {
     pub stage: String,
@@ -123,13 +161,16 @@ pub async fn checked<T>(
                 .to_owned()
         }),
     };
-    std::fs::create_dir_all(evidence)?;
-    std::fs::write(
-        evidence.join(format!("{case_id}-acceptance.json")),
-        serde_json::to_vec_pretty(&receipt)?,
-    )?;
     tracing::info!(target: "gents::configurator_eval", result = %serde_json::to_string(&receipt)?, "eval case acceptance");
-    result
+    let retention = (|| {
+        std::fs::create_dir_all(evidence)?;
+        std::fs::write(
+            evidence.join(format!("{case_id}-acceptance.json")),
+            serde_json::to_vec_pretty(&receipt)?,
+        )?;
+        Ok(())
+    })();
+    retain_outcome(result, retention)
 }
 
 pub fn case_results(evidence: &Path) -> Result<Vec<CaseResult>> {
@@ -167,6 +208,12 @@ pub async fn wait_for_config_activation(
     owner: &str,
     request_id: &str,
 ) -> Result<()> {
+    config_activation(node, owner, request_id)
+        .await
+        .map_err(infrastructure)
+}
+
+async fn config_activation(node: &EmbeddedNode, owner: &str, request_id: &str) -> Result<()> {
     let request = escape_graphql_string(request_id);
     let calls = node.execute(&format!(r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{request}"}}, tool_name: {{_eq: "config"}}, lifecycle_state: {{_eq: "completed"}}}}) {{args result completed_at}} }}"#)).await;
     ensure!(
@@ -347,6 +394,19 @@ pub async fn execute(
     prompt: &str,
     evidence: &Path,
 ) -> Result<StageResult> {
+    execute_inner(node, owner, behavior, stage, prompt, evidence)
+        .await
+        .map_err(infrastructure)
+}
+
+async fn execute_inner(
+    node: &EmbeddedNode,
+    owner: &str,
+    behavior: &str,
+    stage: &str,
+    prompt: &str,
+    evidence: &Path,
+) -> Result<StageResult> {
     let started = Instant::now();
     std::fs::create_dir_all(evidence)?;
     std::fs::write(
@@ -410,12 +470,18 @@ pub async fn execute(
         answer,
         observation_timed_out,
     };
-    std::fs::create_dir_all(evidence).context("create evaluator evidence directory")?;
-    std::fs::write(
-        evidence.join(format!("{stage}.json")),
-        serde_json::to_vec_pretty(&result)?,
-    )?;
-    retain_request_evidence(node, &result.request_id, stage, evidence).await?;
+    let retention = async {
+        std::fs::create_dir_all(evidence).context("create evaluator evidence directory")?;
+        std::fs::write(
+            evidence.join(format!("{stage}.json")),
+            serde_json::to_vec_pretty(&result)?,
+        )?;
+        retain_request_evidence(node, &result.request_id, stage, evidence).await
+    }
+    .await;
+    if let Err(error) = retention {
+        retain_outcome(result.ensure_completed(), Err(error))?;
+    }
     Ok(result)
 }
 

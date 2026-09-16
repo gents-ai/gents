@@ -249,6 +249,43 @@ fn readiness_reassessment_does_not_hide_other_failures() {
 }
 
 /// Offline grading never invokes inference or overwrites the original report.
+fn retained_readiness_result(trial: &std::path::Path) -> Result<Option<stages::CaseResult>> {
+    match std::fs::read(trial.join("evidence/builder-readiness-acceptance.json")) {
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let report: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(trial.join("trial.json"))?)?;
+            ensure!(
+                report["cases"].as_array().is_some_and(|cases| cases
+                    .iter()
+                    .any(|case| case["case_id"] == "builder-readiness"
+                        && case["status"] == "skipped")),
+                "readiness receipt missing without an explicit skipped case"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[test]
+fn reassessment_distinguishes_skipped_readiness_from_missing_evidence() {
+    let trial = tempfile::tempdir().unwrap();
+    assert!(retained_readiness_result(trial.path()).is_err());
+    std::fs::write(
+        trial.path().join("trial.json"),
+        r#"{"cases":[{"case_id":"builder-readiness","status":"skipped"}]}"#,
+    )
+    .unwrap();
+    assert!(retained_readiness_result(trial.path()).unwrap().is_none());
+    std::fs::write(
+        trial.path().join("trial.json"),
+        r#"{"cases":[{"case_id":"builder-readiness","status":"passed"}]}"#,
+    )
+    .unwrap();
+    assert!(retained_readiness_result(trial.path()).is_err());
+}
+
 #[test]
 #[ignore = "offline: set GENTS_EVAL_REASSESS_TRIALS to a platform-separated list of retained trial directories"]
 fn reassess_retained_readiness_evidence() -> Result<()> {
@@ -256,9 +293,10 @@ fn reassess_retained_readiness_evidence() -> Result<()> {
         .context("set GENTS_EVAL_REASSESS_TRIALS to retained trial directories")?;
     for trial in std::env::split_paths(&paths) {
         let evidence = trial.join("evidence");
-        let original: stages::CaseResult = serde_json::from_slice(&std::fs::read(
-            evidence.join("builder-readiness-acceptance.json"),
-        )?)?;
+        let Some(original) = retained_readiness_result(&trial)? else {
+            tracing::info!(trial = %trial.display(), "readiness was skipped; no reassessment");
+            continue;
+        };
         let tool_evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(
             evidence.join("builder-readiness-tools.json"),
         )?)?;
@@ -381,7 +419,11 @@ pub(super) async fn verify_pagoda_sequence(
         );
         Ok(review)
     })
-    .await?;
+    .await;
+    let review = match review {
+        Ok(review) => review,
+        Err(error) => return combine_case_outcomes(creation, Err(error)),
+    };
     let improvement = stages::checked(
         "improve",
         evidence,
@@ -403,7 +445,29 @@ pub(super) async fn verify_pagoda_sequence(
         }),
     )
     .await;
-    creation.and(improvement)
+    combine_case_outcomes(creation, improvement)
+}
+
+fn combine_case_outcomes(first: Result<()>, second: Result<()>) -> Result<()> {
+    match (first, second) {
+        (Err(first), Err(second)) => {
+            Err(first.context(format!("later case also failed: {second:#}")))
+        }
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+#[test]
+fn sequence_summary_retains_both_failures() {
+    let error = combine_case_outcomes(
+        Err(stages::EvaluationFailure::Deadline("pagoda".into()).into()),
+        Err(stages::EvaluationFailure::ModelRequest("review".into()).into()),
+    )
+    .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("pagoda"));
+    assert!(message.contains("review"));
 }
 
 pub(super) async fn verify_skill_workflow(
@@ -513,6 +577,7 @@ pub(super) async fn verify_document_automation(
     evidence: &std::path::Path,
 ) -> Result<()> {
     let result = run_document_automation(node, owner, setup, evidence).await;
+    let retention = async {
     // Persist dispatch failures too: a bad template can fail before there is
     // any AgentRequest or inference call to inspect.
     let escaped = gents::graphql::escape_graphql_string(owner);
@@ -527,6 +592,7 @@ pub(super) async fn verify_document_automation(
             &serde_json::json!({"data":diagnostics.data,"errors":format!("{:?}", diagnostics.errors)}),
         )?,
     )?;
+    let trigger_ids = automation_trigger_ids(node, owner).await?;
     if let Some(requests) = diagnostics
         .data
         .as_ref()
@@ -535,7 +601,7 @@ pub(super) async fn verify_document_automation(
         for (index, request) in requests.iter().enumerate() {
             // Names are not ownership evidence: the model may legitimately
             // choose an eval-trigger-* ID for its own workflow too.
-            if request["caused_by_trigger_id"].as_str().is_some() {
+            if trigger_ids.contains(&request["caused_by_trigger_id"]) {
                 if let Some(id) = request["request_id"].as_str() {
                     stages::retain_request_evidence(
                         node,
@@ -548,7 +614,27 @@ pub(super) async fn verify_document_automation(
             }
         }
     }
-    result
+    Ok(())
+    }.await;
+    stages::retain_outcome(result, retention)
+}
+
+async fn automation_trigger_ids(
+    node: &gents::defra_node::EmbeddedNode,
+    owner: &str,
+) -> Result<Vec<serde_json::Value>> {
+    let escaped_owner = gents::graphql::escape_graphql_string(owner);
+    let sources = rows(node, &format!(r#"{{ EventSource(filter: {{agent_did: {{_eq: "{escaped_owner}"}}, source_collection: {{_eq: "EvalAutomationInput"}}}}) {{event_source_id}} }}"#), "EventSource").await?;
+    let triggers = rows(node, &format!(r#"{{ Trigger(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{trigger_id source}} }}"#), "Trigger").await?;
+    Ok(triggers
+        .iter()
+        .filter(|trigger| {
+            sources
+                .iter()
+                .any(|source| trigger["source"]["event_source_id"] == source["event_source_id"])
+        })
+        .map(|trigger| trigger["trigger_id"].clone())
+        .collect())
 }
 
 async fn run_document_automation(
@@ -651,17 +737,7 @@ async fn run_document_automation(
         );
     }
     let escaped_owner = gents::graphql::escape_graphql_string(owner);
-    let sources = rows(node, &format!(r#"{{ EventSource(filter: {{agent_did: {{_eq: "{escaped_owner}"}}, source_collection: {{_eq: "EvalAutomationInput"}}}}) {{event_source_id}} }}"#), "EventSource").await?;
-    let triggers = rows(node, &format!(r#"{{ Trigger(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{trigger_id source}} }}"#), "Trigger").await?;
-    let trigger_ids = triggers
-        .iter()
-        .filter(|trigger| {
-            sources
-                .iter()
-                .any(|source| trigger["source"]["event_source_id"] == source["event_source_id"])
-        })
-        .map(|trigger| trigger["trigger_id"].clone())
-        .collect::<Vec<_>>();
+    let trigger_ids = automation_trigger_ids(node, owner).await?;
     ensure!(
         !trigger_ids.is_empty(),
         "no trigger watches the input collection"
