@@ -156,6 +156,83 @@ fn readiness_command_evidence_accounts_for_cwd() {
     }
 }
 
+fn reassess_readiness(
+    original: &stages::CaseResult,
+    calls: &[serde_json::Value],
+    workspace: &std::path::Path,
+) -> Option<stages::CaseResult> {
+    // Correct only the known attribution bug. That check ran after request
+    // completion and exact script/receipt validation; other failures stand.
+    if original.case_id != "builder-readiness"
+        || original.status != "failed"
+        || original.error.as_deref()
+            != Some("Builder did not successfully execute its command tool")
+        || !calls
+            .iter()
+            .any(|call| recorded_readiness_command(call, workspace))
+    {
+        return None;
+    }
+    Some(stages::CaseResult {
+        case_id: original.case_id.clone(),
+        status: "passed".into(),
+        elapsed_ms: original.elapsed_ms,
+        error: None,
+        failure_kind: None,
+    })
+}
+
+#[test]
+fn readiness_reassessment_does_not_hide_other_failures() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("readiness")).unwrap();
+    let calls = vec![serde_json::json!({"tool_name":"bash_unrestricted",
+        "lifecycle_state":"completed", "args":serde_json::json!({"command":"sh test.sh","cwd":"readiness"}).to_string()})];
+    let mut original = stages::CaseResult {
+        case_id: "builder-readiness".into(),
+        status: "failed".into(),
+        elapsed_ms: 123,
+        error: Some("Builder did not successfully execute its command tool".into()),
+        failure_kind: Some("acceptance".into()),
+    };
+    let corrected = reassess_readiness(&original, &calls, root.path()).unwrap();
+    assert_eq!(corrected.status, "passed");
+    assert_eq!(corrected.elapsed_ms, 123);
+    assert!(reassess_readiness(&original, &[], root.path()).is_none());
+    original.error = Some("Builder changed the requested test script".into());
+    assert!(reassess_readiness(&original, &calls, root.path()).is_none());
+}
+
+/// Offline grading never invokes inference or overwrites the original report.
+#[test]
+#[ignore = "offline: set GENTS_EVAL_REASSESS_TRIALS to a platform-separated list of retained trial directories"]
+fn reassess_retained_readiness_evidence() -> Result<()> {
+    let paths = std::env::var_os("GENTS_EVAL_REASSESS_TRIALS")
+        .context("set GENTS_EVAL_REASSESS_TRIALS to retained trial directories")?;
+    for trial in std::env::split_paths(&paths) {
+        let evidence = trial.join("evidence");
+        let original: stages::CaseResult = serde_json::from_slice(&std::fs::read(
+            evidence.join("builder-readiness-acceptance.json"),
+        )?)?;
+        let tool_evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(
+            evidence.join("builder-readiness-tools.json"),
+        )?)?;
+        let calls = tool_evidence["AgentToolCall"]
+            .as_array()
+            .context("missing retained tool calls")?;
+        let reassessed = reassess_readiness(&original, calls, &trial.join("workspace"));
+        std::fs::write(
+            evidence.join("builder-readiness-reassessment.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "grader":"readiness-cwd-v1", "changed":reassessed.is_some(),
+                "original":original, "reassessed":reassessed.as_ref().unwrap_or(&original),
+                "basis":"Retained request tool calls; original completion, exact script and receipt checks remain required. No inference rerun."
+            }))?,
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) async fn verify_pagoda_sequence(
     node: &gents::defra_node::EmbeddedNode,
     owner: &str,

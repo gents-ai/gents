@@ -130,3 +130,25 @@ the original creation failure, freezes the browser checker into the binary,
 classifies inconclusive checks, and includes model execution in onboarding timing.
 The final cohort must exercise those changes and the stronger source-relative
 skill fixture before final rates or readiness are claimed.
+
+## Retained-evidence reassessment
+
+The next cohort started at `b96b69918` on 2026-09-16 at 05:45 UTC. Its model
+prompts and embedded browser checker remain fixed while it runs. It exposed a
+readiness-grader false negative: `sh test.sh` with `cwd: readiness` is a valid
+execution, but the original check required the literal `readiness/test.sh` in
+the arguments. `ff015bb33` corrects that attribution check for subsequent runs.
+
+The offline reassessment below handles that specific false negative using
+retained command evidence. It requires the original request-completion, exact
+script and receipt checks to have passed. It never invokes inference or changes
+the original `trial.json`/acceptance result; it writes a separate
+`builder-readiness-reassessment.json` containing both original and reassessed
+results. Report raw and reassessed rates distinctly. Other failures are not
+reclassified. Multiple directories use the platform path separator (`:` on Unix).
+
+```sh
+GENTS_EVAL_REASSESS_TRIALS=/absolute/path/to/gents-eval-TRIAL \
+cargo test -p gents --test e2e_live --features live-e2e \
+  reassess_retained_readiness_evidence -- --ignored
+```
