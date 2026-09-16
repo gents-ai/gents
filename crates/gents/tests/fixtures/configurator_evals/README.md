@@ -131,6 +131,19 @@ classifies inconclusive checks, and includes model execution in onboarding timin
 The final cohort must exercise those changes and the stronger source-relative
 skill fixture before final rates or readiness are claimed.
 
+The `b96b69918` cohort subsequently exposed a fresh-session handoff gap: review
+and improvement did not receive the complete original request. A missing README
+after improvement therefore cannot establish that the model failed an explicitly
+supplied requirement. Follow-up prompts now include the original request from
+one canonical fixture, which explicitly names `README.md`, the HTML document
+title, and artifact bounds. These task-input changes require new measurements;
+they cannot be retroactively credited to that cohort.
+
+Browser launch failures, timeouts and absent/invalid evaluator receipts are now
+classified as `infrastructure`, distinct from page defects and animated-scene
+`inconclusive` results. Creation and improvement retain available bounded source
+on failure too; retention errors preserve the original failure classification.
+
 ## Retained-evidence reassessment
 
 The next cohort started at `b96b69918` on 2026-09-16 at 05:45 UTC. Its model

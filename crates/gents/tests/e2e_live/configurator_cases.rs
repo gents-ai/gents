@@ -233,6 +233,36 @@ fn reassess_retained_readiness_evidence() -> Result<()> {
     Ok(())
 }
 
+fn pagoda_prompt(template: &str, workspace: &std::path::Path) -> String {
+    template
+        .replace(
+            "{{ORIGINAL_REQUEST}}",
+            include_str!("../fixtures/configurator_evals/voxel_pagoda.md"),
+        )
+        .replace("{{USER_HOME}}", &workspace.to_string_lossy())
+}
+
+#[test]
+fn fresh_pagoda_sessions_receive_the_complete_original_request() {
+    let workspace = std::path::Path::new("/isolated/workspace");
+    let original = pagoda_prompt(
+        include_str!("../fixtures/configurator_evals/voxel_pagoda.md"),
+        workspace,
+    );
+    for template in [
+        include_str!("../fixtures/configurator_evals/review_pagoda.md"),
+        include_str!("../fixtures/configurator_evals/improve_pagoda.md"),
+    ] {
+        let rendered = pagoda_prompt(template, workspace);
+        assert!(rendered.contains(&original));
+        assert!(rendered.contains("README.md"));
+        assert!(rendered.contains("HTML document title"));
+        assert!(rendered.contains("symlinks"));
+        assert!(!rendered.contains("{{ORIGINAL_REQUEST}}"));
+        assert!(!rendered.contains("{{USER_HOME}}"));
+    }
+}
+
 pub(super) async fn verify_pagoda_sequence(
     node: &gents::defra_node::EmbeddedNode,
     owner: &str,
@@ -250,23 +280,27 @@ pub(super) async fn verify_pagoda_sequence(
         .as_str()
         .context("Reviewer identity")?;
     let project = workspace.join("pagoda");
-    let prompt = |text: &str| text.replace("{{USER_HOME}}", &workspace.to_string_lossy());
-    let creation = stages::checked("pagoda", evidence, async {
-        let created = stages::execute(
-            node,
-            owner,
-            builder,
-            "pagoda",
-            &prompt(include_str!(
-                "../fixtures/configurator_evals/voxel_pagoda.md"
-            )),
-            evidence,
-        )
-        .await?;
-        created.ensure_completed()?;
-        check_pagoda_browser(&project, &evidence.join("pagoda-browser")).await?;
-        Ok(())
-    })
+    let prompt = |text: &str| pagoda_prompt(text, workspace);
+    let creation = stages::checked(
+        "pagoda",
+        evidence,
+        retain_checked_project(&project, &evidence.join("pagoda-source"), async {
+            let created = stages::execute(
+                node,
+                owner,
+                builder,
+                "pagoda",
+                &prompt(include_str!(
+                    "../fixtures/configurator_evals/voxel_pagoda.md"
+                )),
+                evidence,
+            )
+            .await?;
+            created.ensure_completed()?;
+            check_pagoda_browser(&project, &evidence.join("pagoda-browser")).await?;
+            Ok(())
+        }),
+    )
     .await;
     // A failed first attempt can still be reviewed and improved. Retain its
     // failure, and require actual model-authored HTML rather than seeding a
@@ -278,13 +312,8 @@ pub(super) async fn verify_pagoda_sequence(
             "no HTML artifact available for review"
         )));
     }
-    let before = project_snapshot(workspace)?;
-    retain_project(
-        &project,
-        &evidence.join("pagoda-source"),
-        &project_snapshot(&project)?,
-    )?;
     let review = stages::checked("review", evidence, async {
+        let before = project_snapshot(workspace)?;
         let review = stages::execute(
             node,
             owner,
@@ -308,28 +337,26 @@ pub(super) async fn verify_pagoda_sequence(
         Ok(review)
     })
     .await?;
-    let improvement = stages::checked("improve", evidence, async {
-        let improved = stages::execute(
-            node,
-            owner,
-            builder,
-            "improve",
-            &prompt(include_str!(
-                "../fixtures/configurator_evals/improve_pagoda.md"
-            ))
-            .replace("{{REVIEW}}", &review.answer),
-            evidence,
-        )
-        .await?;
-        improved.ensure_completed()?;
-        check_pagoda_browser(&project, &evidence.join("improve-browser")).await?;
-        retain_project(
-            &project,
-            &evidence.join("improve-source"),
-            &project_snapshot(&project)?,
-        )?;
-        Ok(())
-    })
+    let improvement = stages::checked(
+        "improve",
+        evidence,
+        retain_checked_project(&project, &evidence.join("improve-source"), async {
+            let improved = stages::execute(
+                node,
+                owner,
+                builder,
+                "improve",
+                &prompt(include_str!(
+                    "../fixtures/configurator_evals/improve_pagoda.md"
+                ))
+                .replace("{{REVIEW}}", &review.answer),
+                evidence,
+            )
+            .await?;
+            improved.ensure_completed()?;
+            check_pagoda_browser(&project, &evidence.join("improve-browser")).await
+        }),
+    )
     .await;
     creation.and(improvement)
 }
@@ -663,6 +690,46 @@ fn retain_project(
     Ok(())
 }
 
+async fn retain_checked_project(
+    project: &std::path::Path,
+    evidence: &std::path::Path,
+    check: impl std::future::Future<Output = Result<()>>,
+) -> Result<()> {
+    let outcome = check.await;
+    let retained =
+        project_snapshot(project).and_then(|snapshot| retain_project(project, evidence, &snapshot));
+    match (outcome, retained) {
+        (Err(outcome), Err(retention)) => {
+            Err(outcome.context(format!("artifact retention also failed: {retention:#}")))
+        }
+        (Err(outcome), Ok(())) => Err(outcome),
+        (Ok(()), retained) => retained,
+    }
+}
+
+#[tokio::test]
+async fn failed_project_checks_retain_source_without_losing_the_failure_kind() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("index.html"), "partial model output").unwrap();
+    for source in [&project, &root.path().join("missing-project")] {
+        let error = retain_checked_project(source, &root.path().join("evidence"), async {
+            Err(stages::EvaluationFailure::Deadline("improve".into()).into())
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<stages::EvaluationFailure>(),
+            Some(stages::EvaluationFailure::Deadline(_))
+        ));
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("evidence/index.html")).unwrap(),
+        "partial model output"
+    );
+}
+
 fn project_snapshot(root: &std::path::Path) -> Result<BTreeMap<std::path::PathBuf, String>> {
     use sha2::{Digest, Sha256};
     let mut snapshot = BTreeMap::new();
@@ -723,8 +790,22 @@ async fn check_pagoda_browser(project: &std::path::Path, evidence: &std::path::P
             .kill_on_drop(true)
             .output(),
     )
-    .await
-    .context("browser evaluator timed out")??;
+    .await;
+    let output = match output {
+        Ok(Ok(output)) => output,
+        failure => {
+            let reason = match failure {
+                Err(_) => "browser evaluator exceeded its 60-second deadline".to_owned(),
+                Ok(Err(error)) => format!("launching browser evaluator: {error}"),
+                Ok(Ok(_)) => unreachable!(),
+            };
+            std::fs::write(
+                evidence.join("process.json"),
+                serde_json::to_vec_pretty(&serde_json::json!({"infrastructure_error":reason}))?,
+            )?;
+            return Err(stages::EvaluationFailure::Infrastructure(reason).into());
+        }
+    };
     std::fs::write(
         evidence.join("process.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
@@ -733,8 +814,7 @@ async fn check_pagoda_browser(project: &std::path::Path, evidence: &std::path::P
             "stderr": String::from_utf8_lossy(&output.stderr),
         }))?,
     )?;
-    let receipt: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(evidence.join("browser.json"))?)?;
+    let receipt = read_browser_receipt(evidence, &String::from_utf8_lossy(&output.stderr))?;
     if receipt["inconclusive"] == true {
         return Err(stages::EvaluationFailure::Inconclusive(receipt["error"].to_string()).into());
     }
@@ -744,6 +824,40 @@ async fn check_pagoda_browser(project: &std::path::Path, evidence: &std::path::P
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
+}
+
+fn read_browser_receipt(evidence: &std::path::Path, stderr: &str) -> Result<serde_json::Value> {
+    let decoded = std::fs::read(evidence.join("browser.json"))
+        .map_err(anyhow::Error::from)
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(Into::into));
+    let receipt = decoded.map_err(|error| {
+        stages::EvaluationFailure::Infrastructure(format!(
+            "browser evaluator did not produce a readable receipt: {error}; stderr: {stderr}"
+        ))
+    })?;
+    if !receipt["passed"].is_boolean() {
+        return Err(stages::EvaluationFailure::Infrastructure(format!(
+            "browser evaluator receipt has no boolean passed field; stderr: {stderr}"
+        ))
+        .into());
+    }
+    Ok(receipt)
+}
+
+#[test]
+fn missing_or_invalid_browser_receipts_are_infrastructure_failures() {
+    let evidence = tempfile::tempdir().unwrap();
+    for content in [None, Some("not JSON"), Some("null")] {
+        if let Some(content) = content {
+            std::fs::write(evidence.path().join("browser.json"), content).unwrap();
+        }
+        let error = read_browser_receipt(evidence.path(), "Chrome unavailable").unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<stages::EvaluationFailure>(),
+            Some(stages::EvaluationFailure::Infrastructure(_))
+        ));
+        assert!(error.to_string().contains("Chrome unavailable"));
+    }
 }
 
 #[tokio::test]

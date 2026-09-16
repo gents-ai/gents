@@ -20,6 +20,8 @@ pub enum EvaluationFailure {
     ModelRequest(String),
     #[error("evaluation inconclusive: {0}")]
     Inconclusive(String),
+    #[error("evaluation infrastructure failed: {0}")]
+    Infrastructure(String),
 }
 
 impl EvaluationFailure {
@@ -28,6 +30,7 @@ impl EvaluationFailure {
             Self::Deadline(_) => "deadline",
             Self::ModelRequest(_) => "model_request",
             Self::Inconclusive(_) => "inconclusive",
+            Self::Infrastructure(_) => "infrastructure",
         }
     }
 }
@@ -83,12 +86,20 @@ async fn case_reporting_preserves_failure_classification_and_skipped_prerequisit
     assert!(checked("pagoda", evidence.path(), async { inconclusive })
         .await
         .is_err());
+    let infrastructure: Result<()> =
+        Err(EvaluationFailure::Infrastructure("Chrome unavailable".into()).into());
+    assert!(
+        checked("improve", evidence.path(), async { infrastructure })
+            .await
+            .is_err()
+    );
     let results = case_results(evidence.path()).unwrap();
     assert_eq!(results.len(), 7);
     assert_eq!(results[0].failure_kind.as_deref(), Some("deadline"));
     assert_eq!(results[1].status, "passed");
     assert_eq!(results[2].status, "skipped");
     assert_eq!(results[3].failure_kind.as_deref(), Some("inconclusive"));
+    assert_eq!(results[5].failure_kind.as_deref(), Some("infrastructure"));
 }
 
 /// Independent acceptance is distinct from a model request terminalizing.
