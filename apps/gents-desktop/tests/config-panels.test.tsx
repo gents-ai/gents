@@ -996,7 +996,9 @@ describe("configuration panels", () => {
         if (testCase.method === "saveSkillConfig") {
           expect(api.saveSkillConfig).toHaveBeenCalledWith(
             expect.objectContaining({
-              document: expect.objectContaining({ source_directory: "/skills/skill-a" }),
+              document: expect.objectContaining({
+                source_directory: "/skills/skill-a",
+              }),
             }),
           );
         }
