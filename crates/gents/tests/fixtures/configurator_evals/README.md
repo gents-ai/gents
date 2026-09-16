@@ -18,10 +18,10 @@ replacement project. Automation depends on onboarding, not artwork acceptance.
 Implementation status: onboarding, Builder execution, skill import/use, pagoda
 creation, read-only review, improvement and document automation are wired
 sequentially. CLI, desktop and eval use the same Setup prompt and canonical
-self-configuration grant. The latest completed diagnostic cohort exercised ten
+self-configuration grant. The completed corrected-prompt cohort exercised ten
 onboarding, Builder readiness, skill and automation cases, but only six reviews
-and four improvements. A reproducible cohort of the corrected implementation,
-including ten actual attempts at each dependent case, remains outstanding.
+and five improvements. A supplemental full-chain cohort is collecting the
+remaining dependent-case samples; skips do not count as attempts.
 An initial coding batch was stopped after
 finding a harness bug reading streamed answers; it is not a valid capability
 measurement. The corrected runner uses the existing streamed-answer reader and
@@ -214,11 +214,33 @@ cargo test -p gents --test e2e_live --features live-e2e \
   reassess_retained_readiness_evidence -- --ignored
 ```
 
-## Corrected-prompt cohort (`14f128143`, in progress)
+## Completed corrected-prompt cohort (`14f128143`)
 
-The next ten-trial run started on 2026-09-16 at 07:01 UTC with the same GLM
-endpoint and concurrency two. It includes the complete original request in fresh
-review/improvement sessions and the corrected accessible-label check.
+The ten-trial run completed on 2026-09-16 at 07:01–08:19 UTC in 4673 seconds,
+with the same GLM endpoint and concurrency two. It includes the complete original
+request in fresh review/improvement sessions and the corrected accessible-label
+check. One trial passed every stage. A second produced a verified final project
+through improvement after creation timed out; recovery does not erase that
+creation failure. The test exited 101 because the cohort includes failures.
+
+| Case | Raw passed | Raw failed/inconclusive | Skipped |
+| --- | ---: | ---: | ---: |
+| Onboarding | 10 | 0 | 0 |
+| Builder readiness | 6 | 4 | 0 |
+| Skill import/use (source-relative fixture) | 10 | 0 | 0 |
+| Pagoda creation | 1 | 9 | 0 |
+| Review | 5 | 1 | 4 |
+| Improvement | 2 | 3 | 5 |
+| Model-authored document automation | 9 | 1 | 0 |
+
+Creation had eight deadlines and one animated-scene inconclusive result. Review
+had one invalid-tool-call-budget failure. Improvement had one deadline, one
+animated-scene inconclusive result, and one JavaScript error already present in
+the initial artifact. These are six actual reviews and five improvements.
+Automation's failure added a period to the required exact uppercase result:
+the model-authored task template placed punctuation immediately after the
+message placeholder. Valid template syntax alone does not guarantee correct
+data framing or output.
 
 Trial 1 exposed another readiness attribution omission: a successful structured
 call with `command: "sh", args: ["readiness/test.sh"]` was rejected because the
@@ -237,3 +259,20 @@ Compound/expanded shell programs that this bounded checker cannot establish are
 inconclusive, not proven model failures. Existing script/receipt checks still
 apply before command attribution, and unrelated failures cannot be reassessed
 away.
+
+Retained-evidence reassessments correct the four structured-argument false
+negatives (trials 1, 4, 5 and 7), giving 10/10 evidence-backed readiness. Two
+originally passing trials used compound shell commands; their full recorded
+commands were manually checked for successful script invocation. This is not a
+claim that the bounded v3 checker automatically establishes every compound form.
+Original reports remain unchanged and reassessment sidecars remain separate.
+
+## Supplemental cohort (`681412a0a`, in progress)
+
+Another ten full-chain trials started on 2026-09-16 at 08:20 UTC, with the same
+model, task prompts, inference defaults and concurrency two. The runner includes
+the v3 readiness attribution check and browser visible-label whitespace fix.
+This collects additional review/improvement attempts without substituting
+harness-authored projects or skipping upstream work. All additional outcomes
+will be reported, including upstream failures and prerequisite skips; do not
+select only successful trials when combining case counts.
