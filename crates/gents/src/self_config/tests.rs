@@ -2077,6 +2077,10 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
             crate::document_config::SurfaceToolDecl::Create(crate::mailbox::canonical_mailbox_write_decl())
         ]})
     );
+    assert_eq!(
+        mailbox_help["mailbox_values"]["source_kind"],
+        json!(crate::mailbox::MailboxSourceKind::ALL.map(crate::mailbox::MailboxSourceKind::as_str))
+    );
 
     let create_profile_args = vec![
         "profile".into(),

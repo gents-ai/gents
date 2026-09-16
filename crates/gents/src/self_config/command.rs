@@ -301,6 +301,13 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             "canonical_mailbox_entries": if resource == Some("datastore") {
                 json!({"entries": [crate::document_config::SurfaceToolDecl::Create(crate::mailbox::canonical_mailbox_write_decl())]})
             } else { Value::Null },
+            "mailbox_values": if resource == Some("datastore") {
+                json!({
+                    "kind": crate::mailbox::MailboxKind::ALL.map(crate::mailbox::MailboxKind::as_str),
+                    "action": crate::mailbox::MailboxAction::ALL.map(crate::mailbox::MailboxAction::as_str),
+                    "source_kind": crate::mailbox::MailboxSourceKind::ALL.map(crate::mailbox::MailboxSourceKind::as_str),
+                })
+            } else { Value::Null },
             "current_limitations": {
                 "pack_remove": "unavailable because installation records do not yet distinguish documents created by an install from matching documents the install reused",
             },
