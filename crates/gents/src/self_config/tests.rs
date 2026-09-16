@@ -1094,10 +1094,21 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     let denied_tools =
         build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
     let command = |args: &[&str]| args.iter().map(|value| (*value).to_owned()).collect();
+    let help = call_config_tool(&denied_tools, command(&["help", "discovery"]))
+        .await
+        .unwrap();
+    assert!(help.contains("discovery commands"), "{help}");
+    let legacy = call_config_tool(&denied_tools, command(&["discover", "scan"]))
+        .await
+        .unwrap_err();
+    assert!(
+        legacy.contains("unknown config resource or command"),
+        "{legacy}"
+    );
     let denied = call_config_tool(
         &denied_tools,
         command(&[
-            "discover",
+            "discovery",
             "scan",
             "--source",
             "codex-user",
@@ -1137,7 +1148,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     let outside_error = call_config_tool(
         &tools,
         command(&[
-            "discover",
+            "discovery",
             "scan",
             "--source",
             "outside",
@@ -1155,7 +1166,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     let output = call_config_tool(
         &tools,
         command(&[
-            "discover",
+            "discovery",
             "scan",
             "--source",
             "codex-user",

@@ -28,7 +28,7 @@ const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["skill", "get", SKILL_ID]
   ["skill", "preview", "import", SKILL_ID, PATH]
   ["skill", "import", SKILL_ID, PATH]
-  ["discover", "scan", "--source", SOURCE_ID, claude|codex|grok, user|project, PATH, ...]
+  ["discovery", "scan", "--source", SOURCE_ID, claude|codex|grok, user|project, PATH, ...]
   ["mcp-service", "preview"|"edit", SERVICE_ID, PATCH_FLAGS]
   ["automation", "get", task|schedule|trigger|event-source, ID, [--behavior BEHAVIOR_ID]]
   ["schema", "get", COLLECTION]
@@ -161,7 +161,7 @@ impl ConfigCommandTool {
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
             "skill" => self.skill(&argv[1..]).await,
-            "discover" => self.discovery(&argv[1..]).await,
+            "discovery" => self.discovery(&argv[1..]).await,
             "schema" => self.schema(&argv[1..]).await,
             other => bail!(
                 "unknown config resource or command {other:?}; accepted: help, get, {}\n{CONFIG_USAGE}",

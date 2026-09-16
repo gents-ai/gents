@@ -1,8 +1,10 @@
 use super::*;
 use crate::configuration_discovery::{
-    discover_configuration, DiscoveryLimits, DiscoveryRequest, DiscoveryScope, DiscoverySourceKind,
-    DiscoverySourceRoot,
+    discover_configuration_within, DiscoveryLimits, DiscoveryRequest, DiscoveryScope,
+    DiscoverySourceKind, DiscoverySourceRoot, DEFAULT_MAX_DISCOVERY_SOURCES,
 };
+
+const MAX_SOURCE_PATH_BYTES: usize = 4_096;
 
 struct RequestedSource {
     source_id: String,
@@ -46,10 +48,13 @@ impl ConfigCommandTool {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        discover_configuration(&DiscoveryRequest {
-            sources,
-            limits: DiscoveryLimits::default(),
-        })
+        discover_configuration_within(
+            &DiscoveryRequest {
+                sources,
+                limits: DiscoveryLimits::default(),
+            },
+            &context.root(),
+        )
         .to_model_json_pretty()
         .context("serializing sanitized configuration discovery inventory")
     }
@@ -58,7 +63,7 @@ impl ConfigCommandTool {
 fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
     anyhow::ensure!(
         argv.first().is_some_and(|value| value == "scan"),
-        "use config discover scan --source SOURCE_ID claude|codex|grok user|project PATH"
+        "use config discovery scan --source SOURCE_ID claude|codex|grok user|project PATH"
     );
     let mut index = 1;
     let mut sources = Vec::new();
@@ -69,6 +74,13 @@ fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
             "each discovery source must be --source SOURCE_ID claude|codex|grok user|project PATH"
         );
         let source_id = argv[index + 1].clone();
+        anyhow::ensure!(
+            !source_id.is_empty()
+                && source_id.len() <= 96
+                && source_id.bytes().all(|byte| byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'.' | b'_' | b'-')),
+            "discovery source ID must contain only ASCII letters, digits, '.', '_', or '-' and be at most 96 bytes"
+        );
         let kind = match argv[index + 2].as_str() {
             "claude" => DiscoverySourceKind::Claude,
             "codex" => DiscoverySourceKind::Codex,
@@ -84,11 +96,20 @@ fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
                 "unsupported discovery source scope {other:?}; expected user or project"
             ),
         };
+        let path = argv[index + 4].clone();
+        anyhow::ensure!(
+            !path.is_empty() && path.len() <= MAX_SOURCE_PATH_BYTES,
+            "discovery source path must be non-empty and at most {MAX_SOURCE_PATH_BYTES} bytes"
+        );
+        anyhow::ensure!(
+            sources.len() < DEFAULT_MAX_DISCOVERY_SOURCES,
+            "configuration discovery accepts at most {DEFAULT_MAX_DISCOVERY_SOURCES} explicit sources"
+        );
         sources.push(RequestedSource {
             source_id,
             kind,
             scope,
-            path: argv[index + 4].clone(),
+            path,
         });
         index += 5;
     }
@@ -139,5 +160,30 @@ mod tests {
             let argv = argv.into_iter().map(str::to_owned).collect::<Vec<_>>();
             assert!(parse_sources(&argv).is_err(), "accepted {argv:?}");
         }
+    }
+
+    #[test]
+    fn discovery_is_the_only_public_command_vocabulary() {
+        assert!(CONFIG_USAGE.contains("[\"discovery\", \"scan\""));
+        assert!(!CONFIG_USAGE.contains("[\"discover\", \"scan\""));
+        assert!(parse_sources(
+            &["scan", "--source", "bad/source", "codex", "user", ".",].map(str::to_owned)
+        )
+        .is_err());
+
+        let mut too_many = vec!["scan".to_owned()];
+        for index in 0..=DEFAULT_MAX_DISCOVERY_SOURCES {
+            too_many.extend(
+                [
+                    "--source".to_owned(),
+                    format!("source-{index}"),
+                    "codex".to_owned(),
+                    "user".to_owned(),
+                    ".".to_owned(),
+                ]
+                .into_iter(),
+            );
+        }
+        assert!(parse_sources(&too_many).is_err());
     }
 }

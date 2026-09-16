@@ -16,14 +16,18 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 pub const DISCOVERY_SCHEMA_VERSION: u32 = 1;
+pub const DEFAULT_MAX_DISCOVERY_SOURCES: usize = 8;
 const HARD_MAX_SOURCES: usize = 32;
 const HARD_MAX_FILES_PER_SOURCE: usize = 512;
 const HARD_MAX_ITEMS: usize = 4_096;
 const HARD_MAX_FILE_BYTES: u64 = 1_048_576;
 const HARD_MAX_TOTAL_BYTES: u64 = 16 * 1_048_576;
 const HARD_MAX_DIRECTORY_ENTRIES: usize = 8_192;
+const HARD_MAX_NOTICES: usize = 1_024;
 const MAX_SKILL_DEPTH: usize = 6;
 const MAX_TEXT_FACT_BYTES: usize = 4_096;
+const MAX_METADATA_FACT_BYTES: usize = 512;
+pub const MAX_MODEL_INVENTORY_JSON_BYTES: usize = 8 * 1_048_576;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,7 +83,7 @@ pub struct DiscoveryLimits {
 impl Default for DiscoveryLimits {
     fn default() -> Self {
         Self {
-            max_sources: 8,
+            max_sources: DEFAULT_MAX_DISCOVERY_SOURCES,
             max_files_per_source: 128,
             max_items: 1_024,
             max_file_bytes: 256 * 1_024,
@@ -270,6 +274,7 @@ pub enum DiscoveryNoticeCode {
     RelativeRoot,
     MissingRoot,
     InvalidRoot,
+    OutsideContainment,
     SymlinkRejected,
     FileLimit,
     ItemLimit,
@@ -280,6 +285,7 @@ pub enum DiscoveryNoticeCode {
     FileChanged,
     InvalidUtf8,
     MalformedFile,
+    NoticeLimit,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -307,7 +313,17 @@ impl ConfigurationDiscoveryInventory {
     /// The only model-facing serializer. Callers should not serialize source files or
     /// parser intermediates alongside this value.
     pub fn to_model_json_pretty(&self) -> serde_json::Result<String> {
-        serde_json::to_string_pretty(self)
+        let output = serde_json::to_string_pretty(self)?;
+        if output.len() > MAX_MODEL_INVENTORY_JSON_BYTES {
+            return Err(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "sanitized configuration discovery inventory exceeded the {} byte model-output limit",
+                    MAX_MODEL_INVENTORY_JSON_BYTES
+                ),
+            )));
+        }
+        Ok(output)
     }
 }
 
@@ -316,11 +332,14 @@ struct Scanner {
     inventory: ConfigurationDiscoveryInventory,
     total_bytes: u64,
     item_limit_reported: bool,
+    notice_limit_reported: bool,
+    containment_root: Option<PathBuf>,
 }
 
 struct SourceScan {
     input: DiscoverySourceRoot,
     root: PathBuf,
+    root_metadata: Metadata,
     observed_files: usize,
     observed_bytes: u64,
     emitted_items: usize,
@@ -340,6 +359,24 @@ enum ConfigFormat {
 /// Scan only the selected roots. Errors affecting one source or file are represented in
 /// the inventory so a partial result cannot be mistaken for a complete laptop inventory.
 pub fn discover_configuration(request: &DiscoveryRequest) -> ConfigurationDiscoveryInventory {
+    discover_configuration_inner(request, None)
+}
+
+/// Apply the same bounded scan while requiring every resolved source root to remain
+/// beneath an already-authorized canonical tool root. This is the model-facing adapter
+/// boundary; the scanner rechecks containment after path resolution so a replaced source
+/// root cannot widen the caller's file authority.
+pub fn discover_configuration_within(
+    request: &DiscoveryRequest,
+    containment_root: &Path,
+) -> ConfigurationDiscoveryInventory {
+    discover_configuration_inner(request, Some(containment_root.to_path_buf()))
+}
+
+fn discover_configuration_inner(
+    request: &DiscoveryRequest,
+    containment_root: Option<PathBuf>,
+) -> ConfigurationDiscoveryInventory {
     let limits = request.limits.bounded();
     let mut scanner = Scanner {
         limits: limits.clone(),
@@ -354,6 +391,8 @@ pub fn discover_configuration(request: &DiscoveryRequest) -> ConfigurationDiscov
         },
         total_bytes: 0,
         item_limit_reported: false,
+        notice_limit_reported: false,
+        containment_root,
     };
 
     let mut seen_ids = BTreeSet::new();
@@ -404,10 +443,10 @@ fn source_inventory(
     emitted_items: usize,
 ) -> DiscoverySourceInventory {
     DiscoverySourceInventory {
-        source_id: source.source_id.clone(),
+        source_id: sanitize_text(&source.source_id),
         kind: source.kind,
         scope: source.scope,
-        selected_root: source.root.to_string_lossy().into_owned(),
+        selected_root: sanitize_text(&source.root.to_string_lossy()),
         outcome,
         observed_files,
         observed_bytes,
@@ -511,10 +550,54 @@ impl Scanner {
                 return;
             }
         };
+        if self
+            .containment_root
+            .as_ref()
+            .is_some_and(|containment_root| !root.starts_with(containment_root))
+        {
+            self.warning(
+                DiscoveryNoticeCode::OutsideContainment,
+                Some(&input.source_id),
+                None,
+                "selected source root resolved outside the authorized tool root",
+                None,
+                None,
+            );
+            self.inventory.sources.push(source_inventory(
+                &input,
+                DiscoverySourceOutcome::Rejected,
+                0,
+                0,
+                0,
+            ));
+            return;
+        }
+        let root_metadata = match fs::symlink_metadata(&root) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => metadata,
+            _ => {
+                self.warning(
+                    DiscoveryNoticeCode::InvalidRoot,
+                    Some(&input.source_id),
+                    None,
+                    "selected source root changed while it was being resolved",
+                    None,
+                    None,
+                );
+                self.inventory.sources.push(source_inventory(
+                    &input,
+                    DiscoverySourceOutcome::Rejected,
+                    0,
+                    0,
+                    0,
+                ));
+                return;
+            }
+        };
 
         let mut source = SourceScan {
             input,
             root,
+            root_metadata,
             observed_files: 0,
             observed_bytes: 0,
             emitted_items: 0,
@@ -592,6 +675,18 @@ impl Scanner {
             );
             return None;
         }
+        if !source_root_unchanged(source) {
+            source.partial = true;
+            self.warning(
+                DiscoveryNoticeCode::FileChanged,
+                Some(&source.input.source_id),
+                None,
+                "selected source root changed during inspection",
+                None,
+                None,
+            );
+            return None;
+        }
         let path = source.root.join(relative);
         let relative_string = path_string(relative);
         let metadata = match reject_symlink_components(&source.root, relative) {
@@ -650,6 +745,7 @@ impl Scanner {
             );
             return None;
         }
+        run_preopen_test_hook(&path);
         let mut file = match File::open(&path) {
             Ok(file) => file,
             Err(_) => {
@@ -710,9 +806,12 @@ impl Scanner {
             );
             return None;
         }
-        let path_metadata = fs::symlink_metadata(&path).ok();
+        let path_metadata = reject_symlink_components(&source.root, relative)
+            .ok()
+            .flatten();
         let final_metadata = file.metadata().ok();
         if bytes.len() as u64 > self.limits.max_file_bytes
+            || !source_root_unchanged(source)
             || path_metadata
                 .as_ref()
                 .is_none_or(|current| !metadata_same_file(&opened_metadata, current))
@@ -820,6 +919,18 @@ impl Scanner {
             }
             return;
         }
+        if !source_root_unchanged(source) {
+            source.partial = true;
+            self.warning(
+                DiscoveryNoticeCode::FileChanged,
+                Some(&source.input.source_id),
+                Some(&path_string(relative)),
+                "selected source root changed during skill inspection",
+                None,
+                None,
+            );
+            return;
+        }
         let metadata = match reject_symlink_components(&source.root, relative) {
             Ok(Some(metadata)) => metadata,
             Ok(None) => return,
@@ -884,6 +995,22 @@ impl Scanner {
             if let Ok(entry) = entry {
                 paths.push(entry.path());
             }
+        }
+        let directory_stable = reject_symlink_components(&source.root, relative)
+            .ok()
+            .flatten()
+            .is_some_and(|after| metadata_same_file(&metadata, &after));
+        if !directory_stable || !source_root_unchanged(source) {
+            source.partial = true;
+            self.warning(
+                DiscoveryNoticeCode::FileChanged,
+                Some(&source.input.source_id),
+                Some(&path_string(relative)),
+                "skill directory changed during inspection and its entries were discarded",
+                None,
+                None,
+            );
+            return;
         }
         paths.sort();
         for path in paths {
@@ -1370,10 +1497,11 @@ impl Scanner {
             return;
         }
         let label = sanitize_text(display_label);
-        let relative = path_string(relative);
+        let relative_identity = raw_path_string(relative);
+        let relative = sanitize_text(&relative_identity);
         let item_id = stable_id(&[
             &source.input.source_id,
-            &relative,
+            &relative_identity,
             category.as_str(),
             &label,
         ]);
@@ -1399,14 +1527,17 @@ impl Scanner {
         observed: Option<u64>,
         limit: Option<u64>,
     ) {
-        self.inventory.warnings.push(DiscoveryNotice {
-            code,
-            source_id: source_id.map(str::to_owned),
-            relative_source_file: relative.map(str::to_owned),
-            safe_message: message.to_owned(),
-            observed,
-            limit,
-        });
+        self.record_notice(
+            DiscoveryNotice {
+                code,
+                source_id: source_id.map(sanitize_text),
+                relative_source_file: relative.map(sanitize_text),
+                safe_message: message.to_owned(),
+                observed,
+                limit,
+            },
+            false,
+        );
     }
 
     fn truncation(
@@ -1418,14 +1549,42 @@ impl Scanner {
         observed: Option<u64>,
         limit: Option<u64>,
     ) {
-        self.inventory.truncation.push(DiscoveryNotice {
-            code,
-            source_id: source_id.map(str::to_owned),
-            relative_source_file: relative.map(str::to_owned),
-            safe_message: message.to_owned(),
-            observed,
-            limit,
-        });
+        self.record_notice(
+            DiscoveryNotice {
+                code,
+                source_id: source_id.map(sanitize_text),
+                relative_source_file: relative.map(sanitize_text),
+                safe_message: message.to_owned(),
+                observed,
+                limit,
+            },
+            true,
+        );
+    }
+
+    fn record_notice(&mut self, notice: DiscoveryNotice, truncation: bool) {
+        let count = self.inventory.warnings.len() + self.inventory.truncation.len();
+        if count >= HARD_MAX_NOTICES.saturating_sub(1) {
+            if !self.notice_limit_reported {
+                self.notice_limit_reported = true;
+                self.inventory.truncation.push(DiscoveryNotice {
+                    code: DiscoveryNoticeCode::NoticeLimit,
+                    source_id: None,
+                    relative_source_file: None,
+                    safe_message:
+                        "additional discovery notices were omitted at the bounded output limit"
+                            .to_owned(),
+                    observed: Some(count as u64 + 1),
+                    limit: Some(HARD_MAX_NOTICES as u64),
+                });
+            }
+            return;
+        }
+        if truncation {
+            self.inventory.truncation.push(notice);
+        } else {
+            self.inventory.warnings.push(notice);
+        }
     }
 }
 
@@ -1522,6 +1681,25 @@ fn safe_relative(path: &Path) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
+fn source_root_unchanged(source: &SourceScan) -> bool {
+    fs::symlink_metadata(&source.root).is_ok_and(|current| {
+        current.is_dir()
+            && !current.file_type().is_symlink()
+            && metadata_same_file(&source.root_metadata, &current)
+    })
+}
+
+#[cfg(unix)]
+fn metadata_unchanged(before: &Metadata, after: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    before.len() == after.len()
+        && before.mtime() == after.mtime()
+        && before.mtime_nsec() == after.mtime_nsec()
+        && before.ctime() == after.ctime()
+        && before.ctime_nsec() == after.ctime_nsec()
+}
+
+#[cfg(not(unix))]
 fn metadata_unchanged(before: &Metadata, after: &Metadata) -> bool {
     before.len() == after.len() && before.modified().ok() == after.modified().ok()
 }
@@ -1546,6 +1724,10 @@ fn valid_source_id(value: &str) -> bool {
 }
 
 fn path_string(path: &Path) -> String {
+    sanitize_text(&raw_path_string(path))
+}
+
+fn raw_path_string(path: &Path) -> String {
     path.components()
         .filter_map(|component| match component {
             Component::Normal(value) => Some(value.to_string_lossy()),
@@ -1554,6 +1736,24 @@ fn path_string(path: &Path) -> String {
         .collect::<Vec<_>>()
         .join("/")
 }
+
+#[cfg(test)]
+thread_local! {
+    static PREOPEN_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn run_preopen_test_hook(path: &Path) {
+    PREOPEN_TEST_HOOK.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook(path);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_preopen_test_hook(_: &Path) {}
 
 fn stable_id(parts: &[&str]) -> String {
     let mut hash = Sha256::new();
@@ -1747,18 +1947,26 @@ fn value_type(value: &Value) -> &'static str {
 }
 
 fn bounded_sanitized_text(value: &str) -> String {
-    let sanitized = sanitize_text(value);
-    if sanitized.len() <= MAX_TEXT_FACT_BYTES {
-        return sanitized;
-    }
-    let mut end = MAX_TEXT_FACT_BYTES;
-    while !sanitized.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}\n[TRUNCATED]", &sanitized[..end])
+    truncate_text(&redact_text(value), MAX_TEXT_FACT_BYTES)
 }
 
 fn sanitize_text(value: &str) -> String {
+    truncate_text(&redact_text(value), MAX_METADATA_FACT_BYTES)
+}
+
+fn truncate_text(value: &str, max_bytes: usize) -> String {
+    const MARKER: &str = "\n[TRUNCATED]";
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let mut end = max_bytes.saturating_sub(MARKER.len());
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{MARKER}", &value[..end])
+}
+
+fn redact_text(value: &str) -> String {
     static PRIVATE_KEY: OnceLock<Regex> = OnceLock::new();
     static BEARER: OnceLock<Regex> = OnceLock::new();
     static PREFIXED_TOKEN: OnceLock<Regex> = OnceLock::new();
@@ -1783,16 +1991,16 @@ fn sanitize_text(value: &str) -> String {
     });
     let assignment = ASSIGNMENT.get_or_init(|| {
         Regex::new(
-            r#"(?i)\b(api[_-]?key|access[_-]?token|auth(?:orization)?|bearer[_-]?token|client[_-]?secret|cookie|password|private[_-]?key|refresh[_-]?token|secret|token)\b(\s*[:=]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s,;}\]]+)"#,
+            r#"(?i)([\"']?\b(?:api[_-]?key|access[_-]?token|auth(?:orization)?|bearer[_-]?token|client[_-]?secret|cookie|password|private[_-]?key|refresh[_-]?token|secret|token)\b[\"']?)(\s*[:=]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|[^\r\n,;}\]]+)"#,
         )
         .expect("valid assignment redactor")
     });
     let value = private_key.replace_all(value, "[REDACTED PRIVATE KEY]");
+    let value = assignment.replace_all(&value, "$1$2[REDACTED]");
     let value = bearer.replace_all(&value, "Bearer [REDACTED]");
     let value = prefixed_token.replace_all(&value, "[REDACTED TOKEN]");
-    let value = secret_like.replace_all(&value, "[REDACTED SECRET-LIKE VALUE]");
-    assignment
-        .replace_all(&value, "$1$2[REDACTED]")
+    secret_like
+        .replace_all(&value, "[REDACTED SECRET-LIKE VALUE]")
         .into_owned()
 }
 
@@ -1840,6 +2048,20 @@ mod tests {
         let mut result = BTreeMap::new();
         walk(root, root, &mut result);
         result
+    }
+
+    fn normalize_source_roots(
+        inventory: &mut ConfigurationDiscoveryInventory,
+        roots: &[(&str, &str)],
+    ) {
+        for source in &mut inventory.sources {
+            source.selected_root = roots
+                .iter()
+                .find_map(|(source_id, root)| {
+                    (*source_id == source.source_id).then(|| (*root).to_owned())
+                })
+                .expect("every fixture source has a stable synthetic root");
+        }
     }
 
     #[cfg(unix)]
@@ -2071,5 +2293,189 @@ api_key = "SECRET_VALUE"
         assert_eq!(first, second);
         assert_eq!(first.schema_version, 1);
         assert_eq!(first.items.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authorized_containment_rejects_a_source_root_symlinked_outside() {
+        use std::os::unix::fs::symlink;
+
+        let authorized = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write(&outside.path().join("config.toml"), "model = \"secret\"\n");
+        let selected = authorized.path().join("escaped");
+        symlink(outside.path(), &selected).unwrap();
+        let inventory = discover_configuration_within(
+            &DiscoveryRequest {
+                sources: vec![DiscoverySourceRoot {
+                    source_id: "escaped".into(),
+                    kind: DiscoverySourceKind::Codex,
+                    scope: DiscoveryScope::User,
+                    root: selected,
+                }],
+                limits: DiscoveryLimits::default(),
+            },
+            &fs::canonicalize(authorized.path()).unwrap(),
+        );
+
+        assert!(inventory.items.is_empty());
+        assert_eq!(
+            inventory.sources[0].outcome,
+            DiscoverySourceOutcome::Rejected
+        );
+        assert!(inventory
+            .warnings
+            .iter()
+            .any(|notice| notice.code == DiscoveryNoticeCode::OutsideContainment));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_replaced_by_symlink_between_check_and_open_is_discarded() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let config = fixture.path().join("config.toml");
+        let secret = outside.path().join("config.toml");
+        write(&config, "model = \"public\"\n");
+        write(&secret, "model = \"RACE_SECRET_MUST_NOT_ESCAPE\"\n");
+        PREOPEN_TEST_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |checked_path| {
+                fs::remove_file(checked_path).unwrap();
+                symlink(&secret, checked_path).unwrap();
+            }));
+        });
+
+        let inventory = discover_configuration(&DiscoveryRequest {
+            sources: vec![DiscoverySourceRoot {
+                source_id: "raced".into(),
+                kind: DiscoverySourceKind::Codex,
+                scope: DiscoveryScope::User,
+                root: fixture.path().to_path_buf(),
+            }],
+            limits: DiscoveryLimits::default(),
+        });
+        let output = inventory.to_model_json_pretty().unwrap();
+
+        assert!(!output.contains("RACE_SECRET_MUST_NOT_ESCAPE"));
+        assert!(inventory.items.is_empty());
+        assert_eq!(
+            inventory.sources[0].outcome,
+            DiscoverySourceOutcome::Partial
+        );
+        assert!(inventory
+            .warnings
+            .iter()
+            .any(|notice| notice.code == DiscoveryNoticeCode::FileChanged));
+    }
+
+    #[test]
+    fn redaction_and_model_output_have_explicit_byte_bounds() {
+        let redacted = bounded_sanitized_text(
+            "\"token\": \"value with spaces\"\npassword = another secret phrase\nBearer abcdefgh\n",
+        );
+        assert!(!redacted.contains("value with spaces"));
+        assert!(!redacted.contains("another secret phrase"));
+        assert!(!redacted.contains("abcdefgh"));
+        assert!(!redacted.contains("[REDACTED]]"));
+
+        let metadata = sanitize_text(&"x".repeat(MAX_METADATA_FACT_BYTES * 2));
+        assert!(metadata.len() <= MAX_METADATA_FACT_BYTES);
+        assert!(metadata.ends_with("[TRUNCATED]"));
+
+        let oversized = ConfigurationDiscoveryInventory {
+            schema_version: DISCOVERY_SCHEMA_VERSION,
+            trust_notice: "x".repeat(MAX_MODEL_INVENTORY_JSON_BYTES),
+            sources: vec![],
+            items: vec![],
+            conflicts: vec![],
+            warnings: vec![],
+            truncation: vec![],
+        };
+        assert!(oversized.to_model_json_pretty().is_err());
+    }
+
+    #[test]
+    fn checked_in_complete_inventory_is_canonical_serializer_output() {
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/configuration_discovery");
+        let mut inventory = discover_configuration(&DiscoveryRequest {
+            sources: vec![
+                DiscoverySourceRoot {
+                    source_id: "codex-user".into(),
+                    kind: DiscoverySourceKind::Codex,
+                    scope: DiscoveryScope::User,
+                    root: fixtures.join("codex-user"),
+                },
+                DiscoverySourceRoot {
+                    source_id: "codex-project".into(),
+                    kind: DiscoverySourceKind::Codex,
+                    scope: DiscoveryScope::Project,
+                    root: fixtures.join("project"),
+                },
+            ],
+            limits: DiscoveryLimits::default(),
+        });
+        normalize_source_roots(
+            &mut inventory,
+            &[
+                ("codex-user", "/synthetic/codex-user"),
+                ("codex-project", "/synthetic/project"),
+            ],
+        );
+        let expected =
+            include_str!("../tests/fixtures/configuration_discovery/inventories/complete-v1.json");
+        assert_eq!(
+            format!("{}\n", inventory.to_model_json_pretty().unwrap()),
+            expected
+        );
+        let decoded: ConfigurationDiscoveryInventory = serde_json::from_str(expected).unwrap();
+        assert_eq!(decoded, inventory);
+    }
+
+    #[test]
+    fn checked_in_partial_inventory_is_canonical_serializer_output() {
+        let fixture = tempfile::tempdir().unwrap();
+        let claude = fixture.path().join("claude-user");
+        fs::create_dir_all(&claude).unwrap();
+        write(&claude.join("settings.json"), "{bad");
+        write(&claude.join("CLAUDE.md"), "0123456789abcdef");
+        let missing = fixture.path().join("missing-grok");
+        let mut inventory = discover_configuration(&DiscoveryRequest {
+            sources: vec![
+                DiscoverySourceRoot {
+                    source_id: "claude-user".into(),
+                    kind: DiscoverySourceKind::Claude,
+                    scope: DiscoveryScope::User,
+                    root: claude,
+                },
+                DiscoverySourceRoot {
+                    source_id: "grok-user".into(),
+                    kind: DiscoverySourceKind::Grok,
+                    scope: DiscoveryScope::User,
+                    root: missing,
+                },
+            ],
+            limits: DiscoveryLimits {
+                max_file_bytes: 8,
+                ..DiscoveryLimits::default()
+            },
+        });
+        normalize_source_roots(
+            &mut inventory,
+            &[
+                ("claude-user", "/synthetic/claude-user"),
+                ("grok-user", "/synthetic/missing-grok"),
+            ],
+        );
+        let expected =
+            include_str!("../tests/fixtures/configuration_discovery/inventories/partial-v1.json");
+        assert_eq!(
+            format!("{}\n", inventory.to_model_json_pretty().unwrap()),
+            expected
+        );
+        let decoded: ConfigurationDiscoveryInventory = serde_json::from_str(expected).unwrap();
+        assert_eq!(decoded, inventory);
     }
 }
