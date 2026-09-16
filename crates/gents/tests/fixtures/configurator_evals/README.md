@@ -18,11 +18,11 @@ replacement project. Automation depends on onboarding, not artwork acceptance.
 Implementation status: onboarding, Builder execution, skill import/use, pagoda
 creation, read-only review, improvement and document automation are wired
 sequentially. CLI, desktop and eval use the same Setup prompt and canonical
-self-configuration grant. The completed corrected-prompt cohort exercised ten
-onboarding, Builder readiness, skill and automation cases, but only six reviews
-and five improvements. The completed supplemental cohort brings those counts to
-eleven reviews and eight improvements. Further full-chain trials are collecting
-the remaining improvement samples; skips do not count as attempts.
+self-configuration grant. The corrected-prompt and supplemental cohorts completed
+25 onboarding, Builder readiness, skill, creation and automation attempts,
+14 reviews and ten improvements. Every case now has at least ten actual attempts;
+prerequisite skips do not count. Cohort-specific raw results and grader changes
+are recorded below; this is not a claim that the full workflow reliably passes.
 An initial coding batch was stopped after
 finding a harness bug reading streamed answers; it is not a valid capability
 measurement. The corrected runner uses the existing streamed-answer reader and
@@ -311,9 +311,61 @@ this is not an automatic reassessment or two additional model trials.
 
 Together with the corrected-prompt cohort, these are eleven actual reviews and
 eight improvements. All outcomes count, not only successful prerequisites. A
-five-trial full-chain follow-up at `779b17bbc` uses the same model, task inputs,
+five-trial full-chain follow-up at `779b17bbc` used the same model, task inputs,
 inference defaults and concurrency two, and exercises the new activation fence.
-Its results must be reported separately because the runner has changed.
+Its results are reported separately because the runner changed.
+
+## Completed activation-fence cohort (`779b17bbc`)
+
+Five full-chain trials ran on 2026-09-16 at 09:39–10:15 UTC in 2179 seconds.
+The binary stayed fixed throughout the run. All five trials completed; none
+passed every stage, so the test exited 101. No replacement projects, repaired
+grants, or easier follow-up inputs were supplied.
+
+| Case | Raw passed | Raw failed/inconclusive | Skipped |
+| --- | ---: | ---: | ---: |
+| Onboarding | 5 | 0 | 0 |
+| Builder readiness | 5 | 0 | 0 |
+| Skill import/use | 5 | 0 | 0 |
+| Pagoda creation | 0 | 5 | 0 |
+| Review | 2 | 1 | 2 |
+| Improvement | 1 | 1 | 3 |
+| Model-authored document automation | 5 | 0 | 0 |
+
+Creation had three deadlines and two animated-scene inconclusive results. Two
+deadline attempts left no project to retain; the retention error is supplemental
+context, not a replacement for the primary deadline. Review failed once after
+exhausting the invalid-tool-call budget, as recorded in AgentResponse. Its final
+InferenceCall also records a dropped stream; that secondary observation is not
+the terminal cause. Improvement recovered one failed creation into a browser-
+verified project; the other improvement remained inconclusive because the scene
+animated before the toggle. Recovery does not erase creation failure.
+
+These trials exercised native input-document delivery through the exact
+event-source activation fence, including model-authored automation. They predate
+the subsequent CLI additive-schema correction, whose validation is separate.
+
+## Coverage and interpretation
+
+Across the three corrected-task cohorts, retained `trial.json` receipts establish
+25 onboarding, readiness, skill, creation and automation attempts, 14 reviews,
+and ten improvements. All attempts and skips are included. Raw passes were:
+onboarding 25/25, readiness 19/25, skills 25/25, creation 2/25, review 10/14,
+improvement 4/10, and automation 22/25. One of 25 trials passed every stage.
+
+These are descriptive totals across documented runner/grader revisions, not a
+controlled comparison of models. Readiness's six raw non-passes include four
+reassessed attribution errors and two manually verified compound commands;
+retain those distinctions rather than rewriting the original verdicts. Creation
+had 18 deadlines and five animated-scene inconclusive checks. The browser checks
+do not grade aesthetics, and a successful read-only review does not establish
+the substantive quality of its findings.
+
+GLM is the requested development model and measurement floor, not a demonstrated
+reliable floor for the entire consumer workflow under these defaults. Configuration
+and skill use were strong in this sample; coding completion and tool-error recovery
+need improvement. Changing output budgets, deadlines, prompts or the animation
+oracle should produce a separately labelled measurement, not retroactive passes.
 
 ## Focused review follow-up
 
@@ -357,3 +409,36 @@ A native materialization test uses an unused loopback backend without live
 inference. This adds observation plumbing without changing dispatch, authorization
 or provider-input semantics. The frozen supplemental cohort predates the fence;
 its outcomes do not establish live coverage of the new acknowledgement path.
+
+## Review and validation handoff
+
+The functional tree at `37b31d6e1` passed `cargo test -p gents --no-fail-fast`,
+`cargo test -p gents-cli --no-fail-fast`, and
+`cargo check --workspace --all-targets`. The runtime suite includes the default
+configurator regressions and model-driven conformance/Lean builds. Formatting
+and `git diff --check` passed. `make test-evals-browser` passed all eleven Node
+regressions and the Rust static-browser integration test. Live matrix exits remain failures because the
+measured workflows failed; they are not infrastructure validation passes.
+
+Focused reviews led to the exact activation fence, explicit infrastructure
+classification, preserved primary failures, typed case catalog, shared fixtures,
+and default CI coverage. Subsequent full-suite validation corrected stale CLI
+inference-slot/receipt fixtures and restored SDL-plus-additive-patch convergence
+through the shared schema contract owner. Exact model/graph schema installs
+remain exact; additive CLI series reject shared-field/constraint collisions and
+must supply every declared field before reporting success. No compatibility
+bypass, schema-comparison duplicate, or new schema authorization layer was added.
+
+Earlier CLI runs exposed intermittent listener/transport failures. A deterministic
+two-process regression reproduced unbound-port reuse; the shared test allocator
+now retains cross-process advisory reservations. Additional bind/transport
+failures were observed during validation and did not reproduce in the final full
+run; their cause is not proven resolved by that reservation fix. Do not equate
+one clean run with demonstrated absence of flakiness. Retained local validation
+logs are `/tmp/gents-configurator-final-{runtime,cli,workspace}.log`; prior failure
+logs remain local and are not committed with transcripts.
+
+Interactive native acceptance and remote CI remain coordinator/user-owned; this
+handoff does not claim either. Skill source-directory support changes the canonical
+Skill schema. Existing homes with an unknown schema lineage must fail clearly;
+do not migrate, reset or wipe a user's runtime as an acceptance workaround.

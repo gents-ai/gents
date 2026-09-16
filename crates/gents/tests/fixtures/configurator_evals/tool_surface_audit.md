@@ -29,9 +29,9 @@ values for nested groups and runtime ceilings enforced by existing owners.
 | Inference | Profile inventory/create/edit; backend inventory/edit | Backend creation absent; credentials use operator-managed auth |
 | Self-configuration | Explicit categories, preview, no-lockout, separate pack install grant | CLI/desktop initial grants now include advertised backend/MCP/automation categories |
 
-Next required work: measure the corrected coding prompts/grader and complete ten
-actual improvement attempts, without counting prerequisite skips (eleven reviews
-and eight improvements completed across the corrected and supplemental cohorts).
+The corrected-task cohorts completed 25 upstream attempts, 14 reviews and ten
+improvements, without counting prerequisite skips. README records every cohort,
+raw verdict, grader change and measurement limitation.
 Template authoring now compiles through the execution parser after a live
 diagnostic exposed accepted invalid syntax. Subsequent automation cohorts passed
 9/10 and 8/10; syntax validation does not establish correct output framing or
@@ -40,9 +40,9 @@ Audit gaps for other
 referenced documents must remain visible until implemented and exercised. Do not
 grant all operational capabilities to Setup merely to test a working behavior.
 
-The progressive eval must retain artifacts and distinguish prerequisite failures,
-model request failures, and independent acceptance failures. Ten GLM trials per
-case are still required. GLM onboarding plus fresh-session Builder execution
+The progressive eval retains artifacts and distinguishes prerequisite failures,
+model request failures, infrastructure errors and independent acceptance failures.
+At least ten GLM attempts per case are complete. GLM onboarding plus fresh-session Builder execution
 passed 10/10 on 2026-09-15 (160.86s, concurrency 2); this predates skill import
 and does not establish acceptance of later stages. The earlier Qwen matrix is
 not evidence for GLM trials.
