@@ -27,7 +27,11 @@ An initial coding batch was stopped after
 finding a harness bug reading streamed answers; it is not a valid capability
 measurement. The corrected runner uses the existing streamed-answer reader and
 retains inference failure reasons and token accounting. Pagoda browser checks require `npm ci` at the repository
-root and installed Google Chrome. They retain day/night screenshots and verify
+root and installed Google Chrome. Before an expensive live run, verify the local
+grader with `npm run test:evals` and, when Chrome acceptance is in scope,
+`make test-evals-browser`. A missing Playwright package/browser or an unreadable
+checker receipt is a grader failure; it does not establish a model defect. The
+checks retain day/night screenshots and verify
 local loading, no network requests, an accessible toggle and visible change, and
 no JavaScript errors. They do not grade artwork aesthetics or review quality.
 The automation case now asks the model to author submission/result schemas, a
@@ -96,8 +100,13 @@ interpret those deadline outcomes as provider outages or completed coding work.
 The stage clock includes native definition publication, activation and request
 materialization; it is not ten minutes of inference-only time. Input and request
 timestamps are retained so that overhead can be inspected separately.
-The fixture leaves inference-profile sampling/output settings at runtime defaults;
-the three profile names are binding choices, not distinct reasoning-effort levels.
+Historical cohorts through `b96b69918` left inference-profile sampling/output
+settings at runtime defaults. New
+`configurator-temperature-1-top-p-0.95-v1` runs use one canonical
+`InferenceSampling` document with temperature 1 and top-p 0.95 for Setup and the
+three generated profile choices; seed remains unset. These are different cohorts
+and must not be compared as if the grader and sampling conditions were identical.
+The three profile names are binding choices, not distinct reasoning-effort levels.
 The current default output allowance is 32,768 tokens per completion. In the
 `14f128143` cohort, trial 2 produced three completions of exactly that size with
 no tool calls before the stage deadline. This records an observed resource/use
@@ -105,8 +114,12 @@ pattern, not proof of its cause. A different output budget would be a separate
 measurement condition, not a retroactive correction to these model outcomes.
 
 Retained trial directories contain a writable `workspace` and a sibling
-evaluator-owned `evidence` directory. Stage evidence includes request identity,
-terminal state, elapsed time, answer, and tool calls. Files may contain model
+evaluator-owned `evidence` directory. Each stage checkpoints a `*-progress.json`
+with request/session attribution, retains a raw `*-outcome.json` containing the
+observed request/provider/tool states, and then publishes its immutable acceptance
+receipt. Stage evidence also includes elapsed time, answer, inference calls and
+tool calls. Report provenance records the source revision/dirty state, grader
+digest, endpoint, effective sampling and compiled fixture hashes. Files may contain model
 transcripts; do not commit raw trial evidence or credentials. No subjective
 grading is required for the initial deterministic acceptance path.
 
@@ -136,6 +149,11 @@ databases in the test process, not separate CLI processes or OS sandboxes.
 The private run directory contains identities and potentially sensitive transcripts;
 do not publish it wholesale.
 Replay a report without inference using `node scripts/evals/report.mjs RUN_DIRECTORY`.
+Use `node scripts/evals/watch.mjs RUN_DIRECTORY` for read-only inspection; stopping
+that watcher does not stop the eval. Prefer these evidence files over reopening a
+retained database. If database inspection is necessary, wait until the trial has
+finished, use only that trial's `home-*` directory and recorded identity, and never
+start a second writer against an active home. Do not copy or publish a trial home.
 Unfinished/unreported work is not a prerequisite skip; inconclusive checks remain
 non-passes with their own failure classification. A nonzero eval exit is preserved.
 Use `GENTS_LIVE_CONFIG_RUNS=1 make live-configurator-eval` for a single-trial diagnostic.
@@ -220,9 +238,11 @@ one canonical fixture, which explicitly names `README.md`, the HTML document
 title, and artifact bounds. These task-input changes require new measurements;
 they cannot be retroactively credited to that cohort.
 
-Browser launch failures, timeouts and absent/invalid evaluator receipts are now
-classified as `infrastructure`, distinct from page defects and animated-scene
-`inconclusive` results. Creation and improvement retain available bounded source
+That cohort classified browser launch failures, timeouts and absent/invalid
+evaluator receipts as `infrastructure`. Current reports classify failures inside
+the external checker boundary as `grader`, distinct from broader runner
+infrastructure, page defects and animated-scene `inconclusive` results. Creation
+and improvement retain available bounded source
 on failure too; retention errors preserve the original failure classification.
 
 ## Retained-evidence reassessment
@@ -237,7 +257,7 @@ The offline reassessment below handles that specific false negative using
 retained command evidence. It requires the original request-completion, exact
 script and receipt checks to have passed. It never invokes inference or changes
 the original `trial.json`/acceptance result; it writes a separate
-`builder-readiness-reassessment.json` containing both original and reassessed
+`builder-readiness-reassessment-shell-ast-v4.json` containing both original and reassessed
 results. Report raw and reassessed rates distinctly. Other failures are not
 reclassified. Multiple directories use the platform path separator (`:` on Unix).
 
