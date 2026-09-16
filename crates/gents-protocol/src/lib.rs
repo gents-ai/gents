@@ -19,3 +19,9 @@ pub mod session_hydration;
 pub mod timeline;
 pub mod tool_service_health;
 pub mod transcript;
+
+/// Shared product instructions consumed by CLI, desktop, and live acceptance.
+pub const SETUP_STEWARD_PROMPT: &str = include_str!("../prompts/setup.md");
+
+/// Shared first-run configurator grant; decoded using canonical Tools types.
+pub const SETUP_SELF_CONFIG_JSON: &str = include_str!("../presets/setup-self-config.json");

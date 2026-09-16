@@ -50,7 +50,15 @@ describe("setup steward patches", () => {
         built_ins: { enable_graph_tools: true, enable_context_budget: true },
         self_config: {
           enable_self_config: true,
-          self_config_categories: ["behavior", "tools", "profile", "persona"],
+          self_config_categories: [
+            "behavior",
+            "tools",
+            "profile",
+            "persona",
+            "backend",
+            "mcp_service",
+            "automation",
+          ],
           self_config_no_lockout: true,
           enable_pack_install: true,
         },
@@ -65,8 +73,8 @@ describe("setup steward patches", () => {
     expect(SETUP_STEWARD_PROMPT).toContain("AgentSession selects a behavior");
     expect(SETUP_STEWARD_PROMPT).toContain("Unsafe or invalid request");
     expect(SETUP_STEWARD_PROMPT).toContain("Verify the result");
-    expect(SETUP_STEWARD_PROMPT).toContain("managed process root remains the ceiling");
-    expect(SETUP_STEWARD_PROMPT).toContain("config behavior get");
+    expect(SETUP_STEWARD_PROMPT).toContain("runtime's process ceiling and root");
+    expect(SETUP_STEWARD_PROMPT).toContain("targeted config reads");
     expect(SETUP_STEWARD_PROMPT).toContain("run_graph");
     expect(SETUP_STEWARD_PROMPT).toContain(
       "Never infer its language or workflow from a directory name",
@@ -77,17 +85,13 @@ describe("setup steward patches", () => {
     expect(SETUP_STEWARD_PROMPT).toContain(
       "config tools preview --behavior BEHAVIOR_ID",
     );
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "config tools edit --behavior BEHAVIOR_ID",
-    );
+    expect(SETUP_STEWARD_PROMPT).toContain("config tools edit --behavior BEHAVIOR_ID");
     expect(SETUP_STEWARD_PROMPT).toContain("enable_graph_tools=true");
     expect(SETUP_STEWARD_PROMPT).toContain('bash.network_mode="disabled"');
     expect(SETUP_STEWARD_PROMPT).toContain(
       "config behavior preview edit BEHAVIOR_ID --set FIELD=JSON",
     );
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "config behavior default BEHAVIOR_ID",
-    );
+    expect(SETUP_STEWARD_PROMPT).toContain("config behavior default BEHAVIOR_ID");
     expect(SETUP_STEWARD_PROMPT).not.toContain("config behavior tools");
     expect(SETUP_STEWARD_PROMPT).not.toContain("behavior edit --id");
     expect(SETUP_STEWARD_PROMPT).not.toContain("get_my_config");
@@ -95,12 +99,16 @@ describe("setup steward patches", () => {
     expect(SETUP_STEWARD_PROMPT).not.toContain("install_pack");
     expect(SETUP_STEWARD_PROMPT).toContain("Starter recipes are optional");
     expect(SETUP_STEWARD_PROMPT).toContain(
-      "A code review request is not permission for runtime repair",
+      "A coding/review request is not runtime repair authority",
     );
+    expect(SETUP_STEWARD_PROMPT).toContain("Never adopt another runtime home");
     expect(SETUP_STEWARD_PROMPT).toContain(
-      "Never search for or adopt another runtime home",
+      "Graph terminal states are succeeded, failed and cancelled",
     );
-    expect(SETUP_STEWARD_PROMPT).toContain("not completed");
+    expect(SETUP_STEWARD_PROMPT).toContain("EventSource watches the input collection");
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "Skills supply procedures and declare dependencies; they never grant tools",
+    );
     expect(SETUP_STEWARD_PROMPT).not.toContain(
       "configure this behavior and context as a focused coding agent",
     );

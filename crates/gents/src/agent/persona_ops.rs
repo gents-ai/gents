@@ -54,6 +54,13 @@ pub struct BehaviorRef {
 
 pub const SETUP_STEWARD_BEHAVIOR_TAG: &str = "gents:setup-steward";
 
+/// The explicit first-run configurator grant shared with desktop and CLI.
+/// Working behaviors do not inherit this grant.
+pub fn setup_steward_self_config() -> crate::document_config::SelfConfigTools {
+    serde_json::from_str(gents_protocol::SETUP_SELF_CONFIG_JSON)
+        .expect("bundled Setup grant must match canonical SelfConfigTools")
+}
+
 /// The requested operation, with `clone_from` folded in for `create` (the
 /// only op it applies to).
 #[derive(Debug, Clone, PartialEq, Eq)]
