@@ -1,0 +1,67 @@
+{
+  "fixture_kind": "test_input",
+  "schema_version": 1,
+  "warning": "Synthetic setup input. This is not a scan and contains no credentials.",
+  "sources": [
+    {
+      "source_id": "fixture-project-codex",
+      "kind": "codex",
+      "scope": "project",
+      "selected_root": "/fixture/project",
+      "scan_outcome": "complete"
+    },
+    {
+      "source_id": "fixture-user-codex",
+      "kind": "codex",
+      "scope": "user",
+      "selected_root": "/fixture/user",
+      "scan_outcome": "complete"
+    }
+  ],
+  "items": [
+    {
+      "item_id": "fixture-review-instructions",
+      "source_id": "fixture-project-codex",
+      "relative_source_file": "AGENTS.md",
+      "category": "instruction",
+      "display_label": "Review repository changes",
+      "state": "enabled",
+      "mapping_support": "supported"
+    },
+    {
+      "item_id": "fixture-disabled-hook",
+      "source_id": "fixture-project-codex",
+      "relative_source_file": "config.toml",
+      "category": "hook",
+      "display_label": "Post-edit formatter",
+      "state": "disabled",
+      "mapping_support": "partial"
+    },
+    {
+      "item_id": "fixture-project-model",
+      "source_id": "fixture-project-codex",
+      "relative_source_file": "config.toml",
+      "category": "model_preference",
+      "display_label": "Project review model",
+      "state": "enabled",
+      "mapping_support": "supported"
+    },
+    {
+      "item_id": "fixture-user-model",
+      "source_id": "fixture-user-codex",
+      "relative_source_file": "config.toml",
+      "category": "model_preference",
+      "display_label": "User default model",
+      "state": "enabled",
+      "mapping_support": "supported"
+    }
+  ],
+  "conflicts": [
+    {
+      "item_ids": ["fixture-project-model", "fixture-user-model"],
+      "explanation": "Two model preferences overlap; ask which should apply to the proposed review behavior."
+    }
+  ],
+  "warnings": [],
+  "truncation": null
+}
