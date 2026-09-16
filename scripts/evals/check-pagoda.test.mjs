@@ -14,9 +14,27 @@ async function checkPage(html) {
   return run(process.execPath, [script, root, path.join(root, "evidence")]);
 }
 
+test("uncontrolled randomness remains inconclusive", async () => {
+  await assert.rejects(
+    checkPage(`<!doctype html><title>Pagoda</title>
+    <button onclick="document.body.style.color='red'">Toggle night</button>
+    <script>document.body.style.background = '#' + crypto.getRandomValues(new Uint32Array(1))[0].toString(16).padStart(8, '0').slice(0,6);</script>`),
+    /matched-time control renders differ/,
+  );
+});
+
+test("an overlay cannot satisfy the interaction check", async () => {
+  await assert.rejects(
+    checkPage(`<!doctype html><title>Pagoda</title>
+    <button onclick="document.body.style.background='black'">Toggle night</button>
+    <div style="position:fixed;inset:0;z-index:100"></div>`),
+    /intercepts pointer events|Timeout/,
+  );
+});
+
 for (const animated of [false, true]) {
   for (const changes of [true, false]) {
-    test(`browser check ${animated ? "is inconclusive" : changes ? "accepts" : "rejects"} (animated=${animated}, toggleWorks=${changes})`, async () => {
+    test(`browser check ${changes ? "accepts" : "rejects"} (animated=${animated}, toggleWorks=${changes})`, async () => {
       const execution = checkPage(
         `<!doctype html><title>Pagoda</title>
       <h1>Pagoda</h1><button onclick="${changes ? "document.body.style.background='black'" : "void 0"}">Toggle night</button>
@@ -31,9 +49,7 @@ for (const animated of [false, true]) {
           : ""
       }`,
       );
-      if (animated)
-        await assert.rejects(execution, /visible-change inconclusive/);
-      else if (changes) await execution;
+      if (changes) await execution;
       else
         await assert.rejects(execution, /toggle must produce a visible change/);
     });
@@ -58,12 +74,12 @@ for (const [name, controls, expectedError] of [
   ],
   [
     "rejects a different visible label with a prefix-matching name",
-    '<button>Toggle night mode</button>',
+    "<button>Toggle night mode</button>",
     /one accessible Toggle night button is required/,
   ],
   [
     "rejects a missing control",
-    '<span>Toggle night</span>',
+    "<span>Toggle night</span>",
     /one accessible Toggle night button is required/,
   ],
   [

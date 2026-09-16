@@ -13,10 +13,19 @@ const browser = await chromium.launch({ channel: "chrome", headless: true });
 const errors = [];
 const network = [];
 let inconclusive = false;
-try {
+async function captureScene(clicked, filename) {
   const page = await browser.newPage({
     viewport: { width: 1280, height: 900 },
     offline: true,
+  });
+  await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
+  await page.addInitScript(() => {
+    let seed = 123456789;
+    Math.random = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
   });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/*", (route) => {
@@ -31,7 +40,7 @@ try {
     return route.abort();
   });
   await page.goto(pathToFileURL(path.join(project, "index.html")).href);
-  await page.waitForTimeout(500);
+  await page.clock.runFor(500);
   assert((await page.title()).trim(), "page must have a document title");
   const exactToggle = page.getByRole("button", {
     name: "Toggle night",
@@ -52,26 +61,29 @@ try {
   await page.mouse.move(0, 0);
   await page.evaluate(() => document.activeElement?.blur());
   const capture = { mask: [page.getByRole("button")], animations: "disabled" };
-  const baseline = await page.screenshot(capture);
-  await page.waitForTimeout(500);
-  const day = await page.screenshot({
-    ...capture,
-    path: path.join(evidence, "day.png"),
-  });
-  await toggle.click();
+  if (clicked) await toggle.click({ timeout: 5000 });
   await page.mouse.move(0, 0);
   await page.evaluate(() => document.activeElement?.blur());
-  await page.waitForTimeout(500);
-  const night = await page.screenshot({
+  await page.clock.runFor(500);
+  const screenshot = await page.screenshot({
     ...capture,
-    path: path.join(evidence, "night.png"),
+    path: path.join(evidence, filename),
   });
+  await page.close();
+  return screenshot;
+}
+
+try {
+  // Independent controls must match before a clicked/control difference counts.
+  const baseline = await captureScene(false, "control.png");
+  const day = await captureScene(false, "day.png");
+  const night = await captureScene(true, "night.png");
   assert.deepEqual(errors, [], "page must run without JavaScript errors");
   assert.deepEqual(network, [], "page must not request network dependencies");
   inconclusive = !baseline.equals(day);
   assert(
     !inconclusive,
-    "visible-change inconclusive: scene animates before clicking; inspect retained screenshots",
+    "visible-change inconclusive: matched-time control renders differ; inspect retained screenshots",
   );
   assert(
     !day.equals(night),
@@ -82,6 +94,7 @@ try {
     JSON.stringify(
       {
         passed: true,
+        grader: "matched-clock-v2",
         errors,
         network,
         checks: [
@@ -105,6 +118,7 @@ try {
     JSON.stringify(
       {
         passed: false,
+        grader: "matched-clock-v2",
         inconclusive,
         error: String(error),
         errors,

@@ -27,6 +27,9 @@ mod cases;
 #[path = "reporting.rs"]
 mod reporting;
 
+#[path = "readiness.rs"]
+mod readiness;
+
 const EVAL_CASE_ID: &str = "progressive-configurator";
 const ONBOARDING_PROMPT: &str =
     include_str!("../fixtures/configurator_evals/software_team_and_code_review.md");
