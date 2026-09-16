@@ -18,6 +18,18 @@ fn setup_guidance_covers_conversation_authority_and_repeatability() {
         "Never create duplicate behavior, profile, skill, or backend rows",
         "Server default changes require approved intent",
         "Start a new session on the working behavior",
+        "config behavior context edit",
+        "A prompt edit does not require cloning",
+        "Titles are not deduplication keys",
+        "not a custom MailItem collection",
+        "scheduled request's requester may differ",
+        "Mailbox attention is not authority",
+        "Keep the database configuration minimal",
+        "identify its exact ID from your write receipt",
+        "verify both removal and preservation",
+        "canonical_mailbox_entries",
+        "Persist mailbox operating instructions",
+        "Do not derive condition identity from the current measurement",
     ] {
         assert!(
             prompt.contains(required),

@@ -298,6 +298,9 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             "enabled_resources": model_resources(&self.categories, self.allow_pack_install),
             "patch_contracts": help_patch_contracts(resource),
             "examples": if resource == Some("datastore") { datastore::entry_examples() } else { Value::Null },
+            "canonical_mailbox_entries": if resource == Some("datastore") {
+                json!({"entries": [crate::document_config::SurfaceToolDecl::Create(crate::mailbox::canonical_mailbox_write_decl())]})
+            } else { Value::Null },
             "current_limitations": {
                 "pack_remove": "unavailable because installation records do not yet distinguish documents created by an install from matching documents the install reused",
             },

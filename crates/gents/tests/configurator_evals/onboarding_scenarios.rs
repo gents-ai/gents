@@ -33,6 +33,160 @@ const RECOVERED_NAME: &str = "Recovered Builder";
 const USER_EDIT_SENTINEL: &str = "USER_EDIT_SENTINEL: preserve this authored line.";
 const SAMPLING_ID: &str = "onboarding-glm-sampling";
 
+const MONITOR_PREVIEW: &str =
+    include_str!("../fixtures/configurator_evals/onboarding/monitor_mailbox.md");
+const MONITOR_APPROVE: &str =
+    include_str!("../fixtures/configurator_evals/onboarding/monitor_mailbox_approve.md");
+const MONITOR_EDIT: &str =
+    include_str!("../fixtures/configurator_evals/onboarding/monitor_mailbox_edit.md");
+
+#[tokio::test]
+#[ignore = "live: set GENTS_LIVE_ONBOARDING=1, GENTS_D4F_ENDPOINT and GENTS_EVAL_ROOT"]
+async fn live_monitor_mailbox_acceptance() -> Result<()> {
+    use super::{reporting, stages};
+    use stages::CaseId;
+    const CASES: &[CaseId] = &[
+        CaseId::new("monitor-preview"),
+        CaseId::new("monitor-configure"),
+        CaseId::new("monitor-edit-in-place"),
+        CaseId::new("monitor-two-findings"),
+        CaseId::new("monitor-deduplicate"),
+    ];
+    ensure!(std::env::var("GENTS_LIVE_ONBOARDING").as_deref() == Ok("1"));
+    let artifacts = retained_artifact_root()?;
+    let evidence = artifacts.join("evidence");
+    let root = artifacts.join("workspace");
+    std::fs::create_dir_all(&root)?;
+    let model = super::model_name();
+    let provenance = reporting::RunProvenance::current(
+        "monitor-mailbox",
+        "monitor-mailbox-v1",
+        std::env::var("GENTS_D4F_ENDPOINT")?,
+        SAMPLING_ID,
+        1.0,
+        0.95,
+        &[
+            reporting::EvidenceSource::new("grader", include_bytes!("onboarding_scenarios.rs")),
+            reporting::EvidenceSource::new("stages", include_bytes!("stages.rs")),
+        ],
+        &[
+            reporting::EvidenceSource::new("preview", MONITOR_PREVIEW.as_bytes()),
+            reporting::EvidenceSource::new("approval", MONITOR_APPROVE.as_bytes()),
+            reporting::EvidenceSource::new("edit", MONITOR_EDIT.as_bytes()),
+            reporting::EvidenceSource::new(
+                "setup",
+                include_bytes!("../../../gents-protocol/prompts/setup.md"),
+            ),
+        ],
+    )?;
+    let mut report = reporting::RunReport::new(
+        artifacts.clone(),
+        "monitor-mailbox",
+        CASES,
+        vec![model.clone()],
+        1,
+        "d4f",
+        1,
+        stages::stage_timeout()?.as_secs(),
+        provenance,
+    )?;
+    report.save()?;
+    let db = super::retained_trial_db(&artifacts).await;
+    let result: Result<()> = async {
+        let access = gents::ConfigAccess::Local(db.node.clone());
+        let schema = gents::config_client::preview_schema_install(&access, stages::INPUT_SCHEMA).await?;
+        gents::config_client::apply_schema_install(&access, stages::INPUT_SCHEMA, &schema.artifact_digest).await?;
+        let identity: Arc<dyn AgentIdentity> = Arc::new(gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)?);
+        let (owner, setup) = crate::support::live_inference::bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await;
+        install_onboarding_profiles(db.node.as_ref(), &owner, crate::support::live_inference::D4F_BACKEND_ID, &model).await?;
+        super::install_eval_workspace_root(db.node.as_ref(), &root.to_string_lossy()).await;
+        super::install_setup_configurator(db.node.as_ref(), &owner, &setup, &root.to_string_lossy()).await;
+        let observer = Arc::new(stages::ActivationObserver::default());
+        let (agent, runtime) = crate::support::live_inference::boot_d4f_agent_with_options(&db, identity,
+            gents::DocumentRuntimeOptions { tool_ceiling: gents::ToolCeiling::readwrite(&root), runtime_snapshot_observer: Some(observer.clone()), ..Default::default() }).await?;
+        let activation = stages::ActivationFence::new(runtime, observer, db.node.clone());
+        let outcome: Result<()> = async {
+            let before = configuration_snapshot(db.node.as_ref(), &owner).await?;
+            stages::checked(CASES[0], &evidence, stages::acceptance(async {
+                run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-preview", &render(MONITOR_PREVIEW, "{{ROOT}}", &root), &evidence).await?;
+                ensure!(configuration_snapshot(db.node.as_ref(), &owner).await.map_err(stages::infrastructure)? == before, "preview mutated configuration");
+                Ok(())
+            })).await?;
+            let configured = stages::checked(CASES[1], &evidence, stages::acceptance(async {
+                run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-configure", &render(MONITOR_APPROVE, "{{ROOT}}", &root), &evidence).await?;
+                let snapshot = configuration_snapshot(db.node.as_ref(), &owner).await.map_err(stages::infrastructure)?;
+                let behavior = behavior_by_name(&snapshot, "Mailbox Monitor")?;
+                ensure!(behavior["inference_profile_id"] == "onboarding-medium");
+                ensure!(behavior_context(&snapshot, behavior)?["system_prompt"].as_str().unwrap_or_default().contains("MONITOR_CHECKS_V1\nNo repairs without user approval."), "literal prompt did not round-trip");
+                for key in ["principals", "profiles", "backends", "credentials", "sampling"] {
+                    ensure!(snapshot[key] == before[key], "unexpected change to {key}");
+                }
+                Ok(snapshot)
+            })).await?;
+            let behavior = behavior_by_name(&configured, "Mailbox Monitor")?;
+            let id = behavior["behavior_id"].as_str().context("behavior ID missing")?;
+            stages::checked(CASES[2], &evidence, stages::acceptance(async {
+                run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-edit-in-place", MONITOR_EDIT, &evidence).await?;
+                let mut after = configuration_snapshot(db.node.as_ref(), &owner).await.map_err(stages::infrastructure)?;
+                let old_prompt = behavior_context(&configured, behavior)?["system_prompt"].as_str().context("prompt missing")?;
+                let context = after["contexts"].as_array_mut().context("contexts missing")?.iter_mut().find(|c| c["context_id"] == behavior["context_id"]).context("original context missing")?;
+                ensure!(context["system_prompt"] == old_prompt.replace("MONITOR_CHECKS_V1", "MONITOR_CHECKS_V2"), "edit changed more than the approved literal marker");
+                context["system_prompt"] = Value::String(old_prompt.into());
+                ensure!(after == configured, "prompt edit replaced IDs or changed unrelated configuration");
+                Ok(())
+            })).await?;
+            let query = "{ MailboxItem { item_key requester_did target_behavior_id status kind action source_id title } }";
+            let mut first = Vec::new();
+            for (index, case) in [(3, "monitor-two-findings"), (4, "monitor-deduplicate")] {
+                stages::checked(CASES[index], &evidence, stages::acceptance(async {
+                    run_stage(&activation, db.node.as_ref(), &owner, id, case,
+                        "Synthetic check results only: disk=81%, docker=unavailable. File one acknowledgment flag per condition in the built-in mailbox for this request's requester, using stable distinct source IDs for disk and docker. Repeated identical findings must not create duplicates. Do not inspect the machine, execute commands or repairs. Use only mailbox tools.", &evidence).await?;
+                    let rows = sorted(super::rows(db.node.as_ref(), query, "MailboxItem").await.map_err(stages::infrastructure)?, "item_key");
+                    ensure!(rows.len() == 2, "expected two distinct built-in mailbox findings, got {}", rows.len());
+                    ensure!(rows[0]["source_id"] != rows[1]["source_id"], "distinct conditions share a deduplication key");
+                    for row in &rows {
+                        ensure!(row["requester_did"] == owner && row["target_behavior_id"] == id && row["status"] == "open" && row["kind"] == "flag" && row["action"] == "ack", "incorrect mailbox recipient/action/stamping");
+                    }
+                    if index == 3 { first = rows; } else { ensure!(rows == first, "repeat created or changed mailbox findings"); }
+                    Ok(())
+                })).await?;
+            }
+            Ok(())
+        }.await;
+        agent.shutdown().await;
+        outcome
+    }.await;
+    db.node.shutdown().await;
+    let trial = reporting::TrialResult {
+        case_id: "monitor-mailbox",
+        provider: "d4f",
+        model,
+        trial: 1,
+        passed: result.is_ok(),
+        trial_failure_kind: result.as_ref().err().map(|e| {
+            e.downcast_ref::<stages::EvaluationFailure>()
+                .map_or("infrastructure", stages::EvaluationFailure::kind)
+                .into()
+        }),
+        terminal_state: Some(
+            if result.is_ok() {
+                "completed"
+            } else {
+                "failed"
+            }
+            .into(),
+        ),
+        error: result.as_ref().err().map(|e| format!("{e:#}")),
+        assistant_answer_excerpt: None,
+        artifacts: Some(artifacts.display().to_string()),
+        cases: stages::case_results(CASES, &evidence)?,
+    };
+    reporting::write_json_new(&artifacts.join("trial.json"), &trial)?;
+    report.record(trial)?;
+    report.save()?;
+    result
+}
+
 fn render(template: &str, name: &str, value: &Path) -> String {
     template.replace(name, &value.to_string_lossy())
 }

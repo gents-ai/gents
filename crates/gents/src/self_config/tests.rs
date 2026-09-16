@@ -2065,6 +2065,19 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         .get("target_ids")
         .is_some());
 
+    let mailbox_help: Value = serde_json::from_str(
+        &call_config_tool(&tools, vec!["help".into(), "datastore".into()])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        mailbox_help["canonical_mailbox_entries"],
+        json!({"entries": [
+            crate::document_config::SurfaceToolDecl::Create(crate::mailbox::canonical_mailbox_write_decl())
+        ]})
+    );
+
     let create_profile_args = vec![
         "profile".into(),
         "preview".into(),

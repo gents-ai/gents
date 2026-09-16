@@ -47,6 +47,20 @@ sentinel; acceptance rejects disclosure and never reads personal agent homes.
 
 ## Manual acceptance checklist
 
+### Monitoring/mailbox regression
+
+Run the same live command with test name
+`configurator::onboarding_scenarios::live_monitor_mailbox_acceptance` to exercise
+preview/approval, in-place multiline Context editing, two distinct canonical
+mailbox findings and repeat deduplication. This suite uses shared `report.json`
+reporting and immutable case/trial receipts. Approval is a self-contained fresh
+native invocation, not a replay of a desktop conversation. Its synthetic task
+requester is the runtime principal: it does **not** prove desktop-user delivery,
+scheduled recipient propagation, or a repair handoff. Those require separate
+acceptance with the real client identity and explicit repair approval.
+
+### General onboarding
+
 Use a fresh synthetic home and an explicit runtime root. Do not point Setup or a
 working behavior at a personal home.
 
