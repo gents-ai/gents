@@ -18,9 +18,11 @@ replacement project. Automation depends on onboarding, not artwork acceptance.
 Implementation status: onboarding, Builder execution, skill import/use, pagoda
 creation, read-only review, improvement and document automation are wired
 sequentially. CLI, desktop and eval use the same Setup prompt and canonical
-self-configuration grant. Only onboarding plus Builder
-readiness has completed ten live GLM trials so far (10/10). The expanded sequence
-still needs its ten-trial live run. An initial coding batch was stopped after
+self-configuration grant. The completed diagnostic cohort below exercised ten
+onboarding, Builder readiness, skill and automation cases, but only one review
+and improvement case. A reproducible cohort of the corrected implementation,
+including ten actual attempts at each dependent case, remains outstanding.
+An initial coding batch was stopped after
 finding a harness bug reading streamed answers; it is not a valid capability
 measurement. The corrected runner uses the existing streamed-answer reader and
 retains inference failure reasons and token accounting. Pagoda browser checks require `npm ci` at the repository
@@ -43,8 +45,10 @@ fresh-session live skill execution has passed in single-trial GLM diagnostics
 disk and require the working behavior's ordinary file permissions. Imports retain
 the canonical local source_directory and load_skill supplies that base for
 supporting references. The fixture now uses standard source-directory-relative
-paths; this stronger check still needs a live run. Earlier diagnostics used
-workspace-relative paths and do not establish this behavior.
+paths. Trials 1–6 of the `b96b69918` cohort passed this stronger live check
+(interim observation on 2026-09-16 at 06:20 UTC, not a completed ten-trial rate).
+Earlier diagnostics used workspace-relative paths and do not establish this
+behavior.
 
 Stage invocation now writes `GentsEvalStageInput` documents. Canonical Tasks,
 EventSources and Triggers own request/session materialization; the harness does
