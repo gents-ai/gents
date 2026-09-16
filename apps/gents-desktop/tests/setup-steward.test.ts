@@ -73,6 +73,10 @@ describe("setup steward patches", () => {
     expect(SETUP_STEWARD_PROMPT).toContain("AgentSession selects a behavior");
     expect(SETUP_STEWARD_PROMPT).toContain("Unsafe or invalid request");
     expect(SETUP_STEWARD_PROMPT).toContain("Verify the result");
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "Keep template data separate from instructions and metadata",
+    );
+    expect(SETUP_STEWARD_PROMPT).toContain("minimal runnable result early");
     expect(SETUP_STEWARD_PROMPT).toContain("runtime's process ceiling and root");
     expect(SETUP_STEWARD_PROMPT).toContain("targeted config reads");
     expect(SETUP_STEWARD_PROMPT).toContain("run_graph");
