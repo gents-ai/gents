@@ -34,103 +34,107 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
     let agent_did = agent_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
+    serve
+        .capturing(async {
+            wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+            wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
-    run_cli_text(
-        &home_dir,
-        &["config", "export", "--root", &root.to_string_lossy()],
-    )?;
-    let config_path = root.join("pack_config.json");
-    let mut config = read_json_file(&config_path)?;
-    let behavior_id = config["agent_principal"]
-        .get("default_behavior_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
-        .to_string();
+            run_cli_text(
+                &home_dir,
+                &["config", "export", "--root", &root.to_string_lossy()],
+            )?;
+            let config_path = root.join("pack_config.json");
+            let mut config = read_json_file(&config_path)?;
+            let behavior_id = config["agent_principal"]
+                .get("default_behavior_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+                .to_string();
 
-    let task_id = format!("{agent_name}-task");
-    let schedule_id = format!("{agent_name}-schedule");
-    let trigger_id = format!("{agent_name}-trigger");
-    let event_source_id = format!("{agent_name}-event-source");
-    let service_id = format!("{agent_name}-mcp");
+            let task_id = format!("{agent_name}-task");
+            let schedule_id = format!("{agent_name}-schedule");
+            let trigger_id = format!("{agent_name}-trigger");
+            let event_source_id = format!("{agent_name}-event-source");
+            let service_id = format!("{agent_name}-mcp");
 
-    config["tasks"] = serde_json::json!([{
-        "task_id": task_id.clone(),
-        "display_name": "Read Commands Task",
-        "description": "Seeds config read command coverage.",
-        "behavior_id": behavior_id.clone(),
-        "prompt_template": "Report config read status.",
-        "enabled": false,
-    }]);
-    config["schedules"] = serde_json::json!([{
-        "schedule_id": schedule_id.clone(),
-        "cadence": {"kind": "interval", "interval_secs": 3600},
-    }]);
-    config["event_sources"] = serde_json::json!([{
-        "event_source_id": event_source_id.clone(),
-        "source_collection": "InferenceBackend",
-        "event_kind": "created",
-    }]);
-    config["triggers"] = serde_json::json!([{
-        "trigger_id": trigger_id.clone(),
-        "task_id": task_id.clone(),
-        "source": {"kind": "event", "event_source_id": event_source_id},
-        "enabled": false,
-        "concurrency": "serial",
-    }]);
-    config["tool_service_registries"] = serde_json::json!([{
-        "service_id": service_id.clone(),
-        "display_name": "Read Commands MCP",
-        "description": "Seeded MCP service.",
-        "hostname": "localhost",
-        "tailscale_ip": "",
-        "lan_ip": "",
-        "mcp_port": 3030,
-        "mcp_path": "/mcp",
-        "send_agent_did": true,
-    }]);
-    write_json_file(&config_path, &config)?;
+            config["tasks"] = serde_json::json!([{
+                "task_id": task_id.clone(),
+                "display_name": "Read Commands Task",
+                "description": "Seeds config read command coverage.",
+                "behavior_id": behavior_id.clone(),
+                "prompt_template": "Report config read status.",
+                "enabled": false,
+            }]);
+            config["schedules"] = serde_json::json!([{
+                "schedule_id": schedule_id.clone(),
+                "cadence": {"kind": "interval", "interval_secs": 3600},
+            }]);
+            config["event_sources"] = serde_json::json!([{
+                "event_source_id": event_source_id.clone(),
+                "source_collection": "InferenceBackend",
+                "event_kind": "created",
+            }]);
+            config["triggers"] = serde_json::json!([{
+                "trigger_id": trigger_id.clone(),
+                "task_id": task_id.clone(),
+                "source": {"kind": "event", "event_source_id": event_source_id},
+                "enabled": false,
+                "concurrency": "serial",
+            }]);
+            config["tool_service_registries"] = serde_json::json!([{
+                "service_id": service_id.clone(),
+                "display_name": "Read Commands MCP",
+                "description": "Seeded MCP service.",
+                "hostname": "localhost",
+                "tailscale_ip": "",
+                "lan_ip": "",
+                "mcp_port": 3030,
+                "mcp_path": "/mcp",
+                "send_agent_did": true,
+            }]);
+            write_json_file(&config_path, &config)?;
 
-    let apply = run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "apply",
-            "--root",
-            &root.to_string_lossy(),
-            "--graphql",
-            &graphql,
-        ],
-    )?;
-    assert_eq!(apply.get("ok").and_then(Value::as_bool), Some(true));
+            let apply = run_cli_json(
+                &home_dir,
+                &[
+                    "config",
+                    "apply",
+                    "--root",
+                    &root.to_string_lossy(),
+                    "--graphql",
+                    &graphql,
+                ],
+            )?;
+            assert_eq!(apply.get("ok").and_then(Value::as_bool), Some(true));
 
-    assert_list_show(
-        &home_dir,
-        &graphql,
-        &["config", "trigger"],
-        "Trigger",
-        "trigger_id",
-        &trigger_id,
-    )?;
-    assert_list_show(
-        &home_dir,
-        &graphql,
-        &["config", "schedule"],
-        "Schedule",
-        "schedule_id",
-        &schedule_id,
-    )?;
-    assert_list_show(
-        &home_dir,
-        &graphql,
-        &["config", "mcp"],
-        "ToolServiceRegistry",
-        "service_id",
-        &service_id,
-    )?;
+            assert_list_show(
+                &home_dir,
+                &graphql,
+                &["config", "trigger"],
+                "Trigger",
+                "trigger_id",
+                &trigger_id,
+            )?;
+            assert_list_show(
+                &home_dir,
+                &graphql,
+                &["config", "schedule"],
+                "Schedule",
+                "schedule_id",
+                &schedule_id,
+            )?;
+            assert_list_show(
+                &home_dir,
+                &graphql,
+                &["config", "mcp"],
+                "ToolServiceRegistry",
+                "service_id",
+                &service_id,
+            )?;
 
-    Ok(())
+            Ok(())
+        })
+        .await
 }
 
 fn assert_list_show(
