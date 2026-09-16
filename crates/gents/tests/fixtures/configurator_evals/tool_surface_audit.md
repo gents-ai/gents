@@ -11,7 +11,7 @@ values for nested groups and runtime ceilings enforced by existing owners.
 
 | Capability | Model configuration path | Remaining execution/authoring coverage |
 | --- | --- | --- |
-| Host files and commands | `behavior create --preset write/readonly --root`; `tools edit --behavior` host group | Builder readiness executes a shell test; pagoda browser checks passed in one live diagnostic, ten-trial measurement pending |
+| Host files and commands | `behavior create --preset write/readonly --root`; `tools edit --behavior` host group | Builder readiness executes a shell test; completed corrected and supplemental cohorts each passed pagoda creation 1/10, with deadlines and inconclusive animation checks reported separately in README |
 | Background commands | Host bash background flags and timeout settings | Existing runtime tests; add consumer process start/observe/cancel case |
 | Named CLI tools | Host cli selection | Requires installed executable and a runtime execution check |
 | MCP | Remote service/tool allowlists and presentation; `mcp-service get/preview/edit` | Existing services only; missing service creation and catalog discovery in config |
@@ -30,9 +30,12 @@ values for nested groups and runtime ceilings enforced by existing owners.
 | Self-configuration | Explicit categories, preview, no-lockout, separate pack install grant | CLI/desktop initial grants now include advertised backend/MCP/automation categories |
 
 Next required work: measure the corrected coding prompts/grader and complete ten
-actual review/improvement attempts, without counting prerequisite skips.
+actual improvement attempts, without counting prerequisite skips (eleven reviews
+and eight improvements completed across the corrected and supplemental cohorts).
 Template authoring now compiles through the execution parser after a live
-diagnostic exposed accepted invalid syntax; the live recovery check is pending.
+diagnostic exposed accepted invalid syntax. Subsequent automation cohorts passed
+9/10 and 8/10; syntax validation does not establish correct output framing or
+appropriately bounded datastore access.
 Audit gaps for other
 referenced documents must remain visible until implemented and exercised. Do not
 grant all operational capabilities to Setup merely to test a working behavior.
