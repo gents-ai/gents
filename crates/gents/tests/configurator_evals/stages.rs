@@ -518,8 +518,18 @@ async fn submit_stage(
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_stage_waits_for_exact_subscription_configuration_without_live_inference() {
+#[test]
+fn native_stage_waits_for_exact_subscription_configuration_without_live_inference() {
+    let test_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_stack_size(8 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("configurator activation test runtime");
+    test_runtime.block_on(native_stage_waits_for_exact_subscription_configuration());
+}
+
+async fn native_stage_waits_for_exact_subscription_configuration() {
     use gents::AgentIdentity;
     let db = crate::support::test_db("eval-activation-fence").await;
     let identity = std::sync::Arc::new(crate::support::fixtures::test_identity(
