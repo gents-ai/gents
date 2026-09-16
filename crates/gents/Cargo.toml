@@ -17,8 +17,8 @@ default = [
 ]
 agent-memory = []
 typescript = ["dep:ts-rs"]
-# Gates the e2e_live test binary out of default builds: every test in it is
-# live-inference-gated, so default runs paid a ~160MB link to execute nothing.
+# Gates the optional live-inference collection out of default builds.
+# Configurator regressions are default-built separately in e2e_configurator.
 live-e2e = []
 
 # All other test binaries are auto-discovered; this explicit target overrides

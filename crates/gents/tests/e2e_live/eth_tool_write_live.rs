@@ -34,9 +34,9 @@ use tokio::process::{Child, Command};
 use crate::eth_tool_live::{
     assert_endpoint_reachable, bind_glm_backend, fetch_tool_calls, live_enabled, live_endpoint,
 };
-use crate::steward_loop_live::wait_for_request_terminal;
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
+use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::test_db;
 
 const TOOL_ID: &str = "local";

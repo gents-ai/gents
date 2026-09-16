@@ -31,9 +31,9 @@ use serde::Deserialize;
 
 use gents::AgentIdentity;
 
-use crate::steward_loop_live::{bind_d4f_backend, wait_for_request_terminal};
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
+use crate::support::live_inference::{bind_d4f_backend, wait_for_request_terminal};
 use crate::support::test_db;
 
 fn d4f_enabled() -> bool {

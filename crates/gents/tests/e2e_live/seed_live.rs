@@ -25,11 +25,11 @@ use gents::{
 };
 use serde::Deserialize;
 
-use crate::steward_loop_live::{
-    bind_d4f_backend, boot_d4f_agent, wait_for_assistant_answer, wait_for_request_terminal,
-};
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::create_runtime_request;
+use crate::support::live_inference::{
+    bind_d4f_backend, boot_d4f_agent, wait_for_assistant_answer, wait_for_request_terminal,
+};
 use crate::support::{create_agent_message, test_db};
 
 const PROFILE_SEED: i64 = 424_242;

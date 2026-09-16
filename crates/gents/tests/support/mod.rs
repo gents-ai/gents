@@ -14,6 +14,7 @@ pub mod fixtures;
 pub mod http_mock;
 pub(crate) mod identity_stubs;
 pub mod interrupt;
+pub mod live_inference;
 pub mod mock_endpoint;
 pub mod mock_subscription;
 pub mod p2p_waits;

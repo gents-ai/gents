@@ -6,8 +6,8 @@ use gents::graphql::escape_graphql_string;
 use gents::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
 use gents::{AgentIdentity, Collection, DatastoreToolSurfaceDocument};
 
-use super::steward_loop_live::{bind_d4f_backend, boot_d4f_agent, wait_for_request_terminal};
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
+use crate::support::live_inference::{bind_d4f_backend, boot_d4f_agent, wait_for_request_terminal};
 use crate::support::test_db;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

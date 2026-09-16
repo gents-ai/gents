@@ -35,6 +35,7 @@ async fn behavior_configuration(
 
 /// Exercise the generated default in a new session without changing its grants.
 pub(super) async fn verify_builder_execution(
+    activation: &stages::ActivationFence,
     node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     user_home: &str,
@@ -51,6 +52,7 @@ pub(super) async fn verify_builder_execution(
         .and_then(|row| row["default_behavior_id"].as_str())
         .context("generated default behavior is missing")?;
     let result = stages::execute(
+        activation,
         node,
         agent_did,
         builder,
@@ -353,6 +355,7 @@ fn fresh_pagoda_sessions_receive_the_complete_original_request() {
 }
 
 pub(super) async fn verify_pagoda_sequence(
+    activation: &stages::ActivationFence,
     node: &gents::defra_node::EmbeddedNode,
     owner: &str,
     workspace: &std::path::Path,
@@ -375,6 +378,7 @@ pub(super) async fn verify_pagoda_sequence(
         evidence,
         retain_checked_project(&project, &evidence.join("pagoda-source"), async {
             let created = stages::execute(
+                activation,
                 node,
                 owner,
                 builder,
@@ -404,6 +408,7 @@ pub(super) async fn verify_pagoda_sequence(
     let review = stages::checked(stages::CaseId::Review, evidence, async {
         let before = project_snapshot(workspace)?;
         let review = stages::execute(
+            activation,
             node,
             owner,
             reviewer,
@@ -435,6 +440,7 @@ pub(super) async fn verify_pagoda_sequence(
         evidence,
         retain_checked_project(&project, &evidence.join("improve-source"), async {
             let improved = stages::execute(
+                activation,
                 node,
                 owner,
                 builder,
@@ -477,6 +483,7 @@ fn sequence_summary_retains_both_failures() {
 }
 
 pub(super) async fn verify_skill_workflow(
+    activation: &stages::ActivationFence,
     node: &gents::defra_node::EmbeddedNode,
     owner: &str,
     setup: &str,
@@ -496,6 +503,7 @@ pub(super) async fn verify_skill_workflow(
     std::fs::write(source.join("references/checklist.md"),
         format!("In your working root, write readiness/skill-check.txt containing exactly {marker} followed by a newline. Read it back and report the result.\n"))?;
     let configured = stages::execute(
+        activation,
         node,
         owner,
         setup,
@@ -507,7 +515,7 @@ pub(super) async fn verify_skill_workflow(
     )
     .await?;
     configured.ensure_completed()?;
-    stages::wait_for_config_activation(node, owner, &configured.request_id).await?;
+    activation.wait().await?;
     let imported = rows(node, &format!(
         r#"{{ Skill(filter: {{agent_did: {{_eq: "{}"}}, skill_id: {{_eq: "eval-coding-check"}}}}) {{source_directory}} }}"#,
         gents::graphql::escape_graphql_string(owner)
@@ -553,6 +561,7 @@ pub(super) async fn verify_skill_workflow(
         "Setup executed the skill instead of configuring Builder"
     );
     let executed = stages::execute(
+        activation,
         node,
         owner,
         builder,
@@ -586,12 +595,13 @@ pub(super) async fn verify_skill_workflow(
 }
 
 pub(super) async fn verify_document_automation(
+    activation: &stages::ActivationFence,
     node: &gents::defra_node::EmbeddedNode,
     owner: &str,
     setup: &str,
     evidence: &std::path::Path,
 ) -> Result<()> {
-    let result = run_document_automation(node, owner, setup, evidence).await;
+    let result = run_document_automation(activation, node, owner, setup, evidence).await;
     let retention = async {
     // Persist dispatch failures too: a bad template can fail before there is
     // any AgentRequest or inference call to inspect.
@@ -653,6 +663,7 @@ async fn automation_trigger_ids(
 }
 
 async fn run_document_automation(
+    activation: &stages::ActivationFence,
     node: &gents::defra_node::EmbeddedNode,
     owner: &str,
     setup: &str,
@@ -661,6 +672,7 @@ async fn run_document_automation(
     let setup_before = behavior_configuration(node, owner, Some(setup)).await?;
     let mut builder_before = behavior_configuration(node, owner, None).await?;
     let configured = stages::execute(
+        activation,
         node,
         owner,
         setup,
@@ -670,7 +682,7 @@ async fn run_document_automation(
     )
     .await?;
     configured.ensure_completed()?;
-    stages::wait_for_config_activation(node, owner, &configured.request_id).await?;
+    activation.wait().await?;
     ensure!(
         setup_before == behavior_configuration(node, owner, Some(setup)).await?,
         "automation changed Setup"
@@ -997,6 +1009,7 @@ fn missing_or_invalid_browser_receipts_are_infrastructure_failures() {
 }
 
 #[tokio::test]
+#[ignore = "requires Google Chrome and repository npm ci; run make test-evals-browser"]
 async fn browser_checker_accepts_static_fixture_without_live_inference() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");

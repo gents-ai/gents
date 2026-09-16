@@ -1,4 +1,4 @@
-//! Shared execution and evidence collection for progressive consumer evals.
+//! Shared native execution and evidence collection for progressive consumer evals.
 //! Assertions remain outside the evaluated behaviors and their writable roots.
 
 use std::path::Path;
@@ -255,107 +255,152 @@ pub fn case_results(evidence: &Path) -> Result<Vec<CaseResult>> {
         .collect()
 }
 
-/// Wait for runtime activation after this stage's last committed config patch.
-/// A fresh session alone does not bypass the reconciliation debounce.
-pub async fn wait_for_config_activation(
-    node: &EmbeddedNode,
-    owner: &str,
-    request_id: &str,
-) -> Result<()> {
-    config_activation(node, owner, request_id)
-        .await
-        .map_err(infrastructure)
+/// Observational fence only: configuration resolution and subscription setup
+/// remain owned by the runtime. Call after writes, with no concurrent authoring.
+type SubscriptionObservation = (u64, String, Result<(), String>);
+
+pub struct ActivationObserver {
+    ready: tokio::sync::watch::Sender<Option<SubscriptionObservation>>,
 }
 
-async fn config_activation(node: &EmbeddedNode, owner: &str, request_id: &str) -> Result<()> {
-    let request = escape_graphql_string(request_id);
-    let calls = node.execute(&format!(r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{request}"}}, tool_name: {{_eq: "config"}}, lifecycle_state: {{_eq: "completed"}}}}) {{args result completed_at}} }}"#)).await;
-    ensure!(
-        !calls.has_errors(),
-        "config activation evidence: {:?}",
-        calls.errors
-    );
-    let mut latest = None;
-    for row in calls
-        .data
-        .as_ref()
-        .and_then(|v| v["AgentToolCall"].as_array())
-        .context("config call rows missing")?
-    {
-        // Schema registration is outside configuration-document reconciliation.
-        // It is already verified by its publication owner and cannot provide a
-        // later AgentRuntime completion timestamp by itself.
-        let args = row["args"]
-            .as_str()
-            .and_then(|v| serde_json::from_str::<Value>(v).ok());
-        if args
-            .as_ref()
-            .is_some_and(|args| args["argv"][0] == "schema")
-        {
-            continue;
-        }
-        let result = row["result"]
-            .as_str()
-            .and_then(|v| serde_json::from_str::<Value>(v).ok());
-        if result.as_ref().is_some_and(|v| v["committed"] == true) {
-            let at = chrono::DateTime::parse_from_rfc3339(
-                row["completed_at"]
-                    .as_str()
-                    .context("config completion timestamp missing")?,
-            )?;
-            latest =
-                Some(latest.map_or(at, |old: chrono::DateTime<chrono::FixedOffset>| old.max(at)));
+impl Default for ActivationObserver {
+    fn default() -> Self {
+        Self {
+            ready: tokio::sync::watch::channel(None).0,
         }
     }
-    let Some(latest) = latest else {
-        return Ok(());
-    };
-    wait_for_reconcile_after(node, owner, latest).await
 }
 
-async fn wait_for_reconcile_after(
-    node: &EmbeddedNode,
-    owner: &str,
-    latest: chrono::DateTime<chrono::FixedOffset>,
-) -> Result<()> {
-    let owner = escape_graphql_string(owner);
-    let started = Instant::now();
-    loop {
-        let response = node.execute(&format!(r#"{{ AgentRuntime(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{reconcile_phase last_reconcile_completed_at last_reconcile_result last_reconcile_error}} }}"#)).await;
-        ensure!(
-            !response.has_errors(),
-            "runtime activation observation: {:?}",
-            response.errors
-        );
-        let row = response
-            .data
-            .as_ref()
-            .and_then(|v| v["AgentRuntime"].get(0));
-        if let Some(row) = row {
-            let completed = row["last_reconcile_completed_at"]
-                .as_str()
-                .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok());
-            if row["reconcile_phase"] == "idle" && completed.is_some_and(|at| at >= latest) {
-                ensure!(
-                    row["last_reconcile_result"] != "error",
-                    "runtime rejected configuration: {}",
-                    row["last_reconcile_error"]
+impl gents::RuntimeSnapshotObserver for ActivationObserver {
+    fn on_generation_published(&self, _generation: u64, _fingerprint: &str, _behaviors: &[String]) {
+    }
+
+    fn on_event_sources_reconciled(
+        &self,
+        generation: u64,
+        fingerprint: &str,
+        result: Result<(), &str>,
+    ) {
+        self.ready.send_replace(Some((
+            generation,
+            fingerprint.to_owned(),
+            result.map_err(str::to_owned),
+        )));
+    }
+}
+
+pub struct ActivationFence {
+    runtime: gents::Gents,
+    observer: std::sync::Arc<ActivationObserver>,
+    node: std::sync::Arc<EmbeddedNode>,
+}
+
+impl ActivationFence {
+    pub fn new(
+        runtime: gents::Gents,
+        observer: std::sync::Arc<ActivationObserver>,
+        node: std::sync::Arc<EmbeddedNode>,
+    ) -> Self {
+        Self {
+            runtime,
+            observer,
+            node,
+        }
+    }
+
+    pub async fn wait(&self) -> Result<()> {
+        let wait = wait_for_exact_configuration(self.observer.ready.subscribe(), || {
+            self.runtime.document_runtime_configuration_fingerprint()
+        });
+        match tokio::time::timeout(Duration::from_secs(120), wait).await {
+            Ok(result) => result.map_err(infrastructure),
+            Err(error) => {
+                // Runtime status is diagnostic evidence, never the activation predicate.
+                let owner = escape_graphql_string(self.runtime.agent_did());
+                let query = format!(
+                    r#"{{ AgentRuntime(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{reconcile_phase last_reconcile_result last_reconcile_error}} }}"#
                 );
-                return Ok(());
+                let diagnostics =
+                    tokio::time::timeout(Duration::from_secs(5), self.node.execute(&query)).await;
+                Err(infrastructure(anyhow::anyhow!("exact configuration did not reach event-source subscription readiness: {error}; runtime diagnostics: {diagnostics:?}; last subscription observation: {:?}", self.observer.ready.borrow().clone())))
             }
         }
-        ensure!(
-            started.elapsed() < Duration::from_secs(120),
-            "configuration did not activate after {latest}; last runtime: {row:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+async fn wait_for_exact_configuration<F, Fut>(
+    mut ready: tokio::sync::watch::Receiver<Option<SubscriptionObservation>>,
+    mut resolve: F,
+) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<String>>,
+{
+    loop {
+        // Mark before the asynchronous resolve so an acknowledgement arriving
+        // during it remains available to changed().
+        drop(ready.borrow_and_update());
+        let expected = resolve().await?;
+        if let Some((_, actual, result)) = ready.borrow().as_ref() {
+            if actual == &expected {
+                return result
+                    .clone()
+                    .map_err(|error| infrastructure(anyhow::anyhow!(error)));
+            }
+        }
+        ready
+            .changed()
+            .await
+            .context("event-source readiness observer closed")?;
+    }
+}
+
+#[tokio::test]
+async fn configuration_fence_reports_matching_seed_failure_without_waiting() {
+    let (_tx, rx) = tokio::sync::watch::channel(Some((
+        2,
+        "current".to_owned(),
+        Err("seed query failed".to_owned()),
+    )));
+    let result = wait_for_exact_configuration(rx, || async { Ok("current".to_owned()) }).await;
+    let error = result.unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<EvaluationFailure>(),
+        Some(EvaluationFailure::Infrastructure(_))
+    ));
+    assert!(error.to_string().contains("seed query failed"));
+}
+
+#[tokio::test]
+async fn configuration_fence_does_not_lose_acknowledgement_during_resolution() {
+    let (tx, rx) = tokio::sync::watch::channel(Some((1, "old".to_owned(), Ok(()))));
+    let mut resolves = 0;
+    let wait = wait_for_exact_configuration(rx, || {
+        resolves += 1;
+        let first = resolves == 1;
+        let tx = tx.clone();
+        async move {
+            if first {
+                tx.send_replace(Some((2, "new".to_owned(), Ok(()))));
+                tokio::task::yield_now().await;
+                Ok("old".to_owned())
+            } else {
+                Ok("new".to_owned())
+            }
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), wait)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolves, 2);
 }
 
 /// The runner installs reusable task/trigger definitions, then invokes only by
 /// writing an input document. Native materialization owns request admission,
 /// session creation, templating, deduplication, and request identity.
 async fn submit_stage(
+    activation: &ActivationFence,
     node: &EmbeddedNode,
     owner: &str,
     behavior: &str,
@@ -392,7 +437,6 @@ async fn submit_stage(
             })
             .collect(),
     )?;
-    let written_after = chrono::Utc::now().fixed_offset();
     gents::ConfigAccess::transact_local(node, None, "eval.stage_definitions", |txn| {
         let plan = &plan;
         Box::pin(async move {
@@ -402,7 +446,7 @@ async fn submit_stage(
         })
     })
     .await?;
-    wait_for_reconcile_after(node, owner, written_after).await?;
+    activation.wait().await?;
     let prompt = escape_graphql_string(prompt);
     let submitted = node.execute(&format!(r#"mutation {{ create_GentsEvalStageInput(input: {{stage: "{stage_escaped}", prompt: "{prompt}"}}) {{_docID}} }}"#)).await;
     ensure!(
@@ -439,8 +483,78 @@ async fn submit_stage(
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_stage_waits_for_exact_subscription_configuration_without_live_inference() {
+    use gents::AgentIdentity;
+    let db = crate::support::test_db("eval-activation-fence").await;
+    let identity = std::sync::Arc::new(crate::support::fixtures::test_identity(
+        "eval-activation-fence",
+    ));
+    crate::support::fixtures::bind_behavior_backend(
+        db.node.as_ref(),
+        identity.did(),
+        "eval-observer",
+        "unused-local-backend",
+        "http://127.0.0.1:9/v1",
+        "unused",
+    )
+    .await;
+    let access = gents::ConfigAccess::Local(db.node.clone());
+    let schema = gents::config_client::preview_schema_install(&access, INPUT_SCHEMA)
+        .await
+        .unwrap();
+    gents::config_client::apply_schema_install(&access, INPUT_SCHEMA, &schema.artifact_digest)
+        .await
+        .unwrap();
+    let observer = std::sync::Arc::new(ActivationObserver::default());
+    let (agent, runtime) = crate::support::live_inference::boot_d4f_agent_with_options(
+        &db,
+        identity,
+        gents::DocumentRuntimeOptions {
+            runtime_snapshot_observer: Some(observer.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let owner = runtime.agent_did().to_owned();
+    let fence = ActivationFence::new(runtime, observer, db.node.clone());
+    let result = async {
+        fence.wait().await?;
+        let before = fence.observer.ready.borrow().clone();
+        let id = submit_stage(
+            &fence,
+            db.node.as_ref(),
+            &owner,
+            "eval-observer",
+            "activation-regression",
+            "Materialization only; no provider success required.",
+        )
+        .await?;
+        ensure!(!id.is_empty(), "native request did not materialize");
+        let after = fence.observer.ready.borrow().clone();
+        ensure!(
+            before != after,
+            "old subscription acknowledgement satisfied a changed configuration"
+        );
+        let expected = fence
+            .runtime
+            .document_runtime_configuration_fingerprint()
+            .await?;
+        ensure!(
+            after.is_some_and(|(_, fingerprint, result)| fingerprint == expected && result.is_ok()),
+            "wrong activated configuration"
+        );
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    agent.shutdown().await;
+    result.unwrap();
+}
+
 /// Each stage uses a fresh session; configuration stages must await activation.
 pub async fn execute(
+    activation: &ActivationFence,
     node: &EmbeddedNode,
     owner: &str,
     behavior: &str,
@@ -448,12 +562,13 @@ pub async fn execute(
     prompt: &str,
     evidence: &Path,
 ) -> Result<StageResult> {
-    execute_inner(node, owner, behavior, stage, prompt, evidence)
+    execute_inner(activation, node, owner, behavior, stage, prompt, evidence)
         .await
         .map_err(infrastructure)
 }
 
 async fn execute_inner(
+    activation: &ActivationFence,
     node: &EmbeddedNode,
     owner: &str,
     behavior: &str,
@@ -470,7 +585,7 @@ async fn execute_inner(
             "transport":"GentsEvalStageInput -> EventSource -> Trigger -> Task -> AgentRequest",
         }))?,
     )?;
-    let request_id = submit_stage(node, owner, behavior, stage, prompt).await?;
+    let request_id = submit_stage(activation, node, owner, behavior, stage, prompt).await?;
     let escaped = escape_graphql_string(&request_id);
     let query = format!(
         r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{lifecycle_state session_id}} }}"#
@@ -509,7 +624,7 @@ async fn execute_inner(
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     };
-    let answer = crate::steward_loop_live::wait_for_assistant_answer(
+    let answer = crate::support::live_inference::wait_for_assistant_answer(
         node,
         &request_id,
         Duration::from_secs(2),

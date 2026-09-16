@@ -23,17 +23,17 @@ use gents::{AgentIdentity, Collection};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::steward_loop_live::{
-    bind_d4f_backend_for_model, bind_openrouter_backend_for_model, boot_d4f_agent_with_ceiling,
+use crate::support::fixtures::test_identity;
+use crate::support::live_inference::{
+    bind_d4f_backend_for_model, bind_openrouter_backend_for_model, boot_d4f_agent_with_options,
     D4F_BACKEND_ID, OPENROUTER_BACKEND_ID,
 };
-use crate::support::fixtures::test_identity;
 use crate::support::test_db;
 
-#[path = "configurator_stages.rs"]
+#[path = "stages.rs"]
 mod stages;
 
-#[path = "configurator_cases.rs"]
+#[path = "cases.rs"]
 mod cases;
 
 const EVAL_CASE_ID: &str = "progressive-configurator";
@@ -549,10 +549,19 @@ async fn run_eval_trial(
     install_eval_profiles(db.node.as_ref(), &agent_did, provider.backend_id(), &model).await;
     install_eval_workspace_root(db.node.as_ref(), &user_home).await;
     install_setup_configurator(db.node.as_ref(), &agent_did, &setup_behavior_id, &user_home).await;
-    let agent =
-        boot_d4f_agent_with_ceiling(&db, identity, gents::ToolCeiling::readwrite(&user_home))
-            .await
-            .expect("boot live configurator");
+    let observer = Arc::new(stages::ActivationObserver::default());
+    let (agent, runtime) = boot_d4f_agent_with_options(
+        &db,
+        identity,
+        gents::DocumentRuntimeOptions {
+            tool_ceiling: gents::ToolCeiling::readwrite(&user_home),
+            runtime_snapshot_observer: Some(observer.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("boot live configurator");
+    let activation = stages::ActivationFence::new(runtime, observer, db.node.clone());
 
     // A fixture/assertion panic must not leave this trial's runtime consuming
     // inference capacity while the matrix moves on to another isolated trial.
@@ -561,6 +570,7 @@ async fn run_eval_trial(
         let mut answer = String::new();
         let verification = stages::checked(stages::CaseId::Onboarding, &evidence, async {
             let onboarding = stages::execute(
+                &activation,
                 db.node.as_ref(),
                 &agent_did,
                 &setup_behavior_id,
@@ -590,6 +600,7 @@ async fn run_eval_trial(
                 stages::CaseId::BuilderReadiness,
                 &evidence,
                 cases::verify_builder_execution(
+                    &activation,
                     db.node.as_ref(),
                     &agent_did,
                     &user_home,
@@ -602,6 +613,7 @@ async fn run_eval_trial(
         if configured {
             let result = stages::checked(stages::CaseId::SkillWorkflow, &evidence, async {
                 cases::verify_skill_workflow(
+                    &activation,
                     db.node.as_ref(),
                     &agent_did,
                     &setup_behavior_id,
@@ -623,9 +635,14 @@ async fn run_eval_trial(
             failures.extend(result.err());
         }
         if configured {
-            let result =
-                cases::verify_pagoda_sequence(db.node.as_ref(), &agent_did, &workspace, &evidence)
-                    .await;
+            let result = cases::verify_pagoda_sequence(
+                &activation,
+                db.node.as_ref(),
+                &agent_did,
+                &workspace,
+                &evidence,
+            )
+            .await;
             failures.extend(result.err());
         }
         // Automation depends on generated configuration, not on the artwork
@@ -633,6 +650,7 @@ async fn run_eval_trial(
         if configured {
             let result = stages::checked(stages::CaseId::DocumentAutomation, &evidence, async {
                 cases::verify_document_automation(
+                    &activation,
                     db.node.as_ref(),
                     &agent_did,
                     &setup_behavior_id,

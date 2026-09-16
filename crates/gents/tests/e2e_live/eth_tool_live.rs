@@ -24,9 +24,9 @@ use gents::graphql::escape_graphql_string;
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde::Deserialize;
 
-use crate::steward_loop_live::{wait_for_assistant_answer, wait_for_request_terminal};
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
+use crate::support::live_inference::{wait_for_assistant_answer, wait_for_request_terminal};
 use crate::support::test_db;
 
 const TOOL_ID: &str = "base-sepolia";
