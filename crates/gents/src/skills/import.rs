@@ -206,6 +206,29 @@ mod tests {
     }
 
     #[test]
+    fn optional_frontmatter_does_not_become_tool_authority() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("SKILL.md"),
+            "---\nname: code-review\ndescription: >-\n  Review changes\n  with evidence.\nlicense: MIT\ncompatibility: Requires local source files\nmetadata:\n  author: example\n  version: '1.0'\nallowed-tools: Bash Read\n---\nRead references/checklist.md.\n",
+        )
+        .unwrap();
+        let skill = load_skill_source(root.path(), "review", "did:test", resolve).unwrap();
+        assert_eq!(skill.name.as_deref(), Some("code-review"));
+        assert_eq!(
+            skill.description.as_deref(),
+            Some("Review changes with evidence.")
+        );
+        assert_eq!(
+            skill.instructions.as_deref(),
+            Some("Read references/checklist.md.")
+        );
+        // Optional source annotations are not Gents tool selection or grants.
+        assert!(skill.tool_refs.is_empty());
+        assert!(skill.interface_json.is_none());
+    }
+
+    #[test]
     fn malformed_frontmatter_and_oversized_sources_fail() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("SKILL.md");
