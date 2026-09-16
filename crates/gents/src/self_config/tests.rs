@@ -60,6 +60,8 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         "backend",
         "mcp-service",
         "automation",
+        "datastore",
+        "skill",
     ]
     .into_iter()
     .flat_map(|resource| {
@@ -744,6 +746,489 @@ fn persona_identity(label: &str) -> std::sync::Arc<dyn crate::AgentIdentity> {
         crate::KeyIdentity::load_or_create(&tempdir.path().join(format!("{label}.key")), None)
             .expect("test identity"),
     )
+}
+
+#[tokio::test]
+async fn automation_rejects_invalid_template_before_publication_and_can_recover() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("template-config");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let mut grants = config(&["automation"]);
+    grants.dry_run = true;
+    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &grants);
+    for verb in ["preview", "edit"] {
+        let error = call_config_tool(
+            &tools,
+            vec![
+                "automation".into(),
+                verb.into(),
+                "task".into(),
+                "template-check".into(),
+                "--set".into(),
+                "prompt_template=\"{{.message}}\"".into(),
+            ],
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("MiniJinja"), "{error:#}");
+        let rows = node.execute("{ Task { task_id } }").await;
+        assert!(!rows.has_errors());
+        assert!(rows.data.unwrap()["Task"].as_array().unwrap().is_empty());
+    }
+    call_config_tool(
+        &tools,
+        vec![
+            "automation".into(),
+            "edit".into(),
+            "task".into(),
+            "template-check".into(),
+            "--set".into(),
+            "prompt_template=\"Process {{ doc.message }}\"".into(),
+        ],
+    )
+    .await
+    .unwrap();
+    let rows = node.execute("{ Task { task_id prompt_template } }").await;
+    assert!(!rows.has_errors());
+    let data = rows.data.unwrap();
+    assert_eq!(data["Task"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        data["Task"][0]["prompt_template"],
+        "Process {{ doc.message }}"
+    );
+}
+
+#[tokio::test]
+async fn schema_publication_matches_lean_grant_artifact_and_contract_guards() {
+    use sha2::{Digest, Sha256};
+    // Exhaust the Bool inputs of SelfConfig.schemaPublicationAllowed in
+    // proofs/Proofs/SelfConfig/Auth.lean against the real publication path.
+    let sdl = "type ConfiguratorTruthTable { message: String }";
+    for granted in [false, true] {
+        for artifact_matches in [false, true] {
+            for compatible in [false, true] {
+                let node = build_persona_node().await;
+                let identity = persona_identity("schema-truth-table");
+                let owner = identity.did().to_string();
+                crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+                let access = crate::config_client::ConfigAccess::Local(node.clone());
+                if !compatible {
+                    access
+                        .add_schema("type ConfiguratorTruthTable { message: Int }")
+                        .await
+                        .unwrap();
+                }
+                let before = access
+                    .collection_version("ConfiguratorTruthTable")
+                    .await
+                    .unwrap();
+                let grants = config(if granted { &["automation"] } else { &["tools"] });
+                let tools = build_self_config_tools(node, owner, Some(identity), &grants);
+                let digest = if artifact_matches {
+                    format!("sha256:{:x}", Sha256::digest(sdl))
+                } else {
+                    "wrong".into()
+                };
+                let result = call_config_tool(
+                    &tools,
+                    vec![
+                        "schema".into(),
+                        "install".into(),
+                        "--sdl".into(),
+                        sdl.into(),
+                        "--digest".into(),
+                        digest,
+                    ],
+                )
+                .await;
+                let accepted = granted && artifact_matches && compatible;
+                assert_eq!(result.is_ok(), accepted, "grant={granted}, artifact={artifact_matches}, compatible={compatible}: {result:?}");
+                let after = access
+                    .collection_version("ConfiguratorTruthTable")
+                    .await
+                    .unwrap();
+                if accepted {
+                    assert!(after.is_some());
+                } else {
+                    assert_eq!(after, before, "rejected publication changed schema");
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn schema_publication_requires_automation_and_previewed_artifact() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("schema-config");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let sdl = "type ConfiguratorWorkItem { message: String }";
+    let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
+    let denied = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity.clone()),
+        &config(&["tools"]),
+    );
+    assert!(call_config_tool(
+        &denied,
+        command(&["schema", "preview", "install", "--sdl", sdl])
+    )
+    .await
+    .is_err());
+    let mut grants = config(&["automation"]);
+    grants.dry_run = true;
+    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &grants);
+    let preview = call_config_tool(
+        &tools,
+        command(&["schema", "preview", "install", "--sdl", sdl]),
+    )
+    .await
+    .unwrap();
+    let preview: Value = serde_json::from_str(&preview).unwrap();
+    assert_eq!(preview["committed"], false);
+    assert!(node
+        .get_collection("ConfiguratorWorkItem")
+        .unwrap()
+        .is_none());
+    assert!(call_config_tool(
+        &tools,
+        command(&["schema", "install", "--sdl", sdl, "--digest", "wrong"])
+    )
+    .await
+    .is_err());
+    assert!(node
+        .get_collection("ConfiguratorWorkItem")
+        .unwrap()
+        .is_none());
+    let digest = preview["plan"]["artifact_digest"].as_str().unwrap();
+    assert!(call_config_tool(
+        &denied,
+        command(&["schema", "install", "--sdl", sdl, "--digest", digest])
+    )
+    .await
+    .is_err());
+    call_config_tool(
+        &tools,
+        command(&["schema", "install", "--sdl", sdl, "--digest", digest]),
+    )
+    .await
+    .unwrap();
+    assert!(node
+        .get_collection("ConfiguratorWorkItem")
+        .unwrap()
+        .is_some());
+    let schema = call_config_tool(&tools, command(&["schema", "get", "ConfiguratorWorkItem"]))
+        .await
+        .unwrap();
+    assert!(schema.contains("message"));
+    assert!(call_config_tool(
+        &tools,
+        command(&[
+            "schema",
+            "preview",
+            "install",
+            "--sdl",
+            "type ConfiguratorWorkItem { message: Int }"
+        ])
+    )
+    .await
+    .is_err());
+}
+
+#[tokio::test]
+async fn skill_import_previews_without_writes_and_requires_file_authority() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("skill-import");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("SKILL.md");
+    std::fs::write(
+        &file,
+        "---\nname: Review\ndescription: Review code\n---\nCheck the diff carefully.",
+    )
+    .unwrap();
+    let mut grants = config(&["tools", "behavior"]);
+    grants.dry_run = true;
+    let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
+    let denied_tools =
+        build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
+    let denied = call_config_tool(
+        &denied_tools,
+        command(&["skill", "import", "review", file.to_str().unwrap()]),
+    )
+    .await
+    .unwrap_err();
+    assert!(denied.contains("file read permission"), "{denied}");
+    grants.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
+        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tool_surface::BashMode::Off,
+        root: Some(root.path().into()),
+    };
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    core.apply(tools_request(
+        &core,
+        vec![(
+            "host".into(),
+            Some(json!({
+                "root": root.path().to_str().unwrap(), "files": {"mode": "ReadOnly"}
+            })),
+        )],
+        false,
+    ))
+    .await
+    .unwrap();
+    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(
+        outside.path().join("SKILL.md"),
+        "Outside the effective root.",
+    )
+    .unwrap();
+    let rejected = call_config_tool(
+        &tools,
+        command(&[
+            "skill",
+            "import",
+            "outside",
+            outside.path().to_str().unwrap(),
+        ]),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        rejected.contains("outside the allowed tool root"),
+        "{rejected}"
+    );
+    assert!(
+        call_config_tool(&tools, command(&["skill", "get", "outside"]))
+            .await
+            .is_err()
+    );
+    let preview = call_config_tool(
+        &tools,
+        command(&[
+            "skill",
+            "preview",
+            "import",
+            "review",
+            file.to_str().unwrap(),
+        ]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&preview).unwrap()["committed"],
+        false
+    );
+    assert!(
+        call_config_tool(&tools, command(&["skill", "get", "review"]))
+            .await
+            .is_err()
+    );
+    call_config_tool(
+        &tools,
+        command(&["skill", "import", "review", root.path().to_str().unwrap()]),
+    )
+    .await
+    .unwrap();
+    assert!(call_config_tool(
+        &tools,
+        command(&["skill", "import", "review", file.to_str().unwrap()])
+    )
+    .await
+    .is_err());
+    let read = call_config_tool(&tools, command(&["skill", "get", "review"]))
+        .await
+        .unwrap();
+    assert!(read.contains("Check the diff carefully."));
+    call_config_tool(
+        &tools,
+        command(&[
+            "behavior",
+            "context",
+            "edit",
+            "--set",
+            "skill_ids=[\"review\"]",
+        ]),
+    )
+    .await
+    .unwrap();
+    let effective = core
+        .with_process_ceiling(grants.process_ceiling)
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert_eq!(effective["context"]["skill_ids"], json!(["review"]));
+    assert_eq!(
+        effective["runtime_effective"]["effective"]["file_mode"],
+        "ReadOnly"
+    );
+    assert_eq!(
+        effective["runtime_effective"]["effective"]["bash_mode"],
+        "Off"
+    );
+}
+
+#[tokio::test]
+async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("datastore-config");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let mut grants = config(&["tools"]);
+    grants.dry_run = true;
+    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
+    let preview = call_config_tool(
+        &tools,
+        command(&[
+            "datastore",
+            "preview",
+            "create",
+            "jobs",
+            "--set",
+            "display_name=\"Jobs\"",
+        ]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&preview).unwrap()["committed"],
+        false
+    );
+    assert!(
+        call_config_tool(&tools, command(&["datastore", "get", "jobs"]))
+            .await
+            .is_err()
+    );
+    call_config_tool(
+        &tools,
+        command(&[
+            "datastore",
+            "create",
+            "jobs",
+            "--set",
+            "display_name=\"Jobs\"",
+        ]),
+    )
+    .await
+    .unwrap();
+    assert!(call_config_tool(
+        &tools,
+        command(&[
+            "datastore",
+            "create",
+            "jobs",
+            "--set",
+            "display_name=\"Duplicate\"",
+        ])
+    )
+    .await
+    .is_err());
+    assert!(call_config_tool(
+        &tools,
+        command(&[
+            "datastore",
+            "edit",
+            "jobs",
+            "--set",
+            "agent_did=\"foreign\"",
+        ])
+    )
+    .await
+    .is_err());
+    call_config_tool(
+        &tools,
+        command(&["datastore", "edit", "jobs", "--set", "tags=[\"user:keep\"]"]),
+    )
+    .await
+    .unwrap();
+    let actual = call_config_tool(&tools, command(&["datastore", "get", "jobs"]))
+        .await
+        .unwrap();
+    assert!(actual.contains("Jobs"));
+    assert!(actual.contains("user:keep"));
+    assert!(!actual.contains("Duplicate"));
+    node.add_schema("type ConfiguredWork { message: String }")
+        .await
+        .unwrap();
+    let entries = r#"entries=[{"tool_name":"submit_work","collection":"ConfiguredWork","fields":[{"name":"message","required":true}]}]"#;
+    call_config_tool(
+        &tools,
+        command(&["datastore", "edit", "jobs", "--set", entries]),
+    )
+    .await
+    .unwrap();
+    let entry_read = call_config_tool(&tools, command(&["datastore", "get", "jobs"]))
+        .await
+        .unwrap();
+    let entry_read: Value = serde_json::from_str(&entry_read).unwrap();
+    assert_eq!(
+        entry_read["document"]["entries"]["entries"][0]["tool_name"],
+        "submit_work"
+    );
+    assert!(call_config_tool(
+        &tools,
+        command(&[
+            "datastore",
+            "preview",
+            "edit",
+            "jobs",
+            "--set",
+            r#"entries=[{"tool_name":"submit_work","collection":"ConfiguredWork","fields":[{"name":"bad-name"}]}]"#
+        ])
+    )
+    .await
+    .is_err());
+    let core = SelfConfigCore::new(node.clone(), owner, "beh-test".into()).unwrap();
+    core.apply(tools_request(
+        &core,
+        vec![(
+            "datastore".into(),
+            Some(json!({
+                "datastore_tool_surface_ids": ["jobs"]
+            })),
+        )],
+        false,
+    ))
+    .await
+    .unwrap();
+    core.apply(behavior_request(
+        &core,
+        vec![(
+            "tags".into(),
+            Some(json!([
+                crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+            ])),
+        )],
+    ))
+    .await
+    .unwrap();
+    let denied = call_config_tool(
+        &tools,
+        command(&["datastore", "edit", "jobs", "--set", "enabled=false"]),
+    )
+    .await
+    .unwrap_err();
+    assert!(denied.contains("protected Setup"), "{denied}");
+    let denied = call_config_tool(
+        &tools,
+        command(&[
+            "datastore",
+            "preview",
+            "edit",
+            "jobs",
+            "--set",
+            "enabled=false",
+        ]),
+    )
+    .await
+    .unwrap_err();
+    assert!(denied.contains("protected Setup"), "{denied}");
 }
 
 async fn call_config_tool(

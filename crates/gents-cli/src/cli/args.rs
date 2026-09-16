@@ -1903,9 +1903,9 @@ pub(crate) struct SkillImportArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) agent_did: String,
-    /// Directory tree to scan for `SKILL.md` files (Codex skill layout:
-    /// `<dir>/<skill-name>/SKILL.md` + optional `agents/openai.yaml`).
-    #[arg(value_name = "DIR")]
+    /// A SKILL.md file, skill directory, or directory tree to scan. Each
+    /// skill may include optional agents/openai.yaml metadata.
+    #[arg(value_name = "PATH")]
     pub(crate) dir: PathBuf,
     /// Import skills as disabled.
     #[arg(long)]

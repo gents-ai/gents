@@ -4614,6 +4614,7 @@ dependencies = [
  "security-framework 3.7.0",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2 0.10.9",
  "sha3 0.10.9",
  "storage",

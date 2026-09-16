@@ -20,7 +20,8 @@ pub use command::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
     WorkspaceAuthority,
 };
-pub(super) use context::{ToolContext, ToolError};
+pub(crate) use context::ToolContext;
+pub(super) use context::ToolError;
 pub(super) use filesystem::{cap_output, render_file_contents};
 
 pub(super) fn default_max_list_entries() -> usize {

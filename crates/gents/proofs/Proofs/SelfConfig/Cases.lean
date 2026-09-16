@@ -75,6 +75,8 @@ def examples : List (Target × FieldKey × FieldValue) :=
   , (.agentContext, "system_prompt", "You are concise.")
   , (.compaction, "threshold", "0.75")
   , (.tools, "host", "{root: /workspace}")
+  , (.skill, "instructions", "Read the checklist before reviewing.")
+  , (.datastoreToolSurface, "entries", "[{tool_name: submit_job, collection: Job}]")
   , (.inferenceProfile, "model_name", "model-1")
   , (.inferenceSampling, "temperature", "0.2")
   , (.inferenceExecution, "max_turns", "40")
@@ -101,6 +103,14 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .agentBehavior, guarded := false, validates := false
     , doc := [("context_id", "context-1")]
     , patch := [("context_id", some "missing-context")] }
+  , { name := "datastore_owner_patch_rejected"
+    , target := .datastoreToolSurface, guarded := false, validates := true
+    , doc := [("surface_id", "jobs"), ("agent_did", "did:key:agent-a")]
+    , patch := [("agent_did", some "did:key:agent-b")] }
+  , { name := "datastore_invalid_entries_rejected"
+    , target := .datastoreToolSurface, guarded := false, validates := false
+    , doc := [("surface_id", "jobs"), ("entries", "valid")]
+    , patch := [("entries", some "invalid")] }
   , { name := "tools_self_disable_unguarded_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}")]

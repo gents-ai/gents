@@ -28,7 +28,6 @@ mod tests;
 use bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
 use cli_tool::CliTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
-use shared::ToolContext;
 use subagent::{
     CancelProcessTool, CancelSubagentTool, ListProcessesTool, ListSubagentsTool, ReadProcessTool,
     ReadSubagentTool, SpawnProcessTool, SpawnSubagentTool, SteerSubagentTool, WaitProcessTool,
@@ -63,6 +62,7 @@ pub use session_history::{
 pub(crate) use shared::apply_workspace_authority;
 #[cfg(test)]
 pub(crate) use shared::validate_command_policy;
+pub(crate) use shared::ToolContext;
 pub(crate) use shared::{
     admit_host_executable, default_lsp_network_mode, effective_command_policy,
     lsp_sandbox_for_effective, normalize_workspace_lifecycle_state, prepare_managed_command,

@@ -9,7 +9,8 @@ merely because the shared catalog knows about them. -/
 def allTargets : List Target :=
   [.agentBehavior, .agentContext, .compaction, .tools, .inferenceProfile,
    .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy,
-   .inferenceBackend, .toolServiceRegistry, .task, .schedule, .trigger, .eventSource]
+   .inferenceBackend, .toolServiceRegistry, .task, .schedule, .trigger, .eventSource,
+   .datastoreToolSurface, .skill]
 abbrev Target.collectionName (t : Target) := ConfigDocuments.Collection.collectionName t
 abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField t
 abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
@@ -48,6 +49,15 @@ theorem agent_did_never_writable :
     ∀ t ∈ allTargets, "agent_did" ∉ writableFields t := by decide
 
 theorem auth_reference_editable : "auth" ∈ writableFields .inferenceBackend := by decide
+
+theorem datastore_entries_editable :
+    "entries" ∈ writableFields .datastoreToolSurface := by decide
+
+theorem skill_instructions_editable : "instructions" ∈ writableFields .skill := by decide
+
+theorem datastore_owner_and_identity_protected :
+    "agent_did" ∉ writableFields .datastoreToolSurface ∧
+    "surface_id" ∉ writableFields .datastoreToolSurface := by decide
 
 /-- Observations cannot be introduced by a self-config patch. -/
 theorem observations_not_writable :

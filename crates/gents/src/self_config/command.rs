@@ -1,5 +1,9 @@
 use super::*;
 
+mod datastore;
+mod schema;
+mod skill;
+
 const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["help"] or ["help", RESOURCE]
   ["get", ["--behavior", BEHAVIOR_ID]]
@@ -18,8 +22,16 @@ const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["backend", "preview"|"edit", [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]]
   ["profile", "get"|"preview"|"edit", [profile|sampling|execution|retry-policy|compaction], [--behavior BEHAVIOR_ID] PATCH_FLAGS]
   ["mcp-service", "get", SERVICE_ID]
+  ["datastore", "get"|"create"|"edit", SURFACE_ID, PATCH_FLAGS]
+  ["datastore", "preview", "create"|"edit", SURFACE_ID, PATCH_FLAGS]
+  ["skill", "get", SKILL_ID]
+  ["skill", "preview", "import", SKILL_ID, PATH]
+  ["skill", "import", SKILL_ID, PATH]
   ["mcp-service", "preview"|"edit", SERVICE_ID, PATCH_FLAGS]
   ["automation", "get", task|schedule|trigger|event-source, ID, [--behavior BEHAVIOR_ID]]
+  ["schema", "get", COLLECTION]
+  ["schema", "preview", "install", --sdl SDL]
+  ["schema", "install", --sdl SDL, --digest SHA256]
   ["automation", "preview"|"edit", KIND, ID, [--behavior BEHAVIOR_ID] PATCH_FLAGS]
   ["cleanup", "preview", --target RESOURCE=ID [--target RESOURCE=ID ...]]
   ["cleanup", "remove", --digest SHA256, --target RESOURCE=ID [--target RESOURCE=ID ...]]
@@ -33,7 +45,7 @@ Behavior create/clone/disable flags: --id, --from, --display-name, --description
 repeated --set FIELD=JSON and --clear FIELD; omitted fields preserve.
 Use config help RESOURCE before a write."#;
 
-const DATA_MODEL: &str = "A principal owns exact-ID configuration documents. Requests, tasks, and sessions select a Behavior. Behavior -> Context controls the system prompt, selected skills, compaction, and one Tools document; Tools contains nested host, built-in, integration, MCP, and self-config settings. Behavior -> InferenceProfile -> Backend controls model execution; the profile selects model and reasoning effort and may reference sampling and execution settings. A Trigger selects a Task and a Schedule or EventSource. A Pack declares configuration and inference roles; installation binds every role to an existing principal-owned profile, then publishes the pack's documents and graph revision without copying inference configuration. Reads never mutate. Writes are sparse patches: omission preserves, explicit --clear removes an optional value, and preview/apply validate the complete same-principal reference chain atomically. Credentials and OAuth consent remain operator-owned and are never returned by config.";
+const DATA_MODEL: &str = "A principal owns exact-ID configuration documents. Requests, tasks, and sessions select a Behavior. Behavior -> Context controls the system prompt, selected skills, compaction, and one Tools document; Tools contains nested host, built-in, integration, MCP, and self-config settings. Behavior -> InferenceProfile -> Backend controls model execution; the profile selects model and reasoning effort and may reference sampling and execution settings. A Trigger selects a Task and a Schedule or EventSource. A Pack declares configuration and inference roles; installation binds every role to an existing principal-owned profile, then publishes the pack's documents and graph revision without copying inference configuration. Reads never mutate. Document edits are sparse patches: omission preserves, explicit --clear removes an optional value, and preview/apply validate same-principal references within the document transaction. Schema registration is node-wide and separate from document publication; it never grants document access. Credentials and OAuth consent remain operator-owned and are never returned by config.";
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -97,10 +109,13 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
     }
     for (category, resource) in [
         ("tools", "tools"),
+        ("tools", "datastore"),
+        ("tools", "skill"),
         ("profile", "profile"),
         ("backend", "backend"),
         ("mcp_service", "mcp-service"),
         ("automation", "automation"),
+        ("automation", "schema"),
     ] {
         if categories.contains(category) {
             resources.push(resource);
@@ -133,12 +148,15 @@ impl ConfigCommandTool {
             }
             "behavior" => self.behavior(&argv[1..]).await,
             "tools" => self.bound_document("tools", &argv[1..]).await,
+            "datastore" => self.datastore(&argv[1..]).await,
             "profile" => self.profile(&argv[1..]).await,
             "backend" => self.bound_document("backend", &argv[1..]).await,
             "mcp-service" => self.mcp_service(&argv[1..]).await,
             "automation" => self.automation(&argv[1..]).await,
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
+            "skill" => self.skill(&argv[1..]).await,
+            "schema" => self.schema(&argv[1..]).await,
             other => bail!(
                 "unknown config resource or command {other:?}; accepted: help, get, {}\n{CONFIG_USAGE}",
                 model_resources(&self.categories, self.allow_pack_install).join(", ")
@@ -149,6 +167,31 @@ impl ConfigCommandTool {
     fn help(&self, resource: Option<&str>) -> Result<String> {
         let detail = match resource {
             None => CONFIG_USAGE,
+            Some("schema") => {
+                r#"schema commands (requires automation permission):
+  get COLLECTION
+  preview install --sdl SDL
+  install --sdl SDL --digest SHA256
+Use DefraDB GraphQL SDL, for example: type WorkItem { message: String correlation: String }
+Preview returns artifact_digest and collection contracts without writes. Install requires that exact digest and revalidates the contracts. Existing schemas must match exactly; incompatible changes and SDL mixing existing/new collections are rejected. This supports additive registration, not schema migration or deletion. Submit at most 64 KiB of SDL.
+Schemas are node-wide, not principal-owned documents. Registration does not grant document access: DefraDB ACP remains authoritative, and behaviors need explicit datastore collection/surface selection. Publish the schema first, then create the datastore surface and task/event-source/trigger documents. These are separate operations, not one atomic transaction."#
+            }
+            Some("skill") => {
+                r#"skill commands (requires tools permission):
+  get SKILL_ID
+  preview import SKILL_ID PATH
+  import SKILL_ID PATH
+PATH is one skill directory containing SKILL.md, or that SKILL.md file. Import requires file read authority within the invoking behavior's effective tool root. YAML frontmatter supplies name/description; the Markdown body supplies instructions. Optional agents/openai.yaml supplies interface metadata and tool dependencies. Each source file is limited to 1 MiB; invalid YAML fails without writes. Preview validates without publication; import rereads the source and creates an unused exact ID, never overwrites an existing skill.
+Attach explicitly with behavior context edit --behavior BEHAVIOR_ID --set skill_ids=JSON, preserving existing IDs. Skills describe procedures; tool dependencies never grant tools. Supporting files are not copied or executed: relative references must be made usable within the working behavior's root. Use a fresh request in that behavior to verify load_skill and the required tools."#
+            }
+            Some("datastore") => {
+                r#"datastore commands (requires tools permission):
+  get SURFACE_ID
+  preview create|edit SURFACE_ID --set FIELD=JSON [--clear FIELD]
+  create|edit SURFACE_ID --set FIELD=JSON [--clear FIELD]
+Fields come from DatastoreToolSurface: display_name, enabled, entries, tags.
+Entries are canonical schema-bounded create/query declarations. Owner and surface_id are immutable. Bind an existing surface using config tools edit --behavior BEHAVIOR_ID --set datastore=JSON, preserving the other datastore settings. Editing a surface used by protected Setup is rejected. Schema registration is a separate operation."#
+            }
             Some("behavior") => {
                 r#"behavior commands:
   list [--limit N] [--cursor BEHAVIOR_ID]
@@ -203,7 +246,11 @@ The service must already exist under this principal."#
   get task|schedule|trigger|event-source ID [--behavior BEHAVIOR_ID]
   preview KIND ID [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
   edit KIND ID [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
-Tasks belong to the selected behavior. Triggers may reference only its tasks. Schedules and event sources are included only through those trigger links."#
+Tasks belong to the selected behavior. Triggers may reference only its tasks. Schedules and event sources are included only through those trigger links.
+For per-document triggers, parallel (default) allows independent invocations; serial skips a fire while prior work is active (it is not a queue); latest_only supersedes prior active work. Use parallel when every input must produce an output, including inputs arriving before the previous request finishes.
+Task templates use MiniJinja: {{ doc.message }} reads a source document field; {{ args.name }} reads an invocation argument. Missing values fail rendering; use an explicit default filter for optional fields. Go-style {{.message}} is invalid. Syntax is checked before publication, while available document fields depend on the linked source schema.
+Document automation: define the input collection's schema, connect an event source to a task through a trigger, and template source fields into the task prompt. Grant datastore reads/writes to behaviors that consume or publish documents. An external client may submit the input instead. Inspect available schema/datastore authoring tools; these automation commands do not create schemas or datastore tools.
+Results can feed later stages. Use canonical graph tools or graph packs for coordinated dependencies, branching, parallel work, and completion. Verify a workflow with a sample input and its resulting request/output, not just configuration reads."#
             }
             Some("cleanup") => {
                 r#"cleanup commands:
@@ -231,6 +278,7 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             "help": detail,
             "enabled_resources": model_resources(&self.categories, self.allow_pack_install),
             "patch_contracts": help_patch_contracts(resource),
+            "examples": if resource == Some("datastore") { datastore::entry_examples() } else { Value::Null },
             "current_limitations": {
                 "pack_remove": "unavailable because installation records do not yet distinguish documents created by an install from matching documents the install reused",
             },
@@ -1197,6 +1245,28 @@ fn patch_contract(target: SelfConfigTarget, field_shapes: Value) -> Value {
 
 pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
     let contracts = match resource {
+        Some("skill") => vec![patch_contract(
+            SelfConfigTarget::Skill,
+            json!({
+                "name":"string|null; imported from SKILL.md frontmatter, default SKILL_ID",
+                "description":"string|null; imported from SKILL.md frontmatter",
+                "instructions":"string|null; imported from the Markdown body",
+                "tool_refs":"array<string>; dependencies from agents/openai.yaml, default []; never tool grants",
+                "display_name":"string|null; from agents/openai.yaml interface.display_name",
+                "interface_json":"string|null; serialized agents/openai.yaml interface",
+                "enabled":"boolean; default true",
+                "tags":"array<string>; default []"
+            }),
+        )],
+        Some("datastore") => vec![patch_contract(
+            SelfConfigTarget::DatastoreToolSurface,
+            json!({
+                "display_name":"string|null",
+                "enabled":"boolean; default true",
+                "entries":"array<SurfaceToolDecl>|null (reads use {entries:[...]} envelope). Create: {tool_name:string,collection:string,description?:string,fields:[{name:string,required?:boolean,fill?:correlation|{source_field:string}}],output_obligation?:{scope:request|trigger,minimum_writes?:positive integer,expected_count_field?:string}}. Query: {kind:query,tool_name:string,collection:string,description?:string,fields:[string],filter_fields?:[same field objects]}. Runtime-filled fields must not be required; other fields are model arguments. Surface writes validate declaration syntax. Selecting the surface in Tools checks tool-name collisions; runtime invocation validates the target collection/fields. Register schemas first, then bind and exercise the tools to establish readiness.",
+                "tags":"array<string>; default []"
+            }),
+        )],
         Some("behavior") => vec![
             patch_contract(
                 SelfConfigTarget::AgentBehavior,

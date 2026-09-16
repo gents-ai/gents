@@ -14,6 +14,9 @@
 
 use std::collections::BTreeSet;
 
+pub mod import;
+pub use import::{parse_skill_md, SkillFrontmatter};
+
 #[derive(Debug, Clone)]
 pub struct Skill {
     pub skill_id: String,
