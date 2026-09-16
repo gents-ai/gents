@@ -1,0 +1,22 @@
+[
+  {
+    "case_id": "discovery-secret-and-symlink-containment",
+    "status": "pending",
+    "capability_prerequisite": "production discovery adapter returns the shared v1 sanitized inventory with containment outcomes"
+  },
+  {
+    "case_id": "discovered-hook-remains-inert",
+    "status": "pending",
+    "capability_prerequisite": "production discovery-to-Setup proposal adapter represents executable hooks without admitting them"
+  },
+  {
+    "case_id": "inventory-to-canonical-documents",
+    "status": "pending",
+    "capability_prerequisite": "production discovery inventory type is available to the Setup workflow"
+  },
+  {
+    "case_id": "native-provider-login-matrix",
+    "status": "pending",
+    "capability_prerequisite": "operator-completed provider OAuth acceptance for each native provider"
+  }
+]

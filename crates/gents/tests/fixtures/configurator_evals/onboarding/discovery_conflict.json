@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "limits": {
+    "max_files": 8,
+    "max_bytes": 32768,
+    "max_items": 16
+  },
+  "sources": [
+    {
+      "source_id": "codex-user",
+      "kind": "codex",
+      "scope": "user",
+      "selected_root": "{{SOURCE_HOME}}/.codex",
+      "scan_outcome": "complete"
+    },
+    {
+      "source_id": "codex-project",
+      "kind": "codex",
+      "scope": "project",
+      "selected_root": "{{PROJECT_ROOT}}/.codex",
+      "scan_outcome": "complete"
+    }
+  ],
+  "items": [
+    {
+      "item_id": "user-model",
+      "source_id": "codex-user",
+      "relative_source_file": "config.toml",
+      "category": "model_preference",
+      "display_label": "User model preference",
+      "state": "enabled",
+      "facts": { "profile_hint": "onboarding-medium" },
+      "mapping_support": "supported",
+      "reasons": []
+    },
+    {
+      "item_id": "project-model",
+      "source_id": "codex-project",
+      "relative_source_file": "config.toml",
+      "category": "model_preference",
+      "display_label": "Project model preference",
+      "state": "enabled",
+      "facts": { "profile_hint": "onboarding-high" },
+      "mapping_support": "supported",
+      "reasons": []
+    },
+    {
+      "item_id": "project-disabled-mcp",
+      "source_id": "codex-project",
+      "relative_source_file": "config.toml",
+      "category": "remote_tool",
+      "display_label": "Disabled project MCP service",
+      "state": "disabled",
+      "facts": { "service_label": "docs-search" },
+      "mapping_support": "partial",
+      "reasons": ["Explicit disable must not fall back to a user-scoped service."]
+    }
+  ],
+  "conflicts": [
+    {
+      "item_ids": ["user-model", "project-model"],
+      "explanation": "The selected user and project model preferences disagree; ask which scope should control this behavior."
+    }
+  ],
+  "warnings": [],
+  "truncation": {
+    "truncated": false,
+    "observed_files": 2,
+    "observed_bytes": 512,
+    "observed_items": 3
+  }
+}
