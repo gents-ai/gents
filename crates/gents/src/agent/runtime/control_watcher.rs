@@ -153,7 +153,11 @@ pub(super) async fn run_control_watcher_with_timing(
                 {
                     Ok(snapshot) => {
                         let fingerprint = snapshot.configuration_fingerprint();
-                        if last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+                        // A fresh observed write must reach the reconcile owner
+                        // even when it changes only non-runtime metadata. Its
+                        // existing no-op path publishes completion. Suppress
+                        // only unchanged settle retries, not new observations.
+                        if phase_announced || last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()) {
                             if !phase_announced {
                                 runtime_status
                                     .set_reconcile_phase(ReconcilePhase::Resolving)
