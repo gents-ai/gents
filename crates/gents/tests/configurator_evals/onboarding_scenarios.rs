@@ -353,8 +353,37 @@ fn successful_shell_call(calls: &[Value]) -> bool {
             && call["lifecycle_state"] == "completed"
             && call["result"]
                 .as_str()
-                .is_some_and(|result| result.contains(r#"\"ok\":true"#))
+                .and_then(|result| result.lines().next())
+                .and_then(|line| line.strip_prefix("gents_exec: "))
+                .and_then(|json| serde_json::from_str::<Value>(json).ok())
+                .is_some_and(|metadata| {
+                    metadata["ok"] == true
+                        && metadata["exit_code"] == 0
+                        && metadata["timed_out"] != true
+                })
     })
+}
+
+#[test]
+fn shell_evidence_requires_successful_execution_metadata() {
+    let call = |result: &str| {
+        serde_json::json!({
+            "tool_name":"bash_unrestricted",
+            "lifecycle_state":"completed",
+            "result":result
+        })
+    };
+    assert!(successful_shell_call(&[call(
+        "gents_exec: {\"ok\":true,\"exit_code\":0,\"timed_out\":false}\nstdout:\n"
+    )]));
+    for result in [
+        "gents_exec: {\"ok\":false,\"exit_code\":1}",
+        "gents_exec: {\"ok\":true,\"exit_code\":1}",
+        "gents_exec: {\"ok\":true,\"exit_code\":0,\"timed_out\":true}",
+        "SMALL SAFE TASK",
+    ] {
+        assert!(!successful_shell_call(&[call(result)]));
+    }
 }
 
 fn rejected_forbidden_root(calls: &[Value], forbidden_root: &Path) -> bool {

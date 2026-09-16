@@ -34,7 +34,8 @@ GENTS_D4F_MODEL=GLM-5.3-Flash-NVFP4 \
 GENTS_LIVE_CONFIG_STAGE_TIMEOUT_SECS=1800 \
 GENTS_EVAL_ROOT="$PWD/.gents-eval" \
 cargo test -p gents --test e2e_configurator \
-  live_onboarding_behavioral_acceptance -- --ignored --exact --nocapture
+  configurator::onboarding_scenarios::live_onboarding_behavioral_acceptance \
+  -- --ignored --exact --nocapture
 ```
 
 The test creates a unique retained directory below `GENTS_EVAL_ROOT`. It records
