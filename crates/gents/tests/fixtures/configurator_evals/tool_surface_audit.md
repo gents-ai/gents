@@ -24,8 +24,8 @@ values for nested groups and runtime ceilings enforced by existing owners.
 | Schemas | `schema get/preview install/install`; shared additive schema contract/publication owner with packs and CLI | Node-wide contracts, not document ACP grants; model command regressions pass, full automation live validation pending |
 | LSP | Integrations.lsp settings | Needs installed/indexed server; presence is not readiness |
 | Ethereum | Integrations.eth_tool_ids selects owned EthTool documents | No model config authoring for EthTool; signing keys/credentials stay operator-owned |
-| Skills | `skill get/preview import/import`; Context skill_ids attaches owned Skill documents | Shared CLI/model SKILL.md loader, root-bound reads, create-only publication; canonical source_directory is supplied by load_skill for supporting references without widening authority. Fresh-session source-relative execution passed the first six `b96b69918` trials; full measurement pending (see README). Bounded inventory absent |
-| Automation | `automation get/preview/edit` task, schedule, event-source, trigger with target behavior | Full model-authored schema/surface/task/trigger and real document submission pending |
+| Skills | `skill get/preview import/import`; Context skill_ids attaches owned Skill documents | Shared CLI/model SKILL.md loader, root-bound reads, create-only publication; canonical source_directory is supplied by load_skill for supporting references without widening authority. Fresh-session source-relative execution passed 10/10 `b96b69918` trials (see README). Bounded inventory absent |
+| Automation | `automation get/preview/edit` task, schedule, event-source, trigger with target behavior | Model-authored schema/surface/task/trigger with two real correlated document submissions passed 10/10 `b96b69918` trials |
 | Inference | Profile inventory/create/edit; backend inventory/edit | Backend creation absent; credentials use operator-managed auth |
 | Self-configuration | Explicit categories, preview, no-lockout, separate pack install grant | CLI/desktop initial grants now include advertised backend/MCP/automation categories |
 

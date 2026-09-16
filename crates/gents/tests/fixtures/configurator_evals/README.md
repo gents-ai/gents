@@ -45,8 +45,8 @@ fresh-session live skill execution has passed in single-trial GLM diagnostics
 disk and require the working behavior's ordinary file permissions. Imports retain
 the canonical local source_directory and load_skill supplies that base for
 supporting references. The fixture now uses standard source-directory-relative
-paths. Trials 1–6 of the `b96b69918` cohort passed this stronger live check
-(interim observation on 2026-09-16 at 06:20 UTC, not a completed ten-trial rate).
+paths. All ten trials of the completed `b96b69918` cohort passed this stronger
+live check (see the measured results below).
 Earlier diagnostics used workspace-relative paths and do not establish this
 behavior.
 
@@ -135,7 +135,37 @@ classifies inconclusive checks, and includes model execution in onboarding timin
 The final cohort must exercise those changes and the stronger source-relative
 skill fixture before final rates or readiness are claimed.
 
-The `b96b69918` cohort subsequently exposed a fresh-session handoff gap: review
+## Committed diagnostic cohort (`b96b69918`)
+
+The 2026-09-16 05:45–06:58 UTC run completed ten isolated GLM trials at
+concurrency two in 4386 seconds. Its prompts and embedded browser checker stayed
+fixed. The test exited 101 because no trial passed end to end.
+
+| Case | Raw passed | Raw failed/inconclusive | Skipped |
+| --- | ---: | ---: | ---: |
+| Onboarding | 10 | 0 | 0 |
+| Builder readiness | 8 | 2 | 0 |
+| Skill import/use (source-relative fixture) | 10 | 0 | 0 |
+| Pagoda creation | 0 | 10 | 0 |
+| Review | 4 | 2 | 4 |
+| Improvement | 0 | 4 | 6 |
+| Model-authored document automation | 10 | 0 | 0 |
+
+Readiness trials 1 and 8 both successfully ran `sh test.sh` with `cwd: readiness`.
+The separate retained-evidence reassessments below correct those two false
+negatives, giving 10/10 reassessed readiness without changing the raw reports.
+
+Creation had seven deadlines, one animated-scene inconclusive result, one
+JavaScript error and one exact-accessible-name rejection. Review had one deadline
+and one invalid-tool-call-budget failure after repeated read-only command denials.
+Only six reviews and four improvements actually executed; the other cases are
+not capability trials. Improvement failures were two missing README checks, one
+JavaScript error and one exact-accessible-name rejection. The exact-name case
+had visible text `Toggle night` and an accessible name with a descriptive suffix;
+whether this is an overstrict oracle is under focused review. It is not credited
+as a browser pass.
+
+This cohort exposed a fresh-session handoff gap: review
 and improvement did not receive the complete original request. A missing README
 after improvement therefore cannot establish that the model failed an explicitly
 supplied requirement. Follow-up prompts now include the original request from
