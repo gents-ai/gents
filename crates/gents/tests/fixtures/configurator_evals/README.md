@@ -61,12 +61,33 @@ not synthesize requests. This internal runner schema is separate from the
 application schemas that the automation case must author itself. Acceptance
 reports passed, failed and prerequisite-skipped cases separately.
 
-To add a case, declare its typed identifier in the shared `case_catalog`, add its
-prompt fixture and independent check, then wire the prerequisite in the trial
-sequence. Use `stages::execute` for native task invocation and `stages::checked`
-for the case verdict. Multiple native requests may belong to one case (skill
-setup/use and automation are examples). The catalog drives report enumeration;
+Each suite owns a static slice of `stages::CaseId::new(...)` values and passes
+that catalog to both `stages::case_results` and `reporting::RunReport::new`.
+This is the registration seam for the separate onboarding acceptance suite: its
+case names stay in its module rather than being added to the progressive catalog.
+Use `stages::execute` for native task invocation and `stages::checked` for each
+case verdict. Multiple native requests may belong to one case (skill setup/use
+and automation are examples). A missing receipt for a registered dependent case
+is reported as prerequisite-skipped, never passed. Catalog IDs are validated and
 receipt identities are checked rather than inferred from arbitrary filenames.
+
+Suite-owned grader code and fixtures are passed as `reporting::EvidenceSource`
+values to `RunProvenance::current`; the resulting `RunReport` remains the only
+aggregate reporter and writes the existing `report.json` schema. Submit one
+`reporting::TrialResult` with `RunReport::record`, then checkpoint with `save`.
+Keep each attempt in its own `trials/...` directory and retain raw stage outcomes,
+case receipts, canonical-document snapshots, and the isolated database there.
+`checked` publishes case receipts with no-clobber semantics, so reruns or offline
+reassessment require a fresh evidence directory or a distinct immutable sidecar.
+Do not add a suite-specific aggregate `acceptance.json`.
+
+Classification happens at the owner boundary. Wrap deterministic assertions
+about model-authored state in `stages::acceptance` (`model_acceptance`); wrap a
+broken parser/checker with `stages::grader`; and wrap setup, filesystem, database,
+or report-retention failures with `stages::infrastructure`. Typed provider, tool,
+runtime, deadline, and inconclusive failures from `stages::execute` pass through
+unchanged. `RunReport::record` rejects unknown case IDs/statuses/failure kinds and
+also rejects a passing trial if any registered case is failed, skipped, or absent.
 
 A full single-trial diagnostic passed through pagoda improvement, then failed
 automation with no correlated output. Its configuration contained Go-style

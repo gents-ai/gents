@@ -47,28 +47,58 @@ fn stage_budget_defaults_to_thirty_minutes_and_validates_overrides() {
     }
 }
 
-// One declaration drives both call-site identifiers and report enumeration.
-macro_rules! case_catalog {
-    ($($variant:ident => $id:literal),+ $(,)?) => {
-        #[derive(Clone, Copy, Debug)]
-        pub enum CaseId { $($variant),+ }
-        impl CaseId {
-            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
-            pub const fn as_str(self) -> &'static str {
-                match self { $(Self::$variant => $id),+ }
-            }
-        }
-    };
+/// Stable receipt identity supplied by the suite that owns the scenario.
+///
+/// Keeping this as a value rather than a closed enum lets adjacent suites use
+/// the shared receipt and report machinery without adding their case names to
+/// this module.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaseId(&'static str);
+
+#[allow(non_upper_case_globals)]
+impl CaseId {
+    pub const Onboarding: Self = Self::new("onboarding");
+    pub const BuilderReadiness: Self = Self::new("builder-readiness");
+    pub const SkillWorkflow: Self = Self::new("skill-workflow");
+    pub const Pagoda: Self = Self::new("pagoda");
+    pub const Review: Self = Self::new("review");
+    pub const Improve: Self = Self::new("improve");
+    pub const DocumentAutomation: Self = Self::new("document-automation");
+
+    pub const fn new(id: &'static str) -> Self {
+        Self(id)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
 }
 
-case_catalog! {
-    Onboarding => "onboarding",
-    BuilderReadiness => "builder-readiness",
-    SkillWorkflow => "skill-workflow",
-    Pagoda => "pagoda",
-    Review => "review",
-    Improve => "improve",
-    DocumentAutomation => "document-automation",
+pub const PROGRESSIVE_CASES: &[CaseId] = &[
+    CaseId::Onboarding,
+    CaseId::BuilderReadiness,
+    CaseId::SkillWorkflow,
+    CaseId::Pagoda,
+    CaseId::Review,
+    CaseId::Improve,
+    CaseId::DocumentAutomation,
+];
+
+pub fn validate_case_catalog(cases: &[CaseId]) -> Result<()> {
+    ensure!(!cases.is_empty(), "eval case catalog must not be empty");
+    let mut unique = std::collections::BTreeSet::new();
+    for case in cases {
+        let id = case.as_str();
+        ensure!(
+            !id.is_empty()
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'),
+            "eval case ID must contain only lowercase ASCII letters, digits, and hyphens: {id:?}"
+        );
+        ensure!(unique.insert(id), "duplicate eval case ID: {id}");
+    }
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +124,18 @@ pub enum EvaluationFailure {
 }
 
 impl EvaluationFailure {
+    pub const KINDS: &[&str] = &[
+        "deadline",
+        "provider",
+        "tool",
+        "runtime",
+        "inconclusive",
+        "infrastructure",
+        "grader",
+        "model_acceptance",
+        "unknown",
+    ];
+
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Deadline(_) => "deadline",
@@ -215,13 +257,13 @@ pub struct CaseResult {
 async fn every_catalog_case_is_reported_and_receipt_identity_is_checked() {
     let evidence = tempfile::tempdir().unwrap();
     let mut ids = std::collections::BTreeSet::new();
-    for &case in CaseId::ALL {
+    for &case in PROGRESSIVE_CASES {
         assert!(ids.insert(case.as_str()));
         checked(case, evidence.path(), async { Ok(()) })
             .await
             .unwrap();
     }
-    let results = case_results(evidence.path()).unwrap();
+    let results = case_results(PROGRESSIVE_CASES, evidence.path()).unwrap();
     assert_eq!(results.len(), ids.len());
     assert!(results
         .iter()
@@ -233,7 +275,44 @@ async fn every_catalog_case_is_reported_and_receipt_identity_is_checked() {
         serde_json::to_vec(&incorrect).unwrap(),
     )
     .unwrap();
-    assert!(case_results(evidence.path()).is_err());
+    assert!(case_results(PROGRESSIVE_CASES, evidence.path()).is_err());
+}
+
+#[test]
+fn suite_owned_case_catalogs_are_validated_without_reporting_missing_cases_as_passed() {
+    const CASES: &[CaseId] = &[
+        CaseId::new("onboarding-fresh-setup"),
+        CaseId::new("onboarding-after-restart"),
+    ];
+    validate_case_catalog(CASES).unwrap();
+    assert!(validate_case_catalog(&[CaseId::new("duplicate"), CaseId::new("duplicate")]).is_err());
+    assert!(validate_case_catalog(&[CaseId::new("../receipt")]).is_err());
+
+    let evidence = tempfile::tempdir().unwrap();
+    let results = case_results(CASES, evidence.path()).unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(|result| {
+        result.status == "skipped" && result.failure_kind.as_deref() == Some("prerequisite")
+    }));
+}
+
+#[tokio::test]
+async fn case_receipts_are_immutable_after_first_publication() {
+    let evidence = tempfile::tempdir().unwrap();
+    let case = CaseId::new("suite-owned-case");
+    checked(case, evidence.path(), async { Ok(()) })
+        .await
+        .unwrap();
+    let replacement = checked::<()>(case, evidence.path(), async {
+        Err(model_acceptance(anyhow::anyhow!("replacement verdict")))
+    })
+    .await
+    .unwrap_err();
+    assert!(format!("{replacement:#}").contains("replacement verdict"));
+    assert!(format!("{replacement:#}").contains("evidence retention also failed"));
+    let retained = case_results(&[case], evidence.path()).unwrap();
+    assert_eq!(retained[0].status, "passed");
+    assert!(retained[0].failure_kind.is_none());
 }
 
 #[tokio::test]
@@ -262,7 +341,7 @@ async fn case_reporting_preserves_failure_classification_and_skipped_prerequisit
             .await
             .is_err()
     );
-    let results = case_results(evidence.path()).unwrap();
+    let results = case_results(PROGRESSIVE_CASES, evidence.path()).unwrap();
     assert_eq!(results.len(), 7);
     assert_eq!(results[0].failure_kind.as_deref(), Some("deadline"));
     assert_eq!(results[1].status, "passed");
@@ -315,17 +394,18 @@ pub async fn checked<T>(
     tracing::info!(target: "gents::configurator_eval", result = %serde_json::to_string(&receipt)?, "eval case acceptance");
     let retention = (|| {
         std::fs::create_dir_all(evidence)?;
-        std::fs::write(
-            evidence.join(format!("{case_id}-acceptance.json")),
-            serde_json::to_vec_pretty(&receipt)?,
+        super::reporting::write_json_new(
+            &evidence.join(format!("{case_id}-acceptance.json")),
+            &receipt,
         )?;
         Ok(())
     })();
     retain_outcome(result, retention)
 }
 
-pub fn case_results(evidence: &Path) -> Result<Vec<CaseResult>> {
-    CaseId::ALL
+pub fn case_results(cases: &[CaseId], evidence: &Path) -> Result<Vec<CaseResult>> {
+    validate_case_catalog(cases)?;
+    cases
         .iter()
         .map(|case| case.as_str())
         .map(|case_id| {

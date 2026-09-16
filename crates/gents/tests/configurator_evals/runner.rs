@@ -8,7 +8,6 @@ use anyhow::{ensure, Context, Result};
 use futures::{FutureExt, StreamExt};
 use gents::document_config::{AgentContext, InferenceProfile, InferenceSampling, Tools};
 use gents::{AgentIdentity, Collection};
-use serde::Serialize;
 use serde_json::Value;
 use tracing::Instrument;
 
@@ -38,6 +37,53 @@ const EVAL_TEMPERATURE: f64 = 1.0;
 const EVAL_TOP_P: f64 = 0.95;
 const ONBOARDING_PROMPT: &str =
     include_str!("../fixtures/configurator_evals/software_team_and_code_review.md");
+const EVAL_GRADER_SOURCES: &[reporting::EvidenceSource] = &[
+    reporting::EvidenceSource::new("cases.rs", include_bytes!("cases.rs")),
+    reporting::EvidenceSource::new("readiness.rs", include_bytes!("readiness.rs")),
+    reporting::EvidenceSource::new("stages.rs", include_bytes!("stages.rs")),
+    reporting::EvidenceSource::new(
+        "check-pagoda.mjs",
+        include_bytes!("../../../../scripts/evals/check-pagoda.mjs"),
+    ),
+];
+const EVAL_FIXTURES: &[reporting::EvidenceSource] = &[
+    reporting::EvidenceSource::new(
+        "builder_readiness.md",
+        include_bytes!("../fixtures/configurator_evals/builder_readiness.md"),
+    ),
+    reporting::EvidenceSource::new(
+        "document_automation.md",
+        include_bytes!("../fixtures/configurator_evals/document_automation.md"),
+    ),
+    reporting::EvidenceSource::new(
+        "improve_pagoda.md",
+        include_bytes!("../fixtures/configurator_evals/improve_pagoda.md"),
+    ),
+    reporting::EvidenceSource::new(
+        "review_pagoda.md",
+        include_bytes!("../fixtures/configurator_evals/review_pagoda.md"),
+    ),
+    reporting::EvidenceSource::new(
+        "skill_setup.md",
+        include_bytes!("../fixtures/configurator_evals/skill_setup.md"),
+    ),
+    reporting::EvidenceSource::new(
+        "skill_use.md",
+        include_bytes!("../fixtures/configurator_evals/skill_use.md"),
+    ),
+    reporting::EvidenceSource::new(
+        "software_team_and_code_review.md",
+        include_bytes!("../fixtures/configurator_evals/software_team_and_code_review.md"),
+    ),
+    reporting::EvidenceSource::new(
+        "tool_surface_audit.md",
+        include_bytes!("../fixtures/configurator_evals/tool_surface_audit.md"),
+    ),
+    reporting::EvidenceSource::new(
+        "voxel_pagoda.md",
+        include_bytes!("../fixtures/configurator_evals/voxel_pagoda.md"),
+    ),
+];
 
 #[derive(Clone, Copy, Debug)]
 enum LiveProvider {
@@ -160,21 +206,6 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
                 .map(|message| (*message).to_owned())
         })
         .unwrap_or_else(|| "non-string panic payload".to_owned())
-}
-
-#[derive(Debug, Serialize)]
-struct ConfiguratorEvalResult {
-    case_id: &'static str,
-    provider: &'static str,
-    model: String,
-    trial: usize,
-    passed: bool,
-    trial_failure_kind: Option<String>,
-    terminal_state: Option<String>,
-    error: Option<String>,
-    assistant_answer_excerpt: Option<String>,
-    artifacts: Option<String>,
-    cases: Vec<stages::CaseResult>,
 }
 
 fn excerpt(value: &str, max_chars: usize) -> String {
@@ -562,7 +593,7 @@ async fn run_eval_trial(
     model: String,
     trial: usize,
     artifacts: &std::path::Path,
-) -> ConfiguratorEvalResult {
+) -> reporting::TrialResult {
     let db = retained_trial_db(artifacts).await;
     let access = gents::ConfigAccess::Local(db.node.clone());
     let schema = gents::config_client::preview_schema_install(&access, stages::INPUT_SCHEMA)
@@ -735,7 +766,7 @@ async fn run_eval_trial(
             .await;
             failures.extend(result.err());
         }
-        let report = ConfiguratorEvalResult {
+        let report = reporting::TrialResult {
             case_id: EVAL_CASE_ID,
             provider: provider.name(),
             model,
@@ -752,7 +783,8 @@ async fn run_eval_trial(
             }),
             assistant_answer_excerpt: Some(excerpt(&answer, 2_000)),
             artifacts: Some(artifacts.to_string_lossy().into_owned()),
-            cases: stages::case_results(&evidence).expect("collect independent case results"),
+            cases: stages::case_results(stages::PROGRESSIVE_CASES, &evidence)
+                .expect("collect independent case results"),
         };
         report
     })
@@ -827,7 +859,7 @@ async fn run_retained_trial(
     model: String,
     trial: usize,
     artifacts: std::path::PathBuf,
-) -> ConfiguratorEvalResult {
+) -> reporting::TrialResult {
     let evidence = artifacts.join("evidence");
     std::fs::create_dir_all(&evidence).expect("create evidence directory");
     tracing::info!(target: "gents::configurator_eval", artifacts = %artifacts.display(), "starting trial");
@@ -836,7 +868,7 @@ async fn run_retained_trial(
         .await
     {
         Ok(report) => report,
-        Err(error) => ConfiguratorEvalResult {
+        Err(error) => reporting::TrialResult {
             case_id: EVAL_CASE_ID,
             provider: provider.name(),
             model,
@@ -850,11 +882,11 @@ async fn run_retained_trial(
             )),
             assistant_answer_excerpt: None,
             artifacts: Some(artifacts.to_string_lossy().into_owned()),
-            cases: stages::case_results(&evidence).unwrap_or_default(),
+            cases: stages::case_results(stages::PROGRESSIVE_CASES, &evidence).unwrap_or_default(),
         },
     };
-    reporting::write_json(&evidence.join("trial.json"), &report)
-        .expect("retain trial result, including fixture failures");
+    reporting::write_json_new(&evidence.join("trial.json"), &report)
+        .expect("retain immutable trial result, including fixture failures");
     tracing::info!(target: "gents::configurator_eval", passed = report.passed, "completed trial");
     report
 }
@@ -885,6 +917,8 @@ async fn live_configurator_progressive_eval_matrix() {
     std::fs::create_dir(directory.join("trials")).expect("fresh run directory");
     let mut run_report = reporting::RunReport::new(
         directory.clone(),
+        EVAL_CASE_ID,
+        stages::PROGRESSIVE_CASES,
         models.clone(),
         runs,
         provider.name(),
@@ -897,8 +931,12 @@ async fn live_configurator_progressive_eval_matrix() {
             EVAL_SAMPLING_ID,
             EVAL_TEMPERATURE,
             EVAL_TOP_P,
-        ),
-    );
+            EVAL_GRADER_SOURCES,
+            EVAL_FIXTURES,
+        )
+        .expect("collect eval provenance"),
+    )
+    .expect("initialize eval report");
     run_report.save().expect("initialize run report");
     let trials = models
         .into_iter()
@@ -915,14 +953,16 @@ async fn live_configurator_progressive_eval_matrix() {
         })
         .buffer_unordered(concurrency);
     while let Some(result) = results.next().await {
-        run_report.results.push(result);
+        run_report
+            .record(result)
+            .expect("record planned eval trial exactly once");
         run_report.save().expect("checkpoint run report");
     }
     assert!(
         run_report.failed() == 0,
         "{} of {} configurator eval trials failed; see {}",
         run_report.failed(),
-        run_report.results.len(),
+        run_report.completed(),
         directory.join("report.json").display(),
     );
 }
