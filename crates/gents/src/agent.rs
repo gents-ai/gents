@@ -84,6 +84,15 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
         configuration_fingerprint: &str,
         runnable_behavior_ids: &[String],
     );
+
+    /// Subscription/seed outcome for this exact configuration. Success is not
+    /// a group-recovery/drain guarantee; errors do not authorize reseeding.
+    fn on_event_sources_reconciled(
+        &self,
+        generation: u64,
+        configuration_fingerprint: &str,
+        result: Result<(), &str>,
+    );
 }
 
 #[derive(Default)]

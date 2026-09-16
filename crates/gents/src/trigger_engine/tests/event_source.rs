@@ -1,5 +1,99 @@
 use super::*;
 
+#[derive(Default)]
+struct SubscriptionObserver(std::sync::Mutex<Vec<(u64, String, Result<(), String>)>>);
+
+impl crate::RuntimeSnapshotObserver for SubscriptionObserver {
+    fn on_generation_published(&self, _generation: u64, _fingerprint: &str, _behaviors: &[String]) {
+    }
+
+    fn on_event_sources_reconciled(
+        &self,
+        generation: u64,
+        fingerprint: &str,
+        result: Result<(), &str>,
+    ) {
+        self.0.lock().unwrap().push((
+            generation,
+            fingerprint.to_owned(),
+            result.map_err(str::to_owned),
+        ));
+    }
+}
+
+#[tokio::test]
+async fn event_source_acknowledges_exact_configuration_after_subscription_setup() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema("type ReadyInput { value: String }")
+        .await
+        .unwrap();
+    assert!(!node
+        .execute(r#"mutation { create_ReadyInput(input: {value: "before"}) {_docID} }"#)
+        .await
+        .has_errors());
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([(
+            "ready-trigger".into(),
+            resolved_event_trigger("ready-trigger", "ReadyInput", resolved_task("observe")),
+        )]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let observer = Arc::new(SubscriptionObserver::default());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new())
+        .with_runtime_observer(Some(observer.clone()));
+    assert!(observer.0.lock().unwrap().is_empty());
+    source.reconcile_subscriptions(&snapshot).await;
+    assert_eq!(
+        *observer.0.lock().unwrap(),
+        vec![(1, snapshot.configuration_fingerprint(), Ok(()))]
+    );
+    let submitted = node
+        .execute(r#"mutation { create_ReadyInput(input: {value: "after"}) {_docID} }"#)
+        .await;
+    assert!(!submitted.has_errors());
+    let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        intent.doc_vars.as_ref().unwrap()["value"],
+        "after",
+        "pre-ack documents must have been seeded before readiness"
+    );
+}
+
+#[tokio::test]
+async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let triggers = HashMap::from([(
+        "missing".into(),
+        resolved_event_trigger("missing", "AbsentInput", resolved_task("observe")),
+    )]);
+    let first = snapshot_with_event_triggers(1, triggers.clone());
+    let (_tx, rx) = watch::channel(first.clone());
+    let observer = Arc::new(SubscriptionObserver::default());
+    let mut source = EventSource::new(rx, node, CancellationToken::new())
+        .with_runtime_observer(Some(observer.clone()));
+    source.reconcile_subscriptions(&first).await;
+    source
+        .reconcile_subscriptions(&snapshot_with_event_triggers(2, triggers))
+        .await;
+    let failures = observer.0.lock().unwrap().clone();
+    assert_eq!(failures.len(), 2);
+    assert!(failures
+        .iter()
+        .all(|(_, _, result)| result.as_ref().unwrap_err().contains("AbsentInput")));
+    let removed = snapshot_with_event_triggers(3, HashMap::new());
+    source.reconcile_subscriptions(&removed).await;
+    assert_eq!(
+        observer.0.lock().unwrap().last(),
+        Some(&(3, removed.configuration_fingerprint(), Ok(())))
+    );
+}
+
 /// Build a `ResolvedEventTrigger` pointing at the named source collection.
 /// Matches the empty-defaults pattern used by `resolved_schedule`.
 fn resolved_event_trigger(

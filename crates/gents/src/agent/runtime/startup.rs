@@ -591,6 +591,7 @@ async fn run_agent_owned(
         crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
     let trigger_engine_agent_did = agent.agent_did().to_string();
+    let trigger_engine_runtime_observer = agent.runtime_snapshot_observer.clone();
     let trigger_engine_handle = tokio::spawn(async move {
         tokio::select! {
             _ = trigger_engine_cancel.cancelled() => return,
@@ -621,12 +622,14 @@ async fn run_agent_owned(
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
             ));
-        let event_source: Box<dyn crate::trigger_engine::TriggerSource> =
-            Box::new(crate::trigger_engine::event_source::EventSource::new(
+        let event_source: Box<dyn crate::trigger_engine::TriggerSource> = Box::new(
+            crate::trigger_engine::event_source::EventSource::new(
                 trigger_engine_event_snapshot_rx,
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
-            ));
+            )
+            .with_runtime_observer(trigger_engine_runtime_observer),
+        );
         let subagent_source: Box<dyn crate::trigger_engine::TriggerSource> =
             Box::new(crate::trigger_engine::subagent_source::SubagentSource::new(
                 trigger_engine_subagent_snapshot_rx,
