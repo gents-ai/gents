@@ -21,12 +21,15 @@ required=$(objdump -T "$binary" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC
 [[ -n "$required" && "$(printf '%s\n' 2.36 "$required" | sort -V | tail -1)" == 2.36 ]]
 
 # Fresh ordinary user: no source checkout, Vite, CLI, or pre-existing agent home.
-useradd --create-home --shell /bin/bash gents-desktop-smoke
+smoke_root=$(mktemp -d /tmp/gents-desktop-smoke.XXXXXX)
+smoke_user="gents-smoke-${smoke_root##*.}"
+useradd --home-dir "$smoke_root" --no-create-home --shell /bin/bash "$smoke_user"
+chown "$smoke_user" "$smoke_root"
 set +e
-timeout --kill-after=5s 20s runuser -u gents-desktop-smoke -- \
-  env GENTS_HOME=/home/gents-desktop-smoke/agent \
-      GENTS_DESKTOP_HOME=/home/gents-desktop-smoke/desktop \
-  bash -c 'cd /home/gents-desktop-smoke && exec dbus-run-session -- xvfb-run -a /usr/bin/gents-desktop-tauri' \
+# shellcheck disable=SC2016 # The non-root shell resolves its positional argument.
+timeout --kill-after=5s 20s runuser -u "$smoke_user" -- \
+  env GENTS_HOME="$smoke_root/agent" GENTS_DESKTOP_HOME="$smoke_root/desktop" \
+  bash -c 'cd "$1" && exec dbus-run-session -- xvfb-run -a /usr/bin/gents-desktop-tauri' bash "$smoke_root" \
   > target/desktop-smoke.log 2>&1
 status=$?
 set -e
