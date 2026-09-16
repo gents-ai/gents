@@ -18,7 +18,7 @@ macro_rules! case_catalog {
         #[derive(Clone, Copy, Debug)]
         pub enum CaseId { $($variant),+ }
         impl CaseId {
-            const ALL: &'static [Self] = &[$(Self::$variant),+];
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
             pub const fn as_str(self) -> &'static str {
                 match self { $(Self::$variant => $id),+ }
             }

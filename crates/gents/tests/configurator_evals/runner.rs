@@ -1,18 +1,6 @@
-//! Live model acceptance for the argv-style self-configuration product.
-//!
-//! The assertion surface is durable configuration, not prose: a real model
-//! must discover/call `config` repeatedly and leave the requested behaviors,
-//! profile bindings, prompts, tool roots, default, and pack graph in DefraDB.
-//!
-//! `GENTS_LIVE_CONFIG_MODELS` accepts a comma-separated model matrix and
-//! `GENTS_LIVE_CONFIG_RUNS` selects 1-100 isolated trials per model. Each
-//! `GENTS_LIVE_CONFIG_PROVIDER` selects `d4f` (default) or `openrouter`; the
-//! latter stores only the `OPENROUTER_API_KEY` environment-variable reference.
-//! `GENTS_LIVE_CONFIG_CONCURRENCY` bounds parallel isolated trials (default 1,
-//! maximum 20). Each prompt lives under `tests/fixtures/configurator_evals`;
-//! Rust assertions own the corresponding durable success contract.
+//! Progressive live acceptance: model-authored configuration, native task execution,
+//! and independent checks of durable state and generated artifacts.
 
-use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -22,19 +10,22 @@ use gents::document_config::{AgentContext, InferenceProfile, Tools};
 use gents::{AgentIdentity, Collection};
 use serde::Serialize;
 use serde_json::Value;
+use tracing::Instrument;
 
-use crate::support::fixtures::test_identity;
 use crate::support::live_inference::{
     bind_d4f_backend_for_model, bind_openrouter_backend_for_model, boot_d4f_agent_with_options,
     D4F_BACKEND_ID, OPENROUTER_BACKEND_ID,
 };
-use crate::support::test_db;
+use crate::support::test_db_in;
 
 #[path = "stages.rs"]
 mod stages;
 
 #[path = "cases.rs"]
 mod cases;
+
+#[path = "reporting.rs"]
+mod reporting;
 
 const EVAL_CASE_ID: &str = "progressive-configurator";
 const ONBOARDING_PROMPT: &str =
@@ -91,7 +82,7 @@ fn model_name() -> String {
 }
 
 fn eval_models() -> Vec<String> {
-    std::env::var("GENTS_LIVE_CONFIG_MODELS")
+    let mut models = std::env::var("GENTS_LIVE_CONFIG_MODELS")
         .ok()
         .map(|models| {
             models
@@ -102,7 +93,10 @@ fn eval_models() -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .filter(|models| !models.is_empty())
-        .unwrap_or_else(|| vec![model_name()])
+        .unwrap_or_else(|| vec![model_name()]);
+    let mut seen = std::collections::HashSet::new();
+    models.retain(|model| seen.insert(model.clone()));
+    models
 }
 
 fn eval_runs() -> usize {
@@ -113,7 +107,7 @@ fn eval_runs() -> usize {
                 .parse::<usize>()
                 .expect("GENTS_LIVE_CONFIG_RUNS must be an integer")
         })
-        .unwrap_or(1);
+        .unwrap_or(10);
     assert!(
         (1..=100).contains(&runs),
         "GENTS_LIVE_CONFIG_RUNS must be between 1 and 100"
@@ -165,14 +159,6 @@ struct ConfiguratorEvalResult {
     assistant_answer_excerpt: Option<String>,
     artifacts: Option<String>,
     cases: Vec<stages::CaseResult>,
-}
-
-#[derive(Debug, Serialize)]
-struct ConfiguratorModelSummary {
-    model: String,
-    passed: usize,
-    failed: usize,
-    pass_rate: f64,
 }
 
 fn excerpt(value: &str, max_chars: usize) -> String {
@@ -518,9 +504,7 @@ async fn run_eval_trial(
     trial: usize,
     artifacts: &std::path::Path,
 ) -> ConfiguratorEvalResult {
-    let model_label = model.replace(['/', ':'], "-");
-    let label = format!("live-configurator-{model_label}-{trial}");
-    let db = test_db(&label).await;
+    let db = retained_trial_db(artifacts).await;
     let access = gents::ConfigAccess::Local(db.node.clone());
     let schema = gents::config_client::preview_schema_install(&access, stages::INPUT_SCHEMA)
         .await
@@ -537,7 +521,10 @@ async fn run_eval_trial(
     std::fs::create_dir_all(&workspace).expect("create isolated workspace");
     let user_home = workspace.to_string_lossy().into_owned();
     tracing::info!(target: "gents::configurator_eval", model, trial, artifacts = %artifacts.display(), "retained eval artifacts");
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(&label));
+    let identity: Arc<dyn AgentIdentity> = Arc::new(
+        gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)
+            .expect("retained trial principal identity"),
+    );
     let (agent_did, setup_behavior_id) = match provider {
         LiveProvider::D4f => {
             bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await
@@ -693,10 +680,103 @@ async fn run_eval_trial(
     .catch_unwind()
     .await;
     agent.shutdown().await;
+    db.node.shutdown().await;
     match result {
         Ok(report) => report,
         Err(payload) => std::panic::resume_unwind(payload),
     }
+}
+
+async fn retained_trial_db(artifacts: &std::path::Path) -> crate::support::TestDb {
+    let mut home = tempfile::Builder::new()
+        .prefix("home-")
+        .tempdir_in(artifacts)
+        .expect("isolated trial database home");
+    home.disable_cleanup(true);
+    test_db_in(home).await
+}
+
+#[tokio::test]
+async fn trial_database_homes_are_isolated_and_retained() {
+    let artifacts = tempfile::tempdir().unwrap();
+    let first = retained_trial_db(artifacts.path()).await;
+    let second = retained_trial_db(artifacts.path()).await;
+    assert_ne!(first.node_identity.did(), second.node_identity.did());
+    let first_home = first.data_path().to_path_buf();
+    let first_did = first.node_identity.did().to_string();
+    install_eval_workspace_root(first.node.as_ref(), artifacts.path().to_str().unwrap()).await;
+    assert!(rows(
+        second.node.as_ref(),
+        "{ WorkspaceRoot { root_path } }",
+        "WorkspaceRoot"
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    first.node.shutdown().await;
+    second.node.shutdown().await;
+    drop((first, second));
+    let homes = std::fs::read_dir(artifacts.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(homes.len(), 2);
+    for home in homes {
+        assert!(home.join("node.key").is_file());
+        assert!(std::fs::read_dir(home).unwrap().count() > 1);
+    }
+    let reopened = gents::defra_node::EmbeddedNode::builder()
+        .data_path(first_home)
+        .with_node_identity_did(&first_did)
+        .build()
+        .await
+        .unwrap();
+    let retained = rows(
+        &reopened,
+        "{ WorkspaceRoot { root_path } }",
+        "WorkspaceRoot",
+    )
+    .await
+    .unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0]["root_path"], artifacts.path().to_str().unwrap());
+    reopened.shutdown().await;
+}
+
+async fn run_retained_trial(
+    provider: LiveProvider,
+    model: String,
+    trial: usize,
+    artifacts: std::path::PathBuf,
+) -> ConfiguratorEvalResult {
+    let evidence = artifacts.join("evidence");
+    std::fs::create_dir_all(&evidence).expect("create evidence directory");
+    tracing::info!(target: "gents::configurator_eval", artifacts = %artifacts.display(), "starting trial");
+    let report = match AssertUnwindSafe(run_eval_trial(provider, model.clone(), trial, &artifacts))
+        .catch_unwind()
+        .await
+    {
+        Ok(report) => report,
+        Err(error) => ConfiguratorEvalResult {
+            case_id: EVAL_CASE_ID,
+            provider: provider.name(),
+            model,
+            trial,
+            passed: false,
+            terminal_state: None,
+            error: Some(format!(
+                "eval trial panicked: {}",
+                panic_message(error.as_ref())
+            )),
+            assistant_answer_excerpt: None,
+            artifacts: Some(artifacts.to_string_lossy().into_owned()),
+            cases: stages::case_results(&evidence).unwrap_or_default(),
+        },
+    };
+    reporting::write_json(&evidence.join("trial.json"), &report)
+        .expect("retain trial result, including fixture failures");
+    tracing::info!(target: "gents::configurator_eval", passed = report.passed, "completed trial");
+    report
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -717,141 +797,42 @@ async fn live_configurator_progressive_eval_matrix() {
     let runs = eval_runs();
     let provider = LiveProvider::from_env();
     let concurrency = eval_concurrency();
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("GENTS_EVAL_RUN_DIR")
+            .expect("use make live-configurator-eval to allocate a run directory"),
+    );
+    std::fs::create_dir(directory.join("trials")).expect("fresh run directory");
+    let mut run_report = reporting::RunReport::new(
+        directory.clone(),
+        models.clone(),
+        runs,
+        provider.name(),
+        concurrency,
+    );
+    run_report.save().expect("initialize run report");
     let trials = models
         .into_iter()
-        .flat_map(|model| (1..=runs).map(move |trial| (model.clone(), trial)));
-    let results = futures::stream::iter(trials)
-        .map(|(model, trial)| async move {
-            // Allocate outside the caught trial so setup panics still retain
-            // an addressable report and any evidence already collected.
-            let artifacts = tempfile::Builder::new()
-                .prefix("gents-eval-")
-                .tempdir()
-                .expect("isolated eval artifacts")
-                .keep();
-            let evidence = artifacts.join("evidence");
-            std::fs::create_dir_all(&evidence).expect("create evidence directory");
-            let failed_model = model.clone();
-            let report =
-                match AssertUnwindSafe(run_eval_trial(provider, model.clone(), trial, &artifacts))
-                    .catch_unwind()
-                    .await
-                {
-                    Ok(report) => report,
-                    Err(error) => ConfiguratorEvalResult {
-                        case_id: EVAL_CASE_ID,
-                        provider: provider.name(),
-                        model: failed_model,
-                        trial,
-                        passed: false,
-                        terminal_state: None,
-                        error: Some(format!(
-                            "eval trial panicked: {}",
-                            panic_message(error.as_ref())
-                        )),
-                        assistant_answer_excerpt: None,
-                        artifacts: Some(artifacts.to_string_lossy().into_owned()),
-                        cases: stages::case_results(&evidence).unwrap_or_default(),
-                    },
-                };
-            std::fs::write(
-                evidence.join("trial.json"),
-                serde_json::to_vec_pretty(&report).expect("serialize trial"),
-            )
-            .expect("retain trial result, including fixture failures");
-            tracing::info!(
-                target: "gents::configurator_eval",
-                result = %serde_json::to_string(&report).expect("serialize eval report"),
-                "configurator eval trial"
-            );
-            report
+        .enumerate()
+        .flat_map(|(index, model)| (1..=runs).map(move |trial| (index, model.clone(), trial)));
+    let mut results = futures::stream::iter(trials)
+        .map(|(index, model, trial)| {
+            let artifacts = directory
+                .join("trials")
+                .join(format!("model-{:03}-trial-{trial:03}", index + 1));
+            let span =
+                tracing::info_span!(target: "gents::configurator_eval", "trial", %model, trial);
+            run_retained_trial(provider, model, trial, artifacts).instrument(span)
         })
-        .buffer_unordered(concurrency)
-        .collect::<Vec<_>>()
-        .await;
-    let failures = results
-        .iter()
-        .filter(|result| !result.passed)
-        .collect::<Vec<_>>();
-    let mut model_counts = BTreeMap::<String, (usize, usize)>::new();
-    let mut case_counts = BTreeMap::<(String, String), (usize, usize, usize)>::new();
-    let mut failure_kinds = BTreeMap::<(String, String, String), usize>::new();
-    for result in &results {
-        if result.terminal_state.is_none() {
-            *failure_kinds
-                .entry((
-                    result.model.clone(),
-                    EVAL_CASE_ID.into(),
-                    "fixture_or_harness".into(),
-                ))
-                .or_default() += 1;
-        }
-        let counts = model_counts.entry(result.model.clone()).or_default();
-        if result.passed {
-            counts.0 += 1;
-        } else {
-            counts.1 += 1;
-        }
-        for case in &result.cases {
-            if case.status == "failed" {
-                if let Some(kind) = &case.failure_kind {
-                    *failure_kinds
-                        .entry((result.model.clone(), case.case_id.clone(), kind.clone()))
-                        .or_default() += 1;
-                }
-            }
-            let counts = case_counts
-                .entry((result.model.clone(), case.case_id.clone()))
-                .or_default();
-            match case.status.as_str() {
-                "passed" => counts.0 += 1,
-                "failed" => counts.1 += 1,
-                "skipped" => counts.2 += 1,
-                other => panic!("unknown case status {other}"),
-            }
-        }
+        .buffer_unordered(concurrency);
+    while let Some(result) = results.next().await {
+        run_report.results.push(result);
+        run_report.save().expect("checkpoint run report");
     }
-    for ((model, case_id, kind), count) in failure_kinds {
-        tracing::info!(target: "gents::configurator_eval", result = %serde_json::json!({
-            "model":model,"case_id":case_id,"failure_kind":kind,"count":count,
-        }), "configurator eval failure classification");
-    }
-    for ((model, case_id), (passed, failed, skipped)) in case_counts {
-        tracing::info!(target: "gents::configurator_eval", result = %serde_json::json!({
-            "model": model, "case_id": case_id, "passed": passed, "failed": failed, "skipped": skipped,
-            "attempted": passed + failed,
-            "pass_rate": if passed + failed > 0 { Some(passed as f64 / (passed + failed) as f64) } else { None },
-        }), "configurator eval case summary");
-    }
-    let model_summaries = model_counts
-        .into_iter()
-        .map(|(model, (passed, failed))| ConfiguratorModelSummary {
-            model,
-            passed,
-            failed,
-            pass_rate: passed as f64 / (passed + failed) as f64,
-        })
-        .collect::<Vec<_>>();
-    for summary in &model_summaries {
-        tracing::info!(
-            target: "gents::configurator_eval",
-            result = %serde_json::to_string(summary).expect("serialize model summary"),
-            "configurator eval model summary"
-        );
-    }
-    tracing::info!(
-        target: "gents::configurator_eval",
-        case_id = EVAL_CASE_ID,
-        total = results.len(),
-        passed = results.len() - failures.len(),
-        failed = failures.len(),
-        "configurator eval summary"
-    );
     assert!(
-        failures.is_empty(),
-        "{} of {} configurator eval trials failed:\n{}",
-        failures.len(),
-        results.len(),
-        serde_json::to_string_pretty(&model_summaries).expect("serialize eval summary")
+        run_report.failed() == 0,
+        "{} of {} configurator eval trials failed; see {}",
+        run_report.failed(),
+        run_report.results.len(),
+        directory.join("report.json").display(),
     );
 }

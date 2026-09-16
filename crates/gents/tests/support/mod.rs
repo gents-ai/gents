@@ -46,6 +46,10 @@ pub struct TestDb {
 }
 
 impl TestDb {
+    pub fn data_path(&self) -> &std::path::Path {
+        self.tempdir.path()
+    }
+
     pub async fn simulate_process_crash(&mut self) -> anyhow::Result<()> {
         let data_path = self.tempdir.path().to_path_buf();
         let before = self.process_generation;
@@ -108,6 +112,10 @@ pub async fn test_db(name: &str) -> TestDb {
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
+    test_db_in(tempdir).await
+}
+
+pub async fn test_db_in(tempdir: TempDir) -> TestDb {
     let node_identity: Arc<dyn AgentIdentity> = Arc::new(
         KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity"),
     );

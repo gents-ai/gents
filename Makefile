@@ -417,6 +417,7 @@ test-agent-conformance:
 	$(CARGO) test -p gents --test conformance
 
 test-evals:
+	node --test scripts/evals/report.test.mjs
 	$(CARGO) test -p gents --test e2e_configurator
 
 test-evals-browser:
@@ -424,7 +425,7 @@ test-evals-browser:
 	$(CARGO) test -p gents --test e2e_configurator browser_checker_accepts_static_fixture_without_live_inference -- --ignored
 
 live-configurator-eval:
-	$(CARGO) test -p gents --test e2e_configurator live_configurator_progressive_eval_matrix -- --ignored --nocapture
+	node scripts/evals/run-configurator.mjs $(CARGO)
 
 test-agent-e2e:
 	$(CARGO) test -p gents --test e2e_lifecycle

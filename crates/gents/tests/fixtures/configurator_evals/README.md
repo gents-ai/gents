@@ -110,17 +110,30 @@ terminal state, elapsed time, answer, and tool calls. Files may contain model
 transcripts; do not commit raw trial evidence or credentials. No subjective
 grading is required for the initial deterministic acceptance path.
 
-Run the currently wired stages with:
+`make live-configurator-eval` defaults to ten trials per model. For example:
 
 ```sh
-GENTS_LIVE_CONFIG=1 \
 GENTS_LIVE_CONFIG_PROVIDER=d4f \
 GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 \
 GENTS_LIVE_CONFIG_MODELS=GLM-5.3-Flash-NVFP4 \
 GENTS_LIVE_CONFIG_RUNS=10 \
-cargo test -p gents --test e2e_configurator \
-  live_configurator_progressive_eval_matrix -- --ignored --nocapture
+make live-configurator-eval
 ```
+
+The command prints progress and a final report, including when trials fail.
+Each run lives in `~/.gents-eval/progressive-configurator-{timestamp}-{unique}`
+(`GENTS_EVAL_ROOT` overrides the parent). `report.json` checkpoints completed
+trials and owns the aggregates; `execution.json` records the launcher outcome
+and source revision; `runner.log` retains console diagnostics. Trial workspaces
+and evidence live under `trials/model-NNN-trial-NNN/`, alongside a retained
+`home-*` database directory with its node identity. Trials use independent embedded
+databases in the test process, not separate CLI processes or OS sandboxes.
+The private run directory contains identities and potentially sensitive transcripts;
+do not publish it wholesale.
+Replay a report without inference using `node scripts/evals/report.mjs RUN_DIRECTORY`.
+Unfinished/unreported work is not a prerequisite skip; inconclusive checks remain
+non-passes with their own failure classification. A nonzero eval exit is preserved.
+Use `GENTS_LIVE_CONFIG_RUNS=1 make live-configurator-eval` for a single-trial diagnostic.
 
 `GENTS_LIVE_CONFIG_CONCURRENCY` controls concurrent isolated trials (default 1).
 Do not compare older onboarding-only rates to the expanded execution contract
