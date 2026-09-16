@@ -52,7 +52,7 @@ def documentSpec : Collection → DocumentSpec
   | .agentBehavior => ⟨"AgentBehavior", "behavior_id", "behavior", ["behavior_id", "agent_did", "display_name", "description", "context_id", "inference_profile_id", "enabled", "tags", "created_at"]⟩
   | .agentContext => ⟨"AgentContext", "context_id", "behavior", ["context_id", "agent_did", "display_name", "description", "system_prompt", "tools_id", "compaction_id", "skill_ids", "tags"]⟩
   | .compaction => ⟨"CompactionConfig", "compaction_id", "profile", ["compaction_id", "agent_did", "display_name", "strategy", "threshold", "keep_recent_tokens", "tool_result_max_chars", "summary_max_output_tokens", "summary_file_list_max", "inference_profile_id", "tags"]⟩
-  | .skill => ⟨"Skill", "skill_id", "tools", ["skill_id", "agent_did", "name", "description", "instructions", "tool_refs", "display_name", "interface_json", "enabled", "created_at", "tags"]⟩
+  | .skill => ⟨"Skill", "skill_id", "tools", ["skill_id", "agent_did", "name", "description", "instructions", "source_directory", "tool_refs", "display_name", "interface_json", "enabled", "created_at", "tags"]⟩
   | .datastoreToolSurface => ⟨"DatastoreToolSurface", "surface_id", "tools", ["surface_id", "agent_did", "display_name", "enabled", "entries", "created_at", "tags"]⟩
   | .chainKeyBinding => ⟨"ChainKeyBinding", "binding_id", "tools", ["binding_id", "agent_did", "address", "key_backend", "attestation", "created_at", "revoked_at", "tags"]⟩
   | .ethTool => ⟨"EthTool", "tool_id", "tools", ["tool_id", "agent_did", "display_name", "enabled", "chain_id", "rpc_url", "rpc_timeout_secs", "query_methods", "calls", "key_binding_id", "created_at", "tags"]⟩

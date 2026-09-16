@@ -986,6 +986,13 @@ describe("configuration panels", () => {
         const user = await replace(testCase.field, testCase.value);
         await user.click(screen.getByRole("button", { name: "Save changes" }));
         expect(api[testCase.method], testCase.method).toHaveBeenCalledTimes(1);
+        if (testCase.method === "saveSkillConfig") {
+          expect(api.saveSkillConfig).toHaveBeenCalledWith(
+            expect.objectContaining({
+              document: expect.objectContaining({ source_directory: "/skills/skill-a" }),
+            }),
+          );
+        }
         view.unmount();
       });
     }

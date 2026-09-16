@@ -364,7 +364,7 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
     "InferenceExecution",
     "InferenceRetryPolicy",
 ];
-pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id agent_did name description instructions tool_refs display_name interface_json enabled created_at tags";
+pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id agent_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 
 pub fn run_cli() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()

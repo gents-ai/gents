@@ -59,6 +59,37 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    async fn skill_save_roundtrip_preserves_source_directory() -> Result<()> {
+        let node = EmbeddedNode::builder().build().await?;
+        gents::ensure_runtime_schemas(&node).await?;
+        gents::ensure_agent_principal(&node, "did:test:skill-source").await?;
+        let mut skill: SkillDocument = serde_json::from_value(json!({
+            "agent_did":"did:test:skill-source", "skill_id":"review",
+            "instructions":"Read references/checklist.md.", "source_directory":"/skills/review"
+        }))?;
+        upsert_skill(&node, &skill).await?;
+        skill.display_name = Some("Renamed review".into());
+        upsert_skill(&node, &skill).await?;
+        ConfigAccess::transact_local(&node, None, "desktop.skill.verify_source", |txn| {
+            Box::pin(async move {
+                let (_, saved) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::Skill,
+                    "did:test:skill-source",
+                    "review",
+                )
+                .await?
+                .unwrap();
+                assert_eq!(saved["source_directory"], "/skills/review");
+                assert_eq!(saved["display_name"], "Renamed review");
+                Ok(())
+            })
+        })
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn skill_delete_rejects_context_references_without_detaching_or_cross_owner_effects(
     ) -> Result<()> {
         let node = EmbeddedNode::builder().build().await?;

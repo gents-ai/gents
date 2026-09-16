@@ -659,6 +659,7 @@ fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::sk
         name: doc.name.clone().unwrap_or_default(),
         description: doc.description.clone().unwrap_or_default(),
         instructions: doc.instructions.clone().unwrap_or_default(),
+        source_directory: doc.source_directory.clone(),
         tool_refs: doc.tool_refs.clone(),
         display_name: doc.display_name.clone(),
         enabled: doc.enabled,

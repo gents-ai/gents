@@ -286,6 +286,7 @@ export const deployment: DeploymentView = {
       toolRefs: [],
       displayName: "Skill A",
       interfaceJson: null,
+      sourceDirectory: "/skills/skill-a",
       enabled: true,
       createdAt: null,
       tags: [],

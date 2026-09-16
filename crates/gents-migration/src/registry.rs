@@ -285,7 +285,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::SKILL_NAME,
         gents_protocol::schemas::SKILL,
-        "bafyreiadshuzujbs6t25khjmk5mjiahia7t6crcyhzdp6m3kwxkgaerzk4"
+        "bafyreid2jdacgvz4kn2qp3cgdzjshwiwrdylinjwevpadgs5qsbemqn2na"
     ),
     baseline_entry!(
         gents_protocol::schemas::DATASTORE_TOOL_SURFACE_NAME,

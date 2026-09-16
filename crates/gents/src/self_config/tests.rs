@@ -1045,6 +1045,8 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
         .await
         .unwrap();
     assert!(read.contains("Check the diff carefully."));
+    assert!(read.contains("source_directory"));
+    assert!(read.contains(root.path().canonicalize().unwrap().to_str().unwrap()));
     call_config_tool(
         &tools,
         command(&[

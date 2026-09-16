@@ -20,6 +20,7 @@ structure Skill where
   owner    : Did
   toolRefs : Finset ToolId
   enabled  : Bool
+  sourceDirectory : Option String := none
   deriving DecidableEq
 
 /-- Resolved context selection plus the existing effective tool ceiling. -/
@@ -78,6 +79,11 @@ def skillTools (b : Context) (s : Skill) : Finset ToolId :=
 
 theorem recommended_tools_permitted (b : Context) (s : Skill) :
     skillTools b s ⊆ b.ceiling := Finset.inter_subset_right
+
+/-- A local source location informs relative references, never tool authority. -/
+theorem source_directory_preserves_tool_authority (b : Context) (s : Skill)
+    (directory : Option String) :
+    skillTools b { s with sourceDirectory := directory } = skillTools b s := rfl
 
 /-- Activation selects skill content and carries existing tool authority unchanged.
 There is no second tool-surface composition through skill references. -/

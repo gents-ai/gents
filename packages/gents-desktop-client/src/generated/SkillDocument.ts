@@ -2,9 +2,13 @@
 
 /**
  * Document-layer view of a `Skill` row (decision D1). Mirrors
- * `crates/gents-protocol/schemas/agent/skill.graphql`.
+ * `crates/gents-schemas/schemas/agent/skill.graphql`.
  */
-export type SkillDocument = { skill_id: string, agent_did: string, name?: string | null, description?: string | null, instructions?: string | null, tool_refs?: Array<string> | null, display_name?: string | null, interface_json?: string | null, enabled?: boolean | null, created_at?: string | null,
+export type SkillDocument = { skill_id: string, agent_did: string, name?: string | null, description?: string | null, instructions?: string | null,
+/**
+ * Local supporting-file base, not portable identity or an access grant.
+ */
+source_directory?: string | null, tool_refs?: Array<string> | null, display_name?: string | null, interface_json?: string | null, enabled?: boolean | null, created_at?: string | null,
 /**
  * Optional UI/discovery labels. References, never tags, determine execution.
  */

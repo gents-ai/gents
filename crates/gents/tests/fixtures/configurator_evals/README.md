@@ -40,9 +40,11 @@ The model command supports preview/import/get; attachment uses context skill_ids
 Root-boundary and publication regressions cover the configuration path;
 fresh-session live skill execution has passed in single-trial GLM diagnostics
 (including loading and following a supporting checklist). Supporting files stay on
-disk and require the working behavior's ordinary file permissions. The current
-fixture uses workspace-relative supporting paths; it does not establish standard
-source-directory-relative resolution, which remains an implementation gap.
+disk and require the working behavior's ordinary file permissions. Imports retain
+the canonical local source_directory and load_skill supplies that base for
+supporting references. The fixture now uses standard source-directory-relative
+paths; this stronger check still needs a live run. Earlier diagnostics used
+workspace-relative paths and do not establish this behavior.
 
 Stage invocation now writes `GentsEvalStageInput` documents. Canonical Tasks,
 EventSources and Triggers own request/session materialization; the harness does
@@ -101,3 +103,30 @@ cargo test -p gents --test e2e_live --features live-e2e \
 `GENTS_LIVE_CONFIG_CONCURRENCY` controls concurrent isolated trials (default 1).
 Do not compare older onboarding-only rates to the expanded execution contract
 without identifying the different acceptance requirements.
+
+## Completed diagnostic cohort (not final acceptance)
+
+The 2026-09-16 04:26–05:33 UTC GLM cohort ran ten isolated trials at concurrency
+two in 4037 seconds. It used an earlier, uncommitted runner and a browser script
+that changed during development; it must not be represented as a reproducible
+measurement of the current committed implementation. No trial passed end to end.
+
+| Case | Passed | Failed/inconclusive | Skipped |
+| --- | ---: | ---: | ---: |
+| Onboarding | 10 | 0 | 0 |
+| Builder readiness | 10 | 0 | 0 |
+| Skill import/use (workspace-relative fixture) | 10 | 0 | 0 |
+| Pagoda creation | 1 | 9 | 0 |
+| Review | 1 | 0 | 9 |
+| Improvement | 0 | 1 | 9 |
+| Model-authored document automation | 4 | 6 | 0 |
+
+Eight creation attempts reached the ten-minute deadline. One creation check and
+the one improvement check were inconclusive because the page animated before the
+toggle; the older runner reported these as failures without a separate category.
+Review/improvement were attempted only once: prerequisite skips are not ten
+performed trials. Current code can use partial HTML for recovery without erasing
+the original creation failure, freezes the browser checker into the binary,
+classifies inconclusive checks, and includes model execution in onboarding timing.
+The final cohort must exercise those changes and the stronger source-relative
+skill fixture before final rates or readiness are claimed.

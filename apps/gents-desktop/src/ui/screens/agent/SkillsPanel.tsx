@@ -1,5 +1,5 @@
 /* Skills, as the desktop app's Skills tab: id (immutable after create),
-   name, scope, enabled, display name, description, instructions and tool
+   name, enabled, display name, description, instructions and tool
    dependencies, saved through SkillSaveRequest. */
 import type { DeploymentView, SkillView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
@@ -30,6 +30,7 @@ function SkillEditor({
     displayName: skill.displayName ?? "",
     description: skill.description ?? "",
     instructions: skill.instructions ?? "",
+    sourceDirectory: skill.sourceDirectory ?? "",
     toolRefs: toLines(skill.toolRefs),
     interfaceJson: skill.interfaceJson ?? "",
     tags: toLines(skill.tags),
@@ -51,6 +52,7 @@ function SkillEditor({
           name: next.name.trim(),
           description: next.description || null,
           instructions: next.instructions,
+          source_directory: next.sourceDirectory || null,
           tool_refs: fromLinesOrNull(next.toolRefs),
           display_name: next.displayName || null,
           interface_json: next.interfaceJson || null,
@@ -73,6 +75,14 @@ function SkillEditor({
           label="Name"
           value={d.draft.name}
           onChange={(v) => d.set("name", v)}
+          onCommit={d.commit}
+          onEnter={d.onEnter}
+        />
+        <TextRow
+          id={id("sourceDirectory")}
+          label="Source directory"
+          value={d.draft.sourceDirectory}
+          onChange={(v) => d.set("sourceDirectory", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />

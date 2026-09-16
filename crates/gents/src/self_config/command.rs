@@ -182,7 +182,7 @@ Schemas are node-wide, not principal-owned documents. Registration does not gran
   preview import SKILL_ID PATH
   import SKILL_ID PATH
 PATH is one skill directory containing SKILL.md, or that SKILL.md file. Import requires file read authority within the invoking behavior's effective tool root. YAML frontmatter supplies name/description; the Markdown body supplies instructions. Optional agents/openai.yaml supplies interface metadata and tool dependencies. Each source file is limited to 1 MiB; invalid YAML fails without writes. Preview validates without publication; import rereads the source and creates an unused exact ID, never overwrites an existing skill.
-Attach explicitly with behavior context edit --behavior BEHAVIOR_ID --set skill_ids=JSON, preserving existing IDs. Skills describe procedures; tool dependencies never grant tools. Supporting files are not copied or executed: relative references must be made usable within the working behavior's root. Use a fresh request in that behavior to verify load_skill and the required tools."#
+Attach explicitly with behavior context edit --behavior BEHAVIOR_ID --set skill_ids=JSON, preserving existing IDs. Skills describe procedures; tool dependencies never grant tools. Import retains source_directory; load_skill explains that supporting paths resolve relative to it. Supporting files are not copied or executed automatically and still require the working behavior's ordinary file/root and execution permissions. A local source path is not portable identity: report unavailable paths rather than widening authority. Use a fresh request in that behavior to verify load_skill and the required tools."#
             }
             Some("datastore") => {
                 r#"datastore commands (requires tools permission):
@@ -1252,6 +1252,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                 "name":"string|null; imported from SKILL.md frontmatter, default SKILL_ID",
                 "description":"string|null; imported from SKILL.md frontmatter",
                 "instructions":"string|null; imported from the Markdown body",
+                "source_directory":"string|null; resolved local SKILL.md parent; supporting-file base, never an access grant",
                 "tool_refs":"array<string>; dependencies from agents/openai.yaml, default []; never tool grants",
                 "display_name":"string|null; from agents/openai.yaml interface.display_name",
                 "interface_json":"string|null; serialized agents/openai.yaml interface",

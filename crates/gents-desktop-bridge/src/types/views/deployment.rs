@@ -299,6 +299,7 @@ pub struct SkillView {
     pub name: Option<String>,
     pub description: Option<String>,
     pub instructions: Option<String>,
+    pub source_directory: Option<String>,
     pub tool_refs: Vec<String>,
     pub display_name: Option<String>,
     pub interface_json: Option<String>,

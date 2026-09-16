@@ -131,6 +131,13 @@ pub fn load_skill_source(
         name: Some(frontmatter.name.unwrap_or_else(|| skill_id.to_owned())),
         description: frontmatter.description,
         instructions: Some(body),
+        source_directory: Some(
+            file.parent()
+                .context("SKILL.md has no parent directory")?
+                .to_str()
+                .context("skill source directory must be UTF-8")?
+                .to_owned(),
+        ),
         tool_refs,
         display_name,
         interface_json,
@@ -185,6 +192,10 @@ mod tests {
         let file = load_skill_source(&root.path().join("SKILL.md"), "review", "did:test", resolve)
             .unwrap();
         assert_eq!(directory, file);
+        assert_eq!(
+            file.source_directory.as_deref(),
+            root.path().canonicalize().unwrap().to_str()
+        );
         assert_eq!(file.name.as_deref(), Some("Review"));
         assert_eq!(file.display_name.as_deref(), Some("Code Review"));
         assert_eq!(file.tool_refs, vec!["read_file"]);

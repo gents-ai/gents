@@ -202,14 +202,26 @@ pub(super) async fn verify_skill_workflow(
     let source = workspace.join("skill-fixture");
     std::fs::create_dir_all(source.join("references"))?;
     std::fs::write(source.join("SKILL.md"),
-        "---\nname: coding-check\ndescription: Run the configured coding readiness procedure\n---\nFor the configured readiness procedure, read skill-fixture/references/checklist.md within your working root and carry out its instructions.\n")?;
+        "---\nname: coding-check\ndescription: Run the configured coding readiness procedure\n---\nFor the configured readiness procedure, read references/checklist.md relative to this skill directory and carry out its instructions.\n")?;
     let marker = format!("SKILL_CHECK_{}", uuid::Uuid::new_v4());
+    std::fs::create_dir_all(workspace.join("references"))?;
+    std::fs::write(workspace.join("references/checklist.md"),
+        "This is not the skill's checklist. Do not create a receipt from this file; resolve the reference from the skill's source directory.\n")?;
     std::fs::write(source.join("references/checklist.md"),
-        format!("Write readiness/skill-check.txt containing exactly {marker} followed by a newline. Read it back and report the result.\n"))?;
+        format!("In your working root, write readiness/skill-check.txt containing exactly {marker} followed by a newline. Read it back and report the result.\n"))?;
     let configured = stages::execute(node, owner, setup, "skill-setup",
         &format!("Import the standard skill directory {} as skill ID eval-coding-check and attach it to the existing Builder behavior. Preserve Builder's other context, root and tool settings. Preview first and verify the persisted attachment. Do not perform the skill's procedure yourself.", source.display()), evidence).await?;
     configured.ensure_completed()?;
     stages::wait_for_config_activation(node, owner, &configured.request_id).await?;
+    let imported = rows(node, &format!(
+        r#"{{ Skill(filter: {{agent_did: {{_eq: "{}"}}, skill_id: {{_eq: "eval-coding-check"}}}}) {{source_directory}} }}"#,
+        gents::graphql::escape_graphql_string(owner)
+    ), "Skill").await?;
+    ensure!(
+        imported.len() == 1
+            && imported[0]["source_directory"].as_str() == source.canonicalize()?.to_str(),
+        "imported skill did not preserve its canonical source directory"
+    );
     ensure!(
         setup_before == behavior_configuration(node, owner, Some(setup)).await?,
         "skill import changed Setup"

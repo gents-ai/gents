@@ -80,7 +80,7 @@ pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id reques
 pub(super) const AGENT_TOOL_RESULT_FIELDS: &str = "_docID agent_did requester_did session_id tool_name tool_input output_text truncated truncation_metadata tool_call_doc_id created_at discarded_because_interrupted";
 pub(super) const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at";
 pub(super) const TASK_FIELDS: &str = "task_id agent_did display_name description behavior_id prompt_template goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
-pub(super) const SKILL_FIELDS: &str = "skill_id agent_did name description instructions tool_refs display_name interface_json enabled created_at tags";
+pub(super) const SKILL_FIELDS: &str = "skill_id agent_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 pub(super) const SCHEDULE_FIELDS: &str =
     "schedule_id agent_did display_name cadence created_at updated_at tags";
 pub(super) const SCHEDULE_OBSERVATION_FIELDS: &str = "trigger_id next_run_at";
