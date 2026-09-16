@@ -12,6 +12,30 @@ use serde_json::Value;
 
 pub const INPUT_SCHEMA: &str = "type GentsEvalStageInput { stage: String prompt: String }";
 
+// One declaration drives both call-site identifiers and report enumeration.
+macro_rules! case_catalog {
+    ($($variant:ident => $id:literal),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug)]
+        pub enum CaseId { $($variant),+ }
+        impl CaseId {
+            const ALL: &'static [Self] = &[$(Self::$variant),+];
+            pub const fn as_str(self) -> &'static str {
+                match self { $(Self::$variant => $id),+ }
+            }
+        }
+    };
+}
+
+case_catalog! {
+    Onboarding => "onboarding",
+    BuilderReadiness => "builder-readiness",
+    SkillWorkflow => "skill-workflow",
+    Pagoda => "pagoda",
+    Review => "review",
+    Improve => "improve",
+    DocumentAutomation => "document-automation",
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EvaluationFailure {
     #[error("evaluation deadline exceeded for {0}")]
@@ -110,24 +134,53 @@ pub struct CaseResult {
 }
 
 #[tokio::test]
+async fn every_catalog_case_is_reported_and_receipt_identity_is_checked() {
+    let evidence = tempfile::tempdir().unwrap();
+    let mut ids = std::collections::BTreeSet::new();
+    for &case in CaseId::ALL {
+        assert!(ids.insert(case.as_str()));
+        checked(case, evidence.path(), async { Ok(()) })
+            .await
+            .unwrap();
+    }
+    let results = case_results(evidence.path()).unwrap();
+    assert_eq!(results.len(), ids.len());
+    assert!(results
+        .iter()
+        .all(|result| result.status == "passed" && ids.contains(result.case_id.as_str())));
+    let mut incorrect = results.into_iter().next().unwrap();
+    incorrect.case_id = "not-the-file-identity".into();
+    std::fs::write(
+        evidence.path().join("onboarding-acceptance.json"),
+        serde_json::to_vec(&incorrect).unwrap(),
+    )
+    .unwrap();
+    assert!(case_results(evidence.path()).is_err());
+}
+
+#[tokio::test]
 async fn case_reporting_preserves_failure_classification_and_skipped_prerequisites() {
     let evidence = tempfile::tempdir().unwrap();
     let deadline: Result<()> = Err(EvaluationFailure::Deadline("onboarding".into()).into());
-    assert!(checked("onboarding", evidence.path(), async { deadline })
-        .await
-        .is_err());
-    checked("builder-readiness", evidence.path(), async { Ok(()) })
+    assert!(
+        checked(CaseId::Onboarding, evidence.path(), async { deadline })
+            .await
+            .is_err()
+    );
+    checked(CaseId::BuilderReadiness, evidence.path(), async { Ok(()) })
         .await
         .unwrap();
     let inconclusive: Result<()> =
         Err(EvaluationFailure::Inconclusive("animated scene".into()).into());
-    assert!(checked("pagoda", evidence.path(), async { inconclusive })
-        .await
-        .is_err());
+    assert!(
+        checked(CaseId::Pagoda, evidence.path(), async { inconclusive })
+            .await
+            .is_err()
+    );
     let infrastructure: Result<()> =
         Err(EvaluationFailure::Infrastructure("Chrome unavailable".into()).into());
     assert!(
-        checked("improve", evidence.path(), async { infrastructure })
+        checked(CaseId::Improve, evidence.path(), async { infrastructure })
             .await
             .is_err()
     );
@@ -143,10 +196,11 @@ async fn case_reporting_preserves_failure_classification_and_skipped_prerequisit
 /// Independent acceptance is distinct from a model request terminalizing.
 /// Preserve the check result even when it fails and prevents dependent stages.
 pub async fn checked<T>(
-    case_id: &str,
+    case: CaseId,
     evidence: &Path,
     check: impl std::future::Future<Output = Result<T>>,
 ) -> Result<T> {
+    let case_id = case.as_str();
     let started = Instant::now();
     let result = check.await;
     let receipt = CaseResult {
@@ -174,31 +228,31 @@ pub async fn checked<T>(
 }
 
 pub fn case_results(evidence: &Path) -> Result<Vec<CaseResult>> {
-    [
-        "onboarding",
-        "builder-readiness",
-        "skill-workflow",
-        "pagoda",
-        "review",
-        "improve",
-        "document-automation",
-    ]
-    .into_iter()
-    .map(|case_id| {
-        let path = evidence.join(format!("{case_id}-acceptance.json"));
-        match std::fs::read(&path) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(CaseResult {
-                case_id: case_id.to_owned(),
-                status: "skipped".into(),
-                elapsed_ms: 0,
-                error: Some("prerequisite did not pass".into()),
-                failure_kind: Some("prerequisite".into()),
-            }),
-            Err(error) => Err(error.into()),
-        }
-    })
-    .collect()
+    CaseId::ALL
+        .iter()
+        .map(|case| case.as_str())
+        .map(|case_id| {
+            let path = evidence.join(format!("{case_id}-acceptance.json"));
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let result: CaseResult = serde_json::from_slice(&bytes)?;
+                    ensure!(
+                        result.case_id == case_id,
+                        "case receipt identity mismatch: {path:?}"
+                    );
+                    Ok(result)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(CaseResult {
+                    case_id: case_id.to_owned(),
+                    status: "skipped".into(),
+                    elapsed_ms: 0,
+                    error: Some("prerequisite did not pass".into()),
+                    failure_kind: Some("prerequisite".into()),
+                }),
+                Err(error) => Err(error.into()),
+            }
+        })
+        .collect()
 }
 
 /// Wait for runtime activation after this stage's last committed config patch.

@@ -290,9 +290,13 @@ input collection, and retains both creation and review/improvement failures in
 the aggregate error. Offline reassessment skips explicitly skipped readiness
 cases without treating missing evidence from an attempted case as a skip.
 
+The case catalog now generates typed check identifiers and report enumeration
+from one declaration, with receipt identity and complete-catalog regressions.
+Readiness and skill prompts live alongside the other fixtures; their rendered
+wording is unchanged.
+
 Still pending: replace the timestamp-only activation predicate with an exact
-runtime/event-source readiness acknowledgement, and tie the reported case catalog
-to checked case identifiers so new cases cannot be silently omitted. A reconcile
+runtime/event-source readiness acknowledgement. A reconcile
 completion timestamp alone can race a preceding configuration read, and snapshot
 publication alone does not prove subscription seeding has finished. Current live
 outcomes must not be represented as proof that those races are impossible.

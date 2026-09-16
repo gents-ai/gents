@@ -1,0 +1,1 @@
+Import the standard skill directory {{SKILL_DIRECTORY}} as skill ID eval-coding-check and attach it to the existing Builder behavior. Preserve Builder's other context, root and tool settings. Preview first and verify the persisted attachment. Do not perform the skill's procedure yourself.

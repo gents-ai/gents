@@ -51,10 +51,16 @@ pub(super) async fn verify_builder_execution(
         .and_then(|row| row["default_behavior_id"].as_str())
         .context("generated default behavior is missing")?;
     let result = stages::execute(
-        node, agent_did, builder, "builder-readiness",
-        &format!("Verify this new coding workspace by doing the work now. Inside {user_home}, create a directory named readiness. Write readiness/test.sh containing exactly:\n#!/bin/sh\nset -eu\ntest \"$((2 + 2))\" -eq 4\nprintf 'BUILD_TEST_OK\\n' > \"$(dirname \"$0\")/result.txt\"\n\nExecute it with sh using your command tool. Read result.txt and report the test outcome. Do not write result.txt yourself; the script must produce it. No network or dependencies are needed."),
+        node,
+        agent_did,
+        builder,
+        "builder-readiness",
+        &include_str!("../fixtures/configurator_evals/builder_readiness.md")
+            .trim_end()
+            .replace("{{USER_HOME}}", user_home),
         evidence,
-    ).await?;
+    )
+    .await?;
     result.ensure_completed()?;
     let receipt =
         std::fs::read_to_string(std::path::Path::new(user_home).join("readiness/result.txt"))
@@ -365,7 +371,7 @@ pub(super) async fn verify_pagoda_sequence(
     let project = workspace.join("pagoda");
     let prompt = |text: &str| pagoda_prompt(text, workspace);
     let creation = stages::checked(
-        "pagoda",
+        stages::CaseId::Pagoda,
         evidence,
         retain_checked_project(&project, &evidence.join("pagoda-source"), async {
             let created = stages::execute(
@@ -395,7 +401,7 @@ pub(super) async fn verify_pagoda_sequence(
             "no HTML artifact available for review"
         )));
     }
-    let review = stages::checked("review", evidence, async {
+    let review = stages::checked(stages::CaseId::Review, evidence, async {
         let before = project_snapshot(workspace)?;
         let review = stages::execute(
             node,
@@ -425,7 +431,7 @@ pub(super) async fn verify_pagoda_sequence(
         Err(error) => return combine_case_outcomes(creation, Err(error)),
     };
     let improvement = stages::checked(
-        "improve",
+        stages::CaseId::Improve,
         evidence,
         retain_checked_project(&project, &evidence.join("improve-source"), async {
             let improved = stages::execute(
@@ -489,8 +495,17 @@ pub(super) async fn verify_skill_workflow(
         "This is not the skill's checklist. Do not create a receipt from this file; resolve the reference from the skill's source directory.\n")?;
     std::fs::write(source.join("references/checklist.md"),
         format!("In your working root, write readiness/skill-check.txt containing exactly {marker} followed by a newline. Read it back and report the result.\n"))?;
-    let configured = stages::execute(node, owner, setup, "skill-setup",
-        &format!("Import the standard skill directory {} as skill ID eval-coding-check and attach it to the existing Builder behavior. Preserve Builder's other context, root and tool settings. Preview first and verify the persisted attachment. Do not perform the skill's procedure yourself.", source.display()), evidence).await?;
+    let configured = stages::execute(
+        node,
+        owner,
+        setup,
+        "skill-setup",
+        &include_str!("../fixtures/configurator_evals/skill_setup.md")
+            .trim_end()
+            .replace("{{SKILL_DIRECTORY}}", &source.to_string_lossy()),
+        evidence,
+    )
+    .await?;
     configured.ensure_completed()?;
     stages::wait_for_config_activation(node, owner, &configured.request_id).await?;
     let imported = rows(node, &format!(
@@ -542,7 +557,7 @@ pub(super) async fn verify_skill_workflow(
         owner,
         builder,
         "skill-use",
-        "Load your attached coding-check skill and perform its configured readiness procedure now.",
+        include_str!("../fixtures/configurator_evals/skill_use.md").trim_end(),
         evidence,
     )
     .await?;

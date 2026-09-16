@@ -559,7 +559,7 @@ async fn run_eval_trial(
     let result = AssertUnwindSafe(async {
         let mut terminal = None;
         let mut answer = String::new();
-        let verification = stages::checked("onboarding", &evidence, async {
+        let verification = stages::checked(stages::CaseId::Onboarding, &evidence, async {
             let onboarding = stages::execute(
                 db.node.as_ref(),
                 &agent_did,
@@ -587,7 +587,7 @@ async fn run_eval_trial(
         let mut failures = verification.err().into_iter().collect::<Vec<_>>();
         if configured {
             let result = stages::checked(
-                "builder-readiness",
+                stages::CaseId::BuilderReadiness,
                 &evidence,
                 cases::verify_builder_execution(
                     db.node.as_ref(),
@@ -600,7 +600,7 @@ async fn run_eval_trial(
             failures.extend(result.err());
         }
         if configured {
-            let result = stages::checked("skill-workflow", &evidence, async {
+            let result = stages::checked(stages::CaseId::SkillWorkflow, &evidence, async {
                 cases::verify_skill_workflow(
                     db.node.as_ref(),
                     &agent_did,
@@ -631,7 +631,7 @@ async fn run_eval_trial(
         // Automation depends on generated configuration, not on the artwork
         // passing its browser check. Preserve independent failure measurements.
         if configured {
-            let result = stages::checked("document-automation", &evidence, async {
+            let result = stages::checked(stages::CaseId::DocumentAutomation, &evidence, async {
                 cases::verify_document_automation(
                     db.node.as_ref(),
                     &agent_did,
