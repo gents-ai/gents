@@ -3,7 +3,6 @@ name: Release Linux desktop
 on:
   push:
     tags: ["v*"]
-    branches: ["release/linux-desktop-*"]
   workflow_dispatch:
 
 permissions:
