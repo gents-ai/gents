@@ -33,10 +33,16 @@ try {
   await page.goto(pathToFileURL(path.join(project, "index.html")).href);
   await page.waitForTimeout(500);
   assert((await page.title()).trim(), "page must have a document title");
-  const toggle = page.getByRole("button", {
+  const exactToggle = page.getByRole("button", {
     name: "Toggle night",
     exact: true,
   });
+  // A descriptive accessible name may extend the exact visible label.
+  // Do not admit differently labelled controls or lose the uniqueness check.
+  const labelledToggle = page
+    .getByRole("button", { name: /^Toggle night\b/ })
+    .filter({ hasText: /^Toggle night$/ });
+  const toggle = exactToggle.or(labelledToggle);
   assert.equal(
     await toggle.count(),
     1,

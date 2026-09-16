@@ -18,9 +18,9 @@ replacement project. Automation depends on onboarding, not artwork acceptance.
 Implementation status: onboarding, Builder execution, skill import/use, pagoda
 creation, read-only review, improvement and document automation are wired
 sequentially. CLI, desktop and eval use the same Setup prompt and canonical
-self-configuration grant. The completed diagnostic cohort below exercised ten
-onboarding, Builder readiness, skill and automation cases, but only one review
-and improvement case. A reproducible cohort of the corrected implementation,
+self-configuration grant. The latest completed diagnostic cohort exercised ten
+onboarding, Builder readiness, skill and automation cases, but only six reviews
+and four improvements. A reproducible cohort of the corrected implementation,
 including ten actual attempts at each dependent case, remains outstanding.
 An initial coding batch was stopped after
 finding a harness bug reading streamed answers; it is not a valid capability
@@ -32,7 +32,7 @@ no JavaScript errors. They do not grade artwork aesthetics or review quality.
 The automation case now asks the model to author submission/result schemas, a
 bounded datastore surface and a task/source/trigger chain. The harness submits two
 documents and independently checks correlated uppercase outputs. It
-has passed a live single-trial check with two correlated outputs. Another trial
+passed 10/10 in the committed diagnostic cohort. An earlier trial
 failed because the model selected serial dispatch: the second input was skipped
 while the first request was still active. Schema publication reuses the shared additive installer;
 pre-seeded schemas or tool surfaces do not satisfy this acceptance contract.
@@ -61,13 +61,13 @@ automation with no correlated output. Its configuration contained Go-style
 `{{.message}}` instead of MiniJinja `{{ doc.message }}`. Authoring now uses the
 renderer's syntax compiler to reject this before publication, and Setup/help
 explain the syntax. Do not count the failed diagnostic as an end-to-end pass.
-A later trial passed automation after
-the syntax/help correction, but the ten-trial measurement is still in progress.
+The committed diagnostic cohort passed automation 10/10 after
+the syntax/help correction.
 Automation evidence now retains trigger
 errors, task templates and triggered-request diagnostics, including failures
 before inference starts.
 
-Review hardening (pending a complete live rerun): tool outcomes use
+Review hardening: tool outcomes use
 `lifecycle_state`, not delivery `status`; readiness verifies the requested script
 and its execution; review snapshots the entire workspace; skill/automation checks
 preserve Setup and unrelated Builder configuration. Automation retains input
@@ -161,9 +161,15 @@ and one invalid-tool-call-budget failure after repeated read-only command denial
 Only six reviews and four improvements actually executed; the other cases are
 not capability trials. Improvement failures were two missing README checks, one
 JavaScript error and one exact-accessible-name rejection. The exact-name case
-had visible text `Toggle night` and an accessible name with a descriptive suffix;
-whether this is an overstrict oracle is under focused review. It is not credited
-as a browser pass.
+had visible text `Toggle night` and an accessible name with a descriptive suffix.
+A focused review identified that rejection as an overstrict oracle. The corrected
+checker accepts a descriptive name extension only when the visible label is
+exact, while preserving unique-control and functional-change checks. Ten browser
+regressions cover that rule, misleading/ambiguous labels, no-op toggles and animation.
+A separate browser-only reassessment of trial 10's retained creation source
+(`pagoda-browser-label-reassessment`) passed the label check but was inconclusive
+because the scene animates. Neither its original report nor its pass count was
+changed; this is not a new model trial or a completed browser pass.
 
 This cohort exposed a fresh-session handoff gap: review
 and improvement did not receive the complete original request. A missing README

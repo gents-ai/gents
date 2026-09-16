@@ -8,14 +8,16 @@ import test from "node:test";
 
 const run = promisify(execFile);
 const script = new URL("./check-pagoda.mjs", import.meta.url).pathname;
+async function checkPage(html) {
+  const root = await mkdtemp(path.join(tmpdir(), "gents-browser-contract-"));
+  await writeFile(path.join(root, "index.html"), html);
+  return run(process.execPath, [script, root, path.join(root, "evidence")]);
+}
+
 for (const animated of [false, true]) {
   for (const changes of [true, false]) {
     test(`browser check ${animated ? "is inconclusive" : changes ? "accepts" : "rejects"} (animated=${animated}, toggleWorks=${changes})`, async () => {
-      const root = await mkdtemp(
-        path.join(tmpdir(), "gents-browser-contract-"),
-      );
-      await writeFile(
-        path.join(root, "index.html"),
+      const execution = checkPage(
         `<!doctype html><title>Pagoda</title>
       <h1>Pagoda</h1><button onclick="${changes ? "document.body.style.background='black'" : "void 0"}">Toggle night</button>
       ${
@@ -29,11 +31,6 @@ for (const animated of [false, true]) {
           : ""
       }`,
       );
-      const execution = run(process.execPath, [
-        script,
-        root,
-        path.join(root, "evidence"),
-      ]);
       if (animated)
         await assert.rejects(execution, /visible-change inconclusive/);
       else if (changes) await execution;
@@ -41,4 +38,45 @@ for (const animated of [false, true]) {
         await assert.rejects(execution, /toggle must produce a visible change/);
     });
   }
+}
+
+for (const [name, controls, expectedError] of [
+  [
+    "accepts a descriptive accessible-name suffix",
+    '<button aria-label="Toggle night: change lighting" onclick="document.body.style.background=\'black\'">Toggle night</button>',
+    null,
+  ],
+  [
+    "rejects an accessible name that hides the visible label",
+    '<button aria-label="Night mode">Toggle night</button>',
+    /one accessible Toggle night button is required/,
+  ],
+  [
+    "rejects a different visible label with a prefix-matching name",
+    '<button>Toggle night mode</button>',
+    /one accessible Toggle night button is required/,
+  ],
+  [
+    "rejects a missing control",
+    '<span>Toggle night</span>',
+    /one accessible Toggle night button is required/,
+  ],
+  [
+    "rejects ambiguous exact and extended labels",
+    '<button>Toggle night</button><button aria-label="Toggle night: change lighting">Toggle night</button>',
+    /one accessible Toggle night button is required/,
+  ],
+  [
+    "still rejects a nonfunctional descriptively labelled control",
+    '<button aria-label="Toggle night: change lighting">Toggle night</button>',
+    /toggle must produce a visible change/,
+  ],
+]) {
+  test(`browser label contract ${name}`, async () => {
+    const execution = checkPage(
+      `<!doctype html><title>Pagoda</title><h1>Pagoda</h1>${controls}`,
+    );
+    if (expectedError) await assert.rejects(execution, expectedError);
+    else await execution;
+  });
 }

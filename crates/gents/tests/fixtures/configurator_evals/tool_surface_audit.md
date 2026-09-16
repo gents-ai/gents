@@ -21,7 +21,7 @@ values for nested groups and runtime ceilings enforced by existing owners.
 | Memory/history/context budget | Independent built-in flags | Selection available; live exercise cases pending |
 | Datastore queries | Datastore query flag and exact collection allowlist | Bind to working behavior and execute bounded query |
 | Datastore create/query surfaces | `datastore get/preview create/preview edit/create/edit`; bind through Tools.datastore | Transactional preview/edit/Setup-protection tests pass; bounded discovery absent. Surface syntax is checked on publication; live schema and tool collisions are checked by runtime binding/execution owners |
-| Schemas | `schema get/preview install/install`; shared additive schema contract/publication owner with packs and CLI | Node-wide contracts, not document ACP grants; model command regressions pass, full automation live validation pending |
+| Schemas | `schema get/preview install/install`; shared additive schema contract/publication owner with packs and CLI | Node-wide contracts, not document ACP grants; model command regressions pass, exercised in 10/10 successful model-authored automation trials |
 | LSP | Integrations.lsp settings | Needs installed/indexed server; presence is not readiness |
 | Ethereum | Integrations.eth_tool_ids selects owned EthTool documents | No model config authoring for EthTool; signing keys/credentials stay operator-owned |
 | Skills | `skill get/preview import/import`; Context skill_ids attaches owned Skill documents | Shared CLI/model SKILL.md loader, root-bound reads, create-only publication; canonical source_directory is supplied by load_skill for supporting references without widening authority. Fresh-session source-relative execution passed 10/10 `b96b69918` trials (see README). Bounded inventory absent |
@@ -29,7 +29,8 @@ values for nested groups and runtime ceilings enforced by existing owners.
 | Inference | Profile inventory/create/edit; backend inventory/edit | Backend creation absent; credentials use operator-managed auth |
 | Self-configuration | Explicit categories, preview, no-lockout, separate pack install grant | CLI/desktop initial grants now include advertised backend/MCP/automation categories |
 
-Next required work: verify the full automation chain and ten-trial measurements.
+Next required work: measure the corrected coding prompts/grader and complete ten
+actual review/improvement attempts, without counting prerequisite skips.
 Template authoring now compiles through the execution parser after a live
 diagnostic exposed accepted invalid syntax; the live recovery check is pending.
 Audit gaps for other
