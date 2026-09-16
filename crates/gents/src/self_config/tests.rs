@@ -1196,6 +1196,240 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
 }
 
 #[tokio::test]
+async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_settings() {
+    use crate::configuration_discovery::{
+        ConfigurationDiscoveryInventory, DiscoveryCategory, DiscoveryItemState,
+        DiscoverySourceOutcome, MappingSupportLevel,
+    };
+
+    let node = build_persona_node().await;
+    let identity = persona_identity("setup-discovery-flow");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+
+    let root = tempfile::tempdir().unwrap();
+    let user_root = root.path().join("synthetic-user/.codex");
+    let project_root = root.path().join("synthetic-project");
+    std::fs::create_dir_all(&user_root).unwrap();
+    std::fs::create_dir_all(project_root.join(".codex")).unwrap();
+    let marker = root.path().join("SHOULD_NEVER_RUN");
+    std::fs::write(
+        user_root.join("config.toml"),
+        include_str!("../../tests/fixtures/configuration_discovery/codex-user/config.toml")
+            .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy()),
+    )
+    .unwrap();
+    std::fs::write(
+        user_root.join("AGENTS.md"),
+        include_str!("../../tests/fixtures/configuration_discovery/codex-user/AGENTS.md"),
+    )
+    .unwrap();
+    std::fs::write(
+        project_root.join(".codex/config.toml"),
+        include_str!("../../tests/fixtures/configuration_discovery/project/.codex/config.toml"),
+    )
+    .unwrap();
+    std::fs::write(
+        project_root.join("AGENTS.md"),
+        include_str!("../../tests/fixtures/configuration_discovery/project/AGENTS.md"),
+    )
+    .unwrap();
+
+    let mut grants = config(&["tools", "behavior", "backend"]);
+    grants.dry_run = true;
+    grants.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
+        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tool_surface::BashMode::Off,
+        root: Some(root.path().into()),
+    };
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    core.apply(tools_request(
+        &core,
+        vec![(
+            "host".into(),
+            Some(json!({
+                "root": root.path().to_str().unwrap(),
+                "files": {"mode": "ReadOnly"}
+            })),
+        )],
+        false,
+    ))
+    .await
+    .unwrap();
+    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let scan = vec![
+        "discover".into(),
+        "scan".into(),
+        "--source".into(),
+        "fixture-user-codex".into(),
+        "codex".into(),
+        "user".into(),
+        user_root.to_string_lossy().into_owned(),
+        "--source".into(),
+        "fixture-project-codex".into(),
+        "codex".into(),
+        "project".into(),
+        project_root.to_string_lossy().into_owned(),
+    ];
+
+    // The user-approved source tuples produce the real, sanitized production shape.
+    let discovered: ConfigurationDiscoveryInventory =
+        serde_json::from_str(&call_config_tool(&tools, scan.clone()).await.unwrap()).unwrap();
+    assert!(discovered
+        .sources
+        .iter()
+        .all(|source| source.outcome == DiscoverySourceOutcome::Complete));
+    assert!(!discovered.conflicts.is_empty());
+    assert!(
+        !marker.exists(),
+        "discovery must not execute configured commands"
+    );
+    let serialized = serde_json::to_string(&discovered).unwrap();
+    assert!(!serialized.contains("FAKE_DISCOVERY_SECRET_123"));
+    assert!(!serialized.contains("SHOULD_NEVER_RUN"));
+
+    // Clarification selects only the project instruction. Conflicting model hints and the
+    // disabled remote tool remain unresolved and therefore absent from the proposal.
+    let approved = discovered
+        .items
+        .iter()
+        .find(|item| {
+            item.source_id == "fixture-project-codex"
+                && item.category == DiscoveryCategory::Instruction
+        })
+        .expect("project instruction candidate");
+    let disabled = discovered
+        .items
+        .iter()
+        .find(|item| {
+            item.source_id == "fixture-project-codex"
+                && item.category == DiscoveryCategory::RemoteTool
+        })
+        .expect("disabled project remote tool");
+    assert_eq!(disabled.state, DiscoveryItemState::Disabled);
+    assert_eq!(disabled.mapping.level, MappingSupportLevel::Partial);
+    assert!(!disabled.mapping.reasons.is_empty());
+    assert!(
+        discovered
+            .items
+            .iter()
+            .filter(|item| { item.category == DiscoveryCategory::ModelPreference })
+            .count()
+            >= 2
+    );
+
+    let command = |args: &[&str]| args.iter().map(|value| (*value).to_owned()).collect();
+    let context_before = call_config_tool(
+        &tools,
+        command(&["behavior", "context", "get", "--behavior", "beh-test"]),
+    )
+    .await
+    .unwrap();
+    let backend_before = call_config_tool(
+        &tools,
+        command(&["backend", "get", "--behavior", "beh-test"]),
+    )
+    .await
+    .unwrap();
+    assert!(!backend_before.contains("FAKE_DISCOVERY_SECRET_123"));
+    let services_before = crate::registry::configured_mcp_services(&node, &owner)
+        .await
+        .unwrap();
+
+    let approved_prompt = format!(
+        "Review repository changes and report evidence. Source: {}.",
+        approved.relative_source_file
+    );
+    let prompt_patch = format!(
+        "system_prompt={}",
+        serde_json::to_string(&approved_prompt).unwrap()
+    );
+    let preview: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec![
+                "behavior".into(),
+                "context".into(),
+                "preview".into(),
+                "--behavior".into(),
+                "beh-test".into(),
+                "--set".into(),
+                prompt_patch.clone(),
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["committed"], false);
+    assert_eq!(
+        call_config_tool(
+            &tools,
+            command(&["behavior", "context", "get", "--behavior", "beh-test"]),
+        )
+        .await
+        .unwrap(),
+        context_before,
+        "preview must not apply the proposal"
+    );
+
+    // This edit represents the separately approved minimal preview.
+    call_config_tool(
+        &tools,
+        vec![
+            "behavior".into(),
+            "context".into(),
+            "edit".into(),
+            "--behavior".into(),
+            "beh-test".into(),
+            "--set".into(),
+            prompt_patch,
+        ],
+    )
+    .await
+    .unwrap();
+
+    let verified: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            command(&["behavior", "context", "get", "--behavior", "beh-test"]),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(verified["document"]["system_prompt"], approved_prompt);
+    assert_eq!(
+        call_config_tool(
+            &tools,
+            command(&["backend", "get", "--behavior", "beh-test"]),
+        )
+        .await
+        .unwrap(),
+        backend_before,
+        "discovery-backed setup must not modify operator-owned inference credentials"
+    );
+    assert_eq!(
+        crate::registry::configured_mcp_services(&node, &owner)
+            .await
+            .unwrap()
+            .len(),
+        services_before.len(),
+        "a disabled discovered remote tool must not be configured or enabled"
+    );
+
+    let verified_discovery: ConfigurationDiscoveryInventory =
+        serde_json::from_str(&call_config_tool(&tools, scan).await.unwrap()).unwrap();
+    let verified_disabled = verified_discovery
+        .items
+        .iter()
+        .find(|item| item.item_id == disabled.item_id)
+        .expect("disabled item survives verification scan");
+    assert_eq!(verified_disabled.state, DiscoveryItemState::Disabled);
+    assert_eq!(verified_disabled.mapping, disabled.mapping);
+}
+
+#[tokio::test]
 async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     let node = build_persona_node().await;
     let identity = persona_identity("datastore-config");
