@@ -120,7 +120,12 @@ GENTS_LIVE_CONFIG_RUNS=10 \
 make live-configurator-eval
 ```
 
-The command prints progress and a final report, including when trials fail.
+The command shows a live terminal scorecard and a final report, including when
+trials fail. Raw compiler/runtime output stays in `runner.log`. Attach a read-only
+view to an existing run with `node scripts/evals/watch.mjs RUN_DIRECTORY`;
+Ctrl-C closes that watcher without stopping the eval. Token counts come from
+saved InferenceCall usage, sampled during stages in new runs. They can lag provider
+generation; the displayed rate is recorded output per wall second, not decode speed.
 Each run lives in `~/.gents-eval/progressive-configurator-{timestamp}-{unique}`
 (`GENTS_EVAL_ROOT` overrides the parent). `report.json` checkpoints completed
 trials and owns the aggregates; `execution.json` records the launcher outcome

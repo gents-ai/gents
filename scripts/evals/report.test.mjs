@@ -144,7 +144,7 @@ test(
         fileURLToPath(new URL("./run-configurator.mjs", import.meta.url)),
         process.execPath,
         "-e",
-        'process.stdout.write("READY\\n"); setInterval(() => {}, 1000)',
+        'setTimeout(() => process.kill(process.ppid, "SIGINT"), 100); setInterval(() => {}, 1000)',
         "--",
       ],
       {
@@ -154,13 +154,8 @@ test(
     );
     t.after(() => child.kill("SIGTERM"));
     let output = "";
-    let interrupted = false;
     child.stdout.on("data", (chunk) => {
       output += chunk.toString();
-      if (!interrupted && output.includes("READY")) {
-        interrupted = true;
-        child.kill("SIGINT");
-      }
     });
     child.stderr.resume();
     const [code] = await once(child, "close");

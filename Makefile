@@ -417,7 +417,7 @@ test-agent-conformance:
 	$(CARGO) test -p gents --test conformance
 
 test-evals:
-	node --test scripts/evals/report.test.mjs
+	node --test scripts/evals/report.test.mjs scripts/evals/watch.test.mjs
 	$(CARGO) test -p gents --test e2e_configurator
 
 test-evals-browser:

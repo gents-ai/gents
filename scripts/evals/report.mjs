@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-async function readJson(path) {
+export async function readJson(path) {
   try {
     return JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
@@ -14,7 +14,8 @@ async function readJson(path) {
 const rate = (value) =>
   value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
 // Model names and other external text must not control the terminal.
-const text = (value) => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+export const text = (value) =>
+  String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
 
 export async function renderReport(directory) {
   const [report, execution] = await Promise.all([

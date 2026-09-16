@@ -591,6 +591,7 @@ async fn execute_inner(
         r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{lifecycle_state session_id}} }}"#
     );
     let mut observation_timed_out = false;
+    let mut next_usage_snapshot = Instant::now();
     let (terminal_state, session_id) = loop {
         let response = node.execute(&query).await;
         ensure!(
@@ -610,6 +611,15 @@ async fn execute_inner(
             .map(str::to_owned);
         if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(Some(state)) {
             break (state.to_owned(), session_id);
+        }
+        if Instant::now() >= next_usage_snapshot {
+            // Display sampling must not fail the evaluated request or stall its deadline.
+            let _ = tokio::time::timeout(
+                Duration::from_millis(500),
+                retain_inference_evidence(node, &request_id, stage, evidence),
+            )
+            .await;
+            next_usage_snapshot = Instant::now() + Duration::from_secs(2);
         }
         if started.elapsed() > Duration::from_secs(600) {
             if !observation_timed_out {
@@ -676,6 +686,16 @@ pub async fn retain_request_evidence(
         evidence.join(format!("{stage}-tools.json")),
         serde_json::to_vec_pretty(&calls.data.unwrap_or(Value::Null))?,
     )?;
+    retain_inference_evidence(node, request_id, stage, evidence).await
+}
+
+async fn retain_inference_evidence(
+    node: &EmbeddedNode,
+    request_id: &str,
+    stage: &str,
+    evidence: &Path,
+) -> Result<()> {
+    let escaped = escape_graphql_string(request_id);
     let diagnostics = node.execute(&format!(
         r#"{{
             AgentResponse(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{status error_message}}
@@ -687,9 +707,8 @@ pub async fn retain_request_evidence(
         "stage diagnostics failed: {:?}",
         diagnostics.errors
     );
-    std::fs::write(
-        evidence.join(format!("{stage}-inference.json")),
-        serde_json::to_vec_pretty(&diagnostics.data.unwrap_or(Value::Null))?,
-    )?;
-    Ok(())
+    super::reporting::write_json(
+        &evidence.join(format!("{stage}-inference.json")),
+        &diagnostics.data.unwrap_or(Value::Null),
+    )
 }
