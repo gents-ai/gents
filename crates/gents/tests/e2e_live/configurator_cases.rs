@@ -98,6 +98,20 @@ fn recorded_readiness_command(call: &serde_json::Value, root: &std::path::Path) 
     let Some(command) = args["command"].as_str() else {
         return false;
     };
+    if matches!(command, "sh" | "/bin/sh") {
+        if let Some(script) = args["args"]
+            .as_array()
+            .and_then(|argv| (argv.len() == 1).then(|| argv[0].as_str()).flatten())
+        {
+            let cwd = root.join(args["cwd"].as_str().unwrap_or("."));
+            return cwd
+                .join(script)
+                .canonicalize()
+                .ok()
+                .zip(root.join("readiness/test.sh").canonicalize().ok())
+                .is_some_and(|(actual, expected)| actual == expected);
+        }
+    }
     if command.contains("readiness/test.sh") {
         return true;
     }
@@ -115,16 +129,14 @@ fn recorded_readiness_command(call: &serde_json::Value, root: &std::path::Path) 
     matches!(
         command.trim(),
         "sh test.sh" | "sh ./test.sh" | "/bin/sh test.sh" | "/bin/sh ./test.sh"
-    ) || (matches!(command, "sh" | "/bin/sh")
-        && args["args"].as_array().is_some_and(|argv| {
-            argv.len() == 1 && matches!(argv[0].as_str(), Some("test.sh" | "./test.sh"))
-        }))
+    )
 }
 
 #[test]
 fn readiness_command_evidence_accounts_for_cwd() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("readiness")).unwrap();
+    std::fs::write(root.path().join("readiness/test.sh"), "# fixture").unwrap();
     let call = |args: serde_json::Value, state: &str| {
         serde_json::json!({
             "tool_name":"bash_unrestricted", "lifecycle_state":state, "args":args.to_string()
@@ -132,6 +144,8 @@ fn readiness_command_evidence_accounts_for_cwd() {
     };
     for args in [
         serde_json::json!({"command":"sh readiness/test.sh"}),
+        serde_json::json!({"command":"sh","args":["readiness/test.sh"]}),
+        serde_json::json!({"command":"/bin/sh","args":[root.path().join("readiness/test.sh")],"cwd":"."}),
         serde_json::json!({"command":"sh test.sh","cwd":"readiness"}),
         serde_json::json!({"command":"sh","args":["./test.sh"],"cwd":root.path().join("readiness")}),
     ] {
@@ -148,6 +162,8 @@ fn readiness_command_evidence_accounts_for_cwd() {
         serde_json::json!({"command":"sh test.sh","cwd":"."}),
         serde_json::json!({"command":"echo test.sh","cwd":"readiness"}),
         serde_json::json!({"command":"true","note":"readiness/test.sh"}),
+        serde_json::json!({"command":"sh","args":["unrelated/test.sh"]}),
+        serde_json::json!({"command":"sh","args":["sh","readiness/test.sh"]}),
     ] {
         assert!(!recorded_readiness_command(
             &call(args, "completed"),
@@ -165,8 +181,13 @@ fn reassess_readiness(
     // completion and exact script/receipt validation; other failures stand.
     if original.case_id != "builder-readiness"
         || original.status != "failed"
-        || original.error.as_deref()
-            != Some("Builder did not successfully execute its command tool")
+        || !matches!(
+            original.error.as_deref(),
+            Some(
+                "Builder did not successfully execute its command tool"
+                    | "Builder command evidence did not identify the readiness script"
+            )
+        )
         || !calls
             .iter()
             .any(|call| recorded_readiness_command(call, workspace))
@@ -186,6 +207,7 @@ fn reassess_readiness(
 fn readiness_reassessment_does_not_hide_other_failures() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("readiness")).unwrap();
+    std::fs::write(root.path().join("readiness/test.sh"), "# fixture").unwrap();
     let calls = vec![serde_json::json!({"tool_name":"bash_unrestricted",
         "lifecycle_state":"completed", "args":serde_json::json!({"command":"sh test.sh","cwd":"readiness"}).to_string()})];
     let mut original = stages::CaseResult {
@@ -199,8 +221,18 @@ fn readiness_reassessment_does_not_hide_other_failures() {
     assert_eq!(corrected.status, "passed");
     assert_eq!(corrected.elapsed_ms, 123);
     assert!(reassess_readiness(&original, &[], root.path()).is_none());
+    original.error = Some("Builder command evidence did not identify the readiness script".into());
+    let structured = vec![serde_json::json!({"tool_name":"bash_unrestricted",
+        "lifecycle_state":"completed", "args":serde_json::json!({"command":"sh","args":["readiness/test.sh"]}).to_string()})];
+    assert_eq!(
+        reassess_readiness(&original, &structured, root.path())
+            .unwrap()
+            .status,
+        "passed"
+    );
     original.error = Some("Builder changed the requested test script".into());
     assert!(reassess_readiness(&original, &calls, root.path()).is_none());
+    assert!(reassess_readiness(&original, &structured, root.path()).is_none());
 }
 
 /// Offline grading never invokes inference or overwrites the original report.
@@ -224,7 +256,7 @@ fn reassess_retained_readiness_evidence() -> Result<()> {
         std::fs::write(
             evidence.join("builder-readiness-reassessment.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
-                "grader":"readiness-cwd-v1", "changed":reassessed.is_some(),
+                "grader":"readiness-argv-v2", "changed":reassessed.is_some(),
                 "original":original, "reassessed":reassessed.as_ref().unwrap_or(&original),
                 "basis":"Retained request tool calls; original completion, exact script and receipt checks remain required. No inference rerun."
             }))?,

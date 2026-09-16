@@ -205,3 +205,18 @@ GENTS_EVAL_REASSESS_TRIALS=/absolute/path/to/gents-eval-TRIAL \
 cargo test -p gents --test e2e_live --features live-e2e \
   reassess_retained_readiness_evidence -- --ignored
 ```
+
+## Corrected-prompt cohort (`14f128143`, in progress)
+
+The next ten-trial run started on 2026-09-16 at 07:01 UTC with the same GLM
+endpoint and concurrency two. It includes the complete original request in fresh
+review/improvement sessions and the corrected accessible-label check.
+
+Trial 1 exposed another readiness attribution omission: a successful structured
+call with `command: "sh", args: ["readiness/test.sh"]` was rejected because the
+script path was not in the command string. The `readiness-argv-v2` checker resolves
+that argument against the recorded cwd and exact readiness script, with tests for
+absolute/relative paths, wrong scripts and duplicated executable arguments. Its
+offline reassessment records trial 1 as passed separately from the raw failure.
+The model prompts and configuration are unchanged, so this does not require a new
+model run. Final reporting must still separate raw and reassessed outcomes.
