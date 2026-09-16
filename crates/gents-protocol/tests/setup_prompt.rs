@@ -6,7 +6,7 @@ fn setup_guidance_covers_conversation_authority_and_repeatability() {
     for required in [
         "understand what the user uses AI for",
         "ask for explicit approval of that source/root tuple",
-        "config discover scan --source SOURCE_ID KIND SCOPE PATH",
+        "config discovery scan --source SOURCE_ID KIND SCOPE PATH",
         "structured `mapping` with `level` and `reasons`",
         "After discovery, stop",
         "A disabled item stays disabled",
@@ -76,12 +76,13 @@ fn setup_inventory_fixture_matches_the_production_discovery_shape() {
 #[test]
 fn setup_discovery_flow_orders_consent_clarification_apply_and_verification() {
     let prompt = gents_protocol::SETUP_STEWARD_PROMPT;
+    assert!(!prompt.contains("config discover scan"));
     let position = |text: &str| {
         prompt
             .find(text)
             .unwrap_or_else(|| panic!("missing {text:?}"))
     };
-    assert!(position("ask for explicit approval") < position("config discover scan"));
+    assert!(position("ask for explicit approval") < position("config discovery scan"));
     assert!(
         position("After discovery, stop") < position("Propose only the smallest configuration")
     );

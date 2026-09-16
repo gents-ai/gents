@@ -1258,7 +1258,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     .unwrap();
     let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
     let scan = vec![
-        "discover".into(),
+        "discovery".into(),
         "scan".into(),
         "--source".into(),
         "fixture-user-codex".into(),
