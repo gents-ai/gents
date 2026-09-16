@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, Metadata};
+use std::fs::{self, Metadata, OpenOptions};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
@@ -746,7 +746,15 @@ impl Scanner {
             return None;
         }
         run_preopen_test_hook(&path);
-        let mut file = match File::open(&path) {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // A raced-in FIFO must not block before we can verify the opened file.
+            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+        }
+        let mut file = match options.open(&path) {
             Ok(file) => file,
             Err(_) => {
                 source.partial = true;
@@ -2367,7 +2375,42 @@ api_key = "SECRET_VALUE"
         assert!(inventory
             .warnings
             .iter()
-            .any(|notice| notice.code == DiscoveryNoticeCode::FileChanged));
+            .any(|notice| notice.code == DiscoveryNoticeCode::ReadFailed));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_replaced_by_fifo_before_open_does_not_block_discovery() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let fixture = tempfile::tempdir().unwrap();
+        write(&fixture.path().join("config.toml"), "model = \"public\"\n");
+        PREOPEN_TEST_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(|path| {
+                fs::remove_file(path).unwrap();
+                let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+                // SAFETY: path is a live, NUL-terminated string inside the test home.
+                assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+            }));
+        });
+        let inventory = discover_configuration(&DiscoveryRequest {
+            sources: vec![DiscoverySourceRoot {
+                source_id: "raced".into(),
+                kind: DiscoverySourceKind::Codex,
+                scope: DiscoveryScope::User,
+                root: fixture.path().to_path_buf(),
+            }],
+            limits: DiscoveryLimits::default(),
+        });
+        assert!(inventory.items.is_empty());
+        assert_eq!(
+            inventory.sources[0].outcome,
+            DiscoverySourceOutcome::Partial
+        );
+        assert!(inventory
+            .warnings
+            .iter()
+            .any(|notice| notice.code == DiscoveryNoticeCode::ReadFailed));
     }
 
     #[test]
