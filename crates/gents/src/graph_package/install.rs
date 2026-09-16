@@ -414,61 +414,24 @@ async fn prepare_package(
 }
 
 async fn ensure_package_schemas(access: &ConfigAccess, package: &LoadedGraphPackage) -> Result<()> {
-    // Check every already-visible contract before any additive schema write.
-    let mut missing_paths = Vec::new();
+    // Preflight every contract before the first additive write. The shared
+    // publication owner revalidates each plan immediately before applying it.
+    let mut plans = Vec::new();
     for path in &package.manifest.schemas {
-        let expected = query::parse_sdl(package.asset_text(path)?)?;
-        anyhow::ensure!(
-            !expected.is_empty(),
-            "package schema {path:?} declares no collection"
-        );
-        let mut missing = false;
-        let mut existing = false;
-        for collection in &expected {
-            match access.collection_version(&collection.name).await? {
-                Some(live) => {
-                    existing = true;
-                    anyhow::ensure!(
-                        collection_schema_contract_digest(&serde_json::to_value(collection)?)?
-                            == collection_schema_contract_digest(&live)?,
-                        "existing collection {:?} does not match bundled schema {path:?}",
-                        collection.name
-                    );
-                }
-                None => missing = true,
-            }
-        }
-        anyhow::ensure!(
-            !(missing && existing),
-            "package schema {path:?} mixes existing and missing collections"
-        );
-        if missing {
-            missing_paths.push(path);
-        }
-    }
-    for path in missing_paths {
         let sdl = package.asset_text(path)?;
-        access
-            .add_schema(sdl)
+        let plan = crate::config_client::preview_schema_install(access, sdl)
             .await
-            .with_context(|| format!("add bundled package schema {path:?}"))?;
-        for collection in query::parse_sdl(sdl)? {
-            let live = access
-                .collection_version(&collection.name)
-                .await?
-                .with_context(|| {
-                    format!(
-                        "new bundled collection {:?} is not discoverable",
-                        collection.name
-                    )
-                })?;
-            anyhow::ensure!(
-                collection_schema_contract_digest(&serde_json::to_value(&collection)?)?
-                    == collection_schema_contract_digest(&live)?,
-                "new collection {:?} does not match bundled schema {path:?}",
-                collection.name
-            );
-        }
+            .with_context(|| format!("preview package schema {path:?}"))?;
+        plans.push((path, plan));
+    }
+    for (path, plan) in plans {
+        crate::config_client::apply_schema_install(
+            access,
+            package.asset_text(path)?,
+            &plan.artifact_digest,
+        )
+        .await
+        .with_context(|| format!("publish package schema {path:?}"))?;
     }
     Ok(())
 }

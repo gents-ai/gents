@@ -29,6 +29,7 @@ mod inference_backend;
 mod inference_profile;
 mod retry;
 mod schema_contract;
+mod schema_install;
 mod txn;
 pub(crate) mod write_telemetry;
 
@@ -56,6 +57,7 @@ pub(crate) use desired_state::{
 pub use inference_backend::{load_inference_backend_in_txn, write_inference_backend_document};
 pub use inference_profile::write_inference_profile_document;
 pub(crate) use schema_contract::collection_schema_contract_digest;
+pub use schema_install::{apply_schema_install, preview_schema_install, SchemaInstallPlan};
 pub use tools::write_tools_document;
 pub(crate) use txn::TransactionOutcome;
 pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry};

@@ -128,7 +128,7 @@ async fn existing_package_schema_must_match_types_indexes_and_immutability() {
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("does not match bundled schema"),
+        format!("{error:#}").contains("does not match requested schema"),
         "{error:#}"
     );
     assert!(node.get_collection("CodeReviewArea").unwrap().is_none());
