@@ -85,6 +85,13 @@ Ten-minute stage deadlines are also part of the current measurement: early
 coding trials reached that deadline, including one that emitted over 82,000
 completion tokens across its calls while creating/debugging the page. Do not
 interpret those deadline outcomes as provider outages or completed coding work.
+The fixture leaves inference-profile sampling/output settings at runtime defaults;
+the three profile names are binding choices, not distinct reasoning-effort levels.
+The current default output allowance is 32,768 tokens per completion. In the
+`14f128143` cohort, trial 2 produced three completions of exactly that size with
+no tool calls before the stage deadline. This records an observed resource/use
+pattern, not proof of its cause. A different output budget would be a separate
+measurement condition, not a retroactive correction to these model outcomes.
 
 Retained trial directories contain a writable `workspace` and a sibling
 evaluator-owned `evidence` directory. Stage evidence includes request identity,
