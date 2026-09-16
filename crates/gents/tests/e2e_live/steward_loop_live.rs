@@ -66,7 +66,8 @@ fn d4f_enabled() -> bool {
     std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
 }
 
-const D4F_BACKEND_ID: &str = "backend-d4f-live";
+pub const D4F_BACKEND_ID: &str = "backend-d4f-live";
+pub const OPENROUTER_BACKEND_ID: &str = "backend-openrouter-live";
 
 /// Live backend endpoint/model, overridable for workstation deployments.
 fn d4f_endpoint() -> String {
@@ -95,6 +96,26 @@ pub async fn bind_d4f_backend_for_model(
     identity: &dyn AgentIdentity,
     model: &str,
 ) -> (String, String) {
+    bind_live_backend_for_model(node, identity, model, d4f_backend).await
+}
+
+/// Bind one isolated live-test principal to OpenRouter without copying the
+/// operator's credential into DefraDB. Runtime auth resolves the key from the
+/// named host environment variable at the provider boundary.
+pub async fn bind_openrouter_backend_for_model(
+    node: &EmbeddedNode,
+    identity: &dyn AgentIdentity,
+    model: &str,
+) -> (String, String) {
+    bind_live_backend_for_model(node, identity, model, openrouter_backend).await
+}
+
+async fn bind_live_backend_for_model(
+    node: &EmbeddedNode,
+    identity: &dyn AgentIdentity,
+    model: &str,
+    backend: fn(&str) -> InferenceBackend,
+) -> (String, String) {
     let agent_did = identity.did().to_string();
     let mut principal = ensure_agent_principal(node, &agent_did)
         .await
@@ -102,11 +123,11 @@ pub async fn bind_d4f_backend_for_model(
     let behavior_id = default_behavior_id_for_agent(&agent_did);
     let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
     principal.default_behavior_id = Some(behavior_id.clone());
-    let backend = d4f_backend(&agent_did);
+    let backend = backend(&agent_did);
     let profile = InferenceProfile {
         agent_did: agent_did.clone(),
         profile_id: profile_id.clone(),
-        backend_id: D4F_BACKEND_ID.to_string(),
+        backend_id: backend.backend_id.clone(),
         model_name: model.to_owned(),
         ..Default::default()
     };
@@ -122,7 +143,7 @@ pub async fn bind_d4f_backend_for_model(
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
 
-    apply_d4f_documents(node, principal, backend, profile, behavior).await;
+    apply_live_backend_documents(node, principal, backend, profile, behavior).await;
 
     debug_assert_eq!(behavior_id, default_behavior_id_for_agent(&agent_did));
     (agent_did, behavior_id)
@@ -146,7 +167,27 @@ fn d4f_backend(agent_did: &str) -> InferenceBackend {
     }
 }
 
-async fn apply_d4f_documents(
+fn openrouter_backend(agent_did: &str) -> InferenceBackend {
+    InferenceBackend {
+        agent_did: agent_did.to_string(),
+        backend_id: OPENROUTER_BACKEND_ID.to_string(),
+        name: "OpenRouter live eval".to_string(),
+        provider_kind: BackendProviderKind::OpenRouter,
+        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
+        endpoint: gents::inference_setup::OPENROUTER_ENDPOINT.to_string(),
+        auth: BackendAuth::Environment {
+            variable: "OPENROUTER_API_KEY".to_string(),
+        },
+        connect_timeout_secs: None,
+        discovery_timeout_secs: None,
+        max_concurrent: Some(4),
+        max_queue_depth: Some(100),
+        enabled: true,
+        tags: Vec::new(),
+    }
+}
+
+async fn apply_live_backend_documents(
     node: &EmbeddedNode,
     principal: AgentPrincipal,
     backend: InferenceBackend,
@@ -165,7 +206,7 @@ async fn apply_d4f_documents(
         ]
         .into_iter()
         .map(|(collection, value)| {
-            let value = value.expect("serialize d4f configuration document");
+            let value = value.expect("serialize live configuration document");
             DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
@@ -174,13 +215,13 @@ async fn apply_d4f_documents(
         })
         .collect(),
     )
-    .expect("build d4f backend plan");
-    gents::ConfigAccess::transact_local(node, None, "test.bind_d4f_backend", |txn| {
+    .expect("build live backend plan");
+    gents::ConfigAccess::transact_local(node, None, "test.bind_live_backend", |txn| {
         let plan = &plan;
         Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
     })
     .await
-    .expect("upsert d4f backend");
+    .expect("upsert live backend");
 }
 
 pub async fn boot_d4f_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
@@ -286,7 +327,8 @@ async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String
     if let Some(row) = &row {
         if let Some(content) = row.content.as_deref() {
             if !content.trim().is_empty() {
-                return content.to_string();
+                return gents_protocol::transcript::present_persisted_message("assistant", content)
+                    .body_markdown;
             }
         }
     }
@@ -310,7 +352,10 @@ async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String
     }
     let resp = node.execute(&query).await;
     first_optional_row::<MsgRow>(&resp, "AgentMessage")
-        .map(|m| m.content)
+        .map(|m| {
+            gents_protocol::transcript::present_persisted_message("assistant", &m.content)
+                .body_markdown
+        })
         .unwrap_or_default()
 }
 

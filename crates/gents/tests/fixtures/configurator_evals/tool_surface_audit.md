@@ -1,0 +1,44 @@
+# Configurator tool coverage audit
+
+Sources: canonical `document_config/tools.rs`, runtime `tool_surface/build.rs`
+and `tool_surface/behavior_config.rs`, desired-state `config_client/desired_state.rs`,
+model command dispatch in `self_config/command.rs`, and CLI/desktop Setup grants.
+
+Configuration selection, document authoring, and successful execution are separate
+coverage requirements. The table records the current implementation, not promised
+commands. The `tools` resource uses targeted sparse patches, with typed complete
+values for nested groups and runtime ceilings enforced by existing owners.
+
+| Capability | Model configuration path | Remaining execution/authoring coverage |
+| --- | --- | --- |
+| Host files and commands | `behavior create --preset write/readonly --root`; `tools edit --behavior` host group | Builder readiness executes a shell test; pagoda browser checks passed in one live diagnostic, ten-trial measurement pending |
+| Background commands | Host bash background flags and timeout settings | Existing runtime tests; add consumer process start/observe/cancel case |
+| Named CLI tools | Host cli selection | Requires installed executable and a runtime execution check |
+| MCP | Remote service/tool allowlists and presentation; `mcp-service get/preview/edit` | Existing services only; missing service creation and catalog discovery in config |
+| Subagents | Subagent target IDs, spawn/steering/background grants | No model config authoring command for SubagentTarget; existing target can be selected |
+| Graph execution | Built-in graph flag; native list/run/observe/result/cancel | Pack graph installation supported; caller admission still independently required |
+| Goals | Separate goal tools and creation flags | Goal declarations and terminal states have existing owners; consumer case pending |
+| Memory/history/context budget | Independent built-in flags | Selection available; live exercise cases pending |
+| Datastore queries | Datastore query flag and exact collection allowlist | Bind to working behavior and execute bounded query |
+| Datastore create/query surfaces | `datastore get/preview create/preview edit/create/edit`; bind through Tools.datastore | Transactional preview/edit/Setup-protection tests pass; bounded discovery absent. Surface syntax is checked on publication; live schema and tool collisions are checked by runtime binding/execution owners |
+| Schemas | `schema get/preview install/install`; shared additive schema contract/publication owner with packs and CLI | Node-wide contracts, not document ACP grants; model command regressions pass, full automation live validation pending |
+| LSP | Integrations.lsp settings | Needs installed/indexed server; presence is not readiness |
+| Ethereum | Integrations.eth_tool_ids selects owned EthTool documents | No model config authoring for EthTool; signing keys/credentials stay operator-owned |
+| Skills | `skill get/preview import/import`; Context skill_ids attaches owned Skill documents | Shared CLI/model SKILL.md loader, root-bound reads, create-only publication; fresh-session load/supporting-file execution passed live diagnostics using workspace-relative paths. Source-directory-relative supporting references are not yet supported; bounded inventory absent |
+| Automation | `automation get/preview/edit` task, schedule, event-source, trigger with target behavior | Full model-authored schema/surface/task/trigger and real document submission pending |
+| Inference | Profile inventory/create/edit; backend inventory/edit | Backend creation absent; credentials use operator-managed auth |
+| Self-configuration | Explicit categories, preview, no-lockout, separate pack install grant | CLI/desktop initial grants now include advertised backend/MCP/automation categories |
+
+Next required work: verify the full automation chain and ten-trial measurements.
+Template authoring now compiles through the execution parser after a live
+diagnostic exposed accepted invalid syntax; the live recovery check is pending.
+Audit gaps for other
+referenced documents must remain visible until implemented and exercised. Do not
+grant all operational capabilities to Setup merely to test a working behavior.
+
+The progressive eval must retain artifacts and distinguish prerequisite failures,
+model request failures, and independent acceptance failures. Ten GLM trials per
+case are still required. GLM onboarding plus fresh-session Builder execution
+passed 10/10 on 2026-09-15 (160.86s, concurrency 2); this predates skill import
+and does not establish acceptance of later stages. The earlier Qwen matrix is
+not evidence for GLM trials.

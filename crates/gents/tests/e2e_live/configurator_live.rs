@@ -6,31 +6,81 @@
 //!
 //! `GENTS_LIVE_CONFIG_MODELS` accepts a comma-separated model matrix and
 //! `GENTS_LIVE_CONFIG_RUNS` selects 1-100 isolated trials per model. Each
-//! prompt lives under `tests/fixtures/configurator_evals`; Rust assertions own
-//! the corresponding durable success contract.
+//! `GENTS_LIVE_CONFIG_PROVIDER` selects `d4f` (default) or `openrouter`; the
+//! latter stores only the `OPENROUTER_API_KEY` environment-variable reference.
+//! `GENTS_LIVE_CONFIG_CONCURRENCY` bounds parallel isolated trials (default 1,
+//! maximum 20). Each prompt lives under `tests/fixtures/configurator_evals`;
+//! Rust assertions own the corresponding durable success contract.
 
+use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use futures::FutureExt;
-use gents::document_config::{AgentContext, InferenceProfile, SelfConfigTools, Tools};
+use futures::{FutureExt, StreamExt};
+use gents::document_config::{AgentContext, InferenceProfile, Tools};
 use gents::{AgentIdentity, Collection};
 use serde::Serialize;
 use serde_json::Value;
 
 use super::steward_loop_live::{
-    bind_d4f_backend_for_model, boot_d4f_agent_with_ceiling, wait_for_assistant_answer,
-    wait_for_request_terminal,
+    bind_d4f_backend_for_model, bind_openrouter_backend_for_model, boot_d4f_agent_with_ceiling,
+    D4F_BACKEND_ID, OPENROUTER_BACKEND_ID,
 };
 use crate::support::fixtures::test_identity;
-use crate::support::interrupt::create_runtime_request;
 use crate::support::test_db;
 
-const EVAL_CASE_ID: &str = "software-team-and-code-review";
+#[path = "configurator_stages.rs"]
+mod stages;
+
+#[path = "configurator_cases.rs"]
+mod cases;
+
+const EVAL_CASE_ID: &str = "progressive-configurator";
 const ONBOARDING_PROMPT: &str =
     include_str!("../fixtures/configurator_evals/software_team_and_code_review.md");
+
+#[derive(Clone, Copy, Debug)]
+enum LiveProvider {
+    D4f,
+    OpenRouter,
+}
+
+impl LiveProvider {
+    fn from_env() -> Self {
+        match std::env::var("GENTS_LIVE_CONFIG_PROVIDER")
+            .unwrap_or_else(|_| "d4f".to_owned())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "d4f" => Self::D4f,
+            "openrouter" => {
+                assert!(
+                    std::env::var("OPENROUTER_API_KEY").is_ok_and(|key| !key.trim().is_empty()),
+                    "OPENROUTER_API_KEY must be non-empty for the OpenRouter configurator eval"
+                );
+                Self::OpenRouter
+            }
+            value => panic!(
+                "unsupported GENTS_LIVE_CONFIG_PROVIDER {value:?}; expected d4f or openrouter"
+            ),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::D4f => "d4f",
+            Self::OpenRouter => "openrouter",
+        }
+    }
+
+    fn backend_id(self) -> &'static str {
+        match self {
+            Self::D4f => D4F_BACKEND_ID,
+            Self::OpenRouter => OPENROUTER_BACKEND_ID,
+        }
+    }
+}
 
 fn live_enabled() -> bool {
     std::env::var("GENTS_LIVE_CONFIG").as_deref() == Ok("1")
@@ -71,6 +121,22 @@ fn eval_runs() -> usize {
     runs
 }
 
+fn eval_concurrency() -> usize {
+    let concurrency = std::env::var("GENTS_LIVE_CONFIG_CONCURRENCY")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .expect("GENTS_LIVE_CONFIG_CONCURRENCY must be an integer")
+        })
+        .unwrap_or(1);
+    assert!(
+        (1..=20).contains(&concurrency),
+        "GENTS_LIVE_CONFIG_CONCURRENCY must be between 1 and 20"
+    );
+    concurrency
+}
+
 fn onboarding_prompt(user_home: &str) -> String {
     ONBOARDING_PROMPT.replace("{{USER_HOME}}", user_home)
 }
@@ -90,12 +156,23 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 #[derive(Debug, Serialize)]
 struct ConfiguratorEvalResult {
     case_id: &'static str,
+    provider: &'static str,
     model: String,
     trial: usize,
     passed: bool,
     terminal_state: Option<String>,
     error: Option<String>,
     assistant_answer_excerpt: Option<String>,
+    artifacts: Option<String>,
+    cases: Vec<stages::CaseResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConfiguratorModelSummary {
+    model: String,
+    passed: usize,
+    failed: usize,
+    pass_rate: f64,
 }
 
 fn excerpt(value: &str, max_chars: usize) -> String {
@@ -112,10 +189,11 @@ async fn install_setup_configurator(
     node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     setup_behavior_id: &str,
+    user_home: &str,
 ) {
     let context_id = format!("{setup_behavior_id}:config-context");
     let tools_id = format!("{setup_behavior_id}:config-tools");
-    let prompt = r#"You are a configuration acceptance steward. Carry out the user's requested configuration changes with the single argv-style config tool; do not merely describe commands. Start with config help for relevant resources and use preview before writes. Use exact IDs supplied by reads or by the user. Verify each durable result with config reads. Never edit Setup itself. Nested --set values replace the complete top-level group, so inspect and preserve unrelated fields."#;
+    let prompt = gents_protocol::SETUP_STEWARD_PROMPT;
     let context = AgentContext {
         context_id: context_id.clone(),
         agent_did: agent_did.to_owned(),
@@ -131,20 +209,15 @@ async fn install_setup_configurator(
         tools_id,
         agent_did: agent_did.to_owned(),
         display_name: Some("Live Setup tools".into()),
-        self_config: Some(SelfConfigTools {
-            enable_self_config: Some(true),
-            self_config_categories: Some(vec![
-                "behavior".into(),
-                "tools".into(),
-                "profile".into(),
-                "backend".into(),
-                "persona".into(),
-            ]),
-            self_config_no_lockout: Some(true),
-            self_config_dry_run: Some(true),
-            enable_pack_install: Some(true),
-            timeout_secs: Some(30),
+        host: Some(gents::document_config::HostTools {
+            root: Some(user_home.to_owned()),
+            files: Some(gents::document_config::FileTools {
+                mode: gents::tool_surface::FileToolMode::ReadOnly,
+                ..Default::default()
+            }),
+            ..Default::default()
         }),
+        self_config: Some(gents::agent::persona_ops::setup_steward_self_config()),
         ..Default::default()
     };
     let behavior = gents::list_agent_behaviors(node, agent_did)
@@ -196,6 +269,7 @@ async fn install_setup_configurator(
 async fn install_eval_profiles(
     node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
+    backend_id: &str,
     model: &str,
 ) {
     let documents = [("high", "High"), ("medium", "Medium"), ("low", "Low")]
@@ -203,7 +277,7 @@ async fn install_eval_profiles(
         .map(|(profile_id, display_name)| InferenceProfile {
             agent_did: agent_did.to_owned(),
             profile_id: profile_id.to_owned(),
-            backend_id: "backend-d4f-live".to_owned(),
+            backend_id: backend_id.to_owned(),
             model_name: model.to_owned(),
             display_name: Some(display_name.to_owned()),
             ..Default::default()
@@ -284,6 +358,7 @@ async fn verify_configuration(
     agent_did: &str,
     setup_behavior_id: &str,
     user_home: &str,
+    backend_id: &str,
     model: &str,
 ) -> Result<()> {
     let owner = gents::graphql::escape_graphql_string(agent_did);
@@ -300,7 +375,7 @@ async fn verify_configuration(
             .iter()
             .find(|profile| profile["profile_id"] == profile_id)
             .with_context(|| format!("seeded profile {profile_id:?} disappeared"))?;
-        ensure!(profile["backend_id"] == "backend-d4f-live");
+        ensure!(profile["backend_id"] == backend_id);
         ensure!(profile["model_name"] == model);
     }
 
@@ -437,63 +512,178 @@ async fn verify_configuration(
     Ok(())
 }
 
-async fn run_eval_trial(model: String, trial: usize) -> ConfiguratorEvalResult {
-    let label = format!("live-configurator-{trial}");
+async fn run_eval_trial(
+    provider: LiveProvider,
+    model: String,
+    trial: usize,
+    artifacts: &std::path::Path,
+) -> ConfiguratorEvalResult {
+    let model_label = model.replace(['/', ':'], "-");
+    let label = format!("live-configurator-{model_label}-{trial}");
     let db = test_db(&label).await;
-    let user_home = tempfile::tempdir().expect("isolated eval user home");
-    let user_home = user_home.path().to_string_lossy().into_owned();
+    let access = gents::ConfigAccess::Local(db.node.clone());
+    let schema = gents::config_client::preview_schema_install(&access, stages::INPUT_SCHEMA)
+        .await
+        .expect("preview runner schema");
+    gents::config_client::apply_schema_install(
+        &access,
+        stages::INPUT_SCHEMA,
+        &schema.artifact_digest,
+    )
+    .await
+    .expect("install runner schema");
+    let evidence = artifacts.join("evidence");
+    let workspace = artifacts.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create isolated workspace");
+    let user_home = workspace.to_string_lossy().into_owned();
+    tracing::info!(target: "gents::configurator_eval", model, trial, artifacts = %artifacts.display(), "retained eval artifacts");
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(&label));
-    let (agent_did, setup_behavior_id) =
-        bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await;
-    install_eval_profiles(db.node.as_ref(), &agent_did, &model).await;
+    let (agent_did, setup_behavior_id) = match provider {
+        LiveProvider::D4f => {
+            bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await
+        }
+        LiveProvider::OpenRouter => {
+            bind_openrouter_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await
+        }
+    };
+    install_eval_profiles(db.node.as_ref(), &agent_did, provider.backend_id(), &model).await;
     install_eval_workspace_root(db.node.as_ref(), &user_home).await;
-    install_setup_configurator(db.node.as_ref(), &agent_did, &setup_behavior_id).await;
+    install_setup_configurator(db.node.as_ref(), &agent_did, &setup_behavior_id, &user_home).await;
     let agent =
         boot_d4f_agent_with_ceiling(&db, identity, gents::ToolCeiling::readwrite(&user_home))
             .await
             .expect("boot live configurator");
 
-    let request_id = format!("request-live-configurator-{trial}");
-    create_runtime_request(
-        db.node.as_ref(),
-        &agent_did,
-        &setup_behavior_id,
-        &request_id,
-        "session-live-configurator",
-        &onboarding_prompt(&user_home),
-    )
-    .await;
-    let terminal =
-        wait_for_request_terminal(db.node.as_ref(), &request_id, Duration::from_secs(600)).await;
-    let answer =
-        wait_for_assistant_answer(db.node.as_ref(), &request_id, Duration::from_secs(30)).await;
-    let verification = if terminal == "completed" {
-        verify_configuration(
+    // A fixture/assertion panic must not leave this trial's runtime consuming
+    // inference capacity while the matrix moves on to another isolated trial.
+    let result = AssertUnwindSafe(async {
+        let onboarding = stages::execute(
             db.node.as_ref(),
             &agent_did,
             &setup_behavior_id,
-            &user_home,
-            &model,
+            "onboarding",
+            &onboarding_prompt(&user_home),
+            &evidence,
         )
         .await
-    } else {
-        Err(anyhow::anyhow!("request terminalized as {terminal}"))
-    };
+        .expect("execute onboarding and retain evidence");
+        let completion = onboarding.ensure_completed();
+        let terminal = onboarding.terminal_state;
+        let answer = onboarding.answer;
+        let verification = stages::checked("onboarding", &evidence, async {
+            completion?;
+            verify_configuration(
+                db.node.as_ref(),
+                &agent_did,
+                &setup_behavior_id,
+                &user_home,
+                provider.backend_id(),
+                &model,
+            )
+            .await
+        })
+        .await;
+        let configured = verification.is_ok();
+        let mut failures = verification.err().into_iter().collect::<Vec<_>>();
+        if configured {
+            let result = stages::checked(
+                "builder-readiness",
+                &evidence,
+                cases::verify_builder_execution(
+                    db.node.as_ref(),
+                    &agent_did,
+                    &user_home,
+                    &evidence,
+                ),
+            )
+            .await;
+            failures.extend(result.err());
+        }
+        if configured {
+            let result = stages::checked("skill-workflow", &evidence, async {
+                cases::verify_skill_workflow(
+                    db.node.as_ref(),
+                    &agent_did,
+                    &setup_behavior_id,
+                    &workspace,
+                    &evidence,
+                )
+                .await?;
+                verify_configuration(
+                    db.node.as_ref(),
+                    &agent_did,
+                    &setup_behavior_id,
+                    &user_home,
+                    provider.backend_id(),
+                    &model,
+                )
+                .await
+            })
+            .await;
+            failures.extend(result.err());
+        }
+        if configured {
+            let result =
+                cases::verify_pagoda_sequence(db.node.as_ref(), &agent_did, &workspace, &evidence)
+                    .await;
+            failures.extend(result.err());
+        }
+        // Automation depends on generated configuration, not on the artwork
+        // passing its browser check. Preserve independent failure measurements.
+        if configured {
+            let result = stages::checked("document-automation", &evidence, async {
+                cases::verify_document_automation(
+                    db.node.as_ref(),
+                    &agent_did,
+                    &setup_behavior_id,
+                    &evidence,
+                )
+                .await?;
+                verify_configuration(
+                    db.node.as_ref(),
+                    &agent_did,
+                    &setup_behavior_id,
+                    &user_home,
+                    provider.backend_id(),
+                    &model,
+                )
+                .await
+            })
+            .await;
+            failures.extend(result.err());
+        }
+        let report = ConfiguratorEvalResult {
+            case_id: EVAL_CASE_ID,
+            provider: provider.name(),
+            model,
+            trial,
+            passed: failures.is_empty(),
+            terminal_state: Some(terminal),
+            error: (!failures.is_empty()).then(|| {
+                failures
+                    .iter()
+                    .map(|error| format!("{error:#}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }),
+            assistant_answer_excerpt: Some(excerpt(&answer, 2_000)),
+            artifacts: Some(artifacts.to_string_lossy().into_owned()),
+            cases: stages::case_results(&evidence).expect("collect independent case results"),
+        };
+        report
+    })
+    .catch_unwind()
+    .await;
     agent.shutdown().await;
-    ConfiguratorEvalResult {
-        case_id: EVAL_CASE_ID,
-        model,
-        trial,
-        passed: verification.is_ok(),
-        terminal_state: Some(terminal),
-        error: verification.err().map(|error| format!("{error:#}")),
-        assistant_answer_excerpt: Some(excerpt(&answer, 2_000)),
+    match result {
+        Ok(report) => report,
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_CONFIG=1 and pass --ignored"]
-async fn live_configurator_onboarding_eval_matrix() {
+async fn live_configurator_progressive_eval_matrix() {
     assert!(
         live_enabled(),
         "set GENTS_LIVE_CONFIG=1 and pass --ignored to run live configurator acceptance"
@@ -507,40 +697,130 @@ async fn live_configurator_onboarding_eval_matrix() {
         .try_init();
     let models = eval_models();
     let runs = eval_runs();
-    let mut results = Vec::with_capacity(models.len() * runs);
-    for model in models {
-        for trial in 1..=runs {
+    let provider = LiveProvider::from_env();
+    let concurrency = eval_concurrency();
+    let trials = models
+        .into_iter()
+        .flat_map(|model| (1..=runs).map(move |trial| (model.clone(), trial)));
+    let results = futures::stream::iter(trials)
+        .map(|(model, trial)| async move {
+            // Allocate outside the caught trial so setup panics still retain
+            // an addressable report and any evidence already collected.
+            let artifacts = tempfile::Builder::new()
+                .prefix("gents-eval-")
+                .tempdir()
+                .expect("isolated eval artifacts")
+                .keep();
+            let evidence = artifacts.join("evidence");
+            std::fs::create_dir_all(&evidence).expect("create evidence directory");
             let failed_model = model.clone();
-            let report = match AssertUnwindSafe(run_eval_trial(model.clone(), trial))
-                .catch_unwind()
-                .await
-            {
-                Ok(report) => report,
-                Err(error) => ConfiguratorEvalResult {
-                    case_id: EVAL_CASE_ID,
-                    model: failed_model,
-                    trial,
-                    passed: false,
-                    terminal_state: None,
-                    error: Some(format!(
-                        "eval trial panicked: {}",
-                        panic_message(error.as_ref())
-                    )),
-                    assistant_answer_excerpt: None,
-                },
-            };
+            let report =
+                match AssertUnwindSafe(run_eval_trial(provider, model.clone(), trial, &artifacts))
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(report) => report,
+                    Err(error) => ConfiguratorEvalResult {
+                        case_id: EVAL_CASE_ID,
+                        provider: provider.name(),
+                        model: failed_model,
+                        trial,
+                        passed: false,
+                        terminal_state: None,
+                        error: Some(format!(
+                            "eval trial panicked: {}",
+                            panic_message(error.as_ref())
+                        )),
+                        assistant_answer_excerpt: None,
+                        artifacts: Some(artifacts.to_string_lossy().into_owned()),
+                        cases: stages::case_results(&evidence).unwrap_or_default(),
+                    },
+                };
+            std::fs::write(
+                evidence.join("trial.json"),
+                serde_json::to_vec_pretty(&report).expect("serialize trial"),
+            )
+            .expect("retain trial result, including fixture failures");
             tracing::info!(
                 target: "gents::configurator_eval",
                 result = %serde_json::to_string(&report).expect("serialize eval report"),
                 "configurator eval trial"
             );
-            results.push(report);
-        }
-    }
+            report
+        })
+        .buffer_unordered(concurrency)
+        .collect::<Vec<_>>()
+        .await;
     let failures = results
         .iter()
         .filter(|result| !result.passed)
         .collect::<Vec<_>>();
+    let mut model_counts = BTreeMap::<String, (usize, usize)>::new();
+    let mut case_counts = BTreeMap::<(String, String), (usize, usize, usize)>::new();
+    let mut failure_kinds = BTreeMap::<(String, String, String), usize>::new();
+    for result in &results {
+        if result.terminal_state.is_none() {
+            *failure_kinds
+                .entry((
+                    result.model.clone(),
+                    EVAL_CASE_ID.into(),
+                    "fixture_or_harness".into(),
+                ))
+                .or_default() += 1;
+        }
+        let counts = model_counts.entry(result.model.clone()).or_default();
+        if result.passed {
+            counts.0 += 1;
+        } else {
+            counts.1 += 1;
+        }
+        for case in &result.cases {
+            if case.status == "failed" {
+                if let Some(kind) = &case.failure_kind {
+                    *failure_kinds
+                        .entry((result.model.clone(), case.case_id.clone(), kind.clone()))
+                        .or_default() += 1;
+                }
+            }
+            let counts = case_counts
+                .entry((result.model.clone(), case.case_id.clone()))
+                .or_default();
+            match case.status.as_str() {
+                "passed" => counts.0 += 1,
+                "failed" => counts.1 += 1,
+                "skipped" => counts.2 += 1,
+                other => panic!("unknown case status {other}"),
+            }
+        }
+    }
+    for ((model, case_id, kind), count) in failure_kinds {
+        tracing::info!(target: "gents::configurator_eval", result = %serde_json::json!({
+            "model":model,"case_id":case_id,"failure_kind":kind,"count":count,
+        }), "configurator eval failure classification");
+    }
+    for ((model, case_id), (passed, failed, skipped)) in case_counts {
+        tracing::info!(target: "gents::configurator_eval", result = %serde_json::json!({
+            "model": model, "case_id": case_id, "passed": passed, "failed": failed, "skipped": skipped,
+            "attempted": passed + failed,
+            "pass_rate": if passed + failed > 0 { Some(passed as f64 / (passed + failed) as f64) } else { None },
+        }), "configurator eval case summary");
+    }
+    let model_summaries = model_counts
+        .into_iter()
+        .map(|(model, (passed, failed))| ConfiguratorModelSummary {
+            model,
+            passed,
+            failed,
+            pass_rate: passed as f64 / (passed + failed) as f64,
+        })
+        .collect::<Vec<_>>();
+    for summary in &model_summaries {
+        tracing::info!(
+            target: "gents::configurator_eval",
+            result = %serde_json::to_string(summary).expect("serialize model summary"),
+            "configurator eval model summary"
+        );
+    }
     tracing::info!(
         target: "gents::configurator_eval",
         case_id = EVAL_CASE_ID,
@@ -554,6 +834,6 @@ async fn live_configurator_onboarding_eval_matrix() {
         "{} of {} configurator eval trials failed:\n{}",
         failures.len(),
         results.len(),
-        serde_json::to_string_pretty(&results).expect("serialize eval summary")
+        serde_json::to_string_pretty(&model_summaries).expect("serialize eval summary")
     );
 }
