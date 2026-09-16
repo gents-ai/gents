@@ -14,7 +14,8 @@
     "test:packages": "npm run test --if-present -w @source-inc/gents-desktop-client -w @source-inc/gents-desktop-ui -w @source-inc/gents-desktop-chat -w @source-inc/gents-desktop-fleet -w @source-inc/gents-desktop-operations",
     "check:package-boundaries": "node scripts/check-desktop-package-boundaries.mjs",
     "pack:packages": "./scripts/pack-desktop-packages.sh",
-    "test:triage": "node --test scripts/triage-hygiene/*.test.mjs"
+    "test:triage": "node --test scripts/triage-hygiene/*.test.mjs",
+    "test:evals": "node --test scripts/evals/*.test.mjs"
   },
   "engines": {
     "node": ">=20"
