@@ -18,6 +18,9 @@ const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["profile"|"backend", "list", "--limit", N, "--cursor", ID]
   ["profile", "preview", "create", PROFILE_ID, PATCH_FLAGS]
   ["profile", "create", PROFILE_ID, PATCH_FLAGS]
+  ["backend", "preview", "create", BACKEND_ID, "--endpoint", URL, ["--name", NAME], ["--wire-api", API]]
+  ["backend", "create", BACKEND_ID, "--endpoint", URL, ["--name", NAME], ["--wire-api", API]]
+  ["backend", "discover", BACKEND_ID]
   ["tools", "get"|"preview"|"edit", [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]]
   ["backend", "get", [BACKEND_ID], [--behavior BEHAVIOR_ID]]
   ["backend", "preview"|"edit", [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]]
@@ -155,7 +158,7 @@ impl ConfigCommandTool {
             "tools" => self.bound_document("tools", &argv[1..]).await,
             "datastore" => self.datastore(&argv[1..]).await,
             "profile" => self.profile(&argv[1..]).await,
-            "backend" => self.bound_document("backend", &argv[1..]).await,
+            "backend" => self.backend(&argv[1..]).await,
             "mcp-service" => self.mcp_service(&argv[1..]).await,
             "automation" => self.automation(&argv[1..]).await,
             "cleanup" => self.cleanup(&argv[1..]).await,
@@ -240,10 +243,13 @@ The profile selects backend/model/effort. Creation requires an unused exact ID p
             Some("backend") => {
                 r#"backend commands:
   list [--limit N] [--cursor BACKEND_ID]
+  preview create BACKEND_ID --endpoint URL [--name NAME] [--wire-api chat_completions|responses]
+  create BACKEND_ID --endpoint URL [--name NAME] [--wire-api chat_completions|responses]
+  discover BACKEND_ID
   get [BACKEND_ID] [--behavior BEHAVIOR_ID]
   preview [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
   edit [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
-Without BACKEND_ID, this targets the backend referenced by the selected behavior's profile. Raw credentials cannot be read or changed."#
+Create is deliberately limited to an enabled, unauthenticated OpenAI-compatible server and never accepts a credential. Discover contacts only that exact persisted backend through the canonical provider/catalog owner, records its advertised model catalog, and does not create a profile or select a model. Preview creation before applying it. Without BACKEND_ID, get/edit targets the backend referenced by the selected behavior's profile. Raw credentials cannot be read or changed; OAuth and API-key setup remain operator-owned."#
             }
             Some("mcp-service") => {
                 r#"mcp-service commands:
@@ -534,6 +540,103 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                 "unknown {resource} command {other:?}; accepted: get, preview, edit; run config help {resource}"
             ),
         }
+    }
+
+    async fn backend(&self, argv: &[String]) -> Result<String> {
+        self.ensure_resource("backend")?;
+        let verb = argv
+            .first()
+            .map(String::as_str)
+            .context("backend command is required; run config help backend")?;
+        if verb == "list" {
+            let parsed = ParsedArgs::parse(&argv[1..])?;
+            parsed.reject_mutation_flags()?;
+            return self
+                .inference_inventory(
+                    SelfConfigTarget::InferenceBackend,
+                    parse_limit(&parsed)?,
+                    parsed.one("cursor")?,
+                )
+                .await;
+        }
+        let create_args = match verb {
+            "create" => Some(&argv[1..]),
+            "preview" if argv.get(1).map(String::as_str) == Some("create") => Some(&argv[2..]),
+            _ => None,
+        };
+        if let Some(create_args) = create_args {
+            let parsed = ParsedArgs::parse(create_args)?;
+            anyhow::ensure!(
+                parsed.positionals.len() == 1,
+                "backend create requires exactly one BACKEND_ID"
+            );
+            anyhow::ensure!(
+                parsed.switches.is_empty(),
+                "backend create accepts no switches"
+            );
+            for option in parsed.options.keys() {
+                anyhow::ensure!(
+                    matches!(option.as_str(), "endpoint" | "name" | "wire-api"),
+                    "unknown backend create option --{option}; accepted: --endpoint, --name, --wire-api"
+                );
+            }
+            let endpoint = parsed
+                .one("endpoint")?
+                .filter(|value| !value.trim().is_empty())
+                .context("backend create requires --endpoint URL")?
+                .to_owned();
+            let wire_api =
+                crate::openai_wire::OpenAiWireApi::parse_optional(parsed.one("wire-api")?)?;
+            let request = local_backend_create_request(
+                self.agent_did.clone(),
+                parsed.positionals[0].clone(),
+                endpoint,
+                parsed.one("name")?.map(ToOwned::to_owned),
+                wire_api,
+            );
+            return self
+                .patch(
+                    &self.core,
+                    if verb == "preview" { "preview" } else { "edit" },
+                    request,
+                )
+                .await;
+        }
+        if verb == "discover" {
+            anyhow::ensure!(argv.len() == 2, "backend discover requires one BACKEND_ID");
+            let backend_id = &argv[1];
+            let matches = crate::backend_registry::list_enabled_backends_for_agent(
+                &self.node,
+                &self.agent_did,
+            )
+            .await?
+            .into_iter()
+            .filter(|backend| backend.backend_id == *backend_id)
+            .collect::<Vec<_>>();
+            anyhow::ensure!(
+                matches.len() == 1,
+                "no unique enabled backend with ID {backend_id:?}; inspect config backend list"
+            );
+            let backend = &matches[0];
+            anyhow::ensure!(
+                backend.provider_kind == crate::BackendProviderKind::OpenAiCompatible
+                    && matches!(
+                        backend.auth,
+                        crate::document_config::BackendAuth::Unauthenticated
+                    ),
+                "backend discover is limited to unauthenticated OpenAI-compatible servers; credentials and OAuth remain operator-owned"
+            );
+            let observation =
+                crate::backend_registry::discover_shared_backend(&self.node, backend).await?;
+            return Ok(serde_json::to_string_pretty(&json!({
+                "resource": "InferenceBackend",
+                "backend_id": backend_id,
+                "endpoint": backend.endpoint,
+                "observation": observation,
+                "note": "Provider-advertised facts were recorded for this persisted backend. Discovery did not create a profile, select a model, or change a behavior."
+            }))?);
+        }
+        self.bound_document("backend", argv).await
     }
 
     async fn profile(&self, argv: &[String]) -> Result<String> {

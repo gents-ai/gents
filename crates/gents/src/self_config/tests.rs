@@ -1526,6 +1526,139 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
 }
 
 #[tokio::test]
+async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let count = stream.read(&mut request).await.unwrap();
+        let request = String::from_utf8_lossy(&request[..count]);
+        assert!(request.starts_with("GET /v1/models "), "{request}");
+        assert!(!request.to_ascii_lowercase().contains("authorization:"));
+        let body = r#"{"data":[{"id":"fixture-local-model","max_model_len":32768}]}"#;
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+
+    let node = build_persona_node().await;
+    let identity = persona_identity("local-backend-create");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "setup").await;
+    let mut tool_config = config(&["backend", "profile"]);
+    tool_config.behavior_id = "setup".into();
+    tool_config.dry_run = true;
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let endpoint = format!("http://{address}/v1");
+    let profiles_before: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec![
+                "profile".into(),
+                "list".into(),
+                "--limit".into(),
+                "50".into(),
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    let create = vec![
+        "backend".into(),
+        "preview".into(),
+        "create".into(),
+        "fixture-local".into(),
+        "--endpoint".into(),
+        endpoint.clone(),
+        "--name".into(),
+        "Fixture local".into(),
+    ];
+    let preview: Value =
+        serde_json::from_str(&call_config_tool(&tools, create.clone()).await.unwrap()).unwrap();
+    assert_eq!(preview["committed"], false);
+    assert!(call_config_tool(
+        &tools,
+        vec!["backend".into(), "get".into(), "fixture-local".into()]
+    )
+    .await
+    .is_err());
+    assert!(call_config_tool(
+        &tools,
+        vec![
+            "backend".into(),
+            "preview".into(),
+            "create".into(),
+            "credential-backend".into(),
+            "--endpoint".into(),
+            endpoint.clone(),
+            "--auth".into(),
+            "secret".into(),
+        ],
+    )
+    .await
+    .unwrap_err()
+    .contains("unknown backend create option --auth"));
+
+    let mut apply = create;
+    apply.remove(1);
+    let created: Value =
+        serde_json::from_str(&call_config_tool(&tools, apply.clone()).await.unwrap()).unwrap();
+    assert_eq!(created["committed"], true);
+    assert!(call_config_tool(&tools, apply)
+        .await
+        .unwrap_err()
+        .contains("already exists"));
+
+    let discovered: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec!["backend".into(), "discover".into(), "fixture-local".into()],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(discovered["endpoint"], endpoint);
+    assert_eq!(discovered["observation"]["probe_status"], "healthy");
+    assert_eq!(
+        discovered["observation"]["catalogs"][0]["models"][0]["model_name"],
+        "fixture-local-model"
+    );
+    assert!(discovered["note"]
+        .as_str()
+        .unwrap()
+        .contains("did not create a profile"));
+    let profiles_after: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec![
+                "profile".into(),
+                "list".into(),
+                "--limit".into(),
+                "50".into(),
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(profiles_after["items"], profiles_before["items"]);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     let node = build_persona_node().await;
     let identity = persona_identity("targeted-config");
