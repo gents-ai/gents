@@ -76,12 +76,15 @@ pub(super) async fn verify_builder_execution(
         "AgentToolCall",
     )
     .await?;
-    ensure!(
-        calls
-            .iter()
-            .any(|call| recorded_readiness_command(call, std::path::Path::new(user_home))),
-        "Builder command evidence did not identify the readiness script"
-    );
+    if !calls
+        .iter()
+        .any(|call| recorded_readiness_command(call, std::path::Path::new(user_home)))
+    {
+        return Err(stages::EvaluationFailure::Inconclusive(
+            "command evidence did not identify execution of the readiness script".into(),
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -98,38 +101,38 @@ fn recorded_readiness_command(call: &serde_json::Value, root: &std::path::Path) 
     let Some(command) = args["command"].as_str() else {
         return false;
     };
-    if matches!(command, "sh" | "/bin/sh") {
-        if let Some(script) = args["args"]
-            .as_array()
-            .and_then(|argv| (argv.len() == 1).then(|| argv[0].as_str()).flatten())
-        {
-            let cwd = root.join(args["cwd"].as_str().unwrap_or("."));
-            return cwd
-                .join(script)
-                .canonicalize()
-                .ok()
-                .zip(root.join("readiness/test.sh").canonicalize().ok())
-                .is_some_and(|(actual, expected)| actual == expected);
+    // Match the tool's exec-style versus shell-string distinction. Tokenize
+    // simple shell invocations without executing them or claiming to interpret
+    // arbitrary shell programs; compound/expanded forms remain inconclusive.
+    let argv = match args["args"].as_array().filter(|argv| !argv.is_empty()) {
+        Some(extra) => std::iter::once(Some(command.to_owned()))
+            .chain(extra.iter().map(|value| value.as_str().map(str::to_owned)))
+            .collect::<Option<Vec<_>>>(),
+        None => {
+            let command = command.trim();
+            if command.contains([
+                '$', '`', '*', '?', '[', ']', ';', '|', '&', '<', '>', '(', ')', '\n', '\r',
+            ]) {
+                return false;
+            }
+            shlex::split(command)
         }
-    }
-    if command.contains("readiness/test.sh") {
-        return true;
-    }
-    // cwd is part of the canonical command vocabulary, not an instruction to
-    // embed the workspace-relative path again in the command string.
-    let cwd = root.join(args["cwd"].as_str().unwrap_or("."));
-    if cwd
-        .canonicalize()
-        .ok()
-        .zip(root.join("readiness").canonicalize().ok())
-        .is_none_or(|(actual, expected)| actual != expected)
-    {
+    };
+    let Some(argv) = argv else {
         return false;
-    }
-    matches!(
-        command.trim(),
-        "sh test.sh" | "sh ./test.sh" | "/bin/sh test.sh" | "/bin/sh ./test.sh"
-    )
+    };
+    let [shell, script] = argv.as_slice() else {
+        return false;
+    };
+    matches!(shell.as_str(), "sh" | "/bin/sh")
+        && !script.starts_with('-')
+        && root
+            .join(args["cwd"].as_str().unwrap_or("."))
+            .join(script)
+            .canonicalize()
+            .ok()
+            .zip(root.join("readiness/test.sh").canonicalize().ok())
+            .is_some_and(|(actual, expected)| actual == expected)
 }
 
 #[test]
@@ -144,6 +147,7 @@ fn readiness_command_evidence_accounts_for_cwd() {
     };
     for args in [
         serde_json::json!({"command":"sh readiness/test.sh"}),
+        serde_json::json!({"command":"sh 'readiness/test.sh'","args":[]}),
         serde_json::json!({"command":"sh","args":["readiness/test.sh"]}),
         serde_json::json!({"command":"/bin/sh","args":[root.path().join("readiness/test.sh")],"cwd":"."}),
         serde_json::json!({"command":"sh test.sh","cwd":"readiness"}),
@@ -162,6 +166,15 @@ fn readiness_command_evidence_accounts_for_cwd() {
         serde_json::json!({"command":"sh test.sh","cwd":"."}),
         serde_json::json!({"command":"echo test.sh","cwd":"readiness"}),
         serde_json::json!({"command":"true","note":"readiness/test.sh"}),
+        serde_json::json!({"command":"echo readiness/test.sh"}),
+        serde_json::json!({"command":"sh readiness/test.sh.backup"}),
+        serde_json::json!({"command":"sh -n readiness/test.sh"}),
+        serde_json::json!({"command":"true && echo readiness/test.sh"}),
+        serde_json::json!({"command":"sh $SCRIPT"}),
+        serde_json::json!({"command":"sh readiness/tes?.sh"}),
+        serde_json::json!({"command":"sh\nreadiness/test.sh"}),
+        serde_json::json!({"command":"sh 'readiness/test.sh"}),
+        serde_json::json!({"command":"sh readiness/test.sh","args":["ignored"]}),
         serde_json::json!({"command":"sh","args":["unrelated/test.sh"]}),
         serde_json::json!({"command":"sh","args":["sh","readiness/test.sh"]}),
     ] {
@@ -256,7 +269,7 @@ fn reassess_retained_readiness_evidence() -> Result<()> {
         std::fs::write(
             evidence.join("builder-readiness-reassessment.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
-                "grader":"readiness-argv-v2", "changed":reassessed.is_some(),
+                "grader":"readiness-invocation-v3", "changed":reassessed.is_some(),
                 "original":original, "reassessed":reassessed.as_ref().unwrap_or(&original),
                 "basis":"Retained request tool calls; original completion, exact script and receipt checks remain required. No inference rerun."
             }))?,

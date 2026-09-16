@@ -4617,6 +4617,7 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "sha3 0.10.9",
+ "shlex",
  "storage",
  "syn 2.0.117",
  "tar",

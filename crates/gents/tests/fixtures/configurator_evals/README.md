@@ -227,3 +227,12 @@ absolute/relative paths, wrong scripts and duplicated executable arguments. Its
 offline reassessment records trial 1 as passed separately from the raw failure.
 The model prompts and configuration are unchanged, so this does not require a new
 model run. Final reporting must still separate raw and reassessed outcomes.
+
+The follow-up `readiness-invocation-v3` grader removes the older script-path
+substring shortcut: mentioning a filename (for example, `echo readiness/test.sh`)
+is not evidence of execution. It recognizes structured arguments or tokenized
+simple `sh` invocations of the exact script, without executing command text.
+Compound/expanded shell programs that this bounded checker cannot establish are
+inconclusive, not proven model failures. Existing script/receipt checks still
+apply before command attribution, and unrelated failures cannot be reassessed
+away.
