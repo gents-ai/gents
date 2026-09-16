@@ -79,14 +79,81 @@ pub(super) async fn verify_builder_execution(
     ensure!(
         calls
             .iter()
-            .any(|call| call["tool_name"] == "bash_unrestricted"
-                && call["lifecycle_state"] == "completed"
-                && call["args"]
-                    .as_str()
-                    .is_some_and(|args| args.contains("readiness/test.sh"))),
-        "Builder did not successfully execute its command tool"
+            .any(|call| recorded_readiness_command(call, std::path::Path::new(user_home))),
+        "Builder command evidence did not identify the readiness script"
     );
     Ok(())
+}
+
+fn recorded_readiness_command(call: &serde_json::Value, root: &std::path::Path) -> bool {
+    if call["tool_name"] != "bash_unrestricted" || call["lifecycle_state"] != "completed" {
+        return false;
+    }
+    let Some(args) = call["args"]
+        .as_str()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+    else {
+        return false;
+    };
+    let Some(command) = args["command"].as_str() else {
+        return false;
+    };
+    if command.contains("readiness/test.sh") {
+        return true;
+    }
+    // cwd is part of the canonical command vocabulary, not an instruction to
+    // embed the workspace-relative path again in the command string.
+    let cwd = root.join(args["cwd"].as_str().unwrap_or("."));
+    if cwd
+        .canonicalize()
+        .ok()
+        .zip(root.join("readiness").canonicalize().ok())
+        .is_none_or(|(actual, expected)| actual != expected)
+    {
+        return false;
+    }
+    matches!(
+        command.trim(),
+        "sh test.sh" | "sh ./test.sh" | "/bin/sh test.sh" | "/bin/sh ./test.sh"
+    ) || (matches!(command, "sh" | "/bin/sh")
+        && args["args"].as_array().is_some_and(|argv| {
+            argv.len() == 1 && matches!(argv[0].as_str(), Some("test.sh" | "./test.sh"))
+        }))
+}
+
+#[test]
+fn readiness_command_evidence_accounts_for_cwd() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("readiness")).unwrap();
+    let call = |args: serde_json::Value, state: &str| {
+        serde_json::json!({
+            "tool_name":"bash_unrestricted", "lifecycle_state":state, "args":args.to_string()
+        })
+    };
+    for args in [
+        serde_json::json!({"command":"sh readiness/test.sh"}),
+        serde_json::json!({"command":"sh test.sh","cwd":"readiness"}),
+        serde_json::json!({"command":"sh","args":["./test.sh"],"cwd":root.path().join("readiness")}),
+    ] {
+        assert!(recorded_readiness_command(
+            &call(args.clone(), "completed"),
+            root.path()
+        ));
+        assert!(!recorded_readiness_command(
+            &call(args, "failed"),
+            root.path()
+        ));
+    }
+    for args in [
+        serde_json::json!({"command":"sh test.sh","cwd":"."}),
+        serde_json::json!({"command":"echo test.sh","cwd":"readiness"}),
+        serde_json::json!({"command":"true","note":"readiness/test.sh"}),
+    ] {
+        assert!(!recorded_readiness_command(
+            &call(args, "completed"),
+            root.path()
+        ));
+    }
 }
 
 pub(super) async fn verify_pagoda_sequence(
