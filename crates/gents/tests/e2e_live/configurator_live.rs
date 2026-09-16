@@ -557,21 +557,21 @@ async fn run_eval_trial(
     // A fixture/assertion panic must not leave this trial's runtime consuming
     // inference capacity while the matrix moves on to another isolated trial.
     let result = AssertUnwindSafe(async {
-        let onboarding = stages::execute(
-            db.node.as_ref(),
-            &agent_did,
-            &setup_behavior_id,
-            "onboarding",
-            &onboarding_prompt(&user_home),
-            &evidence,
-        )
-        .await
-        .expect("execute onboarding and retain evidence");
-        let completion = onboarding.ensure_completed();
-        let terminal = onboarding.terminal_state;
-        let answer = onboarding.answer;
+        let mut terminal = None;
+        let mut answer = String::new();
         let verification = stages::checked("onboarding", &evidence, async {
-            completion?;
+            let onboarding = stages::execute(
+                db.node.as_ref(),
+                &agent_did,
+                &setup_behavior_id,
+                "onboarding",
+                &onboarding_prompt(&user_home),
+                &evidence,
+            )
+            .await?;
+            terminal = Some(onboarding.terminal_state.clone());
+            answer = onboarding.answer.clone();
+            onboarding.ensure_completed()?;
             verify_configuration(
                 db.node.as_ref(),
                 &agent_did,
@@ -658,7 +658,7 @@ async fn run_eval_trial(
             model,
             trial,
             passed: failures.is_empty(),
-            terminal_state: Some(terminal),
+            terminal_state: terminal,
             error: (!failures.is_empty()).then(|| {
                 failures
                     .iter()
