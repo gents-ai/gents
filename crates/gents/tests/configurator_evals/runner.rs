@@ -29,6 +29,9 @@ mod reporting;
 #[path = "readiness.rs"]
 mod readiness;
 
+#[path = "onboarding_scenarios.rs"]
+mod onboarding_scenarios;
+
 const EVAL_CASE_ID: &str = "progressive-configurator";
 const EVAL_COHORT: &str = "configurator-temperature-1-top-p-0.95-v1";
 const EVAL_GRADER: &str = "configurator-deterministic-v1";
