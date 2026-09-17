@@ -1,5 +1,6 @@
 //! Signed P2P replication fences canonical context/inference dependencies and excludes credentials.
 
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::templates::single_string_eq;
@@ -27,6 +28,73 @@ const PEER_DID: &str = "did:key:phone";
 /// Foreign principal on the same source node: its AgentRequest row must stay
 /// behind the replicator's requester-scoped AgentRequest filter.
 const FOREIGN_DID: &str = "did:key:outsider";
+
+#[test]
+fn generated_behavior_naming_and_scope_cases_are_typed_and_complete() {
+    let naming = crate::lean_vocab_test::lean_configuration_naming_cases();
+    assert!(!naming.validation.is_empty());
+    assert!(naming.validation.iter().any(|case| case.valid));
+    assert!(naming.validation.iter().any(|case| !case.valid));
+    assert_eq!(
+        naming
+            .validation
+            .iter()
+            .map(|case| case.key.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        naming.validation.len(),
+        "Lean naming validation keys must be unique"
+    );
+
+    assert!(!naming.personal_allocations.is_empty());
+    assert!(naming
+        .personal_allocations
+        .iter()
+        .all(|case| case.ordinal > 0 && !case.behavior_id.is_empty()));
+    assert_eq!(
+        naming
+            .personal_allocations
+            .iter()
+            .map(|case| case.behavior_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        naming.personal_allocations.len(),
+        "Lean personal allocations must produce distinct behavior IDs"
+    );
+
+    assert!(!naming.components.is_empty());
+    assert!(naming
+        .components
+        .iter()
+        .all(|case| !case.suffix.is_empty() && !case.id.is_empty()));
+    assert_eq!(
+        naming
+            .components
+            .iter()
+            .map(|case| case.suffix.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        naming.components.len(),
+        "Lean behavior component suffixes must be unique"
+    );
+    assert!(naming.display_name_independent);
+    assert!(naming.legacy_stored_key_accepted);
+    assert!(naming.new_personal_key_valid);
+
+    let scope_cases = crate::lean_vocab_test::lean_behavior_scope_cases();
+    assert!(!scope_cases.is_empty());
+    assert!(scope_cases.iter().any(|case| case.valid));
+    assert!(scope_cases.iter().any(|case| !case.valid));
+    assert_eq!(
+        scope_cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        scope_cases.len(),
+        "Lean behavior scope case names must be unique"
+    );
+}
 
 #[tokio::test]
 async fn signed_conversation_pairing_replays_agent_config_over_p2p() {

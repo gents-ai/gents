@@ -101,4 +101,45 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
             );
         }
     }
+
+    let immutable_scope_cases = cases
+        .iter()
+        .filter(|case| {
+            case.patch
+                .iter()
+                .any(|entry| entry.field == "scope_behavior_id")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        immutable_scope_cases.len() >= 2,
+        "Lean must witness both scope retarget and scope clear rejection"
+    );
+    for case in immutable_scope_cases {
+        let target =
+            SelfConfigTarget::from_collection_name(&case.collection).expect("runtime target");
+        let patch = case_patch(case);
+        assert!(!case.admissible, "{}: Lean patch admission", case.name);
+        assert!(!case.accepted, "{}: Lean transaction outcome", case.name);
+        assert!(
+            case.protected_preserved,
+            "{}: Lean protected-field theorem witness",
+            case.name
+        );
+        assert!(
+            case.unchanged_on_reject,
+            "{}: Lean rejection atomicity witness",
+            case.name
+        );
+        assert_eq!(
+            doc_map(&case.result),
+            doc_map(&case.doc),
+            "{}: rejected scope mutation must retain stored state",
+            case.name
+        );
+        assert!(
+            ensure_admissible(target, &patch).is_err(),
+            "{}: runtime must reject immutable scope mutation",
+            case.name
+        );
+    }
 }
