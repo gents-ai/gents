@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use super::PackManifest;
 use crate::config_client::ConfigAccess;
-use crate::document_config::PackConfig;
+use crate::document_config::{InferenceBackend, InferenceProfile, PackConfig};
 use crate::Collection;
 
 const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
@@ -39,23 +39,154 @@ pub(super) async fn apply_pack_documents(
     access: &ConfigAccess,
     config: &PackConfig,
 ) -> Result<crate::config_client::DesiredStateApplyCounts> {
-    let bundle = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
-    let documents = bundle
-        .documents()
-        .iter()
-        .filter(|document| document.collection != Collection::AgentPrincipal)
-        .cloned()
-        .collect::<Vec<_>>();
     access
         .transact("pack.documents.install", |txn| {
-            let documents = &documents;
             Box::pin(async move {
-                let plan = prepare_pack_plan_in_txn(txn, documents, false).await?;
+                let plan = prepare_pack_materialization_plan_in_txn(txn, config, false).await?;
                 crate::config_client::validate_desired_state_plan(txn, &plan).await?;
                 crate::config_client::apply_desired_state_plan(txn, &plan).await
             })
         })
         .await
+}
+
+pub(crate) async fn prepare_pack_materialization_plan_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    config: &PackConfig,
+    immutable: bool,
+) -> Result<crate::config_client::DesiredStateApplyPlan> {
+    let bundle = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
+    let ordinary_documents = bundle
+        .documents()
+        .iter()
+        .filter(|document| {
+            !matches!(
+                document.collection,
+                Collection::AgentPrincipal
+                    | Collection::AgentBehavior
+                    | Collection::AgentContext
+                    | Collection::Tools
+                    | Collection::Compaction
+                    | Collection::InferenceProfile
+                    | Collection::InferenceSampling
+                    | Collection::InferenceExecution
+                    | Collection::InferenceRetryPolicy
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let behaviors = &config.agent_behaviors;
+    let overlays = bundle
+        .documents()
+        .iter()
+        .filter(|document| {
+            matches!(
+                document.collection,
+                Collection::AgentContext | Collection::Tools | Collection::Compaction
+            )
+        })
+        .map(|document| (document.collection, document.add.clone()))
+        .collect::<Vec<_>>();
+    let owner = config.agent_principal.agent_did.as_str();
+    let snapshot = crate::ConfigReferences::load_in_txn(txn, owner).await?;
+    let principal_enabled = snapshot
+        .documents()
+        .find(|((collection, _), _)| *collection == Collection::AgentPrincipal)
+        .and_then(|(_, value)| value.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    anyhow::ensure!(
+        principal_enabled,
+        "pack owner principal is missing or disabled at apply"
+    );
+    let mut documents = ordinary_documents;
+    for behavior in behaviors {
+        anyhow::ensure!(
+            !snapshot.documents().any(|((collection, id), _)| {
+                *collection == Collection::AgentBehavior && id == &behavior.behavior_id
+            }),
+            "pack behavior {:?} is already installed; repeated pack instances are unsupported",
+            behavior.behavior_id
+        );
+        validate_bound_profile(&snapshot, behavior)?;
+        let closure = crate::config_client::plan_behavior_closure_with_overlays(
+            &snapshot,
+            behavior,
+            overlays.iter().cloned(),
+            &behavior.behavior_id,
+            behavior.display_name.as_deref(),
+        )?;
+        anyhow::ensure!(
+            closure.removals().is_empty(),
+            "fresh pack behavior materialization unexpectedly planned removals"
+        );
+        let origin = pack_origin_from_tags(&behavior.tags)?
+            .context("bound pack behavior is missing its origin tag")?;
+        for mut document in closure.documents().iter().cloned() {
+            add_pack_origin(&mut document.add, origin)?;
+            add_pack_origin(&mut document.update, origin)?;
+            documents.push(document);
+        }
+    }
+    prepare_pack_plan_in_txn(txn, &documents, immutable).await
+}
+
+fn validate_bound_profile(
+    snapshot: &crate::ConfigReferences,
+    behavior: &crate::document_config::AgentBehavior,
+) -> Result<()> {
+    let profile = snapshot
+        .documents()
+        .find(|((collection, id), _)| {
+            *collection == Collection::InferenceProfile && id == &behavior.inference_profile_id
+        })
+        .with_context(|| {
+            format!(
+                "bound inference profile {:?} disappeared before pack apply",
+                behavior.inference_profile_id
+            )
+        })?;
+    let profile: InferenceProfile = serde_json::from_value(profile.1.clone())?;
+    let backend = snapshot
+        .documents()
+        .find(|((collection, id), _)| {
+            *collection == Collection::InferenceBackend && id == &profile.backend_id
+        })
+        .with_context(|| {
+            format!(
+                "bound inference profile {:?} backend {:?} disappeared before pack apply",
+                profile.profile_id, profile.backend_id
+            )
+        })?;
+    let backend: InferenceBackend = serde_json::from_value(backend.1.clone())?;
+    anyhow::ensure!(
+        backend.enabled,
+        "bound inference profile {:?} backend {:?} is disabled at pack apply",
+        profile.profile_id,
+        backend.backend_id
+    );
+    Ok(())
+}
+
+fn add_pack_origin(value: &mut serde_json::Value, pack_name: &str) -> Result<()> {
+    let object = value
+        .as_object_mut()
+        .context("materialized pack document must be an object")?;
+    let tags = object
+        .entry("tags")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if tags.is_null() {
+        *tags = serde_json::Value::Array(Vec::new());
+    }
+    let tags = tags
+        .as_array_mut()
+        .context("pack document tags must be an array")?;
+    let origin = pack_origin_tag(pack_name)?;
+    if !tags.iter().any(|tag| tag.as_str() == Some(&origin)) {
+        tags.push(origin.into());
+        tags.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+    }
+    Ok(())
 }
 
 /// Merge retained discovery tags without treating them as package identity.

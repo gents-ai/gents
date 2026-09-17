@@ -47,6 +47,26 @@ pub struct PreparedGraphPackageInstall {
     pub plan: GraphPlan,
     pub desired_state: DesiredStateApplyPlan,
     pub schema_digests: Vec<RequiredSchemaDigest>,
+    bound_config: crate::document_config::PackConfig,
+}
+
+fn desired_state_artifacts(plan: &DesiredStateApplyPlan) -> Result<Vec<PlannedPackageArtifact>> {
+    let mut artifacts = plan
+        .documents()
+        .iter()
+        .map(|document| {
+            Ok(PlannedPackageArtifact {
+                collection: document.collection,
+                logical_id: document.add[document.collection.unique_field()]
+                    .as_str()
+                    .context("configuration logical ID missing")?
+                    .to_owned(),
+                content_digest: crate::pack::pack_artifact_document_digest(&document.add)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    artifacts.sort();
+    Ok(artifacts)
 }
 
 fn selected_intent<'a>(
@@ -296,35 +316,23 @@ async fn prepare_package(
         intent.agent_did == options.agent_did,
         "graph owner differs from installation scope"
     );
-    // The existing principal is shared identity, never graph-owned replacement
-    // configuration. Every other authored document uses the ordinary apply owner.
-    let bundle = DesiredStateApplyPlan::from_pack_config(&config)?;
-    let desired_state = DesiredStateApplyPlan::new(
-        bundle
-            .documents()
-            .iter()
-            .filter(|document| document.collection != Collection::AgentPrincipal)
-            .cloned()
-            .collect(),
-    )?;
+    let preview_config = config.clone();
+    let desired_state = access
+        .transact("graph_package.materialization_preview", |txn| {
+            let preview_config = preview_config.clone();
+            Box::pin(async move {
+                crate::pack::prepare_pack_materialization_plan_in_txn(txn, &preview_config, true)
+                    .await
+            })
+        })
+        .await?;
     let base = compile_graph(
         intent,
         &config.graph_capabilities,
         &options.agent_did,
         &CompilerPolicy::default(),
     )?;
-    let mut artifacts = Vec::new();
-    for document in desired_state.documents() {
-        artifacts.push(PlannedPackageArtifact {
-            collection: document.collection,
-            logical_id: document.add[document.collection.unique_field()]
-                .as_str()
-                .context("configuration logical ID missing")?
-                .to_owned(),
-            content_digest: crate::pack::pack_artifact_document_digest(&document.add)?,
-        });
-    }
-    artifacts.sort();
+    let artifacts = desired_state_artifacts(&desired_state)?;
     let mut schema_digests = Vec::new();
     for path in &package.manifest.schemas {
         let collections = query::parse_sdl(package.asset_text(path)?)?;
@@ -400,9 +408,7 @@ async fn prepare_package(
     access
         .transact("graph_package.install_preflight", |txn| {
             Box::pin(async move {
-                let effective =
-                    crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
-                crate::config_client::validate_desired_state_plan(txn, &effective).await
+                crate::config_client::validate_desired_state_plan(txn, desired).await
             })
         })
         .await?;
@@ -410,6 +416,7 @@ async fn prepare_package(
         plan,
         desired_state,
         schema_digests,
+        bound_config: config,
     })
 }
 
@@ -480,6 +487,7 @@ pub(crate) async fn install_loaded_graph_package(
     );
     let prepared = prepare_package(access, package, options, graph_id).await?;
     ensure_package_schemas(access, package).await?;
+    let bound_config = &prepared.bound_config;
     let desired = &prepared.desired_state;
     let owner = options.agent_did.as_str();
     let plan = &prepared.plan;
@@ -487,7 +495,12 @@ pub(crate) async fn install_loaded_graph_package(
         .transact("graph_package.install", |txn| {
             Box::pin(async move {
                 let effective =
-                    crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
+                    crate::pack::prepare_pack_materialization_plan_in_txn(txn, bound_config, true)
+                        .await?;
+                anyhow::ensure!(
+                    desired_state_artifacts(&effective)? == desired_state_artifacts(desired)?,
+                    "graph package materialized configuration changed between preview and apply"
+                );
                 crate::config_client::validate_desired_state_plan(txn, &effective).await?;
                 apply_desired_state_plan(txn, &effective).await?;
                 crate::graph_pipeline::materialize_graph_revision_in_txn(txn, owner, plan).await?;

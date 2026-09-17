@@ -135,7 +135,7 @@ async fn existing_package_schema_must_match_types_indexes_and_immutability() {
 }
 
 #[tokio::test]
-async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
+async fn code_review_install_is_scoped_shared_home_safe_runnable_and_rejects_repeat() {
     let (node, access, options) = fixture().await;
     let metadata = node
         .execute(
@@ -149,12 +149,12 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
         .execute(
             r#"mutation { create_Task(input: {
         agent_did: "did:key:package-owner", task_id: "unrelated-task",
-        behavior_id: "review-recon", prompt_template: "Keep me", enabled: false
+        behavior_id: "claude", prompt_template: "Keep me", enabled: false
     }) {_docID} }"#,
         )
         .await;
     assert!(!unrelated.has_errors(), "{:?}", unrelated.errors);
-    let expected_documents = DesiredStateApplyPlan::from_pack_config(
+    let authored_documents = DesiredStateApplyPlan::from_pack_config(
         &load_test_graph_package("code_review", &options).config,
     )
     .unwrap()
@@ -165,27 +165,15 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
     let first = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
         .await
         .unwrap();
-    let user_tag = node
-        .execute(
-            r#"mutation { update_AgentBehavior(filter: {
-        agent_did: {_eq: "did:key:package-owner"}, behavior_id: {_eq: "review-recon"}
-    }, input: {tags: ["gents:pack:code_review", "user-label"]}) {_docID} }"#,
-        )
-        .await;
-    assert!(!user_tag.has_errors(), "{:?}", user_tag.errors);
-    let second = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
-        .await
-        .unwrap();
-    assert_eq!(first, second);
-    assert_eq!(first.desired_documents, expected_documents);
+    assert!(first.desired_documents > authored_documents);
     assert_eq!(first.graph_id, "code-review");
     let state = node
         .execute(
             r#"{
         AgentPrincipal {agent_did display_name tags}
         AgentBehavior {behavior_id agent_did context_id inference_profile_id tags}
-        AgentContext {context_id tags}
-        Tools {tools_id tags}
+        AgentContext {context_id scope_behavior_id tags}
+        Tools {tools_id scope_behavior_id tags}
         Task {task_id agent_did goal_objective_template goal_token_budget tags}
         GraphDefinition {graph_id tags}
         GraphRevision {digest artifacts_complete plan_json}
@@ -223,10 +211,22 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
         assert!(task["goal_token_budget"].as_i64().is_some_and(|n| n > 0));
     }
     let expected_bindings = BTreeMap::from([
-        ("review-recon", "claude:inference"),
-        ("review-scan", "glm:inference"),
-        ("review-verify", "grok:inference"),
-        ("review-triage", "claude:inference"),
+        (
+            "gents:code-review:review-recon",
+            "gents:code-review:review-recon:inference",
+        ),
+        (
+            "gents:code-review:review-scan",
+            "gents:code-review:review-scan:inference",
+        ),
+        (
+            "gents:code-review:review-verify",
+            "gents:code-review:review-verify:inference",
+        ),
+        (
+            "gents:code-review:review-triage",
+            "gents:code-review:review-triage:inference",
+        ),
     ]);
     for behavior in data["AgentBehavior"].as_array().unwrap() {
         let behavior_id = behavior["behavior_id"].as_str().unwrap();
@@ -235,21 +235,41 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
             continue;
         };
         assert_eq!(behavior["inference_profile_id"], *profile_id);
+        assert_eq!(behavior["context_id"], format!("{behavior_id}:context"));
         assert!(behavior["tags"]
             .as_array()
             .unwrap()
             .contains(&json!("gents:pack:code_review")));
     }
-    let review_recon = data["AgentBehavior"]
+    for context in data["AgentContext"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|behavior| behavior["behavior_id"] == "review-recon")
-        .unwrap();
-    assert!(review_recon["tags"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("user-label")));
+        .filter(|context| {
+            context["context_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("gents:code-review:"))
+        })
+    {
+        assert_eq!(
+            context["scope_behavior_id"].as_str(),
+            context["context_id"]
+                .as_str()
+                .and_then(|id| id.strip_suffix(":context"))
+        );
+    }
+    for tools in data["Tools"].as_array().unwrap().iter().filter(|tools| {
+        tools["tools_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("gents:code-review:"))
+    }) {
+        assert_eq!(
+            tools["scope_behavior_id"].as_str(),
+            tools["tools_id"]
+                .as_str()
+                .and_then(|id| id.strip_suffix(":tools"))
+        );
+    }
     for (collection, id_field, retained_ids) in [
         (
             &data["AgentContext"],
@@ -275,21 +295,16 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
                 .contains(&json!("gents:pack:code_review")));
         }
     }
-    assert_eq!(data["InferenceProfile"].as_array().unwrap().len(), 3);
-    assert_eq!(
-        data["InferenceProfile"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|profile| profile["profile_id"].as_str().unwrap())
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["claude:inference", "glm:inference", "grok:inference"])
-    );
+    assert_eq!(data["InferenceProfile"].as_array().unwrap().len(), 7);
     assert_eq!(data["InferenceBackend"].as_array().unwrap().len(), 3);
     assert!(data["InferenceProfile"]
         .as_array()
         .unwrap()
         .iter()
+        .filter(|profile| {
+            ["claude:inference", "glm:inference", "grok:inference"]
+                .contains(&profile["profile_id"].as_str().unwrap())
+        })
         .all(|profile| profile["tags"].is_null()));
     assert!(data["InferenceBackend"]
         .as_array()
@@ -304,20 +319,13 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
     let plan: GraphPlan =
         serde_json::from_str(data["GraphRevision"][0]["plan_json"].as_str().unwrap()).unwrap();
     let artifacts = &plan.package.as_ref().unwrap().artifacts;
-    assert_eq!(artifacts.len(), expected_documents);
+    assert_eq!(artifacts.len(), first.desired_documents);
     for collection in [Collection::Tools, Collection::AgentContext] {
         assert!(artifacts
             .iter()
             .any(|artifact| artifact.collection == collection));
     }
-    for collection in [
-        Collection::AgentPrincipal,
-        Collection::InferenceProfile,
-        Collection::InferenceBackend,
-        Collection::InferenceSampling,
-        Collection::InferenceExecution,
-        Collection::InferenceRetryPolicy,
-    ] {
+    for collection in [Collection::AgentPrincipal, Collection::InferenceBackend] {
         assert!(!artifacts
             .iter()
             .any(|artifact| artifact.collection == collection));
@@ -332,12 +340,10 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        first,
-        install_test_graph_package(&access, &options.agent_did, "code_review", &options)
-            .await
-            .unwrap()
-    );
+    let repeated = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
+        .await
+        .unwrap_err();
+    assert!(repeated.to_string().contains("already installed"));
     let run = start_graph_run(
         &node,
         None,
@@ -353,23 +359,6 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
     .await
     .unwrap();
     assert_eq!(run.revision_digest, first.revision_digest);
-    // A metadata-only successor still pins the active predecessor exactly.
-    let mut successor = load_test_graph_package("code_review", &options);
-    successor.manifest.version.push_str("-successor");
-    successor.package_digest = digest_bytes(b"successor distribution");
-    let prepared = prepare_package(&access, &successor, &options, None)
-        .await
-        .unwrap();
-    assert_ne!(prepared.plan.digest, first.revision_digest);
-    assert_eq!(
-        prepared
-            .plan
-            .package
-            .unwrap()
-            .predecessor_revision_digest
-            .as_deref(),
-        Some(first.revision_digest.as_str())
-    );
     // Identical authored logical IDs may coexist under another selected DID.
     let foreign = GraphPackageInstallBindings {
         agent_did: "did:key:second-owner".into(),

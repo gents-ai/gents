@@ -196,9 +196,10 @@ pub async fn preview_pack_inference_bindings(
     Ok(preview)
 }
 
-/// Bind authored slot markers and stamp provenance on every pack-authored
-/// configuration type that owns tags. User inference documents are rejected,
-/// so referenced profiles/backends can never acquire pack provenance here.
+/// Bind authored slot markers, assign deterministic registry-qualified behavior
+/// IDs, remap local behavior consumers, and stamp authored provenance. The
+/// selected retained profile remains a source reference until the installer
+/// materializes an independent behavior-owned closure.
 pub fn bind_pack_install_config(
     manifest: &PackManifest,
     config: &PackConfig,
@@ -206,6 +207,34 @@ pub fn bind_pack_install_config(
 ) -> Result<PackConfig> {
     validate_pack_inference_authoring(manifest, config)?;
     let mut bound = config.clone();
+    let mut behavior_ids = BTreeMap::new();
+    for behavior in &bound.agent_behaviors {
+        let role = behavior.behavior_id.replace('_', "-");
+        anyhow::ensure!(
+            crate::behavior_scope::valid_kebab_segment(&role),
+            "pack behavior role {:?} cannot form a generated behavior ID",
+            behavior.behavior_id
+        );
+        let generated = format!(
+            "{}:{}:{}",
+            manifest.metadata.namespace.replace('_', "-"),
+            manifest.name.replace('_', "-"),
+            role
+        );
+        anyhow::ensure!(
+            behavior_ids
+                .insert(behavior.behavior_id.clone(), generated)
+                .is_none(),
+            "pack {} declares duplicate behavior role {:?}",
+            manifest.name,
+            behavior.behavior_id
+        );
+    }
+    anyhow::ensure!(
+        behavior_ids.values().collect::<BTreeSet<_>>().len() == behavior_ids.len(),
+        "pack {} behavior roles produce ambiguous generated IDs",
+        manifest.name
+    );
     for behavior in &mut bound.agent_behaviors {
         let slot = behavior
             .inference_profile_id
@@ -215,6 +244,24 @@ pub fn bind_pack_install_config(
             .get(slot)
             .with_context(|| format!("inference slot {slot:?} is unbound"))?
             .clone();
+        behavior.behavior_id = behavior_ids[&behavior.behavior_id].clone();
+    }
+    if let Some(default_behavior_id) = &mut bound.agent_principal.default_behavior_id {
+        if let Some(generated) = behavior_ids.get(default_behavior_id) {
+            *default_behavior_id = generated.clone();
+        }
+    }
+    for task in &mut bound.tasks {
+        if let Some(generated) = behavior_ids.get(&task.behavior_id) {
+            task.behavior_id = generated.clone();
+        }
+    }
+    for target in &mut bound.subagent_targets {
+        if target.target_agent_did == target.agent_did {
+            if let Some(generated) = behavior_ids.get(&target.behavior_id) {
+                target.behavior_id = generated.clone();
+            }
+        }
     }
     anyhow::ensure!(
         bindings.len() == manifest.metadata.inference_slots.len(),
@@ -224,7 +271,7 @@ pub fn bind_pack_install_config(
 }
 
 /// Publish bound document-pack configuration without replacing its principal
-/// or the retained inference documents selected by the slot map.
+/// or the retained source inference documents selected by the slot map.
 pub async fn install_pack_documents(
     access: &ConfigAccess,
     config: &PackConfig,
@@ -332,6 +379,9 @@ mod tests {
             ]),
         )
         .unwrap();
+        assert_eq!(bound.agent_behaviors[0].behavior_id, "gents:test-pack:plan");
+        assert_eq!(bound.agent_behaviors[1].behavior_id, "gents:test-pack:scan");
+        assert_eq!(bound.tasks[0].behavior_id, "gents:test-pack:plan");
         assert_eq!(bound.agent_behaviors[0].inference_profile_id, "claude");
         assert_eq!(bound.agent_behaviors[1].inference_profile_id, "glm");
         for tags in [
@@ -456,5 +506,62 @@ mod tests {
                 .to_string()
                 .contains("disabled")
         );
+    }
+
+    #[tokio::test]
+    async fn document_install_materializes_independent_scoped_profiles_and_rejects_repeat() {
+        let owner = "did:key:materialized-pack-owner";
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        crate::document_config::ensure_agent_principal(&node, owner)
+            .await
+            .unwrap();
+        crate::test_support::install_test_behavior(&node, owner, "source").await;
+        let access = ConfigAccess::Local(node);
+        let mut authored = config();
+        authored.agent_principal.agent_did = owner.into();
+        for behavior in &mut authored.agent_behaviors {
+            behavior.agent_did = owner.into();
+        }
+        for context in &mut authored.contexts {
+            context.agent_did = owner.into();
+        }
+        for task in &mut authored.tasks {
+            task.agent_did = owner.into();
+        }
+        let bound = bind_pack_install_config(
+            &two_slots(),
+            &authored,
+            &BTreeMap::from([
+                ("coordinator".into(), "source:inference".into()),
+                ("worker".into(), "source:inference".into()),
+            ]),
+        )
+        .unwrap();
+        install_pack_documents(&access, &bound).await.unwrap();
+        let refs = access
+            .transact("pack.materialization.test", |txn| {
+                Box::pin(async move { crate::ConfigReferences::load_in_txn(txn, owner).await })
+            })
+            .await
+            .unwrap();
+        for role in ["plan", "scan"] {
+            let behavior_id = format!("gents:test-pack:{role}");
+            let profile_id = format!("{behavior_id}:inference");
+            let profile = refs
+                .documents()
+                .find(|((collection, id), _)| {
+                    *collection == Collection::InferenceProfile && id == &profile_id
+                })
+                .unwrap()
+                .1;
+            assert_eq!(
+                profile["scope_behavior_id"].as_str(),
+                Some(behavior_id.as_str())
+            );
+            assert_eq!(profile["backend_id"], "source:backend");
+        }
+        let error = install_pack_documents(&access, &bound).await.unwrap_err();
+        assert!(error.to_string().contains("already installed"));
     }
 }
