@@ -317,6 +317,7 @@ async fn install_setup_configurator(
     let context = AgentContext {
         context_id: context_id.clone(),
         agent_did: agent_did.to_owned(),
+        scope_behavior_id: None,
         display_name: Some("Live Setup".into()),
         description: Some("Live configurator acceptance".into()),
         system_prompt: Some(prompt.into()),

@@ -125,6 +125,7 @@ async fn install_canonical_behavior_bundle(node: &EmbeddedNode, agent_did: &str)
     let context = AgentContext {
         context_id: format!("{PARENT_BEHAVIOR_ID}:context"),
         agent_did: agent_did.to_string(),
+        scope_behavior_id: None,
         display_name: None,
         description: None,
         system_prompt: None,
