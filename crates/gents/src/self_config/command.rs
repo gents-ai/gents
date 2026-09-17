@@ -2,12 +2,14 @@ use super::*;
 
 mod datastore;
 mod discovery;
+mod plan;
 mod schema;
 mod skill;
 
 const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["help"] or ["help", RESOURCE]
   ["get", ["--behavior", BEHAVIOR_ID]]
+  ["plan", "preview", "--documents", DOCUMENTS_JSON]
   ["behavior", "list", "--limit", N, "--cursor", ID]
   ["behavior", "get", BEHAVIOR_ID]
   ["behavior", "preview", "edit", BEHAVIOR_ID, PATCH_FLAGS]
@@ -49,7 +51,7 @@ Behavior create/clone/disable flags: --id, --from, --display-name, --description
 --system-prompt, --root, --preset, --profile, and --default. PATCH_FLAGS are
 repeated --set FIELD=JSON and --clear FIELD; omitted fields preserve.
 Model calls should put native JSON patch values in the top-level set object,
-field removals in clear, and named string options in options (keys without --).
+field removals in clear, and named options in options (keys without --). JSON-valued options use native JSON objects.
 For datastore, automation and mcp-service document commands, target_id supplies
 the document ID instead of its positional argv operand. Never supply both.
 Example: {"argv":["automation","preview","task","ID"],"options":{"behavior":"BEHAVIOR_ID"},"set":{"prompt_template":"Read {{ doc.message }}","enabled":true}}
@@ -69,7 +71,7 @@ pub struct ConfigCommandParams {
     #[serde(default)]
     pub clear: Vec<String>,
     #[serde(default)]
-    pub options: BTreeMap<String, String>,
+    pub options: BTreeMap<String, Value>,
 }
 
 impl ConfigCommandParams {
@@ -113,6 +115,10 @@ impl ConfigCommandParams {
                 !argv.contains(&flag),
                 "option {flag} supplied in both argv and options"
             );
+            let value = match value {
+                Value::String(value) => value,
+                value => serde_json::to_string(&value)?,
+            };
             argv.extend([flag, value]);
         }
         for (field, value) in self.set {
@@ -136,7 +142,7 @@ impl ConfigCommandParams {
 }
 
 /// Recognize help before parsing command operands, never inside option values.
-pub fn config_help_resource(argv: &[String]) -> Option<Option<&str>> {
+fn config_help_resource(argv: &[String]) -> Option<Option<&str>> {
     let first = argv.first()?.as_str();
     if matches!(first, "help" | "--help" | "-h") {
         return Some(argv.get(1).map(String::as_str));
@@ -161,6 +167,7 @@ fn required_resource_id<'a>(value: Option<&'a String>, label: &str) -> Result<&'
         .with_context(|| format!("missing {label}: supply a non-empty resource ID before options or patch fields; use --help for syntax"))
 }
 
+#[derive(Clone)]
 pub struct ConfigCommandTool {
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) agent_did: String,
@@ -171,6 +178,7 @@ pub struct ConfigCommandTool {
     pub(super) dry_run: bool,
     pub(super) allow_pack_install: bool,
     pub(super) process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
+    pub(super) execution: Arc<super::execution::ExecutionObservation>,
 }
 
 impl Tool for ConfigCommandTool {
@@ -184,7 +192,7 @@ impl Tool for ConfigCommandTool {
         ToolDefinition {
             name: Self::NAME.to_owned(),
             description: format!(
-                "Inspect and change this principal's configuration. Put command words in argv; use target_id for datastore, automation and mcp-service document IDs, or the positional ID shown in help (never both). Put patch values directly in set as JSON, optional removals in clear, and named string options in options (keys without --). Do not stringify or escape JSON inside set. Example: {{\"argv\":[\"behavior\",\"context\",\"preview\"],\"options\":{{\"behavior\":\"ID\"}},\"set\":{{\"system_prompt\":\"Your literal prompt\"}}}}. {DATA_MODEL} Enabled resources: {}. Common reads: [\"behavior\",\"list\"] and [\"behavior\",\"get\",BEHAVIOR_ID]. Append --help or -h to a command path, or call [\"help\",RESOURCE], for syntax and fields before writing.",
+                "Inspect and change this principal's configuration. Put command words in argv; use target_id for datastore, automation and mcp-service document IDs, or the positional ID shown in help (never both). Put patch values directly in set as JSON, optional removals in clear, and named options in options (keys without --). Use native JSON for object-valued options such as mailbox. Do not stringify or escape JSON inside set or options. Example: {{\"argv\":[\"behavior\",\"context\",\"preview\"],\"options\":{{\"behavior\":\"ID\"}},\"set\":{{\"system_prompt\":\"Your literal prompt\"}}}}. {DATA_MODEL} Enabled resources: {}. Common reads: [\"behavior\",\"list\"] and [\"behavior\",\"get\",BEHAVIOR_ID]. Append --help or -h to a command path, or call [\"help\",RESOURCE], for syntax and fields before writing.",
                 resources.join(", ")
             ),
             parameters: json!({
@@ -199,7 +207,7 @@ impl Tool for ConfigCommandTool {
                     "target_id": {"type":"string", "description":"Named document ID for datastore, automation or mcp-service get/preview/create/edit commands. Omit the positional ID from argv when using this. Behavior selection remains options.behavior."},
                     "set": {"type":"object", "additionalProperties":true, "description":"Patch fields with native JSON values, not FIELD=JSON strings. Omitted fields stay unchanged; nested objects replace the complete group."},
                     "clear": {"type":"array", "items":{"type":"string"}, "description":"Optional fields to remove explicitly. Do not also supply them in set."},
-                    "options": {"type":"object", "additionalProperties":{"type":"string"}, "description":"Named string options without --, e.g. behavior, system-prompt, display-name, root, profile, sdl, digest. Values are literal strings, not JSON-encoded strings. Boolean switches remain in argv."}
+                    "options": {"type":"object", "additionalProperties":true, "description":"Named options without --. Text options (behavior, system-prompt, root, profile, sdl, digest) use literal strings. Structured options such as mailbox use native JSON objects, never JSON-encoded strings. Boolean switches remain in argv."}
                 },
                 "required": ["argv"],
                 "additionalProperties": false
@@ -208,8 +216,34 @@ impl Tool for ConfigCommandTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let argv = args.into_argv().map_err(SelfConfigError::from)?;
-        self.dispatch(&argv).await.map_err(Into::into)
+        let call = Self {
+            execution: Arc::new(super::execution::ExecutionObservation::default()),
+            ..self.clone()
+        };
+        let result = async {
+            let argv = args.into_argv()?;
+            call.dispatch(&argv).await
+        }
+        .await;
+        let receipt = call.execution.receipt();
+        match result {
+            Ok(text) => {
+                let mut value: Value = serde_json::from_str(&text).map_err(anyhow::Error::from)?;
+                let object = value
+                    .as_object_mut()
+                    .context("config output must be an object")?;
+                object.insert(
+                    "config_execution".into(),
+                    serde_json::to_value(receipt).map_err(anyhow::Error::from)?,
+                );
+                serde_json::to_string_pretty(&value)
+                    .map_err(|error| anyhow::Error::from(error).into())
+            }
+            Err(error) => Err(anyhow::anyhow!(
+                json!({"config_execution":receipt,"error":format!("{error:#}")}).to_string()
+            )
+            .into()),
+        }
     }
 }
 
@@ -242,6 +276,9 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
     }
     if categories.contains("tools") {
         resources.push("discovery");
+    }
+    if categories.contains("persona") {
+        resources.push("plan");
     }
     resources
 }
@@ -277,6 +314,7 @@ impl ConfigCommandTool {
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,
             "schema" => self.schema(&argv[1..]).await,
+            "plan" => self.plan(&argv[1..]).await,
             other => bail!(
                 "unknown config resource or command {other:?}; accepted: help, get, {}\n{CONFIG_USAGE}",
                 model_resources(&self.categories, self.allow_pack_install).join(", ")
@@ -287,6 +325,12 @@ impl ConfigCommandTool {
     fn help(&self, resource: Option<&str>) -> Result<String> {
         let detail = match resource {
             None => CONFIG_USAGE,
+            Some("plan") => {
+                r#"plan preview --documents DOCUMENTS_JSON
+Preview a connected set of NEW canonical configuration documents without publishing any of them. Put an array of {"collection":"AgentBehavior", "document":{...}} entries in options.documents as native JSON. Use exact IDs and include all proposed Behavior, Context, Tools, datastore and automation dependencies. Existing same-principal references may be reused. Every new document must include agent_did. Existing documents cannot be replaced by this command.
+For a mailbox surface, add "mailbox": POLICY alongside "collection" and "document" in that proposal entry, and omit document.entries. This uses the same canonical declaration as datastore --mailbox; do not reconstruct file_mailbox_item fields yourself.
+This uses the publication owner's canonical type and retained-reference validation; it does not register application schemas, grant approval, publish documents, or prove live tool/service readiness. After explicit approval, use the normal resource commands to create the configuration and verify effective state. Schema preview is separate. Never create temporary documents just to make a preview pass."#
+            }
             Some("schema") => {
                 r#"schema commands (requires automation permission):
   get COLLECTION
@@ -314,9 +358,11 @@ Every source is explicit and opt-in. User PATH is the selected application's con
   get SURFACE_ID
   preview create|edit SURFACE_ID --set FIELD=JSON [--clear FIELD]
   create|edit SURFACE_ID --set FIELD=JSON [--clear FIELD]
+  preview create|edit SURFACE_ID --mailbox POLICY_JSON [--set FIELD=JSON]
+  create|edit SURFACE_ID --mailbox POLICY_JSON [--set FIELD=JSON]
 Fields come from DatastoreToolSurface: display_name, enabled, entries, tags.
 Model example: {"argv":["datastore","preview","create"],"target_id":"monitor-notifications","set":{"display_name":"Monitor notifications"}}
-SURFACE_ID names the tool-surface configuration (monitor-notifications here), not a mailbox or collection. For the existing MailboxItem collection, include set.entries from canonical_mailbox_entries with your notification policy; file_mailbox_item is the exposed tool. Do not create a replacement mailbox collection. Create with the same ID and fields after preview, then select that ID in the working Tools.datastore.datastore_tool_surface_ids. Definition, selection and runtime execution are separate checks.
+SURFACE_ID names the tool-surface configuration (monitor-notifications here), not a mailbox or collection. For the existing MailboxItem collection, use options.mailbox with a notification policy; the runtime supplies the protected canonical file_mailbox_item declaration. Example: {"argv":["datastore","preview","create"],"target_id":"monitor-notifications","options":{"mailbox":{"identity":{"mode":"condition","key":"host-health"},"kind":"flag","action":"ack"}},"set":{"enabled":true}}. --mailbox replaces entries with that one canonical declaration and cannot be combined with setting or clearing entries; use a separate surface for observation tools. Do not create a replacement mailbox collection. Create with the same ID and fields after preview, then select that ID in the working Tools.datastore.datastore_tool_surface_ids. Definition, selection and runtime execution are separate checks.
 Entries are canonical schema-bounded create/query declarations. Owner and surface_id are immutable. Bind an existing surface using config tools edit --behavior BEHAVIOR_ID --set datastore=JSON, preserving the other datastore settings. Editing a surface used by protected Setup is rejected. Schema registration is a separate operation."#
             }
             Some("behavior") => {
@@ -541,6 +587,7 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                 let params = behavior_params(verb, None, &argv[1..])?;
                 self.ensure_behavior_operation(verb, params.behavior_id.as_deref())?;
                 self.ensure_default_selection(&params)?;
+                self.execution.enter_mutation();
                 persona_mutate(
                     &self.node,
                     &self.agent_did,
@@ -562,6 +609,7 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                 let identity = self.identity.as_deref().context(
                     "behavior writes require the exact local principal signer; reads remain available",
                 )?;
+                self.execution.enter_mutation();
                 persona_mutate(
                     &self.node,
                     &self.agent_did,
@@ -753,6 +801,7 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                     ),
                 "backend discover is limited to unauthenticated OpenAI-compatible servers; credentials and OAuth remain operator-owned"
             );
+            self.execution.enter_mutation();
             let observation =
                 crate::backend_registry::discover_shared_backend(&self.node, backend).await?;
             return Ok(serde_json::to_string_pretty(&json!({
@@ -996,6 +1045,9 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
         let plan = crate::config_client::DesiredStateApplyPlan::new(Vec::new())?
             .with_removals(removals)?;
         let preview = verb == "preview";
+        if !preview {
+            self.execution.enter_mutation();
+        }
         let (receipt_targets, plan_digest) = crate::config_client::ConfigAccess::transact_local(
             &self.node,
             Some(self.core.identity()?),
@@ -1119,7 +1171,9 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                     .await
             }
             "install" | "update" => {
-                installer.apply(verb, parse_pack_change(&argv[1..])?).await
+                let change = parse_pack_change(&argv[1..])?;
+                self.execution.enter_mutation();
+                installer.apply(verb, change).await
             }
             "remove" => bail!(
                 "pack remove is unavailable: installation records do not distinguish created documents from reused matching documents, and provenance tags or DefraDB ACL cannot supply that semantic ownership"
@@ -1195,7 +1249,10 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                 anyhow::ensure!(self.dry_run, "preview is not granted for this behavior");
                 core.preview(request).await?
             }
-            "edit" => core.apply(request).await?,
+            "edit" => {
+                self.execution.enter_mutation();
+                core.apply(request).await?
+            }
             _ => unreachable!("patch verb"),
         };
         outcome_text(&outcome)
@@ -1667,7 +1724,10 @@ fn parse_pack_change(argv: &[String]) -> Result<PackInstallParams> {
 }
 
 fn parse_patch(argv: &[String], target: SelfConfigTarget) -> Result<SelfConfigPatch> {
-    let parsed = ParsedArgs::parse(argv)?;
+    parse_patch_args(ParsedArgs::parse(argv)?, target)
+}
+
+fn parse_patch_args(parsed: ParsedArgs, target: SelfConfigTarget) -> Result<SelfConfigPatch> {
     anyhow::ensure!(
         parsed.positionals.is_empty(),
         "unexpected positional argument {:?}; use --set FIELD=JSON or --clear FIELD",

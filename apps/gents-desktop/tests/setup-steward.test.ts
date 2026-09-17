@@ -67,7 +67,7 @@ describe("setup steward patches", () => {
   });
 
   it("keeps Setup as the configurator and promotes a separate working behavior", () => {
-    expect(SETUP_STEWARD_PROMPT).toContain("Keep Setup unchanged");
+    expect(SETUP_STEWARD_PROMPT).toContain("Keep The Engineer unchanged");
     expect(SETUP_STEWARD_PROMPT).toContain("config behavior create");
     expect(SETUP_STEWARD_PROMPT).toContain("--default");
     expect(SETUP_STEWARD_PROMPT).toContain("AgentSession selects a behavior");

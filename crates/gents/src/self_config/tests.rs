@@ -1497,6 +1497,36 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
         )
         .await
         .unwrap();
+    let mut mailbox_args = json!({
+        "argv":["datastore","preview","create"],
+        "target_id":"host-attention",
+        "options":{"mailbox":{"identity":{"mode":"condition","key":"host-health"},"kind":"flag","action":"ack"}},
+        "set":{"enabled":true}
+    });
+    let mailbox_preview: Value =
+        serde_json::from_str(&config_tool.call(mailbox_args.to_string()).await.unwrap()).unwrap();
+    assert_eq!(mailbox_preview["committed"], false);
+    assert!(
+        call_config_tool(&tools, command(&["datastore", "get", "host-attention"]))
+            .await
+            .is_err()
+    );
+    mailbox_args["argv"] = json!(["datastore", "create"]);
+    config_tool.call(mailbox_args.to_string()).await.unwrap();
+    let mailbox_created: Value = serde_json::from_str(
+        &call_config_tool(&tools, command(&["datastore", "get", "host-attention"]))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        mailbox_created["document"]["entries"]["entries"][0]["tool_name"],
+        "file_mailbox_item"
+    );
+    assert_eq!(
+        mailbox_created["document"]["entries"]["entries"][0]["notification"]["identity"]["key"],
+        "host-health"
+    );
     assert_eq!(
         serde_json::from_str::<Value>(&named_preview).unwrap(),
         serde_json::from_str::<Value>(&preview).unwrap()
@@ -1659,9 +1689,12 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
     let preview: Value =
         serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
     assert_eq!(preview["committed"], false);
+    assert_eq!(preview["config_execution"]["mutation_entered"], false);
     assert_eq!(tool.call(read.clone()).await.unwrap(), before);
     request["argv"][2] = json!("edit");
-    tool.call(request.to_string()).await.unwrap();
+    let applied: Value =
+        serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
+    assert_eq!(applied["config_execution"]["mutation_entered"], true);
     let after: Value = serde_json::from_str(&tool.call(read.clone()).await.unwrap()).unwrap();
     assert_eq!(after["document"]["system_prompt"], prompt);
     request["set"] = json!({"agent_did":"foreign"});
@@ -1684,6 +1717,174 @@ async fn call_config_tool(
     tool.call(json!({"argv": argv}).to_string())
         .await
         .map_err(|error| format!("{error:#}"))
+}
+
+#[tokio::test]
+async fn connected_plan_preview_validates_pending_references_without_writes() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("connected-preview");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let access = crate::ConfigAccess::Local(node.clone());
+    let query = "{ AgentBehavior { behavior_id context_id } AgentContext { context_id tools_id } Tools { tools_id } }";
+    let before = access.execute(query).await.unwrap();
+    let documents = json!([
+        {"collection":"AgentBehavior","document":{"agent_did":owner,"behavior_id":"proposed-behavior","context_id":"proposed-context","inference_profile_id":"beh-test:inference"}},
+        {"collection":"AgentContext","document":{"agent_did":owner,"context_id":"proposed-context","tools_id":"proposed-tools","system_prompt":"Observe the host."}},
+        {"collection":"Tools","document":{"agent_did":owner,"tools_id":"proposed-tools"}}
+    ]);
+    let mut grants = config(&["persona", "tools"]);
+    grants.dry_run = true;
+    let tools =
+        build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    let args = |documents: Value| {
+        json!({"argv":["plan","preview"],"options":{"documents":documents}}).to_string()
+    };
+    let response: Value =
+        serde_json::from_str(&tool.call(args(documents.clone())).await.unwrap()).unwrap();
+    assert_eq!(response["committed"], false);
+    assert_eq!(response["config_execution"]["mutation_entered"], false);
+    assert_eq!(response["documents"].as_array().unwrap().len(), 3);
+    let mut with_mailbox = documents.clone();
+    with_mailbox.as_array_mut().unwrap().push(json!({
+        "collection":"DatastoreToolSurface",
+        "document":{"agent_did":owner,"surface_id":"proposed-attention","enabled":true},
+        "mailbox":{"identity":{"mode":"condition","key":"host-health"},"kind":"flag","action":"ack"}
+    }));
+    let response: Value =
+        serde_json::from_str(&tool.call(args(with_mailbox.clone())).await.unwrap()).unwrap();
+    let surface = response["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["collection"] == "DatastoreToolSurface")
+        .unwrap();
+    let mut canonical = crate::mailbox::canonical_mailbox_write_decl();
+    canonical.notification =
+        Some(serde_json::from_value(with_mailbox[3]["mailbox"].clone()).unwrap());
+    assert_eq!(
+        surface["document"]["entries"],
+        json!([crate::document_config::SurfaceToolDecl::Create(canonical)])
+    );
+    with_mailbox[3]["document"]["entries"] = json!([]);
+    assert!(tool.call(args(with_mailbox)).await.is_err());
+    let mut missing = documents.clone();
+    missing.as_array_mut().unwrap().pop();
+    assert!(tool.call(args(missing)).await.is_err());
+    let mut foreign = documents.clone();
+    foreign[2]["document"]["agent_did"] = "another-principal".into();
+    assert!(tool.call(args(foreign)).await.is_err());
+    let mut existing = documents.clone();
+    existing[0]["document"]["behavior_id"] = "beh-test".into();
+    assert!(tool.call(args(existing)).await.is_err());
+    let mut duplicate = documents.clone();
+    duplicate.as_array_mut().unwrap().push(documents[0].clone());
+    assert!(tool.call(args(duplicate)).await.is_err());
+    for (categories, dry_run) in [
+        (&["persona"][..], true),
+        (&["tools"][..], true),
+        (&["persona", "tools"][..], false),
+    ] {
+        let mut denied = config(categories);
+        denied.dry_run = dry_run;
+        let denied =
+            build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &denied);
+        assert!(denied
+            .iter()
+            .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+            .unwrap()
+            .call(args(documents.clone()))
+            .await
+            .is_err());
+    }
+    assert_eq!(
+        before,
+        access.execute(query).await.unwrap(),
+        "preview changed canonical documents"
+    );
+}
+
+#[tokio::test]
+async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("config-execution");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let mut grants = config(&[
+        "persona",
+        "tools",
+        "automation",
+        "profile",
+        "backend",
+        "mcp_service",
+    ]);
+    grants.dry_run = true;
+    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &grants);
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    for (args, mutation) in [
+        (
+            json!({"argv":["behavior","create","preview"],"set":{"system_prompt":"literal"}}),
+            false,
+        ),
+        (json!({"argv":["unknown","operation"]}), false),
+        (
+            json!({"argv":["datastore","create"],"set":{"display_name":"Missing ID"}}),
+            false,
+        ),
+        (
+            json!({"argv":["datastore","get"],"target_id":"missing"}),
+            false,
+        ),
+        (
+            json!({"argv":["datastore","preview","create"],"target_id":"notifications","set":{"display_name":"Notifications"}}),
+            false,
+        ),
+        (
+            json!({"argv":["datastore","create"],"target_id":"notifications","set":{"display_name":"Notifications"}}),
+            true,
+        ),
+        (
+            json!({"argv":["datastore","create"],"target_id":"notifications","set":{"display_name":"Duplicate"}}),
+            true,
+        ),
+        (
+            json!({"argv":["schema","install"],"options":{"sdl":"type ReceiptProbe { value: String }","digest":"wrong"}}),
+            true,
+        ),
+        (json!({"argv":["schema","install"]}), false),
+        (
+            json!({"argv":["automation","edit","task"],"target_id":"missing","set":{"display_name":"Missing behavior"},"options":{"behavior":"missing"}}),
+            true,
+        ),
+    ] {
+        let text = match tool.call(args.to_string()).await {
+            Ok(text) => text,
+            Err(crate::llm::tool::ToolError::ToolCallError(error)) => error.to_string(),
+            Err(error) => panic!("missing typed result for {args}: {error}"),
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value["config_execution"]["mutation_entered"], mutation,
+            "{args}: {value}"
+        );
+    }
+    // A write in one invocation cannot contaminate a later read's receipt.
+    let read: Value = serde_json::from_str(
+        &tool
+            .call(json!({"argv":["datastore","--help"]}).to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(read["config_execution"]["mutation_entered"], false);
+    node.shutdown().await;
 }
 
 #[tokio::test]

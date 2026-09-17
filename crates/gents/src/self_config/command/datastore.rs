@@ -1,5 +1,60 @@
 use super::*;
 
+pub(super) fn mailbox_entries(policy: crate::mailbox::MailboxNotificationPolicy) -> Result<Value> {
+    policy.validate()?;
+    let mut declaration = crate::mailbox::canonical_mailbox_write_decl();
+    declaration.notification = Some(policy);
+    Ok(json!([crate::document_config::SurfaceToolDecl::Create(
+        declaration
+    )]))
+}
+
+fn surface_patch(argv: &[String]) -> Result<SelfConfigPatch> {
+    let mut parsed = ParsedArgs::parse(argv)?;
+    if let Some(policy) = parsed.one("mailbox")? {
+        let policy: crate::mailbox::MailboxNotificationPolicy = serde_json::from_str(policy)
+            .context("--mailbox requires a notification policy JSON object")?;
+        let entries = mailbox_entries(policy)?;
+        parsed.options.remove("mailbox");
+        parsed
+            .options
+            .entry("set".into())
+            .or_default()
+            .push(format!("entries={entries}"));
+    }
+    parse_patch_args(parsed, SelfConfigTarget::DatastoreToolSurface)
+}
+
+#[test]
+fn mailbox_option_uses_canonical_declaration_and_rejects_ambiguous_patches() {
+    let policy =
+        json!({"identity":{"mode":"condition","key":"host-health"},"kind":"flag","action":"ack"});
+    let args = vec![
+        "--mailbox".into(),
+        policy.to_string(),
+        "--set".into(),
+        "enabled=true".into(),
+    ];
+    let patch = surface_patch(&args).unwrap();
+    let mut canonical = crate::mailbox::canonical_mailbox_write_decl();
+    canonical.notification = Some(serde_json::from_value(policy).unwrap());
+    assert!(patch.contains(&(
+        "entries".into(),
+        Some(json!([crate::document_config::SurfaceToolDecl::Create(
+            canonical
+        )]))
+    )));
+    for extra in [vec!["--set", "entries=[]"], vec!["--clear", "entries"]] {
+        let mut conflicting = args.clone();
+        conflicting.extend(extra.into_iter().map(String::from));
+        assert!(surface_patch(&conflicting).is_err());
+    }
+    assert!(surface_patch(&["--mailbox".into(), "{}".into()]).is_err());
+    let mut duplicate = args.clone();
+    duplicate.extend(args);
+    assert!(surface_patch(&duplicate).is_err());
+}
+
 pub(super) fn entry_examples() -> Value {
     use crate::document_config::{
         SurfaceToolDecl, WriteToolDecl, WriteToolField, WriteToolFieldFill,
@@ -45,7 +100,7 @@ impl ConfigCommandTool {
             matches!(verb, "create" | "edit"),
             "run config help datastore; expected create or edit"
         );
-        let mut request = ApplyRequest::new(target, parse_patch(&argv[2..], target)?);
+        let mut request = ApplyRequest::new(target, surface_patch(&argv[2..])?);
         let surface_id = id.clone();
         request.resolve_unique = Box::new(move |_| Ok(surface_id.clone()));
         request.allow_create = verb == "create";

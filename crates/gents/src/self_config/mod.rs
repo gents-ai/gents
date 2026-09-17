@@ -6,7 +6,8 @@
 //! chain. Persona requests reuse the existing signed admission and reconciliation path.
 
 mod command;
-pub use command::config_help_resource;
+mod execution;
+pub use execution::ConfigExecutionReceipt;
 mod ops;
 mod read;
 #[cfg(test)]
@@ -2104,6 +2105,7 @@ pub fn build_self_config_tools(
         dry_run: config.dry_run,
         allow_pack_install: config.enable_pack_install,
         process_ceiling: config.process_ceiling.clone(),
+        execution: Arc::new(execution::ExecutionObservation::default()),
     }));
     tools
 }

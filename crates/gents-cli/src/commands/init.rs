@@ -747,7 +747,7 @@ async fn initialize_runtime_home(
         context_id: default_context_id_for_behavior(&default_behavior_id),
         agent_did: agent_did.to_string(),
         display_name: Some(if args.setup_steward {
-            "Setup".to_string()
+            "The Engineer".to_string()
         } else {
             "Default".to_string()
         }),
@@ -776,7 +776,7 @@ async fn initialize_runtime_home(
         behavior_id: default_behavior_id.clone(),
         agent_did: agent_did.to_string(),
         display_name: Some(if args.setup_steward {
-            "Setup".to_string()
+            "The Engineer".to_string()
         } else {
             "Default".to_string()
         }),
@@ -1492,7 +1492,8 @@ mod tests {
 
     #[test]
     fn setup_steward_starts_readonly_under_an_unrestricted_process_ceiling() {
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Keep Setup unchanged"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.starts_with("You are The Engineer,"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Keep The Engineer unchanged"));
         assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("--default"));
         assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("AgentSession selects a behavior"));
         assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Unsafe or invalid request"));
