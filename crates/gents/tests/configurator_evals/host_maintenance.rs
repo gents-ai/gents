@@ -350,7 +350,8 @@ fn workflow(before: &Value, after: &Value) -> Result<Workflow> {
         } else {
             ensure!(
                 bash.mode == gents::tool_surface::BashMode::Unrestricted,
-                "repair command unavailable"
+                "behavior {id}: repair command unavailable: host.bash.mode is {:?}; execution_mode and argv constraints do not enable the bash capability",
+                bash.mode
             );
             ensure!(
                 bash.allowed_argv_prefixes.as_ref() == Some(&vec![vec![REPAIR.to_owned()]]),
@@ -724,6 +725,17 @@ fn maintenance_configuration_rejects_extra_authority_and_decision_writers() {
         {"event_source_id":"repair-source", "source_collection":"RepairDecision", "filter":"{ approved: {_eq: true}, resource: {_eq: \"/host/api-work\"}, operation: {_eq: \"restore-owner-write\"} }"}
     ]);
     assert!(workflow(&before, &after).is_ok());
+    let mut inactive = after.clone();
+    inactive["Tools"][1]["host"]["bash"] = json!({
+        "execution_mode":"unrestricted", "allowed_argv_prefixes":[[REPAIR]]
+    });
+    let error = workflow(&before, &inactive)
+        .err()
+        .expect("inactive repair must fail")
+        .to_string();
+    assert!(error.contains("host.bash.mode is Off"), "{error}");
+    inactive["Tools"][1]["host"]["bash"]["mode"] = json!("Unrestricted");
+    assert!(workflow(&before, &inactive).is_ok());
     let mut broad = after.clone();
     broad["Tools"][1]["host"]["bash"]["allowed_argv_prefixes"] = json!([["sh"]]);
     assert!(workflow(&before, &broad).is_err());

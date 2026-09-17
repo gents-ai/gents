@@ -395,7 +395,8 @@ Behavior edit patches the canonical AgentBehavior document, including display_na
   get [--behavior BEHAVIOR_ID]
   preview [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
   edit [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
-This targets the Tools document referenced by the selected owned working behavior. Nested values are JSON. A patch is atomic; omitted fields preserve and --clear removes an optional field."#
+This targets the Tools document referenced by the selected owned working behavior. Nested values are JSON. A patch is atomic; omitted fields preserve and --clear removes an optional field.
+host.bash.mode selects the capability (Off by default). execution_mode, argv constraints, and background_enabled only constrain a selected capability; none enables it. For a scoped write command, select mode Unrestricted and an allowed_argv_prefixes array containing only the approved command's argv prefix. The process ceiling still limits effective authority. Read behavior get's runtime_effective after editing and test the tool in that working behavior; a saved constraint is not proof that a tool is available."#
             }
             Some("profile") => {
                 r#"profile commands:
