@@ -54,7 +54,7 @@ pub(super) const MONITOR_CASES: &[CaseId] = &[
 pub(super) fn monitor_provenance() -> Result<reporting::RunProvenance> {
     reporting::RunProvenance::current(
         "monitor-mailbox",
-        "monitor-mailbox-v4-command-help",
+        "monitor-mailbox-v5-execution-evidence",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         SAMPLING_ID,
         1.0,
@@ -236,7 +236,7 @@ fn working_behavior_selection_uses_identity_not_display_name() {
     assert!(new_working_behavior(&before, &after).is_err());
 }
 
-async fn preview_snapshot(node: &gents::defra_node::EmbeddedNode) -> Result<Value> {
+pub(super) async fn preview_snapshot(node: &gents::defra_node::EmbeddedNode) -> Result<Value> {
     let mut documents = serde_json::Map::new();
     for collection in Collection::ALL {
         let (fields, _) = gents::config_client::config_projection(collection, None)?;
@@ -269,60 +269,44 @@ async fn preview_snapshot(node: &gents::defra_node::EmbeddedNode) -> Result<Valu
     Ok(serde_json::json!({"documents":documents,"schemas":schemas}))
 }
 
-fn assert_preview_calls(calls: &[Value]) -> Result<()> {
+pub(super) fn assert_preview_calls(calls: &[Value]) -> Result<()> {
     for call in calls.iter().filter(|call| call["tool_name"] == "config") {
-        let rejected = call["lifecycle_state"] == "failed";
-        let error = call["result"].as_str().unwrap_or_default();
-        // These errors are emitted before command execution, not by a failed write.
-        // Retain them as tool diagnostics; the full configuration snapshot still applies.
-        if rejected
-            && [
-                "tool 'config' arguments were rejected",
-                "unknown config resource or command ",
-                "unknown behavior command ",
-            ]
-            .iter()
-            .any(|prefix| error.starts_with(prefix))
-        {
-            continue;
-        }
-        let args: Value =
-            serde_json::from_str(call["args"].as_str().context("config arguments missing")?)
-                .map_err(|error| stages::grader(error.into()))?;
-        let argv = args["argv"]
-            .as_array()
-            .context("config argv missing")
-            .map_err(stages::grader)?;
-        let help_argv = argv
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        if help_argv.len() == argv.len()
-            && gents::self_config::config_help_resource(&help_argv).is_some()
-        {
-            continue;
-        }
-        let tokens: Vec<_> = argv
-            .iter()
-            .map(|v| v.as_str().unwrap_or_default())
-            .collect();
-        let command = tokens.as_slice();
-        let read_only = match command {
-            ["help" | "get", ..] => true,
-            ["behavior", "context", "get" | "preview", ..] => true,
-            ["discovery", "scan", ..] => true,
-            ["backend", "discover", ..] => true,
-            ["behavior" | "tools" | "profile" | "backend" | "skill" | "datastore" | "schema"
-            | "automation" | "pack" | "cleanup" | "mcp-service", "get" | "list" | "preview", ..] => {
-                true
-            }
-            _ => false,
-        };
         ensure!(
-            read_only,
-            "preview attempted a mutation or unknown config operation: {:?}",
-            tokens.get(..3).unwrap_or(&tokens)
+            matches!(
+                call["lifecycle_state"].as_str(),
+                Some("completed" | "failed")
+            ),
+            "preview config call has no terminal outcome"
+        );
+        let result = call["result"]
+            .as_str()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok());
+        // Typed argument rejection can precede the config adapter entirely.
+        // A receipt, when present, takes precedence over the failure class.
+        if result
+            .as_ref()
+            .and_then(|value| value.get("config_execution"))
+            .is_none()
+            && call["lifecycle_state"] == "failed"
+            && call["tool_failure_class"] == "argumentInvalid"
+        {
+            continue;
+        }
+        let result = result
+            .context("missing config execution receipt")
+            .map_err(stages::grader)?;
+        let receipt: gents::self_config::ConfigExecutionReceipt =
+            serde_json::from_value(result["config_execution"].clone())
+                .map_err(|error| stages::grader(error.into()))?;
+        if receipt.version != 1 {
+            return Err(stages::grader(anyhow::anyhow!(
+                "unsupported config execution receipt version {}",
+                receipt.version
+            )));
+        }
+        ensure!(
+            !receipt.mutation_entered,
+            "preview entered a configuration mutation"
         );
     }
     Ok(())
@@ -349,84 +333,28 @@ fn assert_mailbox_findings(rows: &[Value]) -> Result<()> {
 }
 
 #[test]
-fn preview_grader_rejects_mutations_even_if_rejected_or_later_undone() {
-    let call = |argv: Value| serde_json::json!({"tool_name":"config", "args":serde_json::json!({"argv":argv}).to_string(), "lifecycle_state":"failed"});
-    for argv in [
-        serde_json::json!(["schema", "install"]),
-        serde_json::json!(["datastore", "create"]),
-        serde_json::json!(["automation", "edit"]),
-        serde_json::json!(["behavior", "context", "edit"]),
-        serde_json::json!(["cleanup", "remove"]),
-        serde_json::json!(["config", "schema", "install"]),
-        serde_json::json!(["behavior", "tools", "edit"]),
-        serde_json::json!([
-            "behavior",
-            "create",
-            "--id",
-            "monitor",
-            "--system-prompt",
-            "--help"
-        ]),
-        serde_json::json!("[\"schema\",\"install\"]"),
-    ] {
-        assert!(assert_preview_calls(&[call(argv)]).is_err());
-    }
-    assert!(assert_preview_calls(&[
-        call(serde_json::json!(["schema", "preview", "install"])),
-        call(serde_json::json!(["behavior", "context", "get"]))
-    ])
-    .is_ok());
-}
-
-#[test]
-fn preview_grader_allows_rejected_read_syntax_without_accepting_successful_unknown_calls() {
-    for (argv, error) in [
-        (
-            serde_json::json!(["config", "get"]),
-            "unknown config resource or command \"config\"",
-        ),
-        (
-            serde_json::json!(["preview", "task", "monitor"]),
-            "unknown config resource or command \"preview\"",
-        ),
-        (
-            serde_json::json!(["behavior", "tools", "get", "--behavior", "setup"]),
-            "unknown behavior command \"tools\"",
-        ),
-        (
-            serde_json::json!("[malformed array"),
-            "tool 'config' arguments were rejected (wrong type): expected a sequence",
-        ),
-    ] {
-        let mut call = serde_json::json!({
-            "tool_name": "config", "args": serde_json::json!({"argv":argv}).to_string(),
-            "lifecycle_state": "failed", "result":error
-        });
-        assert!(assert_preview_calls(&[call.clone()]).is_ok());
-        call["lifecycle_state"] = serde_json::json!("completed");
-        assert!(assert_preview_calls(&[call]).is_err());
-    }
-}
-
-#[test]
-fn preview_grader_uses_runtime_help_classification() {
-    for argv in [
-        serde_json::json!(["datastore", "help", "create"]),
-        serde_json::json!(["datastore", "preview", "create", "--help"]),
-        serde_json::json!(["behavior", "create", "-h"]),
-        serde_json::json!(["behavior", "create", "--id", "monitor", "--help"]),
-    ] {
-        for state in ["completed", "failed"] {
-            let call = serde_json::json!({"tool_name":"config", "args":serde_json::json!({"argv":argv}).to_string(), "lifecycle_state":state,"result":"help"});
-            assert!(assert_preview_calls(&[call]).is_ok());
+fn preview_grader_uses_execution_evidence_not_command_or_error_text() {
+    for state in ["completed", "failed"] {
+        for entered in [false, true] {
+            let call = serde_json::json!({
+                "tool_name":"config", "lifecycle_state":state, "tool_failure_class":"argumentInvalid",
+                "args":"not parsed by the grader",
+                "result":serde_json::json!({
+                    "config_execution":{"version":1,"mutation_entered":entered},
+                    "error":"arbitrary wording"
+                }).to_string()
+            });
+            assert_eq!(assert_preview_calls(&[call]).is_ok(), !entered);
         }
     }
-    let write = serde_json::json!({
-        "tool_name":"config",
-        "args":serde_json::json!({"argv":["behavior","create","--system-prompt","--help"]}).to_string(),
-        "lifecycle_state":"completed", "result":"created"
-    });
-    assert!(assert_preview_calls(&[write]).is_err());
+    let rejected = serde_json::json!({"tool_name":"config","lifecycle_state":"failed",
+        "tool_failure_class":"argumentInvalid","result":"arbitrary diagnostic"});
+    assert!(assert_preview_calls(&[rejected]).is_ok());
+    for state in ["completed", "failed", "running"] {
+        let missing = serde_json::json!({"tool_name":"config","lifecycle_state":state,
+            "args":"[\"help\"]", "result":"nothing was written"});
+        assert!(assert_preview_calls(&[missing]).is_err());
+    }
 }
 
 #[test]
@@ -918,12 +846,12 @@ fn assert_global_negatives(snapshot: &Value, setup_behavior_id: &str) -> Result<
     Ok(())
 }
 
-async fn tool_calls(
+pub(super) async fn tool_calls(
     node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
 ) -> Result<Vec<Value>> {
     let request_id = gents::graphql::escape_graphql_string(request_id);
-    super::rows(node, &format!(r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{tool_name lifecycle_state args result}} }}"#), "AgentToolCall").await
+    super::rows(node, &format!(r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{tool_name lifecycle_state tool_failure_class args result}} }}"#), "AgentToolCall").await
 }
 
 fn successful_shell_call(calls: &[Value]) -> bool {

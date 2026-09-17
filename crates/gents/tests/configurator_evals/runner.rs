@@ -20,6 +20,15 @@ use crate::support::test_db_in;
 #[path = "stages.rs"]
 mod stages;
 
+#[path = "access.rs"]
+mod access;
+
+#[path = "host.rs"]
+mod host;
+
+#[path = "host_scenarios.rs"]
+mod host_scenarios;
+
 #[path = "cases.rs"]
 mod cases;
 
@@ -38,8 +47,14 @@ fn monitor_suite() -> bool {
     std::env::var("GENTS_EVAL_SUITE").as_deref() == Ok("monitor-mailbox")
 }
 
+fn host_suite() -> bool {
+    std::env::var("GENTS_EVAL_SUITE").as_deref() == Ok("host-steward")
+}
+
 fn suite_cases() -> &'static [stages::CaseId] {
-    if monitor_suite() {
+    if host_suite() {
+        host_scenarios::CASES
+    } else if monitor_suite() {
         onboarding_scenarios::MONITOR_CASES
     } else {
         stages::PROGRESSIVE_CASES
@@ -47,14 +62,16 @@ fn suite_cases() -> &'static [stages::CaseId] {
 }
 
 fn suite_id() -> &'static str {
-    if monitor_suite() {
+    if host_suite() {
+        "host-steward"
+    } else if monitor_suite() {
         "monitor-mailbox"
     } else {
         EVAL_CASE_ID
     }
 }
 const EVAL_COHORT: &str = "configurator-temperature-1-top-p-0.95-v1";
-const EVAL_GRADER: &str = "configurator-deterministic-v1";
+const EVAL_GRADER: &str = "configurator-process-receipts-v3-no-artwork";
 const EVAL_SAMPLING_ID: &str = "configurator-eval-sampling-v1";
 const EVAL_TEMPERATURE: f64 = 1.0;
 const EVAL_TOP_P: f64 = 0.95;
@@ -94,10 +111,6 @@ const EVAL_GRADER_SOURCES: &[reporting::EvidenceSource] = &[
     reporting::EvidenceSource::new("cases.rs", include_bytes!("cases.rs")),
     reporting::EvidenceSource::new("readiness.rs", include_bytes!("readiness.rs")),
     reporting::EvidenceSource::new("stages.rs", include_bytes!("stages.rs")),
-    reporting::EvidenceSource::new(
-        "check-pagoda.mjs",
-        include_bytes!("../../../../scripts/evals/check-pagoda.mjs"),
-    ),
 ];
 const EVAL_FIXTURES: &[reporting::EvidenceSource] = &[
     reporting::EvidenceSource::new(
@@ -107,14 +120,6 @@ const EVAL_FIXTURES: &[reporting::EvidenceSource] = &[
     reporting::EvidenceSource::new(
         "document_automation.md",
         include_bytes!("../fixtures/configurator_evals/document_automation.md"),
-    ),
-    reporting::EvidenceSource::new(
-        "improve_pagoda.md",
-        include_bytes!("../fixtures/configurator_evals/improve_pagoda.md"),
-    ),
-    reporting::EvidenceSource::new(
-        "review_pagoda.md",
-        include_bytes!("../fixtures/configurator_evals/review_pagoda.md"),
     ),
     reporting::EvidenceSource::new(
         "skill_setup.md",
@@ -135,10 +140,6 @@ const EVAL_FIXTURES: &[reporting::EvidenceSource] = &[
     reporting::EvidenceSource::new(
         "tool_surface_audit.md",
         include_bytes!("../fixtures/configurator_evals/tool_surface_audit.md"),
-    ),
-    reporting::EvidenceSource::new(
-        "voxel_pagoda.md",
-        include_bytes!("../fixtures/configurator_evals/voxel_pagoda.md"),
     ),
 ];
 
@@ -802,19 +803,6 @@ async fn run_eval_trial(
             failures.extend(result.err());
         }
         if configured {
-            let result = cases::verify_pagoda_sequence(
-                &activation,
-                db.node.as_ref(),
-                &agent_did,
-                &workspace,
-                &evidence,
-            )
-            .await;
-            failures.extend(result.err());
-        }
-        // Automation depends on generated configuration, not on the artwork
-        // passing its browser check. Preserve independent failure measurements.
-        if configured {
             let result = stages::checked(
                 stages::CaseId::DocumentAutomation,
                 &evidence,
@@ -939,7 +927,9 @@ async fn run_retained_trial(
     std::fs::create_dir_all(&evidence).expect("create evidence directory");
     tracing::info!(target: "gents::configurator_eval", artifacts = %artifacts.display(), "starting trial");
     let work = async {
-        if monitor_suite() {
+        if host_suite() {
+            host_scenarios::run_trial(model.clone(), trial, &artifacts).await
+        } else if monitor_suite() {
             onboarding_scenarios::run_monitor_trial(model.clone(), trial, &artifacts).await
         } else {
             Ok(run_eval_trial(provider, model.clone(), trial, &artifacts).await)
@@ -977,7 +967,7 @@ async fn live_configurator_progressive_eval_matrix() {
     assert!(
         matches!(
             std::env::var("GENTS_EVAL_SUITE").as_deref(),
-            Err(_) | Ok("progressive-configurator") | Ok("monitor-mailbox")
+            Err(_) | Ok("progressive-configurator") | Ok("monitor-mailbox") | Ok("host-steward")
         ),
         "unsupported eval suite"
     );
@@ -996,7 +986,7 @@ async fn live_configurator_progressive_eval_matrix() {
     let runs = eval_runs();
     let provider = LiveProvider::from_env();
     assert!(
-        !monitor_suite() || matches!(provider, LiveProvider::D4f),
+        !(monitor_suite() || host_suite()) || matches!(provider, LiveProvider::D4f),
         "monitor-mailbox currently supports the local D4F provider only"
     );
     let concurrency = eval_concurrency();
@@ -1015,7 +1005,9 @@ async fn live_configurator_progressive_eval_matrix() {
         provider.name(),
         concurrency,
         stage_timeout.as_secs(),
-        if monitor_suite() {
+        if host_suite() {
+            host_scenarios::provenance().expect("collect host provenance")
+        } else if monitor_suite() {
             onboarding_scenarios::monitor_provenance().expect("collect monitor provenance")
         } else {
             reporting::RunProvenance::current(

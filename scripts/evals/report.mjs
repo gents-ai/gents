@@ -26,6 +26,9 @@ export function assessRun(report, execution, now = Date.now()) {
   )
     return "failed";
   if (execution?.status === "running") {
+    const heartbeat = Date.parse(execution.heartbeat_at || "");
+    if (Number.isFinite(heartbeat) && now - heartbeat > 30_000)
+      return "stalled";
     const updated = Date.parse(report?.updated_at || "");
     const budget = ((report?.stage_timeout_secs || 0) + 30) * 1000;
     if (report?.unfinished > 0 && budget > 30_000 && now - updated > budget)

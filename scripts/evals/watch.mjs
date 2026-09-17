@@ -113,8 +113,23 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
           ? previous.document
           : null;
       if (!document) {
-        const data = await readJson(path);
+        let data = await readJson(path);
         if (!data) continue;
+        // Keep counters, not transcripts, in the long-lived display cache.
+        if (name.endsWith("-tools.json"))
+          data = { AgentToolCall: (data.AgentToolCall || []).map(() => ({})) };
+        else if (name.endsWith("-inference.json"))
+          data = {
+            InferenceCall: (data.InferenceCall || []).map(
+              ({ prompt_tokens, completion_tokens }) => ({
+                prompt_tokens,
+                completion_tokens,
+              }),
+            ),
+          };
+        else if (name.endsWith("-input.json")) data = { stage: data.stage };
+        else if (name === "trial.json")
+          data = { passed: data.passed, cases: data.cases };
         document = { name, data, modified: metadata.mtimeMs };
         cache.set(path, {
           stamp: `${metadata.mtimeMs}:${metadata.size}`,

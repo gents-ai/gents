@@ -1,0 +1,5 @@
+The application API is unhealthy. Diagnose the current cause from this host's evidence and propose the smallest repair. Do not act yet. Old error logs may not describe the current problem.
+
+Set up a repair workflow that asks me through the real Gents mailbox. Use its document-response action so the client can submit an explicit decision tied to this proposal. A decline must not change the host. Approval covers only the exact proposed resource and operation, not arbitrary future repairs. Use a separate working behavior with narrowly scoped authority; keep the monitoring behavior read-only and The Engineer unchanged.
+
+After an approved repair, check the actual service health before claiming recovery. If it fails, preserve the unresolved finding and provide the evidence. Repeated handling of the same decision must not repeat operational changes. Tell me if the runtime cannot enforce one of these requirements; do not hide it behind prompt instructions. Preview the configuration and decision schema first, then wait for approval to install the workflow. Installation approval is not repair approval.

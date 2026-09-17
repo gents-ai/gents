@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use super::access::RuntimeAccess;
 use anyhow::{ensure, Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -60,9 +61,6 @@ impl CaseId {
     pub const Onboarding: Self = Self::new("onboarding");
     pub const BuilderReadiness: Self = Self::new("builder-readiness");
     pub const SkillWorkflow: Self = Self::new("skill-workflow");
-    pub const Pagoda: Self = Self::new("pagoda");
-    pub const Review: Self = Self::new("review");
-    pub const Improve: Self = Self::new("improve");
     pub const DocumentAutomation: Self = Self::new("document-automation");
 
     pub const fn new(id: &'static str) -> Self {
@@ -78,9 +76,6 @@ pub const PROGRESSIVE_CASES: &[CaseId] = &[
     CaseId::Onboarding,
     CaseId::BuilderReadiness,
     CaseId::SkillWorkflow,
-    CaseId::Pagoda,
-    CaseId::Review,
-    CaseId::Improve,
     CaseId::DocumentAutomation,
 ];
 
@@ -317,6 +312,8 @@ async fn case_receipts_are_immutable_after_first_publication() {
 
 #[tokio::test]
 async fn case_reporting_preserves_failure_classification_and_skipped_prerequisites() {
+    let inconclusive_case = CaseId::new("inconclusive-fixture");
+    let infrastructure_case = CaseId::new("infrastructure-fixture");
     let evidence = tempfile::tempdir().unwrap();
     let deadline: Result<()> = Err(EvaluationFailure::Deadline("onboarding".into()).into());
     assert!(
@@ -330,24 +327,31 @@ async fn case_reporting_preserves_failure_classification_and_skipped_prerequisit
     let inconclusive: Result<()> =
         Err(EvaluationFailure::Inconclusive("animated scene".into()).into());
     assert!(
-        checked(CaseId::Pagoda, evidence.path(), async { inconclusive })
+        checked(inconclusive_case, evidence.path(), async { inconclusive })
             .await
             .is_err()
     );
     let infrastructure: Result<()> =
         Err(EvaluationFailure::Infrastructure("disk unavailable".into()).into());
-    assert!(
-        checked(CaseId::Improve, evidence.path(), async { infrastructure })
-            .await
-            .is_err()
-    );
-    let results = case_results(PROGRESSIVE_CASES, evidence.path()).unwrap();
-    assert_eq!(results.len(), 7);
+    assert!(checked(infrastructure_case, evidence.path(), async {
+        infrastructure
+    })
+    .await
+    .is_err());
+    let cases = [
+        CaseId::Onboarding,
+        CaseId::BuilderReadiness,
+        CaseId::SkillWorkflow,
+        inconclusive_case,
+        infrastructure_case,
+    ];
+    let results = case_results(&cases, evidence.path()).unwrap();
+    assert_eq!(results.len(), 5);
     assert_eq!(results[0].failure_kind.as_deref(), Some("deadline"));
     assert_eq!(results[1].status, "passed");
     assert_eq!(results[2].status, "skipped");
     assert_eq!(results[3].failure_kind.as_deref(), Some("inconclusive"));
-    assert_eq!(results[5].failure_kind.as_deref(), Some("infrastructure"));
+    assert_eq!(results[4].failure_kind.as_deref(), Some("infrastructure"));
 }
 
 #[test]
@@ -793,24 +797,19 @@ pub(super) fn write_stage_progress(
     )
 }
 
-async fn observed_request_outcome(node: &EmbeddedNode, request_id: &str) -> Result<Value> {
+pub(super) async fn observed_request_outcome<'a>(
+    access: impl Into<RuntimeAccess<'a>>,
+    request_id: &str,
+) -> Result<Value> {
     let escaped = escape_graphql_string(request_id);
-    let response = node.execute(&format!(
+    access.into().query(&format!(
         r#"{{
             AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{request_id lifecycle_state failure_reason session_id}}
             AgentResponse(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{status error_message}}
             InferenceCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{call_seq call_state failure_reason queued_at started_at ended_at}}
-            AgentToolCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{tool_name status lifecycle_state started_at completed_at}}
+            AgentToolCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{tool_name status lifecycle_state tool_failure_class started_at completed_at}}
         }}"#
-    )).await;
-    ensure!(
-        !response.has_errors(),
-        "request outcome query failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .context("request outcome query returned no data")
+    )).await
 }
 
 fn classify_request_outcome(
@@ -831,18 +830,25 @@ fn classify_request_outcome(
             .map(Vec::as_slice)
             .unwrap_or(&[])
     };
-    if rows("InferenceCall").iter().any(|row| {
+    let inference_failed = rows("InferenceCall").iter().any(|row| {
         matches!(row["call_state"].as_str(), Some("failed" | "error"))
             || row["failure_reason"]
                 .as_str()
                 .is_some_and(|reason| !reason.is_empty())
-    }) {
-        return Some("provider");
-    }
-    if rows("AgentToolCall").iter().any(|row| {
+    });
+    let tool_failed = rows("AgentToolCall").iter().any(|row| {
         matches!(row["lifecycle_state"].as_str(), Some("failed"))
             || matches!(row["status"].as_str(), Some("failed" | "error"))
-    }) {
+    });
+    // Failed tool execution can terminate an otherwise healthy provider stream.
+    // Co-occurrence does not establish which boundary caused termination.
+    if inference_failed && tool_failed {
+        return Some("unknown");
+    }
+    if inference_failed {
+        return Some("provider");
+    }
+    if tool_failed {
         return Some("tool");
     }
     if rows("AgentRequest").iter().any(|row| {
@@ -865,6 +871,18 @@ fn request_failure_taxonomy_uses_structured_observations_and_preserves_unknown()
             "AgentToolCall":tools,
         })
     };
+    assert_eq!(
+        classify_request_outcome(
+            "failed",
+            false,
+            &outcome(
+                "failed",
+                serde_json::json!([{"call_state":"failed"}]),
+                serde_json::json!([{"lifecycle_state":"failed","tool_failure_class":"argumentInvalid"}])
+            )
+        ),
+        Some("unknown")
+    );
     assert_eq!(
         classify_request_outcome(
             "failed",
@@ -928,7 +946,6 @@ async fn execute_inner(
     prompt: &str,
     evidence: &Path,
 ) -> Result<StageResult> {
-    let timeout = stage_timeout()?;
     let started = Instant::now();
     let started_at = chrono::Utc::now().to_rfc3339();
     std::fs::create_dir_all(evidence)?;
@@ -941,6 +958,26 @@ async fn execute_inner(
     )?;
     write_stage_progress(evidence, stage, "submitting", None, None, None, &started_at)?;
     let request_id = submit_stage(activation, node, owner, behavior, stage, prompt).await?;
+    observe_request(
+        node.into(),
+        request_id,
+        stage,
+        evidence,
+        started,
+        started_at,
+    )
+    .await
+}
+
+pub(super) async fn observe_request(
+    access: RuntimeAccess<'_>,
+    request_id: String,
+    stage: &str,
+    evidence: &Path,
+    started: Instant,
+    started_at: String,
+) -> Result<StageResult> {
+    let timeout = stage_timeout()?;
     write_stage_progress(
         evidence,
         stage,
@@ -958,21 +995,12 @@ async fn execute_inner(
     let mut next_usage_snapshot = Instant::now();
     let mut last_progress = None;
     let (terminal_state, session_id) = loop {
-        let response = node.execute(&query).await;
-        ensure!(
-            !response.has_errors(),
-            "stage observation failed: {:?}",
-            response.errors
-        );
-        let state = response
-            .data
-            .as_ref()
-            .and_then(|data| data["AgentRequest"][0]["lifecycle_state"].as_str())
+        let response = access.query(&query).await?;
+        let state = response["AgentRequest"][0]["lifecycle_state"]
+            .as_str()
             .unwrap_or("missing");
-        let session_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data["AgentRequest"][0]["session_id"].as_str())
+        let session_id = response["AgentRequest"][0]["session_id"]
+            .as_str()
             .map(str::to_owned);
         let progress = (state.to_owned(), session_id.clone());
         if last_progress.as_ref() != Some(&progress) {
@@ -994,7 +1022,7 @@ async fn execute_inner(
             // Display sampling must not fail the evaluated request or stall its deadline.
             let _ = tokio::time::timeout(
                 Duration::from_millis(500),
-                retain_inference_evidence(node, &request_id, stage, evidence),
+                retain_inference_evidence(access, &request_id, stage, evidence),
             )
             .await;
             next_usage_snapshot = Instant::now() + Duration::from_secs(2);
@@ -1011,7 +1039,8 @@ async fn execute_inner(
                     Some(state),
                     &started_at,
                 )?;
-                gents::interrupt_request(node, &request_id)
+                access
+                    .interrupt(&request_id)
                     .await
                     .context("interrupt stage after evaluation deadline")?;
             }
@@ -1021,7 +1050,7 @@ async fn execute_inner(
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     };
-    let observed_outcome = observed_request_outcome(node, &request_id)
+    let observed_outcome = observed_request_outcome(access, &request_id)
         .await
         .map_err(infrastructure)?;
     let failure_kind =
@@ -1040,12 +1069,22 @@ async fn execute_inner(
         Some(&terminal_state),
         &started_at,
     )?;
-    let answer = crate::support::live_inference::wait_for_assistant_answer(
-        node,
-        &request_id,
-        Duration::from_secs(2),
-    )
-    .await;
+    let response = access
+        .query(&format!(
+            r#"{{ AgentMessage(filter: {{request_id: {{_eq: "{escaped}"}}, role: {{_eq: "assistant"}}}}, order: {{sequence: ASC}}) {{content}} }}"#
+        ))
+        .await?;
+    let answer = response["AgentMessage"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row["content"].as_str())
+        .map(|content| {
+            gents_protocol::transcript::present_persisted_message("assistant", content)
+                .body_markdown
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let result = StageResult {
         stage: stage.to_owned(),
         request_id,
@@ -1063,7 +1102,7 @@ async fn execute_inner(
             evidence.join(format!("{stage}.json")),
             serde_json::to_vec_pretty(&result)?,
         )?;
-        retain_request_evidence(node, &result.request_id, stage, evidence).await
+        retain_request_evidence(access, &result.request_id, stage, evidence).await
     }
     .await;
     if let Err(error) = retention {
@@ -1074,49 +1113,40 @@ async fn execute_inner(
 
 /// Also used for requests created by model-authored automation, which the
 /// runner observes but does not submit or repair.
-pub async fn retain_request_evidence(
-    node: &EmbeddedNode,
+pub async fn retain_request_evidence<'a>(
+    access: impl Into<RuntimeAccess<'a>>,
     request_id: &str,
     stage: &str,
     evidence: &Path,
 ) -> Result<()> {
+    let access = access.into();
     let escaped = escape_graphql_string(request_id);
     // Tool evidence records concrete execution, including failures and recovery.
-    let calls = node.execute(&format!(
-        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{tool_name status lifecycle_state started_at completed_at args result}} }}"#
-    )).await;
-    ensure!(
-        !calls.has_errors(),
-        "tool evidence query failed: {:?}",
-        calls.errors
-    );
+    let calls = access.query(&format!(
+        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{tool_name status lifecycle_state tool_failure_class started_at completed_at args result}} }}"#
+    )).await?;
     std::fs::write(
         evidence.join(format!("{stage}-tools.json")),
-        serde_json::to_vec_pretty(&calls.data.unwrap_or(Value::Null))?,
+        serde_json::to_vec_pretty(&calls)?,
     )?;
-    retain_inference_evidence(node, request_id, stage, evidence).await
+    retain_inference_evidence(access, request_id, stage, evidence).await
 }
 
-async fn retain_inference_evidence(
-    node: &EmbeddedNode,
+async fn retain_inference_evidence<'a>(
+    access: impl Into<RuntimeAccess<'a>>,
     request_id: &str,
     stage: &str,
     evidence: &Path,
 ) -> Result<()> {
     let escaped = escape_graphql_string(request_id);
-    let diagnostics = node.execute(&format!(
+    let diagnostics = access.into().query(&format!(
         r#"{{
             AgentResponse(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{status error_message}}
             InferenceCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{call_seq call_state failure_reason prompt_tokens completion_tokens queued_at started_at ended_at}}
         }}"#
-    )).await;
-    ensure!(
-        !diagnostics.has_errors(),
-        "stage diagnostics failed: {:?}",
-        diagnostics.errors
-    );
+    )).await?;
     super::reporting::write_json(
         &evidence.join(format!("{stage}-inference.json")),
-        &diagnostics.data.unwrap_or(Value::Null),
+        &diagnostics,
     )
 }

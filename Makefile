@@ -407,7 +407,7 @@ check-cli-headless:
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
 
-.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-evals test-evals-browser live-configurator-eval
+.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-evals live-configurator-eval
 test: test-agent test-cli
 
 test-agent:
@@ -420,14 +420,18 @@ test-evals:
 	node --test scripts/evals/report.test.mjs scripts/evals/watch.test.mjs
 	$(CARGO) test -p gents --test e2e_configurator
 
-test-evals-browser:
-	$(NPM) run test:evals
-	$(CARGO) test -p gents --test e2e_configurator browser_checker_accepts_static_fixture_without_live_inference -- --ignored
-
 live-configurator-eval:
 	node scripts/evals/run-configurator.mjs $(CARGO)
 
 .PHONY: live-mailbox-eval
+.PHONY: live-host-steward-eval
+live-host-steward-eval:
+	GENTS_EVAL_SUITE=host-steward GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-1} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-1} node scripts/evals/run-configurator.mjs $(CARGO)
+
+.PHONY: test-host-eval-environment
+test-host-eval-environment:
+	GENTS_HOST_FIXTURE_TEST=1 node --test scripts/evals/host-environment.test.mjs
+
 live-mailbox-eval:
 	GENTS_EVAL_SUITE=monitor-mailbox GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-10} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-10} node scripts/evals/run-configurator.mjs $(CARGO)
 

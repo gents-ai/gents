@@ -8,6 +8,66 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { assessRun, renderReport } from "./report.mjs";
 import { runConfigurator } from "./run-configurator.mjs";
+import { readdir } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
+
+test("stale launcher heartbeat is not represented as a running eval", () => {
+  const now = Date.now();
+  assert.equal(
+    assessRun(
+      null,
+      {
+        status: "running",
+        heartbeat_at: new Date(now - 31000).toISOString(),
+      },
+      now,
+    ),
+    "stalled",
+  );
+  assert.equal(
+    assessRun(
+      null,
+      {
+        status: "running",
+        heartbeat_at: new Date(now).toISOString(),
+      },
+      now,
+    ),
+    "running",
+  );
+});
+
+test(
+  "runtime log remains writable after launcher SIGKILL",
+  { timeout: 10000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "gents-killed-launcher-"));
+    const launcher = spawn(
+      process.execPath,
+      [
+        fileURLToPath(new URL("./run-configurator.mjs", import.meta.url)),
+        process.execPath,
+        "-e",
+        'process.kill(process.ppid, "SIGKILL"); setTimeout(() => console.log("survived observer loss"), 100);',
+        "--",
+      ],
+      {
+        env: { ...process.env, GENTS_EVAL_ROOT: root },
+        stdio: ["ignore", "ignore", "ignore"],
+      },
+    );
+    const [, signal] = await once(launcher, "close");
+    assert.equal(signal, "SIGKILL");
+    const [name] = await readdir(root);
+    let log = "";
+    for (let attempt = 0; attempt < 50; attempt++) {
+      log = await readFile(join(root, name, "runner.log"), "utf8");
+      if (log.includes("survived observer loss")) break;
+      await delay(50);
+    }
+    assert.match(log, /survived observer loss/);
+  },
+);
 
 const counts = {
   passed: 1,

@@ -146,6 +146,32 @@ async function fixture() {
   return { directory, evidence };
 }
 
+test("dashboard cache excludes raw tool and provider payloads", async () => {
+  const { directory, evidence } = await fixture();
+  const raw = "private transcript ".repeat(10000);
+  await writeFile(
+    join(evidence, "onboarding-tools.json"),
+    JSON.stringify({
+      AgentToolCall: [{ args: raw, result: raw }],
+    }),
+  );
+  await writeFile(
+    join(evidence, "onboarding-inference.json"),
+    JSON.stringify({
+      InferenceCall: [
+        { prompt_tokens: 123, completion_tokens: 4, response: raw },
+      ],
+    }),
+  );
+  const cache = new Map();
+  const snapshot = await snapshotRun(directory, cache);
+  assert.equal(snapshot.trials[0].usage.tools, 1);
+  assert.equal(snapshot.trials[0].usage.input, 123);
+  assert.ok(
+    !JSON.stringify([...cache.values()]).includes("private transcript"),
+  );
+});
+
 test("watching existing receipts preserves verdicts, pending work and interrupted state without writing", async () => {
   const { directory, evidence } = await fixture();
   const before = await readFile(join(directory, "report.json"), "utf8");

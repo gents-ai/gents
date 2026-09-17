@@ -97,395 +97,6 @@ pub(super) async fn verify_builder_execution(
     Ok(())
 }
 
-#[test]
-fn readiness_command_evidence_accounts_for_cwd() {
-    let root = tempfile::tempdir().unwrap();
-    std::fs::create_dir(root.path().join("readiness")).unwrap();
-    std::fs::write(root.path().join("readiness/test.sh"), "# fixture").unwrap();
-    let call = |args: serde_json::Value, state: &str| {
-        serde_json::json!({
-            "tool_name":"bash_unrestricted", "lifecycle_state":state, "args":args.to_string(),
-            "result":"gents_exec: {\"ok\":true,\"exit_code\":0}"
-        })
-    };
-    for result in [
-        "",
-        "BUILD_TEST_OK",
-        "gents_exec: {\"ok\":false,\"exit_code\":1}",
-        "gents_exec: {\"ok\":true,\"exit_code\":0,\"timed_out\":true}",
-    ] {
-        let mut evidence = call(
-            serde_json::json!({"command":"sh readiness/test.sh"}),
-            "completed",
-        );
-        evidence["result"] = result.into();
-        assert!(!recorded_readiness_command(&evidence, root.path()));
-    }
-    for args in [
-        serde_json::json!({"command":"sh readiness/test.sh"}),
-        serde_json::json!({"command":"sh readiness/test.sh; # executed"}),
-        serde_json::json!({"command":"sh 'readiness/test.sh'","args":[]}),
-        serde_json::json!({"command":"sh","args":["readiness/test.sh"]}),
-        serde_json::json!({"command":"/bin/sh","args":[root.path().join("readiness/test.sh")],"cwd":"."}),
-        serde_json::json!({"command":"sh test.sh","cwd":"readiness"}),
-        serde_json::json!({"command":"sh","args":["./test.sh"],"cwd":root.path().join("readiness")}),
-        serde_json::json!({"command":"sh readiness/test.sh && echo \"exit=$?\""}),
-        serde_json::json!({"command":"sh", "args":["-lc", "mkdir -p readiness && cat > readiness/test.sh <<'EOF'\nsh readiness/test.sh\nEOF\nchmod +x readiness/test.sh && sh readiness/test.sh && cat readiness/result.txt"]}),
-    ] {
-        assert!(recorded_readiness_command(
-            &call(args.clone(), "completed"),
-            root.path()
-        ));
-        assert!(!recorded_readiness_command(
-            &call(args, "failed"),
-            root.path()
-        ));
-    }
-    for args in [
-        serde_json::json!({"command":"sh test.sh","cwd":"."}),
-        serde_json::json!({"command":"echo test.sh","cwd":"readiness"}),
-        serde_json::json!({"command":"true","note":"readiness/test.sh"}),
-        serde_json::json!({"command":"echo readiness/test.sh"}),
-        serde_json::json!({"command":"sh readiness/test.sh.backup"}),
-        serde_json::json!({"command":"sh -n readiness/test.sh"}),
-        serde_json::json!({"command":"true && echo readiness/test.sh"}),
-        serde_json::json!({"command":"sh $SCRIPT"}),
-        serde_json::json!({"command":"sh readiness/tes?.sh"}),
-        serde_json::json!({"command":"sh\nreadiness/test.sh"}),
-        serde_json::json!({"command":"sh 'readiness/test.sh"}),
-        serde_json::json!({"command":"sh readiness/test.sh","args":["ignored"]}),
-        serde_json::json!({"command":"sh","args":["unrelated/test.sh"]}),
-        serde_json::json!({"command":"sh","args":["sh","readiness/test.sh"]}),
-        serde_json::json!({"command":"true || sh readiness/test.sh"}),
-        serde_json::json!({"command":"false && sh readiness/test.sh; true"}),
-        serde_json::json!({"command":"if false; then sh readiness/test.sh; fi"}),
-        serde_json::json!({"command":"echo 'sh readiness/test.sh && echo ok'"}),
-        serde_json::json!({"command":"cat <<'EOF'\nsh readiness/test.sh\nEOF"}),
-        serde_json::json!({"command":"f() { sh readiness/test.sh; }; true"}),
-        serde_json::json!({"command":"cd elsewhere; sh readiness/test.sh"}),
-        serde_json::json!({"command":"sh readiness/test.sh &"}),
-        serde_json::json!({"command":"echo $(sh readiness/test.sh)"}),
-        serde_json::json!({"command":"mkdir /unwritable && sh readiness/test.sh; true"}),
-        serde_json::json!({"command":"mkdir /unwritable && sh readiness/test.sh\ntrue"}),
-    ] {
-        assert!(!recorded_readiness_command(
-            &call(args, "completed"),
-            root.path()
-        ));
-    }
-}
-
-fn reassess_readiness(
-    original: &stages::CaseResult,
-    calls: &[serde_json::Value],
-    workspace: &std::path::Path,
-) -> Option<stages::CaseResult> {
-    // Correct only the known attribution bug. That check ran after request
-    // completion and exact script/receipt validation; other failures stand.
-    if original.case_id != "builder-readiness"
-        || original.status != "failed"
-        || !matches!(
-            original.error.as_deref(),
-            Some(
-                "Builder did not successfully execute its command tool"
-                    | "Builder command evidence did not identify the readiness script"
-                    | "evaluation inconclusive: command evidence did not identify execution of the readiness script"
-            )
-        )
-        || !calls
-            .iter()
-            .any(|call| recorded_readiness_command(call, workspace))
-    {
-        return None;
-    }
-    Some(stages::CaseResult {
-        case_id: original.case_id.clone(),
-        status: "passed".into(),
-        elapsed_ms: original.elapsed_ms,
-        error: None,
-        failure_kind: None,
-    })
-}
-
-#[test]
-fn readiness_reassessment_does_not_hide_other_failures() {
-    let root = tempfile::tempdir().unwrap();
-    std::fs::create_dir(root.path().join("readiness")).unwrap();
-    std::fs::write(root.path().join("readiness/test.sh"), "# fixture").unwrap();
-    let calls = vec![serde_json::json!({"tool_name":"bash_unrestricted",
-        "lifecycle_state":"completed", "result":"gents_exec: {\"ok\":true,\"exit_code\":0}", "args":serde_json::json!({"command":"sh test.sh","cwd":"readiness"}).to_string()})];
-    let mut original = stages::CaseResult {
-        case_id: "builder-readiness".into(),
-        status: "failed".into(),
-        elapsed_ms: 123,
-        error: Some("Builder did not successfully execute its command tool".into()),
-        failure_kind: Some("acceptance".into()),
-    };
-    let corrected = reassess_readiness(&original, &calls, root.path()).unwrap();
-    assert_eq!(corrected.status, "passed");
-    assert_eq!(corrected.elapsed_ms, 123);
-    assert!(reassess_readiness(&original, &[], root.path()).is_none());
-    original.error = Some("Builder command evidence did not identify the readiness script".into());
-    let structured = vec![serde_json::json!({"tool_name":"bash_unrestricted",
-        "lifecycle_state":"completed", "result":"gents_exec: {\"ok\":true,\"exit_code\":0}", "args":serde_json::json!({"command":"sh","args":["readiness/test.sh"]}).to_string()})];
-    assert_eq!(
-        reassess_readiness(&original, &structured, root.path())
-            .unwrap()
-            .status,
-        "passed"
-    );
-    original.error = Some("Builder changed the requested test script".into());
-    assert!(reassess_readiness(&original, &calls, root.path()).is_none());
-    assert!(reassess_readiness(&original, &structured, root.path()).is_none());
-}
-
-/// Offline grading never invokes inference or overwrites the original report.
-fn retained_readiness_result(trial: &std::path::Path) -> Result<Option<stages::CaseResult>> {
-    match std::fs::read(trial.join("evidence/builder-readiness-acceptance.json")) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let report: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(trial.join("trial.json"))?)?;
-            ensure!(
-                report["cases"].as_array().is_some_and(|cases| cases
-                    .iter()
-                    .any(|case| case["case_id"] == "builder-readiness"
-                        && case["status"] == "skipped")),
-                "readiness receipt missing without an explicit skipped case"
-            );
-            Ok(None)
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
-#[test]
-fn reassessment_distinguishes_skipped_readiness_from_missing_evidence() {
-    let trial = tempfile::tempdir().unwrap();
-    assert!(retained_readiness_result(trial.path()).is_err());
-    std::fs::write(
-        trial.path().join("trial.json"),
-        r#"{"cases":[{"case_id":"builder-readiness","status":"skipped"}]}"#,
-    )
-    .unwrap();
-    assert!(retained_readiness_result(trial.path()).unwrap().is_none());
-    std::fs::write(
-        trial.path().join("trial.json"),
-        r#"{"cases":[{"case_id":"builder-readiness","status":"passed"}]}"#,
-    )
-    .unwrap();
-    assert!(retained_readiness_result(trial.path()).is_err());
-}
-
-#[test]
-#[ignore = "offline: set GENTS_EVAL_REASSESS_TRIALS to a platform-separated list of retained trial directories"]
-fn reassess_retained_readiness_evidence() -> Result<()> {
-    use sha2::{Digest, Sha256};
-
-    let paths = std::env::var_os("GENTS_EVAL_REASSESS_TRIALS")
-        .context("set GENTS_EVAL_REASSESS_TRIALS to retained trial directories")?;
-    for trial in std::env::split_paths(&paths) {
-        let evidence = trial.join("evidence");
-        let Some(original) = retained_readiness_result(&trial)? else {
-            tracing::info!(trial = %trial.display(), "readiness was skipped; no reassessment");
-            continue;
-        };
-        let original_bytes = std::fs::read(evidence.join("builder-readiness-acceptance.json"))?;
-        let tool_bytes = std::fs::read(evidence.join("builder-readiness-tools.json"))?;
-        let tool_evidence: serde_json::Value = serde_json::from_slice(&tool_bytes)?;
-        let calls = tool_evidence["AgentToolCall"]
-            .as_array()
-            .context("missing retained tool calls")?;
-        let reassessed = reassess_readiness(&original, calls, &trial.join("workspace"));
-        super::reporting::write_json_new(
-            &evidence.join("builder-readiness-reassessment-shell-ast-v4.json"),
-            &serde_json::json!({
-                "schema_version":1,
-                "grader":{"id":"readiness-shell-ast-v4",
-                    "source_revision":std::env::var("GENTS_EVAL_SOURCE_REVISION").unwrap_or_else(|_| "unknown".into()),
-                    "source_dirty":std::env::var("GENTS_EVAL_SOURCE_DIRTY").map_or(true, |value| value != "false")},
-                "created_at":chrono::Utc::now().to_rfc3339(),
-                "input_sha256":{"original_receipt":format!("{:x}", Sha256::digest(&original_bytes)),
-                    "tool_evidence":format!("{:x}", Sha256::digest(&tool_bytes))},
-                "changed":reassessed.is_some(),
-                "original":original, "reassessed":reassessed.as_ref().unwrap_or(&original),
-                "basis":"Retained request tool calls; original completion, exact script and receipt checks remain required. No inference rerun."
-            }),
-        )?;
-    }
-    Ok(())
-}
-
-fn pagoda_prompt(template: &str, workspace: &std::path::Path) -> String {
-    template
-        .replace(
-            "{{ORIGINAL_REQUEST}}",
-            include_str!("../fixtures/configurator_evals/voxel_pagoda.md"),
-        )
-        .replace("{{USER_HOME}}", &workspace.to_string_lossy())
-}
-
-#[test]
-fn fresh_pagoda_sessions_receive_the_complete_original_request() {
-    let workspace = std::path::Path::new("/isolated/workspace");
-    let original = pagoda_prompt(
-        include_str!("../fixtures/configurator_evals/voxel_pagoda.md"),
-        workspace,
-    );
-    for template in [
-        include_str!("../fixtures/configurator_evals/review_pagoda.md"),
-        include_str!("../fixtures/configurator_evals/improve_pagoda.md"),
-    ] {
-        let rendered = pagoda_prompt(template, workspace);
-        assert!(rendered.contains(&original));
-        assert!(rendered.contains("README.md"));
-        assert!(rendered.contains("HTML document title"));
-        assert!(rendered.contains("symlinks"));
-        assert!(!rendered.contains("{{ORIGINAL_REQUEST}}"));
-        assert!(!rendered.contains("{{USER_HOME}}"));
-    }
-}
-
-pub(super) async fn verify_pagoda_sequence(
-    activation: &stages::ActivationFence,
-    node: &gents::defra_node::EmbeddedNode,
-    owner: &str,
-    workspace: &std::path::Path,
-    evidence: &std::path::Path,
-) -> Result<()> {
-    let escaped = gents::graphql::escape_graphql_string(owner);
-    let behaviors = rows(node, &format!(
-        r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{escaped}"}}}}) {{behavior_id display_name enabled}} }}"#
-    ), "AgentBehavior").await?;
-    let builder = exact_named_behavior(&behaviors, "Builder")?["behavior_id"]
-        .as_str()
-        .context("Builder identity")?;
-    let reviewer = exact_named_behavior(&behaviors, "Reviewer")?["behavior_id"]
-        .as_str()
-        .context("Reviewer identity")?;
-    let project = workspace.join("pagoda");
-    let prompt = |text: &str| pagoda_prompt(text, workspace);
-    let creation = stages::checked(
-        stages::CaseId::Pagoda,
-        evidence,
-        stages::acceptance(retain_checked_project(
-            &project,
-            &evidence.join("pagoda-source"),
-            async {
-                let created = stages::execute(
-                    activation,
-                    node,
-                    owner,
-                    builder,
-                    "pagoda",
-                    &prompt(include_str!(
-                        "../fixtures/configurator_evals/voxel_pagoda.md"
-                    )),
-                    evidence,
-                )
-                .await?;
-                created.ensure_completed()?;
-                check_pagoda_browser(&project, &evidence.join("pagoda-browser")).await?;
-                Ok(())
-            },
-        )),
-    )
-    .await;
-    // A failed first attempt can still be reviewed and improved. Retain its
-    // failure, and require actual model-authored HTML rather than seeding a
-    // substitute artifact to make the later cases runnable.
-    if !std::fs::metadata(project.join("index.html"))
-        .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
-    {
-        return creation.and(Err(anyhow::anyhow!(
-            "no HTML artifact available for review"
-        )));
-    }
-    let review = stages::checked(
-        stages::CaseId::Review,
-        evidence,
-        stages::acceptance(async {
-            let before = project_snapshot(workspace)?;
-            let review = stages::execute(
-                activation,
-                node,
-                owner,
-                reviewer,
-                "review",
-                &prompt(include_str!(
-                    "../fixtures/configurator_evals/review_pagoda.md"
-                )),
-                evidence,
-            )
-            .await?;
-            review.ensure_completed()?;
-            ensure!(
-                before == project_snapshot(workspace)?,
-                "Reviewer modified workspace files"
-            );
-            ensure!(
-                !review.answer.trim().is_empty(),
-                "Reviewer returned no feedback"
-            );
-            Ok(review)
-        }),
-    )
-    .await;
-    let review = match review {
-        Ok(review) => review,
-        Err(error) => return combine_case_outcomes(creation, Err(error)),
-    };
-    let improvement = stages::checked(
-        stages::CaseId::Improve,
-        evidence,
-        stages::acceptance(retain_checked_project(
-            &project,
-            &evidence.join("improve-source"),
-            async {
-                let improved = stages::execute(
-                    activation,
-                    node,
-                    owner,
-                    builder,
-                    "improve",
-                    &prompt(include_str!(
-                        "../fixtures/configurator_evals/improve_pagoda.md"
-                    ))
-                    .replace("{{REVIEW}}", &review.answer),
-                    evidence,
-                )
-                .await?;
-                improved.ensure_completed()?;
-                check_pagoda_browser(&project, &evidence.join("improve-browser")).await
-            },
-        )),
-    )
-    .await;
-    combine_case_outcomes(creation, improvement)
-}
-
-fn combine_case_outcomes(first: Result<()>, second: Result<()>) -> Result<()> {
-    match (first, second) {
-        (Err(first), Err(second)) => {
-            Err(first.context(format!("later case also failed: {second:#}")))
-        }
-        (Err(error), _) | (_, Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-    }
-}
-
-#[test]
-fn sequence_summary_retains_both_failures() {
-    let error = combine_case_outcomes(
-        Err(stages::EvaluationFailure::Deadline("pagoda".into()).into()),
-        Err(stages::EvaluationFailure::Provider("review".into()).into()),
-    )
-    .unwrap_err();
-    let message = format!("{error:#}");
-    assert!(message.contains("pagoda"));
-    assert!(message.contains("review"));
-}
-
 pub(super) async fn verify_skill_workflow(
     activation: &stages::ActivationFence,
     node: &gents::defra_node::EmbeddedNode,
@@ -506,6 +117,9 @@ pub(super) async fn verify_skill_workflow(
         "This is not the skill's checklist. Do not create a receipt from this file; resolve the reference from the skill's source directory.\n")?;
     std::fs::write(source.join("references/checklist.md"),
         format!("In your working root, write readiness/skill-check.txt containing exactly {marker} followed by a newline. Read it back and report the result.\n"))?;
+    stages::prepare_stage(activation, node, owner, setup, "skill-preview").await?;
+    let before = super::onboarding_scenarios::preview_snapshot(node).await?;
+    super::reporting::write_json_new(&evidence.join("skill-preview-before.json"), &before)?;
     let previewed = stages::execute(
         activation,
         node,
@@ -520,6 +134,15 @@ pub(super) async fn verify_skill_workflow(
     .await?;
     previewed.ensure_completed()?;
     activation.wait().await?;
+    let after = super::onboarding_scenarios::preview_snapshot(node).await?;
+    super::reporting::write_json_new(&evidence.join("skill-preview-after.json"), &after)?;
+    ensure!(
+        before == after,
+        "skill preview mutated canonical configuration or schema"
+    );
+    super::onboarding_scenarios::assert_preview_calls(
+        &super::onboarding_scenarios::tool_calls(node, &previewed.request_id).await?,
+    )?;
     ensure!(
         builder_before == behavior_configuration(node, owner, None).await?
             && setup_before == behavior_configuration(node, owner, Some(setup)).await?,
@@ -758,7 +381,7 @@ async fn run_document_automation(
         "automation output was precreated before any input"
     );
     let mut receipts = Vec::new();
-    for message in ["Hello pagoda", "the garden is green"] {
+    for message in ["Hello steward", "the garden is green"] {
         let correlation = uuid::Uuid::new_v4().to_string();
         let escaped_correlation = gents::graphql::escape_graphql_string(&correlation);
         let escaped_message = gents::graphql::escape_graphql_string(message);
@@ -772,9 +395,13 @@ async fn run_document_automation(
             "automation input submission failed: {:?}",
             response.errors
         );
+        let source_doc_id =
+            gents::graphql::single_mutation_document(&response, "create_EvalAutomationInput")?
+                .and_then(|row| row["_docID"].as_str())
+                .context("automation input document ID missing")?;
         receipts.push(serde_json::json!({
             "input": message, "correlation": correlation,
-            "submission": response.data, "output": null,
+            "source_doc_id": source_doc_id, "submission": response.data, "output": null,
         }));
         std::fs::write(
             evidence.join("automation-receipts.json"),
@@ -813,18 +440,27 @@ async fn run_document_automation(
     );
     let started = std::time::Instant::now();
     loop {
-        let requests = rows(node, &format!(r#"{{ AgentRequest(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{request_id caused_by_trigger_id lifecycle_state}} }}"#), "AgentRequest").await?;
+        let requests = rows(node, &format!(r#"{{ AgentRequest(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{request_id caused_by_source_doc_id caused_by_trigger_id lifecycle_state}} }}"#), "AgentRequest").await?;
         let requests = requests
             .iter()
             .filter(|request| trigger_ids.contains(&request["caused_by_trigger_id"]))
             .collect::<Vec<_>>();
-        if requests.len() >= receipts.len()
+        let each_input_invoked = receipts.iter().all(|receipt| {
+            receipt["source_doc_id"].as_str().is_some_and(|id| {
+                requests
+                    .iter()
+                    .any(|request| request["caused_by_source_doc_id"] == id)
+            })
+        });
+        if each_input_invoked
             && requests.iter().all(|request| {
                 gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
                     request["lifecycle_state"].as_str(),
                 )
             })
         {
+            ensure!(requests.iter().all(|request| request["lifecycle_state"] == "completed"),
+                "automation produced output but its requests did not complete successfully: {requests:?}");
             break;
         }
         ensure!(
@@ -950,115 +586,4 @@ fn project_snapshot(root: &std::path::Path) -> Result<BTreeMap<std::path::PathBu
         }
     }
     Ok(snapshot)
-}
-
-async fn check_pagoda_browser(project: &std::path::Path, evidence: &std::path::Path) -> Result<()> {
-    ensure!(
-        project.join("README.md").is_file(),
-        "pagoda README.md is missing"
-    );
-    // Validate filesystem bounds before opening the model-authored page.
-    project_snapshot(project)?;
-    // Freeze evaluator code with the compiled fixtures for the entire batch.
-    // Working-tree edits during a long run must not change later trials' checks.
-    let script = include_str!("../../../../scripts/evals/check-pagoda.mjs");
-    std::fs::create_dir_all(evidence)?;
-    std::fs::write(evidence.join("checker.mjs"), script)?;
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        tokio::process::Command::new("node")
-            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-            .args([
-                "--input-type=module",
-                "--eval",
-                script,
-                "--",
-                "check-pagoda.mjs",
-            ])
-            .arg(project)
-            .arg(evidence)
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await;
-    let output = match output {
-        Ok(Ok(output)) => output,
-        failure => {
-            let reason = match failure {
-                Err(_) => "browser evaluator exceeded its 60-second deadline".to_owned(),
-                Ok(Err(error)) => format!("launching browser evaluator: {error}"),
-                Ok(Ok(_)) => unreachable!(),
-            };
-            std::fs::write(
-                evidence.join("process.json"),
-                serde_json::to_vec_pretty(&serde_json::json!({"infrastructure_error":reason}))?,
-            )?;
-            return Err(stages::EvaluationFailure::Grader(reason).into());
-        }
-    };
-    std::fs::write(
-        evidence.join("process.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "exit_code": output.status.code(),
-            "stdout": String::from_utf8_lossy(&output.stdout),
-            "stderr": String::from_utf8_lossy(&output.stderr),
-        }))?,
-    )?;
-    let receipt = read_browser_receipt(evidence, &String::from_utf8_lossy(&output.stderr))?;
-    if receipt["inconclusive"] == true {
-        return Err(stages::EvaluationFailure::Inconclusive(receipt["error"].to_string()).into());
-    }
-    ensure!(
-        output.status.success(),
-        "browser acceptance failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(())
-}
-
-fn read_browser_receipt(evidence: &std::path::Path, stderr: &str) -> Result<serde_json::Value> {
-    let decoded = std::fs::read(evidence.join("browser.json"))
-        .map_err(anyhow::Error::from)
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(Into::into));
-    let receipt = decoded.map_err(|error| {
-        stages::EvaluationFailure::Grader(format!(
-            "browser evaluator did not produce a readable receipt: {error}; stderr: {stderr}"
-        ))
-    })?;
-    if !receipt["passed"].is_boolean() {
-        return Err(stages::EvaluationFailure::Grader(format!(
-            "browser evaluator receipt has no boolean passed field; stderr: {stderr}"
-        ))
-        .into());
-    }
-    Ok(receipt)
-}
-
-#[test]
-fn missing_or_invalid_browser_receipts_are_grader_failures() {
-    let evidence = tempfile::tempdir().unwrap();
-    for content in [None, Some("not JSON"), Some("null")] {
-        if let Some(content) = content {
-            std::fs::write(evidence.path().join("browser.json"), content).unwrap();
-        }
-        let error = read_browser_receipt(evidence.path(), "Chrome unavailable").unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<stages::EvaluationFailure>(),
-            Some(stages::EvaluationFailure::Grader(_))
-        ));
-        assert!(error.to_string().contains("Chrome unavailable"));
-    }
-}
-
-#[tokio::test]
-#[ignore = "requires Google Chrome and repository npm ci; run make test-evals-browser"]
-async fn browser_checker_accepts_static_fixture_without_live_inference() {
-    let root = tempfile::tempdir().unwrap();
-    let project = root.path().join("project");
-    std::fs::create_dir(&project).unwrap();
-    std::fs::write(project.join("README.md"), "Open index.html.").unwrap();
-    std::fs::write(project.join("index.html"), "<!doctype html><title>Test</title><button onclick=\"document.body.style.background='black'\">Toggle night</button>").unwrap();
-    check_pagoda_browser(&project, &root.path().join("evidence"))
-        .await
-        .unwrap();
 }

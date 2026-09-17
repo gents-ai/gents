@@ -56,7 +56,10 @@ mailbox output and repeat deduplication. Combined summaries are accepted; item
 count and prompt paragraph layout are not product acceptance requirements.
 Preview compares all canonical configuration documents and registered schemas,
 and rejects dispatched config mutations even if they fail or are later undone.
-Malformed calls rejected before dispatch remain diagnostics, not writes.
+The grader uses typed config execution receipts and the durable tool argument-rejection
+class, not argv spelling or error messages. Missing receipts fail closed. Malformed
+calls rejected before execution remain diagnostics, not writes. A receipt records
+entry into a write-capable operation, not a claim that a commit succeeded.
 Repeat checks preserve notification identity and require complete findings;
 condition-policy content updates are allowed, not mistaken for duplicates.
 The harness prepares its own invocation definitions before taking the baseline;
