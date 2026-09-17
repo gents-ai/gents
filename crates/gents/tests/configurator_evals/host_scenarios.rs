@@ -23,7 +23,7 @@ const APPROVE: &str = include_str!("../fixtures/configurator_evals/host/approve-
 pub(super) fn provenance() -> Result<reporting::RunProvenance> {
     reporting::RunProvenance::current(
         "host-steward",
-        "host-observations-v3-schedule-execution",
+        "host-observations-v4-actionable-coverage",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         "engineer-eval-sampling",
         1.0,
@@ -137,6 +137,7 @@ pub(super) async fn run_trial(
                 let open = items.iter().filter(|row| row["status"] == "open").collect::<Vec<_>>();
                 if index == 3 || index == 4 {
                     ensure!(!open.is_empty(), "faults produced no attention item");
+                    verify_finding_coverage(&open, &actual, chrono::Utc::now().timestamp())?;
                     for row in &open {
                         ensure!(row["requester_did"] == owner && row["target_behavior_id"] == monitor && row["kind"] == "flag" && row["action"] == "ack", "wrong notification ownership or handling");
                         let (request, source) = if index == 3 {
@@ -213,6 +214,80 @@ fn verify_notification_causality(item: &Value, request: &str, source: &str) -> R
         "attention item belongs to a different input document"
     );
     Ok(())
+}
+
+fn verify_finding_coverage(items: &[&Value], actual: &Value, now: i64) -> Result<()> {
+    use std::collections::BTreeSet;
+    let mut expected = BTreeSet::new();
+    if actual["disk_used_percent"]
+        .as_i64()
+        .context("disk measurement missing")?
+        >= 80
+    {
+        expected.insert("disk");
+    }
+    if now
+        - actual["backup_mtime"]
+            .as_i64()
+            .context("backup timestamp missing")?
+        > 86_400
+        || !actual["backup_matches"]
+            .as_bool()
+            .context("backup comparison missing")?
+    {
+        expected.insert("backup");
+    }
+    if actual["api_status"]
+        .as_i64()
+        .context("API status missing")?
+        != 200
+    {
+        expected.insert("api");
+    }
+    if actual["dashboard"].as_str() != Some("Dashboard ready") {
+        expected.insert("dashboard");
+    }
+    let mut reported = BTreeSet::new();
+    for item in items {
+        let payload: Value = serde_json::from_str(
+            item["payload"]
+                .as_str()
+                .context("finding payload missing")?,
+        )?;
+        let checks = payload["checks"]
+            .as_array()
+            .context("finding payload requires checks list")?;
+        ensure!(!checks.is_empty(), "attention item has no actionable check");
+        for check in checks {
+            reported.insert(
+                check
+                    .as_str()
+                    .context("finding check must be a string")?
+                    .to_owned(),
+            );
+        }
+    }
+    ensure!(
+        reported.iter().map(String::as_str).collect::<BTreeSet<_>>() == expected,
+        "mailbox finding coverage differs from host measurements: expected {expected:?}, got {reported:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn mailbox_coverage_accepts_grouping_but_rejects_missing_and_spurious_findings() {
+    let actual = serde_json::json!({"disk_used_percent":86,"backup_mtime":0,
+        "backup_matches":true,"api_status":200,"dashboard":"Dashboard ready"});
+    let grouped = serde_json::json!({"payload":r#"{"checks":["disk","backup"]}"#});
+    let disk = serde_json::json!({"payload":r#"{"checks":["disk"]}"#});
+    let backup = serde_json::json!({"payload":r#"{"checks":["backup"]}"#});
+    assert!(verify_finding_coverage(&[&grouped], &actual, 100_000).is_ok());
+    assert!(verify_finding_coverage(&[&disk, &backup], &actual, 100_000).is_ok());
+    assert!(verify_finding_coverage(&[&disk], &actual, 100_000).is_err());
+    let spurious = serde_json::json!({"payload":r#"{"checks":["disk","backup","api"]}"#});
+    assert!(verify_finding_coverage(&[&spurious], &actual, 100_000).is_err());
+    let vague = serde_json::json!({"payload":"The host needs attention"});
+    assert!(verify_finding_coverage(&[&vague], &actual, 100_000).is_err());
 }
 
 #[test]

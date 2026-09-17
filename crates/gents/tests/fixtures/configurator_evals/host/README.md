@@ -2,7 +2,8 @@
 
 Status: the eight-stage stewardship suite is registered in the shared runner,
 including independent scheduled-execution grading. An initial live trial passed
-all eight checkpoints; cohort-scale acceptance remains pending. Maintenance and
+all eight checkpoints before the v4 structured finding-coverage check was added;
+live v4 and cohort-scale acceptance remain pending. Maintenance and
 isolated improvement candidates are not yet implemented.
 These results are separate from monitor-mailbox cohorts.
 
@@ -48,6 +49,8 @@ the coordinator's container control socket.
    canonical open mailbox findings linked through runtime-stamped request/source
    IDs to measurements of both conditions. Combined items are valid. Do not flag the disabled worker or
    historical log error as a current incident.
+   Compare the union of structured payload `checks` to actual host faults; a
+   correctly linked but vague notification is not proof of complete coverage.
 5. Repeat: submit another check without changing faults. Compare stable open
    notification identities and coverage. No additional duplicate attention items.
 6. Recovery: coordinator restores the seeded backup and removes only the injected
