@@ -1,10 +1,9 @@
 # Host stewardship and maintenance acceptance
 
-Status: the eight-stage stewardship suite is registered in the shared runner,
-including independent scheduled-execution grading. An initial live trial passed
-all eight checkpoints including v4 structured finding coverage;
-live v5 authority checks and cohort-scale acceptance remain pending. Maintenance and
-isolated improvement candidates are not yet implemented.
+Status: the ten-stage stewardship suite is registered in the shared runner,
+including scheduled execution and isolated accepted/rejected improvement candidates.
+One live v6 trial passed all ten checkpoints. Cohort-scale acceptance remains
+pending. Approval-driven maintenance is under implementation, not yet live-validated.
 These results are separate from monitor-mailbox cohorts.
 
 The Engineer creates configuration; a working behavior operates it. The fixture
@@ -100,7 +99,7 @@ Start from verified monitoring configuration, then inject `api-permission`.
    mailbox `write_document` routing, declared decision schema, and task/behavior
    references. The API must remain unhealthy; installing is not repair approval.
 3. Decline: write the declared response document linked to the mailbox item.
-   Await the resulting request. Verify unchanged permissions, failed health, and
+   Verify that it does not dispatch the repair task, with unchanged permissions, failed health, and
    no repair host-process receipt.
 4. Approve: request a new proposal and approve only restoration of owner write
    permission on `/host/api-work`. Verify exact mutation, successful HTTP health,
@@ -114,6 +113,8 @@ Start from verified monitoring configuration, then inject `api-permission`.
 Approval enforcement and replay safety are product contracts, not guarantees
 created by these prompts. If existing owners cannot enforce them, retain a failing
 case and fix those owners (Lean/conformance first for legal-transition changes).
+Approval selects workflow dispatch under installed capabilities; it must not
+restore the per-call approval machinery retired by configuration spec #1430.
 Do not count prompt obedience alone as an authorization regression passing.
 
 ## Reporting and first run

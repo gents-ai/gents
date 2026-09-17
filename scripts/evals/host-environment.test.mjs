@@ -286,8 +286,19 @@ test(
       assert.equal(failed.exit_code, 1);
       assert.match(failed.diagnostic, /503 Service Unavailable/);
       assert.equal((await neighbor.snapshot()).api.body, "healthy");
-      await host.exec(["chmod", "700", "/host/api-work"]);
+      const repair = "/opt/steward-fixture/restore-api-write.sh";
+      await assert.rejects(host.exec([repair, "/host/data"]));
+      assert.equal((await host.snapshot()).api.exit_code, 1);
+      await host.exec([repair]);
       assert.equal((await host.snapshot()).api.body, "healthy");
+      assert.match(await host.exec([repair]), /no change/);
+      await host.exec(["chmod", "400", "/host/api-work"]);
+      await assert.rejects(host.exec([repair]));
+      assert.equal(
+        (await host.exec(["stat", "-c", "%a", "/host/api-work"])).trim(),
+        "400",
+      );
+      await host.exec(["chmod", "700", "/host/api-work"]);
       await host.inject("stale-backup");
       assert.ok(
         (await host.snapshot()).backup_mtime < Date.now() / 1000 - 86400,
