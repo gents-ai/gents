@@ -232,9 +232,6 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
         )
         .await?;
 
-        let doc_id = extract_doc_id(resp.data.as_ref(), &self.decl.collection)
-            .ok_or_else(|| anyhow!("write to {:?} returned no _docID", self.decl.collection))?;
-
         let document = resp
             .data
             .as_ref()
@@ -242,32 +239,16 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
             .ok_or_else(|| anyhow!("write returned no canonical document"))?;
+        let doc_id = document
+            .get("_docID")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("write to {:?} returned no _docID", self.decl.collection))?;
         Ok(
             json!({"collection":self.decl.collection, "document_id":doc_id,
             "document":document})
             .to_string(),
         )
     }
-}
-
-fn extract_doc_id(data: Option<&Value>, collection: &str) -> Option<String> {
-    let data = data?;
-    let add_key = format!("add_{collection}");
-    let create_key = format!("create_{collection}");
-    let field = data.get(&add_key).or_else(|| data.get(&create_key))?;
-
-    field
-        .get("_docID")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            field
-                .as_array()
-                .and_then(|rows| rows.first())
-                .and_then(|row| row.get("_docID"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
 }
 
 #[cfg(test)]

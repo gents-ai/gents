@@ -1766,9 +1766,13 @@ async fn connected_plan_preview_validates_pending_references_without_writes() {
     let mut canonical = crate::mailbox::canonical_mailbox_write_decl();
     canonical.notification =
         Some(serde_json::from_value(with_mailbox[3]["mailbox"].clone()).unwrap());
+    let surface: crate::document_config::DatastoreToolSurfaceDocument =
+        serde_json::from_value(surface["document"].clone()).unwrap();
     assert_eq!(
-        surface["document"]["entries"],
-        json!([crate::document_config::SurfaceToolDecl::Create(canonical)])
+        surface.entries,
+        Some(vec![crate::document_config::SurfaceToolDecl::Create(
+            canonical
+        )])
     );
     with_mailbox[3]["document"]["entries"] = json!([]);
     assert!(tool.call(args(with_mailbox)).await.is_err());

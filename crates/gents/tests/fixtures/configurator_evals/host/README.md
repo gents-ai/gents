@@ -1,8 +1,9 @@
 # Host stewardship and maintenance acceptance
 
-Status: the seven-stage stewardship suite is registered in the shared runner;
-live acceptance is in progress. Independent scheduled-execution grading,
-maintenance and isolated improvement candidates are not yet implemented.
+Status: the eight-stage stewardship suite is registered in the shared runner,
+including independent scheduled-execution grading. An initial live trial passed
+all eight checkpoints; cohort-scale acceptance remains pending. Maintenance and
+isolated improvement candidates are not yet implemented.
 These results are separate from monitor-mailbox cohorts.
 
 The Engineer creates configuration; a working behavior operates it. The fixture
