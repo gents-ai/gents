@@ -15,6 +15,68 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 test(
+  "candidate runtime forks an offline home without changing the original host",
+  { skip: process.env.GENTS_HOST_FIXTURE_TEST !== "1", timeout: 180_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "gents-candidate-"));
+    const endpoint = "http://127.0.0.1:8000/v1";
+    let original;
+    let candidate;
+    const principal = async (graphql) => {
+      const response = await fetch(graphql, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: "{ AgentPrincipal { agent_did } }" }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const body = await response.json();
+      assert.equal(response.ok, true);
+      assert.equal(body.errors, undefined);
+      assert.equal(body.data.AgentPrincipal.length, 1);
+      return body.data.AgentPrincipal[0].agent_did;
+    };
+    try {
+      original = await HostEnvironment.start({
+        runtime: true,
+        runtimeImage: await resolveRuntimeImage(),
+        endpoint,
+      });
+      const graphql = await original.provision({
+        endpoint,
+        model: "fixture-no-inference",
+      });
+      const did = await principal(graphql);
+      await original.inject("api-permission");
+      candidate = await original.forkStoppedRuntime({
+        endpoint,
+        directory: join(directory, "snapshot"),
+      });
+      await assert.rejects(
+        original.exec(["test", "-e", "/runtime/server.pid"]),
+      );
+      await assert.rejects(
+        candidate.exec(["test", "-e", "/runtime/server.pid"]),
+      );
+      assert.equal(await principal(await candidate.startRuntime()), did);
+      assert.equal((await candidate.snapshot()).api_status, 200);
+      assert.equal((await original.snapshot()).api_status, 503);
+      await candidate.exec(["touch", "/host/candidate-only"]);
+      await assert.rejects(
+        original.exec(["test", "-e", "/host/candidate-only"]),
+      );
+      await candidate.close();
+      candidate = undefined;
+      assert.equal(await principal(await original.startRuntime()), did);
+      assert.equal((await original.snapshot()).api_status, 503);
+    } finally {
+      await candidate?.close();
+      await original?.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   "stopped runtime archives retain private final memory evidence",
   { skip: process.env.GENTS_HOST_FIXTURE_TEST !== "1", timeout: 180_000 },
   async () => {

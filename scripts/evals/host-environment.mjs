@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -324,6 +324,72 @@ export class HostEnvironment {
 
   async stopRuntime() {
     await this.exec(["/opt/steward-fixture/stop-runtime.sh"]);
+  }
+
+  // The original stays stopped until the coordinator retires the candidate.
+  // Copy only its offline agent home, never process state or host effects.
+  async forkStoppedRuntime({ endpoint, directory }) {
+    await this.assertOwned();
+    const [record] = JSON.parse(await docker(["inspect", this.id]));
+    await this.stopRuntime();
+    const archive = await archiveContainerDirectory(
+      this.id,
+      "/runtime/agent",
+      directory,
+    );
+    const candidate = await HostEnvironment.start({
+      runtime: true,
+      runtimeImage: record.Image,
+      endpoint,
+    });
+    try {
+      await candidate.exec(["mkdir", "/runtime/agent"]);
+      const child = spawn(
+        "docker",
+        [
+          "exec",
+          "-i",
+          "--user",
+          "1000:1000",
+          candidate.id,
+          "tar",
+          "-C",
+          "/runtime/agent",
+          "-xf",
+          "-",
+        ],
+        { stdio: ["pipe", "ignore", "pipe"], timeout: 120_000 },
+      );
+      let diagnostic = "";
+      child.stderr.on("data", (chunk) => {
+        diagnostic = (diagnostic + chunk.toString()).slice(-4096);
+      });
+      const completion = new Promise((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", (code, signal) =>
+          code === 0
+            ? resolve()
+            : reject(
+                new Error(
+                  `Candidate restore failed (${signal || code}): ${diagnostic}`,
+                ),
+              ),
+        );
+      });
+      try {
+        await Promise.all([
+          completion,
+          pipeline(createReadStream(archive), child.stdin),
+        ]);
+      } catch (error) {
+        child.kill();
+        throw error;
+      }
+      return candidate;
+    } catch (error) {
+      await candidate.close();
+      throw error;
+    }
   }
 
   async submitChat(behavior, session, prompt, timeout) {

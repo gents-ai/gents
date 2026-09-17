@@ -117,6 +117,15 @@ is written after runtime shutdown and archival, before container removal. Use
 these measurements to size cohorts; successful trials alone do not establish
 that a smaller container limit is safe.
 
+The coordinator's `forkStoppedRuntime` fixture stops the original runtime and
+archives only its offline agent home into a new isolated container using the
+same immutable runtime image. The candidate begins stopped, on a fresh synthetic
+host; faults must be injected explicitly for its checks. Retire the candidate
+before restarting the original so the same principal is never served by both.
+This fixture does not promote configuration, copy host effects, or itself grade
+an improvement. Candidate acceptance and promotion still require protected
+checks and canonical configuration writes.
+
 Run one inspected GLM trial per scenario before scaling. Use temperature 1,
 top-p 0.95 and record requested reasoning effort. C=30 requires per-container
 limits and an explicit resource preflight, not thirty unbounded containers.
