@@ -7,9 +7,18 @@ dependencies, then `gents graph run web_deep_research --help` for run inputs.
 Installation binds its `coordinator`, `researcher`, and `verifier` slots to
 existing profiles owned by the selected principal.
 
+The roles install as `gents:web-deep-research:research-plan`,
+`gents:web-deep-research:research-investigate`,
+`gents:web-deep-research:research-adjudicate`, and
+`gents:web-deep-research:research-report`. Each owns deterministic component
+IDs such as `:context`, `:tools`, and `:inference`; visible role names remain
+independent labels.
+
 ## Configuration and authority
 
-Inference resolves through each task's behavior and bound user profile. The
+Inference resolves through each task's behavior and a scoped copy of the user
+profile selected by its slot. The source profile remains unchanged and the
+backend connection remains shared. The
 contexts, exact MCP tool names, datastore surfaces, tasks, capabilities and
 graph intent are authored once in `pack_config.json`; inference connectivity
 and model settings remain on existing user configuration.

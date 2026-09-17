@@ -7,6 +7,12 @@ Runtime configuration is authored once in `pack_config.json`. The distribution
 prompt sidecars needed to install the pack; there are no per-collection JSON
 document fragments.
 
+The authored roles remain pack-local. Installation publishes them as
+`gents:background-continuation:background-parent` and
+`gents:background-continuation:background-worker`; each gets its own
+`:context`, `:tools`, and inference component IDs. Their human-readable display
+names remain independent of those stable keys.
+
 ```text
 create BackgroundContinuationJob
               │

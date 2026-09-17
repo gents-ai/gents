@@ -63,7 +63,7 @@ settings remains unchecked; the direct probe is not a substitute for that flow.
       backend/profile without modifying existing behavior bindings or profiles.
 
 - [ ] Start the new native binary, not only a refreshed browser bundle.
-- [ ] Setup has no stale provider, identity, session, or authority selections.
+- [ ] Configurator has no stale provider, identity, session, or authority selections.
 - [ ] The selected Local agent card shows editable name, pre-filled user-home
       tool root with optional folder picker, and a read/write, read-only, or
       metatools-only ceiling dropdown. Root and ceiling are independent.
@@ -127,11 +127,11 @@ restart, and a real response in chat. A model list alone does not prove inferenc
 
 ## 3. Configurator and behavior creation
 
-- [ ] Initial chat uses Setup; its prompt explains the data model and available
+- [ ] Initial chat uses Configurator (`gents:base:configurator`); its prompt explains the data model and available
       configuration tools, and asks for clarification when requirements conflict.
 - [ ] Ask for coding work in a chosen repository with explicit desired tools.
       The agent creates a **new** behavior and makes it the server default;
-      Setup remains an available configurator behavior.
+      Configurator remains available under that stable ID.
 - [ ] Inspect persisted display name, description, literal system prompt,
       context, profile, tools, and default selection. Reported success matches
       effective state; starting the behavior does not repeat the setup interview.
@@ -142,7 +142,9 @@ restart, and a real response in chat. A model list alone does not prove inferenc
       as healthy until a server actually activates.
 - [ ] A partial multi-step configuration identifies the failed step and retries
       it without duplicating the already-created behavior.
-- [ ] Editing tools cannot change protected Setup or collateral shared tools.
+- [ ] The created behavior has a `local:{slug}` ID, an independent display name,
+      and consistently scoped `:context`, `:tools`, and inference components.
+- [ ] Editing tools cannot change protected Configurator or another behavior's scoped tools.
 - [ ] A behavior cannot exceed the process permission ceiling. The agent explains
       the limit and directs the user to runtime controls when necessary.
 - [ ] Test the new default behavior with a small coding task in the selected
@@ -150,7 +152,7 @@ restart, and a real response in chat. A model list alone does not prove inferenc
 
 ## 4. Packs, graphs, and deployment
 
-- [ ] Ask Setup to discover/inspect the bundled code-review pack before install.
+- [ ] Ask Configurator to discover/inspect the bundled code-review pack before install.
 - [ ] Install via the authorized pack tool on the current serving node/principal;
       verify materialized documents/assets and explicit caller admission.
 - [ ] No unrelated home adoption, CLI rebuild, schema reset, or data deletion is
@@ -171,7 +173,7 @@ restart, and a real response in chat. A model list alone does not prove inferenc
 
 - [ ] Press Enter twice while creating a chat: one accepted submission and one
       AgentSession, not duplicate sessions/requests.
-- [ ] Leave and reopen both Setup and coding sessions; transcript and behavior
+- [ ] Leave and reopen both Configurator and coding sessions; transcript and behavior
       selection restore correctly, including after desktop restart.
 - [ ] Session filters are visible, understandable, and resettable; filtered-out
       sessions are not mistaken for lost data.

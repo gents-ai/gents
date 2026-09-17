@@ -11,6 +11,10 @@ Runtime configuration is authored once in `pack_config.json`. The distribution
 prompt sidecars needed to install the pack; there are no per-collection JSON
 document fragments.
 
+The authored `lsp-coder` role installs as `gents:lsp-rust:lsp-coder`, with
+owned `gents:lsp-rust:lsp-coder:context`, `:tools`, and inference components.
+“LSP rust-analyzer coder” remains its independent display name.
+
 This pack is **not** a CI gate. Required CI still says no live rust-analyzer.
 Run it locally when `rust-analyzer` is on `PATH` and the DeepSeek box (or
 another OpenAI-compatible endpoint) is reachable.

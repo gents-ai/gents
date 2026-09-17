@@ -10,9 +10,8 @@ use gents::config_client::{
 use gents::defra_node::{EmbeddedNode, HttpConfig};
 use gents::document_config::{AgentPrincipal, BackendAuth, PackConfig};
 use gents::{
-    default_behavior_id_for_agent, ensure_runtime_schemas, AgentIdentity, Collection,
-    DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity, McpPool, ToolCeiling,
-    DEFAULT_MAX_TURNS,
+    ensure_runtime_schemas, AgentIdentity, Collection, DocumentRuntimeOptions, Gents,
+    InferenceBackend, KeyIdentity, McpPool, ToolCeiling, DEFAULT_MAX_TURNS,
 };
 use tokio::sync::watch;
 
@@ -124,13 +123,13 @@ async fn seed_demo_documents(
                 None => serde_json::from_value(serde_json::json!({"agent_did":agent_did}))?,
             };
             let behavior_id = principal.default_behavior_id.clone()
-                .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
+                .unwrap_or_else(|| "local:demo".to_owned());
             principal.default_behavior_id = Some(behavior_id.clone());
-            let profile_id = format!("{behavior_id}:demo-profile");
-            let tools_id = format!("{behavior_id}:demo-tools");
-            let context_id = format!("{behavior_id}:demo-context");
-            let execution_id = format!("{behavior_id}:demo-execution");
-            let compaction_id = format!("{behavior_id}:demo-compaction");
+            let profile_id = format!("{behavior_id}:inference");
+            let tools_id = format!("{behavior_id}:tools");
+            let context_id = format!("{behavior_id}:context");
+            let execution_id = format!("{behavior_id}:execution");
+            let compaction_id = format!("{behavior_id}:compaction");
             let created_at = read_desired_state_record_in_txn(
                 txn, Collection::AgentBehavior, agent_did, &behavior_id,
             ).await?.and_then(|(_, value)| value.get("created_at").cloned());
@@ -150,18 +149,18 @@ async fn seed_demo_documents(
                 "agent_principal":principal,
                 "agent_behaviors":[{"agent_did":agent_did,"behavior_id":behavior_id,
                     "display_name":"Default","context_id":context_id,"inference_profile_id":profile_id,"created_at":created_at}],
-                "contexts":[{"agent_did":agent_did,"context_id":context_id,
+                "contexts":[{"agent_did":agent_did,"context_id":context_id,"scope_behavior_id":behavior_id,
                     "system_prompt":system_prompt,"tools_id":tools_id,"compaction_id":compaction_id}],
-                "compactions":[{"agent_did":agent_did,"compaction_id":compaction_id,
+                "compactions":[{"agent_did":agent_did,"compaction_id":compaction_id,"scope_behavior_id":behavior_id,
                     "strategy":"StripThenSummarize","threshold":0.75}],
-                "tools":[{"agent_did":agent_did,"tools_id":tools_id,"display_name":"Demo Tools",
+                "tools":[{"agent_did":agent_did,"tools_id":tools_id,"scope_behavior_id":behavior_id,"display_name":"Demo Tools",
                     "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"ReadOnly"}},
                     "built_ins":{"enable_goal_tools":true,"enable_goal_creation":false}}],
                 "inference_backends":[backend],
-                "inference_profiles":[{"agent_did":agent_did,"profile_id":profile_id,"display_name":"Demo",
+                "inference_profiles":[{"agent_did":agent_did,"profile_id":profile_id,"scope_behavior_id":behavior_id,"display_name":"Demo",
                     "backend_id":backend_id,"model_name":model_name,"context_window":131072,
                     "max_output_tokens":32768,"execution_id":execution_id}],
-                "inference_execution":[{"agent_did":agent_did,"execution_id":execution_id,
+                "inference_execution":[{"agent_did":agent_did,"execution_id":execution_id,"scope_behavior_id":behavior_id,
                     "max_turns":DEFAULT_MAX_TURNS,"stream_batch_ms":1000,
                     "stream_liveness_timeout_secs":60.min(deadline_secs.saturating_sub(1)),"deadline_duration_secs":deadline_secs}]
             }))?;
@@ -229,12 +228,12 @@ mod tests {
                         .await?
                         .unwrap();
                     assert_eq!(other.endpoint, "http://localhost:8000/v1");
-                    let id = default_behavior_id_for_agent("did:test:demo-a");
+                    let id = "local:demo";
                     let (_, tools) = read_desired_state_record_in_txn(
                         txn,
                         Collection::Tools,
                         "did:test:demo-a",
-                        &format!("{id}:demo-tools"),
+                        &format!("{id}:tools"),
                     )
                     .await?
                     .unwrap();
@@ -244,7 +243,7 @@ mod tests {
                         txn,
                         Collection::AgentContext,
                         "did:test:demo-a",
-                        &format!("{id}:demo-context"),
+                        &format!("{id}:context"),
                     )
                     .await?
                     .unwrap();

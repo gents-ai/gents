@@ -157,11 +157,23 @@ principal's existing profiles and the effective slot map without writing.
 Bind ambiguous installs explicitly with repeated
 `--inference-slot name=profile_id`. Only a one-slot/one-usable-profile install
 auto-binds. Packs do not author inference backends, profiles, endpoints,
-credentials, models, sampling, or execution settings; the bound user profile
-remains their sole owner. Packs bind to the target node through existing
+credentials, models, sampling, or execution settings. The selected user profile
+remains the source; installation copies its mutable settings into each behavior
+closure while retaining the shared backend reference. Packs bind to the target node through existing
 identity checks. Review plugin declarations and host authority before
 installing untrusted content. External dependency commands are documentation,
 never automatically executed.
+
+Installed behavior keys are derived from distribution metadata and the authored
+pack-local role: `{namespace}:{pack-name}:{role}`, with snake-case registry
+segments rendered as kebab-case. For example, `code_review` role
+`review-recon` installs as `gents:code-review:review-recon`. Its owned mutable
+documents use deterministic suffixes such as `:context`, `:tools`,
+`:inference`, `:sampling`, `:execution`, `:retry-policy`, and `:compaction`.
+Each installed behavior receives its own scoped context and inference closure,
+even when several roles select the same source profile; the backend connection
+remains shared. Display names are independent labels and never determine these
+keys.
 
 `pack run`, `init`, and `seed` operate `experiment.json` scenarios. A lexically
 normalized source directory with a snake_case leaf name can be used while
@@ -216,6 +228,10 @@ Every authored behavior references its slot as
 `gents:inference-slot:<name>`. Do not ship `InferenceBackend`,
 `InferenceProfile`, sampling, execution, or retry documents and do not use
 endpoint/model environment substitutions as a second inference owner.
+Behavior and component IDs inside `pack_config.json` are pack-local authoring
+handles. Keep task references and `manifest.json` slot membership on those
+handles; the installer rewrites the complete reference graph to installed
+registry-qualified keys. Do not pre-expand authored roles to installed IDs.
 
 Installation stamps `gents:pack:<pack_name>` onto every pack-authored document
 whose canonical type has tags, merging it with authored discovery tags. This
