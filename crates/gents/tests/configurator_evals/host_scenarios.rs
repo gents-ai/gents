@@ -23,7 +23,7 @@ const APPROVE: &str = include_str!("../fixtures/configurator_evals/host/approve-
 pub(super) fn provenance() -> Result<reporting::RunProvenance> {
     reporting::RunProvenance::current(
         "host-steward",
-        "host-observations-v4-actionable-coverage",
+        "host-observations-v5-monitor-authority",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         "engineer-eval-sampling",
         1.0,
@@ -476,25 +476,22 @@ pub(super) fn verify_steward_configuration(before: &Value, after: &Value) -> Res
         .iter()
         .find(|row| row["tools_id"] == context["tools_id"])
         .context("monitor tools missing")?;
-    let mut document = tools.clone();
-    document
-        .as_object_mut()
-        .context("invalid tools document")?
-        .remove("_docID");
-    let (_, projected) =
-        gents::config_client::config_projection(gents::Collection::Tools, Some(&document))?;
     let tools: gents::document_config::Tools =
-        serde_json::from_value(projected.context("tools projection missing")?)?;
-    let host = tools.host.context("monitor host tools missing")?;
+        decode_configuration(gents::Collection::Tools, tools)?;
+    verify_monitor_authority(&tools)?;
+    let surfaces = after["DatastoreToolSurface"]
+        .as_array()
+        .context("datastore surfaces missing")?
+        .iter()
+        .map(|row| decode_configuration(gents::Collection::DatastoreToolSurface, row))
+        .collect::<Result<Vec<gents::document_config::DatastoreToolSurfaceDocument>>>()?;
+    let selected = gents::document_config::merge_datastore_tool_surfaces(&tools, &surfaces)?;
     ensure!(
-        host.bash
-            .is_some_and(|bash| bash.mode == gents::tool_surface::BashMode::ReadOnly),
-        "monitor bash must stay read-only"
-    );
-    ensure!(
-        host.files
-            .is_some_and(|files| files.mode == gents::tool_surface::FileToolMode::ReadOnly),
-        "monitor files must stay read-only"
+        selected
+            .write_tools
+            .iter()
+            .all(|tool| matches!(tool.collection.as_str(), "HostObservation" | "MailboxItem")),
+        "monitor may write only observations and canonical mailbox items"
     );
     let tasks = after["Task"]
         .as_array()
@@ -503,6 +500,12 @@ pub(super) fn verify_steward_configuration(before: &Value, after: &Value) -> Res
         .filter(|row| row["behavior_id"] == behavior["behavior_id"] && row["enabled"] == true)
         .collect::<Vec<_>>();
     ensure!(tasks.len() == 1, "expected one enabled monitoring task");
+    let task: gents::document_config::Task =
+        decode_configuration(gents::Collection::Task, tasks[0])?;
+    ensure!(
+        task.hooks.is_empty(),
+        "read-only monitor must not install host command hooks"
+    );
     let triggers = after["Trigger"]
         .as_array()
         .context("triggers missing")?
@@ -532,4 +535,235 @@ pub(super) fn verify_steward_configuration(before: &Value, after: &Value) -> Res
         .as_str()
         .context("monitor ID missing")?
         .into())
+}
+
+fn decode_configuration<T: serde::de::DeserializeOwned>(
+    collection: gents::Collection,
+    row: &Value,
+) -> Result<T> {
+    let mut document = row.clone();
+    document
+        .as_object_mut()
+        .context("configuration must be an object")?
+        .remove("_docID");
+    let (_, projected) = gents::config_client::config_projection(collection, Some(&document))?;
+    Ok(serde_json::from_value(
+        projected.context("configuration projection missing")?,
+    )?)
+}
+
+fn verify_monitor_authority(tools: &gents::document_config::Tools) -> Result<()> {
+    let host = tools.host.as_ref().context("monitor host tools missing")?;
+    let bash = host.bash.as_ref().context("monitor bash missing")?;
+    ensure!(
+        bash.mode == gents::tool_surface::BashMode::ReadOnly
+            && bash
+                .execution_mode
+                .is_none_or(|mode| mode == gents::toolset::CommandExecutionMode::ReadOnly),
+        "monitor bash must stay read-only"
+    );
+    ensure!(
+        host.files.as_ref().is_none_or(|files| matches!(
+            files.mode,
+            gents::tool_surface::FileToolMode::Off | gents::tool_surface::FileToolMode::ReadOnly
+        )),
+        "monitor files must stay read-only"
+    );
+    let baseline = gents::toolset::default_read_only_command_policy();
+    ensure!(
+        bash.read_only_commands
+            .iter()
+            .flatten()
+            .all(|command| baseline.read_only_allowlist().contains(command))
+            && bash
+                .allowed_argv_prefixes
+                .iter()
+                .flatten()
+                .all(|prefix| prefix
+                    .first()
+                    .is_some_and(|command| baseline.read_only_allowlist().contains(command))),
+        "monitor command overrides must not extend the canonical read-only allowlist"
+    );
+    ensure!(
+        host.cli.is_empty(),
+        "monitor must not select additional host-registered executors"
+    );
+    ensure!(
+        tools.remote.as_ref().is_none_or(|remote| remote
+            .services
+            .iter()
+            .all(|service| service.tool_names.is_empty())),
+        "monitor must not select remote tools"
+    );
+    ensure!(
+        tools
+            .subagents
+            .as_ref()
+            .is_none_or(|subagents| subagents.target_ids.is_empty()
+                && subagents.spawn_enabled != Some(true)
+                && subagents.steering_enabled != Some(true)),
+        "monitor must not gain delegated execution authority"
+    );
+    ensure!(
+        tools
+            .integrations
+            .as_ref()
+            .is_none_or(|integrations| integrations.lsp.is_none()
+                && integrations.eth_tool_ids.as_ref().is_none_or(Vec::is_empty)),
+        "monitor must not select external execution integrations"
+    );
+    ensure!(
+        tools
+            .self_config
+            .as_ref()
+            .is_none_or(|config| config.enable_self_config != Some(true)
+                && config.enable_pack_install != Some(true)),
+        "monitor must not retain configuration write authority"
+    );
+    ensure!(
+        tools
+            .built_ins
+            .as_ref()
+            .is_none_or(|built_ins| built_ins.enable_graph_tools != Some(true)
+                && built_ins.enable_memory != Some(true)),
+        "monitor must not gain graph execution or unrelated datastore writes"
+    );
+    Ok(())
+}
+
+#[test]
+fn read_only_modes_do_not_hide_additional_monitor_authority() {
+    use gents::document_config::{BashTools, FileTools, HostTools, Tools};
+    let tools = Tools {
+        host: Some(HostTools {
+            files: Some(FileTools {
+                mode: gents::tool_surface::FileToolMode::ReadOnly,
+                ..Default::default()
+            }),
+            bash: Some(BashTools {
+                mode: gents::tool_surface::BashMode::ReadOnly,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert!(verify_monitor_authority(&tools).is_ok());
+    for (group, value) in [
+        (
+            "self_config",
+            serde_json::json!({"enable_self_config":true}),
+        ),
+        (
+            "self_config",
+            serde_json::json!({"enable_pack_install":true}),
+        ),
+        ("built_ins", serde_json::json!({"enable_graph_tools":true})),
+        ("integrations", serde_json::json!({"lsp":{}})),
+        (
+            "subagents",
+            serde_json::json!({"target_ids":["repair"],"spawn_enabled":true}),
+        ),
+        (
+            "remote",
+            serde_json::json!({"services":[{"mcp_service_id":"repair","tool_names":["execute"]}]}),
+        ),
+    ] {
+        let mut modified = serde_json::to_value(&tools).unwrap();
+        modified[group] = value;
+        let modified: Tools = serde_json::from_value(modified).unwrap();
+        assert!(
+            verify_monitor_authority(&modified).is_err(),
+            "accepted {group}"
+        );
+    }
+    let mut narrowed = tools.clone();
+    narrowed.host.as_mut().unwrap().files = None;
+    narrowed
+        .host
+        .as_mut()
+        .unwrap()
+        .bash
+        .as_mut()
+        .unwrap()
+        .read_only_commands = Some(vec!["df".into(), "cmp".into()]);
+    assert!(verify_monitor_authority(&narrowed).is_ok());
+    narrowed
+        .host
+        .as_mut()
+        .unwrap()
+        .bash
+        .as_mut()
+        .unwrap()
+        .read_only_commands = Some(vec!["chmod".into()]);
+    assert!(verify_monitor_authority(&narrowed).is_err());
+    let mut cli = tools.clone();
+    cli.host
+        .as_mut()
+        .unwrap()
+        .cli
+        .push(gents::document_config::CliTool {
+            name: "repair".into(),
+            ..Default::default()
+        });
+    assert!(verify_monitor_authority(&cli).is_err());
+    let mut extended = tools.clone();
+    extended
+        .host
+        .as_mut()
+        .unwrap()
+        .bash
+        .as_mut()
+        .unwrap()
+        .allowed_argv_prefixes = Some(vec![vec!["chmod".into()]]);
+    assert!(verify_monitor_authority(&extended).is_err());
+    let mut disabled = tools;
+    disabled.self_config = Some(gents::document_config::SelfConfigTools {
+        enable_self_config: Some(false),
+        ..Default::default()
+    });
+    assert!(verify_monitor_authority(&disabled).is_ok());
+}
+
+#[test]
+fn monitor_configuration_rejects_hooks_and_unrelated_datastore_writers() {
+    let before = serde_json::json!({
+        "AgentPrincipal":[], "InferenceBackend":[], "InferenceProfile":[],
+        "InferenceSampling":[], "OAuthCredential":[], "AgentBehavior":[],
+        "AgentContext":[], "Tools":[]
+    });
+    let mut after = before.clone();
+    after["AgentBehavior"] =
+        serde_json::json!([{"behavior_id":"monitor","context_id":"context","enabled":true}]);
+    after["AgentContext"] = serde_json::json!([{"context_id":"context","tools_id":"tools"}]);
+    after["Tools"] = serde_json::json!([{"tools_id":"tools","agent_did":"did:key:owner",
+        "host":{"bash":{"mode":"ReadOnly"}}}]);
+    after["DatastoreToolSurface"] = serde_json::json!([]);
+    after["Task"] = serde_json::json!([{"task_id":"check","agent_did":"did:key:owner",
+        "behavior_id":"monitor","prompt_template":"Check this host","enabled":true}]);
+    after["Schedule"] = serde_json::json!([{"schedule_id":"scheduled"}]);
+    after["EventSource"] = serde_json::json!([{"event_source_id":"immediate"}]);
+    after["Trigger"] = serde_json::json!([
+        {"task_id":"check","enabled":true,"source":{"schedule_id":"scheduled"}},
+        {"task_id":"check","enabled":true,"source":{"event_source_id":"immediate"}}
+    ]);
+    assert!(verify_steward_configuration(&before, &after).is_ok());
+    let mut hooked = after.clone();
+    hooked["Task"][0]["hooks"] = serde_json::json!([
+        {"hook_id":"repair","phase":"before","command":["chmod","700","/host/api-work"]}
+    ]);
+    let error = verify_steward_configuration(&before, &hooked).unwrap_err();
+    assert!(
+        error.to_string().contains("host command hooks"),
+        "{error:#}"
+    );
+    after["Tools"][0]["datastore"] = serde_json::json!({"datastore_tool_surface_ids":["extra"]});
+    after["DatastoreToolSurface"] = serde_json::json!([{
+        "surface_id":"extra","agent_did":"did:key:owner","entries":[{
+            "tool_name":"write_other","collection":"OtherData","description":"Unrelated writer",
+            "fields":[{"name":"value","required":true}]
+        }]
+    }]);
+    let error = verify_steward_configuration(&before, &after).unwrap_err();
+    assert!(error.to_string().contains("only observations"), "{error:#}");
 }

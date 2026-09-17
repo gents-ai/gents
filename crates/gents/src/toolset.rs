@@ -73,7 +73,8 @@ pub use shared::{
     WorkspaceAuthority,
 };
 
-pub(crate) fn default_read_only_command_policy() -> CommandExecutionPolicy {
+/// Canonical baseline for inspecting or narrowing the read-only host capability.
+pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
     CommandExecutionPolicy::read_only(default_read_only_commands())
 }
 
