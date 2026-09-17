@@ -1448,7 +1448,7 @@ mod tests {
         );
 
         let behavior_id = format!("{agent_did}:research-assistant");
-        let behavior = crate::load_agent_behavior(&node, &behavior_id)
+        let behavior = crate::load_agent_behavior(&node, &agent_did, &behavior_id)
             .await?
             .expect("behavior created");
         assert_eq!(

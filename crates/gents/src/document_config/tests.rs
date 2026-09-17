@@ -993,7 +993,7 @@ async fn agent_behavior_description_round_trip_with_explicit_owner_fixture() {
         .await
         .expect("upsert should persist description fields");
 
-    let loaded = load_agent_behavior(&node, "amy-general")
+    let loaded = load_agent_behavior(&node, agent_did, "amy-general")
         .await
         .expect("load should succeed")
         .expect("behavior should exist after upsert");
@@ -1005,6 +1005,36 @@ async fn agent_behavior_description_round_trip_with_explicit_owner_fixture() {
     assert_eq!(loaded.context_id, doc.context_id);
     assert_eq!(loaded.inference_profile_id, doc.inference_profile_id);
     assert!(loaded.enabled);
+}
+
+#[tokio::test]
+async fn agent_behavior_lookup_is_principal_qualified() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let behavior_id = "shared-name";
+    let first_owner = "did:key:z-first-owner";
+    let second_owner = "did:key:z-second-owner";
+    crate::test_support::install_test_behavior(&node, first_owner, behavior_id).await;
+    crate::test_support::install_test_behavior(&node, second_owner, behavior_id).await;
+
+    let first = load_agent_behavior(&node, first_owner, behavior_id)
+        .await
+        .expect("first owner lookup succeeds")
+        .expect("first owner behavior exists");
+    let second = load_agent_behavior(&node, second_owner, behavior_id)
+        .await
+        .expect("second owner lookup succeeds")
+        .expect("second owner behavior exists");
+
+    assert_eq!(first.agent_did, first_owner);
+    assert_eq!(second.agent_did, second_owner);
+    assert!(
+        load_agent_behavior(&node, "did:key:z-missing-owner", behavior_id)
+            .await
+            .expect("missing owner lookup succeeds")
+            .is_none()
+    );
 }
 
 /// Borrow the embedded node back out of a Local `ConfigAccess` for the

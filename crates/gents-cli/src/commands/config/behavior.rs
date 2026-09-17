@@ -516,7 +516,7 @@ mod tests {
         let outcome = apply_persona_request(&node, &doc, &PersonaCatalogView::default()).await?;
         assert!(!outcome.repaired);
 
-        let behavior = gents::load_agent_behavior(&node, &outcome.behavior_id)
+        let behavior = gents::load_agent_behavior(&node, owner, &outcome.behavior_id)
             .await?
             .expect("created behavior exists");
         assert_eq!(behavior.inference_profile_id, "profile-1");
@@ -567,7 +567,7 @@ mod tests {
             apply_persona_request(&node, &clone_doc, &PersonaCatalogView::default()).await?;
         assert!(!clone_outcome.repaired);
         assert_ne!(clone_outcome.behavior_id, outcome.behavior_id);
-        let cloned = gents::load_agent_behavior(&node, &clone_outcome.behavior_id)
+        let cloned = gents::load_agent_behavior(&node, owner, &clone_outcome.behavior_id)
             .await?
             .expect("cloned behavior exists");
         let cloned_context_id = cloned

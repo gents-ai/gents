@@ -124,12 +124,15 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     .await
     .expect("write read-only Tools patch");
 
-    let behavior_doc_id =
-        crate::document_config::load_agent_behavior_record(node.as_ref(), &default_behavior_id)
-            .await
-            .unwrap()
-            .expect("behavior record")
-            .0;
+    let behavior_doc_id = crate::document_config::load_agent_behavior_record(
+        node.as_ref(),
+        identity.did(),
+        &default_behavior_id,
+    )
+    .await
+    .unwrap()
+    .expect("behavior record")
+    .0;
 
     assert!(apply_control_update(
         node.as_ref(),

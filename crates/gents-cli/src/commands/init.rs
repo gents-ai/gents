@@ -663,7 +663,8 @@ async fn initialize_runtime_home(
         .as_ref()
         .and_then(|principal| normalize_optional_string(principal.default_behavior_id.as_deref()))
         .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
-    let existing_default_behavior = load_agent_behavior(node, &default_behavior_id).await?;
+    let existing_default_behavior =
+        load_agent_behavior(node, agent_did, &default_behavior_id).await?;
     if let Some(behavior) = existing_default_behavior.as_ref() {
         if behavior.agent_did != agent_did {
             anyhow::bail!(
