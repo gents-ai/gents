@@ -53,7 +53,7 @@ impl ConfigCommandTool {
         let skill_id = argv[1].clone();
         request.resolve_unique = Box::new(move |_| Ok(skill_id.clone()));
         // Imports create an explicit new identity. Never overwrite an existing
-        // skill that may be referenced by Setup or another working behavior.
+        // skill that may be referenced by Configurator or another working behavior.
         request.allow_create = true;
         request.require_create = true;
         let owner = self.agent_did.clone();

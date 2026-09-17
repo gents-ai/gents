@@ -267,7 +267,7 @@ pub async fn prepare_bundled_graph_package_install(
     options: &GraphPackageInstallBindings,
 ) -> Result<PreparedGraphPackageInstall> {
     let package = load_bundled_graph_package(package_name, &options.scope())?;
-    prepare_package(access, &package, options, None).await
+    prepare_package(access, &package, options, None, false).await
 }
 
 /// Explicit selection for packs containing more than one authored graph.
@@ -278,7 +278,7 @@ pub async fn prepare_bundled_graph_package_install_for_graph(
     graph_id: &str,
 ) -> Result<PreparedGraphPackageInstall> {
     let package = load_bundled_graph_package(package_name, &options.scope())?;
-    prepare_package(access, &package, options, Some(graph_id)).await
+    prepare_package(access, &package, options, Some(graph_id), false).await
 }
 
 /// Read-only canonical plan owner for an already resolved bundled graph.
@@ -289,7 +289,15 @@ pub(crate) async fn prepare_loaded_graph_package_install(
     package: &LoadedGraphPackage,
     options: &GraphPackageInstallBindings,
 ) -> Result<PreparedGraphPackageInstall> {
-    prepare_package(access, package, options, None).await
+    prepare_package(access, package, options, None, false).await
+}
+
+pub(crate) async fn prepare_loaded_graph_package_update(
+    access: &ConfigAccess,
+    package: &LoadedGraphPackage,
+    options: &GraphPackageInstallBindings,
+) -> Result<PreparedGraphPackageInstall> {
+    prepare_package(access, package, options, None, true).await
 }
 
 async fn prepare_package(
@@ -297,6 +305,7 @@ async fn prepare_package(
     package: &LoadedGraphPackage,
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
+    allow_existing_pack_closure: bool,
 ) -> Result<PreparedGraphPackageInstall> {
     validate_owner(access, &options.agent_did).await?;
     let preview = crate::pack::preview_pack_inference_bindings(
@@ -321,8 +330,13 @@ async fn prepare_package(
         .transact("graph_package.materialization_preview", |txn| {
             let preview_config = preview_config.clone();
             Box::pin(async move {
-                crate::pack::prepare_pack_materialization_plan_in_txn(txn, &preview_config, true)
-                    .await
+                crate::pack::prepare_pack_materialization_plan_in_txn(
+                    txn,
+                    &preview_config,
+                    true,
+                    allow_existing_pack_closure,
+                )
+                .await
             })
         })
         .await?;
@@ -481,11 +495,41 @@ pub(crate) async fn install_loaded_graph_package(
     options: &GraphPackageInstallBindings,
     graph_id: Option<&str>,
 ) -> Result<GraphPackageInstallReceipt> {
+    install_loaded_graph_package_with_mode(access, actor_did, package, options, graph_id, false)
+        .await
+}
+
+pub(crate) async fn update_loaded_graph_package(
+    access: &ConfigAccess,
+    actor_did: &str,
+    package: &LoadedGraphPackage,
+    options: &GraphPackageInstallBindings,
+    graph_id: Option<&str>,
+) -> Result<GraphPackageInstallReceipt> {
+    install_loaded_graph_package_with_mode(access, actor_did, package, options, graph_id, true)
+        .await
+}
+
+async fn install_loaded_graph_package_with_mode(
+    access: &ConfigAccess,
+    actor_did: &str,
+    package: &LoadedGraphPackage,
+    options: &GraphPackageInstallBindings,
+    graph_id: Option<&str>,
+    allow_existing_pack_closure: bool,
+) -> Result<GraphPackageInstallReceipt> {
     anyhow::ensure!(
         actor_did == options.agent_did,
         "package install requires graph owner authority"
     );
-    let prepared = prepare_package(access, package, options, graph_id).await?;
+    let prepared = prepare_package(
+        access,
+        package,
+        options,
+        graph_id,
+        allow_existing_pack_closure,
+    )
+    .await?;
     ensure_package_schemas(access, package).await?;
     let bound_config = &prepared.bound_config;
     let desired = &prepared.desired_state;
@@ -494,9 +538,13 @@ pub(crate) async fn install_loaded_graph_package(
     access
         .transact("graph_package.install", |txn| {
             Box::pin(async move {
-                let effective =
-                    crate::pack::prepare_pack_materialization_plan_in_txn(txn, bound_config, true)
-                        .await?;
+                let effective = crate::pack::prepare_pack_materialization_plan_in_txn(
+                    txn,
+                    bound_config,
+                    true,
+                    allow_existing_pack_closure,
+                )
+                .await?;
                 anyhow::ensure!(
                     desired_state_artifacts(&effective)? == desired_state_artifacts(desired)?,
                     "graph package materialized configuration changed between preview and apply"

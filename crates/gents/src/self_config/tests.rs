@@ -432,7 +432,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     let owner = crate::graphql::escape_graphql_string(&agent_did);
     let tagged = node
         .execute(&format!(
-            r#"mutation {{ update_AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "review-recon"}}}}, input: {{tags: ["gents:pack:code_review", "user:favorite"]}}) {{_docID}} }}"#
+            r#"mutation {{ update_AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "gents:code-review:review-recon"}}}}, input: {{tags: ["gents:pack:code_review", "user:favorite"]}}) {{_docID}} }}"#
         ))
         .await;
     assert!(!tagged.has_errors(), "{:?}", tagged.errors);
@@ -474,7 +474,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     );
     let tags = node
         .execute(&format!(
-            r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "review-recon"}}}}) {{tags}} }}"#
+            r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "gents:code-review:review-recon"}}}}) {{tags}} }}"#
         ))
         .await;
     assert!(!tags.has_errors(), "{:?}", tags.errors);
@@ -1650,7 +1650,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     )
     .await
     .unwrap_err();
-    assert!(denied.contains("protected Setup"), "{denied}");
+    assert!(denied.contains("protected Configurator"), "{denied}");
     let denied = call_config_tool(
         &tools,
         command(&[
@@ -1664,7 +1664,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     )
     .await
     .unwrap_err();
-    assert!(denied.contains("protected Setup"), "{denied}");
+    assert!(denied.contains("protected Configurator"), "{denied}");
 }
 
 #[tokio::test]
@@ -2346,7 +2346,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     assert!(working["documents"]["Tools"]["remote"]["services"].is_null());
     assert!(
         working["documents"]["Tools"]["self_config"].is_null(),
-        "targeting a sibling must protect the invoking Setup chain without granting config to the sibling"
+        "targeting a sibling must protect the invoking Configurator chain without granting config to the sibling"
     );
     let working_core = SelfConfigCore::new(node.clone(), owner.clone(), "working".into()).unwrap();
     working_core
@@ -2371,7 +2371,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         ],
     )
     .await
-    .expect_err("a sibling edit must not disable the invoking Setup backend");
+    .expect_err("a sibling edit must not disable the invoking Configurator backend");
     assert!(
         shared_backend.contains("backend disabled"),
         "{shared_backend}"
@@ -2503,10 +2503,10 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     )
     .await
     .unwrap_err();
-    assert!(setup_error.to_string().contains("protected Setup"));
+    assert!(setup_error.to_string().contains("protected Configurator"));
 
     // Lean siblingToolsAllowed: both reference observations happen in the
-    // same patch transaction. Sharing either the Context or Tools with Setup
+    // same patch transaction. Sharing either the Context or Tools with Configurator
     // must reject without mutating the shared document.
     working_core
         .apply(anchored_request(
@@ -2528,7 +2528,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         ],
     )
     .await
-    .expect_err("Tools shared with Setup must be protected transactionally");
+    .expect_err("Tools shared with Configurator must be protected transactionally");
     assert!(
         shared_tools.contains("unshared Context and Tools"),
         "{shared_tools}"
@@ -2561,7 +2561,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         ],
     )
     .await
-    .expect_err("Context shared with Setup must be protected transactionally");
+    .expect_err("Context shared with Configurator must be protected transactionally");
     assert!(
         shared_context.contains("unshared Context and Tools"),
         "{shared_context}"

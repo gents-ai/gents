@@ -631,13 +631,16 @@ async fn load_catalog_view_from_node(
                 if behavior_id.is_empty() {
                     return None;
                 }
+                let protected =
+                    behavior_id == crate::behavior_scope::SETUP_CONFIGURATOR_BEHAVIOR_ID
+                        || row.tags.as_deref().unwrap_or_default().iter().any(|tag| {
+                            tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+                        });
                 Some((
                     behavior_id,
                     BehaviorRef {
                         enabled: row.enabled.unwrap_or(true),
-                        protected: row.tags.as_deref().unwrap_or_default().iter().any(|tag| {
-                            tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
-                        }),
+                        protected,
                     },
                 ))
             })

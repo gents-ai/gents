@@ -111,7 +111,7 @@ impl ConfigCommandTool {
             doc.insert("agent_did".into(), json!(owner));
             Ok(())
         });
-        // Protect Setup through indirect shared surface references in the same
+        // Protect Configurator through indirect shared surface references in the same
         // transaction that publishes the edit. ACP remains the write authority.
         let protected_owner = escape_graphql_string(&self.agent_did);
         request.validate = Box::new(move |txn, _, _, merged| {
@@ -121,7 +121,7 @@ impl ConfigCommandTool {
                 let response = txn
                     .execute(&format!(
                         r#"{{
-                    AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{context_id tags}}
+                    AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{behavior_id context_id tags}}
                     AgentContext(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{context_id tools_id}}
                     Tools(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{tools_id datastore}}
                 }}"#
@@ -136,10 +136,14 @@ impl ConfigCommandTool {
                         .with_context(|| format!("missing {name} references"))
                 };
                 for behavior in rows("AgentBehavior")? {
-                    if !behavior["tags"].as_array().is_some_and(|tags| {
-                        tags.iter()
-                            .any(|tag| tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG)
-                    }) {
+                    let protected = behavior["behavior_id"]
+                        == crate::behavior_scope::SETUP_CONFIGURATOR_BEHAVIOR_ID
+                        || behavior["tags"].as_array().is_some_and(|tags| {
+                            tags.iter().any(|tag| {
+                                tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+                            })
+                        });
+                    if !protected {
                         continue;
                     }
                     for context in rows("AgentContext")?
@@ -153,7 +157,7 @@ impl ConfigCommandTool {
                             anyhow::ensure!(
                                 !tools["datastore"]["datastore_tool_surface_ids"].as_array()
                                     .is_some_and(|ids| ids.iter().any(|id| id == &surface_id)),
-                                "surface is referenced by protected Setup; create a separate surface for the working behavior"
+                                "surface is referenced by the protected Configurator; create a separate surface for the working behavior"
                             );
                         }
                     }

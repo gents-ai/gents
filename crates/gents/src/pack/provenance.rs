@@ -42,7 +42,8 @@ pub(super) async fn apply_pack_documents(
     access
         .transact("pack.documents.install", |txn| {
             Box::pin(async move {
-                let plan = prepare_pack_materialization_plan_in_txn(txn, config, false).await?;
+                let plan =
+                    prepare_pack_materialization_plan_in_txn(txn, config, false, false).await?;
                 crate::config_client::validate_desired_state_plan(txn, &plan).await?;
                 crate::config_client::apply_desired_state_plan(txn, &plan).await
             })
@@ -54,6 +55,7 @@ pub(crate) async fn prepare_pack_materialization_plan_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     config: &PackConfig,
     immutable: bool,
+    allow_existing_pack_closure: bool,
 ) -> Result<crate::config_client::DesiredStateApplyPlan> {
     let bundle = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
     let ordinary_documents = bundle
@@ -100,14 +102,59 @@ pub(crate) async fn prepare_pack_materialization_plan_in_txn(
         "pack owner principal is missing or disabled at apply"
     );
     let mut documents = ordinary_documents;
+    let mut removals = Vec::new();
     for behavior in behaviors {
-        anyhow::ensure!(
-            !snapshot.documents().any(|((collection, id), _)| {
-                *collection == Collection::AgentBehavior && id == &behavior.behavior_id
-            }),
-            "pack behavior {:?} is already installed; repeated pack instances are unsupported",
-            behavior.behavior_id
-        );
+        let origin = pack_origin_from_tags(&behavior.tags)?
+            .context("bound pack behavior is missing its origin tag")?;
+        for slot in crate::behavior_scope::reserved_behavior_slots(&behavior.behavior_id) {
+            if let Some((_, live)) = snapshot.documents().find(|((collection, id), _)| {
+                *collection == slot.collection && id == &slot.logical_id
+            }) {
+                if !allow_existing_pack_closure {
+                    if slot.collection == Collection::AgentBehavior {
+                        anyhow::bail!(
+                            "pack behavior {:?} is already installed; repeated pack instances are unsupported",
+                            behavior.behavior_id
+                        );
+                    }
+                    anyhow::bail!(
+                        "pack behavior {:?} reserved slot {} {:?} is already occupied; partial collisions are unsupported",
+                        behavior.behavior_id,
+                        slot.collection.graphql_type(),
+                        slot.logical_id
+                    );
+                }
+                let live_tags = live
+                    .get("tags")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|tag| {
+                        tag.as_str()
+                            .map(ToOwned::to_owned)
+                            .context("live pack document tag must be a string")
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                anyhow::ensure!(
+                    pack_origin_from_tags(&live_tags)?.as_deref() == Some(origin),
+                    "pack behavior {:?} reserved slot {} {:?} belongs to another owner",
+                    behavior.behavior_id,
+                    slot.collection.graphql_type(),
+                    slot.logical_id,
+                );
+                if slot.collection != Collection::AgentBehavior {
+                    anyhow::ensure!(
+                        live.get("scope_behavior_id")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(behavior.behavior_id.as_str()),
+                        "pack behavior {:?} reserved slot {} {:?} has incompatible scope",
+                        behavior.behavior_id,
+                        slot.collection.graphql_type(),
+                        slot.logical_id,
+                    );
+                }
+            }
+        }
         validate_bound_profile(&snapshot, behavior)?;
         let closure = crate::config_client::plan_behavior_closure_with_overlays(
             &snapshot,
@@ -116,19 +163,16 @@ pub(crate) async fn prepare_pack_materialization_plan_in_txn(
             &behavior.behavior_id,
             behavior.display_name.as_deref(),
         )?;
-        anyhow::ensure!(
-            closure.removals().is_empty(),
-            "fresh pack behavior materialization unexpectedly planned removals"
-        );
-        let origin = pack_origin_from_tags(&behavior.tags)?
-            .context("bound pack behavior is missing its origin tag")?;
+        removals.extend_from_slice(closure.removals());
         for mut document in closure.documents().iter().cloned() {
             add_pack_origin(&mut document.add, origin)?;
             add_pack_origin(&mut document.update, origin)?;
             documents.push(document);
         }
     }
-    prepare_pack_plan_in_txn(txn, &documents, immutable).await
+    prepare_pack_plan_in_txn(txn, &documents, immutable)
+        .await?
+        .with_removals(removals)
 }
 
 fn validate_bound_profile(

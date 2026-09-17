@@ -629,7 +629,14 @@ pub async fn apply_persona_request(
         }
         if matches!(op, PersonaOp::Edit | PersonaOp::Disable) {
             anyhow::ensure!(
-                source.as_ref().is_none_or(|source| !source.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)),
+                source.as_ref().is_none_or(|source| {
+                    source.behavior_id
+                        != crate::behavior_scope::SETUP_CONFIGURATOR_BEHAVIOR_ID
+                        && !source
+                            .tags
+                            .iter()
+                            .any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)
+                }),
                 "protected configurator behavior cannot be modified"
             );
         }

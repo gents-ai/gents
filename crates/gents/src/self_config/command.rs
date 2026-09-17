@@ -380,7 +380,7 @@ Fields come from DatastoreToolSurface: display_name, enabled, entries, tags.
 The --mailbox and --set forms above are CLI argv notation. Native calls use target_id, options.mailbox, and set.
 Model example: {"argv":["datastore","preview","create"],"target_id":"monitor-notifications","set":{"display_name":"Monitor notifications"}}
 SURFACE_ID names the tool-surface configuration (monitor-notifications here), not a mailbox or collection. For the existing MailboxItem collection, use options.mailbox with a notification policy; the runtime supplies the protected canonical file_mailbox_item declaration. Example: {"argv":["datastore","preview","create"],"target_id":"monitor-notifications","options":{"mailbox":{"identity":{"mode":"condition","key":"host-health"},"kind":"flag","action":"ack"}},"set":{"enabled":true}}. --mailbox replaces entries with that one canonical declaration and cannot be combined with setting or clearing entries; use a separate surface for observation tools. Do not create a replacement mailbox collection. Create with the same ID and fields after preview, then select that ID in the working Tools.datastore.datastore_tool_surface_ids. Definition, selection and runtime execution are separate checks.
-Entries are canonical schema-bounded create/query declarations. Owner and surface_id are immutable. Bind an existing surface using config tools edit --behavior BEHAVIOR_ID --set datastore=JSON, preserving the other datastore settings. Editing a surface used by protected Setup is rejected. Schema registration is a separate operation."#
+Entries are canonical schema-bounded create/query declarations. Owner and surface_id are immutable. Bind an existing surface using config tools edit --behavior BEHAVIOR_ID --set datastore=JSON, preserving the other datastore settings. Editing a surface used by protected Engineer behavior is rejected. Schema registration is a separate operation."#
             }
             Some("behavior") => {
                 r#"behavior commands:
@@ -454,7 +454,7 @@ Results can feed later stages. Use canonical graph tools or graph packs for coor
   preview --target RESOURCE=ID [--target RESOURCE=ID ...]
   remove --digest SHA256 --target RESOURCE=ID [--target RESOURCE=ID ...]
 Resources: behavior, context, tools, profile, sampling, execution, retry-policy, compaction, backend, mcp-service, task, schedule, trigger, event-source.
-Cleanup is exact-ID, same-principal, and reference-aware. Preview performs the same complete retained-reference validation without writing and returns the digest required by remove. Remove requires the same target set and refuses if any target changed, then revalidates and deletes the whole set atomically, so related unreferenced cycles can be removed together. A retained document may never be left with a missing reference. Behavior/context cleanup requires the behavior catalog grant; the protected Setup behavior cannot be removed."#
+Cleanup is exact-ID, same-principal, and reference-aware. Preview performs the same complete retained-reference validation without writing and returns the digest required by remove. Remove requires the same target set and refuses if any target changed, then revalidates and deletes the whole set atomically, so related unreferenced cycles can be removed together. A retained document may never be left with a missing reference. Behavior/context cleanup requires the behavior catalog grant; the protected Configurator cannot be removed."#
             }
             Some("pack") if self.allow_pack_install => {
                 r#"pack commands:
@@ -1115,18 +1115,20 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                                 )
                             })?;
                         if *target == SelfConfigTarget::AgentBehavior {
-                            let protected = document
-                                .get("tags")
-                                .and_then(Value::as_array)
-                                .is_some_and(|tags| {
-                                    tags.iter().any(|tag| {
-                                        tag.as_str()
-                                            == Some(crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG)
-                                    })
-                                });
+                            let protected = id
+                                == crate::behavior_scope::SETUP_CONFIGURATOR_BEHAVIOR_ID
+                                || document
+                                    .get("tags")
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|tags| {
+                                        tags.iter().any(|tag| {
+                                            tag.as_str()
+                                                == Some(crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG)
+                                        })
+                                    });
                             anyhow::ensure!(
                                 !protected,
-                                "target behavior {id:?} is the protected Setup configurator and cannot be removed"
+                                "target behavior {id:?} is the protected Configurator and cannot be removed"
                             );
                         }
                         receipt.push(json!({

@@ -263,6 +263,13 @@ pub fn bind_pack_install_config(
             }
         }
     }
+    for binding in &mut bound.projection_acp_bindings {
+        if let Some(behavior_id) = &mut binding.behavior_id {
+            if let Some(generated) = behavior_ids.get(behavior_id) {
+                *behavior_id = generated.clone();
+            }
+        }
+    }
     anyhow::ensure!(
         bindings.len() == manifest.metadata.inference_slots.len(),
         "inference slot binding map does not exactly match the pack declaration"
@@ -370,9 +377,20 @@ mod tests {
 
     #[test]
     fn binding_replaces_slot_markers_and_stamps_only_pack_owned_documents() {
+        let mut authored = config();
+        authored.agent_principal.default_behavior_id = Some("plan".into());
+        authored.subagent_targets = serde_json::from_value(json!([
+            {"agent_did":"did:key:pack-owner","target_id":"local-plan","target_agent_did":"did:key:pack-owner","behavior_id":"plan","name":"plan"},
+            {"agent_did":"did:key:pack-owner","target_id":"foreign-plan","target_agent_did":"did:key:foreign","behavior_id":"plan","name":"foreign-plan"}
+        ]))
+        .unwrap();
+        authored.projection_acp_bindings = serde_json::from_value(json!([
+            {"agent_did":"did:key:pack-owner","binding_id":"scan-binding","behavior_id":"scan","policy_id":"policy"}
+        ]))
+        .unwrap();
         let bound = bind_pack_install_config(
             &two_slots(),
-            &config(),
+            &authored,
             &BTreeMap::from([
                 ("coordinator".into(), "claude".into()),
                 ("worker".into(), "glm".into()),
@@ -381,7 +399,20 @@ mod tests {
         .unwrap();
         assert_eq!(bound.agent_behaviors[0].behavior_id, "gents:test-pack:plan");
         assert_eq!(bound.agent_behaviors[1].behavior_id, "gents:test-pack:scan");
+        assert_eq!(
+            bound.agent_principal.default_behavior_id.as_deref(),
+            Some("gents:test-pack:plan")
+        );
         assert_eq!(bound.tasks[0].behavior_id, "gents:test-pack:plan");
+        assert_eq!(
+            bound.subagent_targets[0].behavior_id,
+            "gents:test-pack:plan"
+        );
+        assert_eq!(bound.subagent_targets[1].behavior_id, "plan");
+        assert_eq!(
+            bound.projection_acp_bindings[0].behavior_id.as_deref(),
+            Some("gents:test-pack:scan")
+        );
         assert_eq!(bound.agent_behaviors[0].inference_profile_id, "claude");
         assert_eq!(bound.agent_behaviors[1].inference_profile_id, "glm");
         for tags in [
@@ -563,5 +594,55 @@ mod tests {
         }
         let error = install_pack_documents(&access, &bound).await.unwrap_err();
         assert!(error.to_string().contains("already installed"));
+    }
+
+    #[tokio::test]
+    async fn document_install_rejects_an_occupied_optional_behavior_slot_atomically() {
+        let owner = "did:key:pack-slot-owner";
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        crate::document_config::ensure_agent_principal(&node, owner)
+            .await
+            .unwrap();
+        crate::test_support::install_test_behavior(&node, owner, "source").await;
+        let collision = node
+            .execute(
+                r#"mutation { create_CompactionConfig(input: {
+                    agent_did: "did:key:pack-slot-owner",
+                    compaction_id: "gents:test-pack:plan:compaction"
+                }) { _docID } }"#,
+            )
+            .await;
+        assert!(!collision.has_errors(), "{:?}", collision.errors);
+
+        let access = ConfigAccess::Local(node.clone());
+        let mut authored = config();
+        authored.agent_principal.agent_did = owner.into();
+        for behavior in &mut authored.agent_behaviors {
+            behavior.agent_did = owner.into();
+        }
+        for context in &mut authored.contexts {
+            context.agent_did = owner.into();
+        }
+        for task in &mut authored.tasks {
+            task.agent_did = owner.into();
+        }
+        let bound = bind_pack_install_config(
+            &two_slots(),
+            &authored,
+            &BTreeMap::from([
+                ("coordinator".into(), "source:inference".into()),
+                ("worker".into(), "source:inference".into()),
+            ]),
+        )
+        .unwrap();
+        let error = install_pack_documents(&access, &bound).await.unwrap_err();
+        assert!(error.to_string().contains("reserved slot"));
+        for id in ["gents:test-pack:plan", "gents:test-pack:scan"] {
+            assert!(crate::load_agent_behavior(&node, owner, id)
+                .await
+                .unwrap()
+                .is_none());
+        }
     }
 }
