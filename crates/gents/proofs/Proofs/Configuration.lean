@@ -91,6 +91,91 @@ theorem installOwned_ok_iff {α : Type} (scope : String) (declared : Option Stri
   | none => simp [installOwned, fillOwner, eq_comm]
   | some d => by_cases h : d = scope <;> simp_all [installOwned, fillOwner, eq_comm]
 
+/-! ## Generated logical names
+
+This grammar applies at new authoring boundaries. Stored legacy keys remain
+readable verbatim and are never rejected merely for predating the convention.
+Names describe scope; DID ownership and document authorization remain separate. -/
+
+private def isLowerAsciiAlphanumeric (character : Char) : Bool :=
+  "abcdefghijklmnopqrstuvwxyz0123456789".toList.contains character
+
+/-- A kebab segment is one or more lowercase ASCII alphanumeric runs separated
+by single hyphens. There is intentionally no proof-level length limit. -/
+def validKebabSegment (segment : String) : Bool :=
+  let parts := segment.splitOn "-"
+  !parts.isEmpty && parts.all fun part =>
+    !part.isEmpty && part.toList.all isLowerAsciiAlphanumeric
+
+/-- Generated qualified keys are nonempty kebab segments separated by colons. -/
+def validGeneratedQualifiedKey (key : String) : Bool :=
+  let segments := key.splitOn ":"
+  !segments.isEmpty && segments.all validKebabSegment
+
+/-- First allocation uses the requested slug. A collision appends its ordinal
+before any component suffix is derived (`reviewer`, `reviewer-2`, ...). -/
+def allocateBehaviorSlug (slug : String) (ordinal : Nat) : String :=
+  if ordinal < 2 then slug else slug ++ "-" ++ toString ordinal
+
+/-- Every newly generated personal behavior is visibly in the local namespace. -/
+def personalBehaviorKey (slug : String) (ordinal : Nat := 1) : String :=
+  "local:" ++ allocateBehaviorSlug slug ordinal
+
+def validNewPersonalBehaviorKey (key : String) : Bool :=
+  match key.splitOn ":" with
+  | head :: slug :: [] => head == "local" && validKebabSegment slug
+  | _ => false
+
+inductive BehaviorComponentPath where
+  | context | tools | inference | sampling | execution | retryPolicy | compaction
+  | compactionInference | compactionSampling | compactionExecution | compactionRetryPolicy
+  deriving DecidableEq, Repr
+
+def BehaviorComponentPath.suffix : BehaviorComponentPath → String
+  | .context => "context"
+  | .tools => "tools"
+  | .inference => "inference"
+  | .sampling => "sampling"
+  | .execution => "execution"
+  | .retryPolicy => "retry-policy"
+  | .compaction => "compaction"
+  | .compactionInference => "compaction:inference"
+  | .compactionSampling => "compaction:sampling"
+  | .compactionExecution => "compaction:execution"
+  | .compactionRetryPolicy => "compaction:retry-policy"
+
+def behaviorComponentId (behaviorId : String) (component : BehaviorComponentPath) : String :=
+  behaviorId ++ ":" ++ component.suffix
+
+structure GeneratedBehaviorNames where
+  displayName : String
+  behaviorId : String
+  deriving DecidableEq, Repr
+
+/-- Display text is retained for presentation but never participates in key
+allocation or component derivation. -/
+def generatedPersonalBehaviorNames
+    (displayName slug : String) (ordinal : Nat := 1) : GeneratedBehaviorNames :=
+  ⟨displayName, personalBehaviorKey slug ordinal⟩
+
+theorem generated_key_independent_of_display_name
+    (leftName rightName slug : String) (ordinal : Nat) :
+    (generatedPersonalBehaviorNames leftName slug ordinal).behaviorId =
+      (generatedPersonalBehaviorNames rightName slug ordinal).behaviorId := rfl
+
+inductive KeyAdmissionContext where
+  | newGenerated
+  | newPersonal
+  | retainedStored
+  deriving DecidableEq, Repr
+
+/-- Compatibility is explicit: grammar gates newly generated keys only. -/
+def keyAccepted (context : KeyAdmissionContext) (key : String) : Bool :=
+  match context with
+  | .newGenerated => validGeneratedQualifiedKey key
+  | .newPersonal => validNewPersonalBehaviorKey key
+  | .retainedStored => true
+
 /-- The model/effort selected through the only legal path. -/
 structure SelectedModel where
   backendId : String
@@ -205,6 +290,246 @@ structure Task where
   behaviorId : String
   enabled : Bool
   deriving DecidableEq, Repr
+
+/-! ## Behavior-owned mutable configuration
+
+`scopeBehaviorId = none` is the retained legacy representation. A scoped
+document names the behavior whose mutable closure owns it. The graph below is
+deliberately separate from runtime resolution: it models publication validity,
+while the resolver above continues to consume its compact projections.
+
+Only the mutable owned edges are traversed. Backend/credential, Skill, MCP,
+SubagentTarget, DatastoreToolSurface, and integration references are reusable
+resources and stop the ownership walk. -/
+
+structure ScopedBehaviorDocument where
+  behaviorId : String
+  contextId : Option String
+  profileId : String
+  deriving DecidableEq, Repr
+
+structure AgentContextDocument where
+  contextId : String
+  scopeBehaviorId : Option String := none
+  toolsId : Option String := none
+  compactionId : Option String := none
+  /-- Shared resource leaves; scope validation does not traverse them. -/
+  skillIds : List String := []
+  deriving DecidableEq, Repr
+
+structure ToolsDocument where
+  toolsId : String
+  scopeBehaviorId : Option String := none
+  /-- Shared resource leaves; host/built-in grants are values in this document. -/
+  mcpServiceIds : List String := []
+  subagentTargetIds : List String := []
+  datastoreSurfaceIds : List String := []
+  integrationIds : List String := []
+  deriving DecidableEq, Repr
+
+structure CompactionConfigDocument where
+  compactionId : String
+  scopeBehaviorId : Option String := none
+  inferenceProfileId : Option String := none
+  deriving DecidableEq, Repr
+
+structure InferenceProfileDocument where
+  profileId : String
+  scopeBehaviorId : Option String := none
+  /-- Backend selection is shared; its credentials remain behind that owner. -/
+  backendId : String
+  samplingId : Option String := none
+  executionId : Option String := none
+  deriving DecidableEq, Repr
+
+structure InferenceSamplingDocument where
+  samplingId : String
+  scopeBehaviorId : Option String := none
+  deriving DecidableEq, Repr
+
+structure InferenceExecutionDocument where
+  executionId : String
+  scopeBehaviorId : Option String := none
+  retryPolicyId : Option String := none
+  deriving DecidableEq, Repr
+
+structure InferenceRetryPolicyDocument where
+  retryPolicyId : String
+  scopeBehaviorId : Option String := none
+  deriving DecidableEq, Repr
+
+structure ScopedConfigRegistry where
+  behaviors : List ScopedBehaviorDocument := []
+  contexts : List AgentContextDocument := []
+  tools : List ToolsDocument := []
+  compactions : List CompactionConfigDocument := []
+  profiles : List InferenceProfileDocument := []
+  samplings : List InferenceSamplingDocument := []
+  executions : List InferenceExecutionDocument := []
+  retryPolicies : List InferenceRetryPolicyDocument := []
+  deriving DecidableEq, Repr
+
+private def rootContextReachable (reg : ScopedConfigRegistry) (behaviorId contextId : String) : Bool :=
+  reg.behaviors.any fun behavior =>
+    behavior.behaviorId == behaviorId && behavior.contextId == some contextId
+
+private def rootProfileReachable (reg : ScopedConfigRegistry) (behaviorId profileId : String) : Bool :=
+  reg.behaviors.any fun behavior =>
+    behavior.behaviorId == behaviorId && behavior.profileId == profileId
+
+private def toolsReachable (reg : ScopedConfigRegistry) (behaviorId toolsId : String) : Bool :=
+  reg.contexts.any fun context =>
+    context.scopeBehaviorId == some behaviorId && context.toolsId == some toolsId &&
+      rootContextReachable reg behaviorId context.contextId
+
+private def compactionReachable
+    (reg : ScopedConfigRegistry) (behaviorId compactionId : String) : Bool :=
+  reg.contexts.any fun context =>
+    context.scopeBehaviorId == some behaviorId && context.compactionId == some compactionId &&
+      rootContextReachable reg behaviorId context.contextId
+
+private def profileReachable (reg : ScopedConfigRegistry) (behaviorId profileId : String) : Bool :=
+  rootProfileReachable reg behaviorId profileId || reg.compactions.any fun compaction =>
+    compaction.scopeBehaviorId == some behaviorId &&
+      compaction.inferenceProfileId == some profileId &&
+      compactionReachable reg behaviorId compaction.compactionId
+
+private def samplingReachable
+    (reg : ScopedConfigRegistry) (behaviorId samplingId : String) : Bool :=
+  reg.profiles.any fun profile =>
+    profile.scopeBehaviorId == some behaviorId && profile.samplingId == some samplingId &&
+      profileReachable reg behaviorId profile.profileId
+
+private def executionReachable
+    (reg : ScopedConfigRegistry) (behaviorId executionId : String) : Bool :=
+  reg.profiles.any fun profile =>
+    profile.scopeBehaviorId == some behaviorId && profile.executionId == some executionId &&
+      profileReachable reg behaviorId profile.profileId
+
+private def retryPolicyReachable
+    (reg : ScopedConfigRegistry) (behaviorId retryPolicyId : String) : Bool :=
+  reg.executions.any fun execution =>
+    execution.scopeBehaviorId == some behaviorId &&
+      execution.retryPolicyId == some retryPolicyId &&
+      executionReachable reg behaviorId execution.executionId
+
+private def scopeReachable (scope : Option String) (reachable : String → Bool) : Bool :=
+  match scope with
+  | none => true
+  | some behaviorId => reachable behaviorId
+
+private def behaviorRootScopesAgree (reg : ScopedConfigRegistry) : Bool :=
+  reg.behaviors.all fun behavior =>
+    reg.profiles.all (fun profile =>
+      if profile.profileId == behavior.profileId then
+        profile.scopeBehaviorId == none ||
+          profile.scopeBehaviorId == some behavior.behaviorId
+      else true) &&
+    reg.contexts.all (fun context =>
+      if behavior.contextId == some context.contextId then
+        (context.scopeBehaviorId == none ||
+          context.scopeBehaviorId == some behavior.behaviorId) &&
+        reg.profiles.all (fun profile =>
+          if profile.profileId == behavior.profileId then
+            context.scopeBehaviorId == profile.scopeBehaviorId
+          else true)
+      else true)
+
+private def contextChildScopesAgree (reg : ScopedConfigRegistry) : Bool :=
+  reg.contexts.all fun context =>
+    reg.tools.all (fun tools =>
+      if context.toolsId == some tools.toolsId then
+        tools.scopeBehaviorId == context.scopeBehaviorId
+      else true) &&
+    reg.compactions.all (fun compaction =>
+      if context.compactionId == some compaction.compactionId then
+        compaction.scopeBehaviorId == context.scopeBehaviorId
+      else true)
+
+private def compactionProfileScopesAgree (reg : ScopedConfigRegistry) : Bool :=
+  reg.compactions.all fun compaction =>
+    reg.profiles.all fun profile =>
+      if compaction.inferenceProfileId == some profile.profileId then
+        profile.scopeBehaviorId == compaction.scopeBehaviorId
+      else true
+
+private def profileChildScopesAgree (reg : ScopedConfigRegistry) : Bool :=
+  reg.profiles.all fun profile =>
+    reg.samplings.all (fun sampling =>
+      if profile.samplingId == some sampling.samplingId then
+        sampling.scopeBehaviorId == profile.scopeBehaviorId
+      else true) &&
+    reg.executions.all (fun execution =>
+      if profile.executionId == some execution.executionId then
+        execution.scopeBehaviorId == profile.scopeBehaviorId
+      else true)
+
+private def executionRetryScopesAgree (reg : ScopedConfigRegistry) : Bool :=
+  reg.executions.all fun execution =>
+    reg.retryPolicies.all fun retry =>
+      if execution.retryPolicyId == some retry.retryPolicyId then
+        retry.scopeBehaviorId == execution.scopeBehaviorId
+      else true
+
+/-- Every referenced owned child has exactly its parent's scope. At behavior
+roots the whole closure is either legacy-unscoped or scoped to that behavior;
+this rejects both cross-behavior aliases and scoped/unscoped mixtures. -/
+def ownedEdgeScopesAgree (reg : ScopedConfigRegistry) : Bool :=
+  behaviorRootScopesAgree reg &&
+  contextChildScopesAgree reg &&
+  compactionProfileScopesAgree reg &&
+  profileChildScopesAgree reg &&
+  executionRetryScopesAgree reg
+
+private def scopedContextsReachable (reg : ScopedConfigRegistry) : Bool :=
+  reg.contexts.all fun context =>
+    scopeReachable context.scopeBehaviorId fun behaviorId =>
+      rootContextReachable reg behaviorId context.contextId
+
+private def scopedToolsReachable (reg : ScopedConfigRegistry) : Bool :=
+  reg.tools.all fun tools =>
+    scopeReachable tools.scopeBehaviorId fun behaviorId =>
+      toolsReachable reg behaviorId tools.toolsId
+
+private def scopedCompactionsReachable (reg : ScopedConfigRegistry) : Bool :=
+  reg.compactions.all fun compaction =>
+    scopeReachable compaction.scopeBehaviorId fun behaviorId =>
+      compactionReachable reg behaviorId compaction.compactionId
+
+private def scopedProfilesReachable (reg : ScopedConfigRegistry) : Bool :=
+  reg.profiles.all fun profile =>
+    scopeReachable profile.scopeBehaviorId fun behaviorId =>
+      profileReachable reg behaviorId profile.profileId
+
+private def scopedSamplingsReachable (reg : ScopedConfigRegistry) : Bool :=
+  reg.samplings.all fun sampling =>
+    scopeReachable sampling.scopeBehaviorId fun behaviorId =>
+      samplingReachable reg behaviorId sampling.samplingId
+
+private def scopedExecutionsReachable (reg : ScopedConfigRegistry) : Bool :=
+  reg.executions.all fun execution =>
+    scopeReachable execution.scopeBehaviorId fun behaviorId =>
+      executionReachable reg behaviorId execution.executionId
+
+private def scopedRetryPoliciesReachable (reg : ScopedConfigRegistry) : Bool :=
+  reg.retryPolicies.all fun retry =>
+    scopeReachable retry.scopeBehaviorId fun behaviorId =>
+      retryPolicyReachable reg behaviorId retry.retryPolicyId
+
+/-- Scoped documents cannot be orphans: their named behavior must exist and a
+typed owned path from that behavior must reach the document. Legacy unscoped
+documents remain admissible and are not silently assigned to a behavior. -/
+def scopedDocumentsReachable (reg : ScopedConfigRegistry) : Bool :=
+  scopedContextsReachable reg &&
+  scopedToolsReachable reg &&
+  scopedCompactionsReachable reg &&
+  scopedProfilesReachable reg &&
+  scopedSamplingsReachable reg &&
+  scopedExecutionsReachable reg &&
+  scopedRetryPoliciesReachable reg
+
+def behaviorScopesValid (reg : ScopedConfigRegistry) : Bool :=
+  ownedEdgeScopesAgree reg && scopedDocumentsReachable reg
 
 /-- The profile projection is its required inference selection. Context payloads
 have already had their nested same-owner references resolved by the loader.

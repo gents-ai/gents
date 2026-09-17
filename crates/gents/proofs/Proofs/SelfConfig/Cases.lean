@@ -99,6 +99,16 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .agentBehavior, guarded := false, validates := true
     , doc := [("agent_did", "did:key:agent-a")]
     , patch := [("agent_did", some "did:key:agent-b")] }
+  , { name := "context_scope_retarget_rejected"
+    , target := .agentContext, guarded := false, validates := true
+    , doc := [("context_id", "local:reviewer:context"),
+        ("scope_behavior_id", "local:reviewer")]
+    , patch := [("scope_behavior_id", some "local:other")] }
+  , { name := "profile_scope_clear_rejected"
+    , target := .inferenceProfile, guarded := false, validates := true
+    , doc := [("profile_id", "local:reviewer:inference"),
+        ("scope_behavior_id", "local:reviewer")]
+    , patch := [("scope_behavior_id", none)] }
   , { name := "behavior_invalid_reference_rejected"
     , target := .agentBehavior, guarded := false, validates := false
     , doc := [("context_id", "context-1")]
@@ -154,6 +164,56 @@ theorem self_config_cases_cover_rejections :
 theorem self_config_cases_cover_all_targets :
     allTargets.all (fun t =>
       selfConfigCases.any (fun w => decide (w.row.target = t))) = true := by
+  native_decide
+
+theorem self_config_cases_cover_scope_immutability :
+    (selfConfigCases.any (fun w =>
+      w.row.name == "context_scope_retarget_rejected" &&
+        !w.admissiblePatch && !w.accepted && w.protectedPreserved)) &&
+    (selfConfigCases.any (fun w =>
+      w.row.name == "profile_scope_clear_rejected" &&
+        !w.admissiblePatch && !w.accepted && w.protectedPreserved)) = true := by
+  native_decide
+
+private def emptyStore : Store := fun _ _ => none
+
+private def materializedStore : Store := fun target =>
+  match target with
+  | .agentBehavior => Doc.ofList [("behavior_id", "local:reviewer")]
+  | .agentContext => Doc.ofList
+      [("context_id", "local:reviewer:context"),
+       ("scope_behavior_id", "local:reviewer")]
+  | _ => fun _ => none
+
+private def mixedStore : Store := fun target =>
+  match target with
+  | .agentBehavior => Doc.ofList [("behavior_id", "local:reviewer")]
+  | .agentContext => Doc.ofList
+      [("context_id", "local:reviewer:context"),
+       ("scope_behavior_id", "local:other")]
+  | _ => fun _ => none
+
+/-- Finite fixture projection of the canonical typed closure validator. The
+general owner theorem is parametric in that validator; these cases exercise its
+accept/reject transaction behavior. -/
+private def fixtureClosureValid (s : Store) : Bool :=
+  s .agentBehavior "behavior_id" == some "local:reviewer" &&
+    s .agentContext "scope_behavior_id" == some "local:reviewer"
+
+example : (materializeClosure fixtureClosureValid emptyStore materializedStore).2 = true := by
+  native_decide
+
+example :
+    (materializeClosure fixtureClosureValid emptyStore materializedStore).1
+      .agentContext "scope_behavior_id" = some "local:reviewer" := by
+  native_decide
+
+example : (materializeClosure fixtureClosureValid emptyStore mixedStore).2 = false := by
+  native_decide
+
+example :
+    (materializeClosure fixtureClosureValid emptyStore mixedStore).1
+      .agentContext "scope_behavior_id" = none := by
   native_decide
 
 end SelfConfig.ContractCases

@@ -11,6 +11,13 @@ def allTargets : List Target :=
    .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy,
    .inferenceBackend, .toolServiceRegistry, .task, .schedule, .trigger, .eventSource,
    .datastoreToolSurface, .skill]
+
+/-- Documents materialized as the private configuration closure of one
+behavior. Backends and credentials remain reusable infrastructure and therefore
+do not carry this ownership marker. -/
+def scopedTargets : List Target :=
+  [.agentContext, .compaction, .tools, .inferenceProfile,
+   .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy]
 abbrev Target.collectionName (t : Target) := ConfigDocuments.Collection.collectionName t
 abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField t
 abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
@@ -24,7 +31,8 @@ abbrev allFields := ConfigDocuments.Collection.fields
 /-- Identity/provenance and module material are operator-managed. Nested auth
 references remain editable; raw-key protection belongs to the typed guard. -/
 def protectedKey (t : Target) (k : FieldKey) : Bool :=
-  (t == .task && k == "behavior_id") || k == t.uniqueField || ["agent_did", "created_at", "updated_at", "created_by",
+  (t == .task && k == "behavior_id") || k == "scope_behavior_id" ||
+    k == t.uniqueField || ["agent_did", "created_at", "updated_at", "created_by",
     "wasm_bytes", "canonical_args", "signer_did", "provenance"].contains k
 
 def writableFields (t : Target) : List FieldKey :=
@@ -47,6 +55,14 @@ theorem unique_field_protected :
 
 theorem agent_did_never_writable :
     ∀ t ∈ allTargets, "agent_did" ∉ writableFields t := by decide
+
+/-- Scope is the owner-written mutable-closure association. Neither sparse nor
+full self-configuration may add, clear, or retarget it. -/
+theorem scope_behavior_id_never_writable :
+    ∀ t ∈ allTargets, "scope_behavior_id" ∉ writableFields t := by decide
+
+theorem scoped_targets_are_self_config_targets :
+    ∀ t ∈ scopedTargets, t ∈ allTargets := by decide
 
 theorem auth_reference_editable : "auth" ∈ writableFields .inferenceBackend := by decide
 

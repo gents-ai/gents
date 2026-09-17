@@ -25,6 +25,162 @@ example : (resolveTask registry "bob" "task").toOption.map (·.inference.model) 
     some "bob-model" := by rfl
 example : resolveTask registry "absent" "task" = .error .missingTask := by rfl
 
+/-! Generated naming witnesses cover authoring grammar separately from stored
+key compatibility and from DID/document ownership. -/
+
+example : validGeneratedQualifiedKey "local:reviewer" = true := by native_decide
+example : validGeneratedQualifiedKey "gents:base:configurator:retry-policy" = true := by
+  native_decide
+example : validGeneratedQualifiedKey "Local:reviewer" = false := by native_decide
+example : validGeneratedQualifiedKey "local:review_er" = false := by native_decide
+example : validGeneratedQualifiedKey "local::reviewer" = false := by native_decide
+example : validGeneratedQualifiedKey "local:-reviewer" = false := by native_decide
+example : validGeneratedQualifiedKey "local:reviewer--worker" = false := by native_decide
+example : validNewPersonalBehaviorKey "local:reviewer" = true := by native_decide
+example : validNewPersonalBehaviorKey "gents:base:configurator" = false := by native_decide
+example : personalBehaviorKey "reviewer" = "local:reviewer" := by native_decide
+example : personalBehaviorKey "reviewer" 2 = "local:reviewer-2" := by native_decide
+example : personalBehaviorKey "reviewer" 3 = "local:reviewer-3" := by native_decide
+example :
+    behaviorComponentId "local:reviewer-2" .context = "local:reviewer-2:context" := by
+  native_decide
+example :
+    behaviorComponentId "local:reviewer-2" .compactionRetryPolicy =
+      "local:reviewer-2:compaction:retry-policy" := by native_decide
+example :
+    (generatedPersonalBehaviorNames "Jack's reviewer" "reviewer" 1).behaviorId =
+      (generatedPersonalBehaviorNames "レビュー担当" "reviewer" 1).behaviorId := by
+  native_decide
+example : keyAccepted .newGenerated "Legacy_Reviewer" = false := by native_decide
+example : keyAccepted .newPersonal "local:reviewer-2" = true := by native_decide
+example : keyAccepted .retainedStored "Legacy_Reviewer" = true := by native_decide
+
+private def namingValidationCase (key : String) : Json :=
+  Json.mkObj [("key", toJson key), ("valid", toJson (validGeneratedQualifiedKey key))]
+
+private def componentCase (path : BehaviorComponentPath) : Json :=
+  Json.mkObj
+    [("suffix", toJson path.suffix),
+     ("id", toJson (behaviorComponentId "local:reviewer-2" path))]
+
+private def namingCasesJson : Json := Json.mkObj
+  [("validation", toJson
+      (["local:reviewer", "gents:base:configurator:retry-policy", "Local:reviewer",
+        "local:review_er", "local::reviewer", "local:-reviewer",
+        "local:reviewer--worker"].map namingValidationCase)),
+   ("personal_allocations", toJson
+      ([1, 2, 3].map fun ordinal => Json.mkObj
+        [("ordinal", toJson ordinal),
+         ("behavior_id", toJson (personalBehaviorKey "reviewer" ordinal))])),
+   ("components", toJson
+      ([.context, .tools, .inference, .sampling, .execution, .retryPolicy, .compaction,
+        .compactionInference, .compactionSampling, .compactionExecution,
+        .compactionRetryPolicy].map componentCase)),
+   ("display_name_independent", toJson
+      ((generatedPersonalBehaviorNames "Jack's reviewer" "reviewer" 1).behaviorId ==
+       (generatedPersonalBehaviorNames "レビュー担当" "reviewer" 1).behaviorId)),
+   ("legacy_stored_key_accepted", toJson
+      (keyAccepted .retainedStored "Legacy_Reviewer")),
+   ("new_personal_key_valid", toJson
+      (keyAccepted .newPersonal (personalBehaviorKey "reviewer" 2)))]
+
+/-! Behavior-owned configuration fixtures exercise the canonical
+`scope_behavior_id` contract independently of principal ownership. -/
+
+private def scopedRegistry : ScopedConfigRegistry :=
+  { behaviors := [⟨"coding", some "context", "inference"⟩]
+    contexts :=
+      [{ contextId := "context", scopeBehaviorId := some "coding",
+         toolsId := some "tools", compactionId := some "compaction",
+         skillIds := ["shared-skill"] }]
+    tools :=
+      [{ toolsId := "tools", scopeBehaviorId := some "coding",
+         mcpServiceIds := ["shared-mcp"], subagentTargetIds := ["shared-subagent"],
+         datastoreSurfaceIds := ["shared-datastore"], integrationIds := ["shared-integration"] }]
+    compactions :=
+      [{ compactionId := "compaction", scopeBehaviorId := some "coding",
+         inferenceProfileId := some "compaction-inference" }]
+    profiles :=
+      [{ profileId := "inference", scopeBehaviorId := some "coding",
+         backendId := "shared-backend", samplingId := some "sampling",
+         executionId := some "execution" },
+       { profileId := "compaction-inference", scopeBehaviorId := some "coding",
+         backendId := "shared-backend", samplingId := some "compaction-sampling",
+         executionId := some "compaction-execution" }]
+    samplings :=
+      [⟨"sampling", some "coding"⟩, ⟨"compaction-sampling", some "coding"⟩]
+    executions :=
+      [{ executionId := "execution", scopeBehaviorId := some "coding",
+         retryPolicyId := some "retry" },
+       { executionId := "compaction-execution", scopeBehaviorId := some "coding" }]
+    retryPolicies := [⟨"retry", some "coding"⟩] }
+
+private def legacyRegistry : ScopedConfigRegistry :=
+  { scopedRegistry with
+    contexts := scopedRegistry.contexts.map fun document =>
+      { document with scopeBehaviorId := none }
+    , tools := scopedRegistry.tools.map fun document =>
+      { document with scopeBehaviorId := none }
+    , compactions := scopedRegistry.compactions.map fun document =>
+      { document with scopeBehaviorId := none }
+    , profiles := scopedRegistry.profiles.map fun document =>
+      { document with scopeBehaviorId := none }
+    , samplings := scopedRegistry.samplings.map fun document =>
+      { document with scopeBehaviorId := none }
+    , executions := scopedRegistry.executions.map fun document =>
+      { document with scopeBehaviorId := none }
+    , retryPolicies := scopedRegistry.retryPolicies.map fun document =>
+      { document with scopeBehaviorId := none } }
+
+private def mixedRegistry : ScopedConfigRegistry :=
+  { scopedRegistry with
+    tools := scopedRegistry.tools.map fun document =>
+      { document with scopeBehaviorId := none } }
+
+private def orphanRegistry : ScopedConfigRegistry :=
+  { scopedRegistry with
+    retryPolicies := ⟨"orphan-retry", some "coding"⟩ :: scopedRegistry.retryPolicies }
+
+private def missingBehaviorRegistry : ScopedConfigRegistry :=
+  { scopedRegistry with
+    contexts := ⟨"absent-context", some "absent", none, none, []⟩ :: scopedRegistry.contexts }
+
+private def crossBehaviorAliasRegistry : ScopedConfigRegistry :=
+  { scopedRegistry with
+    behaviors := ⟨"other", none, "inference"⟩ :: scopedRegistry.behaviors }
+
+example : behaviorScopesValid scopedRegistry = true := by native_decide
+example : behaviorScopesValid legacyRegistry = true := by native_decide
+example : behaviorScopesValid mixedRegistry = false := by native_decide
+example : behaviorScopesValid orphanRegistry = false := by native_decide
+example : behaviorScopesValid missingBehaviorRegistry = false := by native_decide
+example : behaviorScopesValid crossBehaviorAliasRegistry = false := by native_decide
+
+/-- Changing reusable-resource references does not enter the owned closure. -/
+example :
+    behaviorScopesValid
+      { scopedRegistry with
+        tools := scopedRegistry.tools.map fun document =>
+          { toolsId := document.toolsId, scopeBehaviorId := document.scopeBehaviorId,
+            mcpServiceIds := ["other-mcp"], subagentTargetIds := ["other-subagent"],
+            datastoreSurfaceIds := ["other-datastore"],
+            integrationIds := ["other-integration"] }
+        , contexts := scopedRegistry.contexts.map fun document =>
+          { document with skillIds := ["other-skill"] }
+        , profiles := scopedRegistry.profiles.map fun document =>
+          { document with backendId := "other-shared-backend" } } = true := by native_decide
+
+private def scopeCaseJson (name : String) (reg : ScopedConfigRegistry) : Json :=
+  Json.mkObj [("name", toJson name), ("valid", toJson (behaviorScopesValid reg))]
+
+private def scopeCasesJson : Json := toJson
+  [scopeCaseJson "complete_scoped_closure" scopedRegistry,
+   scopeCaseJson "complete_legacy_unscoped_closure" legacyRegistry,
+   scopeCaseJson "mixed_scoped_and_unscoped_rejected" mixedRegistry,
+   scopeCaseJson "scoped_orphan_rejected" orphanRegistry,
+   scopeCaseJson "missing_named_behavior_rejected" missingBehaviorRegistry,
+   scopeCaseJson "cross_behavior_alias_rejected" crossBehaviorAliasRegistry]
+
 private def caseJson (owner : String) : Json := Json.mkObj
   [("owner", toJson owner), ("task_id", toJson "task"),
    ("result", (resolveTask registry owner "task").toOption.map (fun s => Json.mkObj
@@ -55,6 +211,8 @@ def casesJson : String := (Json.mkObj
        ("instructions", toJson owner), ("model", toJson (owner ++ "-model")),
        ("enabled", toJson true)])),
    ("cases", toJson (["alice", "bob", "absent"].map caseJson)),
+   ("naming_cases", namingCasesJson),
+   ("behavior_scope_cases", scopeCasesJson),
    ("context_bounds", contextBoundsJson)]).compress
 
 /-- These scope fixtures advertise one model with unknown capabilities. Backend

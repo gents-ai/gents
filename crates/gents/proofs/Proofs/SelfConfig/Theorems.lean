@@ -144,4 +144,87 @@ theorem runStep_identity_immutable (validate guard : Doc → Bool) (t : Target)
       have himm := identity_immutable t (s t) p k hk
       simp [runStep, hstep, hm, himm]
 
+theorem applyStorePatch_scope_immutable (s : Store) (p : StorePatch)
+    (t : Target) (ht : t ∈ scopedTargets) :
+    applyStorePatch s p t "scope_behavior_id" = s t "scope_behavior_id" := by
+  have hall : t ∈ allTargets := scoped_targets_are_self_config_targets t ht
+  simp only [applyStorePatch, if_pos hall]
+  exact applyPatch_protected t (s t) (p t) "scope_behavior_id"
+    (scope_behavior_id_never_writable t hall)
+
+theorem runOwnerStep_accepts_valid_closure (validate guard : Store → Bool)
+    (s : Store) (p : StorePatch)
+    (accepted : (runOwnerStep validate guard s p).2 = true) :
+    validate (runOwnerStep validate guard s p).1 = true := by
+  by_cases h : (admissibleStorePatch p && validate (applyStorePatch s p) &&
+      guard (applyStorePatch s p)) = true
+  · have valid : validate (applyStorePatch s p) = true := by
+      have parts : (admissibleStorePatch p = true ∧
+          validate (applyStorePatch s p) = true) ∧
+          guard (applyStorePatch s p) = true := by
+        simpa only [Bool.and_eq_true] using h
+      exact parts.1.2
+    simpa [runOwnerStep, h] using valid
+  · simp [runOwnerStep, h] at accepted
+
+theorem runOwnerStep_rejects_atomically (validate guard : Store → Bool)
+    (s : Store) (p : StorePatch)
+    (rejected : (runOwnerStep validate guard s p).2 = false) :
+    (runOwnerStep validate guard s p).1 = s := by
+  by_cases h : (admissibleStorePatch p && validate (applyStorePatch s p) &&
+      guard (applyStorePatch s p)) = true
+  · simp [runOwnerStep, h] at rejected
+  · simp [runOwnerStep, h]
+
+/-- Full materialization and sparse edits have the same atomic outcome: the
+complete validated candidate or the exact previous store. -/
+theorem runOwnerStep_all_or_nothing (validate guard : Store → Bool)
+    (s : Store) (p : StorePatch) :
+    (runOwnerStep validate guard s p).1 = applyStorePatch s p ∨
+      (runOwnerStep validate guard s p).1 = s := by
+  by_cases h : (admissibleStorePatch p && validate (applyStorePatch s p) &&
+      guard (applyStorePatch s p)) = true
+  · exact Or.inl (by simp [runOwnerStep, h])
+  · exact Or.inr (by simp [runOwnerStep, h])
+
+theorem runOwnerStep_scope_immutable (validate guard : Store → Bool)
+    (s : Store) (p : StorePatch) (t : Target) (ht : t ∈ scopedTargets) :
+    (runOwnerStep validate guard s p).1 t "scope_behavior_id" =
+      s t "scope_behavior_id" := by
+  by_cases h : (admissibleStorePatch p && validate (applyStorePatch s p) &&
+      guard (applyStorePatch s p)) = true
+  · simpa [runOwnerStep, h] using applyStorePatch_scope_immutable s p t ht
+  · simp [runOwnerStep, h]
+
+theorem runScopedStep_accepts_valid_closure (validate guard : Store → Bool)
+    (target : Target) (s : Store) (patch : Patch)
+    (accepted : (runScopedStep validate guard target s patch).2 = true) :
+    validate (runScopedStep validate guard target s patch).1 = true := by
+  exact runOwnerStep_accepts_valid_closure validate guard s
+    (sparseStorePatch target patch) accepted
+
+theorem materializeClosure_accepts_valid (validate : Store → Bool)
+    (stored candidate : Store)
+    (accepted : (materializeClosure validate stored candidate).2 = true) :
+    validate (materializeClosure validate stored candidate).1 = true := by
+  by_cases h : validate candidate = true
+  · simp [materializeClosure, h]
+  · simp [materializeClosure, h] at accepted
+
+theorem materializeClosure_rejects_atomically (validate : Store → Bool)
+    (stored candidate : Store)
+    (rejected : (materializeClosure validate stored candidate).2 = false) :
+    (materializeClosure validate stored candidate).1 = stored := by
+  by_cases h : validate candidate = true
+  · simp [materializeClosure, h] at rejected
+  · simp [materializeClosure, h]
+
+theorem materializeClosure_all_or_nothing (validate : Store → Bool)
+    (stored candidate : Store) :
+    (materializeClosure validate stored candidate).1 = candidate ∨
+      (materializeClosure validate stored candidate).1 = stored := by
+  by_cases h : validate candidate = true
+  · exact Or.inl (by simp [materializeClosure, h])
+  · exact Or.inr (by simp [materializeClosure, h])
+
 end SelfConfig

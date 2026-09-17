@@ -11,10 +11,15 @@ Persona requests are command DTOs, not installed configuration. Published compos
 choices validate the request; they do not prove the resulting references resolve.
 The shared authoring loader compiles the requested edits into canonical documents.
 This boundary admits the command and resolves its candidate behavior through
-`Configuration.resolveBehavior`. Publication/idempotence belong to ApplyReconcile,
-not a second behavior/tools materializer here. Exact translation of composer
-root/preset/profile choices and copying a clone payload are loader refinement
-obligations; resolving the candidate does not itself prove those translations.
+`Configuration.resolveBehavior`. Persona creation additionally models the atomic
+publication contract shared by initial application and crash replay: the first
+application materializes one deterministic behavior-scoped closure and writes the
+existing `applied_behavior_id` receipt in the same state transition; replay returns
+that receipted behavior without allocating or publishing again. Exact translation
+of composer root/preset/profile choices and copying a clone payload remain loader
+refinement obligations; resolving the candidate does not itself prove those
+translations. The receipt is the durable replay association, so the behavior does
+not gain a second request/provenance field.
 The composer selects inference through `profile` only — there is no separate
 backend/model field, catalog, or fallback in the request shape.
 Catalog construction must filter profiles and allowed roots for the authorized
@@ -370,6 +375,138 @@ def targetBehaviorId (r : Request) : String :=
   | .create => r.key
   | .edit | .disable => r.target
 
+/-! ## Atomic behavior-scoped create materialization
+
+The common loader decides which optional members are present in a behavior's
+mutable closure. This model intentionally represents that decision as a finite set
+of stable component suffixes: it proves the naming, scoping, publication, and replay
+properties without duplicating the runtime's context/inference traversal table.
+-/
+
+/-- One mutable component after behavior-scoped materialization. The logical ID is
+derived from the stable behavior ID; `scopeBehaviorId` is ownership metadata, not
+authorization or publisher provenance. -/
+structure ScopedComponent where
+  logicalId : String
+  scopeBehaviorId : String
+  deriving DecidableEq, Repr
+
+/-- The canonical derivation shared by every component selected into the closure. -/
+def scopedComponent (behaviorId suffix : String) : ScopedComponent :=
+  { logicalId := behaviorId ++ ":" ++ suffix
+  , scopeBehaviorId := behaviorId }
+
+/-- The complete selected mutable closure. Optional/defaulted documents are absent
+from `componentSuffixes`; every selected member is present exactly as a scoped,
+deterministically named component. -/
+structure MaterializedClosure where
+  behaviorId : String
+  components : Finset ScopedComponent
+  deriving DecidableEq
+
+def deterministicClosure
+    (behaviorId : String) (componentSuffixes : Finset String) : MaterializedClosure :=
+  { behaviorId
+  , components := componentSuffixes.image (scopedComponent behaviorId) }
+
+theorem deterministic_closure_component_scope
+    (behaviorId : String) (componentSuffixes : Finset String) (component : ScopedComponent)
+    (hcomponent : component ∈ (deterministicClosure behaviorId componentSuffixes).components) :
+    component.scopeBehaviorId = behaviorId := by
+  simp only [deterministicClosure, Finset.mem_image] at hcomponent
+  obtain ⟨suffix, _, rfl⟩ := hcomponent
+  rfl
+
+theorem deterministic_closure_component_id
+    (behaviorId : String) (componentSuffixes : Finset String) (suffix : String)
+    (hsuffix : suffix ∈ componentSuffixes) :
+    scopedComponent behaviorId suffix ∈
+      (deterministicClosure behaviorId componentSuffixes).components := by
+  exact Finset.mem_image.mpr ⟨suffix, hsuffix, rfl⟩
+
+/-- Durable state relevant to persona creation. `appliedBehaviorId` is the existing
+`PersonaConfigRequest.applied_behavior_id` receipt. No creation/provenance field is
+stored on the behavior or its components. -/
+structure MaterializationState where
+  closures : String → Option MaterializedClosure
+  appliedBehaviorId : String → Option String
+  allocatedBehaviorIds : Finset String
+
+structure MaterializationResult where
+  state : MaterializationState
+  behaviorId : String
+  replayed : Bool
+
+/-- The naming owner supplies one pure collision-resolving allocator. Keeping its
+grammar abstract here separates user-facing naming from authoritative component
+scope while still making allocation deterministic from the pre-state and request. -/
+abbrev BehaviorAllocator := MaterializationState → Request → String
+
+/-- One atomic create step. A receipt is authoritative for replay. Without one, the
+allocator's target and its complete scoped closure are installed together with the
+receipt; there is no observable intermediate state containing only one side. -/
+def applyCreate
+    (allocateBehaviorId : BehaviorAllocator)
+    (state : MaterializationState) (request : Request)
+    (componentSuffixes : Finset String) : MaterializationResult :=
+  match state.appliedBehaviorId request.key with
+  | some behaviorId =>
+      { state, behaviorId, replayed := true }
+  | none =>
+      let behaviorId := allocateBehaviorId state request
+      let closure := deterministicClosure behaviorId componentSuffixes
+      { state :=
+          { closures := Function.update state.closures behaviorId (some closure)
+          , appliedBehaviorId :=
+              Function.update state.appliedBehaviorId request.key (some behaviorId)
+          , allocatedBehaviorIds := insert behaviorId state.allocatedBehaviorIds }
+      , behaviorId
+      , replayed := false }
+
+/-- The postcondition checked at the transaction boundary: the returned ID is both
+receipted by this request and backed by a complete installed closure. -/
+def receiptClosed (request : Request) (result : MaterializationResult) : Prop :=
+  result.state.appliedBehaviorId request.key = some result.behaviorId ∧
+    ∃ closure, result.state.closures result.behaviorId = some closure
+
+theorem initial_create_commits_closure_and_receipt_atomically
+    (allocateBehaviorId : BehaviorAllocator)
+    (state : MaterializationState) (request : Request)
+    (componentSuffixes : Finset String)
+    (hfresh : state.appliedBehaviorId request.key = none) :
+    let result := applyCreate allocateBehaviorId state request componentSuffixes
+    result.replayed = false ∧
+      result.behaviorId = allocateBehaviorId state request ∧
+      result.state.closures result.behaviorId =
+        some (deterministicClosure result.behaviorId componentSuffixes) ∧
+      result.state.appliedBehaviorId request.key = some result.behaviorId ∧
+      result.behaviorId ∈ result.state.allocatedBehaviorIds ∧
+      receiptClosed request result := by
+  simp [applyCreate, hfresh, receiptClosed]
+
+/-- Crash replay consults the durable receipt before allocation. It returns the
+original behavior and leaves every materialized/configuration fact unchanged,
+regardless of the closure payload proposed by the retry. -/
+theorem replay_returns_receipted_behavior_without_reallocation
+    (allocateBehaviorId : BehaviorAllocator)
+    (state : MaterializationState) (request : Request)
+    (componentSuffixes : Finset String) (behaviorId : String)
+    (hreceipt : state.appliedBehaviorId request.key = some behaviorId) :
+    applyCreate allocateBehaviorId state request componentSuffixes =
+      { state, behaviorId, replayed := true } := by
+  simp [applyCreate, hreceipt]
+
+theorem replay_preserves_atomic_receipt_closure
+    (allocateBehaviorId : BehaviorAllocator)
+    (state : MaterializationState) (request : Request)
+    (componentSuffixes : Finset String) (behaviorId : String)
+    (closure : MaterializedClosure)
+    (hreceipt : state.appliedBehaviorId request.key = some behaviorId)
+    (hclosure : state.closures behaviorId = some closure) :
+    receiptClosed request
+      (applyCreate allocateBehaviorId state request componentSuffixes) := by
+  simp [receiptClosed, applyCreate, hreceipt, hclosure]
+
 /-- Default selection is part of the same admitted create/edit publication.
 It never rewrites the configurator/source behavior; it only points the
 principal at the separately materialized target. -/
@@ -388,43 +525,83 @@ theorem omitted_promotion_keeps_existing_default
     defaultBehaviorAfter preDefault appliedBehavior r = preDefault := by
   simp [defaultBehaviorAfter, hdefault]
 
+/-- Creation resolves the exact ID returned by atomic materialization (and stored in
+`applied_behavior_id`), including a collision suffix chosen by the allocator. Edits
+and disables continue to address the explicit request target. -/
+def resolutionBehaviorId (r : Request) (appliedBehaviorId : String) : String :=
+  match r.op with
+  | .create => appliedBehaviorId
+  | .edit | .disable => r.target
+
+theorem create_resolves_applied_behavior
+    (r : Request) (appliedBehaviorId : String) (hop : r.op = .create) :
+    resolutionBehaviorId r appliedBehaviorId = appliedBehaviorId := by
+  simp [resolutionBehaviorId, hop]
+
+theorem edit_or_disable_resolves_request_target
+    (r : Request) (appliedBehaviorId : String)
+    (hop : r.op = .edit ∨ r.op = .disable) :
+    resolutionBehaviorId r appliedBehaviorId = r.target := by
+  rcases hop with hop | hop <;> simp [resolutionBehaviorId, hop]
+
 /-- A create/edit result must resolve as one context-plus-inference configuration.
-The candidate is supplied by the common authoring loader, not reconstructed from
-independent root/profile catalogs. Disable is admitted above but starts no session. -/
+The candidate and applied ID are supplied by the common authoring/materialization
+owner, not reconstructed from independent root/profile catalogs. Disable is admitted
+above but starts no session. -/
 def materializedSession (cat : Catalog) (st : BehaviorCatalog) (r : Request)
+    (appliedBehaviorId : String)
     (candidate : Configuration.Registry) : Option Configuration.ResolvedSessionConfig :=
   if admits cat st r ∧ r.op ≠ .disable then
-    (Configuration.resolveBehavior candidate r.agent (targetBehaviorId r)).toOption
+    (Configuration.resolveBehavior candidate r.agent
+      (resolutionBehaviorId r appliedBehaviorId)).toOption
   else none
+
+/-- Even when collision allocation makes the applied ID differ from the request's
+original create target, session resolution follows the applied/receipted ID. -/
+theorem create_materialized_session_resolves_applied_behavior
+    (cat : Catalog) (st : BehaviorCatalog) (r : Request)
+    (appliedBehaviorId : String) (candidate : Configuration.Registry)
+    (hop : r.op = .create) :
+    materializedSession cat st r appliedBehaviorId candidate =
+      if admits cat st r then
+        (Configuration.resolveBehavior candidate r.agent appliedBehaviorId).toOption
+      else none := by
+  simp [materializedSession, resolutionBehaviorId, hop]
 
 /-- This boundary makes no claim about arbitrary host effects or payload copying:
 it establishes authenticated command admission and actual canonical resolution. -/
 theorem materializedSession_iff (cat : Catalog) (st : BehaviorCatalog) (r : Request)
+    (appliedBehaviorId : String)
     (candidate : Configuration.Registry) (session : Configuration.ResolvedSessionConfig) :
-    materializedSession cat st r candidate = some session ↔
+    materializedSession cat st r appliedBehaviorId candidate = some session ↔
       admits cat st r ∧ r.op ≠ .disable ∧
-      Configuration.resolveBehavior candidate r.agent (targetBehaviorId r) = .ok session := by
+      Configuration.resolveBehavior candidate r.agent
+        (resolutionBehaviorId r appliedBehaviorId) = .ok session := by
   unfold materializedSession
   by_cases h : admits cat st r ∧ r.op ≠ .disable
   · simp only [if_pos h]
-    cases hr : Configuration.resolveBehavior candidate r.agent (targetBehaviorId r) <;>
+    cases hr : Configuration.resolveBehavior candidate r.agent
+        (resolutionBehaviorId r appliedBehaviorId) <;>
       simp_all [Except.toOption]
   · simp only [if_neg h, reduceCtorEq]
     tauto
 
 theorem unauthorized_command_resolves_nothing (cat : Catalog) (st : BehaviorCatalog)
-    (r : Request) (candidate : Configuration.Registry)
-    (h : ¬ authorizationOk cat r) : materializedSession cat st r candidate = none := by
+    (r : Request) (appliedBehaviorId : String) (candidate : Configuration.Registry)
+    (h : ¬ authorizationOk cat r) :
+    materializedSession cat st r appliedBehaviorId candidate = none := by
   simp [materializedSession, admits, h]
 
 theorem unknown_agent_resolves_nothing (cat : Catalog) (st : BehaviorCatalog)
-    (r : Request) (candidate : Configuration.Registry)
-    (h : r.agent ∉ cat.agents) : materializedSession cat st r candidate = none := by
+    (r : Request) (appliedBehaviorId : String) (candidate : Configuration.Registry)
+    (h : r.agent ∉ cat.agents) :
+    materializedSession cat st r appliedBehaviorId candidate = none := by
   simp [materializedSession, admits, agentOk, h]
 
 theorem disable_has_no_materialized_session (cat : Catalog) (st : BehaviorCatalog)
-    (r : Request) (candidate : Configuration.Registry)
-    (h : r.op = .disable) : materializedSession cat st r candidate = none := by
+    (r : Request) (appliedBehaviorId : String) (candidate : Configuration.Registry)
+    (h : r.op = .disable) :
+    materializedSession cat st r appliedBehaviorId candidate = none := by
   simp [materializedSession, h]
 
 /-- Local self-configuration retains exact-principal signature admission. -/

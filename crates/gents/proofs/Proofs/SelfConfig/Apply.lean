@@ -50,6 +50,39 @@ def step (validate guard : Doc → Bool) (t : Target) (stored : Doc)
 
 def Store := Target → Doc
 
+abbrev StorePatch := Target → Patch
+
+def applyStorePatch (s : Store) (p : StorePatch) : Store :=
+  fun t => if t ∈ allTargets then applyPatch t (s t) (p t) else s t
+
+def admissibleStorePatch (p : StorePatch) : Bool :=
+  allTargets.all (fun t => admissible t (p t))
+
+/-- Sparse and full self-configuration edits share this owner. The canonical
+typed closure validator is supplied by the configuration boundary and runs on
+the complete candidate before one commit. -/
+def runOwnerStep (validate guard : Store → Bool) (s : Store)
+    (p : StorePatch) : Store × Bool :=
+  let candidate := applyStorePatch s p
+  if admissibleStorePatch p && validate candidate && guard candidate then
+    (candidate, true)
+  else
+    (s, false)
+
+def sparseStorePatch (target : Target) (patch : Patch) : StorePatch :=
+  fun t => if t = target then patch else []
+
+def runScopedStep (validate guard : Store → Bool) (target : Target) (s : Store)
+    (patch : Patch) : Store × Bool :=
+  runOwnerStep validate guard s (sparseStorePatch target patch)
+
+/-- Creation and cloning are owner operations rather than self-config patches:
+they may establish protected identity/scope fields, but only by validating and
+committing the complete materialized closure at once. -/
+def materializeClosure (validate : Store → Bool) (stored candidate : Store) :
+    Store × Bool :=
+  if validate candidate then (candidate, true) else (stored, false)
+
 def runStep (validate guard : Doc → Bool) (t : Target) (s : Store)
     (p : Patch) : Store × Bool :=
   match step validate guard t (s t) p with
