@@ -7,6 +7,9 @@ use anyhow::{ensure, Context, Result};
 use serde_json::Value;
 use std::path::Path;
 
+#[path = "host_candidates.rs"]
+mod candidates;
+
 pub(super) const CASES: &[CaseId] = &[
     CaseId::new("host-preview"),
     CaseId::new("host-configure"),
@@ -16,6 +19,8 @@ pub(super) const CASES: &[CaseId] = &[
     CaseId::new("host-recovery"),
     CaseId::new("host-restart"),
     CaseId::new("host-schedule"),
+    CaseId::new("host-improvement"),
+    CaseId::new("host-regression-rejected"),
 ];
 const PREVIEW: &str = include_str!("../fixtures/configurator_evals/host/steward.md");
 const APPROVE: &str = include_str!("../fixtures/configurator_evals/host/approve-steward.md");
@@ -23,7 +28,7 @@ const APPROVE: &str = include_str!("../fixtures/configurator_evals/host/approve-
 pub(super) fn provenance() -> Result<reporting::RunProvenance> {
     reporting::RunProvenance::current(
         "host-steward",
-        "host-observations-v5-monitor-authority",
+        "host-observations-v6-isolated-candidates",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         "engineer-eval-sampling",
         1.0,
@@ -31,6 +36,7 @@ pub(super) fn provenance() -> Result<reporting::RunProvenance> {
         &[
             reporting::EvidenceSource::new("grader", include_bytes!("host_scenarios.rs")),
             reporting::EvidenceSource::new("host", include_bytes!("host.rs")),
+            reporting::EvidenceSource::new("candidates", include_bytes!("host_candidates.rs")),
             reporting::EvidenceSource::new("access", include_bytes!("access.rs")),
             reporting::EvidenceSource::new("stages", include_bytes!("stages.rs")),
         ],
@@ -69,6 +75,120 @@ async fn mailbox(host: &Host) -> Result<Vec<Value>> {
         .clone();
     rows.sort_by(|a, b| a["item_key"].as_str().cmp(&b["item_key"].as_str()));
     Ok(rows)
+}
+
+fn verify_prompt_only_candidate(before: &Value, after: &Value, monitor: &str) -> Result<Value> {
+    for collection in gents::Collection::ALL {
+        let name = collection.graphql_type();
+        ensure!(
+            before[name].is_array() && after[name].is_array(),
+            "candidate snapshot missing {name}"
+        );
+    }
+    let behaviors = before["AgentBehavior"]
+        .as_array()
+        .context("behaviors missing")?;
+    let selected: Vec<_> = behaviors
+        .iter()
+        .filter(|row| row["behavior_id"] == monitor)
+        .collect();
+    ensure!(
+        selected.len() == 1,
+        "candidate requires exactly one existing monitor"
+    );
+    let context_id = selected[0]["context_id"]
+        .as_str()
+        .context("monitor context missing")?;
+    ensure!(!context_id.is_empty(), "monitor context is empty");
+    ensure!(
+        behaviors
+            .iter()
+            .filter(|row| row["context_id"] == context_id)
+            .count()
+            == 1,
+        "candidate context is shared with another behavior"
+    );
+    let select = |snapshot: &Value| -> Result<(usize, Value)> {
+        let contexts = snapshot["AgentContext"]
+            .as_array()
+            .context("contexts missing")?;
+        let rows: Vec<_> = contexts
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row["context_id"] == context_id)
+            .collect();
+        ensure!(
+            rows.len() == 1,
+            "candidate requires exactly one existing monitor context"
+        );
+        Ok((rows[0].0, rows[0].1.clone()))
+    };
+    let (_, original) = select(before)?;
+    let (index, candidate) = select(after)?;
+    let prompt = candidate["system_prompt"]
+        .as_str()
+        .context("candidate prompt missing")?;
+    ensure!(!prompt.trim().is_empty(), "candidate prompt is empty");
+    ensure!(
+        candidate["system_prompt"] != original["system_prompt"],
+        "candidate did not change the prompt"
+    );
+    let mut restored = after.clone();
+    restored["AgentContext"][index]["system_prompt"] = original["system_prompt"].clone();
+    ensure!(
+        &restored == before,
+        "candidate changed configuration outside the monitor prompt"
+    );
+    Ok(candidate)
+}
+
+#[test]
+fn improvement_scope_requires_an_in_place_unshared_prompt_and_complete_snapshot() {
+    let mut before = serde_json::Map::new();
+    for collection in gents::Collection::ALL {
+        before.insert(collection.graphql_type().into(), serde_json::json!([]));
+    }
+    let mut before = Value::Object(before);
+    before["AgentBehavior"] = serde_json::json!([{"behavior_id":"monitor","context_id":"context"}]);
+    before["AgentContext"] = serde_json::json!([{"_docID":"original", "context_id":"context","system_prompt":"original prompt","tools_id":"readonly"}]);
+    let mut after = before.clone();
+    after["AgentContext"][0]["system_prompt"] = "improved prompt".into();
+    assert!(verify_prompt_only_candidate(&before, &after, "monitor").is_ok());
+    assert!(verify_prompt_only_candidate(&before, &before, "monitor").is_err());
+    for (field, value) in [
+        ("system_prompt", " "),
+        ("_docID", "clone"),
+        ("tools_id", "writer"),
+    ] {
+        let mut invalid = after.clone();
+        invalid["AgentContext"][0][field] = value.into();
+        assert!(
+            verify_prompt_only_candidate(&before, &invalid, "monitor").is_err(),
+            "{field}"
+        );
+    }
+    for collection in gents::Collection::ALL {
+        let mut invalid = after.clone();
+        invalid
+            .as_object_mut()
+            .unwrap()
+            .remove(collection.graphql_type());
+        assert!(verify_prompt_only_candidate(&before, &invalid, "monitor").is_err());
+    }
+    let mut shared = before.clone();
+    shared["AgentBehavior"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"behavior_id":"other","context_id":"context"}));
+    let mut shared_after = shared.clone();
+    shared_after["AgentContext"][0]["system_prompt"] = "improved prompt".into();
+    assert!(verify_prompt_only_candidate(&shared, &shared_after, "monitor").is_err());
+    let mut extra = after.clone();
+    extra["AgentContext"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"context_id":"extra"}));
+    assert!(verify_prompt_only_candidate(&before, &extra, "monitor").is_err());
 }
 
 pub(super) async fn run_trial(
@@ -173,6 +293,11 @@ pub(super) async fn run_trial(
             ensure!(mailbox(&host).await?.iter().all(|row| row["status"] != "open"), "healthy scheduled check produced an attention item");
             Ok(())
         })).await?;
+        for (case, regression) in [(CASES[8], false), (CASES[9], true)] {
+            stages::checked(case, &evidence, stages::acceptance(
+                candidates::evaluate(&mut host, &evidence, &engineer, &monitor, collection, regression)
+            )).await?;
+        }
         Ok(())
     }.await;
     let cleanup = host.close().await;
@@ -217,12 +342,21 @@ fn verify_notification_causality(item: &Value, request: &str, source: &str) -> R
 }
 
 fn verify_finding_coverage(items: &[&Value], actual: &Value, now: i64) -> Result<()> {
+    verify_finding_coverage_at(items, actual, now, 80)
+}
+
+fn verify_finding_coverage_at(
+    items: &[&Value],
+    actual: &Value,
+    now: i64,
+    disk_threshold: i64,
+) -> Result<()> {
     use std::collections::BTreeSet;
     let mut expected = BTreeSet::new();
     if actual["disk_used_percent"]
         .as_i64()
         .context("disk measurement missing")?
-        >= 80
+        >= disk_threshold
     {
         expected.insert("disk");
     }

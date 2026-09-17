@@ -344,6 +344,24 @@ impl Host {
 
     pub async fn start(evidence: &Path) -> Result<Self> {
         let receipt = control(&["start"]).await?;
+        Self::from_start_receipt(evidence, receipt).await
+    }
+
+    pub async fn fork(&self, evidence: &Path) -> Result<Self> {
+        std::fs::create_dir_all(evidence)?;
+        let snapshot = evidence.join("original-home");
+        let receipt = control(&[
+            "fork",
+            &self.id,
+            snapshot
+                .to_str()
+                .context("non-UTF8 candidate snapshot path")?,
+        ])
+        .await?;
+        Self::from_start_receipt(evidence, receipt).await
+    }
+
+    async fn from_start_receipt(evidence: &Path, receipt: Value) -> Result<Self> {
         let id = receipt["container_id"]
             .as_str()
             .context("container ID missing")?
@@ -378,7 +396,15 @@ impl Host {
     }
 
     pub async fn restart(&mut self, stage: &str) -> Result<()> {
-        let receipt = control(&["restart", &self.id]).await?;
+        self.resume_or_restart("restart", stage).await
+    }
+
+    pub async fn resume(&mut self, stage: &str) -> Result<()> {
+        self.resume_or_restart("resume", stage).await
+    }
+
+    async fn resume_or_restart(&mut self, operation: &str, stage: &str) -> Result<()> {
+        let receipt = control(&[operation, &self.id]).await?;
         let endpoint = receipt["graphql"]
             .as_str()
             .context("restart endpoint missing")?;
@@ -471,6 +497,31 @@ async fn isolated_host_runtime_survives_restart_without_changing_configuration()
         ensure!(host.snapshot("restarted").await?["api"]["exit_code"] == 0);
         host.fault("api-permission", "fault-after-restart").await?;
         ensure!(host.snapshot("faulted").await?["api"]["exit_code"] == 1);
+        let candidate = host.fork(&root.path().join("candidate")).await?;
+        let candidate_check: Result<()> = async {
+            ensure!(
+                configuration_snapshot(&candidate.access).await? == before,
+                "candidate fork changed canonical configuration"
+            );
+            ensure!(
+                candidate.snapshot("fresh-host").await?["api"]["exit_code"] == 0,
+                "candidate copied original host faults"
+            );
+            Ok(())
+        }
+        .await;
+        let retired = candidate.close().await;
+        retired?;
+        host.resume("after-candidate").await?;
+        candidate_check?;
+        ensure!(
+            configuration_snapshot(&host.access).await? == before,
+            "candidate changed original canonical configuration"
+        );
+        ensure!(
+            host.snapshot("original-after-candidate").await?["api"]["exit_code"] == 1,
+            "candidate changed original host effects"
+        );
         Ok(())
     }
     .await;

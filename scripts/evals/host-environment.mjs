@@ -19,13 +19,18 @@ export function hostMemoryPlan(memoryBytes, concurrency) {
     throw new Error("Docker did not report a valid VM memory limit");
   const containerBytes = 512 * 1024 * 1024;
   const overheadBytes = 1024 * 1024 * 1024;
+  const containersPerTrial = 2;
   return {
     vm_memory_bytes: memoryBytes,
     concurrency,
     container_memory_bytes: containerBytes,
+    containers_per_trial: containersPerTrial,
     overhead_bytes: overheadBytes,
-    required_bytes: concurrency * containerBytes + overheadBytes,
-    sufficient: memoryBytes >= concurrency * containerBytes + overheadBytes,
+    required_bytes:
+      concurrency * containersPerTrial * containerBytes + overheadBytes,
+    sufficient:
+      memoryBytes >=
+      concurrency * containersPerTrial * containerBytes + overheadBytes,
   };
 }
 
@@ -456,6 +461,13 @@ export class HostEnvironment {
 
   async inject(fault) {
     const commands = {
+      "disk-warning": [
+        "dd",
+        "if=/dev/zero",
+        "of=/host/logs/growth.log",
+        "bs=1024",
+        "count=12000",
+      ],
       "disk-pressure": [
         "dd",
         "if=/dev/zero",

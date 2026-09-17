@@ -4,6 +4,26 @@ import { HostEnvironment } from "./host-environment.mjs";
 // Process boundary for the Rust eval coordinator, not a model-facing tool.
 export async function control(argv, env = process.env) {
   const [operation, id, fault] = argv;
+  if (operation === "fork") {
+    if (argv.length !== 3)
+      throw new Error("fork requires container and private snapshot directory");
+    const original = new HostEnvironment(id);
+    const candidate = await original.forkStoppedRuntime({
+      endpoint: env.GENTS_D4F_ENDPOINT,
+      directory: fault,
+    });
+    try {
+      return {
+        container_id: candidate.id,
+        original_container_id: original.id,
+        graphql: await candidate.startRuntime(),
+        host: await candidate.snapshot(),
+      };
+    } catch (error) {
+      await candidate.close();
+      throw error;
+    }
+  }
   if (operation === "start") {
     if (argv.length !== 1)
       throw new Error("start takes no positional arguments");
@@ -43,6 +63,7 @@ export async function control(argv, env = process.env) {
       "snapshot",
       "fault",
       "restart",
+      "resume",
       "archive",
       "close",
       "restore",
@@ -70,7 +91,8 @@ export async function control(argv, env = process.env) {
       await host.inject(fault);
       return host.snapshot();
     case "restart":
-      await host.stopRuntime();
+    case "resume":
+      if (operation === "restart") await host.stopRuntime();
       return {
         graphql: await host.startRuntime(),
         host: await host.snapshot(),

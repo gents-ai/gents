@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { control } from "./host-control.mjs";
 
 test(
   "candidate runtime forks an offline home without changing the original host",
@@ -47,17 +48,16 @@ test(
       });
       const did = await principal(graphql);
       await original.inject("api-permission");
-      candidate = await original.forkStoppedRuntime({
-        endpoint,
-        directory: join(directory, "snapshot"),
-      });
+      const fork = await control(
+        ["fork", original.id, join(directory, "snapshot")],
+        { GENTS_D4F_ENDPOINT: endpoint },
+      );
+      candidate = new HostEnvironment(fork.container_id);
+      assert.equal(fork.original_container_id, original.id);
       await assert.rejects(
         original.exec(["test", "-e", "/runtime/server.pid"]),
       );
-      await assert.rejects(
-        candidate.exec(["test", "-e", "/runtime/server.pid"]),
-      );
-      assert.equal(await principal(await candidate.startRuntime()), did);
+      assert.equal(await principal(fork.graphql), did);
       assert.equal((await candidate.snapshot()).api_status, 200);
       assert.equal((await original.snapshot()).api_status, 503);
       await candidate.exec(["touch", "/host/candidate-only"]);
@@ -66,7 +66,8 @@ test(
       );
       await candidate.close();
       candidate = undefined;
-      assert.equal(await principal(await original.startRuntime()), did);
+      const resumed = await control(["resume", original.id]);
+      assert.equal(await principal(resumed.graphql), did);
       assert.equal((await original.snapshot()).api_status, 503);
     } finally {
       await candidate?.close();
@@ -201,7 +202,9 @@ test("runtime provenance rejects stale, dirty, missing, or abbreviated revisions
 test("host memory preflight budgets every container and VM overhead", () => {
   const gib = 1024 ** 3;
   assert.equal(hostMemoryPlan(16 * gib - 1, 30).sufficient, false);
-  assert.equal(hostMemoryPlan(24 * gib, 30).sufficient, true);
+  assert.equal(hostMemoryPlan(24 * gib, 30).sufficient, false);
+  assert.equal(hostMemoryPlan(31 * gib, 30).sufficient, true);
+  assert.equal(hostMemoryPlan(31 * gib, 30).containers_per_trial, 2);
   assert.equal(hostMemoryPlan(2 * gib, 1).sufficient, true);
   for (const concurrency of [0, 31, 1.5, NaN])
     assert.throws(() => hostMemoryPlan(24 * gib, concurrency));
@@ -288,6 +291,11 @@ test(
       await host.inject("stale-backup");
       assert.ok(
         (await host.snapshot()).backup_mtime < Date.now() / 1000 - 86400,
+      );
+      await host.inject("disk-warning");
+      const warning = await host.snapshot();
+      assert.ok(
+        warning.disk_used_percent >= 70 && warning.disk_used_percent < 80,
       );
       await host.inject("disk-pressure");
       const occupied = await host.snapshot();
