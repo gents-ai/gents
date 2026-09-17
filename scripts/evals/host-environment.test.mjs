@@ -4,12 +4,36 @@ import {
   HostEnvironment,
   archiveContainerDirectory,
   hostMemoryPlan,
+  validateRuntimeRevision,
 } from "./host-environment.mjs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+
+test("runtime provenance rejects stale, dirty, missing, or abbreviated revisions", () => {
+  const commit = "a".repeat(40);
+  const labels = {
+    "org.opencontainers.image.revision": commit,
+    "gents.eval.source-dirty": "false",
+  };
+  const revision = { commit, dirty: false };
+  assert.doesNotThrow(() => validateRuntimeRevision(labels, revision));
+  for (const source of [
+    null,
+    { commit, dirty: true },
+    { commit: "aaaa", dirty: false },
+  ])
+    assert.throws(() => validateRuntimeRevision(labels, source));
+  for (const imageLabels of [
+    undefined,
+    {},
+    { ...labels, "gents.eval.source-dirty": "true" },
+    { ...labels, "org.opencontainers.image.revision": "b".repeat(40) },
+  ])
+    assert.throws(() => validateRuntimeRevision(imageLabels, revision));
+});
 
 test("host memory preflight budgets every container and VM overhead", () => {
   const gib = 1024 ** 3;

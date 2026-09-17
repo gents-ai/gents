@@ -37,17 +37,29 @@ export async function runtimeMemoryPlan(concurrency) {
 
 export async function resolveRuntimeImage(
   reference = "gents-eval-runtime:development",
+  revision,
 ) {
-  const id = await docker([
-    "image",
-    "inspect",
-    "--format",
-    "{{.Id}}",
-    reference,
-  ]);
+  const [record] = JSON.parse(await docker(["image", "inspect", reference]));
+  const id = record?.Id;
   if (!/^sha256:[a-f0-9]{64}$/.test(id))
     throw new Error("Docker did not return an immutable runtime image ID");
+  if (revision !== undefined)
+    validateRuntimeRevision(record.Config?.Labels, revision);
   return id;
+}
+
+export function validateRuntimeRevision(labels, revision) {
+  if (!revision || revision.dirty || !/^[a-f0-9]{40}$/.test(revision.commit))
+    throw new Error(
+      "Host evals require committed source so runtime and grader revisions can be verified",
+    );
+  if (
+    labels?.["org.opencontainers.image.revision"] !== revision.commit ||
+    labels?.["gents.eval.source-dirty"] !== "false"
+  )
+    throw new Error(
+      "Runtime image does not match the clean checkout; rebuild Dockerfile.runtime with GENTS_BUILD_GIT_SHA=$(git rev-parse HEAD) and GENTS_BUILD_GIT_DIRTY=false",
+    );
 }
 
 export async function archiveContainerDirectory(id, source, directory) {

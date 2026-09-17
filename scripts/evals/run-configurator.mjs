@@ -85,6 +85,7 @@ export async function runConfigurator({
     if (suite === "host-steward") {
       const runtimeImage = await resolveRuntimeImage(
         env.GENTS_HOST_RUNTIME_IMAGE,
+        execution.revision,
       );
       const memory = await runtimeMemoryPlan(
         Number(env.GENTS_LIVE_CONFIG_CONCURRENCY || 1),

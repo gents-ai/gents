@@ -21,3 +21,6 @@ RUN chmod 755 /opt/steward-fixture/*.sh
 USER 1000:1000
 WORKDIR /host
 ENTRYPOINT ["/opt/steward-fixture/start.sh"]
+ARG GENTS_BUILD_GIT_SHA
+ARG GENTS_BUILD_GIT_DIRTY=true
+LABEL org.opencontainers.image.revision=$GENTS_BUILD_GIT_SHA gents.eval.source-dirty=$GENTS_BUILD_GIT_DIRTY

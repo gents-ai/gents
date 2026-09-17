@@ -113,6 +113,11 @@ The launcher resolves that tag once to an immutable image ID, records it in
 `host-environment.json`, and passes the same ID to every trial. Set
 `GENTS_HOST_RUNTIME_IMAGE` to select a different local image; mutable tags are
 resolved before any trial starts. Controller calls require the resolved ID.
+The checkout must have no tracked changes, and the image revision label must
+match its full commit SHA. Commit changes before building with
+`--build-arg GENTS_BUILD_GIT_SHA=$(git rev-parse HEAD)` and
+`--build-arg GENTS_BUILD_GIT_DIRTY=false`; stale or unlabeled images are rejected.
+This verifies source provenance, not bit-for-bit reproducibility of OS packages.
 
 ```sh
 GENTS_LIVE_CONFIG_RUNS=1 GENTS_LIVE_CONFIG_CONCURRENCY=1 \
