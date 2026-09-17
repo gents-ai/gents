@@ -1121,6 +1121,7 @@ impl ClientCore {
         agent_did: &str,
         source_behavior_id: &str,
         display_name: &str,
+        request_id: &str,
     ) -> Result<String> {
         let access = self.operator_access(agent_did)?;
         let result = mutations::create_disabled_behavior_scaffold_on(
@@ -1128,6 +1129,7 @@ impl ClientCore {
             agent_did,
             source_behavior_id,
             display_name,
+            request_id,
         )
         .await;
         match result {

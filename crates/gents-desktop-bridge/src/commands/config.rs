@@ -25,6 +25,7 @@ pub async fn create_behavior_scaffold(
         &request.agent_did,
         &request.source_behavior_id,
         &request.display_name,
+        &request.request_id,
     )
     .await
 }

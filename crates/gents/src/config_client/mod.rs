@@ -45,9 +45,10 @@ pub mod patch;
 
 pub use agent_behavior::write_agent_behavior_document;
 pub use behavior_closure::{
-    materialize_behavior_closure_candidate_in_txn, materialize_behavior_closure_in_txn,
-    materialize_disabled_behavior_scaffold_in_txn, plan_behavior_closure,
-    plan_behavior_closure_with_overlays,
+    delete_behavior_closure_in_txn, ensure_behavior_component_patchable_in_txn,
+    is_behavior_system_tag, materialize_behavior_closure_candidate_in_txn,
+    materialize_behavior_closure_in_txn, materialize_disabled_behavior_scaffold_in_txn,
+    plan_behavior_closure, plan_behavior_closure_with_overlays,
 };
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 #[cfg(test)]

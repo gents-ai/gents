@@ -108,6 +108,9 @@ pub struct BehaviorScaffoldCreateRequest {
     pub agent_did: String,
     pub source_behavior_id: String,
     pub display_name: String,
+    /// Immutable idempotency identity. Reuse it only while retrying the same
+    /// source-behavior and display-name request.
+    pub request_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

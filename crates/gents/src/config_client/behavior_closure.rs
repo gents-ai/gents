@@ -12,6 +12,7 @@ use anyhow::{ensure, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::{
     apply_desired_state_plan, config_projection, ConfigApplyTxn, DesiredStateApplyCounts,
@@ -19,7 +20,8 @@ use super::{
 };
 use crate::behavior_scope::{
     behavior_component_id, behavior_slug_from_display_name, find_available_personal_behavior_key,
-    valid_generated_qualified_key, BehaviorComponentPath,
+    valid_generated_qualified_key, valid_new_personal_behavior_key, BehaviorComponentPath,
+    SETUP_CONFIGURATOR_BEHAVIOR_ID,
 };
 use crate::document_config::{
     AgentBehavior, AgentContext, CompactionConfig, ConfigReferences, InferenceExecution,
@@ -38,6 +40,32 @@ const OWNED_COLLECTIONS: [Collection; 7] = [
     Collection::InferenceExecution,
     Collection::InferenceRetryPolicy,
 ];
+
+const SETUP_STEWARD_TAG: &str = "gents:setup-steward";
+const PACK_ORIGIN_TAG_PREFIX: &str = "gents:pack:";
+const DESKTOP_SCAFFOLD_TAG_PREFIX: &str = "gents:desktop-scaffold:";
+const DESKTOP_SCAFFOLD_SOURCE_TAG_PREFIX: &str = "gents:desktop-scaffold-source:";
+const DESKTOP_SCAFFOLD_DISPLAY_TAG_PREFIX: &str = "gents:desktop-scaffold-display:";
+
+/// Tags owned by configuration provenance and replay machinery. Metadata
+/// editors must retain these while replacing user-authored tags.
+pub fn is_behavior_system_tag(tag: &str) -> bool {
+    tag == SETUP_STEWARD_TAG
+        || tag.starts_with(PACK_ORIGIN_TAG_PREFIX)
+        || tag.starts_with(DESKTOP_SCAFFOLD_TAG_PREFIX)
+        || tag.starts_with(DESKTOP_SCAFFOLD_SOURCE_TAG_PREFIX)
+        || tag.starts_with(DESKTOP_SCAFFOLD_DISPLAY_TAG_PREFIX)
+}
+
+fn strip_reserved_personal_tags(tags: &mut Vec<String>, target_behavior_id: &str) {
+    if valid_new_personal_behavior_key(target_behavior_id) {
+        tags.retain(|tag| !is_behavior_system_tag(tag));
+    }
+}
+
+fn hashed_tag(prefix: &str, value: &str) -> String {
+    format!("{prefix}{:x}", Sha256::digest(value.as_bytes()))
+}
 
 #[derive(Clone, Copy)]
 struct InferencePaths {
@@ -149,6 +177,7 @@ impl<'a> ClosurePlanner<'a> {
         let mut document: Tools = self.source(Collection::Tools, source_id)?;
         document.tools_id = target_id.clone();
         document.scope_behavior_id = Some(self.target_behavior_id.to_owned());
+        strip_reserved_personal_tags(&mut document.tags, self.target_behavior_id);
         self.push(Collection::Tools, &document)?;
         Ok(target_id)
     }
@@ -168,6 +197,7 @@ impl<'a> ClosurePlanner<'a> {
             self.source(Collection::InferenceRetryPolicy, source_id)?;
         document.retry_policy_id = target_id.clone();
         document.scope_behavior_id = Some(self.target_behavior_id.to_owned());
+        strip_reserved_personal_tags(&mut document.tags, self.target_behavior_id);
         self.push(Collection::InferenceRetryPolicy, &document)?;
         Ok(target_id)
     }
@@ -183,6 +213,7 @@ impl<'a> ClosurePlanner<'a> {
             self.source(Collection::InferenceExecution, source_id)?;
         document.execution_id = target_id.clone();
         document.scope_behavior_id = Some(self.target_behavior_id.to_owned());
+        strip_reserved_personal_tags(&mut document.tags, self.target_behavior_id);
         document.retry_policy_id = document
             .retry_policy_id
             .as_deref()
@@ -203,6 +234,7 @@ impl<'a> ClosurePlanner<'a> {
             self.source(Collection::InferenceSampling, source_id)?;
         document.sampling_id = target_id.clone();
         document.scope_behavior_id = Some(self.target_behavior_id.to_owned());
+        strip_reserved_personal_tags(&mut document.tags, self.target_behavior_id);
         self.push(Collection::InferenceSampling, &document)?;
         Ok(target_id)
     }
@@ -218,6 +250,7 @@ impl<'a> ClosurePlanner<'a> {
             self.source(Collection::InferenceProfile, source_id)?;
         document.profile_id = target_id.clone();
         document.scope_behavior_id = Some(self.target_behavior_id.to_owned());
+        strip_reserved_personal_tags(&mut document.tags, self.target_behavior_id);
         document.sampling_id = document
             .sampling_id
             .as_deref()
@@ -245,6 +278,7 @@ impl<'a> ClosurePlanner<'a> {
         let mut document: CompactionConfig = self.source(Collection::Compaction, source_id)?;
         document.compaction_id = target_id.clone();
         document.scope_behavior_id = Some(self.target_behavior_id.to_owned());
+        strip_reserved_personal_tags(&mut document.tags, self.target_behavior_id);
         document.inference_profile_id = document
             .inference_profile_id
             .as_deref()
@@ -267,6 +301,7 @@ impl<'a> ClosurePlanner<'a> {
         let mut document: AgentContext = self.source(Collection::AgentContext, source_id)?;
         document.context_id = target_id.clone();
         document.scope_behavior_id = Some(self.target_behavior_id.to_owned());
+        strip_reserved_personal_tags(&mut document.tags, self.target_behavior_id);
         document.tools_id = document
             .tools_id
             .as_deref()
@@ -464,6 +499,24 @@ pub fn plan_behavior_closure_with_overlays(
     target_behavior_id: &str,
     target_display_name: Option<&str>,
 ) -> Result<DesiredStateApplyPlan> {
+    plan_behavior_closure_with_overlays_and_behavior_tags(
+        snapshot,
+        source_behavior,
+        source_overlays,
+        target_behavior_id,
+        target_display_name,
+        &[],
+    )
+}
+
+fn plan_behavior_closure_with_overlays_and_behavior_tags(
+    snapshot: &ConfigReferences,
+    source_behavior: &AgentBehavior,
+    source_overlays: impl IntoIterator<Item = (Collection, Value)>,
+    target_behavior_id: &str,
+    target_display_name: Option<&str>,
+    additional_behavior_tags: &[String],
+) -> Result<DesiredStateApplyPlan> {
     ensure!(
         valid_generated_qualified_key(target_behavior_id),
         "target behavior ID {target_behavior_id:?} must use lowercase colon-separated kebab segments"
@@ -540,6 +593,12 @@ pub fn plan_behavior_closure_with_overlays(
     target_behavior.context_id = context_id;
     target_behavior.inference_profile_id = inference_profile_id;
     target_behavior.created_at = existing_target.and_then(|behavior| behavior.created_at);
+    strip_reserved_personal_tags(&mut target_behavior.tags, target_behavior_id);
+    for tag in additional_behavior_tags {
+        if !target_behavior.tags.contains(tag) {
+            target_behavior.tags.push(tag.clone());
+        }
+    }
     planner.push(Collection::AgentBehavior, &target_behavior)?;
 
     let planned_keys: BTreeSet<DocumentKey> = planner
@@ -639,12 +698,41 @@ pub async fn materialize_disabled_behavior_scaffold_in_txn(
     agent_did: &str,
     source_behavior_id: &str,
     display_name: &str,
+    request_id: &str,
 ) -> Result<String> {
     ensure!(
         !display_name.trim().is_empty(),
         "behavior display name must not be blank"
     );
+    ensure!(
+        !request_id.trim().is_empty(),
+        "scaffold request ID must not be blank"
+    );
     let snapshot = ConfigReferences::load_in_txn(txn, agent_did).await?;
+    let request_tag = hashed_tag(DESKTOP_SCAFFOLD_TAG_PREFIX, request_id);
+    let source_tag = hashed_tag(DESKTOP_SCAFFOLD_SOURCE_TAG_PREFIX, source_behavior_id);
+    let display_tag = hashed_tag(DESKTOP_SCAFFOLD_DISPLAY_TAG_PREFIX, display_name);
+    let prior = snapshot
+        .documents()
+        .filter(|((collection, _), value)| {
+            *collection == Collection::AgentBehavior
+                && value["tags"]
+                    .as_array()
+                    .is_some_and(|tags| tags.iter().any(|tag| tag == &request_tag))
+        })
+        .map(|(_, value)| serde_json::from_value::<AgentBehavior>(value.clone()))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    ensure!(
+        prior.len() <= 1,
+        "scaffold request ID is bound to multiple behaviors"
+    );
+    if let Some(prior) = prior.first() {
+        ensure!(
+            prior.tags.contains(&source_tag) && prior.tags.contains(&display_tag),
+            "scaffold request ID was already used with a different source behavior or display name"
+        );
+        return Ok(prior.behavior_id.clone());
+    }
     let mut source: AgentBehavior =
         decode_snapshot(&snapshot, Collection::AgentBehavior, source_behavior_id)?
             .with_context(|| format!("source behavior {source_behavior_id:?} does not exist"))?;
@@ -659,9 +747,107 @@ pub async fn materialize_disabled_behavior_scaffold_in_txn(
     .context("personal behavior key space exhausted")?;
 
     source.enabled = false;
-    let plan = plan_behavior_closure(&snapshot, &source, &target_behavior_id, Some(display_name))?;
+    let plan = plan_behavior_closure_with_overlays_and_behavior_tags(
+        &snapshot,
+        &source,
+        std::iter::empty(),
+        &target_behavior_id,
+        Some(display_name),
+        &[request_tag, source_tag, display_tag],
+    )?;
     apply_desired_state_plan(txn, &plan).await?;
     Ok(target_behavior_id)
+}
+
+/// Delete a behavior and every document explicitly scoped to it in one
+/// validated transaction. Retained configuration consumers are rejected by
+/// desired-state validation; durable sessions are checked before staging.
+pub async fn delete_behavior_closure_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    agent_did: &str,
+    behavior_id: &str,
+) -> Result<usize> {
+    let snapshot = ConfigReferences::load_in_txn(txn, agent_did).await?;
+    let Some(behavior): Option<AgentBehavior> =
+        decode_snapshot(&snapshot, Collection::AgentBehavior, behavior_id)?
+    else {
+        return Ok(0);
+    };
+    ensure!(
+        behavior.behavior_id != SETUP_CONFIGURATOR_BEHAVIOR_ID
+            && !behavior.tags.iter().any(|tag| tag == SETUP_STEWARD_TAG),
+        "protected configurator behavior cannot be deleted"
+    );
+    let owner = crate::graphql::escape_graphql_string(agent_did);
+    let id = crate::graphql::escape_graphql_string(behavior_id);
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "{id}"}}}}, limit: 1) {{session_id}} }}"#
+        ))
+        .await?;
+    ensure!(
+        gents_protocol::graphql::graphql_rows_from_response(&response, "AgentSession").is_empty(),
+        "behavior {behavior_id:?} is retained by an AgentSession"
+    );
+
+    let mut removals = vec![(
+        Collection::AgentBehavior,
+        agent_did.to_owned(),
+        behavior_id.to_owned(),
+    )];
+    removals.extend(
+        snapshot
+            .documents()
+            .filter_map(|((collection, id), value)| {
+                (OWNED_COLLECTIONS.contains(collection)
+                    && value.get("scope_behavior_id").and_then(Value::as_str) == Some(behavior_id))
+                .then(|| (*collection, agent_did.to_owned(), id.clone()))
+            }),
+    );
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
+    apply_desired_state_plan(txn, &plan).await?;
+    Ok(1)
+}
+
+/// Generic desktop component patches may mutate only one behavior's private
+/// closure. Shared legacy components require an explicit copy/materialization.
+pub async fn ensure_behavior_component_patchable_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    agent_did: &str,
+    collection: Collection,
+    id: &str,
+) -> Result<()> {
+    if !OWNED_COLLECTIONS.contains(&collection) {
+        return Ok(());
+    }
+    let snapshot = ConfigReferences::load_in_txn(txn, agent_did).await?;
+    let target = snapshot_document(&snapshot, collection, id)
+        .with_context(|| format!("missing {} {id:?}", collection.graphql_type()))?;
+    let mut consumers = Vec::new();
+    for ((candidate_collection, _), value) in snapshot.documents() {
+        if *candidate_collection != Collection::AgentBehavior {
+            continue;
+        }
+        let behavior: AgentBehavior = serde_json::from_value(value.clone())?;
+        if current_owned_closure(&snapshot, &behavior)?.contains(&(collection, id.to_owned())) {
+            consumers.push(behavior.behavior_id);
+        }
+    }
+    if let Some(scope) = target.get("scope_behavior_id").and_then(Value::as_str) {
+        ensure!(
+            consumers.as_slice() == [scope],
+            "{} {id:?} scope does not match one behavior consumer",
+            collection.graphql_type()
+        );
+    } else {
+        ensure!(
+            consumers.len() <= 1,
+            "{} {id:?} is shared by {} behaviors; materialize a private closure before editing",
+            collection.graphql_type(),
+            consumers.len()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -855,6 +1041,53 @@ mod tests {
                     && document.add["sampling_id"] == "local:reviewer:compaction:sampling"
             }),
             "a shared source sampling document must remain one target alias"
+        );
+    }
+
+    #[test]
+    fn personal_copy_strips_reserved_origin_tags_but_preserves_user_tags() {
+        let mut source = source_behavior();
+        source.tags = vec![
+            SETUP_STEWARD_TAG.into(),
+            "gents:pack:code_review".into(),
+            "user:favorite".into(),
+        ];
+        let documents = full_source_documents()
+            .into_iter()
+            .map(|(collection, mut value)| {
+                value["tags"] = json!([
+                    SETUP_STEWARD_TAG,
+                    "gents:pack:code_review",
+                    "source:retained"
+                ]);
+                (collection, value)
+            })
+            .collect();
+        let plan = plan_behavior_closure(
+            &snapshot(documents),
+            &source,
+            "local:reviewer",
+            Some("Reviewer"),
+        )
+        .unwrap();
+
+        for document in plan.documents() {
+            assert!(!document.add["tags"]
+                .as_array()
+                .is_some_and(|tags| tags.iter().any(|tag| {
+                    tag == SETUP_STEWARD_TAG
+                        || tag
+                            .as_str()
+                            .is_some_and(|tag| tag.starts_with(PACK_ORIGIN_TAG_PREFIX))
+                })));
+        }
+        assert_eq!(
+            planned(&plan, Collection::AgentBehavior, "local:reviewer")["tags"],
+            json!(["user:favorite"])
+        );
+        assert_eq!(
+            planned(&plan, Collection::AgentContext, "local:reviewer:context")["tags"],
+            json!(["source:retained"])
         );
     }
 

@@ -25,6 +25,10 @@ function harness() {
   const api: MockApi = {
     saveAgentConfig: vi.fn().mockResolvedValue({}),
     saveBehaviorConfig: vi.fn().mockResolvedValue({}),
+    createBehaviorScaffold: vi.fn().mockResolvedValue({
+      behaviorId: "local:new-behaviour",
+      snapshot: { bootstrap },
+    }),
     patchConfigComponents: vi.fn().mockResolvedValue({}),
     applyConfigComponents: vi.fn().mockResolvedValue({}),
     saveBackendConfig: vi.fn().mockResolvedValue({}),
@@ -79,6 +83,13 @@ function harness() {
     snapshot: { bootstrap },
     saveAgentConfig: api.saveAgentConfig,
     saveBehaviorConfig: api.saveBehaviorConfig,
+    createBehaviorScaffold: async (
+      request: Parameters<NonNullable<DesktopApiAdapter["createBehaviorScaffold"]>>[0],
+    ) => {
+      const result = await api.createBehaviorScaffold(request);
+      await refreshSnapshot();
+      return result.behaviorId;
+    },
     applyConfig: (run: (bridge: DesktopApiAdapter) => Promise<unknown>) =>
       run(api as unknown as DesktopApiAdapter),
     refreshSnapshot,
@@ -486,7 +497,7 @@ describe("configuration panels", () => {
     );
   });
 
-  it("validates and saves every behavior-owned setting without changing Setup", async () => {
+  it("validates and saves every behavior-owned setting without changing Configurator", async () => {
     const { api, shell } = harness();
     render(<BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />);
     expectFields([
@@ -506,6 +517,34 @@ describe("configuration panels", () => {
     expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
   });
 
+  it("hides system-owned behavior tags from the metadata editor", () => {
+    const { shell } = harness();
+    const withSystemTags = {
+      ...deployment,
+      behaviors: deployment.behaviors.map((behavior) =>
+        behavior.behaviorId === "ops"
+          ? {
+              ...behavior,
+              tags: [
+                "user:visible",
+                "gents:desktop-scaffold:receipt",
+                "gents:desktop-scaffold-source:source",
+                "gents:desktop-scaffold-display:display",
+                "gents:pack:origin",
+              ],
+            }
+          : behavior,
+      ),
+    };
+    render(
+      <BehaviorsPanel shell={shell} deployment={withSystemTags} behaviorId="ops" />,
+    );
+
+    expect(screen.getByText("user:visible")).toBeInTheDocument();
+    expect(screen.queryByText("gents:desktop-scaffold:receipt")).toBeNull();
+    expect(screen.queryByText("gents:pack:origin")).toBeNull();
+  });
+
   it("creates behavior scaffolds disabled until the operator saves them", async () => {
     const { api, shell } = harness();
     render(<BehaviorsPanel shell={shell} deployment={deployment} />);
@@ -514,11 +553,37 @@ describe("configuration panels", () => {
       .setup()
       .click(screen.getByRole("button", { name: "New behaviour" }));
 
-    expect(api.saveBehaviorConfig).toHaveBeenCalledWith(
+    expect(api.createBehaviorScaffold).toHaveBeenCalledWith(
       expect.objectContaining({
-        document: expect.objectContaining({ enabled: false }),
+        agentDid: deployment.agentDid,
+        sourceBehaviorId: expect.any(String),
+        displayName: "New behaviour",
+        requestId: expect.any(String),
       }),
     );
+  });
+
+  it("retains the scaffold request identity only while retrying a failed create", async () => {
+    const { api, shell } = harness();
+    api.createBehaviorScaffold
+      .mockRejectedValueOnce(new Error("snapshot refresh failed"))
+      .mockResolvedValueOnce({
+        behaviorId: "local:new-behaviour",
+        snapshot: { bootstrap },
+      });
+    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const button = screen.getByRole("button", { name: "New behaviour" });
+
+    await userEvent.setup().click(button);
+    await waitFor(() => expect(api.createBehaviorScaffold).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.setup().click(button);
+    await waitFor(() => expect(api.createBehaviorScaffold).toHaveBeenCalledTimes(2));
+
+    const first = api.createBehaviorScaffold.mock.calls[0][0];
+    const retry = api.createBehaviorScaffold.mock.calls[1][0];
+    expect(retry.requestId).toBe(first.requestId);
+    expect(retry).toEqual(first);
   });
 
   it("coalesces repeated create activation while the operator write is pending", async () => {
