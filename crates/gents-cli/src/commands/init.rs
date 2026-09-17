@@ -1492,32 +1492,11 @@ mod tests {
 
     #[test]
     fn setup_steward_starts_readonly_under_an_unrestricted_process_ceiling() {
+        assert_eq!(
+            SETUP_STEWARD_SYSTEM_PROMPT,
+            gents_protocol::SETUP_STEWARD_PROMPT
+        );
         assert!(SETUP_STEWARD_SYSTEM_PROMPT.starts_with("You are The Engineer,"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Keep The Engineer unchanged"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("--default"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("AgentSession selects a behavior"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Unsafe or invalid request"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Verify the result"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config pack install"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("--inference-slot NAME=PROFILE_ID"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("--digest DIGEST"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config behavior"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config tools preview --behavior BEHAVIOR_ID"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config tools edit --behavior BEHAVIOR_ID"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("enable_graph_tools=true"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("bash.network_mode=\"disabled\""));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT
-            .contains("config behavior preview edit BEHAVIOR_ID --set FIELD=JSON"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config behavior default BEHAVIOR_ID"));
-        assert!(!SETUP_STEWARD_SYSTEM_PROMPT.contains("config behavior tools"));
-        assert!(!SETUP_STEWARD_SYSTEM_PROMPT.contains("behavior edit --id"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT
-            .contains("test enforcement before claiming network isolation"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("run_graph"));
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT
-            .contains("Never infer its language or workflow from a directory name"));
-        assert!(!SETUP_STEWARD_SYSTEM_PROMPT
-            .contains("configure this behavior and context as a focused coding agent"));
         let selected = initial_tools_package(ToolPackageArg::Yolo, true);
         assert_eq!(selected, ToolPackageArg::Readonly);
         assert_eq!(

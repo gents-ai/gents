@@ -44,6 +44,10 @@ describe("setup steward patches", () => {
       changes: { tags: [SETUP_STEWARD_BEHAVIOR_TAG] },
     });
     const tools = patches.find((patch) => patch.collection === "Tools");
+    expect(patches.find((patch) => patch.collection === "AgentContext")).toMatchObject({
+      id: "context-a",
+      changes: { system_prompt: SETUP_STEWARD_PROMPT },
+    });
     expect(tools).toMatchObject({
       id: "tools-a",
       changes: {
@@ -66,56 +70,18 @@ describe("setup steward patches", () => {
     });
   });
 
-  it("keeps Setup as the configurator and promotes a separate working behavior", () => {
-    expect(SETUP_STEWARD_PROMPT).toContain("Keep The Engineer unchanged");
-    expect(SETUP_STEWARD_PROMPT).toContain("config behavior create");
-    expect(SETUP_STEWARD_PROMPT).toContain("--default");
+  it("keeps The Engineer available for reusable work without redundant approvals", () => {
+    expect(SETUP_STEWARD_PROMPT).toContain("build, maintain, and improve");
+    expect(SETUP_STEWARD_PROMPT).toContain("keep The Engineer available");
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "without asking for the same permission again",
+    );
+    expect(SETUP_STEWARD_PROMPT).toContain(
+      "Preview-only and discovery-only requests stop before writes",
+    );
     expect(SETUP_STEWARD_PROMPT).toContain("AgentSession selects a behavior");
-    expect(SETUP_STEWARD_PROMPT).toContain("Unsafe or invalid request");
-    expect(SETUP_STEWARD_PROMPT).toContain("Verify the result");
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "Keep template data separate from instructions and metadata",
-    );
-    expect(SETUP_STEWARD_PROMPT).toContain("minimal runnable result early");
-    expect(SETUP_STEWARD_PROMPT).toContain("runtime's process ceiling and root");
-    expect(SETUP_STEWARD_PROMPT).toContain("targeted config reads");
-    expect(SETUP_STEWARD_PROMPT).toContain("run_graph");
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "Never infer its language or workflow from a directory name",
-    );
-    expect(SETUP_STEWARD_PROMPT).toContain("config pack install");
-    expect(SETUP_STEWARD_PROMPT).toContain("--inference-slot NAME=PROFILE_ID");
-    expect(SETUP_STEWARD_PROMPT).toContain("--digest DIGEST");
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "config tools preview --behavior BEHAVIOR_ID",
-    );
-    expect(SETUP_STEWARD_PROMPT).toContain("config tools edit --behavior BEHAVIOR_ID");
-    expect(SETUP_STEWARD_PROMPT).toContain("enable_graph_tools=true");
-    expect(SETUP_STEWARD_PROMPT).toContain('bash.network_mode="disabled"');
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "config behavior preview edit BEHAVIOR_ID --set FIELD=JSON",
-    );
-    expect(SETUP_STEWARD_PROMPT).toContain("config behavior default BEHAVIOR_ID");
-    expect(SETUP_STEWARD_PROMPT).not.toContain("config behavior tools");
-    expect(SETUP_STEWARD_PROMPT).not.toContain("behavior edit --id");
-    expect(SETUP_STEWARD_PROMPT).not.toContain("get_my_config");
-    expect(SETUP_STEWARD_PROMPT).not.toContain("configure_behaviors");
-    expect(SETUP_STEWARD_PROMPT).not.toContain("install_pack");
-    expect(SETUP_STEWARD_PROMPT).toContain("Starter recipes are optional");
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "A coding/review request is not runtime repair authority",
-    );
-    expect(SETUP_STEWARD_PROMPT).toContain("Never adopt another runtime home");
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "Graph terminal states are succeeded, failed and cancelled",
-    );
-    expect(SETUP_STEWARD_PROMPT).toContain("EventSource watches the input collection");
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "Skills supply procedures and declare dependencies; they never grant tools",
-    );
-    expect(SETUP_STEWARD_PROMPT).not.toContain(
-      "configure this behavior and context as a focused coding agent",
-    );
+    expect(SETUP_STEWARD_PROMPT).toContain("process ceiling and root");
+    expect(SETUP_STEWARD_PROMPT.split(/\s+/).length).toBeLessThanOrEqual(1_200);
   });
 
   it("patches the protected Setup behavior after a working behavior becomes default", () => {
