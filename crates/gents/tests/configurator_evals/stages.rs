@@ -584,6 +584,26 @@ async fn submit_stage(
     stage: &str,
     prompt: &str,
 ) -> Result<String> {
+    prepare_stage(activation, node, owner, behavior, stage).await?;
+    let stage_escaped = escape_graphql_string(stage);
+    let trigger = format!("eval-trigger-{stage}");
+    let prompt = escape_graphql_string(prompt);
+    let submitted = node.execute(&format!(r#"mutation {{ create_GentsEvalStageInput(input: {{stage: "{stage_escaped}", prompt: "{prompt}"}}) {{_docID}} }}"#)).await;
+    ensure!(
+        !submitted.has_errors(),
+        "stage input write failed: {:?}",
+        submitted.errors
+    );
+    observe_stage_request(node, &trigger).await
+}
+
+pub(super) async fn prepare_stage(
+    activation: &ActivationFence,
+    node: &EmbeddedNode,
+    owner: &str,
+    behavior: &str,
+    stage: &str,
+) -> Result<()> {
     use gents::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents::Collection;
     let task = format!("eval-task-{stage}");
@@ -623,15 +643,11 @@ async fn submit_stage(
         })
     })
     .await?;
-    activation.wait().await?;
-    let prompt = escape_graphql_string(prompt);
-    let submitted = node.execute(&format!(r#"mutation {{ create_GentsEvalStageInput(input: {{stage: "{stage_escaped}", prompt: "{prompt}"}}) {{_docID}} }}"#)).await;
-    ensure!(
-        !submitted.has_errors(),
-        "stage input write failed: {:?}",
-        submitted.errors
-    );
-    let trigger = escape_graphql_string(&trigger);
+    activation.wait().await
+}
+
+async fn observe_stage_request(node: &EmbeddedNode, trigger: &str) -> Result<String> {
+    let trigger = escape_graphql_string(trigger);
     let started = Instant::now();
     loop {
         let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{caused_by_trigger_id: {{_eq: "{trigger}"}}}}) {{request_id}} }}"#)).await;
@@ -654,7 +670,7 @@ async fn submit_stage(
         }
         ensure!(
             started.elapsed() < Duration::from_secs(120),
-            "native task did not materialize for stage {stage}"
+            "native task did not materialize for trigger {trigger}"
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -754,7 +770,7 @@ pub async fn execute(
         .map_err(infrastructure)
 }
 
-fn write_stage_progress(
+pub(super) fn write_stage_progress(
     evidence: &Path,
     stage: &str,
     phase: &str,

@@ -90,6 +90,7 @@ export async function renderReport(directory, { now = Date.now() } = {}) {
         `Grader: ${text(report.provenance.grader?.id || "unknown")} ${text(report.provenance.grader?.sha256 || "unknown")}`,
         `Inference: ${report.models.map(text).join(", ")} @ ${text(inference?.endpoint || "unknown")}`,
         `Sampling: temperature=${sampling.temperature ?? "provider default"}, top_p=${sampling.top_p ?? "provider default"}, seed=${sampling.seed ?? "provider default"}`,
+        `Requested reasoning effort: ${text(inference?.requested_reasoning_effort ?? "server default")} (provider enforcement not measured)`,
         `Fixture hashes: ${Object.keys(report.provenance.fixture_sha256 || {}).length}`,
       );
     }

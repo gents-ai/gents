@@ -427,6 +427,10 @@ test-evals-browser:
 live-configurator-eval:
 	node scripts/evals/run-configurator.mjs $(CARGO)
 
+.PHONY: live-mailbox-eval
+live-mailbox-eval:
+	GENTS_EVAL_SUITE=monitor-mailbox GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-10} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-10} node scripts/evals/run-configurator.mjs $(CARGO)
+
 test-agent-e2e:
 	$(CARGO) test -p gents --test e2e_lifecycle
 	$(CARGO) test -p gents --test e2e_runtime

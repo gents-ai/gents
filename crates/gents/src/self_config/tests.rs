@@ -1439,6 +1439,32 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     grants.dry_run = true;
     let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
+    let expected_help = call_config_tool(&tools, command(&["help", "datastore"]))
+        .await
+        .unwrap();
+    for args in [
+        vec!["datastore", "--help"],
+        vec!["datastore", "preview", "create", "-h"],
+        vec!["datastore", "help", "create"],
+    ] {
+        assert_eq!(
+            call_config_tool(&tools, command(&args)).await.unwrap(),
+            expected_help
+        );
+    }
+    for args in [
+        vec!["datastore", "create", "--set", "display_name=\"Test\""],
+        vec![
+            "datastore",
+            "preview",
+            "create",
+            "--set",
+            "display_name=\"Test\"",
+        ],
+    ] {
+        let error = call_config_tool(&tools, command(&args)).await.unwrap_err();
+        assert!(error.contains("missing SURFACE_ID"), "{error}");
+    }
     let preview = call_config_tool(
         &tools,
         command(&[
@@ -1456,6 +1482,30 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
         serde_json::from_str::<Value>(&preview).unwrap()["committed"],
         false
     );
+    let config_tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    let named_preview = config_tool
+        .call(
+            json!({
+                "argv":["datastore","preview","create"],
+                "target_id":"jobs",
+                "set":{"display_name":"Jobs"}
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&named_preview).unwrap(),
+        serde_json::from_str::<Value>(&preview).unwrap()
+    );
+    let error = config_tool
+        .call(json!({"argv":["datastore","create"],"set":{"display_name":"Test"}}).to_string())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("missing SURFACE_ID"));
     assert!(
         call_config_tool(&tools, command(&["datastore", "get", "jobs"]))
             .await
@@ -1585,6 +1635,42 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     .await
     .unwrap_err();
     assert!(denied.contains("protected Setup"), "{denied}");
+}
+
+#[tokio::test]
+async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("structured-config");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "working").await;
+    let mut settings = config(&["behavior"]);
+    settings.behavior_id = "working".into();
+    settings.dry_run = true;
+    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &settings);
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    let read = json!({"argv":["behavior","context","get"]}).to_string();
+    let before = tool.call(read.clone()).await.unwrap();
+    let prompt = "Quoted \"text\"\nActual newline; literal \\n; Unicode λ; {{ doc.message }}";
+    let mut request =
+        json!({"argv":["behavior","context","preview"],"set":{"system_prompt":prompt}});
+    let preview: Value =
+        serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
+    assert_eq!(preview["committed"], false);
+    assert_eq!(tool.call(read.clone()).await.unwrap(), before);
+    request["argv"][2] = json!("edit");
+    tool.call(request.to_string()).await.unwrap();
+    let after: Value = serde_json::from_str(&tool.call(read.clone()).await.unwrap()).unwrap();
+    assert_eq!(after["document"]["system_prompt"], prompt);
+    request["set"] = json!({"agent_did":"foreign"});
+    assert!(tool.call(request.to_string()).await.is_err());
+    assert_eq!(
+        serde_json::from_str::<Value>(&tool.call(read).await.unwrap()).unwrap(),
+        after
+    );
+    node.shutdown().await;
 }
 
 async fn call_config_tool(

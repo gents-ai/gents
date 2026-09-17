@@ -8,7 +8,54 @@ import {
   snapshotRun,
   startDashboard,
   usageFromEvidence,
+  stageUsageFromEvidence,
 } from "./watch.mjs";
+import { summarizeUsage, renderUsage } from "./usage.mjs";
+
+test("stage usage preserves partial coverage, model isolation and repeated input", () => {
+  const stages = stageUsageFromEvidence([
+    {
+      name: "preview-inference.json",
+      modified: 1,
+      data: {
+        InferenceCall: [
+          { prompt_tokens: 100, completion_tokens: 10 },
+          { prompt_tokens: 150, completion_tokens: 0 },
+          { prompt_tokens: null, completion_tokens: null },
+        ],
+      },
+    },
+    { name: "preview-tools.json", data: { AgentToolCall: [{}] } },
+    {
+      name: "apply-inference.json",
+      modified: 2,
+      data: { InferenceCall: [{}] },
+    },
+  ]);
+  assert.equal(stages[0].input, 250);
+  assert.equal(stages[0].peakInput, 150);
+  assert.equal(stages[0].inputReportedCalls, 2);
+  assert.equal(stages[0].outputReportedCalls, 2);
+  assert.equal(stages[0].calls, 3);
+  assert.equal(stages[0].tools, 1);
+  assert.equal(stages[1].input, null);
+  const result = summarizeUsage({
+    directory: "/test",
+    trials: [
+      { model: "one", trial: 1, stageUsage: stages },
+      { model: "one", trial: 2, stageUsage: stages },
+      { model: "two", trial: 1, stageUsage: stages },
+      { model: "one", trial: 3 },
+    ],
+  });
+  assert.equal(result.stages.length, 4);
+  assert.equal(result.stages[0].input, 500);
+  assert.equal(result.stages[0].peakInput, 150);
+  assert.equal(result.stages[0].inputReportedCalls, 4);
+  assert.equal(result.trials.length, 6);
+  assert.match(renderUsage(result), /4\/6 \/ 4\/6/);
+  assert.match(renderUsage(result), /not unique or uncached prefill/);
+});
 
 test("usage counts saved calls once and distinguishes unknown tokens from zero", () => {
   const document = {

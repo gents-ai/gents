@@ -48,7 +48,13 @@ const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
 Behavior create/clone/disable flags: --id, --from, --display-name, --description,
 --system-prompt, --root, --preset, --profile, and --default. PATCH_FLAGS are
 repeated --set FIELD=JSON and --clear FIELD; omitted fields preserve.
-Use config help RESOURCE before a write."#;
+Model calls should put native JSON patch values in the top-level set object,
+field removals in clear, and named string options in options (keys without --).
+For datastore, automation and mcp-service document commands, target_id supplies
+the document ID instead of its positional argv operand. Never supply both.
+Example: {"argv":["automation","preview","task","ID"],"options":{"behavior":"BEHAVIOR_ID"},"set":{"prompt_template":"Read {{ doc.message }}","enabled":true}}
+Do not JSON-stringify values inside set; CLI --set syntax is optional.
+Use RESOURCE --help (or -h), RESOURCE OPERATION --help, or help RESOURCE before a write."#;
 
 const DATA_MODEL: &str = "A principal owns exact-ID configuration documents. Requests, tasks, and sessions select a Behavior. Behavior -> Context controls the system prompt, selected skills, compaction, and one Tools document; Tools contains nested host, built-in, integration, MCP, and self-config settings. Behavior -> InferenceProfile -> Backend controls model execution; the profile selects model and reasoning effort and may reference sampling and execution settings. A Trigger selects a Task and a Schedule or EventSource. A Pack declares configuration and inference roles; installation binds every role to an existing principal-owned profile, then publishes the pack's documents and graph revision without copying inference configuration. Reads never mutate. Document edits are sparse patches: omission preserves, explicit --clear removes an optional value, and preview/apply validate same-principal references within the document transaction. Schema registration is node-wide and separate from document publication; it never grants document access. Credentials and OAuth consent remain operator-owned and are never returned by config.";
 
@@ -56,6 +62,103 @@ const DATA_MODEL: &str = "A principal owns exact-ID configuration documents. Req
 #[serde(deny_unknown_fields)]
 pub struct ConfigCommandParams {
     pub argv: Vec<String>,
+    #[serde(default)]
+    pub target_id: Option<String>,
+    #[serde(default)]
+    pub set: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub clear: Vec<String>,
+    #[serde(default)]
+    pub options: BTreeMap<String, String>,
+}
+
+impl ConfigCommandParams {
+    fn into_argv(self) -> Result<Vec<String>> {
+        anyhow::ensure!(!self.argv.is_empty(), "argv requires a config command");
+        if config_help_resource(&self.argv).is_some() {
+            anyhow::ensure!(
+                self.target_id.is_none()
+                    && self.set.is_empty()
+                    && self.clear.is_empty()
+                    && self.options.is_empty(),
+                "help accepts a command path only; remove target_id, set, clear and options"
+            );
+        }
+        let mut argv = self.argv;
+        if let Some(id) = self.target_id {
+            required_resource_id(Some(&id), "target_id")?;
+            let words = argv.iter().map(String::as_str).collect::<Vec<_>>();
+            let position = match words.as_slice() {
+                ["datastore", "preview", "create" | "edit", ..] => 3,
+                ["datastore", "get" | "create" | "edit", ..]
+                | ["mcp-service", "get" | "preview" | "edit", ..] => 2,
+                ["automation", "get" | "preview" | "edit", _, ..] => 3,
+                _ => bail!("target_id is supported for datastore, automation and mcp-service document commands; use --help for the command path"),
+            };
+            anyhow::ensure!(
+                argv.get(position).is_none_or(|arg| arg.starts_with('-')),
+                "target ID supplied in both argv and target_id; use only one"
+            );
+            argv.insert(position, id);
+        }
+        for (name, value) in self.options {
+            anyhow::ensure!(
+                name.bytes().next().is_some_and(|c| c.is_ascii_lowercase())
+                    && name.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
+                    && !matches!(name.as_str(), "set" | "clear"),
+                "options keys must be option names without --; use set/clear for patches"
+            );
+            let flag = format!("--{name}");
+            anyhow::ensure!(
+                !argv.contains(&flag),
+                "option {flag} supplied in both argv and options"
+            );
+            argv.extend([flag, value]);
+        }
+        for (field, value) in self.set {
+            anyhow::ensure!(
+                !field.is_empty()
+                    && field
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'_'),
+                "invalid patch field {field:?}"
+            );
+            argv.extend([
+                "--set".into(),
+                format!("{field}={}", serde_json::to_string(&value)?),
+            ]);
+        }
+        for field in self.clear {
+            argv.extend(["--clear".into(), field]);
+        }
+        Ok(argv)
+    }
+}
+
+/// Recognize help before parsing command operands, never inside option values.
+pub fn config_help_resource(argv: &[String]) -> Option<Option<&str>> {
+    let first = argv.first()?.as_str();
+    if matches!(first, "help" | "--help" | "-h") {
+        return Some(argv.get(1).map(String::as_str));
+    }
+    let mut index = 1;
+    while let Some(arg) = argv.get(index) {
+        if matches!(arg.as_str(), "--help" | "-h") || (index == 1 && arg == "help") {
+            return Some(Some(first));
+        }
+        index += if arg.starts_with("--") && arg != "--default" {
+            2
+        } else {
+            1
+        };
+    }
+    None
+}
+
+fn required_resource_id<'a>(value: Option<&'a String>, label: &str) -> Result<&'a String> {
+    value
+        .filter(|id| !id.trim().is_empty() && !id.starts_with('-'))
+        .with_context(|| format!("missing {label}: supply a non-empty resource ID before options or patch fields; use --help for syntax"))
 }
 
 pub struct ConfigCommandTool {
@@ -81,7 +184,7 @@ impl Tool for ConfigCommandTool {
         ToolDefinition {
             name: Self::NAME.to_owned(),
             description: format!(
-                "Inspect and change this principal's configuration with a safe argv-style command interface. {DATA_MODEL} Enabled resources: {}. Common reads: [\"behavior\",\"list\"] and [\"behavior\",\"get\",BEHAVIOR_ID]. Call [\"help\"] or [\"help\",RESOURCE] for exact commands before writing.",
+                "Inspect and change this principal's configuration. Put command words in argv; use target_id for datastore, automation and mcp-service document IDs, or the positional ID shown in help (never both). Put patch values directly in set as JSON, optional removals in clear, and named string options in options (keys without --). Do not stringify or escape JSON inside set. Example: {{\"argv\":[\"behavior\",\"context\",\"preview\"],\"options\":{{\"behavior\":\"ID\"}},\"set\":{{\"system_prompt\":\"Your literal prompt\"}}}}. {DATA_MODEL} Enabled resources: {}. Common reads: [\"behavior\",\"list\"] and [\"behavior\",\"get\",BEHAVIOR_ID]. Append --help or -h to a command path, or call [\"help\",RESOURCE], for syntax and fields before writing.",
                 resources.join(", ")
             ),
             parameters: json!({
@@ -92,7 +195,11 @@ impl Tool for ConfigCommandTool {
                         "items": {"type": "string"},
                         "minItems": 1,
                         "description": "One allowlisted config command as argv elements; this is parsed internally and is never passed to a shell."
-                    }
+                    },
+                    "target_id": {"type":"string", "description":"Named document ID for datastore, automation or mcp-service get/preview/create/edit commands. Omit the positional ID from argv when using this. Behavior selection remains options.behavior."},
+                    "set": {"type":"object", "additionalProperties":true, "description":"Patch fields with native JSON values, not FIELD=JSON strings. Omitted fields stay unchanged; nested objects replace the complete group."},
+                    "clear": {"type":"array", "items":{"type":"string"}, "description":"Optional fields to remove explicitly. Do not also supply them in set."},
+                    "options": {"type":"object", "additionalProperties":{"type":"string"}, "description":"Named string options without --, e.g. behavior, system-prompt, display-name, root, profile, sdl, digest. Values are literal strings, not JSON-encoded strings. Boolean switches remain in argv."}
                 },
                 "required": ["argv"],
                 "additionalProperties": false
@@ -101,7 +208,8 @@ impl Tool for ConfigCommandTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        self.dispatch(&args.argv).await.map_err(Into::into)
+        let argv = args.into_argv().map_err(SelfConfigError::from)?;
+        self.dispatch(&argv).await.map_err(Into::into)
     }
 }
 
@@ -140,6 +248,9 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
 
 impl ConfigCommandTool {
     async fn dispatch(&self, argv: &[String]) -> Result<String> {
+        if let Some(resource) = config_help_resource(argv) {
+            return self.help(resource);
+        }
         let Some(command) = argv.first().map(String::as_str) else {
             bail!("missing config command\n{CONFIG_USAGE}");
         };
@@ -204,6 +315,8 @@ Every source is explicit and opt-in. User PATH is the selected application's con
   preview create|edit SURFACE_ID --set FIELD=JSON [--clear FIELD]
   create|edit SURFACE_ID --set FIELD=JSON [--clear FIELD]
 Fields come from DatastoreToolSurface: display_name, enabled, entries, tags.
+Model example: {"argv":["datastore","preview","create"],"target_id":"monitor-notifications","set":{"display_name":"Monitor notifications"}}
+SURFACE_ID names the tool-surface configuration (monitor-notifications here), not a mailbox or collection. For the existing MailboxItem collection, include set.entries from canonical_mailbox_entries with your notification policy; file_mailbox_item is the exposed tool. Do not create a replacement mailbox collection. Create with the same ID and fields after preview, then select that ID in the working Tools.datastore.datastore_tool_surface_ids. Definition, selection and runtime execution are separate checks.
 Entries are canonical schema-bounded create/query declarations. Owner and surface_id are immutable. Bind an existing surface using config tools edit --behavior BEHAVIOR_ID --set datastore=JSON, preserving the other datastore settings. Editing a surface used by protected Setup is rejected. Schema registration is a separate operation."#
             }
             Some("behavior") => {
@@ -747,7 +860,7 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             .first()
             .map(String::as_str)
             .context("mcp-service command is required; run config help mcp-service")?;
-        let id = argv.get(1).context("mcp-service requires SERVICE_ID")?;
+        let id = required_resource_id(argv.get(1), "SERVICE_ID")?;
         match verb {
             "get" => {
                 anyhow::ensure!(argv.len() == 2, "mcp-service get accepts one SERVICE_ID");
@@ -771,7 +884,7 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             .map(String::as_str)
             .context("automation command is required; run config help automation")?;
         let kind = argv.get(1).context("automation requires KIND")?;
-        let id = argv.get(2).context("automation requires ID")?;
+        let id = required_resource_id(argv.get(2), "automation ID")?;
         let target = automation_target(&kind.replace('-', "_"))?;
         match verb {
             "get" => {
@@ -1747,6 +1860,143 @@ pub(super) fn behavior_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_aliases_are_recognized_before_operands_but_not_in_values() {
+        for argv in [vec!["--help"], vec!["-h"], vec!["help"]] {
+            let argv = argv.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert_eq!(config_help_resource(&argv), Some(None));
+        }
+        for argv in [
+            vec!["help", "datastore"],
+            vec!["datastore", "--help"],
+            vec!["datastore", "create", "-h"],
+            vec!["datastore", "preview", "create", "--help"],
+            vec!["datastore", "help", "create"],
+            vec![
+                "datastore",
+                "create",
+                "surface",
+                "--set",
+                "display_name=\"Test\"",
+                "--help",
+            ],
+        ] {
+            let argv = argv.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert_eq!(config_help_resource(&argv), Some(Some("datastore")));
+        }
+        for argv in [
+            vec!["behavior", "create", "--system-prompt", "--help"],
+            vec!["behavior", "create", "--description", "help"],
+            vec!["datastore", "get", "help"],
+        ] {
+            let argv = argv.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert_eq!(config_help_resource(&argv), None);
+        }
+    }
+
+    #[test]
+    fn required_ids_never_consume_patch_flags() {
+        for id in [None, Some(""), Some(" "), Some("--set"), Some("-h")] {
+            let id = id.map(str::to_owned);
+            assert!(required_resource_id(id.as_ref(), "SURFACE_ID")
+                .unwrap_err()
+                .to_string()
+                .contains("missing SURFACE_ID"));
+        }
+        let id = "monitor-notifications".to_owned();
+        assert_eq!(required_resource_id(Some(&id), "SURFACE_ID").unwrap(), &id);
+    }
+
+    #[test]
+    fn named_target_uses_the_existing_positional_command_path() {
+        for (argv, expected) in [
+            (
+                json!(["datastore", "preview", "create"]),
+                json!(["datastore", "preview", "create", "surface"]),
+            ),
+            (
+                json!(["automation", "preview", "task"]),
+                json!(["automation", "preview", "task", "surface"]),
+            ),
+            (
+                json!(["mcp-service", "get"]),
+                json!(["mcp-service", "get", "surface"]),
+            ),
+        ] {
+            let params: ConfigCommandParams =
+                serde_json::from_value(json!({"argv":argv,"target_id":"surface"})).unwrap();
+            assert_eq!(json!(params.into_argv().unwrap()), expected);
+        }
+        for input in [
+            json!({"argv":["datastore","create","one"],"target_id":"two"}),
+            json!({"argv":["datastore","create"],"target_id":"--set"}),
+            json!({"argv":["datastore","--help"],"target_id":"one"}),
+            json!({"argv":["behavior","create"],"target_id":"one"}),
+        ] {
+            assert!(serde_json::from_value::<ConfigCommandParams>(input)
+                .unwrap()
+                .into_argv()
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn structured_config_preserves_literal_values_and_uses_canonical_patch_validation() {
+        let prompt = "A \"quoted\" prompt\nActual newline; literal \\n; {{ doc.message }}; λ";
+        let params: ConfigCommandParams = serde_json::from_value(json!({
+            "argv":["behavior","context","preview"],
+            "options":{"behavior":"working"},
+            "set":{"system_prompt":prompt,"skill_ids":["one","two"]},
+            "clear":["description"]
+        }))
+        .unwrap();
+        let argv = params.into_argv().unwrap();
+        let (behavior, rest) = extract_behavior_target(&argv[3..]).unwrap();
+        assert_eq!(behavior.as_deref(), Some("working"));
+        let patch = parse_patch(&rest, SelfConfigTarget::AgentContext).unwrap();
+        assert!(patch.contains(&("system_prompt".into(), Some(json!(prompt)))));
+        assert!(patch.contains(&("skill_ids".into(), Some(json!(["one", "two"])))));
+        assert!(patch.contains(&("description".into(), None)));
+        for input in [
+            json!({"argv":[],"set":{"description":"x"}}),
+            json!({"argv":["get","--behavior","one"],"options":{"behavior":"two"}}),
+            json!({"argv":["get"],"options":{"--behavior":"two"}}),
+            json!({"argv":["get"],"set":{"description=enabled":"x"}}),
+        ] {
+            assert!(serde_json::from_value::<ConfigCommandParams>(input)
+                .unwrap()
+                .into_argv()
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn structured_config_rejects_conflicts_and_protected_fields() {
+        for input in [
+            json!({"argv":["--set","system_prompt=\"old\""],"set":{"system_prompt":"new"}}),
+            json!({"argv":["--clear","system_prompt"],"set":{"system_prompt":"new"}}),
+            json!({"argv":["--set","description=null"],"set":{"agent_did":"foreign"}}),
+        ] {
+            let args = serde_json::from_value::<ConfigCommandParams>(input)
+                .unwrap()
+                .into_argv()
+                .unwrap();
+            assert!(parse_patch(&args, SelfConfigTarget::AgentContext).is_err());
+        }
+        let args = serde_json::from_value::<ConfigCommandParams>(json!({
+            "argv":["behavior","preview","create"],
+            "options":{"display-name":"Writer", "system-prompt":"First\nSecond", "root":"/tmp/work"}
+        }))
+        .unwrap()
+        .into_argv()
+        .unwrap();
+        let params = behavior_params("preview", Some("create".into()), &args[3..]).unwrap();
+        assert_eq!(
+            params.system_prompt,
+            StringUpdate::Set("First\nSecond".into())
+        );
+    }
 
     #[test]
     fn edit_argv_preserves_omitted_fields_and_marks_clear() {

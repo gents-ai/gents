@@ -49,15 +49,61 @@ sentinel; acceptance rejects disclosure and never reads personal agent homes.
 
 ### Monitoring/mailbox regression
 
-Run the same live command with test name
-`configurator::onboarding_scenarios::live_monitor_mailbox_acceptance` to exercise
-preview/approval, in-place multiline Context editing, two distinct canonical
-mailbox findings and repeat deduplication. This suite uses shared `report.json`
+Run `make live-mailbox-eval` (10 trials, concurrency 10 by default) to exercise
+preview/approval, model-authored input schema and Task/EventSource/Trigger,
+in-place Context editing with unchanged automation bindings, accurate canonical
+mailbox output and repeat deduplication. Combined summaries are accepted; item
+count and prompt paragraph layout are not product acceptance requirements.
+Preview compares all canonical configuration documents and registered schemas,
+and rejects dispatched config mutations even if they fail or are later undone.
+Malformed calls rejected before dispatch remain diagnostics, not writes.
+Repeat checks preserve notification identity and require complete findings;
+condition-policy content updates are allowed, not mistaken for duplicates.
+The harness prepares its own invocation definitions before taking the baseline;
+no prefix-based exclusions hide model-authored documents. After Setup finishes, the
+harness writes only an `EvalMailboxInput` document; it neither creates the monitor's
+automation nor directly invokes its behavior. Acceptance checks the resulting
+request's source document, trigger, behavior, rendered input and completed state
+before checking mailbox output. It repeats with a second input document. This suite uses shared `report.json`
 reporting and immutable case/trial receipts. Approval is a self-contained fresh
 native invocation, not a replay of a desktop conversation. Its synthetic task
 requester is the runtime principal: it does **not** prove desktop-user delivery,
 scheduled recipient propagation, or a repair handoff. Those require separate
 acceptance with the real client identity and explicit repair approval.
+
+```sh
+GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 \
+GENTS_D4F_MODEL=GLM-5.3-Flash-NVFP4 make live-mailbox-eval
+
+# A single diagnostic trial:
+GENTS_LIVE_CONFIG_RUNS=1 GENTS_LIVE_CONFIG_CONCURRENCY=1 \
+GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 make live-mailbox-eval
+
+# Request thinking at high effort on Setup and every seeded working profile:
+GENTS_LIVE_CONFIG_REASONING_EFFORT=high \
+GENTS_LIVE_CONFIG_RUNS=30 GENTS_LIVE_CONFIG_CONCURRENCY=30 \
+GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 make live-mailbox-eval
+
+# Watch or replay the retained directory printed by the runner:
+node scripts/evals/watch.mjs <run-directory>
+node scripts/evals/report.mjs <run-directory>
+
+# Report observed token usage by stage, or export per-trial/stage metrics:
+node scripts/evals/usage.mjs <run-directory>
+node scripts/evals/usage.mjs <run-directory> --json
+```
+
+Reasoning effort is unset by default. The override uses the canonical profile
+enum (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`); support
+depends on the provider/model. Local Chat Completions uses the existing
+`chat_template_kwargs.enable_thinking` and `reasoning_effort` mapping. The report
+records the requested setting, not a claim that the server honors it. Fixture
+profile names high/medium/low remain selection labels: all receive the cohort
+override. This setting also applies to `make live-configurator-eval`.
+
+The same terminal dashboard and runner used by the progressive/Pagoda suite show
+per-stage outcomes, active trials, usage and failures. Each trial has a separate
+runtime home under `trials/`; model endpoints are shared but databases are not.
 
 ### General onboarding
 

@@ -28,8 +28,12 @@ fn setup_guidance_covers_conversation_authority_and_repeatability() {
         "identify its exact ID from your write receipt",
         "verify both removal and preservation",
         "canonical_mailbox_entries",
-        "Persist mailbox operating instructions",
-        "Do not derive condition identity from the current measurement",
+        "Deduplication is configured policy, not a prompt convention",
+        "The runtime owns notification identity, routing and provenance",
+        "Prefer structured config inputs",
+        "native JSON patch values in `set`",
+        "created/reused/updated receipt",
+        "Ordinary event tasks should leave goal_objective_template unset",
     ] {
         assert!(
             prompt.contains(required),

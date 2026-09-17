@@ -54,6 +54,32 @@ export function usageFromEvidence(documents) {
   };
 }
 
+export function stageUsageFromEvidence(documents) {
+  const grouped = new Map();
+  for (const document of documents) {
+    const match = document.name.match(/^(.*)-(inference|tools)\.json$/);
+    if (!match) continue;
+    if (!grouped.has(match[1])) grouped.set(match[1], []);
+    grouped.get(match[1]).push(document);
+  }
+  return [...grouped].map(([stage, entries]) => {
+    const calls = entries.flatMap((entry) => entry.data.InferenceCall || []);
+    const inputs = calls
+      .map((call) => call.prompt_tokens)
+      .filter(Number.isFinite);
+    const outputs = calls
+      .map((call) => call.completion_tokens)
+      .filter(Number.isFinite);
+    return {
+      stage,
+      ...usageFromEvidence(entries),
+      inputReportedCalls: inputs.length,
+      outputReportedCalls: outputs.length,
+      peakInput: inputs.length ? Math.max(...inputs) : null,
+    };
+  });
+}
+
 async function trialSnapshot(directory, model, trial, caseIds, cache) {
   const evidence = join(directory, "evidence");
   let names;
@@ -137,6 +163,7 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
         finished?.cases.find((entry) => entry.case_id === id),
     ),
     usage: usageFromEvidence(documents),
+    stageUsage: stageUsageFromEvidence(documents),
     events: receipts.map(({ data, modified }) => ({
       ...data,
       modified,
@@ -217,7 +244,7 @@ export function renderDashboard(
     );
   else {
     lines.push(
-      `${report.models.map(text).join(" · ")}   n=${report.runs_per_model}   concurrency=${report.concurrency}${report.stage_timeout_secs ? `   stage budget=${duration(report.stage_timeout_secs * 1000)}` : ""}`,
+      `${report.models.map(text).join(" · ")}   n=${report.runs_per_model}   concurrency=${report.concurrency}   reasoning=${text(report.provenance?.inference?.requested_reasoning_effort ?? "server default")}${report.stage_timeout_secs ? `   stage budget=${duration(report.stage_timeout_secs * 1000)}` : ""}`,
     );
     lines.push(
       `Reported tokens  IN ${number(knownInput ? totals.input : null)}  OUT ${number(known ? totals.output : null)}   |   ${totals.calls} inference calls   ${totals.tools} saved tool calls`,
@@ -262,9 +289,11 @@ export function renderDashboard(
           ended && !trial.finished ? "unfinished" : current,
         )
           .slice(0, 20)
+          .padEnd(20)} ${text(trial.requestId || "—")
+          .slice(0, 12)
           .padEnd(
-            20,
-          )} ${text(trial.requestId || "—").slice(0, 12).padEnd(12)} ${age.padStart(6)} ${number(trial.usage.input).padStart(10)} ${number(trial.usage.output).padStart(10)} ${String(trial.usage.calls).padStart(5)}  ${trial.usage.latest ? duration(now - trial.usage.latest) : "—"}`,
+            12,
+          )} ${age.padStart(6)} ${number(trial.usage.input).padStart(10)} ${number(trial.usage.output).padStart(10)} ${String(trial.usage.calls).padStart(5)}  ${trial.usage.latest ? duration(now - trial.usage.latest) : "—"}`,
       );
     }
     if (trials.length > limit)

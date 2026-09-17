@@ -112,6 +112,7 @@ test("report renders provenance without treating missing sampling as zero", asyn
         grader: { id: "grader-v1", sha256: "def456" },
         inference: {
           endpoint: "http://inference.test/v1",
+          requested_reasoning_effort: "high",
           effective_sampling: { temperature: 1, top_p: 0.95, seed: null },
         },
         fixture_sha256: { "fixture.md": "123" },
@@ -123,9 +124,10 @@ test("report renders provenance without treating missing sampling as zero", asyn
   assert.match(output, /Source: abc123 \(dirty\)/);
   assert.match(output, /temperature=1, top_p=0.95, seed=provider default/);
   assert.match(output, /Fixture hashes: 1/);
+  assert.match(output, /Requested reasoning effort: high/);
 });
 
-async function fakeRun(script) {
+async function fakeRun(script, overrides = {}) {
   const root = await mkdtemp(join(tmpdir(), "gents-launch-test-"));
   let output = "";
   const sink = {
@@ -135,7 +137,12 @@ async function fakeRun(script) {
   };
   const result = await runConfigurator({
     cargo: [process.execPath, "-e", script, "--"],
-    env: { ...process.env, GENTS_EVAL_ROOT: root },
+    env: {
+      ...process.env,
+      GENTS_EVAL_SUITE: "progressive-configurator",
+      ...overrides,
+      GENTS_EVAL_ROOT: root,
+    },
     stdout: sink,
     stderr: sink,
   });
@@ -158,6 +165,22 @@ test("launcher retains diagnostics and exit status before any trial starts", asy
   );
   assert.ok(
     result.directory.startsWith(join(result.root, "progressive-configurator-")),
+  );
+});
+
+test("mailbox suite uses the shared launcher and isolated directory", async () => {
+  const result = await fakeRun(
+    'process.exit(process.env.GENTS_EVAL_SUITE === "monitor-mailbox" ? 101 : 2)',
+    { GENTS_EVAL_SUITE: "monitor-mailbox" },
+  );
+  assert.equal(result.exitCode, 101);
+  assert.ok(result.directory.startsWith(join(result.root, "monitor-mailbox-")));
+});
+
+test("launcher rejects an unknown suite before starting cargo", async () => {
+  await assert.rejects(
+    fakeRun("process.exit(0)", { GENTS_EVAL_SUITE: "typo" }),
+    /Unsupported eval suite/,
   );
 });
 

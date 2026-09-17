@@ -6,6 +6,7 @@
 //! chain. Persona requests reuse the existing signed admission and reconciliation path.
 
 mod command;
+pub use command::config_help_resource;
 mod ops;
 mod read;
 #[cfg(test)]

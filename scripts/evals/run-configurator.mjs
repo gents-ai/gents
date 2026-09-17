@@ -32,11 +32,13 @@ export async function runConfigurator({
   stdout = process.stdout,
 } = {}) {
   const root = resolve(env.GENTS_EVAL_ROOT || join(homedir(), ".gents-eval"));
+  const suite = env.GENTS_EVAL_SUITE || "progressive-configurator";
+  if (!["progressive-configurator", "monitor-mailbox"].includes(suite)) {
+    throw new Error(`Unsupported eval suite: ${suite}`);
+  }
   await mkdir(root, { recursive: true, mode: 0o700 });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const directory = await mkdtemp(
-    join(root, `progressive-configurator-${timestamp}-`),
-  );
+  const directory = await mkdtemp(join(root, `${suite}-${timestamp}-`));
   const execution = {
     schema_version: 1,
     started_at: new Date().toISOString(),

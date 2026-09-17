@@ -62,6 +62,7 @@ struct GraderRevision {
 #[derive(Clone, Debug, Serialize)]
 struct InferenceRevision {
     endpoint: String,
+    requested_reasoning_effort: Option<gents::config::ReasoningEffort>,
     sampling_id: &'static str,
     effective_sampling: serde_json::Value,
 }
@@ -133,6 +134,7 @@ impl RunProvenance {
             },
             inference: InferenceRevision {
                 endpoint,
+                requested_reasoning_effort: super::eval_reasoning_effort()?,
                 sampling_id,
                 effective_sampling: serde_json::json!({
                     "temperature": temperature,

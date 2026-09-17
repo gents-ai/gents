@@ -33,11 +33,61 @@ mod readiness;
 mod onboarding_scenarios;
 
 const EVAL_CASE_ID: &str = "progressive-configurator";
+
+fn monitor_suite() -> bool {
+    std::env::var("GENTS_EVAL_SUITE").as_deref() == Ok("monitor-mailbox")
+}
+
+fn suite_cases() -> &'static [stages::CaseId] {
+    if monitor_suite() {
+        onboarding_scenarios::MONITOR_CASES
+    } else {
+        stages::PROGRESSIVE_CASES
+    }
+}
+
+fn suite_id() -> &'static str {
+    if monitor_suite() {
+        "monitor-mailbox"
+    } else {
+        EVAL_CASE_ID
+    }
+}
 const EVAL_COHORT: &str = "configurator-temperature-1-top-p-0.95-v1";
 const EVAL_GRADER: &str = "configurator-deterministic-v1";
 const EVAL_SAMPLING_ID: &str = "configurator-eval-sampling-v1";
 const EVAL_TEMPERATURE: f64 = 1.0;
 const EVAL_TOP_P: f64 = 0.95;
+
+fn parse_eval_reasoning_effort(
+    value: Option<&str>,
+) -> Result<Option<gents::config::ReasoningEffort>> {
+    value.map(gents::config::ReasoningEffort::parse).transpose()
+}
+
+fn eval_reasoning_effort() -> Result<Option<gents::config::ReasoningEffort>> {
+    let value = match std::env::var("GENTS_LIVE_CONFIG_REASONING_EFFORT") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(error.into()),
+    };
+    parse_eval_reasoning_effort(value.as_deref())
+        .context("invalid GENTS_LIVE_CONFIG_REASONING_EFFORT")
+}
+
+#[test]
+fn eval_reasoning_override_preserves_unset_and_validates_canonical_values() {
+    use gents::config::ReasoningEffort;
+    assert_eq!(parse_eval_reasoning_effort(None).unwrap(), None);
+    for effort in ReasoningEffort::ALL {
+        assert_eq!(
+            parse_eval_reasoning_effort(Some(effort.as_str())).unwrap(),
+            Some(effort)
+        );
+    }
+    assert!(parse_eval_reasoning_effort(Some("")).is_err());
+    assert!(parse_eval_reasoning_effort(Some("hgh")).is_err());
+}
 const ONBOARDING_PROMPT: &str =
     include_str!("../fixtures/configurator_evals/software_team_and_code_review.md");
 const EVAL_GRADER_SOURCES: &[reporting::EvidenceSource] = &[
@@ -192,11 +242,26 @@ fn eval_concurrency() -> usize {
                 .expect("GENTS_LIVE_CONFIG_CONCURRENCY must be an integer")
         })
         .unwrap_or(1);
-    assert!(
-        (1..=20).contains(&concurrency),
-        "GENTS_LIVE_CONFIG_CONCURRENCY must be between 1 and 20"
-    );
+    validate_eval_concurrency(concurrency).expect("valid eval concurrency");
     concurrency
+}
+
+fn validate_eval_concurrency(concurrency: usize) -> Result<()> {
+    ensure!(
+        (1..=30).contains(&concurrency),
+        "GENTS_LIVE_CONFIG_CONCURRENCY must be between 1 and 30"
+    );
+    Ok(())
+}
+
+#[test]
+fn eval_concurrency_accepts_thirty_and_rejects_out_of_bounds() {
+    for concurrency in [1, 10, 20, 30] {
+        assert!(validate_eval_concurrency(concurrency).is_ok());
+    }
+    for concurrency in [0, 31, usize::MAX] {
+        assert!(validate_eval_concurrency(concurrency).is_err());
+    }
 }
 
 fn onboarding_prompt(user_home: &str) -> String {
@@ -313,6 +378,7 @@ async fn install_eval_profiles(
     model: &str,
     setup_behavior_id: &str,
 ) {
+    let reasoning_effort = eval_reasoning_effort().expect("valid eval reasoning effort");
     let sampling = InferenceSampling {
         agent_did: agent_did.to_owned(),
         sampling_id: EVAL_SAMPLING_ID.to_owned(),
@@ -331,6 +397,7 @@ async fn install_eval_profiles(
             model_name: model.to_owned(),
             display_name: Some(display_name.to_owned()),
             sampling_id: Some(EVAL_SAMPLING_ID.to_owned()),
+            reasoning_effort,
             ..Default::default()
         })
         .chain(std::iter::once(InferenceProfile {
@@ -340,6 +407,7 @@ async fn install_eval_profiles(
             model_name: model.to_owned(),
             display_name: Some("Live default behavior".to_owned()),
             sampling_id: Some(EVAL_SAMPLING_ID.to_owned()),
+            reasoning_effort,
             ..Default::default()
         }));
     let documents = std::iter::once((
@@ -870,26 +938,31 @@ async fn run_retained_trial(
     let evidence = artifacts.join("evidence");
     std::fs::create_dir_all(&evidence).expect("create evidence directory");
     tracing::info!(target: "gents::configurator_eval", artifacts = %artifacts.display(), "starting trial");
-    let report = match AssertUnwindSafe(run_eval_trial(provider, model.clone(), trial, &artifacts))
-        .catch_unwind()
-        .await
-    {
-        Ok(report) => report,
-        Err(error) => reporting::TrialResult {
-            case_id: EVAL_CASE_ID,
+    let work = async {
+        if monitor_suite() {
+            onboarding_scenarios::run_monitor_trial(model.clone(), trial, &artifacts).await
+        } else {
+            Ok(run_eval_trial(provider, model.clone(), trial, &artifacts).await)
+        }
+    };
+    let report = match AssertUnwindSafe(work).catch_unwind().await {
+        Ok(Ok(report)) => report,
+        failure => reporting::TrialResult {
+            case_id: suite_id(),
             provider: provider.name(),
             model,
             trial,
             passed: false,
             trial_failure_kind: Some("infrastructure".into()),
             terminal_state: None,
-            error: Some(format!(
-                "eval trial panicked: {}",
-                panic_message(error.as_ref())
-            )),
+            error: Some(match failure {
+                Ok(Err(error)) => format!("{error:#}"),
+                Err(error) => format!("eval trial panicked: {}", panic_message(error.as_ref())),
+                Ok(Ok(_)) => unreachable!(),
+            }),
             assistant_answer_excerpt: None,
             artifacts: Some(artifacts.to_string_lossy().into_owned()),
-            cases: stages::case_results(stages::PROGRESSIVE_CASES, &evidence).unwrap_or_default(),
+            cases: stages::case_results(suite_cases(), &evidence).unwrap_or_default(),
         },
     };
     reporting::write_json_new(&evidence.join("trial.json"), &report)
@@ -901,6 +974,13 @@ async fn run_retained_trial(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_CONFIG=1 and pass --ignored"]
 async fn live_configurator_progressive_eval_matrix() {
+    assert!(
+        matches!(
+            std::env::var("GENTS_EVAL_SUITE").as_deref(),
+            Err(_) | Ok("progressive-configurator") | Ok("monitor-mailbox")
+        ),
+        "unsupported eval suite"
+    );
     assert!(
         live_enabled(),
         "set GENTS_LIVE_CONFIG=1 and pass --ignored to run live configurator acceptance"
@@ -915,6 +995,10 @@ async fn live_configurator_progressive_eval_matrix() {
     let models = eval_models();
     let runs = eval_runs();
     let provider = LiveProvider::from_env();
+    assert!(
+        !monitor_suite() || matches!(provider, LiveProvider::D4f),
+        "monitor-mailbox currently supports the local D4F provider only"
+    );
     let concurrency = eval_concurrency();
     let stage_timeout = stages::stage_timeout().expect("valid stage deadline");
     let directory = std::path::PathBuf::from(
@@ -924,24 +1008,28 @@ async fn live_configurator_progressive_eval_matrix() {
     std::fs::create_dir(directory.join("trials")).expect("fresh run directory");
     let mut run_report = reporting::RunReport::new(
         directory.clone(),
-        EVAL_CASE_ID,
-        stages::PROGRESSIVE_CASES,
+        suite_id(),
+        suite_cases(),
         models.clone(),
         runs,
         provider.name(),
         concurrency,
         stage_timeout.as_secs(),
-        reporting::RunProvenance::current(
-            EVAL_COHORT,
-            EVAL_GRADER,
-            provider.endpoint(),
-            EVAL_SAMPLING_ID,
-            EVAL_TEMPERATURE,
-            EVAL_TOP_P,
-            EVAL_GRADER_SOURCES,
-            EVAL_FIXTURES,
-        )
-        .expect("collect eval provenance"),
+        if monitor_suite() {
+            onboarding_scenarios::monitor_provenance().expect("collect monitor provenance")
+        } else {
+            reporting::RunProvenance::current(
+                EVAL_COHORT,
+                EVAL_GRADER,
+                provider.endpoint(),
+                EVAL_SAMPLING_ID,
+                EVAL_TEMPERATURE,
+                EVAL_TOP_P,
+                EVAL_GRADER_SOURCES,
+                EVAL_FIXTURES,
+            )
+            .expect("collect eval provenance")
+        },
     )
     .expect("initialize eval report");
     run_report.save().expect("initialize run report");

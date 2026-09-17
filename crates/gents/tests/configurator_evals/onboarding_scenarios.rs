@@ -40,27 +40,21 @@ const MONITOR_APPROVE: &str =
 const MONITOR_EDIT: &str =
     include_str!("../fixtures/configurator_evals/onboarding/monitor_mailbox_edit.md");
 
-#[tokio::test]
-#[ignore = "live: set GENTS_LIVE_ONBOARDING=1, GENTS_D4F_ENDPOINT and GENTS_EVAL_ROOT"]
-async fn live_monitor_mailbox_acceptance() -> Result<()> {
-    use super::{reporting, stages};
-    use stages::CaseId;
-    const CASES: &[CaseId] = &[
-        CaseId::new("monitor-preview"),
-        CaseId::new("monitor-configure"),
-        CaseId::new("monitor-edit-in-place"),
-        CaseId::new("monitor-two-findings"),
-        CaseId::new("monitor-deduplicate"),
-    ];
-    ensure!(std::env::var("GENTS_LIVE_ONBOARDING").as_deref() == Ok("1"));
-    let artifacts = retained_artifact_root()?;
-    let evidence = artifacts.join("evidence");
-    let root = artifacts.join("workspace");
-    std::fs::create_dir_all(&root)?;
-    let model = super::model_name();
-    let provenance = reporting::RunProvenance::current(
+use super::{reporting, stages};
+use stages::CaseId;
+
+pub(super) const MONITOR_CASES: &[CaseId] = &[
+    CaseId::new("monitor-preview"),
+    CaseId::new("monitor-configure"),
+    CaseId::new("monitor-edit-in-place"),
+    CaseId::new("monitor-mailbox-output"),
+    CaseId::new("monitor-deduplicate"),
+];
+
+pub(super) fn monitor_provenance() -> Result<reporting::RunProvenance> {
+    reporting::RunProvenance::current(
         "monitor-mailbox",
-        "monitor-mailbox-v1",
+        "monitor-mailbox-v4-command-help",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         SAMPLING_ID,
         1.0,
@@ -78,19 +72,18 @@ async fn live_monitor_mailbox_acceptance() -> Result<()> {
                 include_bytes!("../../../gents-protocol/prompts/setup.md"),
             ),
         ],
-    )?;
-    let mut report = reporting::RunReport::new(
-        artifacts.clone(),
-        "monitor-mailbox",
-        CASES,
-        vec![model.clone()],
-        1,
-        "d4f",
-        1,
-        stages::stage_timeout()?.as_secs(),
-        provenance,
-    )?;
-    report.save()?;
+    )
+}
+
+pub(super) async fn run_monitor_trial(
+    model: String,
+    trial_number: usize,
+    artifacts: &Path,
+) -> Result<reporting::TrialResult> {
+    const CASES: &[CaseId] = MONITOR_CASES;
+    let evidence = artifacts.join("evidence");
+    let root = artifacts.join("workspace");
+    std::fs::create_dir_all(&root)?;
     let db = super::retained_trial_db(&artifacts).await;
     let result: Result<()> = async {
         let access = gents::ConfigAccess::Local(db.node.clone());
@@ -98,7 +91,7 @@ async fn live_monitor_mailbox_acceptance() -> Result<()> {
         gents::config_client::apply_schema_install(&access, stages::INPUT_SCHEMA, &schema.artifact_digest).await?;
         let identity: Arc<dyn AgentIdentity> = Arc::new(gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)?);
         let (owner, setup) = crate::support::live_inference::bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await;
-        install_onboarding_profiles(db.node.as_ref(), &owner, crate::support::live_inference::D4F_BACKEND_ID, &model).await?;
+        install_onboarding_profiles(db.node.as_ref(), &owner, crate::support::live_inference::D4F_BACKEND_ID, &model, super::eval_reasoning_effort()?).await?;
         super::install_eval_workspace_root(db.node.as_ref(), &root.to_string_lossy()).await;
         super::install_setup_configurator(db.node.as_ref(), &owner, &setup, &root.to_string_lossy()).await;
         let observer = Arc::new(stages::ActivationObserver::default());
@@ -106,48 +99,67 @@ async fn live_monitor_mailbox_acceptance() -> Result<()> {
             gents::DocumentRuntimeOptions { tool_ceiling: gents::ToolCeiling::readwrite(&root), runtime_snapshot_observer: Some(observer.clone()), ..Default::default() }).await?;
         let activation = stages::ActivationFence::new(runtime, observer, db.node.clone());
         let outcome: Result<()> = async {
+            stages::prepare_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-preview").await?;
+            let preview_before = preview_snapshot(db.node.as_ref()).await?;
+            reporting::write_json_new(&evidence.join("monitor-preview-before.json"), &preview_before)?;
             let before = configuration_snapshot(db.node.as_ref(), &owner).await?;
             stages::checked(CASES[0], &evidence, stages::acceptance(async {
-                run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-preview", &render(MONITOR_PREVIEW, "{{ROOT}}", &root), &evidence).await?;
-                ensure!(configuration_snapshot(db.node.as_ref(), &owner).await.map_err(stages::infrastructure)? == before, "preview mutated configuration");
+                let preview = run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-preview", &render(MONITOR_PREVIEW, "{{ROOT}}", &root), &evidence).await?;
+                let after = preview_snapshot(db.node.as_ref()).await.map_err(stages::infrastructure)?;
+                reporting::write_json_new(&evidence.join("monitor-preview-after.json"), &after).map_err(stages::infrastructure)?;
+                ensure!(after == preview_before, "preview mutated canonical configuration or schema");
+                let calls = tool_calls(db.node.as_ref(), &preview.request_id).await.map_err(stages::infrastructure)?;
+                assert_preview_calls(&calls)?;
                 Ok(())
             })).await?;
             let configured = stages::checked(CASES[1], &evidence, stages::acceptance(async {
                 run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-configure", &render(MONITOR_APPROVE, "{{ROOT}}", &root), &evidence).await?;
                 let snapshot = configuration_snapshot(db.node.as_ref(), &owner).await.map_err(stages::infrastructure)?;
-                let behavior = behavior_by_name(&snapshot, "Mailbox Monitor")?;
+                let behavior = new_working_behavior(&before, &snapshot)?;
                 ensure!(behavior["inference_profile_id"] == "onboarding-medium");
-                ensure!(behavior_context(&snapshot, behavior)?["system_prompt"].as_str().unwrap_or_default().contains("MONITOR_CHECKS_V1\nNo repairs without user approval."), "literal prompt did not round-trip");
+                let prompt = behavior_context(&snapshot, behavior)?["system_prompt"].as_str().unwrap_or_default();
+                ensure!(prompt.contains("MONITOR_CHECKS_V1") && prompt.contains("No repairs without user approval."), "prompt lost required instructions");
                 for key in ["principals", "profiles", "backends", "credentials", "sampling"] {
                     ensure!(snapshot[key] == before[key], "unexpected change to {key}");
                 }
+                mailbox_automation(db.node.as_ref(), &owner, behavior["behavior_id"].as_str().context("behavior ID")?).await?;
+                ensure!(super::rows(db.node.as_ref(), "{ EvalMailboxInput { _docID } }", "EvalMailboxInput").await?.is_empty(), "configurator precreated input");
+                ensure!(super::rows(db.node.as_ref(), "{ MailboxItem { _docID } }", "MailboxItem").await?.is_empty(), "configurator precreated mailbox output");
                 Ok(snapshot)
             })).await?;
-            let behavior = behavior_by_name(&configured, "Mailbox Monitor")?;
+            let behavior = new_working_behavior(&before, &configured)?;
             let id = behavior["behavior_id"].as_str().context("behavior ID missing")?;
+            let automation_before = mailbox_automation(db.node.as_ref(), &owner, id).await?;
+            reporting::write_json_new(&evidence.join("monitor-automation-config.json"), &automation_before)?;
             stages::checked(CASES[2], &evidence, stages::acceptance(async {
-                run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-edit-in-place", MONITOR_EDIT, &evidence).await?;
+                run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-edit-in-place", &MONITOR_EDIT.replace("{{BEHAVIOR_ID}}", id), &evidence).await?;
                 let mut after = configuration_snapshot(db.node.as_ref(), &owner).await.map_err(stages::infrastructure)?;
                 let old_prompt = behavior_context(&configured, behavior)?["system_prompt"].as_str().context("prompt missing")?;
                 let context = after["contexts"].as_array_mut().context("contexts missing")?.iter_mut().find(|c| c["context_id"] == behavior["context_id"]).context("original context missing")?;
                 ensure!(context["system_prompt"] == old_prompt.replace("MONITOR_CHECKS_V1", "MONITOR_CHECKS_V2"), "edit changed more than the approved literal marker");
                 context["system_prompt"] = Value::String(old_prompt.into());
                 ensure!(after == configured, "prompt edit replaced IDs or changed unrelated configuration");
+                ensure!(mailbox_automation(db.node.as_ref(), &owner, id).await? == automation_before, "prompt edit changed automation bindings");
                 Ok(())
             })).await?;
-            let query = "{ MailboxItem { item_key requester_did target_behavior_id status kind action source_id title } }";
+            activation.wait().await?;
+            let query = "{ MailboxItem { item_key requester_did target_behavior_id status kind action source_id title summary payload } }";
             let mut first = Vec::new();
-            for (index, case) in [(3, "monitor-two-findings"), (4, "monitor-deduplicate")] {
+            for (index, case) in [(3, "monitor-mailbox-output"), (4, "monitor-deduplicate")] {
                 stages::checked(CASES[index], &evidence, stages::acceptance(async {
-                    run_stage(&activation, db.node.as_ref(), &owner, id, case,
-                        "Synthetic check results only: disk=81%, docker=unavailable. File one acknowledgment flag per condition in the built-in mailbox for this request's requester, using stable distinct source IDs for disk and docker. Repeated identical findings must not create duplicates. Do not inspect the machine, execute commands or repairs. Use only mailbox tools.", &evidence).await?;
+                    submit_mailbox_input(db.node.as_ref(), &automation_before, id, case, &evidence).await?;
                     let rows = sorted(super::rows(db.node.as_ref(), query, "MailboxItem").await.map_err(stages::infrastructure)?, "item_key");
-                    ensure!(rows.len() == 2, "expected two distinct built-in mailbox findings, got {}", rows.len());
-                    ensure!(rows[0]["source_id"] != rows[1]["source_id"], "distinct conditions share a deduplication key");
+                    reporting::write_json_new(&evidence.join(format!("{case}-mailbox.json")), &rows)?;
+                    ensure!(!rows.is_empty(), "automation produced no mailbox output");
                     for row in &rows {
                         ensure!(row["requester_did"] == owner && row["target_behavior_id"] == id && row["status"] == "open" && row["kind"] == "flag" && row["action"] == "ack", "incorrect mailbox recipient/action/stamping");
+                        ensure!(row["title"].as_str().is_some_and(|title| !title.trim().is_empty()), "mailbox title missing");
                     }
-                    if index == 3 { first = rows; } else { ensure!(rows == first, "repeat created or changed mailbox findings"); }
+                    assert_mailbox_findings(&rows)?;
+                    if index == 3 { first = rows; } else {
+                        let keys = |items: &[Value]| items.iter().map(|row| row["item_key"].clone()).collect::<Vec<_>>();
+                        ensure!(keys(&rows) == keys(&first), "repeat created duplicate notification identities");
+                    }
                     Ok(())
                 })).await?;
             }
@@ -161,7 +173,7 @@ async fn live_monitor_mailbox_acceptance() -> Result<()> {
         case_id: "monitor-mailbox",
         provider: "d4f",
         model,
-        trial: 1,
+        trial: trial_number,
         passed: result.is_ok(),
         trial_failure_kind: result.as_ref().err().map(|e| {
             e.downcast_ref::<stages::EvaluationFailure>()
@@ -181,14 +193,384 @@ async fn live_monitor_mailbox_acceptance() -> Result<()> {
         artifacts: Some(artifacts.display().to_string()),
         cases: stages::case_results(CASES, &evidence)?,
     };
-    reporting::write_json_new(&artifacts.join("trial.json"), &trial)?;
-    report.record(trial)?;
-    report.save()?;
-    result
+    Ok(trial)
 }
 
 fn render(template: &str, name: &str, value: &Path) -> String {
     template.replace(name, &value.to_string_lossy())
+}
+
+fn new_working_behavior<'a>(before: &Value, after: &'a Value) -> Result<&'a Value> {
+    let old = before["behaviors"]
+        .as_array()
+        .context("baseline behaviors missing")?;
+    let added: Vec<_> = after["behaviors"]
+        .as_array()
+        .context("configured behaviors missing")?
+        .iter()
+        .filter(|row| {
+            !old.iter()
+                .any(|prior| prior["behavior_id"] == row["behavior_id"])
+        })
+        .collect();
+    ensure!(
+        added.len() == 1,
+        "expected one new working behavior, found {}",
+        added.len()
+    );
+    Ok(added[0])
+}
+
+#[test]
+fn working_behavior_selection_uses_identity_not_display_name() {
+    let before = serde_json::json!({"behaviors":[{"behavior_id":"setup"}]});
+    let mut after = serde_json::json!({"behaviors":[{"behavior_id":"setup"}, {"behavior_id":"worker", "display_name":"Synthetic Monitor"}]});
+    assert_eq!(
+        new_working_behavior(&before, &after).unwrap()["behavior_id"],
+        "worker"
+    );
+    after["behaviors"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"behavior_id":"accidental-clone"}));
+    assert!(new_working_behavior(&before, &after).is_err());
+}
+
+async fn preview_snapshot(node: &gents::defra_node::EmbeddedNode) -> Result<Value> {
+    let mut documents = serde_json::Map::new();
+    for collection in Collection::ALL {
+        let (fields, _) = gents::config_client::config_projection(collection, None)?;
+        let name = collection.graphql_type();
+        let rows = super::rows(
+            node,
+            &format!("{{ {name} {{ _docID {} }} }}", fields.join(" ")),
+            name,
+        )
+        .await?;
+        let mut projected = Vec::new();
+        for mut row in rows {
+            let doc_id = row
+                .as_object_mut()
+                .context("configuration row is not an object")?
+                .remove("_docID")
+                .context("configuration row ID missing")?;
+            let (_, value) = gents::config_client::config_projection(collection, Some(&row))?;
+            projected.push(serde_json::json!({"doc_id":doc_id, "config":value}));
+        }
+        documents.insert(name.into(), Value::Array(sorted(projected, "doc_id")));
+    }
+    let mut schemas = serde_json::Map::new();
+    for name in node.list_collections()? {
+        schemas.insert(
+            name.clone(),
+            serde_json::to_value(node.get_collection(&name)?)?,
+        );
+    }
+    Ok(serde_json::json!({"documents":documents,"schemas":schemas}))
+}
+
+fn assert_preview_calls(calls: &[Value]) -> Result<()> {
+    for call in calls.iter().filter(|call| call["tool_name"] == "config") {
+        let rejected = call["lifecycle_state"] == "failed";
+        let error = call["result"].as_str().unwrap_or_default();
+        // These errors are emitted before command execution, not by a failed write.
+        // Retain them as tool diagnostics; the full configuration snapshot still applies.
+        if rejected
+            && [
+                "tool 'config' arguments were rejected",
+                "unknown config resource or command ",
+                "unknown behavior command ",
+            ]
+            .iter()
+            .any(|prefix| error.starts_with(prefix))
+        {
+            continue;
+        }
+        let args: Value =
+            serde_json::from_str(call["args"].as_str().context("config arguments missing")?)
+                .map_err(|error| stages::grader(error.into()))?;
+        let argv = args["argv"]
+            .as_array()
+            .context("config argv missing")
+            .map_err(stages::grader)?;
+        let help_argv = argv
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if help_argv.len() == argv.len()
+            && gents::self_config::config_help_resource(&help_argv).is_some()
+        {
+            continue;
+        }
+        let tokens: Vec<_> = argv
+            .iter()
+            .map(|v| v.as_str().unwrap_or_default())
+            .collect();
+        let command = tokens.as_slice();
+        let read_only = match command {
+            ["help" | "get", ..] => true,
+            ["behavior", "context", "get" | "preview", ..] => true,
+            ["discovery", "scan", ..] => true,
+            ["backend", "discover", ..] => true,
+            ["behavior" | "tools" | "profile" | "backend" | "skill" | "datastore" | "schema"
+            | "automation" | "pack" | "cleanup" | "mcp-service", "get" | "list" | "preview", ..] => {
+                true
+            }
+            _ => false,
+        };
+        ensure!(
+            read_only,
+            "preview attempted a mutation or unknown config operation: {:?}",
+            tokens.get(..3).unwrap_or(&tokens)
+        );
+    }
+    Ok(())
+}
+
+fn assert_mailbox_findings(rows: &[Value]) -> Result<()> {
+    // Only user-visible contents count, never routing IDs or tool prose.
+    let text = rows
+        .iter()
+        .flat_map(|row| {
+            ["title", "summary", "payload"].map(|field| row[field].as_str().unwrap_or_default())
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    ensure!(
+        text.contains("disk")
+            && text.contains("81")
+            && text.contains("docker")
+            && text.contains("unavailable"),
+        "mailbox output lost input findings"
+    );
+    Ok(())
+}
+
+#[test]
+fn preview_grader_rejects_mutations_even_if_rejected_or_later_undone() {
+    let call = |argv: Value| serde_json::json!({"tool_name":"config", "args":serde_json::json!({"argv":argv}).to_string(), "lifecycle_state":"failed"});
+    for argv in [
+        serde_json::json!(["schema", "install"]),
+        serde_json::json!(["datastore", "create"]),
+        serde_json::json!(["automation", "edit"]),
+        serde_json::json!(["behavior", "context", "edit"]),
+        serde_json::json!(["cleanup", "remove"]),
+        serde_json::json!(["config", "schema", "install"]),
+        serde_json::json!(["behavior", "tools", "edit"]),
+        serde_json::json!([
+            "behavior",
+            "create",
+            "--id",
+            "monitor",
+            "--system-prompt",
+            "--help"
+        ]),
+        serde_json::json!("[\"schema\",\"install\"]"),
+    ] {
+        assert!(assert_preview_calls(&[call(argv)]).is_err());
+    }
+    assert!(assert_preview_calls(&[
+        call(serde_json::json!(["schema", "preview", "install"])),
+        call(serde_json::json!(["behavior", "context", "get"]))
+    ])
+    .is_ok());
+}
+
+#[test]
+fn preview_grader_allows_rejected_read_syntax_without_accepting_successful_unknown_calls() {
+    for (argv, error) in [
+        (
+            serde_json::json!(["config", "get"]),
+            "unknown config resource or command \"config\"",
+        ),
+        (
+            serde_json::json!(["preview", "task", "monitor"]),
+            "unknown config resource or command \"preview\"",
+        ),
+        (
+            serde_json::json!(["behavior", "tools", "get", "--behavior", "setup"]),
+            "unknown behavior command \"tools\"",
+        ),
+        (
+            serde_json::json!("[malformed array"),
+            "tool 'config' arguments were rejected (wrong type): expected a sequence",
+        ),
+    ] {
+        let mut call = serde_json::json!({
+            "tool_name": "config", "args": serde_json::json!({"argv":argv}).to_string(),
+            "lifecycle_state": "failed", "result":error
+        });
+        assert!(assert_preview_calls(&[call.clone()]).is_ok());
+        call["lifecycle_state"] = serde_json::json!("completed");
+        assert!(assert_preview_calls(&[call]).is_err());
+    }
+}
+
+#[test]
+fn preview_grader_uses_runtime_help_classification() {
+    for argv in [
+        serde_json::json!(["datastore", "help", "create"]),
+        serde_json::json!(["datastore", "preview", "create", "--help"]),
+        serde_json::json!(["behavior", "create", "-h"]),
+        serde_json::json!(["behavior", "create", "--id", "monitor", "--help"]),
+    ] {
+        for state in ["completed", "failed"] {
+            let call = serde_json::json!({"tool_name":"config", "args":serde_json::json!({"argv":argv}).to_string(), "lifecycle_state":state,"result":"help"});
+            assert!(assert_preview_calls(&[call]).is_ok());
+        }
+    }
+    let write = serde_json::json!({
+        "tool_name":"config",
+        "args":serde_json::json!({"argv":["behavior","create","--system-prompt","--help"]}).to_string(),
+        "lifecycle_state":"completed", "result":"created"
+    });
+    assert!(assert_preview_calls(&[write]).is_err());
+}
+
+#[test]
+fn mailbox_grader_accepts_combined_findings_but_rejects_lost_content() {
+    assert!(assert_mailbox_findings(&[
+        serde_json::json!({"summary":"Disk=81%, docker=unavailable"})
+    ])
+    .is_ok());
+    assert!(assert_mailbox_findings(&[
+        serde_json::json!({"summary":"Disk=81%", "source_id":"docker-unavailable"})
+    ])
+    .is_err());
+}
+
+#[tokio::test]
+async fn preview_snapshot_detects_schema_and_datastore_changes_without_live_inference() -> Result<()>
+{
+    let db = crate::support::test_db("preview-snapshot").await;
+    let before = preview_snapshot(db.node.as_ref()).await?;
+    let access = gents::ConfigAccess::Local(db.node.clone());
+    let sdl = "type PreviewProbe { message: String }";
+    let plan = gents::config_client::preview_schema_install(&access, sdl).await?;
+    ensure!(
+        preview_snapshot(db.node.as_ref()).await? == before,
+        "schema preview changed snapshot"
+    );
+    gents::config_client::apply_schema_install(&access, sdl, &plan.artifact_digest).await?;
+    let schema_changed = preview_snapshot(db.node.as_ref()).await?;
+    ensure!(schema_changed["schemas"] != before["schemas"]);
+    let response = db.node.execute(r#"mutation { create_DatastoreToolSurface(input: {surface_id: "preview-probe", agent_did: "did:key:preview-probe", enabled: false}) {_docID} }"#).await;
+    ensure!(
+        !response.has_errors(),
+        "fixture write failed: {:?}",
+        response.errors
+    );
+    let document_changed = preview_snapshot(db.node.as_ref()).await?;
+    ensure!(
+        document_changed["documents"]["DatastoreToolSurface"]
+            != schema_changed["documents"]["DatastoreToolSurface"]
+    );
+    db.node.shutdown().await;
+    Ok(())
+}
+
+async fn mailbox_automation(
+    node: &gents::defra_node::EmbeddedNode,
+    owner: &str,
+    behavior: &str,
+) -> Result<Value> {
+    let owner = gents::graphql::escape_graphql_string(owner);
+    let behavior = gents::graphql::escape_graphql_string(behavior);
+    let tasks = super::rows(node, &format!(r#"{{ Task(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "{behavior}"}}}}) {{task_id behavior_id enabled prompt_template}} }}"#), "Task").await?;
+    ensure!(
+        tasks.len() == 1 && tasks[0]["enabled"] == true,
+        "expected exactly one enabled model-authored monitor task: {tasks:?}"
+    );
+    let sources = super::rows(node, &format!(r#"{{ EventSource(filter: {{agent_did: {{_eq: "{owner}"}}, source_collection: {{_eq: "EvalMailboxInput"}}}}) {{event_source_id source_collection event_kind correlation_field}} }}"#), "EventSource").await?;
+    ensure!(
+        sources.len() == 1,
+        "expected one model-authored mailbox input source: {sources:?}"
+    );
+    let triggers = super::rows(node, &format!(r#"{{ Trigger(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{trigger_id task_id source enabled concurrency}} }}"#), "Trigger").await?;
+    let linked: Vec<_> = triggers
+        .into_iter()
+        .filter(|t| t["source"]["event_source_id"] == sources[0]["event_source_id"])
+        .collect();
+    ensure!(
+        linked.len() == 1
+            && linked[0]["task_id"] == tasks[0]["task_id"]
+            && linked[0]["enabled"] == true
+            && linked[0]["concurrency"] == "parallel",
+        "invalid model-authored automation chain: {linked:?}"
+    );
+    Ok(serde_json::json!({"task": tasks[0], "source": sources[0], "trigger": linked[0]}))
+}
+
+async fn submit_mailbox_input(
+    node: &gents::defra_node::EmbeddedNode,
+    automation: &Value,
+    behavior: &str,
+    case: &str,
+    evidence: &Path,
+) -> Result<()> {
+    use super::{reporting, stages};
+    let correlation = uuid::Uuid::new_v4().to_string();
+    let input = "Synthetic findings: disk=81%, docker=unavailable. File acknowledgment flags only; no machine inspection or repairs.";
+    let response = node.execute(&format!(r#"mutation {{ create_EvalMailboxInput(input: {{correlation: "{}", message: "{}"}}) {{_docID}} }}"#,
+        gents::graphql::escape_graphql_string(&correlation), gents::graphql::escape_graphql_string(input))).await;
+    reporting::write_json_new(
+        &evidence.join(format!("{case}-input-receipt.json")),
+        &serde_json::json!({"correlation":correlation, "message":input, "data":response.data, "errors":format!("{:?}", response.errors)}),
+    )?;
+    ensure!(
+        !response.has_errors(),
+        "input document write failed: {:?}",
+        response.errors
+    );
+    let source_doc = gents::graphql::single_mutation_document(&response, "create_EvalMailboxInput")
+        .map_err(stages::grader)?
+        .and_then(|r| r["_docID"].as_str())
+        .context("input document ID missing")
+        .map_err(stages::grader)?;
+    let source = gents::graphql::escape_graphql_string(source_doc);
+    let started = std::time::Instant::now();
+    let started_at = chrono::Utc::now().to_rfc3339();
+    stages::write_stage_progress(
+        evidence,
+        case,
+        "materializing",
+        None,
+        None,
+        None,
+        &started_at,
+    )?;
+    let mut last_observation = None;
+    let outcome = async {
+        loop {
+            let requests = super::rows(node, &format!(r#"{{ AgentRequest(filter: {{caused_by_source_doc_id: {{_eq: "{source}"}}}}) {{request_id behavior_id caused_by_trigger_id lifecycle_state failure_reason content}} }}"#), "AgentRequest").await.map_err(stages::infrastructure)?;
+            ensure!(requests.len() <= 1, "duplicate requests for input: {requests:?}");
+            if let Some(request) = requests.first() {
+                let observation = (request["request_id"].as_str(), request["lifecycle_state"].as_str());
+                let owned_observation = (observation.0.map(str::to_owned), observation.1.map(str::to_owned));
+                if last_observation.as_ref() != Some(&owned_observation) {
+                    stages::write_stage_progress(evidence, case, "observing", observation.0, None, observation.1, &started_at)?;
+                    last_observation = Some(owned_observation);
+                }
+                ensure!(request["behavior_id"] == behavior && request["caused_by_trigger_id"] == automation["trigger"]["trigger_id"], "request did not originate from model-authored chain");
+                if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(request["lifecycle_state"].as_str()) {
+                    stages::retain_request_evidence(node, request["request_id"].as_str().context("request ID")?, case, evidence).await?;
+                    ensure!(request["lifecycle_state"] == "completed", "automation request failed: {request:?}");
+                    ensure!(request["content"].as_str().unwrap_or_default().contains(input), "task did not render the input message");
+                    return Ok(());
+                }
+            }
+            ensure!(started.elapsed() < stages::stage_timeout()?, "input produced no completed request: {requests:?}");
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }.await;
+    let diagnostics = node.execute("{ Trigger { trigger_id last_error last_status } AgentRequest { request_id caused_by_source_doc_id caused_by_trigger_id lifecycle_state failure_reason } }").await;
+    let retention = reporting::write_json_new(
+        &evidence.join(format!("{case}-dispatch.json")),
+        &serde_json::json!({"data":diagnostics.data,"errors":format!("{:?}", diagnostics.errors)}),
+    );
+    stages::retain_outcome(outcome, retention)
 }
 
 fn sorted(mut values: Vec<Value>, key: &str) -> Vec<Value> {
@@ -308,11 +690,49 @@ fn live_prompts_have_fixed_authority_and_acceptance_markers() {
     assert!(AFTER_RESTART.contains("RECOVERED DEFAULT"));
 }
 
+#[tokio::test]
+async fn eval_reasoning_reaches_setup_and_all_monitor_profiles() -> Result<()> {
+    let db = crate::support::test_db("eval-reasoning-profiles").await;
+    let identity = gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)?;
+    let (owner, behavior) = crate::support::live_inference::bind_d4f_backend_for_model(
+        db.node.as_ref(),
+        &identity,
+        "test-model",
+    )
+    .await;
+    let setup = gents::default_inference_profile_id_for_behavior(&behavior);
+    for effort in [Some(gents::config::ReasoningEffort::High), None] {
+        install_onboarding_profiles(
+            db.node.as_ref(),
+            &owner,
+            crate::support::live_inference::D4F_BACKEND_ID,
+            "test-model",
+            effort,
+        )
+        .await?;
+        for id in [
+            setup.as_str(),
+            "onboarding-high",
+            "onboarding-medium",
+            "onboarding-low",
+        ] {
+            let profile = gents::load_inference_profile(db.node.as_ref(), &owner, id)
+                .await?
+                .context("profile missing")?;
+            assert_eq!(profile.reasoning_effort, effort);
+            assert_eq!(profile.sampling_id.as_deref(), Some(SAMPLING_ID));
+        }
+    }
+    db.node.shutdown().await;
+    Ok(())
+}
+
 async fn install_onboarding_profiles(
     node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     backend_id: &str,
     model: &str,
+    reasoning_effort: Option<gents::config::ReasoningEffort>,
 ) -> Result<()> {
     use gents::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 
@@ -329,7 +749,11 @@ async fn install_onboarding_profiles(
         Collection::InferenceSampling,
         serde_json::to_value(sampling)?,
     )];
+    let setup_profile = gents::default_inference_profile_id_for_behavior(
+        &gents::default_behavior_id_for_agent(agent_did),
+    );
     for (profile_id, display_name) in [
+        (setup_profile.as_str(), "Live default behavior"),
         ("onboarding-high", "Onboarding high"),
         ("onboarding-medium", "Onboarding medium"),
         ("onboarding-low", "Onboarding low"),
@@ -343,6 +767,7 @@ async fn install_onboarding_profiles(
                 model_name: model.to_owned(),
                 display_name: Some(display_name.into()),
                 sampling_id: Some(SAMPLING_ID.into()),
+                reasoning_effort,
                 tags: vec!["onboarding-eval".into()],
                 ..Default::default()
             })?,
@@ -636,6 +1061,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
         &agent_did,
         crate::support::live_inference::D4F_BACKEND_ID,
         &model,
+        super::eval_reasoning_effort()?,
     )
     .await?;
     super::install_eval_workspace_root(db.node.as_ref(), &user_home.to_string_lossy()).await;
@@ -654,6 +1080,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
             "model":model,
             "temperature":1.0,
             "top_p":0.95,
+            "requested_reasoning_effort":super::eval_reasoning_effort()?,
             "concurrency":1,
             "stage_timeout_seconds":super::stages::stage_timeout()?.as_secs(),
             "workspace":user_home,
