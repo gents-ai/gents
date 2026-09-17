@@ -10,7 +10,8 @@
 //! `AgentBehavior` rows) — never from the `AgentDirectoryEntry` projection,
 //! so this reconciler never depends on the directory sweep having already
 //! run — runs [`decide_persona_request`], and on `Admit` calls
-//! [`apply_persona_request`] before writing the outcome back onto the row.
+//! [`apply_persona_request`], which publishes the closure and applied receipt
+//! in the same transaction.
 //! Admission and materialization are the exact same core the agent's own
 //! self-config tool and the `gents` CLI call, so the three write channels
 //! can never drift.
@@ -25,14 +26,9 @@
 //! view's `known_agent_dids`, Lean `agentOk`), so a request can never mint
 //! orphan config for a phantom or foreign agent.
 //!
-//! CRASH REPAIR — [`apply_persona_request`] is idempotent: if a prior tick
-//! applied the request (writing the `AgentBehavior`/`AgentContext`/`Tools`) but
-//! crashed or errored before this reconciler could write `status: applied`
-//! back onto the row, the row is still `pending` and gets re-processed. The
-//! re-run's catalog view includes the already-materialized behavior, so
-//! `apply_persona_request` recognizes the request-owned context/tools and
-//! returns `repaired: true` instead of minting a duplicate — this tick only
-//! needs to (re)write the mark to converge.
+//! REPLAY — [`apply_persona_request`] treats the request row's
+//! `applied_behavior_id` as the receipt. A stale replay returns that exact ID
+//! without allocating or publishing another closure.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -194,10 +190,12 @@ async fn process_one_request(
             let apply_outcome = apply_persona_request(node, &authorized_doc, &catalog)
                 .await
                 .context("apply admitted persona request")?;
-            store
-                .mark_applied(&doc.doc_id, &apply_outcome.behavior_id)
-                .await
-                .context("mark persona request applied")?;
+            if !apply_outcome.receipt_written {
+                store
+                    .mark_applied(&doc.doc_id, &apply_outcome.behavior_id)
+                    .await
+                    .context("mark persona request applied")?;
+            }
             if apply_outcome.repaired {
                 outcome.repaired.insert(doc.request_key.clone());
             } else {
@@ -1176,7 +1174,7 @@ mod tests {
         let applied = store.applied.lock().unwrap();
         assert_eq!(applied.len(), 1);
         assert_eq!(applied[0].0, "req-1");
-        assert_eq!(applied[0].1, "did:key:agent:research-assistant");
+        assert_eq!(applied[0].1, "local:research-assistant");
         Ok(())
     }
 
@@ -1288,93 +1286,6 @@ mod tests {
         Ok(())
     }
 
-    /// Mirrors `apply_persona_request`'s own crash-repair contract: a row
-    /// whose apply succeeded but whose `mark_applied` failed must re-enter
-    /// as pending (the fixture never advanced its own `status`), and the
-    /// next tick must converge to `applied` via `repaired: true` without
-    /// minting a duplicate `AgentBehavior`.
-    #[tokio::test]
-    async fn crash_between_apply_and_mark_repairs_without_duplicate() -> Result<()> {
-        let tempdir = tempfile::tempdir()?;
-        let node = build_apply_node(&tempdir).await;
-
-        let doc = pending_create_doc("req-repair", "did:key:repair-agent");
-        let agent_did = doc.agent_did.clone();
-        crate::agent::persona_ops::seed_persona_validation_references(&node, &agent_did).await?;
-        let mut catalog_by_agent = BTreeMap::new();
-        catalog_by_agent.insert(agent_did.clone(), happy_catalog(&agent_did));
-
-        let mut fail_mark_applied_once = BTreeSet::new();
-        fail_mark_applied_once.insert("req-repair".to_string());
-
-        let store1 = FixtureStore {
-            all: vec![doc.clone()],
-            catalog_by_agent: catalog_by_agent.clone(),
-            fail_mark_applied_once: Mutex::new(fail_mark_applied_once),
-            ..Default::default()
-        };
-
-        let first_result = reconcile_persona_tick(&store1, &node).await;
-        assert!(
-            first_result.is_err(),
-            "the injected mark_applied failure must surface"
-        );
-        assert!(
-            store1.applied.lock().unwrap().is_empty(),
-            "mark_applied failed, so no applied record for this attempt"
-        );
-
-        // The apply itself succeeded against the real node before the mark
-        // failure: exactly one behavior now exists.
-        let behaviors = crate::list_agent_behaviors(&node, &agent_did).await?;
-        assert_eq!(
-            behaviors.len(),
-            1,
-            "apply must have written exactly one behavior before the mark failure"
-        );
-
-        let mut catalog_after = happy_catalog(&agent_did);
-        for behavior in &behaviors {
-            catalog_after.behaviors.insert(
-                behavior.behavior_id.clone(),
-                BehaviorRef {
-                    enabled: behavior.enabled,
-                    protected: behavior
-                        .tags
-                        .iter()
-                        .any(|tag| tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG),
-                },
-            );
-        }
-        let mut catalog_by_agent2 = BTreeMap::new();
-        catalog_by_agent2.insert(agent_did.clone(), catalog_after);
-
-        let store2 = FixtureStore {
-            all: vec![doc],
-            catalog_by_agent: catalog_by_agent2,
-            ..Default::default()
-        };
-
-        let outcome = reconcile_persona_tick(&store2, &node).await?;
-        assert_eq!(outcome.repaired, BTreeSet::from(["req-repair".to_string()]));
-        assert!(outcome.applied.is_empty());
-
-        let applied = store2.applied.lock().unwrap();
-        assert_eq!(
-            applied.len(),
-            1,
-            "the repair converges via a mark_applied call"
-        );
-
-        let behaviors_after = crate::list_agent_behaviors(&node, &agent_did).await?;
-        assert_eq!(
-            behaviors_after.len(),
-            1,
-            "repair must not mint a duplicate behavior"
-        );
-        Ok(())
-    }
-
     #[derive(Deserialize)]
     struct PersonaStatusRow {
         status: Option<String>,
@@ -1441,13 +1352,19 @@ mod tests {
         ensure_no_errors(&response, "create signed local persona request")?;
 
         let store = GraphqlPersonaRequestStore::with_local_identity(node.clone(), None, identity);
+        let replay_doc = store
+            .load_pending_requests()
+            .await?
+            .into_iter()
+            .next()
+            .context("pending request available before reconciliation")?;
         let outcome = reconcile_persona_tick(&store, &node).await?;
         assert_eq!(
             outcome.applied,
             BTreeSet::from(["req-integration-1".to_string()])
         );
 
-        let behavior_id = format!("{agent_did}:research-assistant");
+        let behavior_id = "local:research-assistant".to_string();
         let behavior = crate::load_agent_behavior(&node, &agent_did, &behavior_id)
             .await?
             .expect("behavior created");
@@ -1502,7 +1419,10 @@ mod tests {
             },
         )
         .await?;
-        assert_eq!(context.tools_id.as_deref(), Some("tools-req-integration-1"));
+        assert_eq!(
+            context.tools_id.as_deref(),
+            Some("local:research-assistant:tools")
+        );
         let host = tools.host.context("write preset host tools missing")?;
         assert_eq!(host.root.as_deref(), Some("/repo/allowed"));
         assert_eq!(
@@ -1529,6 +1449,15 @@ mod tests {
             Some(behavior_id.as_str())
         );
         assert!(request_row.processed_at.is_some());
+
+        let replay_catalog = store.load_catalog_view(&agent_did).await?;
+        let replay = apply_persona_request(&node, &replay_doc, &replay_catalog).await?;
+        assert_eq!(replay.behavior_id, behavior_id);
+        assert!(replay.repaired && replay.receipt_written);
+        assert_eq!(
+            crate::list_agent_behaviors(&node, &agent_did).await?.len(),
+            1
+        );
 
         // Ties PR 1+2: the directory projection tick now publishes the newly
         // materialized persona.

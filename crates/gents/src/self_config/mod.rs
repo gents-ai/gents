@@ -27,8 +27,12 @@ use serde_json::{json, Value};
 
 use crate::agent::p2p_reconcile::{GraphqlPersonaRequestStore, PersonaRequestStore};
 use crate::agent::persona_ops::{
-    decide_persona_request, derive_behavior_id, local_persona_request_mutation, PersonaOp,
-    PersonaRequestDoc, PersonaVerdict,
+    decide_persona_request, local_persona_request_mutation, PersonaOp, PersonaRequestDoc,
+    PersonaVerdict,
+};
+use crate::behavior_scope::{
+    behavior_component_id, behavior_slug_from_display_name, find_available_personal_behavior_key,
+    BehaviorComponentPath,
 };
 use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::graphql::escape_graphql_string;
@@ -882,10 +886,39 @@ async fn persona_preview(
         PersonaVerdict::Reject(detail) => Some(detail.clone()),
     };
     let behavior_id = match &op {
-        PersonaOp::Create { .. } => args
-            .display_name
-            .value()
-            .map(|name| derive_behavior_id(agent_did, name, &catalog.behaviors)),
+        PersonaOp::Create { .. } => match args.display_name.value() {
+            Some(name) => {
+                let slug = behavior_slug_from_display_name(name);
+                Some(
+                    crate::config_client::ConfigAccess::transact_local(
+                        node,
+                        None,
+                        "self_config.persona.preview_id",
+                        |txn| {
+                            let slug = slug.clone();
+                            Box::pin(async move {
+                                let snapshot =
+                                    crate::document_config::ConfigReferences::load_in_txn(
+                                        txn, agent_did,
+                                    )
+                                    .await?;
+                                find_available_personal_behavior_key(&slug, |collection, id| {
+                                    snapshot.documents().any(
+                                        |((candidate_collection, candidate_id), _)| {
+                                            *candidate_collection == collection
+                                                && candidate_id == id
+                                        },
+                                    )
+                                })?
+                                .context("personal behavior ID space exhausted")
+                            })
+                        },
+                    )
+                    .await?,
+                )
+            }
+            None => None,
+        },
         PersonaOp::Edit | PersonaOp::Disable => args.behavior_id.clone(),
     };
     let inherited = match operation {
@@ -927,9 +960,9 @@ async fn persona_preview(
         "operation": operation,
         "proposed_ids": {
             "behavior_id": behavior_id,
-            "context_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("context-{request_key}")),
-            "tools_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("tools-{request_key}")),
-            "profile_id": args.profile_id.value(),
+            "context_id": behavior_id.as_deref().map(|id| behavior_component_id(id, BehaviorComponentPath::Context)),
+            "tools_id": behavior_id.as_deref().map(|id| behavior_component_id(id, BehaviorComponentPath::Tools)),
+            "profile_id": behavior_id.as_deref().map(|id| behavior_component_id(id, BehaviorComponentPath::Inference)),
         },
         "proposed_values": {
             "display_name": args.display_name.value(),
@@ -944,7 +977,7 @@ async fn persona_preview(
         "preset_requested": preset_requested,
         "inherited_config": inherited_config,
         "process_ceiling": process_ceiling,
-        "note": "Preview checks request admission without writing; it does not verify materialization or runtime readiness. Preset values are requested authority, narrowed by the process ceiling at runtime. Inspect the applied behavior for effective authority. Applied create IDs use the admitted request key and will differ from these preview-only IDs.",
+        "note": "Preview checks request admission without writing; it does not verify materialization or runtime readiness. Preset values are requested authority, narrowed by the process ceiling at runtime. Inspect the applied behavior for effective authority.",
     }))
     .map_err(|error| anyhow!("serialize behavior preview: {error}"))
 }
