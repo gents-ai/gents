@@ -239,10 +239,19 @@ impl Tool for ConfigCommandTool {
                 serde_json::to_string_pretty(&value)
                     .map_err(|error| anyhow::Error::from(error).into())
             }
-            Err(error) => Err(anyhow::anyhow!(
-                json!({"config_execution":receipt,"error":format!("{error:#}")}).to_string()
-            )
-            .into()),
+            Err(error) => {
+                let recovery = if error
+                    .downcast_ref::<super::ops::MissingBehavior>()
+                    .is_some()
+                {
+                    call.connected_preview_contract()
+                } else {
+                    Value::Null
+                };
+                Err(anyhow::anyhow!(
+                    json!({"config_execution":receipt,"error":format!("{error:#}"),"recovery":recovery}).to_string()
+                ).into())
+            }
         }
     }
 }
@@ -455,6 +464,7 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             "data_model": DATA_MODEL,
             "help": detail,
             "enabled_resources": model_resources(&self.categories, self.allow_pack_install),
+            "connected_preview": self.connected_preview_contract(),
             "patch_contracts": help_patch_contracts(resource),
             "examples": if resource == Some("datastore") { datastore::entry_examples() } else { Value::Null },
             "canonical_mailbox_entries": if resource == Some("datastore") {
@@ -475,6 +485,20 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                 "pack_remove": "unavailable because installation records do not yet distinguish documents created by an install from matching documents the install reused",
             },
         }))?)
+    }
+
+    fn connected_preview_contract(&self) -> Value {
+        if !self.dry_run || !self.categories.contains("persona") {
+            return Value::Null;
+        }
+        json!({
+            "help_argv": ["plan", "--help"],
+            "preview_argv": ["plan", "preview"],
+            "input_field": "options.documents",
+            "input_shape": "native JSON array of {collection, document} entries using canonical document fields and exact proposed IDs",
+            "use_when": "previewing new connected resources whose behavior/context/tools/automation references do not exist yet",
+            "boundary": "Individual resource previews target existing anchors. Connected preview checks proposed references without publishing them. Preview application schemas separately; schema publication and effective runtime readiness are not proved by plan preview. Do not create temporary resources to satisfy a preview."
+        })
     }
 
     async fn behavior(&self, argv: &[String]) -> Result<String> {

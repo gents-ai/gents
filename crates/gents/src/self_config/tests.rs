@@ -1744,6 +1744,41 @@ async fn connected_plan_preview_validates_pending_references_without_writes() {
     let args = |documents: Value| {
         json!({"argv":["plan","preview"],"options":{"documents":documents}}).to_string()
     };
+    for resource in ["behavior", "tools", "datastore", "automation", "schema"] {
+        let help: Value = serde_json::from_str(
+            &tool
+                .call(json!({"argv":[resource,"--help"]}).to_string())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            help["connected_preview"]["preview_argv"],
+            json!(["plan", "preview"])
+        );
+        assert_eq!(
+            help["connected_preview"]["input_field"],
+            "options.documents"
+        );
+        let plan_help: Value = serde_json::from_str(
+            &tool
+                .call(json!({"argv":help["connected_preview"]["help_argv"]}).to_string())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(plan_help["ok"], true);
+    }
+    let error = tool.call(json!({"argv":["tools","preview"],"options":{"behavior":"proposed-behavior"},"set":{"host":{"bash":{"mode":"read_only"}}}}).to_string()).await.unwrap_err();
+    let crate::llm::tool::ToolError::ToolCallError(error) = error else {
+        panic!("missing typed config error: {error}");
+    };
+    let error: Value = serde_json::from_str(&error.to_string()).unwrap();
+    assert_eq!(error["config_execution"]["mutation_entered"], false);
+    assert_eq!(
+        error["recovery"]["preview_argv"],
+        json!(["plan", "preview"])
+    );
     let response: Value =
         serde_json::from_str(&tool.call(args(documents.clone())).await.unwrap()).unwrap();
     assert_eq!(response["committed"], false);
@@ -1804,6 +1839,21 @@ async fn connected_plan_preview_validates_pending_references_without_writes() {
             .call(args(documents.clone()))
             .await
             .is_err());
+        let tool = denied
+            .iter()
+            .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+            .unwrap();
+        let help: Value = serde_json::from_str(
+            &tool
+                .call(json!({"argv":["--help"]}).to_string())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            help["connected_preview"].is_object(),
+            dry_run && categories.contains(&"persona")
+        );
     }
     assert_eq!(
         before,
