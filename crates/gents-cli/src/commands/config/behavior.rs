@@ -5,14 +5,14 @@ use anyhow::{Context, Result};
 use gents::agent::persona_presets;
 use gents::document_config::AgentBehavior;
 use gents::graphql::escape_graphql_string;
-use gents::{default_behavior_id_for_agent, AgentIdentity, Collection};
+use gents::{AgentIdentity, Collection};
 use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL_SELF};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
-use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
+use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{
     graphql_rows, load_initialized_home_identity, print_json, read_init_config,
@@ -23,13 +23,8 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
     let behavior_id = args
         .behavior_id
         .clone()
-        .unwrap_or_else(|| default_behavior_id_for_agent(&args.agent_did));
+        .context("config behavior set requires --behavior-id")?;
     let access = ConfigAccess::Graphql(args.graphql.clone());
-    // Raw set means one complete canonical document: omitted optionals clear,
-    // no sparse legacy merge. `write_agent_behavior_document` validates
-    // references (same-principal context/profile existence) inside its
-    // transaction; this deliberately stays outside persona admission (see
-    // `gents::agent::persona_ops`).
     let behavior = AgentBehavior {
         behavior_id: behavior_id.clone(),
         agent_did: args.agent_did.clone(),
@@ -39,9 +34,9 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         inference_profile_id: args.inference_profile_id.clone(),
         enabled: args.enabled,
         tags: args.tags.clone(),
-        created_at: Some(chrono::Utc::now().to_rfc3339()),
+        created_at: None,
     };
-    let doc_id = write_agent_behavior_document(&access, &behavior).await?;
+    let doc_id = update_existing_behavior_metadata(&access, &behavior).await?;
     let output = json!({
         "doc_id": doc_id,
         "behavior_id": behavior_id,
@@ -52,6 +47,70 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
     });
     print_json(&output)?;
     Ok(())
+}
+
+async fn update_existing_behavior_metadata(
+    access: &ConfigAccess,
+    requested: &AgentBehavior,
+) -> Result<String> {
+    access
+        .transact("config.behavior.metadata_update", |txn| {
+            Box::pin(async move {
+                let (doc_id, value) = gents::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentBehavior,
+                    &requested.agent_did,
+                    &requested.behavior_id,
+                )
+                .await?
+                .with_context(|| {
+                    format!(
+                        "AgentBehavior {:?} does not exist for principal {:?}; create or clone behaviors through the persona materializer",
+                        requested.behavior_id, requested.agent_did
+                    )
+                })?;
+                let mut retained: AgentBehavior = serde_json::from_value(value)?;
+                anyhow::ensure!(
+                    retained.behavior_id
+                        != gents::behavior_scope::SETUP_CONFIGURATOR_BEHAVIOR_ID
+                        && !retained.tags.iter().any(|tag| {
+                            tag == gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
+                        }),
+                    "protected configurator behavior cannot be modified"
+                );
+                anyhow::ensure!(
+                    requested.context_id == retained.context_id
+                        && requested.inference_profile_id == retained.inference_profile_id,
+                    "config behavior set cannot change context_id or inference_profile_id; use the behavior materializer"
+                );
+                retained.display_name = requested.display_name.clone();
+                retained.description = requested.description.clone();
+                retained.enabled = requested.enabled;
+                let system_tags = retained
+                    .tags
+                    .iter()
+                    .filter(|tag| gents::config_client::is_behavior_system_tag(tag))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                retained.tags = requested.tags.clone();
+                for tag in system_tags {
+                    if !retained.tags.contains(&tag) {
+                        retained.tags.push(tag);
+                    }
+                }
+                let value = serde_json::to_value(&retained)?;
+                let plan = gents::config_client::DesiredStateApplyPlan::new(vec![
+                    gents::config_client::DesiredStateApplyDocument {
+                        collection: Collection::AgentBehavior,
+                        add: value.clone(),
+                        update: value,
+                    },
+                ])?;
+                gents::config_client::apply_desired_state_plan(txn, &plan).await?;
+                Ok(doc_id)
+            })
+        })
+        .await
 }
 
 const PERSONA_REQUEST_POLL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -322,6 +381,10 @@ pub(super) async fn behavior_show(args: ConfigShowArgs) -> Result<()> {
     )?;
     args.output
         .ensure_supported("config behavior show", &[OutputFormat::Json])?;
+    let agent_did = match args.agent_did.as_deref() {
+        Some(agent_did) => agent_did.to_owned(),
+        None => local_identity(args.home.as_deref())?.did().to_owned(),
+    };
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .context("resolving access for config behavior show")?;
@@ -330,7 +393,7 @@ pub(super) async fn behavior_show(args: ConfigShowArgs) -> Result<()> {
         &access,
         Collection::AgentBehavior,
         CANONICAL_BEHAVIOR_SHOW_FIELDS,
-        None,
+        Some(&agent_did),
         &id,
     )
     .await?
@@ -429,7 +492,7 @@ mod tests {
         apply_persona_request, PersonaCatalogView, PersonaOp, PersonaRequestDoc,
     };
     use gents::document_config::Tools;
-    use gents::{ensure_runtime_schemas, upsert_agent_behavior};
+    use gents::ensure_runtime_schemas;
     use serde_json::Value;
 
     use super::*;
@@ -519,7 +582,17 @@ mod tests {
         let behavior = gents::load_agent_behavior(&node, owner, &outcome.behavior_id)
             .await?
             .expect("created behavior exists");
-        assert_eq!(behavior.inference_profile_id, "profile-1");
+        let expected_profile_id = gents::behavior_scope::behavior_component_id(
+            &outcome.behavior_id,
+            gents::behavior_scope::BehaviorComponentPath::Inference,
+        );
+        assert_eq!(behavior.inference_profile_id, expected_profile_id);
+        let materialized_profile =
+            gents::load_inference_profile(&node, owner, &behavior.inference_profile_id)
+                .await?
+                .expect("created behavior has a private inference profile");
+        assert_eq!(materialized_profile.backend_id, "backend");
+        assert_eq!(materialized_profile.model_name, "test");
         let context_id = behavior.context_id.clone().expect("create mints a context");
         let context_row = read_canonical(
             &node,
@@ -623,11 +696,58 @@ mod tests {
         Ok(())
     }
 
-    /// The raw `behavior set` door is a complete canonical replacement through
-    /// the shared writer: omitted optionals clear and a dangling
-    /// context/profile reference fails the write transaction.
     #[tokio::test]
-    async fn raw_set_rejects_dangling_profile_reference() -> Result<()> {
+    async fn behavior_lookup_qualifies_repeated_ids_by_principal() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node.clone());
+        for owner in ["did:key:first", "did:key:second"] {
+            gents::ensure_agent_principal(&node, owner).await?;
+            let documents = [
+                (Collection::InferenceBackend, json!({"agent_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+                (Collection::InferenceProfile, json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"test"})),
+                (Collection::AgentBehavior, json!({"agent_did":owner,"behavior_id":"local:default","display_name":owner,"inference_profile_id":"profile"})),
+            ]
+            .into_iter()
+            .map(|(collection, value)| gents::config_client::DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect();
+            let plan = gents::config_client::DesiredStateApplyPlan::new(documents)?;
+            access
+                .transact("test.behavior_lookup.seed", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move {
+                        gents::config_client::apply_desired_state_plan(txn, plan)
+                            .await
+                            .map(|_| ())
+                    })
+                })
+                .await?;
+        }
+
+        for owner in ["did:key:first", "did:key:second"] {
+            let row = load_document(
+                &access,
+                Collection::AgentBehavior,
+                CANONICAL_BEHAVIOR_SHOW_FIELDS,
+                Some(owner),
+                "local:default",
+            )
+            .await?
+            .expect("owner-qualified behavior");
+            assert_eq!(row["agent_did"], owner);
+            assert_eq!(row["display_name"], owner);
+        }
+        Ok(())
+    }
+
+    /// The raw `behavior set` door updates metadata on an existing behavior. It
+    /// cannot create a behavior or move one onto another closure.
+    #[tokio::test]
+    async fn raw_set_rejects_create_and_closure_changes() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let node = Arc::new(
             EmbeddedNode::builder()
@@ -638,36 +758,93 @@ mod tests {
         );
         ensure_runtime_schemas(&node).await?;
         gents::ensure_agent_principal(&node, "did:key:set-owner").await?;
-        let behavior = AgentBehavior {
+        let mut behavior = AgentBehavior {
             behavior_id: "b1".to_string(),
             agent_did: "did:key:set-owner".to_string(),
             display_name: None,
             description: None,
             context_id: None,
-            inference_profile_id: "missing-profile".to_string(),
+            inference_profile_id: "profile".to_string(),
             enabled: true,
             tags: Vec::new(),
             created_at: None,
         };
-        // The shared writer behavior_set drives owns the reference validation;
-        // a dangling profile rejects inside its transaction.
-        assert!(format!(
-            "{:#}",
-            upsert_agent_behavior(&node, &behavior).await.unwrap_err()
-        )
-        .contains("missing-profile"));
-        // Nothing was published: the canonical chain stays empty.
-        let response = node
-            .execute("{ AgentBehavior {behavior_id} AgentContext {context_id} Tools {tools_id} }")
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        for name in ["AgentBehavior", "AgentContext", "Tools"] {
-            assert_eq!(
-                response.data.as_ref().unwrap()[name],
-                serde_json::json!([]),
-                "{name} must stay empty after a rejected write"
-            );
-        }
+        let access = ConfigAccess::Local(node.clone());
+        let error = update_existing_behavior_metadata(&access, &behavior)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("does not exist"));
+
+        let seed = [
+            (Collection::InferenceBackend, json!({"agent_did":"did:key:set-owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+            (Collection::InferenceProfile, json!({"agent_did":"did:key:set-owner","profile_id":"profile","backend_id":"backend","model_name":"test"})),
+            (Collection::AgentBehavior, serde_json::to_value(&behavior)?),
+        ]
+        .into_iter()
+        .map(|(collection, value)| gents::config_client::DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect();
+        let plan = gents::config_client::DesiredStateApplyPlan::new(seed)?;
+        access
+            .transact("test.raw_set.seed", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents::config_client::apply_desired_state_plan(txn, plan)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .await?;
+
+        behavior.display_name = Some("Renamed".into());
+        behavior.description = Some("Updated metadata".into());
+        behavior.tags = vec!["review".into()];
+        update_existing_behavior_metadata(&access, &behavior).await?;
+        let stored = gents::load_agent_behavior(&node, "did:key:set-owner", "b1")
+            .await?
+            .unwrap();
+        assert_eq!(stored.display_name.as_deref(), Some("Renamed"));
+        assert_eq!(stored.inference_profile_id, "profile");
+
+        behavior.inference_profile_id = "other-profile".into();
+        let error = update_existing_behavior_metadata(&access, &behavior)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("cannot change"));
+        let stored = gents::load_agent_behavior(&node, "did:key:set-owner", "b1")
+            .await?
+            .unwrap();
+        assert_eq!(stored.inference_profile_id, "profile");
+
+        let mut protected = stored;
+        protected.behavior_id = gents::behavior_scope::SETUP_CONFIGURATOR_BEHAVIOR_ID.into();
+        protected.tags = vec![gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG.into()];
+        let value = serde_json::to_value(&protected)?;
+        let plan = gents::config_client::DesiredStateApplyPlan::new(vec![
+            gents::config_client::DesiredStateApplyDocument {
+                collection: Collection::AgentBehavior,
+                add: value.clone(),
+                update: value,
+            },
+        ])?;
+        access
+            .transact("test.raw_set.protected", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents::config_client::apply_desired_state_plan(txn, plan)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .await?;
+        protected.display_name = Some("Changed".into());
+        let error = update_existing_behavior_metadata(&access, &protected)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("protected configurator"));
         Ok(())
     }
 }

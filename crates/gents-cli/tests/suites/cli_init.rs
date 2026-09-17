@@ -6,7 +6,6 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use gents::default_behavior_id_for_agent;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -14,9 +13,8 @@ fn generated_backend_id_for_agent(agent_did: &str) -> String {
     format!("{agent_did}:backend")
 }
 
-fn generated_tools_id_for_agent(agent_did: &str) -> String {
-    let default_behavior_id = default_behavior_id_for_agent(agent_did);
-    format!("{default_behavior_id}-tools")
+fn generated_tools_id_for_agent(_agent_did: &str) -> String {
+    "local:default:tools".to_string()
 }
 
 fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
