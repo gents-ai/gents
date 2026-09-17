@@ -90,10 +90,18 @@ pub(super) async fn run_monitor_trial(
         let schema = gents::config_client::preview_schema_install(&access, stages::INPUT_SCHEMA).await?;
         gents::config_client::apply_schema_install(&access, stages::INPUT_SCHEMA, &schema.artifact_digest).await?;
         let identity: Arc<dyn AgentIdentity> = Arc::new(gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)?);
-        let (owner, setup) = crate::support::live_inference::bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await;
+        let (owner, source_setup) = crate::support::live_inference::bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await;
         install_onboarding_profiles(db.node.as_ref(), &owner, crate::support::live_inference::D4F_BACKEND_ID, &model, super::eval_reasoning_effort()?).await?;
         super::install_eval_workspace_root(db.node.as_ref(), &root.to_string_lossy()).await;
-        super::install_setup_configurator(db.node.as_ref(), &owner, &setup, &root.to_string_lossy()).await;
+        super::install_setup_configurator(
+            db.node.as_ref(),
+            &owner,
+            &source_setup,
+            &root.to_string_lossy(),
+            SAMPLING_ID,
+        )
+        .await;
+        let setup = super::SETUP_BEHAVIOR_ID.to_owned();
         let observer = Arc::new(stages::ActivationObserver::default());
         let (agent, runtime) = crate::support::live_inference::boot_d4f_agent_with_options(&db, identity,
             gents::DocumentRuntimeOptions { tool_ceiling: gents::ToolCeiling::readwrite(&root), runtime_snapshot_observer: Some(observer.clone()), ..Default::default() }).await?;
@@ -116,10 +124,14 @@ pub(super) async fn run_monitor_trial(
                 run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-configure", &render(MONITOR_APPROVE, "{{ROOT}}", &root), &evidence).await?;
                 let snapshot = configuration_snapshot(db.node.as_ref(), &owner).await.map_err(stages::infrastructure)?;
                 let behavior = new_working_behavior(&before, &snapshot)?;
-                ensure!(behavior["inference_profile_id"] == "onboarding-medium");
+                assert_scoped_profile_copy(
+                    &snapshot,
+                    behavior,
+                    "onboarding-medium",
+                )?;
                 let prompt = behavior_context(&snapshot, behavior)?["system_prompt"].as_str().unwrap_or_default();
                 ensure!(prompt.contains("MONITOR_CHECKS_V1") && prompt.contains("No repairs without user approval."), "prompt lost required instructions");
-                for key in ["principals", "profiles", "backends", "credentials", "sampling"] {
+                for key in ["principals", "backends", "credentials"] {
                     ensure!(snapshot[key] == before[key], "unexpected change to {key}");
                 }
                 mailbox_automation(db.node.as_ref(), &owner, behavior["behavior_id"].as_str().context("behavior ID")?).await?;
@@ -619,16 +631,15 @@ fn live_prompts_have_fixed_authority_and_acceptance_markers() {
 }
 
 #[tokio::test]
-async fn eval_reasoning_reaches_setup_and_all_monitor_profiles() -> Result<()> {
+async fn eval_reasoning_reaches_all_onboarding_source_profiles() -> Result<()> {
     let db = crate::support::test_db("eval-reasoning-profiles").await;
     let identity = gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)?;
-    let (owner, behavior) = crate::support::live_inference::bind_d4f_backend_for_model(
+    let (owner, source_behavior) = crate::support::live_inference::bind_d4f_backend_for_model(
         db.node.as_ref(),
         &identity,
         "test-model",
     )
     .await;
-    let setup = gents::default_inference_profile_id_for_behavior(&behavior);
     for effort in [Some(gents::config::ReasoningEffort::High), None] {
         install_onboarding_profiles(
             db.node.as_ref(),
@@ -638,12 +649,7 @@ async fn eval_reasoning_reaches_setup_and_all_monitor_profiles() -> Result<()> {
             effort,
         )
         .await?;
-        for id in [
-            setup.as_str(),
-            "onboarding-high",
-            "onboarding-medium",
-            "onboarding-low",
-        ] {
+        for id in ["onboarding-high", "onboarding-medium", "onboarding-low"] {
             let profile = gents::load_inference_profile(db.node.as_ref(), &owner, id)
                 .await?
                 .context("profile missing")?;
@@ -651,6 +657,24 @@ async fn eval_reasoning_reaches_setup_and_all_monitor_profiles() -> Result<()> {
             assert_eq!(profile.sampling_id.as_deref(), Some(SAMPLING_ID));
         }
     }
+    super::install_setup_configurator(
+        db.node.as_ref(),
+        &owner,
+        &source_behavior,
+        "/tmp",
+        SAMPLING_ID,
+    )
+    .await;
+    let snapshot = configuration_snapshot(db.node.as_ref(), &owner).await?;
+    assert_global_negatives(&snapshot, super::SETUP_BEHAVIOR_ID)?;
+    ensure!(
+        !snapshot["behaviors"]
+            .as_array()
+            .context("behavior snapshot missing")?
+            .iter()
+            .any(|row| row["behavior_id"] == source_behavior),
+        "temporary live-test behavior survived canonical Setup installation"
+    );
     db.node.shutdown().await;
     Ok(())
 }
@@ -677,11 +701,7 @@ async fn install_onboarding_profiles(
         Collection::InferenceSampling,
         serde_json::to_value(sampling)?,
     )];
-    let setup_profile = gents::default_inference_profile_id_for_behavior(
-        &gents::default_behavior_id_for_agent(agent_did),
-    );
     for (profile_id, display_name) in [
-        (setup_profile.as_str(), "Live default behavior"),
         ("onboarding-high", "Onboarding high"),
         ("onboarding-medium", "Onboarding medium"),
         ("onboarding-low", "Onboarding low"),
@@ -729,11 +749,11 @@ async fn configuration_snapshot(
 ) -> Result<Value> {
     let owner = gents::graphql::escape_graphql_string(owner);
     let behaviors = super::rows(node, &format!(r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{behavior_id display_name context_id inference_profile_id tags enabled}} }}"#), "AgentBehavior").await?;
-    let contexts = super::rows(node, &format!(r#"{{ AgentContext(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{context_id display_name system_prompt tools_id skill_ids compaction_id tags}} }}"#), "AgentContext").await?;
-    let tools = super::rows(node, &format!(r#"{{ Tools(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{tools_id display_name host remote subagents built_ins datastore integrations self_config tags}} }}"#), "Tools").await?;
+    let contexts = super::rows(node, &format!(r#"{{ AgentContext(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{context_id scope_behavior_id display_name system_prompt tools_id skill_ids compaction_id tags}} }}"#), "AgentContext").await?;
+    let tools = super::rows(node, &format!(r#"{{ Tools(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{tools_id scope_behavior_id display_name host remote subagents built_ins datastore integrations self_config tags}} }}"#), "Tools").await?;
     let principals = super::rows(node, &format!(r#"{{ AgentPrincipal(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{agent_did default_behavior_id}} }}"#), "AgentPrincipal").await?;
-    let profiles = super::rows(node, &format!(r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{profile_id backend_id model_name sampling_id tags}} }}"#), "InferenceProfile").await?;
-    let sampling = super::rows(node, &format!(r#"{{ InferenceSampling(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{sampling_id temperature top_p tags}} }}"#), "InferenceSampling").await?;
+    let profiles = super::rows(node, &format!(r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{profile_id scope_behavior_id backend_id model_name sampling_id tags}} }}"#), "InferenceProfile").await?;
+    let sampling = super::rows(node, &format!(r#"{{ InferenceSampling(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{sampling_id scope_behavior_id temperature top_p tags}} }}"#), "InferenceSampling").await?;
     let backends = super::rows(node, &format!(r#"{{ InferenceBackend(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{backend_id provider_kind endpoint auth enabled tags}} }}"#), "InferenceBackend").await?;
     let credentials = super::rows(node, &format!(r#"{{ OAuthCredential(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{credential_id provider enabled}} }}"#), "OAuthCredential").await?;
     Ok(serde_json::json!({
@@ -788,14 +808,63 @@ fn behavior_tools<'a>(snapshot: &'a Value, behavior: &Value) -> Result<&'a Value
         .context("referenced Tools document missing")
 }
 
+fn assert_scoped_profile_copy(
+    snapshot: &Value,
+    behavior: &Value,
+    source_profile_id: &str,
+) -> Result<()> {
+    let behavior_id = behavior["behavior_id"]
+        .as_str()
+        .context("behavior ID missing")?;
+    let expected_profile_id = format!("{behavior_id}:inference");
+    ensure!(
+        behavior["inference_profile_id"] == expected_profile_id,
+        "{behavior_id} does not select its scoped inference profile"
+    );
+    let profiles = snapshot["profiles"]
+        .as_array()
+        .context("profile snapshot missing")?;
+    let source = profiles
+        .iter()
+        .find(|profile| profile["profile_id"] == source_profile_id)
+        .with_context(|| format!("source profile {source_profile_id:?} missing"))?;
+    let scoped = profiles
+        .iter()
+        .find(|profile| profile["profile_id"] == expected_profile_id)
+        .context("scoped profile copy missing")?;
+    ensure!(scoped["scope_behavior_id"] == behavior_id);
+    ensure!(scoped["backend_id"] == source["backend_id"]);
+    ensure!(scoped["model_name"] == source["model_name"]);
+
+    if source["sampling_id"].as_str().is_some() {
+        let expected_sampling_id = format!("{behavior_id}:sampling");
+        ensure!(scoped["sampling_id"] == expected_sampling_id);
+        let sampling = snapshot["sampling"]
+            .as_array()
+            .context("sampling snapshot missing")?
+            .iter()
+            .find(|sampling| sampling["sampling_id"] == expected_sampling_id)
+            .context("scoped sampling copy missing")?;
+        ensure!(sampling["scope_behavior_id"] == behavior_id);
+    }
+    Ok(())
+}
+
 fn assert_behavior(snapshot: &Value, name: &str, profile: &str, root: &Path) -> Result<String> {
     let behavior = behavior_by_name(snapshot, name)?;
     ensure!(behavior["enabled"] == true, "{name} is disabled");
+    let behavior_id = behavior["behavior_id"]
+        .as_str()
+        .context("behavior ID missing")?;
+    let expected_id = format!("local:{}", name.to_ascii_lowercase().replace(' ', "-"));
     ensure!(
-        behavior["inference_profile_id"] == profile,
-        "{name} has the wrong profile"
+        behavior_id == expected_id,
+        "{name} has the wrong personal ID"
     );
+    assert_scoped_profile_copy(snapshot, behavior, profile)?;
     let context = behavior_context(snapshot, behavior)?;
+    ensure!(context["context_id"] == format!("{behavior_id}:context"));
+    ensure!(context["scope_behavior_id"] == behavior_id);
     ensure!(
         context["system_prompt"]
             .as_str()
@@ -803,6 +872,8 @@ fn assert_behavior(snapshot: &Value, name: &str, profile: &str, root: &Path) -> 
         "{name} has no system prompt"
     );
     let tools = behavior_tools(snapshot, behavior)?;
+    ensure!(tools["tools_id"] == format!("{behavior_id}:tools"));
+    ensure!(tools["scope_behavior_id"] == behavior_id);
     ensure!(
         tools["host"]["root"] == root.to_string_lossy().as_ref(),
         "{name} has the wrong root"
@@ -813,10 +884,7 @@ fn assert_behavior(snapshot: &Value, name: &str, profile: &str, root: &Path) -> 
     ensure!(tools["remote"].is_null() || tools["remote"]["services"] == serde_json::json!([]));
     ensure!(tools["datastore"].is_null());
     ensure!(tools["subagents"].is_null());
-    Ok(behavior["behavior_id"]
-        .as_str()
-        .context("behavior ID missing")?
-        .to_owned())
+    Ok(behavior_id.to_owned())
 }
 
 fn assert_global_negatives(snapshot: &Value, setup_behavior_id: &str) -> Result<()> {
@@ -834,6 +902,29 @@ fn assert_global_negatives(snapshot: &Value, setup_behavior_id: &str) -> Result<
         })
         .context("Setup behavior disappeared")?;
     ensure!(setup["enabled"] == true, "Setup was disabled");
+    ensure!(setup["behavior_id"] == super::SETUP_BEHAVIOR_ID);
+    ensure!(setup["context_id"] == format!("{}:context", super::SETUP_BEHAVIOR_ID));
+    ensure!(setup["inference_profile_id"] == format!("{}:inference", super::SETUP_BEHAVIOR_ID));
+    ensure!(behavior_context(snapshot, setup)?["scope_behavior_id"] == super::SETUP_BEHAVIOR_ID);
+    ensure!(behavior_tools(snapshot, setup)?["scope_behavior_id"] == super::SETUP_BEHAVIOR_ID);
+    let setup_profile_id = format!("{}:inference", super::SETUP_BEHAVIOR_ID);
+    let setup_profile = snapshot["profiles"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["profile_id"] == setup_profile_id)
+        })
+        .context("Setup scoped profile disappeared")?;
+    ensure!(setup_profile["scope_behavior_id"] == super::SETUP_BEHAVIOR_ID);
+    let setup_sampling_id = format!("{}:sampling", super::SETUP_BEHAVIOR_ID);
+    let setup_sampling = snapshot["sampling"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["sampling_id"] == setup_sampling_id)
+        })
+        .context("Setup scoped sampling disappeared")?;
+    ensure!(setup_sampling["scope_behavior_id"] == super::SETUP_BEHAVIOR_ID);
     ensure!(
         setup["tags"] == serde_json::json!([gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG])
     );
@@ -977,7 +1068,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
         None,
     )?);
     let model = super::model_name();
-    let (agent_did, setup_behavior_id) =
+    let (agent_did, source_setup_behavior_id) =
         crate::support::live_inference::bind_d4f_backend_for_model(
             db.node.as_ref(),
             identity.as_ref(),
@@ -996,10 +1087,12 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
     super::install_setup_configurator(
         db.node.as_ref(),
         &agent_did,
-        &setup_behavior_id,
+        &source_setup_behavior_id,
         &user_home.to_string_lossy(),
+        SAMPLING_ID,
     )
     .await;
+    let setup_behavior_id = super::SETUP_BEHAVIOR_ID.to_owned();
     std::fs::write(
         artifacts.join("run-settings.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
