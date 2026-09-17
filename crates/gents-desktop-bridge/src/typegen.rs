@@ -451,6 +451,17 @@ fn write_bindings() {
 #[test]
 fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     let dir = tempfile::tempdir().expect("generated directory");
+    gents::mailbox::MailboxNotificationPolicy::export_all_to(dir.path())
+        .expect("notification export");
+    let notification = std::fs::read_to_string(dir.path().join("NotificationIdentity.ts")).unwrap();
+    assert!(
+        notification.contains("\"mode\": \"event\""),
+        "{notification}"
+    );
+    assert!(
+        notification.contains("\"mode\": \"condition\""),
+        "{notification}"
+    );
     BackendSaveRequest::export_all_to(dir.path()).expect("backend export");
     ToolsSaveRequest::export_all_to(dir.path()).expect("tools export");
     ToolServiceSaveRequest::export_all_to(dir.path()).expect("service export");

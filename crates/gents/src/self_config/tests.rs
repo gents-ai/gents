@@ -2078,8 +2078,8 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         ]})
     );
     assert_eq!(
-        mailbox_help["mailbox_values"]["source_kind"],
-        json!(crate::mailbox::MailboxSourceKind::ALL.map(crate::mailbox::MailboxSourceKind::as_str))
+        mailbox_help["mailbox_values"]["notification_identity"]["condition"],
+        json!({"mode":"condition","key":"monitor-summary"})
     );
 
     let create_profile_args = vec![

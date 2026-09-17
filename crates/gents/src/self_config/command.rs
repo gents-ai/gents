@@ -305,7 +305,11 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                 json!({
                     "kind": crate::mailbox::MailboxKind::ALL.map(crate::mailbox::MailboxKind::as_str),
                     "action": crate::mailbox::MailboxAction::ALL.map(crate::mailbox::MailboxAction::as_str),
-                    "source_kind": crate::mailbox::MailboxSourceKind::ALL.map(crate::mailbox::MailboxSourceKind::as_str),
+                    "notification_identity": {
+                        "event": {"mode":"event"},
+                        "condition": {"mode":"condition","key":"monitor-summary"},
+                    },
+                    "notification_contract": "Set the canonical entry's notification policy before binding the surface. Event mode files one item per runtime request. Condition mode maintains one open item per requester/behavior/configured key across requests, updating its content. Use a combined summary for multiple findings. The model supplies only title, summary and payload; identity, routing and request provenance are runtime-owned. The receipt returns outcome created/reused/updated and the stored item. Terminal items are never updated or reopened.",
                 })
             } else { Value::Null },
             "current_limitations": {

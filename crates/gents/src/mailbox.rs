@@ -18,6 +18,14 @@ use crate::graphql::{
 };
 use crate::llm::tool::ToolDefinition;
 
+mod notification;
+pub use notification::{
+    MailboxContentArgs, MailboxNotificationPolicy, MailboxWriteOutcome, MailboxWriteReceipt,
+    NotificationIdentity,
+};
+#[cfg(test)]
+mod notification_tests;
+
 pub const MAILBOX_COLLECTION: &str = "MailboxItem";
 pub const FILE_MAILBOX_ITEM_TOOL_NAME: &str = "file_mailbox_item";
 
@@ -83,6 +91,7 @@ impl MailboxStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum MailboxKind {
     Ask,
     Gate,
@@ -113,6 +122,7 @@ impl MailboxKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum MailboxAction {
     Ack,
     StartRequest,
@@ -281,24 +291,14 @@ fn canonical_field(name: &str, required: bool) -> WriteToolField {
 /// The only declaration allowed to target `MailboxItem`.
 pub fn canonical_mailbox_write_decl() -> WriteToolDecl {
     WriteToolDecl {
+        notification: Some(MailboxNotificationPolicy::default()),
         tool_name: FILE_MAILBOX_ITEM_TOOL_NAME.to_string(),
         collection: MAILBOX_COLLECTION.to_string(),
-        description: "File a stamped item in the current requester's mailbox.".to_string(),
+        description: "Publish notification content using the configured identity and handling policy; runtime stamps ownership and provenance.".to_string(),
         fields: [
-            ("kind", true),
-            ("action", true),
             ("title", true),
             ("summary", false),
             ("payload", false),
-            ("source_kind", true),
-            ("source_id", true),
-            ("session_id", false),
-            ("request_id", false),
-            ("graph_run_id", false),
-            ("cause_doc_id", false),
-            ("expected_collection", false),
-            ("parent_item_id", false),
-            ("deadline_at", false),
         ]
         .into_iter()
         .map(|(name, required)| canonical_field(name, required))
@@ -309,9 +309,19 @@ pub fn canonical_mailbox_write_decl() -> WriteToolDecl {
 
 pub fn validate_mailbox_write_decl(decl: &WriteToolDecl) -> Result<()> {
     if decl.collection != MAILBOX_COLLECTION {
+        anyhow::ensure!(
+            decl.notification.is_none(),
+            "notification policy is only valid for MailboxItem"
+        );
         return Ok(());
     }
-    if decl != &canonical_mailbox_write_decl() {
+    decl.notification
+        .as_ref()
+        .context("MailboxItem requires an explicit notification policy")?
+        .validate()?;
+    let mut canonical = canonical_mailbox_write_decl();
+    canonical.notification = decl.notification.clone();
+    if decl != &canonical {
         bail!(
             "MailboxItem may only be targeted by the canonical `{FILE_MAILBOX_ITEM_TOOL_NAME}` declaration"
         );
@@ -446,9 +456,27 @@ pub async fn stamp_create(
 pub async fn stamp_create_with_close_collections(
     node: &EmbeddedNode,
     context: &MailboxStampContext,
-    mut args: FileMailboxItemArgs,
+    args: FileMailboxItemArgs,
     close_collections: &[MailboxCloseCollection],
 ) -> Result<MailboxItem> {
+    Ok(stamp_notification(
+        node,
+        context,
+        args,
+        &NotificationIdentity::Event,
+        close_collections,
+    )
+    .await?
+    .item)
+}
+
+async fn stamp_notification(
+    node: &EmbeddedNode,
+    context: &MailboxStampContext,
+    mut args: FileMailboxItemArgs,
+    identity: &NotificationIdentity,
+    close_collections: &[MailboxCloseCollection],
+) -> Result<MailboxWriteReceipt> {
     validate_close_collections(close_collections)?;
     validate_file_args(&mut args, context, close_collections)?;
     let existing = load_prefix_items(
@@ -465,7 +493,9 @@ pub async fn stamp_create_with_close_collections(
         .collect::<Vec<_>>();
     match open.as_slice() {
         [] => {}
-        [item] if item.requester_did == context.requester_did => return Ok((*item).clone()),
+        [item] if item.requester_did == context.requester_did => {
+            return notification::reuse_or_update(node, context, &args, identity, item).await
+        }
         [_] => bail!("mailbox open-row owner mismatch"),
         _ => bail!("mailbox invariant violation: more than one owner-matching open row"),
     }
@@ -543,7 +573,10 @@ pub async fn stamp_create_with_close_collections(
     if let Ok(response) = &response {
         let document = single_mutation_document(&response, "create_MailboxItem")?
             .context("create stamped mailbox item returned no row")?;
-        return serde_json::from_value(document.clone()).context("decode created MailboxItem");
+        return Ok(MailboxWriteReceipt {
+            outcome: MailboxWriteOutcome::Created,
+            item: serde_json::from_value(document.clone()).context("decode created MailboxItem")?,
+        });
     }
 
     // A local unique-index race is idempotent only if the exact key resolves
@@ -555,7 +588,7 @@ pub async fn stamp_create_with_close_collections(
             && item.source_id == args.source_id
             && item.kind == args.kind.as_str()
         {
-            return Ok(item);
+            return notification::reuse_or_update(node, context, &args, identity, &item).await;
         }
         bail!("mailbox unique-key collision did not match an open stamped owner/source tuple");
     }
@@ -583,44 +616,34 @@ impl From<anyhow::Error> for MailboxToolError {
 #[derive(Clone)]
 pub struct MailboxCreateTool {
     node: Arc<EmbeddedNode>,
+    policy: MailboxNotificationPolicy,
 }
 
 impl MailboxCreateTool {
-    pub fn new(node: Arc<EmbeddedNode>) -> Self {
-        Self { node }
+    pub fn new(node: Arc<EmbeddedNode>, policy: MailboxNotificationPolicy) -> Self {
+        Self { node, policy }
     }
 }
 
 impl crate::llm::tool::Tool for MailboxCreateTool {
     const NAME: &'static str = FILE_MAILBOX_ITEM_TOOL_NAME;
     type Error = MailboxToolError;
-    type Args = FileMailboxItemArgs;
+    type Args = MailboxContentArgs;
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: FILE_MAILBOX_ITEM_TOOL_NAME.to_string(),
-            description: canonical_mailbox_write_decl().description,
+            description: format!("{} Configured policy: {}. Supply findings only; never supply IDs or routing. Receipt reports created, reused, or updated and the stored item.", canonical_mailbox_write_decl().description, serde_json::to_string(&self.policy).expect("serialize policy")),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "kind": {"type": "string", "enum": MailboxKind::ALL.map(MailboxKind::as_str)},
-                    "action": {"type": "string", "enum": MailboxAction::ALL.map(MailboxAction::as_str)},
                     "title": {"type": "string"},
                     "summary": {"type": "string"},
-                    "payload": {"type": "string"},
-                    "source_kind": {"type": "string", "enum": MailboxSourceKind::ALL.map(MailboxSourceKind::as_str)},
-                    "source_id": {"type": "string"},
-                    "session_id": {"type": "string"},
-                    "request_id": {"type": "string"},
-                    "graph_run_id": {"type": "string"},
-                    "cause_doc_id": {"type": "string"},
-                    "expected_collection": {"type": "string"},
-                    "parent_item_id": {"type": "string"},
-                    "deadline_at": {"type": "string", "description": "RFC3339 deadline"}
+                    "payload": {"type": "string"}
                 },
-                "required": ["kind", "action", "title", "source_kind", "source_id"]
+                "required": ["title"]
             }),
         }
     }
@@ -628,21 +651,45 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
     async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
         let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .context("file_mailbox_item requires a current AgentRequest context")?;
-        let item = stamp_create(
+        let request_id = runtime.request_id.context("missing request_id")?;
+        let context = MailboxStampContext {
+            requester_did: runtime.requester_did.context("missing requester_did")?,
+            agent_did: runtime.agent_did.context("missing agent_did")?,
+            behavior_id: runtime.behavior_id.context("missing behavior_id")?,
+            session_id: runtime.session_id,
+        };
+        let request = notification::request_provenance(&self.node, &request_id, &context).await?;
+        let source_id = self.policy.identity.source_id(
+            &context.agent_did,
+            &context.requester_did,
+            &context.behavior_id,
+            &request_id,
+        )?;
+        self.policy.validate()?;
+        let receipt = stamp_notification(
             &self.node,
-            &MailboxStampContext {
-                requester_did: runtime.requester_did.context("missing requester_did")?,
-                agent_did: runtime.agent_did.context("missing agent_did")?,
-                behavior_id: runtime.behavior_id.context("missing behavior_id")?,
-                session_id: runtime.session_id,
+            &context,
+            FileMailboxItemArgs {
+                kind: self.policy.kind,
+                action: self.policy.action,
+                title: args.title,
+                summary: args.summary,
+                payload: args.payload,
+                source_kind: MailboxSourceKind::Agent,
+                source_id,
+                session_id: None,
+                request_id: Some(request_id),
+                graph_run_id: None,
+                cause_doc_id: request.caused_by_source_doc_id,
+                expected_collection: self.policy.expected_collection.clone(),
+                parent_item_id: None,
+                deadline_at: None,
             },
-            args,
+            &self.policy.identity,
+            MAILBOX_CLOSE_COLLECTIONS,
         )
         .await?;
-        Ok(format!(
-            "filed MailboxItem {} ({})",
-            item.doc_id, item.item_key
-        ))
+        Ok(serde_json::to_string(&receipt).context("serialize notification receipt")?)
     }
 }
 
@@ -954,7 +1001,7 @@ mod tests {
         correlation_field: "mailbox_item_key",
     }];
 
-    async fn test_node() -> Arc<EmbeddedNode> {
+    pub(super) async fn test_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node.add_schema(
@@ -970,7 +1017,7 @@ mod tests {
         node
     }
 
-    fn context(owner: &str) -> MailboxStampContext {
+    pub(super) fn context(owner: &str) -> MailboxStampContext {
         MailboxStampContext {
             requester_did: owner.into(),
             agent_did: "did:test:agent".into(),
@@ -979,7 +1026,7 @@ mod tests {
         }
     }
 
-    fn args(action: MailboxAction, source_id: &str) -> FileMailboxItemArgs {
+    pub(super) fn args(action: MailboxAction, source_id: &str) -> FileMailboxItemArgs {
         FileMailboxItemArgs {
             kind: MailboxKind::Ask,
             action,

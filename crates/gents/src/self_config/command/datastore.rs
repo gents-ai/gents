@@ -5,6 +5,7 @@ pub(super) fn entry_examples() -> Value {
         SurfaceToolDecl, WriteToolDecl, WriteToolField, WriteToolFieldFill,
     };
     let create = SurfaceToolDecl::Create(WriteToolDecl {
+        notification: None,
         tool_name: "record_result".into(),
         collection: "WorkResult".into(),
         description: "Record the result for the current input".into(),

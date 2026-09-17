@@ -27,6 +27,7 @@ async fn node_with_actionrequest() -> Arc<EmbeddedNode> {
 
 fn decl() -> WriteToolDecl {
     WriteToolDecl {
+        notification: None,
         tool_name: "request_action".into(),
         collection: "ActionRequest".into(),
         description: "Emit one ActionRequest.".into(),
@@ -159,6 +160,7 @@ async fn runtime_backstop_rejects_invalid_graphql_identifiers() {
 async fn rejects_decl_with_non_identifier_field_name() {
     let node = node_with_actionrequest().await;
     let bad = WriteToolDecl {
+        notification: None,
         tool_name: "broken".into(),
         collection: "ActionRequest".into(),
         description: "field name breaks out of identifier position".into(),
@@ -183,6 +185,7 @@ async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_
     let tool = BoundedWriteTool::new(
         Arc::clone(&node),
         WriteToolDecl {
+            notification: None,
             tool_name: "write_result".into(),
             collection: "ActionRequest".into(),
             description: "write a correlated result".into(),

@@ -1665,6 +1665,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
 
 fn finding_decl() -> crate::document_config::WriteToolDecl {
     crate::document_config::WriteToolDecl {
+        notification: None,
         tool_name: "write_experiment_finding".to_string(),
         collection: "ExperimentFinding".to_string(),
         description: "Record a finding document for the next pipeline stage.".to_string(),

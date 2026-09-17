@@ -189,6 +189,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_workspace_path_capability_cases_drive_real_git_executor",
         },
         ConformanceConsumer::RustTest {
+            id: "mailbox::notification_tests::generated_notification_cases_drive_durable_writes",
+            package: "gents",
+            source_path: "crates/gents/src/mailbox/notification_tests.rs",
+            module_path: "mailbox::notification_tests",
+            function: "generated_notification_cases_drive_durable_writes",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::output_obligation::logical_tests::generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes",
             package: "gents",
             source_path: "crates/gents/src/agent/output_obligation/logical_tests.rs",

@@ -1,6 +1,8 @@
 # TRUST BASIS: this attention index grants neither graph progress nor tool
 # authority. Runtime stamping owns creation identity; requester_did owns
 # supported dismiss writes; acted is runtime-written after a correlated create.
+# The notification owner may update open condition content; creation provenance
+# remains immutable. Terminal content is never changed by that owner.
 type MailboxItem @branchable {
     item_key: String @index(unique: true) @immutable
     requester_did: String @index @immutable
@@ -9,9 +11,9 @@ type MailboxItem @branchable {
 
     kind: String @index @immutable
     action: String @index @immutable
-    title: String @immutable
-    summary: String @immutable
-    payload: String @immutable
+    title: String
+    summary: String
+    payload: String
 
     source_kind: String @immutable
     source_id: String @index @immutable

@@ -182,7 +182,11 @@ The current proof suite covers twenty practical areas:
 19. Human-attention mailbox: requester/agent identity stamping, owner-only
     dismissal, at-most-one open item per owner/source tuple, fresh occurrence
     allocation after terminal rows, terminal-state immutability, deadline
-    expiry, and proof that mailbox close states do not create graph edges
+    expiry, and proof that mailbox close states do not create graph edges.
+    Notification policy separates configured condition identity from runtime
+    event identity; open condition content can update without changing the
+    envelope or mutating a terminal row (`Mailbox/Notification`). Generated
+    cases exercise the database write owner and its typed receipts.
 20. Request execution leases (#1341): opaque fresh ownership generations,
     claim deadlines, renewal only from persisted semantic response/tool/
     transcript progress, expiry/drop recovery, matching-generation terminal

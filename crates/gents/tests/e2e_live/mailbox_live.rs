@@ -88,19 +88,19 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let request_id = "request-mailbox-live";
     let session_id = "session-mailbox-live";
     let now = chrono::Utc::now().to_rfc3339();
-    let prompt = format!(
-        "You must call file_mailbox_item exactly once before answering. Use kind=ask, action=ack, title='Mailbox live verified', source_kind=agent, source_id='{source_id}'. Then answer MAILBOX_FILED."
-    );
+    let prompt = "Call file_mailbox_item exactly once with title='Mailbox live verified', then answer MAILBOX_FILED. The tool owns notification identity and handling.";
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "{request_id}", agent_did: "{agent_did}",
             requester_did: "{requester}", behavior_id: "{behavior_id}",
             session_id: "{session_id}", content: "{content}",
+            caused_by_source_doc_id: "{source_id}",
             lifecycle_state: "pending", execution_origin: "interactive",
             created_at: "{now}", retry_count: 0, max_retries: 2
         }}) {{ _docID }} }}"#,
         requester = escape_graphql_string(identity.did()),
-        content = escape_graphql_string(&prompt),
+        content = escape_graphql_string(prompt),
+        source_id = escape_graphql_string(&source_id),
     );
     let response = db.node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -118,7 +118,14 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     assert_eq!(items[0].agent_did, agent_did);
     assert_eq!(items[0].target_behavior_id, behavior_id);
     assert_eq!(items[0].source_kind, "agent");
-    assert_eq!(items[0].source_id, source_id);
+    assert_eq!(
+        items[0].source_id,
+        gents::mailbox::NotificationIdentity::Event
+            .source_id(&agent_did, identity.did(), &behavior_id, request_id)
+            .unwrap()
+    );
+    assert_eq!(items[0].cause_doc_id.as_deref(), Some(source_id.as_str()));
+    assert_eq!(items[0].request_id.as_deref(), Some(request_id));
 
     let tool_calls = db.node.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{request_id}" }}, tool_name: {{ _eq: "file_mailbox_item" }} }}) {{ lifecycle_state }} }}"#

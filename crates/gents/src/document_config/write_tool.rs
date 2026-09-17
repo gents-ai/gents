@@ -147,6 +147,9 @@ impl<'de> serde::Deserialize<'de> for WriteToolField {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct WriteToolDecl {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub notification: Option<crate::mailbox::MailboxNotificationPolicy>,
     pub tool_name: String,
     pub collection: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
@@ -260,6 +263,8 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
         #[derive(serde::Deserialize)]
         struct Raw {
             tool_name: String,
+            #[serde(default)]
+            notification: Option<crate::mailbox::MailboxNotificationPolicy>,
             collection: String,
             #[serde(default)]
             description: String,
@@ -270,6 +275,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(WriteToolDecl {
+            notification: raw.notification,
             tool_name: raw.tool_name.trim().to_string(),
             collection: raw.collection.trim().to_string(),
             description: raw.description,

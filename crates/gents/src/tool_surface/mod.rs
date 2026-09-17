@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::llm::tool::ToolDyn;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::defra_query::{
     build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
@@ -333,10 +333,12 @@ impl ToolSurface {
                 );
             }
             if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
-                tools.push(
-                    Box::new(crate::mailbox::MailboxCreateTool::new(runtime.node.clone()))
-                        as Box<dyn ToolDyn>,
-                );
+                tools.push(Box::new(crate::mailbox::MailboxCreateTool::new(
+                    runtime.node.clone(),
+                    decl.notification
+                        .clone()
+                        .context("missing notification policy")?,
+                )) as Box<dyn ToolDyn>);
             } else {
                 let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
                 tools.push(Box::new(tool) as Box<dyn ToolDyn>);

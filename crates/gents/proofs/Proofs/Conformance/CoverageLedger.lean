@@ -708,6 +708,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "mailbox_notification_cases"
+      "MailboxNotificationCases"
+      "mailbox::notification_tests::generated_notification_cases_drive_durable_writes")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "logical_output_obligation_cases"
       "LogicalOutputObligationCases"
       "agent::output_obligation::logical_tests::generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes")
