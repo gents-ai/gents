@@ -397,6 +397,7 @@ fn workspace_tools(
     Tools {
         tools_id: tools_id.to_owned(),
         agent_did: agent_did.to_owned(),
+        scope_behavior_id: None,
         display_name: Some(format!("{display_name} starter tools")),
         host: Some(HostTools {
             root,
@@ -420,6 +421,7 @@ fn empty_tools(agent_did: &str, tools_id: &str, display_name: &str) -> Tools {
     Tools {
         tools_id: tools_id.to_owned(),
         agent_did: agent_did.to_owned(),
+        scope_behavior_id: None,
         display_name: Some(format!("{display_name} starter tools")),
         ..Tools::default()
     }

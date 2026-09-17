@@ -1,6 +1,7 @@
 type CompactionConfig @branchable @index(fields: ["agent_did", "compaction_id"], unique: true) {
     compaction_id: String
     agent_did: String @index
+    scope_behavior_id: String @index
     display_name: String
     strategy: String
     threshold: Float

@@ -1,6 +1,8 @@
 # Behavior-scoped naming and configuration: implementation plan
 
-Status: proposal for implementation, not an implemented contract.
+Status: implementation contract. The Lean model and generated conformance
+bridge are implemented on `feat/behavior-scoped-naming`; runtime propagation is
+in progress.
 
 Implementation base: `stack/onboarding-acceptance` at `72be84b87`, taken from
 `gents-onboarding-coordinator` and verified against the pushed remote branch.
@@ -34,7 +36,7 @@ continues to authorize documents; lookups remain principal- and collection-scope
 
 The user's follow-up adds an important distinction: personal behaviors need
 good generated defaults without restricting the names people choose in the UI.
-Recommended personal grammar is `local:{slug}` and `local:{slug}:{component}`.
+The personal grammar is `local:{slug}` and `local:{slug}:{component}`.
 For example, a user can request the display name `Jack's code reviewer` while
 the stable logical behavior key is `local:jacks-code-reviewer`. An unnamed
 personal reviewer defaults to the visible name `local:reviewer`.
@@ -49,8 +51,9 @@ personal reviewer defaults to the visible name `local:reviewer`.
 - Pack coordinates, installed scopes, descriptions, and display names are
   separate concepts. Do not globally replace underscores in registry coordinates,
   asset paths, GraphQL collections, tool names, or fixture markers.
-- `local:{slug}` is a proposed default based on the user's latest suggestion;
-  the exact personal-key grammar is to be fixed in the first contract change.
+- New generated keys use lowercase ASCII alphanumeric kebab segments. Collision
+  allocation appends `-2`, `-3`, and so on to the behavior slug before deriving
+  component keys. Existing retained keys remain exempt from this authoring rule.
 
 ## Isolation boundary
 
@@ -81,18 +84,18 @@ Resource edits can still have shared effects: expose affected consumers at those
 owners rather than promising isolation beyond this closure. Tasks, schedules,
 triggers, graphs, and runs keep their existing owners and lifecycle semantics.
 
-Recommended enforcement: add a canonical, protected behavior association
-(`scope_behavior_id`, provisional field name) to mutable component documents.
+Enforcement uses the canonical, protected `scope_behavior_id` association on
+mutable component documents.
 The ordinary typed reference validator checks that scoped components point only
 within the selected behavior's scope, except for the documented shared resources.
 Use existing canonical types, schemas, transaction and validation owners; do not
 introduce a parallel configuration graph or authorization model. Tags may project
 scope for filtering but are not authoritative ownership or selection data.
 
-Before choosing the final representation, model whether the existing reverse
-reference closure is sufficient without new stored metadata. The contract PR must
-choose one representation and reject inconsistent declarations; implementations
-must not maintain competing scope authorities.
+`scope_behavior_id` is the single scope authority. Names and tags may describe or
+project scope but cannot compete with it. A null value retains legacy unscoped
+configuration; a scoped closure must be wholly and consistently scoped, reachable
+from exactly its named behavior, and free of scoped orphans.
 
 An edit through a behavior must not mutate another behavior's owned documents.
 Reject cross-scope rebindings and conflicting direct writes. Reading another

@@ -571,6 +571,7 @@ mod tests {
         InferenceProfile {
             agent_did: "did:test:codex-shim".to_string(),
             profile_id: profile_id.to_string(),
+            scope_behavior_id: None,
             display_name: None,
             description: None,
             backend_id: "backend-a".to_string(),

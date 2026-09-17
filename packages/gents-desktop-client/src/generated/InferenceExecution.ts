@@ -4,7 +4,11 @@
  * Owned-loop execution settings. These are configuration limits; active request
  * deadlines, retry counters, and token ledgers remain owned execution state.
  */
-export type InferenceExecution = { agent_did: string, execution_id: string, display_name?: string | null, max_turns?: number | null,
+export type InferenceExecution = { agent_did: string, execution_id: string,
+/**
+ * Owning behavior for generated closure documents; absent on unscoped existing data.
+ */
+scope_behavior_id?: string | null, display_name?: string | null, max_turns?: number | null,
 /**
  * Optional aggregate provider-token limit for one physical request, shared by
  * its inference and compaction calls. Positive when set; unset is unlimited.

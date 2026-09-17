@@ -471,47 +471,49 @@ pub enum ConfigComponentPatch {
     AgentContext {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./AgentContext.js\").AgentContext, \"agent_did\" | \"context_id\">>"
+            type = "Partial<Omit<import(\"./AgentContext.js\").AgentContext, \"agent_did\" | \"context_id\" | \"scope_behavior_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     Compaction {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./CompactionConfig.js\").CompactionConfig, \"agent_did\" | \"compaction_id\">>"
+            type = "Partial<Omit<import(\"./CompactionConfig.js\").CompactionConfig, \"agent_did\" | \"compaction_id\" | \"scope_behavior_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     Tools {
         id: String,
-        #[ts(type = "Partial<Omit<import(\"./Tools.js\").Tools, \"agent_did\" | \"tools_id\">>")]
+        #[ts(
+            type = "Partial<Omit<import(\"./Tools.js\").Tools, \"agent_did\" | \"tools_id\" | \"scope_behavior_id\">>"
+        )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     InferenceProfile {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./InferenceProfile.js\").InferenceProfile, \"agent_did\" | \"profile_id\">>"
+            type = "Partial<Omit<import(\"./InferenceProfile.js\").InferenceProfile, \"agent_did\" | \"profile_id\" | \"scope_behavior_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     InferenceSampling {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./InferenceSampling.js\").InferenceSampling, \"agent_did\" | \"sampling_id\">>"
+            type = "Partial<Omit<import(\"./InferenceSampling.js\").InferenceSampling, \"agent_did\" | \"sampling_id\" | \"scope_behavior_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     InferenceExecution {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./InferenceExecution.js\").InferenceExecution, \"agent_did\" | \"execution_id\">>"
+            type = "Partial<Omit<import(\"./InferenceExecution.js\").InferenceExecution, \"agent_did\" | \"execution_id\" | \"scope_behavior_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     InferenceRetryPolicy {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./InferenceRetryPolicy.js\").InferenceRetryPolicy, \"agent_did\" | \"retry_policy_id\">>"
+            type = "Partial<Omit<import(\"./InferenceRetryPolicy.js\").InferenceRetryPolicy, \"agent_did\" | \"retry_policy_id\" | \"scope_behavior_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },

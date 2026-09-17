@@ -360,6 +360,7 @@ mod tests {
         invalid.inference_profiles.push(InferenceProfile {
             agent_did: "did:key:pack-owner".into(),
             profile_id: "copy".into(),
+            scope_behavior_id: None,
             backend_id: "copy".into(),
             model_name: "copy".into(),
             ..Default::default()

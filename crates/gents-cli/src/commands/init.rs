@@ -741,6 +741,7 @@ async fn initialize_runtime_home(
     let context = AgentContext {
         context_id: default_context_id_for_behavior(&default_behavior_id),
         agent_did: agent_did.to_string(),
+        scope_behavior_id: None,
         display_name: Some(if args.setup_steward {
             "The Engineer".to_string()
         } else {
@@ -938,6 +939,7 @@ fn tools_for_package(
     Tools {
         tools_id: tools_id.to_string(),
         agent_did: agent_did.to_string(),
+        scope_behavior_id: None,
         display_name: Some(
             match tool_package {
                 ToolPackageArg::Minimal => "Minimal Tools",
@@ -1130,6 +1132,7 @@ fn standard_inference_profile(
     InferenceProfile {
         agent_did: agent_did.to_string(),
         profile_id: profile_id.to_string(),
+        scope_behavior_id: None,
         display_name: Some("Default".to_string()),
         description: None,
         backend_id: backend_id.to_string(),

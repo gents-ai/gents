@@ -120,6 +120,7 @@ fn validate_rejects_blank_subagent_target_ids() {
     let doc = Tools {
         tools_id: "test-tools".to_string(),
         agent_did: "did:test:test".to_string(),
+        scope_behavior_id: None,
         subagents: Some(SubagentTools {
             target_ids: vec!["".to_string()],
             spawn_enabled: Some(true),
@@ -544,6 +545,7 @@ async fn tools_document_round_trips_defra_query_fields() {
     let doc = Tools {
         tools_id: "amy-general-tools".to_string(),
         agent_did: "did:key:z-test".to_string(),
+        scope_behavior_id: None,
         built_ins: Some(BuiltInTools {
             enable_session_history_tool: Some(true),
             ..Default::default()
@@ -613,6 +615,7 @@ async fn tools_update_can_clear_lsp_config() {
     let lsp = |config: Option<String>| Tools {
         tools_id: "lsp-config-clear".to_string(),
         agent_did: "did:key:z-lsp-config-clear".to_string(),
+        scope_behavior_id: None,
         integrations: Some(IntegrationTools {
             lsp: config.map(|config| LspTools {
                 config: Some(config),
@@ -681,6 +684,7 @@ async fn tools_document_round_trips_read_only_commands() {
     let doc = Tools {
         tools_id: "steward-readonly-allowlist".to_string(),
         agent_did: "did:key:z-test-allowlist".to_string(),
+        scope_behavior_id: None,
         host: Some(HostTools {
             bash: Some(BashTools {
                 read_only_commands: Some(vec!["jq".to_string(), "echo".to_string()]),
@@ -826,6 +830,7 @@ async fn tools_document_round_trips_write_tools() {
     let tools = Tools {
         tools_id: "steward-write-tools".to_string(),
         agent_did: "did:key:z-test-write".to_string(),
+        scope_behavior_id: None,
         datastore: Some(DatastoreTools {
             datastore_tool_surface_ids: Some(vec!["surface".to_string()]),
             ..Default::default()
@@ -880,6 +885,7 @@ async fn tools_document_round_trips_subagent_default_await_mode() {
     let doc = Tools {
         tools_id: "amy-background-tools".to_string(),
         agent_did: "did:key:z-test-background".to_string(),
+        scope_behavior_id: None,
         subagents: Some(SubagentTools {
             background_enabled: Some(true),
             default_await_mode: Some("background".to_string()),
@@ -1023,6 +1029,7 @@ async fn inference_retry_policy_fields_round_trip() {
     let retry = InferenceRetryPolicy {
         agent_did: "did:key:z-test-retry".to_string(),
         retry_policy_id: "retry-policy".to_string(),
+        scope_behavior_id: None,
         display_name: Some("Retry Policy".to_string()),
         max_transport_retries: Some(4),
         backoff_ms: Some(vec![1_000, 5_000, 30_000]),
@@ -1044,6 +1051,7 @@ async fn inference_retry_policy_fields_round_trip() {
     let profile = InferenceProfile {
         agent_did: "did:key:z-test-retry".to_string(),
         profile_id: "retry-profile".to_string(),
+        scope_behavior_id: None,
         display_name: Some("Retry Profile".to_string()),
         backend_id: "backend".to_string(),
         model_name: "test-model".to_string(),
@@ -1054,6 +1062,7 @@ async fn inference_retry_policy_fields_round_trip() {
     let execution = InferenceExecution {
         agent_did: "did:key:z-test-retry".to_string(),
         execution_id: "retry-execution".to_string(),
+        scope_behavior_id: None,
         retry_policy_id: Some("retry-policy".to_string()),
         ..Default::default()
     };
@@ -1113,6 +1122,7 @@ fn inference_sampling_rejects_negative_seed() {
     let sampling = InferenceSampling {
         agent_did: "did:key:z-test-seed".to_string(),
         sampling_id: "negative-seed-sampling".to_string(),
+        scope_behavior_id: None,
         seed: Some(-1),
         ..Default::default()
     };
@@ -1244,6 +1254,7 @@ fn validate_accepts_well_formed_subagent_target_documents() {
     let doc = Tools {
         tools_id: "test-tools".to_string(),
         agent_did: "did:test:test".to_string(),
+        scope_behavior_id: None,
         subagents: Some(SubagentTools {
             target_ids: vec!["amy-code".to_string(), "amy-research".to_string()],
             spawn_enabled: Some(true),
@@ -1264,6 +1275,7 @@ fn validate_rejects_background_default_when_background_disabled() {
     let doc = Tools {
         tools_id: "test-tools".to_string(),
         agent_did: "did:test:test".to_string(),
+        scope_behavior_id: None,
         subagents: Some(SubagentTools {
             background_enabled: Some(false),
             default_await_mode: Some("background".to_string()),
@@ -1284,6 +1296,7 @@ fn tools_validation_reports_every_violation() {
     let doc = Tools {
         tools_id: "invalid-tools".to_string(),
         agent_did: "did:test:test".to_string(),
+        scope_behavior_id: None,
         subagents: Some(SubagentTools {
             target_ids: vec![String::new()],
             background_enabled: Some(false),
@@ -1387,6 +1400,7 @@ fn base_sampling(sampling_id: &str) -> InferenceSampling {
     InferenceSampling {
         agent_did: "owner".to_string(),
         sampling_id: sampling_id.to_string(),
+        scope_behavior_id: None,
         ..Default::default()
     }
 }
@@ -1395,6 +1409,7 @@ fn base_execution(execution_id: &str) -> InferenceExecution {
     InferenceExecution {
         agent_did: "owner".to_string(),
         execution_id: execution_id.to_string(),
+        scope_behavior_id: None,
         ..Default::default()
     }
 }
@@ -1474,6 +1489,7 @@ fn inference_profile_accepts_unset_and_every_vocabulary_reasoning_effort() {
         let profile = InferenceProfile {
             agent_did: "owner".into(),
             profile_id: "unset-effort".into(),
+            scope_behavior_id: None,
             backend_id: "backend".into(),
             model_name: "model".into(),
             reasoning_effort: unset,
@@ -1494,6 +1510,7 @@ fn inference_profile_accepts_unset_and_every_vocabulary_reasoning_effort() {
         let profile = InferenceProfile {
             agent_did: "owner".into(),
             profile_id: "vocab".into(),
+            scope_behavior_id: None,
             backend_id: "backend".into(),
             model_name: "model".into(),
             reasoning_effort: Some(value),

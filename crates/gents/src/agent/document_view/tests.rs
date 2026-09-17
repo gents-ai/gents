@@ -1748,6 +1748,7 @@ fn tools_selection(
     crate::document_config::Tools {
         tools_id: "sel".to_string(),
         agent_did: agent_did.to_string(),
+        scope_behavior_id: None,
         datastore: datastore_tool_surface_ids.map(|ids| crate::document_config::DatastoreTools {
             datastore_tool_surface_ids: Some(ids),
             ..Default::default()

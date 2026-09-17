@@ -16,6 +16,7 @@ pub mod background_completion;
 mod background_completion_diagnostics;
 pub(crate) mod background_tools;
 mod behavior_readiness_publisher;
+pub mod behavior_scope;
 pub(crate) mod callback;
 pub mod chatgpt_codex;
 pub mod chatgpt_oauth_refresh;

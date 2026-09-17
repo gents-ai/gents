@@ -531,6 +531,7 @@ fn tools_from_preset(
     Ok(Tools {
         tools_id,
         agent_did: owner.into(),
+        scope_behavior_id: None,
         display_name: Some(format!("{name} tools")),
         host: Some(HostTools {
             root,
@@ -705,7 +706,14 @@ pub async fn apply_persona_request(
         // Omitted edit fields preserve their canonical values. A present root
         // with a null payload explicitly clears only the root narrowing.
         if root.is_some() || (!create && doc.edits("root")) {
-            if tools.is_none() && root.is_some() { tools = Some(Tools {tools_id:tools_id.clone(),agent_did:owner.clone(),..Default::default()}); }
+            if tools.is_none() && root.is_some() {
+                tools = Some(Tools {
+                    tools_id: tools_id.clone(),
+                    agent_did: owner.clone(),
+                    scope_behavior_id: None,
+                    ..Default::default()
+                });
+            }
             if let Some(tools) = &mut tools {
                 if let Some(host) = &mut tools.host { host.root = root.clone(); }
                 else if root.is_some() { tools.host = Some(HostTools {root:root.clone(),..Default::default()}); }

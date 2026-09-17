@@ -5,6 +5,7 @@
 type Tools @branchable @index(fields: ["agent_did", "tools_id"], unique: true) {
     tools_id: String
     agent_did: String @index
+    scope_behavior_id: String @index
     display_name: String
     host: JSON
     remote: JSON
