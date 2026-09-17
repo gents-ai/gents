@@ -4,7 +4,7 @@ import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
 import { randomUUID } from "node:crypto";
 
@@ -34,6 +34,31 @@ export async function runtimeMemoryPlan(concurrency) {
     Number(await docker(["info", "--format", "{{.MemTotal}}"])),
     concurrency,
   );
+}
+
+export function parseMemoryObservation(raw) {
+  const [current, peak, limit, ...events] = raw.trim().split("\n");
+  const count = (value) => {
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
+      throw new Error("Invalid cgroup memory measurement");
+    return Number(value);
+  };
+  const counters = {};
+  for (const event of events) {
+    const [name, value, extra] = event.trim().split(/\s+/);
+    if (!/^[a-z_]+$/.test(name) || extra || Object.hasOwn(counters, name))
+      throw new Error("Invalid cgroup memory event");
+    counters[name] = count(value);
+  }
+  for (const required of ["max", "oom", "oom_kill"])
+    if (!Object.hasOwn(counters, required))
+      throw new Error(`Missing cgroup memory event: ${required}`);
+  return {
+    current_bytes: count(current),
+    peak_bytes: count(peak),
+    limit_bytes: count(limit),
+    events: counters,
+  };
 }
 
 export async function resolveRuntimeImage(
@@ -334,6 +359,25 @@ export class HostEnvironment {
       directory,
     );
     await execute("tar", ["-tf", path, "./server.log", "./agent/init.json"]);
+    await writeFile(
+      join(directory, "memory.json"),
+      JSON.stringify(await this.memoryObservation(), null, 2) + "\n",
+      { flag: "wx", mode: 0o600 },
+    );
+  }
+
+  async memoryObservation() {
+    const raw = await this.exec([
+      "cat",
+      "/sys/fs/cgroup/memory.current",
+      "/sys/fs/cgroup/memory.peak",
+      "/sys/fs/cgroup/memory.max",
+      "/sys/fs/cgroup/memory.events",
+    ]);
+    return {
+      observed_at: new Date().toISOString(),
+      ...parseMemoryObservation(raw),
+    };
   }
 
   async assertOwned() {
@@ -386,6 +430,7 @@ export class HostEnvironment {
       image: inspect.Image,
       resolved_hosts: inspect.HostConfig.ExtraHosts,
       running: inspect.State.Running,
+      memory: await this.memoryObservation(),
       api,
       api_status:
         Number(api.diagnostic.match(/HTTP\/[\d.]+ (\d{3})/)?.[1]) || null,

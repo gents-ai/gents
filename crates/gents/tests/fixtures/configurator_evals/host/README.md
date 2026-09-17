@@ -111,6 +111,12 @@ identity keys and must not be published. Earlier development cohorts used a
 `docker cp` path that returned empty directories: their retained JSON receipts
 remain evidence, but those empty directories are not runtime snapshots.
 
+Host snapshots include cgroup memory usage, lifetime peak, configured limit, and
+limit/OOM event counters. A final private `evidence/runtime/memory.json` receipt
+is written after runtime shutdown and archival, before container removal. Use
+these measurements to size cohorts; successful trials alone do not establish
+that a smaller container limit is safe.
+
 Run one inspected GLM trial per scenario before scaling. Use temperature 1,
 top-p 0.95 and record requested reasoning effort. C=30 requires per-container
 limits and an explicit resource preflight, not thirty unbounded containers.

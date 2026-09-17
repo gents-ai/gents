@@ -6,12 +6,65 @@ import {
   hostMemoryPlan,
   validateRuntimeRevision,
   resolveRuntimeImage,
+  parseMemoryObservation,
 } from "./host-environment.mjs";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+
+test(
+  "stopped runtime archives retain private final memory evidence",
+  { skip: process.env.GENTS_HOST_FIXTURE_TEST !== "1", timeout: 180_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "gents-memory-archive-"));
+    let host;
+    try {
+      host = await HostEnvironment.start({
+        runtime: true,
+        runtimeImage: await resolveRuntimeImage(),
+        endpoint: "http://127.0.0.1:8000/v1",
+      });
+      await host.provision({
+        endpoint: "http://127.0.0.1:8000/v1",
+        model: "fixture-no-inference",
+      });
+      const archive = join(directory, "runtime");
+      await host.archiveRuntime(archive);
+      const path = join(archive, "memory.json");
+      const memory = JSON.parse(await readFile(path, "utf8"));
+      assert.equal(memory.limit_bytes, 512 * 1024 * 1024);
+      assert.ok(memory.peak_bytes > 0);
+      assert.equal(memory.events.oom_kill, 0);
+      assert.equal((await stat(path)).mode & 0o777, 0o600);
+      const receipt = await readFile(path, "utf8");
+      await assert.rejects(host.archiveRuntime(archive));
+      assert.equal(await readFile(path, "utf8"), receipt);
+    } finally {
+      await host?.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("memory evidence preserves limit pressure and OOM counters without coercion", () => {
+  const raw = "1024\n2048\n4096\nlow 0\nhigh 0\nmax 2\noom 1\noom_kill 1\n";
+  assert.deepEqual(parseMemoryObservation(raw), {
+    current_bytes: 1024,
+    peak_bytes: 2048,
+    limit_bytes: 4096,
+    events: { low: 0, high: 0, max: 2, oom: 1, oom_kill: 1 },
+  });
+  for (const invalid of [
+    "",
+    raw.replace("4096", "max"),
+    raw.replace("oom 1\n", ""),
+    `${raw}oom 0\n`,
+    raw.replace("1024", "1.5"),
+  ])
+    assert.throws(() => parseMemoryObservation(invalid));
+});
 
 test(
   "live fixture networks prevent direct cross-trial access and are cleaned up",
@@ -160,6 +213,9 @@ test(
       assert.equal(healthy.api.exit_code, 0);
       assert.equal(healthy.api.body, "healthy");
       assert.equal(healthy.dashboard, "Dashboard ready");
+      assert.equal(healthy.memory.limit_bytes, 128 * 1024 * 1024);
+      assert.ok(healthy.memory.peak_bytes > 0);
+      assert.equal(healthy.memory.events.oom_kill, 0);
       await host.inject("api-permission");
       const failed = (await host.snapshot()).api;
       assert.equal(failed.exit_code, 1);
