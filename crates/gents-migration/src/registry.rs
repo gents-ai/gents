@@ -250,12 +250,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::COMPACTION_CONFIG_NAME,
         gents_protocol::schemas::COMPACTION_CONFIG,
-        "bafyreih3w3aeusza2pu5uwgr3fqkcdwicq3xvfxa7ujcpkkwbub6w5q244"
+        "bafyreicepdd5pnmjkfmggad63cz4gg7qgkllz3jt2tmkvj3fbstp33dfke"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_CONTEXT_NAME,
         gents_protocol::schemas::AGENT_CONTEXT,
-        "bafyreieq6mlc6yvruovlup5ctquafgmdbzj4c5a7nl4hcxjmdrtzsjykp4"
+        "bafyreicdtolbmgtbczoyzrxjslj252sq5a4wgcgdhg7ku4r233mdlj7nlq"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RUNTIME_NAME,
@@ -280,7 +280,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::TOOLS_NAME,
         gents_protocol::schemas::TOOLS,
-        "bafyreianpmeiccjdnuvgby5mfnstrhe7o54whywumqqmbaguarnj2ja6bq"
+        "bafyreicinpy342onle4q5mpxypf5swocmbbkuzn6d5dnijixvpc6mbl2xa"
     ),
     baseline_entry!(
         gents_protocol::schemas::SKILL_NAME,
@@ -385,22 +385,22 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
         gents_protocol::schemas::INFERENCE_PROFILE,
-        "bafyreibd54aukeo6tjk6x46fz5p4d7jmijsgblkzotqtrekm77s4wvpjtm"
+        "bafyreie7m674ajo65ycpdljre5zj4phhktg4mbbhpdlqp5c24gmwdxieh4"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_RETRY_POLICY_NAME,
         gents_protocol::schemas::INFERENCE_RETRY_POLICY,
-        "bafyreiaxi52fh44qighc3utd5j2glpj5kswavb3w7nqurcfe2ymzbkumcm"
+        "bafyreibbfyf3bx4nkbxhcq274wmoan46k2bommr4dskh3hhj62jtluuhym"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_EXECUTION_NAME,
         gents_protocol::schemas::INFERENCE_EXECUTION,
-        "bafyreihjwsdfpjfihlqy7sjaxmiwxn3j2n4osbbgfty6bu5iesvaqpufg4"
+        "bafyreihrhtlooun7guxg2vsdz7qmeawcniofnvwz2cplc2uc3x7vasp5ny"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_SAMPLING_NAME,
         gents_protocol::schemas::INFERENCE_SAMPLING,
-        "bafyreiahd7xljxsayg3kkipq5x566bb5sq23byhhixnjbzaxal7nvspq64"
+        "bafyreibzeldfwkqdobah2eyvlvswmhvgr2m47tkjg26ek4x5tzbjnfuf3y"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_CALL_NAME,
