@@ -4840,6 +4840,8 @@ dependencies = [
  "gents-desktop-core",
  "gents-fs-runner",
  "gents-protocol",
+ "objc2",
+ "objc2-app-kit",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

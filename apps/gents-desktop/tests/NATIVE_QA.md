@@ -106,3 +106,32 @@ make desktop-native-preflight
 make desktop-native-dev
 make desktop-native-build
 ```
+
+## macOS native tabs
+
+Each tab is a complete Gents view with its own navigation, composer draft and
+scroll position. All views share the desktop client and managed agent. Moving a
+tab does not reload its webview or move its durable session.
+
+Onboarding stays in the original window. New Tab and New Window remain disabled
+until the existing setup flow finishes. An already configured installation
+unlocks them when startup reaches the ready state.
+
+- File → New Tab (`Cmd+T`) and the native tab bar's `+` create another view.
+- File → New Window (`Cmd+Shift+N`) creates a separate window, including when
+  macOS is configured to always prefer tabs. `Cmd+N` still starts a conversation.
+- Drag a tab out, or use Window → Move Tab to New Window; move it to another
+  monitor, then drag it back or use Window → Merge All Windows.
+- `Ctrl+Tab` / `Ctrl+Shift+Tab` select the next / previous tab.
+- `Cmd+W` closes an additional view without cancelling its requests. The
+  original view hides and retains the existing automatic recovery owner;
+  reopening from the Dock or tray restores it. `Cmd+Q` quits the application.
+
+For acceptance, use isolated `GENTS_HOME` and `GENTS_DESKTOP_HOME` directories
+and a real configured provider. Keep different drafts in two views, send a
+request, detach and merge while it completes, and verify both the response and
+the other view's draft. Close the original tab and verify the remaining view
+still works; close an additional tab during inference and reopen its session
+from another view to verify terminal completion. Check the native `+` button,
+menus, keyboard shortcuts, title-bar layout and Dock reopening separately from
+browser tests. Retain screenshots and request IDs outside the repository.

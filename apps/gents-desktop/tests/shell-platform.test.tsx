@@ -7,9 +7,11 @@ import {
   isMacTauriShell,
   isMobileTauriShell,
   isWindowsTauriShell,
+  ownsAutomaticRecovery,
 } from "../src/lib/shellPlatform";
 
 const windowMocks = vi.hoisted(() => ({
+  label: "main",
   isFullscreen: vi.fn().mockResolvedValue(false),
   onResized: vi.fn().mockResolvedValue(vi.fn()),
 }));
@@ -53,6 +55,7 @@ describe("native shell classifier", () => {
       value: originalMaxTouchPoints,
     });
     vi.clearAllMocks();
+    windowMocks.label = "main";
   });
 
   it("does not stamp a browser shell", () => {
@@ -60,6 +63,16 @@ describe("native shell classifier", () => {
 
     expect(document.documentElement.dataset.shell).toBeUndefined();
     expect(headerIsWindowBar()).toBe(false);
+  });
+
+  it("keeps automatic shared-client recovery in the original native view", () => {
+    expect(ownsAutomaticRecovery()).toBe(true);
+    enterTauri("MacIntel");
+    expect(ownsAutomaticRecovery()).toBe(true);
+    windowMocks.label = "gents-view-1";
+    expect(ownsAutomaticRecovery()).toBe(false);
+    enterTauri("iPhone", "iPhone", 5);
+    expect(ownsAutomaticRecovery()).toBe(true);
   });
 
   it("classifies macOS and tracks its fullscreen state", async () => {

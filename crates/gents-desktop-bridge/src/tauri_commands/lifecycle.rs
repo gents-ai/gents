@@ -388,7 +388,8 @@ async fn start_client_core_async(
 }
 
 #[tauri::command]
-pub fn desktop_set_selected_agent(
+pub fn desktop_set_selected_agent<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
     agent_did: Option<String>,
 ) -> Result<(), BridgeError> {
@@ -401,7 +402,13 @@ pub fn desktop_set_selected_agent(
     let did = agent_did
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    core.set_selected_agent_did(did.clone());
+    // The backend is shared by all native views; only a single-view host may
+    // narrow its observation/request lookup scope to the selected agent.
+    core.set_selected_agent_did(if app.webview_windows().len() > 1 {
+        None
+    } else {
+        did.clone()
+    });
 
     if let Some(did_str) = did {
         let core_arc = Arc::clone(&core);

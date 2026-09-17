@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "native-window-setup"
+description = "Allow the original view to unlock native windows after onboarding."
+commands.allow = ["desktop_window_setup_complete"]

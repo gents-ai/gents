@@ -10,7 +10,7 @@ import type {
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
 import { selectedBehaviorIdForDeployment } from "@source-inc/gents-desktop-client";
-import { isMobileTauriShell } from "../lib/shellPlatform";
+import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import {
   logShellEvent,
   shouldAutoRestartP2P,
@@ -92,7 +92,13 @@ export function useDesktopShellEffects({
   }, [selectedSessionId, selectedSessionIdRef]);
 
   useEffect(() => {
-    if (!snapshot || snapshot.client || starting || sending) {
+    if (
+      !ownsAutomaticRecovery() ||
+      !snapshot ||
+      snapshot.client ||
+      starting ||
+      sending
+    ) {
       return;
     }
 
@@ -133,6 +139,7 @@ export function useDesktopShellEffects({
     }
 
     if (
+      !ownsAutomaticRecovery() ||
       autoRestartInFlight.current ||
       starting ||
       stopping ||

@@ -89,7 +89,7 @@ export function sendButton(page: Page) {
 export async function openChat(page: Page) {
   await expect(page.getByTestId("app-shell")).toBeVisible();
   if (await page.getByTestId("sessions-screen").count()) {
-    const newChat = page.getByRole("button", { name: "New" });
+    const newChat = page.getByRole("button", { name: "New", exact: true });
     if (await newChat.count()) {
       await newChat.click();
     } else {

@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+mod windows;
+
 #[cfg(desktop)]
 use gents_desktop_bridge::contract::{
     MANAGED_SERVER_TRAY_STOP_EVENT, MANAGED_SERVER_UPDATED_EVENT,
@@ -40,22 +43,51 @@ pub fn run() {
         .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
+    #[cfg(target_os = "macos")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        windows::desktop_window_setup_complete
+    ]);
     #[cfg(desktop)]
-    let builder = builder.setup(setup_tray).on_window_event(|window, event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            let active = window
-                .app_handle()
-                .try_state::<TrayRuntimeState>()
-                .is_some_and(|state| state.active.load(Ordering::SeqCst));
-            if active {
-                api.prevent_close();
-                let _ = window.hide();
+    let builder = builder
+        .setup(|app| {
+            setup_tray(app)?;
+            #[cfg(target_os = "macos")]
+            windows::setup(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let active = window
+                    .app_handle()
+                    .try_state::<TrayRuntimeState>()
+                    .is_some_and(|state| state.active.load(Ordering::SeqCst));
+                // Keep the original view as the existing automatic recovery owner.
+                // Additional views close normally, even while an agent is running.
+                if window.label() == "main" && (active || cfg!(target_os = "macos")) {
+                    api.prevent_close();
+                    #[cfg(target_os = "macos")]
+                    if let Some(view) = window.app_handle().get_webview_window(window.label()) {
+                        let _ = windows::detach(&view);
+                    }
+                    let _ = window.hide();
+                }
             }
-        }
-    });
+        });
     builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                show_main_window(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 fn platform_bridge_config() -> BridgeConfig {
@@ -145,7 +177,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
             "stop" => {
-                let _ = app.emit(MANAGED_SERVER_TRAY_STOP_EVENT, ());
+                let _ = app.emit_to("main", MANAGED_SERVER_TRAY_STOP_EVENT, ());
                 show_main_window(app);
             }
             "quit" => shutdown_and_quit(app),

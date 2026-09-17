@@ -1,4 +1,12 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
 const inTauri = () => "__TAURI_INTERNALS__" in window;
+
+// The main view stays alive when closed on macOS. It remains the sole
+// automatic recovery owner while detached views observe the shared backend.
+export function ownsAutomaticRecovery(): boolean {
+  return !isMacTauriShell() || getCurrentWindow().label === "main";
+}
 
 /// iPadOS also reports MacIntel, so a touch screen rules macOS out.
 export function isMacTauriShell(): boolean {

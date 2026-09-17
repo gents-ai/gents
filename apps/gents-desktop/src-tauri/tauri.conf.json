@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "Gents",
+        "tabbingIdentifier": "com.source-inc.gents.views",
         "width": 1480,
         "height": 920,
         "minWidth": 1180,
@@ -24,7 +25,7 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default", "desktop-runtime-admin"]
+      "capabilities": ["default", "desktop-runtime-admin", "native-windows"]
     }
   },
   "bundle": {

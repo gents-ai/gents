@@ -5,17 +5,20 @@ import { MemoryNavProvider, useNav, type Nav } from "@gents/shell";
 import { Toaster } from "@gents/ui/components/sonner";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { StartupScreen } from "./components/StartupScreen";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
+import { useNativeWindowReadiness } from "./hooks/useNativeWindowReadiness";
 import type { DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
 import {
   applyShellPlatform,
   isMobileTauriShell,
+  isMacTauriShell,
   isWindowsTauriShell,
 } from "./lib/shellPlatform";
 import { AppShell } from "./ui/app/AppShell";
@@ -96,7 +99,30 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   }, [bridge.api]);
 
   const agent = shell.selectedDeployment?.agentPrincipal.displayName ?? null;
+  useEffect(() => {
+    if (!isMacTauriShell()) return;
+    const title =
+      route.name === "session"
+        ? shell.selectedSession?.title || "New Session"
+        : route.name === "sessions"
+          ? "Sessions"
+          : route.name === "agents"
+            ? "Agents"
+            : route.name === "mailbox"
+              ? "Mailbox"
+              : "Configuration";
+    void getCurrentWindow().setTitle(
+      agent ? `${title} — ${agent}` : `${title} — Gents`,
+    );
+  }, [agent, route.name, shell.selectedSession?.title]);
   const [setup, setSetup] = useState<"unknown" | "active" | "done">("unknown");
+  useNativeWindowReadiness(
+    shell.startupPhase === "ready" &&
+      (setup === "done" ||
+        (setup === "unknown" &&
+          shell.snapshot !== null &&
+          !needsFirstRunSetup(shell.snapshot))),
+  );
 
   const titlebar = (
     <div className="titlebar-drag-region" data-tauri-drag-region>

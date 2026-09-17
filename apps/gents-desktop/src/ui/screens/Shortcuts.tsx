@@ -11,6 +11,7 @@ import {
 import { Kbd } from "@gents/ui/components/kbd";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
+import { isMacTauriShell } from "../../lib/shellPlatform";
 
 const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
 const MOD = IS_MAC ? "⌘" : "Ctrl+";
@@ -73,12 +74,22 @@ export function Shortcuts({ shell }: { shell: Shell }) {
           <DialogTitle>Keyboard shortcuts</DialogTitle>
           <DialogDescription>
             {IN_DESKTOP
-              ? "The same keys across desktop and iOS."
+              ? "Navigation and window shortcuts."
               : "The desktop app’s keys. In a browser, tab and window keys stay with the browser."}
           </DialogDescription>
         </DialogHeader>
         <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
-          {ROWS.map(([keys, action]) => (
+          {[
+            ...ROWS,
+            ...(isMacTauriShell()
+              ? [
+                  ["⌘T", "New tab"],
+                  ["⌘⇧N", "New window"],
+                  ["⌘W", "Close tab or window"],
+                  ["⌃Tab / ⌃⇧Tab", "Next / previous tab"],
+                ]
+              : []),
+          ].map(([keys, action]) => (
             <div key={keys} className="contents">
               <dt>
                 <Kbd>{keys}</Kbd>
