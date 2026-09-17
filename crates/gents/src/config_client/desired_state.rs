@@ -317,13 +317,21 @@ impl DesiredStateApplyPlan {
 
     pub fn new(mut documents: Vec<DesiredStateApplyDocument>) -> Result<Self> {
         let mut identities = BTreeSet::new();
-        for document in &mut documents {
-            document.add = config_projection(document.collection, Some(&document.add))?
-                .1
-                .context("missing create configuration")?;
-            document.update = config_projection(document.collection, Some(&document.update))?
-                .1
-                .context("missing replacement configuration")?;
+        for (index, document) in documents.iter_mut().enumerate() {
+            for (operation, value) in [
+                ("create", &mut document.add),
+                ("replacement", &mut document.update),
+            ] {
+                *value = config_projection(document.collection, Some(value))
+                    .with_context(|| {
+                        format!(
+                            "desired configuration documents[{index}] {} {operation}",
+                            document.collection.graphql_type()
+                        )
+                    })?
+                    .1
+                    .context("missing desired configuration")?;
+            }
             let (owner, id) = document_identity(document.collection, &document.add)?;
             anyhow::ensure!(
                 document_identity(document.collection, &document.update)? == (owner, id),

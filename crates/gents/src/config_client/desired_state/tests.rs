@@ -14,6 +14,40 @@ fn document(value: Value) -> DesiredStateApplyDocument {
         update: value,
     }
 }
+
+#[test]
+fn plan_decode_errors_identify_the_document_and_operation() {
+    let valid = document(backend("did:key:owner", "local"));
+    let incomplete = json!({"agent_did":"did:key:owner","system_prompt":"Inspect the host"});
+    let error = DesiredStateApplyPlan::new(vec![
+        valid,
+        DesiredStateApplyDocument {
+            collection: Collection::AgentContext,
+            add: incomplete.clone(),
+            update: incomplete,
+        },
+    ])
+    .err()
+    .expect("context ID is required");
+    let diagnostic = format!("{error:#}");
+    assert!(
+        diagnostic.contains("documents[1] AgentContext create"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("context_id"), "{diagnostic}");
+
+    let mut invalid_update = document(backend("did:key:owner", "local"));
+    invalid_update.update["name"] = json!(42);
+    let error = DesiredStateApplyPlan::new(vec![invalid_update])
+        .err()
+        .expect("name must be a string");
+    let diagnostic = format!("{error:#}");
+    assert!(
+        diagnostic.contains("documents[0] InferenceBackend replacement"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("invalid type"), "{diagnostic}");
+}
 async fn register_config_schemas(node: &EmbeddedNode) -> Result<()> {
     register_config_schemas_dropping_unique_indexes(node, &[]).await
 }
