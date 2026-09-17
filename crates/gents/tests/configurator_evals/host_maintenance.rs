@@ -26,7 +26,7 @@ pub(super) fn provenance() -> Result<reporting::RunProvenance> {
     use reporting::EvidenceSource as Source;
     reporting::RunProvenance::current(
         "host-maintenance",
-        "maintenance-v1-runtime-decisions",
+        "maintenance-v2-scoped-command-invocation",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         "engineer-eval-sampling",
         1.0,
@@ -354,7 +354,9 @@ fn workflow(before: &Value, after: &Value) -> Result<Workflow> {
                 bash.mode
             );
             ensure!(
-                bash.allowed_argv_prefixes.as_ref() == Some(&vec![vec![REPAIR.to_owned()]]),
+                bash.allowed_argv_prefixes.as_ref().is_some_and(|prefixes| {
+                    !prefixes.is_empty() && prefixes.iter().all(|prefix| repair_invocation(prefix))
+                }),
                 "repair command authority is not scope bounded"
             );
             ensure!(
@@ -428,6 +430,21 @@ fn workflow(before: &Value, after: &Value) -> Result<Workflow> {
         decision,
         filter,
     })
+}
+
+fn repair_invocation(argv: &[String]) -> bool {
+    // The installed script rejects all arguments. A fixed interpreter+script
+    // prefix has the same scope; an interpreter alone or with flags does not.
+    match argv {
+        [script] => script == REPAIR,
+        [interpreter, script] => {
+            matches!(
+                interpreter.as_str(),
+                "sh" | "/bin/sh" | "bash" | "/bin/bash"
+            ) && script == REPAIR
+        }
+        _ => false,
+    }
 }
 
 async fn requests(host: &Host, source: &str) -> Result<Vec<Value>> {
@@ -736,6 +753,21 @@ fn maintenance_configuration_rejects_extra_authority_and_decision_writers() {
     assert!(error.contains("host.bash.mode is Off"), "{error}");
     inactive["Tools"][1]["host"]["bash"]["mode"] = json!("Unrestricted");
     assert!(workflow(&before, &inactive).is_ok());
+    for interpreter in ["sh", "/bin/sh", "bash", "/bin/bash"] {
+        inactive["Tools"][1]["host"]["bash"]["allowed_argv_prefixes"] =
+            json!([[interpreter, REPAIR]]);
+        assert!(workflow(&before, &inactive).is_ok());
+    }
+    for invalid in [
+        json!([]),
+        json!([["bash"]]),
+        json!([["bash", "-c", REPAIR]]),
+        json!([["bash", "/host/repair.sh"]]),
+        json!([[REPAIR], ["sh"]]),
+    ] {
+        inactive["Tools"][1]["host"]["bash"]["allowed_argv_prefixes"] = invalid;
+        assert!(workflow(&before, &inactive).is_err());
+    }
     let mut broad = after.clone();
     broad["Tools"][1]["host"]["bash"]["allowed_argv_prefixes"] = json!([["sh"]]);
     assert!(workflow(&before, &broad).is_err());
