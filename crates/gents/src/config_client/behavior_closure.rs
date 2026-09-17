@@ -440,7 +440,7 @@ pub fn plan_behavior_closure(
     snapshot: &ConfigReferences,
     source_behavior: &AgentBehavior,
     target_behavior_id: &str,
-    target_display_name: &str,
+    target_display_name: Option<&str>,
 ) -> Result<DesiredStateApplyPlan> {
     plan_behavior_closure_with_overlays(
         snapshot,
@@ -461,14 +461,14 @@ pub fn plan_behavior_closure_with_overlays(
     source_behavior: &AgentBehavior,
     source_overlays: impl IntoIterator<Item = (Collection, Value)>,
     target_behavior_id: &str,
-    target_display_name: &str,
+    target_display_name: Option<&str>,
 ) -> Result<DesiredStateApplyPlan> {
     ensure!(
         valid_generated_qualified_key(target_behavior_id),
         "target behavior ID {target_behavior_id:?} must use lowercase colon-separated kebab segments"
     );
     ensure!(
-        !target_display_name.trim().is_empty(),
+        target_display_name.is_none_or(|name| !name.trim().is_empty()),
         "target behavior display name must not be blank"
     );
 
@@ -535,7 +535,7 @@ pub fn plan_behavior_closure_with_overlays(
 
     let mut target_behavior = source_behavior.clone();
     target_behavior.behavior_id = target_behavior_id.to_owned();
-    target_behavior.display_name = Some(target_display_name.to_owned());
+    target_behavior.display_name = target_display_name.map(str::to_owned);
     target_behavior.context_id = context_id;
     target_behavior.inference_profile_id = inference_profile_id;
     target_behavior.created_at = existing_target.and_then(|behavior| behavior.created_at);
@@ -598,7 +598,7 @@ pub async fn materialize_behavior_closure_in_txn(
     agent_did: &str,
     source_behavior_id: &str,
     target_behavior_id: &str,
-    target_display_name: &str,
+    target_display_name: Option<&str>,
 ) -> Result<DesiredStateApplyCounts> {
     let snapshot = ConfigReferences::load_in_txn(txn, agent_did).await?;
     let source: AgentBehavior =
@@ -615,7 +615,7 @@ pub async fn materialize_behavior_closure_candidate_in_txn(
     source_behavior: &AgentBehavior,
     source_overlays: impl IntoIterator<Item = (Collection, Value)>,
     target_behavior_id: &str,
-    target_display_name: &str,
+    target_display_name: Option<&str>,
 ) -> Result<DesiredStateApplyCounts> {
     let source_overlays: Vec<_> = source_overlays.into_iter().collect();
     let snapshot = ConfigReferences::load_in_txn(txn, &source_behavior.agent_did).await?;
@@ -756,7 +756,7 @@ mod tests {
             &snapshot,
             &source_behavior(),
             "local:reviewer",
-            "Jack's reviewer",
+            Some("Jack's reviewer"),
         )
         .unwrap();
 
@@ -838,7 +838,7 @@ mod tests {
             &snapshot(documents),
             &source_behavior(),
             "local:alias",
-            "Alias",
+            Some("Alias"),
         )
         .unwrap();
 
@@ -870,7 +870,8 @@ mod tests {
                 "model_name": "model"
             }),
         )]);
-        let plan = plan_behavior_closure(&snapshot, &behavior, "local:minimal", "Minimal").unwrap();
+        let plan =
+            plan_behavior_closure(&snapshot, &behavior, "local:minimal", Some("Minimal")).unwrap();
 
         assert_eq!(plan.documents().len(), 2);
         let target = planned(&plan, Collection::AgentBehavior, "local:minimal");
@@ -899,7 +900,7 @@ mod tests {
             &snapshot(documents),
             &source_behavior(),
             "local:reviewer",
-            "Reviewer",
+            Some("Reviewer"),
         )
         .unwrap();
 
@@ -924,7 +925,7 @@ mod tests {
             &snapshot(documents),
             &source_behavior(),
             "local:reviewer",
-            "Reviewer",
+            Some("Reviewer"),
         )
         .unwrap_err()
         .to_string();
@@ -966,7 +967,7 @@ mod tests {
             &snapshot(documents),
             &source_behavior(),
             "local:reviewer",
-            "Reviewer",
+            Some("Reviewer"),
         )
         .unwrap_err()
         .to_string();
@@ -1016,7 +1017,7 @@ mod tests {
             &behavior,
             overlays,
             "local:edited",
-            "Edited",
+            Some("Edited"),
         )
         .unwrap();
 
