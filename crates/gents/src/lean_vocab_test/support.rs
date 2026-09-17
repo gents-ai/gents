@@ -105,6 +105,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
+    pub(crate) write_input_cases: Vec<serde_json::Value>,
+    pub(crate) invocation_correlation_cases: Vec<serde_json::Value>,
     pub(crate) goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
     pub(crate) lsp_action_cases: Vec<LeanLspActionCase>,
     pub(crate) self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
@@ -952,6 +954,10 @@ pub(crate) fn lean_apply_reconcile_case(name: &str) -> &'static LeanApplyReconci
 
 pub(crate) fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {
     &lean_contract_snapshot().tool_policy_cases
+}
+
+pub(crate) fn lean_write_input_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().write_input_cases
 }
 
 pub(crate) fn lean_goal_capability_resolution_cases() -> &'static [LeanGoalCapabilityResolutionCase]

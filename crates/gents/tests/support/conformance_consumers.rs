@@ -56,6 +56,20 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "tool_call_lifecycle::runtime::tests::invocation_correlation_matches_lean",
+            package: "gents",
+            source_path: "crates/gents/src/tool_call_lifecycle/runtime.rs",
+            module_path: "tool_call_lifecycle::runtime::tests",
+            function: "invocation_correlation_matches_lean",
+        },
+        ConformanceConsumer::RustTest {
+            id: "defra_write::tests::native_input_admission_matches_lean",
+            package: "gents",
+            source_path: "crates/gents/src/defra_write/tests.rs",
+            module_path: "defra_write::tests",
+            function: "native_input_admission_matches_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases",
             package: "gents",
             source_path: "crates/gents/src/agent/runtime/tests/behavior_resolution.rs",

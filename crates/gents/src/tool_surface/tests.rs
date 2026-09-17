@@ -1020,6 +1020,9 @@ async fn write_tools_register_under_declared_names() {
 
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
+    node.add_schema("type ActionRequest { summary: String }")
+        .await
+        .unwrap();
 
     let surface = BehaviorToolConfig::from_selection(
         "ops",

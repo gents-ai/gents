@@ -161,6 +161,8 @@ def snapshotJson : String :=
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
+    ++ "\"write_input_cases\":" ++ writeInputCasesJson ++ ","
+    ++ "\"invocation_correlation_cases\":" ++ invocationCorrelationCasesJson ++ ","
     ++ "\"goal_capability_resolution_cases\":"
       ++ goalCapabilityResolutionCasesJson ++ ","
     ++ "\"lsp_action_cases\":"

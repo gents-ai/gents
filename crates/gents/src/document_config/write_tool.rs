@@ -78,7 +78,7 @@ impl WriteToolFieldFill {
         let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "runtime-filled field `{field_name}` requires an AgentRequest trigger context"
+                    "runtime-filled field `{field_name}` requires an active AgentRequest context"
                 )
             })?;
         match self {

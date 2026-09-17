@@ -681,6 +681,16 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_tool_policy_cases_match_lean_composition")
       "tool-policy" [Surface.operatorUi, Surface.agentFacing]
   , tagged (consumerCoverage
+      "write_input_cases"
+      "WriteInputCases"
+      "defra_write::tests::native_input_admission_matches_lean")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "invocation_correlation_cases"
+      "InvocationCorrelationCases"
+      "tool_call_lifecycle::runtime::tests::invocation_correlation_matches_lean")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "lsp_action_cases"
       "LspActionCases"
       "conformance::generated_lsp_action_cases_match_rust_authorization")

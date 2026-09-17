@@ -7,6 +7,40 @@ use serde_json::json;
 use super::BoundedWriteTool;
 use crate::document_config::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
 
+#[test]
+fn native_input_admission_matches_lean() {
+    let cases = crate::lean_vocab_test::lean_write_input_cases();
+    assert_eq!(cases.len(), 256);
+    for case in cases {
+        let base = match case["expected"].as_str().unwrap() {
+            "text" => "String",
+            "integer" => "Int",
+            "number" => "Float64",
+            "boolean" => "Boolean",
+            other => panic!("unknown kind {other}"),
+        };
+        let schema = format!("{base}{}", if case["nullable"] == true { "" } else { "!" });
+        let value = match case["actual"].as_str() {
+            None => None,
+            Some("text") => Some(json!("measurement")),
+            Some("integer") => Some(json!(86)),
+            Some("number") => Some(json!(0.5)),
+            Some("boolean") => Some(json!(false)),
+            Some("array") => Some(json!([1])),
+            Some("object") => Some(json!({"x":1})),
+            Some("null") => Some(json!(null)),
+            other => panic!("unknown kind {other:?}"),
+        };
+        let result = super::input::validate_input(
+            &schema,
+            case["required"] == true,
+            case["filled"] == true,
+            value.as_ref(),
+        );
+        assert_eq!(result.is_ok(), case["accepted"] == true, "{case}");
+    }
+}
+
 async fn node_with_actionrequest() -> Arc<EmbeddedNode> {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_schema(
@@ -85,6 +119,42 @@ async fn writes_one_bounded_doc() {
         .unwrap()
         .len();
     assert_eq!(rows, 1);
+}
+
+#[tokio::test]
+async fn writes_native_measurements_without_string_coercion() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema("type HostMeasurement { disk: Int healthy: Boolean }")
+        .await
+        .unwrap();
+    let declaration = WriteToolDecl {
+        notification: None,
+        tool_name: "record_measurement".into(),
+        collection: "HostMeasurement".into(),
+        description: "Record measured host state".into(),
+        fields: ["disk", "healthy"]
+            .into_iter()
+            .map(|name| WriteToolField {
+                name: name.into(),
+                required: true,
+                fill: None,
+            })
+            .collect(),
+        output_obligation: None,
+    };
+    let tool = BoundedWriteTool::new(node.clone(), declaration);
+    Tool::call(
+        &tool,
+        serde_json::from_value(json!({"disk":86,"healthy":false})).unwrap(),
+    )
+    .await
+    .unwrap();
+    let response = node.execute("{ HostMeasurement { disk healthy } }").await;
+    assert!(!response.has_errors());
+    assert_eq!(
+        response.data.unwrap()["HostMeasurement"][0],
+        json!({"disk":86,"healthy":false})
+    );
 }
 
 #[tokio::test]
@@ -234,12 +304,15 @@ async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_
         source_fields,
         false,
         async {
-            Tool::call(
+            let receipt = Tool::call(
                 &tool,
                 serde_json::from_value(json!({"summary": "done"})).unwrap(),
             )
             .await
             .expect("runtime-filled write");
+            let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+            assert_eq!(receipt["document"]["run_id"], "run-42");
+            assert!(receipt["document_id"].as_str().is_some());
         },
     )
     .await;
@@ -250,4 +323,59 @@ async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_
     let row = response.data.unwrap()["ActionRequest"][0].clone();
     assert_eq!(row["run_id"], "run-42");
     assert_eq!(row["expected_total"], "3");
+}
+
+#[tokio::test]
+async fn native_schema_and_receipts_preserve_lists_json_and_null() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema(
+        "type TypedRecord { count: Int flag: Boolean score: Float64 labels: [String] data: JSON }",
+    )
+    .await
+    .unwrap();
+    let tool = BoundedWriteTool::new(
+        node.clone(),
+        WriteToolDecl {
+            notification: None,
+            tool_name: "record_typed".into(),
+            collection: "TypedRecord".into(),
+            description: "Record typed data".into(),
+            output_obligation: None,
+            fields: ["count", "flag", "score", "labels", "data"]
+                .into_iter()
+                .map(|name| WriteToolField {
+                    name: name.into(),
+                    required: true,
+                    fill: None,
+                })
+                .collect(),
+        },
+    );
+    let definition = Tool::definition(&tool, String::new()).await;
+    assert_eq!(
+        definition.parameters["properties"]["count"]["type"],
+        json!(["integer", "null"])
+    );
+    assert_eq!(
+        definition.parameters["properties"]["flag"]["type"],
+        json!(["boolean", "null"])
+    );
+    let args = json!({"count":86,"flag":false,"score":0.5,"labels":["quoted\"\nlabel"],"data":{"measured":true,"readings":[1,2]}});
+    let receipt = Tool::call(&tool, serde_json::from_value(args.clone()).unwrap())
+        .await
+        .unwrap();
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    for (field, value) in args.as_object().unwrap() {
+        assert_eq!(&receipt["document"][field], value, "{field}");
+    }
+    let args = json!({"count":null,"flag":null,"score":null,"labels":[],"data":null});
+    let receipt = Tool::call(&tool, serde_json::from_value(args).unwrap())
+        .await
+        .unwrap();
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    assert!(receipt["document"]["count"].is_null());
+    assert!(receipt["document"]["labels"].is_null());
+    assert!(super::input::literal("JSON", &json!({"bad-key":1})).is_err());
+    assert!(super::input::literal("JSON", &json!([])).is_err());
+    assert!(super::input::literal("JSON", &json!({"nested": [1, []]})).is_err());
 }

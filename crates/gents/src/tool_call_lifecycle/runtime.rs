@@ -78,7 +78,7 @@ impl ToolOutcome {
                         "the JSON is missing a required field; add the required field shown below"
                     }
                     UnparseableArgsKind::WrongType => {
-                        "a field has the wrong JSON type; use the expected type shown below"
+                        "a field has the wrong JSON type; use the expected type shown below. Arrays and objects must be native JSON values, not strings containing JSON"
                     }
                     UnparseableArgsKind::Schema => {
                         "the JSON does not match the tool's argument schema; correct the field described below"
@@ -493,6 +493,15 @@ where
     .await
 }
 
+fn invocation_correlation<'a>(
+    request: Option<&'a str>,
+    supplied: Option<&'a str>,
+) -> Option<&'a str> {
+    supplied
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| request.filter(|value| !value.trim().is_empty()))
+}
+
 pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
     TOOL_RUNTIME_SCOPE.try_with(Clone::clone).ok().map(|scope| {
         let overlay = WORKSPACE_OVERLAY.try_with(Clone::clone).ok();
@@ -512,7 +521,11 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             session_id: scope.session_id,
             live_output: scope.live_output,
             background: scope.background,
-            correlation: scope.correlation,
+            correlation: invocation_correlation(
+                scope.request_id.as_deref(),
+                scope.correlation.as_deref(),
+            )
+            .map(str::to_owned),
             source_fields: scope.source_fields,
             requester_did: scope.requester_did,
             agent_did: scope.agent_did,
@@ -615,9 +628,53 @@ pub(crate) fn deadline_remaining(deadline_at: Option<DateTime<Utc>>) -> Option<D
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invocation_correlation_matches_lean() {
+        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        assert_eq!(snapshot.invocation_correlation_cases.len(), 16);
+        for case in &snapshot.invocation_correlation_cases {
+            assert_eq!(
+                super::invocation_correlation(case["request"].as_str(), case["supplied"].as_str()),
+                case["expected"].as_str(),
+                "{case}"
+            );
+        }
+    }
     use super::*;
     use crate::llm::tool::BoxFuture;
     use crate::llm::tool::ToolDefinition;
+
+    #[tokio::test]
+    async fn invocation_correlation_is_available_to_foreground_and_background_fills() {
+        scope_tool_request_identity(None, None, None, Some("request-17".into()), async {
+            scope_request_tool_execution_with_trigger_context(
+                None,
+                CancellationToken::new(),
+                None,
+                None,
+                None,
+                None,
+                std::collections::BTreeMap::new(),
+                false,
+                async {
+                    let fill = crate::document_config::WriteToolFieldFill::Correlation;
+                    assert_eq!(fill.resolve("correlation").unwrap(), "request-17");
+                    scope_background_tool_execution(
+                        None,
+                        CancellationToken::new(),
+                        None,
+                        None,
+                        async {
+                            assert_eq!(fill.resolve("correlation").unwrap(), "request-17");
+                        },
+                    )
+                    .await;
+                },
+            )
+            .await;
+        })
+        .await;
+    }
 
     struct PendingTool;
 

@@ -341,6 +341,12 @@ impl ToolSurface {
                 )) as Box<dyn ToolDyn>);
             } else {
                 let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
+                if !tool.is_well_formed() {
+                    anyhow::bail!(
+                        "write tool `{}` has an unavailable or unsupported collection schema",
+                        decl.tool_name
+                    );
+                }
                 tools.push(Box::new(tool) as Box<dyn ToolDyn>);
             }
         }

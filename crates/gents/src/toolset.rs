@@ -635,6 +635,8 @@ fn default_read_only_commands() -> Vec<String> {
         "rg",
         "wc",
         "stat",
+        "cmp",
+        "sha256sum",
         "file",
         "git",
         "date",
