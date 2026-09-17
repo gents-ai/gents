@@ -84,7 +84,7 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
   const evidence = join(directory, "evidence");
   let names;
   try {
-    names = await readdir(evidence);
+    names = await evidenceNames(evidence);
   } catch (error) {
     if (error.code === "ENOENT")
       return {
@@ -130,6 +130,14 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
         else if (name.endsWith("-input.json")) data = { stage: data.stage };
         else if (name === "trial.json")
           data = { passed: data.passed, cases: data.cases };
+        if (
+          data.stage &&
+          (name.endsWith("-input.json") || name.endsWith("-progress.json"))
+        )
+          data = {
+            ...data,
+            stage: name.slice(0, name.lastIndexOf("/") + 1) + data.stage,
+          };
         document = { name, data, modified: metadata.mtimeMs };
         cache.set(path, {
           stamp: `${metadata.mtimeMs}:${metadata.size}`,
@@ -186,6 +194,25 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
       trial,
     })),
   };
+}
+
+async function evidenceNames(directory, prefix = "") {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const names = [];
+  for (const entry of entries) {
+    const name = prefix + entry.name;
+    if (entry.isFile()) names.push(name);
+    else if (entry.isDirectory()) {
+      try {
+        names.push(
+          ...(await evidenceNames(join(directory, entry.name), name + "/")),
+        );
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+  return names;
 }
 
 export async function snapshotRun(directory, cache = new Map()) {

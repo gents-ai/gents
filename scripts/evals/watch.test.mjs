@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -223,6 +223,57 @@ test("stage progress attributes requests and exposes stalled work as non-passing
   assert.match(view, /STALLED \/ NON-PASSING/);
   assert.match(view, /stalled/);
   assert.match(view, /request-visi/);
+});
+
+test("nested candidate progress and usage remain distinct without following symlinks", async () => {
+  const { directory, evidence } = await fixture();
+  for (const candidate of ["improvement", "regression"]) {
+    const path = join(evidence, candidate);
+    await mkdir(path);
+    await writeFile(
+      join(path, "candidate-edit-inference.json"),
+      JSON.stringify({
+        InferenceCall: [{ prompt_tokens: 100, completion_tokens: 20 }],
+      }),
+    );
+    await writeFile(
+      join(path, "candidate-edit-tools.json"),
+      JSON.stringify({ AgentToolCall: [{ args: "private transcript" }] }),
+    );
+  }
+  await writeFile(
+    join(evidence, "regression", "candidate-edit-progress.json"),
+    JSON.stringify({
+      stage: "candidate-edit",
+      request_id: "candidate-request",
+      lifecycle_state: "processing",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:01Z",
+    }),
+  );
+  const outside = join(directory, "private");
+  await mkdir(outside);
+  await writeFile(
+    join(outside, "secret-progress.json"),
+    JSON.stringify({ stage: "must-not-read", request_id: "secret" }),
+  );
+  await symlink(outside, join(evidence, "linked"), "junction");
+  const cache = new Map();
+  const snapshot = await snapshotRun(directory, cache);
+  const trial = snapshot.trials[0];
+  assert.equal(trial.current, "regression/candidate-edit");
+  assert.equal(trial.requestId, "candidate-request");
+  assert.equal(trial.usage.input, 200);
+  assert.equal(trial.usage.output, 40);
+  assert.equal(trial.usage.tools, 2);
+  assert.deepEqual(trial.stageUsage.map((row) => row.stage).sort(), [
+    "improvement/candidate-edit",
+    "regression/candidate-edit",
+  ]);
+  assert.ok(
+    !JSON.stringify([...cache.values()]).includes("private transcript"),
+  );
+  assert.ok(!JSON.stringify(snapshot).includes("must-not-read"));
 });
 
 test("TTY display restores the cursor and screen on stop", async () => {
