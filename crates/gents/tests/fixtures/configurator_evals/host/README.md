@@ -67,11 +67,12 @@ the coordinator's container control socket.
    observation against host measurements and require no healthy attention item.
 
 9. Isolated improvement: stop the original and fork its offline home. Ask the
-   Engineer to edit only the monitor's existing system prompt to warn at 70%
-   disk usage. Require unchanged identities and all other configuration, then
+   Engineer to update the monitor's existing Context and Task instructions to
+   warn at 70% disk usage, wherever that policy is expressed. Require unchanged
+   identities, permissions, bindings, and all other configuration, then
    grade healthy operation, a real 70–79% disk condition, and stale-backup
    detection. Retire the candidate, verify the original is unchanged, promote
-   only the accepted prompt through the canonical configuration transaction,
+   only the accepted prompt changes together through the canonical configuration transaction,
    and verify exact read-back.
 10. Rejected regression: fork the improved runtime and create an explicitly
     disposable candidate that suppresses backup notifications but still records
