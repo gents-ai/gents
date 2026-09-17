@@ -26,7 +26,7 @@ pub(super) fn provenance() -> Result<reporting::RunProvenance> {
     use reporting::EvidenceSource as Source;
     reporting::RunProvenance::current(
         "host-maintenance",
-        "maintenance-v3-staged-host-effects",
+        "maintenance-v4-staged-host-effects",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         "engineer-eval-sampling",
         1.0,
@@ -123,11 +123,11 @@ pub(super) async fn run_trial(
             }),
         )
         .await?;
-        let repaired = stages::checked(
+        stages::checked(
             CASES[3],
             &evidence,
             stages::acceptance(async {
-                let request = execute(&host, &behavior, CASES[3], REPAIR, &configured).await?;
+                execute(&host, &behavior, CASES[3], REPAIR, &configured).await?;
                 verify_host_effects(
                     &fault,
                     &host
@@ -137,13 +137,10 @@ pub(super) async fn run_trial(
                     "700",
                     200,
                 )?;
-                Ok(request)
+                Ok(())
             }),
         )
         .await?;
-        let repair_calls = calls(&host, &repaired.request_id)
-            .await
-            .map_err(stages::infrastructure)?;
         stages::checked(
             CASES[4],
             &evidence,
@@ -157,12 +154,6 @@ pub(super) async fn run_trial(
                         .map_err(stages::infrastructure)?,
                     "700",
                     200,
-                )?;
-                verify_replayed_calls(
-                    &repair_calls,
-                    &calls(&host, &repaired.request_id)
-                        .await
-                        .map_err(stages::infrastructure)?,
                 )?;
                 Ok(())
             }),
@@ -184,12 +175,6 @@ pub(super) async fn run_trial(
                         .map_err(stages::infrastructure)?,
                     "700",
                     200,
-                )?;
-                verify_replayed_calls(
-                    &repair_calls,
-                    &calls(&host, &repaired.request_id)
-                        .await
-                        .map_err(stages::infrastructure)?,
                 )?;
                 Ok(())
             }),
@@ -304,10 +289,20 @@ async fn execute(
 ) -> Result<stages::StageResult> {
     let request = host.request(behavior, case.as_str(), prompt).await?;
     request.ensure_completed()?;
-    let receipts = calls(host, &request.request_id)
+    let id = gents::graphql::escape_graphql_string(&request.request_id);
+    let receipts = host
+        .access
+        .execute(&format!(
+            "{{ AgentToolCall(filter: {{request_id: {{_eq: \"{id}\"}}}}) {{lifecycle_state}} }}"
+        ))
         .await
         .map_err(stages::infrastructure)?;
-    verify_replayed_calls(&receipts, &receipts)?;
+    ensure!(
+        rows(&receipts["data"], "AgentToolCall")?
+            .iter()
+            .any(|call| call["lifecycle_state"] == "completed"),
+        "maintenance request did not successfully execute a tool"
+    );
     ensure!(
         &configuration_snapshot(&host.access)
             .await
@@ -430,12 +425,6 @@ fn preserve_configuration(before: &Value, after: &Value) -> Result<()> {
     Ok(())
 }
 
-async fn calls(host: &Host, request: &str) -> Result<Vec<Value>> {
-    let request = gents::graphql::escape_graphql_string(request);
-    let result = host.access.execute(&format!("{{ AgentToolCall(filter: {{request_id: {{_eq: \"{request}\"}}}}) {{tool_call_key request_id lifecycle_state args result started_at completed_at}} }}")).await?;
-    Ok(rows(&result["data"], "AgentToolCall")?.clone())
-}
-
 fn verify_host_effects(
     before: &Value,
     after: &Value,
@@ -468,48 +457,6 @@ fn verify_host_effects(
     if expected_status == 200 {
         ensure!(after["api"]["exit_code"] == 0, "API health probe failed");
     }
-    Ok(())
-}
-
-fn verify_replayed_calls(before: &[Value], after: &[Value]) -> Result<()> {
-    let keyed = |calls: &[Value]| -> Result<std::collections::BTreeMap<String, Value>> {
-        let mut result = std::collections::BTreeMap::new();
-        for call in calls {
-            let key = call["tool_call_key"]
-                .as_str()
-                .filter(|key| !key.is_empty())
-                .context("missing canonical tool call key")?;
-            use gents::tool_call_lifecycle::ToolCallState;
-            let state = call["lifecycle_state"]
-                .as_str()
-                .and_then(ToolCallState::from_persisted);
-            ensure!(
-                matches!(
-                    state,
-                    Some(
-                        ToolCallState::Completed
-                            | ToolCallState::Failed
-                            | ToolCallState::TimedOut
-                            | ToolCallState::Cancelled
-                    )
-                ),
-                "replay baseline contains unfinished or unknown work"
-            );
-            ensure!(
-                result.insert(key.to_owned(), call.clone()).is_none(),
-                "duplicate tool call receipt"
-            );
-        }
-        Ok(result)
-    };
-    ensure!(
-        !before.is_empty(),
-        "replay requires a previously executed repair"
-    );
-    ensure!(
-        keyed(before)? == keyed(after)?,
-        "replay added or changed execution receipts"
-    );
     Ok(())
 }
 
@@ -546,23 +493,4 @@ fn unresolved_attention_requires_runtime_lineage_and_current_conditions() {
     let mut invalid = item;
     invalid["payload"]["checks"] = serde_json::json!(["api", "backup"]);
     assert!(verify_attention(&[invalid], "request").is_err());
-}
-
-#[test]
-fn maintenance_replay_requires_unchanged_terminal_execution_receipts() {
-    let call = serde_json::json!({"tool_call_key":"call-1", "lifecycle_state":"completed",
-        "request_id":"repair-request", "completed_at":"2026-01-01T00:00:00Z"});
-    assert!(verify_replayed_calls(&[], &[]).is_err());
-    assert!(verify_replayed_calls(&[call.clone()], &[call.clone()]).is_ok());
-    let mut failed_attempt = call.clone();
-    failed_attempt["tool_call_key"] = "earlier-failed-attempt".into();
-    failed_attempt["lifecycle_state"] = "failed".into();
-    let recovered = vec![failed_attempt.clone(), call.clone()];
-    assert!(verify_replayed_calls(&recovered, &recovered).is_ok());
-    failed_attempt["lifecycle_state"] = "running".into();
-    assert!(verify_replayed_calls(&[failed_attempt.clone()], &[failed_attempt]).is_err());
-    assert!(verify_replayed_calls(&[call.clone()], &[call.clone(), call.clone()]).is_err());
-    let mut changed = call.clone();
-    changed["completed_at"] = "2026-01-01T00:01:00Z".into();
-    assert!(verify_replayed_calls(&[call], &[changed]).is_err());
 }

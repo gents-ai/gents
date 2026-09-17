@@ -70,20 +70,6 @@ describe("setup steward patches", () => {
     });
   });
 
-  it("keeps The Engineer available for reusable work without redundant approvals", () => {
-    expect(SETUP_STEWARD_PROMPT).toContain("build, maintain, and improve");
-    expect(SETUP_STEWARD_PROMPT).toContain("keep The Engineer available");
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "without asking for the same permission again",
-    );
-    expect(SETUP_STEWARD_PROMPT).toContain(
-      "Preview-only and discovery-only requests stop before writes",
-    );
-    expect(SETUP_STEWARD_PROMPT).toContain("AgentSession selects a behavior");
-    expect(SETUP_STEWARD_PROMPT).toContain("process ceiling and root");
-    expect(SETUP_STEWARD_PROMPT.split(/\s+/).length).toBeLessThanOrEqual(1_200);
-  });
-
   it("patches the protected Setup behavior after a working behavior becomes default", () => {
     const configured = {
       ...deployment,

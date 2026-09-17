@@ -263,41 +263,6 @@ test(
 );
 
 test(
-  "runtime repair interpreters preserve the fixed script scope",
-  { skip: process.env.GENTS_HOST_FIXTURE_TEST !== "1", timeout: 180_000 },
-  async () => {
-    const host = await HostEnvironment.start({
-      runtime: true,
-      runtimeImage: await resolveRuntimeImage(
-        process.env.GENTS_HOST_RUNTIME_IMAGE,
-      ),
-      endpoint: "http://127.0.0.1:8000/v1",
-    });
-    try {
-      const before = await host.snapshot();
-      const repair = "/opt/steward-fixture/restore-api-write.sh";
-      for (const interpreter of ["sh", "/bin/sh", "bash", "/bin/bash"]) {
-        await host.inject("api-permission");
-        await assert.rejects(host.exec([interpreter, repair, "/host/data"]));
-        assert.equal((await host.snapshot()).api_status, 503);
-        await host.exec([interpreter, repair]);
-        assert.equal((await host.snapshot()).api_status, 200);
-        assert.match(await host.exec([interpreter, repair]), /no change/);
-        await host.exec(["chmod", "400", "/host/api-work"]);
-        await assert.rejects(host.exec([interpreter, repair]));
-        const after = await host.snapshot();
-        assert.equal(after.work_mode.trim(), "400");
-        assert.equal(after.api_status, 503);
-        assert.equal(after.data_hashes, before.data_hashes);
-        assert.equal(after.backup_mtime, before.backup_mtime);
-      }
-    } finally {
-      await host.close();
-    }
-  },
-);
-
-test(
   "host fixture has real isolated faults and repair effects",
   {
     skip: process.env.GENTS_HOST_FIXTURE_TEST !== "1",

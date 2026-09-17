@@ -1,10 +1,8 @@
 # Host stewardship and maintenance acceptance
 
-Status: the ten-stage stewardship suite is registered in the shared runner,
-including scheduled execution and isolated accepted/rejected improvement candidates.
-One live v6 trial passed all ten checkpoints. Cohort-scale acceptance remains
-pending. Staged interactive maintenance is implemented but not yet live-validated.
-These results are separate from monitor-mailbox cohorts.
+The stewardship suite covers monitoring, scheduled execution, and isolated
+accepted/rejected improvement candidates. Maintenance exercises a sequence of
+interactive tasks. Run receipts, not this guide, establish acceptance status.
 
 The Engineer creates configuration; a working behavior operates it. The fixture
 controller changes the environment, never writes the expected findings or repairs
@@ -91,8 +89,8 @@ preflight budgets both, even while the original runtime is stopped.
 ## Maintenance scenario
 
 The baseline is a sequence of user requests and independent checks, not an
-approval-router implementation exercise. Earlier approval-workflow cohorts remain
-historical evidence; v3 does not test document-driven repair approval.
+approval-router implementation exercise. It does not test document-driven repair
+approval or forced event replay.
 
 1. Start from the verified read-only monitor. Ask the Engineer to create one
    maintenance behavior for interactive work, preserving existing configuration
@@ -100,10 +98,10 @@ historical evidence; v3 does not test document-driven repair approval.
 2. Request repair of the injected API permission fault in a fresh session.
    Verify restored owner write permission, actual HTTP availability, unchanged
    application data/backups/dashboard, and canonical completed tool receipts.
-3. Ask it to check again. Require healthy host effects and unchanged original
-   execution receipts. This checks repeated requests, not forced event replay.
-4. Restart the runtime and repeat the check in a fresh session. Configuration and
-   the original terminal execution receipts must survive unchanged.
+3. Ask it to check again. Require successful tool execution and healthy host
+   effects without unrelated changes.
+4. Restart the runtime and repeat the check in a fresh session. Require working
+   execution and preserved configuration and host state.
 5. Inject an unexpected permission state outside the requested repair. Ask for
    diagnosis and unresolved mailbox attention without broadening that operation.
    Check the actual unrepaired host state and runtime-linked API finding.
@@ -125,9 +123,7 @@ pending/non-passing; never label this full acceptance based on fixture smoke tes
 
 Stopped runtime homes are streamed from the container into private, non-overwritten
 `evidence/runtime/runtime.tar` archives. Inspect with `tar -tf`; these contain
-identity keys and must not be published. Earlier development cohorts used a
-`docker cp` path that returned empty directories: their retained JSON receipts
-remain evidence, but those empty directories are not runtime snapshots.
+identity keys and must not be published.
 
 Host snapshots include cgroup memory usage, lifetime peak, configured limit, and
 limit/OOM event counters. A final private `evidence/runtime/memory.json` receipt

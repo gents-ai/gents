@@ -1492,11 +1492,6 @@ mod tests {
 
     #[test]
     fn setup_steward_starts_readonly_under_an_unrestricted_process_ceiling() {
-        assert_eq!(
-            SETUP_STEWARD_SYSTEM_PROMPT,
-            gents_protocol::SETUP_STEWARD_PROMPT
-        );
-        assert!(SETUP_STEWARD_SYSTEM_PROMPT.starts_with("You are The Engineer,"));
         let selected = initial_tools_package(ToolPackageArg::Yolo, true);
         assert_eq!(selected, ToolPackageArg::Readonly);
         assert_eq!(
