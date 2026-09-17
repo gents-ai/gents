@@ -429,6 +429,10 @@ live-host-steward-eval:
 	GENTS_EVAL_SUITE=host-steward GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-1} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-1} node scripts/evals/run-configurator.mjs $(CARGO)
 
 .PHONY: test-host-eval-environment
+.PHONY: live-host-maintenance-eval
+live-host-maintenance-eval:
+	GENTS_EVAL_SUITE=host-maintenance GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-1} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-1} node scripts/evals/run-configurator.mjs $(CARGO)
+
 test-host-eval-environment:
 	GENTS_HOST_FIXTURE_TEST=1 node --test scripts/evals/host-environment.test.mjs
 

@@ -482,6 +482,7 @@ export class HostEnvironment {
         "/host/backups/records.txt",
       ],
       "api-permission": ["chmod", "500", "/host/api-work"],
+      "api-permission-outside-repair": ["chmod", "400", "/host/api-work"],
     };
     if (!Object.hasOwn(commands, fault))
       throw new Error(`Unknown host fault: ${fault}`);

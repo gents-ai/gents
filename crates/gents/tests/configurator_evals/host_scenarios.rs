@@ -191,6 +191,69 @@ fn improvement_scope_requires_an_in_place_unshared_prompt_and_complete_snapshot(
     assert!(verify_prompt_only_candidate(&before, &extra, "monitor").is_err());
 }
 
+pub(super) struct PreparedMonitor {
+    pub owner: String,
+    pub engineer: String,
+    pub behavior: String,
+    pub configuration: Value,
+}
+
+pub(super) async fn prepare_monitor(host: &Host, evidence: &Path) -> Result<PreparedMonitor> {
+    host.configure_sampling()
+        .await
+        .map_err(stages::infrastructure)?;
+    let before = configuration_snapshot(&host.access)
+        .await
+        .map_err(stages::infrastructure)?;
+    reporting::write_json_new(&evidence.join("configuration-before.json"), &before)?;
+    let owner = before["AgentPrincipal"][0]["agent_did"]
+        .as_str()
+        .context("owner missing")?;
+    let engineer = gents::default_behavior_id_for_agent(owner);
+    let preview = stages::checked(CASES[0], &evidence, stages::acceptance(async {
+        let host_before = host.snapshot("before-preview").await.map_err(stages::infrastructure)?;
+        let result = host.request(&engineer, CASES[0].as_str(), PREVIEW).await?;
+        result.ensure_completed()?;
+        let after = configuration_snapshot(&host.access).await.map_err(stages::infrastructure)?;
+        reporting::write_json_new(&evidence.join("configuration-after-preview.json"), &after)?;
+        ensure!(after == before, "preview mutated configuration");
+        let request = gents::graphql::escape_graphql_string(&result.request_id);
+        let calls = host.access.execute(&format!("{{ AgentToolCall(filter: {{ request_id: {{_eq: \"{request}\"}} }}) {{tool_name lifecycle_state tool_failure_class result}} }}")).await.map_err(stages::infrastructure)?;
+        super::onboarding_scenarios::assert_preview_calls(calls["data"]["AgentToolCall"].as_array().context("tool receipts missing")?)?;
+        let host_after = host.snapshot("after-preview").await.map_err(stages::infrastructure)?;
+        verify_read_only_check(&host_before, &host_after)?;
+        Ok(result)
+    })).await?;
+    let configured = stages::checked(
+        CASES[1],
+        &evidence,
+        stages::acceptance(async {
+            host.request_in_session(
+                &engineer,
+                CASES[1].as_str(),
+                APPROVE,
+                preview.session_id.as_deref(),
+            )
+            .await?
+            .ensure_completed()?;
+            let configured = configuration_snapshot(&host.access)
+                .await
+                .map_err(stages::infrastructure)?;
+            reporting::write_json_new(&evidence.join("configuration-applied.json"), &configured)?;
+            verify_steward_configuration(&before, &configured)?;
+            Ok(configured)
+        }),
+    )
+    .await?;
+    let monitor = verify_steward_configuration(&before, &configured)?;
+    Ok(PreparedMonitor {
+        owner: owner.to_owned(),
+        engineer,
+        behavior: monitor,
+        configuration: configured,
+    })
+}
+
 pub(super) async fn run_trial(
     model: String,
     trial: usize,
@@ -200,106 +263,198 @@ pub(super) async fn run_trial(
     std::fs::create_dir_all(&evidence)?;
     let mut host = Host::start(&evidence).await?;
     let result: Result<()> = async {
-        host.configure_sampling().await.map_err(stages::infrastructure)?;
-        let before = configuration_snapshot(&host.access).await.map_err(stages::infrastructure)?;
-        reporting::write_json_new(&evidence.join("configuration-before.json"), &before)?;
-        let owner = before["AgentPrincipal"][0]["agent_did"].as_str().context("owner missing")?;
-        let engineer = gents::default_behavior_id_for_agent(owner);
-        let preview = stages::checked(CASES[0], &evidence, stages::acceptance(async {
-            let host_before = host.snapshot("before-preview").await.map_err(stages::infrastructure)?;
-            let result = host.request(&engineer, CASES[0].as_str(), PREVIEW).await?;
-            result.ensure_completed()?;
-            let after = configuration_snapshot(&host.access).await.map_err(stages::infrastructure)?;
-            reporting::write_json_new(&evidence.join("configuration-after-preview.json"), &after)?;
-            ensure!(after == before, "preview mutated configuration");
-            let request = gents::graphql::escape_graphql_string(&result.request_id);
-            let calls = host.access.execute(&format!("{{ AgentToolCall(filter: {{ request_id: {{_eq: \"{request}\"}} }}) {{tool_name lifecycle_state tool_failure_class result}} }}")).await.map_err(stages::infrastructure)?;
-            super::onboarding_scenarios::assert_preview_calls(calls["data"]["AgentToolCall"].as_array().context("tool receipts missing")?)?;
-            let host_after = host.snapshot("after-preview").await.map_err(stages::infrastructure)?;
-            verify_read_only_check(&host_before, &host_after)?;
-            Ok(result)
-        })).await?;
-        let configured = stages::checked(CASES[1], &evidence, stages::acceptance(async {
-            host.request_in_session(&engineer, CASES[1].as_str(), APPROVE, preview.session_id.as_deref()).await?.ensure_completed()?;
-            let configured = configuration_snapshot(&host.access).await.map_err(stages::infrastructure)?;
-            reporting::write_json_new(&evidence.join("configuration-applied.json"), &configured)?;
-            verify_steward_configuration(&before, &configured)?;
-            Ok(configured)
-        })).await?;
-        let monitor = verify_steward_configuration(&before, &configured)?;
-        let sources = configured["EventSource"].as_array().context("sources missing")?;
+        let PreparedMonitor {
+            owner,
+            engineer,
+            behavior: monitor,
+            configuration: configured,
+        } = prepare_monitor(&host, &evidence).await?;
+        let sources = configured["EventSource"]
+            .as_array()
+            .context("sources missing")?;
         ensure!(sources.len() == 1, "expected one monitoring source");
-        let collection = sources[0]["source_collection"].as_str().context("source collection missing")?;
+        let collection = sources[0]["source_collection"]
+            .as_str()
+            .context("source collection missing")?;
         let mut previous_keys: Vec<Value> = Vec::new();
         let mut original_notification_cause: Option<(String, String)> = None;
         for (index, case) in CASES.iter().enumerate().take(7).skip(2) {
-            stages::checked(*case, &evidence, stages::acceptance(async {
-                if index == 3 {
-                    host.fault("disk-pressure", "disk-pressure").await.map_err(stages::infrastructure)?;
-                    host.fault("stale-backup", "stale-backup").await.map_err(stages::infrastructure)?;
-                }
-                if index == 5 { host.restore().await.map_err(stages::infrastructure)?; }
-                if index == 6 {
-                    host.restart(case.as_str()).await.map_err(stages::infrastructure)?;
-                    ensure!(configuration_snapshot(&host.access).await.map_err(stages::infrastructure)? == configured, "restart changed configuration");
-                }
-                let before_check = host.snapshot(&format!("{}-before-check", case.as_str())).await.map_err(stages::infrastructure)?;
-                let check = host.trigger_check(collection, &monitor, case.as_str()).await?;
+            stages::checked(
+                *case,
+                &evidence,
+                stages::acceptance(async {
+                    if index == 3 {
+                        host.fault("disk-pressure", "disk-pressure")
+                            .await
+                            .map_err(stages::infrastructure)?;
+                        host.fault("stale-backup", "stale-backup")
+                            .await
+                            .map_err(stages::infrastructure)?;
+                    }
+                    if index == 5 {
+                        host.restore().await.map_err(stages::infrastructure)?;
+                    }
+                    if index == 6 {
+                        host.restart(case.as_str())
+                            .await
+                            .map_err(stages::infrastructure)?;
+                        ensure!(
+                            configuration_snapshot(&host.access)
+                                .await
+                                .map_err(stages::infrastructure)?
+                                == configured,
+                            "restart changed configuration"
+                        );
+                    }
+                    let before_check = host
+                        .snapshot(&format!("{}-before-check", case.as_str()))
+                        .await
+                        .map_err(stages::infrastructure)?;
+                    let check = host
+                        .trigger_check(collection, &monitor, case.as_str())
+                        .await?;
+                    check.ensure_completed()?;
+                    let input: Value = serde_json::from_slice(
+                        &std::fs::read(
+                            evidence.join(format!("{}-input-receipt.json", case.as_str())),
+                        )
+                        .map_err(|error| stages::grader(error.into()))?,
+                    )
+                    .map_err(|error| stages::grader(error.into()))?;
+                    let source =
+                        input_document_id(&input["receipt"], collection).map_err(stages::grader)?;
+                    let observation = host.observation(case.as_str()).await?;
+                    let actual = host
+                        .snapshot(case.as_str())
+                        .await
+                        .map_err(stages::infrastructure)?;
+                    verify_read_only_check(&before_check, &actual)?;
+                    verify_observation(&observation, &actual)?;
+                    let items = mailbox(&host).await.map_err(stages::infrastructure)?;
+                    reporting::write_json_new(
+                        &evidence.join(format!("{}-mailbox.json", case.as_str())),
+                        &items,
+                    )?;
+                    let open = items
+                        .iter()
+                        .filter(|row| row["status"] == "open")
+                        .collect::<Vec<_>>();
+                    if index == 3 || index == 4 {
+                        ensure!(!open.is_empty(), "faults produced no attention item");
+                        verify_finding_coverage(&open, &actual, chrono::Utc::now().timestamp())?;
+                        for row in &open {
+                            ensure!(
+                                row["requester_did"] == owner
+                                    && row["target_behavior_id"] == monitor
+                                    && row["kind"] == "flag"
+                                    && row["action"] == "ack",
+                                "wrong notification ownership or handling"
+                            );
+                            let (request, source) = if index == 3 {
+                                (check.request_id.as_str(), source)
+                            } else {
+                                let (request, source) = original_notification_cause
+                                    .as_ref()
+                                    .context("original notification cause missing")?;
+                                (request.as_str(), source.as_str())
+                            };
+                            verify_notification_causality(row, request, source)?;
+                        }
+                        let keys = open
+                            .iter()
+                            .map(|row| row["item_key"].clone())
+                            .collect::<Vec<_>>();
+                        if index == 4 {
+                            ensure!(
+                                keys == previous_keys,
+                                "repeat created duplicate attention items"
+                            );
+                        }
+                        previous_keys = keys;
+                        if index == 3 {
+                            original_notification_cause =
+                                Some((check.request_id.clone(), source.to_owned()));
+                        }
+                    } else if index == 5 {
+                        verify_recovery_items(&open, &previous_keys)?;
+                        // Simulate the requester acknowledging earlier findings only after verified recovery.
+                        for row in open {
+                            host.dismiss(row["_docID"].as_str().context("mailbox ID missing")?)
+                                .await
+                                .map_err(stages::infrastructure)?;
+                        }
+                        ensure!(
+                            mailbox(&host)
+                                .await?
+                                .iter()
+                                .all(|row| row["status"] != "open"),
+                            "recovered findings were not dismissible"
+                        );
+                    } else {
+                        ensure!(open.is_empty(), "healthy cycle produced an attention item");
+                    }
+                    Ok(())
+                }),
+            )
+            .await?;
+        }
+        stages::checked(
+            CASES[7],
+            &evidence,
+            stages::acceptance(async {
+                let trigger = configured["Trigger"]
+                    .as_array()
+                    .context("triggers missing")?
+                    .iter()
+                    .find(|row| row["enabled"] == true && row["source"]["schedule_id"].is_string())
+                    .context("schedule trigger missing")?;
+                let before_check = host
+                    .snapshot("host-schedule-before-check")
+                    .await
+                    .map_err(stages::infrastructure)?;
+                let check = host
+                    .scheduled_check(
+                        trigger["trigger_id"]
+                            .as_str()
+                            .context("trigger ID missing")?,
+                        &monitor,
+                        CASES[7].as_str(),
+                    )
+                    .await?;
                 check.ensure_completed()?;
-                let input: Value = serde_json::from_slice(&std::fs::read(evidence.join(format!("{}-input-receipt.json", case.as_str()))).map_err(|error| stages::grader(error.into()))?).map_err(|error| stages::grader(error.into()))?;
-                let source = input_document_id(&input["receipt"], collection).map_err(stages::grader)?;
-                let observation = host.observation(case.as_str()).await?;
-                let actual = host.snapshot(case.as_str()).await.map_err(stages::infrastructure)?;
+                let observation = host
+                    .observation_for_correlation(CASES[7].as_str(), &check.request_id)
+                    .await?;
+                let actual = host
+                    .snapshot(CASES[7].as_str())
+                    .await
+                    .map_err(stages::infrastructure)?;
                 verify_read_only_check(&before_check, &actual)?;
                 verify_observation(&observation, &actual)?;
-                let items = mailbox(&host).await.map_err(stages::infrastructure)?;
-                reporting::write_json_new(&evidence.join(format!("{}-mailbox.json", case.as_str())), &items)?;
-                let open = items.iter().filter(|row| row["status"] == "open").collect::<Vec<_>>();
-                if index == 3 || index == 4 {
-                    ensure!(!open.is_empty(), "faults produced no attention item");
-                    verify_finding_coverage(&open, &actual, chrono::Utc::now().timestamp())?;
-                    for row in &open {
-                        ensure!(row["requester_did"] == owner && row["target_behavior_id"] == monitor && row["kind"] == "flag" && row["action"] == "ack", "wrong notification ownership or handling");
-                        let (request, source) = if index == 3 {
-                            (check.request_id.as_str(), source)
-                        } else {
-                            let (request, source) = original_notification_cause.as_ref().context("original notification cause missing")?;
-                            (request.as_str(), source.as_str())
-                        };
-                        verify_notification_causality(row, request, source)?;
-                    }
-                    let keys = open.iter().map(|row| row["item_key"].clone()).collect::<Vec<_>>();
-                    if index == 4 { ensure!(keys == previous_keys, "repeat created duplicate attention items"); }
-                    previous_keys = keys;
-                    if index == 3 { original_notification_cause = Some((check.request_id.clone(), source.to_owned())); }
-                } else if index == 5 {
-                    verify_recovery_items(&open, &previous_keys)?;
-                    // Simulate the requester acknowledging earlier findings only after verified recovery.
-                    for row in open { host.dismiss(row["_docID"].as_str().context("mailbox ID missing")?).await.map_err(stages::infrastructure)?; }
-                    ensure!(mailbox(&host).await?.iter().all(|row| row["status"] != "open"), "recovered findings were not dismissible");
-                } else { ensure!(open.is_empty(), "healthy cycle produced an attention item"); }
+                ensure!(
+                    mailbox(&host)
+                        .await?
+                        .iter()
+                        .all(|row| row["status"] != "open"),
+                    "healthy scheduled check produced an attention item"
+                );
                 Ok(())
-            })).await?;
-        }
-        stages::checked(CASES[7], &evidence, stages::acceptance(async {
-            let trigger = configured["Trigger"].as_array().context("triggers missing")?.iter().find(|row| row["enabled"] == true && row["source"]["schedule_id"].is_string()).context("schedule trigger missing")?;
-            let before_check = host.snapshot("host-schedule-before-check").await.map_err(stages::infrastructure)?;
-            let check = host.scheduled_check(trigger["trigger_id"].as_str().context("trigger ID missing")?, &monitor, CASES[7].as_str()).await?;
-            check.ensure_completed()?;
-            let observation = host.observation_for_correlation(CASES[7].as_str(), &check.request_id).await?;
-            let actual = host.snapshot(CASES[7].as_str()).await.map_err(stages::infrastructure)?;
-            verify_read_only_check(&before_check, &actual)?;
-            verify_observation(&observation, &actual)?;
-            ensure!(mailbox(&host).await?.iter().all(|row| row["status"] != "open"), "healthy scheduled check produced an attention item");
-            Ok(())
-        })).await?;
+            }),
+        )
+        .await?;
         for (case, regression) in [(CASES[8], false), (CASES[9], true)] {
-            stages::checked(case, &evidence, stages::acceptance(
-                candidates::evaluate(&mut host, &evidence, &engineer, &monitor, collection, regression)
-            )).await?;
+            stages::checked(
+                case,
+                &evidence,
+                stages::acceptance(candidates::evaluate(
+                    &mut host, &evidence, &engineer, &monitor, collection, regression,
+                )),
+            )
+            .await?;
         }
         Ok(())
-    }.await;
+    }
+    .await;
     let cleanup = host.close().await;
     let result = result.and(cleanup.map_err(stages::infrastructure));
     Ok(reporting::TrialResult {
@@ -671,7 +826,7 @@ pub(super) fn verify_steward_configuration(before: &Value, after: &Value) -> Res
         .into())
 }
 
-fn decode_configuration<T: serde::de::DeserializeOwned>(
+pub(super) fn decode_configuration<T: serde::de::DeserializeOwned>(
     collection: gents::Collection,
     row: &Value,
 ) -> Result<T> {
@@ -686,7 +841,7 @@ fn decode_configuration<T: serde::de::DeserializeOwned>(
     )?)
 }
 
-fn verify_monitor_authority(tools: &gents::document_config::Tools) -> Result<()> {
+pub(super) fn verify_monitor_authority(tools: &gents::document_config::Tools) -> Result<()> {
     let host = tools.host.as_ref().context("monitor host tools missing")?;
     let bash = host.bash.as_ref().context("monitor bash missing")?;
     ensure!(
@@ -718,8 +873,12 @@ fn verify_monitor_authority(tools: &gents::document_config::Tools) -> Result<()>
                     .is_some_and(|command| baseline.read_only_allowlist().contains(command))),
         "monitor command overrides must not extend the canonical read-only allowlist"
     );
+    verify_no_auxiliary_authority(tools)
+}
+
+pub(super) fn verify_no_auxiliary_authority(tools: &gents::document_config::Tools) -> Result<()> {
     ensure!(
-        host.cli.is_empty(),
+        tools.host.as_ref().is_none_or(|host| host.cli.is_empty()),
         "monitor must not select additional host-registered executors"
     );
     ensure!(

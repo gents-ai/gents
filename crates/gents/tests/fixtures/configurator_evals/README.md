@@ -10,11 +10,15 @@ Current suites:
   See [host/README.md](host/README.md) for environment and live commands.
 - `monitor-mailbox`: document-triggered monitoring, in-place editing, canonical
   mailbox output and deduplication. Run `make live-mailbox-eval`.
+- `host-maintenance`: shared monitor setup, repair preview/configuration, decline,
+  scope rejection, approved repair, restart/replay, and unresolved failed repair.
+  Run `make live-host-maintenance-eval`; first live acceptance is still pending.
 - `progressive-configurator`: supplemental onboarding, Builder readiness,
   skill import/use and document automation. Run `make live-configurator-eval`.
 
-Approval-driven maintenance and isolated accepted/rejected improvement candidates
-are unfinished. A passing host-steward cohort does not establish those guarantees.
+The host-steward suite includes isolated accepted/rejected improvement candidates;
+one live trial passed all ten stages. Approval-driven maintenance is registered
+but not yet live-validated. Neither suite has completed its N=30/C=30 acceptance.
 Pagoda creation/review/improvement and their dedicated browser grader are retired.
 [Historical cohort results](HISTORICAL_COHORTS.md) remain available, with original
 private receipts unchanged; do not compare different case catalogs as one cohort.

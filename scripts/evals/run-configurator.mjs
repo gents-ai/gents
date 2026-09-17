@@ -34,9 +34,12 @@ export async function runConfigurator({
   const root = resolve(env.GENTS_EVAL_ROOT || join(homedir(), ".gents-eval"));
   const suite = env.GENTS_EVAL_SUITE || "progressive-configurator";
   if (
-    !["progressive-configurator", "monitor-mailbox", "host-steward"].includes(
-      suite,
-    )
+    ![
+      "progressive-configurator",
+      "monitor-mailbox",
+      "host-steward",
+      "host-maintenance",
+    ].includes(suite)
   ) {
     throw new Error(`Unsupported eval suite: ${suite}`);
   }
@@ -82,7 +85,7 @@ export async function runConfigurator({
   const stopDashboard = startDashboard(directory, { output: stdout });
   try {
     const hostEnvironment = {};
-    if (suite === "host-steward") {
+    if (suite === "host-steward" || suite === "host-maintenance") {
       const runtimeImage = await resolveRuntimeImage(
         env.GENTS_HOST_RUNTIME_IMAGE,
         execution.revision,

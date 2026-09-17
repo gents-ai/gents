@@ -29,6 +29,9 @@ mod host;
 #[path = "host_scenarios.rs"]
 mod host_scenarios;
 
+#[path = "host_maintenance.rs"]
+mod host_maintenance;
+
 #[path = "cases.rs"]
 mod cases;
 
@@ -48,11 +51,20 @@ fn monitor_suite() -> bool {
 }
 
 fn host_suite() -> bool {
-    std::env::var("GENTS_EVAL_SUITE").as_deref() == Ok("host-steward")
+    matches!(
+        std::env::var("GENTS_EVAL_SUITE").as_deref(),
+        Ok("host-steward" | "host-maintenance")
+    )
+}
+
+fn maintenance_suite() -> bool {
+    std::env::var("GENTS_EVAL_SUITE").as_deref() == Ok("host-maintenance")
 }
 
 fn suite_cases() -> &'static [stages::CaseId] {
-    if host_suite() {
+    if maintenance_suite() {
+        host_maintenance::CASES
+    } else if host_suite() {
         host_scenarios::CASES
     } else if monitor_suite() {
         onboarding_scenarios::MONITOR_CASES
@@ -62,7 +74,9 @@ fn suite_cases() -> &'static [stages::CaseId] {
 }
 
 fn suite_id() -> &'static str {
-    if host_suite() {
+    if maintenance_suite() {
+        "host-maintenance"
+    } else if host_suite() {
         "host-steward"
     } else if monitor_suite() {
         "monitor-mailbox"
@@ -927,7 +941,9 @@ async fn run_retained_trial(
     std::fs::create_dir_all(&evidence).expect("create evidence directory");
     tracing::info!(target: "gents::configurator_eval", artifacts = %artifacts.display(), "starting trial");
     let work = async {
-        if host_suite() {
+        if maintenance_suite() {
+            host_maintenance::run_trial(model.clone(), trial, &artifacts).await
+        } else if host_suite() {
             host_scenarios::run_trial(model.clone(), trial, &artifacts).await
         } else if monitor_suite() {
             onboarding_scenarios::run_monitor_trial(model.clone(), trial, &artifacts).await
@@ -967,7 +983,11 @@ async fn live_configurator_progressive_eval_matrix() {
     assert!(
         matches!(
             std::env::var("GENTS_EVAL_SUITE").as_deref(),
-            Err(_) | Ok("progressive-configurator") | Ok("monitor-mailbox") | Ok("host-steward")
+            Err(_)
+                | Ok("progressive-configurator")
+                | Ok("monitor-mailbox")
+                | Ok("host-steward")
+                | Ok("host-maintenance")
         ),
         "unsupported eval suite"
     );
@@ -1005,7 +1025,9 @@ async fn live_configurator_progressive_eval_matrix() {
         provider.name(),
         concurrency,
         stage_timeout.as_secs(),
-        if host_suite() {
+        if maintenance_suite() {
+            host_maintenance::provenance().expect("collect maintenance provenance")
+        } else if host_suite() {
             host_scenarios::provenance().expect("collect host provenance")
         } else if monitor_suite() {
             onboarding_scenarios::monitor_provenance().expect("collect monitor provenance")
