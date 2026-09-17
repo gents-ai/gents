@@ -373,6 +373,32 @@ fn untyped_failures_remain_unknown_until_the_check_owner_classifies_them() {
     );
 }
 
+#[tokio::test]
+async fn acceptance_preserves_host_observation_failures_as_infrastructure() {
+    let error = acceptance(async {
+        let observation: Result<()> = Err(anyhow::anyhow!("host controller unavailable"));
+        observation.map_err(infrastructure)?;
+        Ok(())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<EvaluationFailure>().unwrap().kind(),
+        "infrastructure"
+    );
+
+    let error = acceptance(async {
+        anyhow::ensure!(false, "host observed but repair did not recover service");
+        Ok(())
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<EvaluationFailure>().unwrap().kind(),
+        "model_acceptance"
+    );
+}
+
 /// Independent acceptance is distinct from a model request terminalizing.
 /// Preserve the check result even when it fails and prevents dependent stages.
 pub async fn checked<T>(
