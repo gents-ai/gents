@@ -226,6 +226,9 @@ pub struct SkillSaveRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TaskRunRequest {
     pub task_id: String,
+    /// Explicit action scope; independent of the shared observation filter.
+    #[ts(optional)]
+    pub agent_did: Option<String>,
     #[ts(type = "unknown", optional)]
     pub args: Option<serde_json::Value>,
 }
@@ -241,6 +244,8 @@ pub struct ScheduleSaveRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleRunRequest {
     pub schedule_id: String,
+    #[ts(optional)]
+    pub agent_did: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

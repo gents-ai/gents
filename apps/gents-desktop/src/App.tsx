@@ -4,7 +4,6 @@ import { createDesktopClient } from "@source-inc/gents-desktop-client";
 import { MemoryNavProvider, useNav, type Nav } from "@gents/shell";
 import { Toaster } from "@gents/ui/components/sonner";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -12,6 +11,7 @@ import { StartupScreen } from "./components/StartupScreen";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
 import { useNativeWindowReadiness } from "./hooks/useNativeWindowReadiness";
+import { useManagedServerTrayStop } from "./hooks/useManagedServerTrayStop";
 import type { DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
@@ -87,16 +87,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   useEffect(() => {
     void startNativeSimulatorE2e();
   }, []);
-  useEffect(() => {
-    if (!bridge.api.stopManagedServer || !("__TAURI_INTERNALS__" in window)) return;
-    let unlisten: (() => void) | undefined;
-    void listen("desktop://managed-server-tray-stop", () => {
-      void bridge.api.stopManagedServer?.(true);
-    }).then((cleanup) => {
-      unlisten = cleanup;
-    });
-    return () => unlisten?.();
-  }, [bridge.api]);
+  useManagedServerTrayStop(bridge.api);
 
   const agent = shell.selectedDeployment?.agentPrincipal.displayName ?? null;
   useEffect(() => {

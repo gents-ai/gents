@@ -147,13 +147,15 @@ export function createDesktopApiAdapter(
       }),
     renameSession: (request) =>
       invokeDesktop<void>("desktop_session_rename", { request }),
-    resendRequest: (requestId) =>
+    resendRequest: (requestId, agentDid) =>
       invokeDesktop<RequestResendResult>("desktop_request_resend", {
         requestId,
+        agentDid,
       }),
-    retryRequest: (requestId) =>
+    retryRequest: (requestId, agentDid) =>
       invokeDesktop<ChatSendResult>("desktop_request_retry", {
         requestId,
+        agentDid,
       }),
     applyConfigComponents: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_config_components_apply", {

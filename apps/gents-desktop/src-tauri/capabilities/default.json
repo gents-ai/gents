@@ -10,6 +10,7 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-set-title",
+    "core:window:allow-set-theme",
     "opener:default",
     "dialog:allow-open",
     "gents-desktop-bridge:default",

@@ -810,6 +810,11 @@ describe("configuration panels", () => {
       screen.getByRole("button", { name: "Run task" }).click();
       await Promise.resolve();
     });
+    expect(shell.runTask).toHaveBeenCalledWith({
+      taskId: "task-a",
+      agentDid: deployment.agentDid,
+      args: {},
+    });
     generation += 1;
     await act(async () => {
       resolve({ requestId: "stale-request", sessionId: "stale-session" });
@@ -850,7 +855,10 @@ describe("configuration panels", () => {
       .setup()
       .click(screen.getByRole("button", { name: "Run schedule now" }));
 
-    expect(api.runSchedule).toHaveBeenCalledWith({ scheduleId: "timer-a" });
+    expect(api.runSchedule).toHaveBeenCalledWith({
+      scheduleId: "timer-a",
+      agentDid: deployment.agentDid,
+    });
     expect(await screen.findByText("request-schedule")).toBeInTheDocument();
     expect(shell.refreshSnapshot).toHaveBeenCalledTimes(1);
   });

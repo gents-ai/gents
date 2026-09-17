@@ -75,19 +75,16 @@ describe("native shell classifier", () => {
     expect(ownsAutomaticRecovery()).toBe(true);
   });
 
-  it("classifies macOS and tracks its fullscreen state", async () => {
+  it("lets macOS own title and tab chrome outside the web viewport", () => {
     enterTauri("MacIntel");
-    windowMocks.isFullscreen.mockResolvedValueOnce(true);
 
     applyShellPlatform();
 
     expect(isMacTauriShell()).toBe(true);
-    expect(headerIsWindowBar()).toBe(true);
+    expect(headerIsWindowBar()).toBe(false);
     expect(document.documentElement.dataset.shell).toBe("mac");
-    await vi.waitFor(() => {
-      expect(document.documentElement.dataset.windowFullscreen).toBe("true");
-    });
-    expect(windowMocks.onResized).toHaveBeenCalledOnce();
+    expect(windowMocks.onResized).not.toHaveBeenCalled();
+    expect(windowMocks.isFullscreen).not.toHaveBeenCalled();
   });
 
   it("classifies Windows as a custom window bar", () => {
