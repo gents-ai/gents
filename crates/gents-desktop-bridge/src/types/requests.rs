@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use super::DesktopClientSnapshot;
+
 /// Local-runtime init request. Filesystem paths are **not** accepted from the
 /// webview — they come from `BridgeConfig` resolved at plugin init.
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -97,6 +99,22 @@ pub struct AgentConfigSaveRequest {
 #[serde(deny_unknown_fields)]
 pub struct BehaviorSaveRequest {
     pub document: gents::AgentBehaviorDocument,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct BehaviorScaffoldCreateRequest {
+    pub agent_did: String,
+    pub source_behavior_id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BehaviorScaffoldCreateResult {
+    pub behavior_id: String,
+    pub snapshot: DesktopClientSnapshot,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

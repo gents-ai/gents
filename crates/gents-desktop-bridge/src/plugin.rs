@@ -59,6 +59,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::config::desktop_config_components_apply,
             tauri_commands::config::desktop_config_components_patch,
             tauri_commands::config::desktop_behavior_save,
+            tauri_commands::config::desktop_behavior_scaffold_create,
             tauri_commands::config::desktop_skill_save,
             tauri_commands::config::desktop_skill_delete,
             tauri_commands::config::desktop_task_delete,

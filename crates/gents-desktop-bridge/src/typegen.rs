@@ -194,6 +194,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ConfigComponentsPatchRequest,
         ConfigComponentPatch,
         BehaviorSaveRequest,
+        BehaviorScaffoldCreateRequest,
+        BehaviorScaffoldCreateResult,
         SkillDeleteRequest,
         TaskDeleteRequest,
         ScheduleDeleteRequest,
@@ -466,6 +468,8 @@ fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     ToolsSaveRequest::export_all_to(dir.path()).expect("tools export");
     ToolServiceSaveRequest::export_all_to(dir.path()).expect("service export");
     BehaviorSaveRequest::export_all_to(dir.path()).expect("behavior export");
+    BehaviorScaffoldCreateRequest::export_all_to(dir.path()).expect("behavior scaffold request");
+    BehaviorScaffoldCreateResult::export_all_to(dir.path()).expect("behavior scaffold result");
     InferenceProfileSaveRequest::export_all_to(dir.path()).expect("profile export");
     normalize_generated_types(dir.path()).expect("wire number normalization");
     let behavior = std::fs::read_to_string(dir.path().join("AgentBehavior.ts")).unwrap();

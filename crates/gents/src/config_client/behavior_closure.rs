@@ -18,7 +18,8 @@ use super::{
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::behavior_scope::{
-    behavior_component_id, valid_generated_qualified_key, BehaviorComponentPath,
+    behavior_component_id, behavior_slug_from_display_name, find_available_personal_behavior_key,
+    valid_generated_qualified_key, BehaviorComponentPath,
 };
 use crate::document_config::{
     AgentBehavior, AgentContext, CompactionConfig, ConfigReferences, InferenceExecution,
@@ -629,6 +630,40 @@ pub async fn materialize_behavior_closure_candidate_in_txn(
     apply_desired_state_plan(txn, &plan).await
 }
 
+/// Allocate and publish a disabled personal-behavior scaffold in one
+/// transaction. The source closure is copied through the canonical closure
+/// planner, so no partially enabled or partially scoped configuration is ever
+/// visible.
+pub async fn materialize_disabled_behavior_scaffold_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    agent_did: &str,
+    source_behavior_id: &str,
+    display_name: &str,
+) -> Result<String> {
+    ensure!(
+        !display_name.trim().is_empty(),
+        "behavior display name must not be blank"
+    );
+    let snapshot = ConfigReferences::load_in_txn(txn, agent_did).await?;
+    let mut source: AgentBehavior =
+        decode_snapshot(&snapshot, Collection::AgentBehavior, source_behavior_id)?
+            .with_context(|| format!("source behavior {source_behavior_id:?} does not exist"))?;
+    ensure!(
+        source.agent_did == agent_did,
+        "source behavior belongs to a different principal"
+    );
+    let slug = behavior_slug_from_display_name(display_name);
+    let target_behavior_id = find_available_personal_behavior_key(&slug, |collection, id| {
+        snapshot_document(&snapshot, collection, id).is_some()
+    })?
+    .context("personal behavior key space exhausted")?;
+
+    source.enabled = false;
+    let plan = plan_behavior_closure(&snapshot, &source, &target_behavior_id, Some(display_name))?;
+    apply_desired_state_plan(txn, &plan).await?;
+    Ok(target_behavior_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1032,5 +1067,27 @@ mod tests {
             "local:edited:inference",
         );
         assert_eq!(profile["backend_id"], "shared-backend");
+    }
+
+    #[test]
+    fn disabled_candidate_stays_disabled_in_the_atomic_closure_plan() {
+        let snapshot = snapshot(full_source_documents());
+        let mut source = source_behavior();
+        source.enabled = false;
+        let plan = plan_behavior_closure(
+            &snapshot,
+            &source,
+            "local:new-behaviour",
+            Some("New behaviour"),
+        )
+        .unwrap();
+
+        let behavior = planned(&plan, Collection::AgentBehavior, "local:new-behaviour");
+        assert_eq!(behavior["enabled"], false);
+        assert_eq!(behavior["context_id"], "local:new-behaviour:context");
+        assert_eq!(
+            behavior["inference_profile_id"],
+            "local:new-behaviour:inference"
+        );
     }
 }

@@ -4,6 +4,7 @@ import type { BackendSaveRequest as GeneratedBackendSaveRequest } from "../gener
 import type { BehaviorDeleteRequest as GeneratedBehaviorDeleteRequest } from "../generated/BehaviorDeleteRequest.js";
 import type { ContextDeleteRequest as GeneratedContextDeleteRequest } from "../generated/ContextDeleteRequest.js";
 import type { BehaviorSaveRequest as GeneratedBehaviorSaveRequest } from "../generated/BehaviorSaveRequest.js";
+import type { BehaviorScaffoldCreateRequest as GeneratedBehaviorScaffoldCreateRequest } from "../generated/BehaviorScaffoldCreateRequest.js";
 import type { ChatSendRequest as GeneratedChatSendRequest } from "../generated/ChatSendRequest.js";
 import type { MailboxItemRequest as GeneratedMailboxItemRequest } from "../generated/MailboxItemRequest.js";
 import type { SessionRenameRequest as GeneratedSessionRenameRequest } from "../generated/SessionRenameRequest.js";
@@ -44,6 +45,8 @@ export type BehaviorDeleteRequest =
   RequestInput<GeneratedBehaviorDeleteRequest>;
 export type ContextDeleteRequest = RequestInput<GeneratedContextDeleteRequest>;
 export type BehaviorSaveRequest = RequestInput<GeneratedBehaviorSaveRequest>;
+export type BehaviorScaffoldCreateRequest =
+  RequestInput<GeneratedBehaviorScaffoldCreateRequest>;
 export type ChatSendRequest = RequestInput<GeneratedChatSendRequest>;
 export type MailboxItemRequest = RequestInput<GeneratedMailboxItemRequest>;
 export type SessionRenameRequest = RequestInput<GeneratedSessionRenameRequest>;
@@ -83,6 +86,7 @@ export type { TaskRunResult } from "../generated/TaskRunResult.js";
 export type { ToolServiceTestResult } from "../generated/ToolServiceTestResult.js";
 export type { ToolServiceToolView } from "../generated/ToolServiceToolView.js";
 export type { CodexLoginResult } from "../generated/CodexLoginResult.js";
+export type { BehaviorScaffoldCreateResult } from "../generated/BehaviorScaffoldCreateResult.js";
 export type { GrokLoginResult } from "../generated/GrokLoginResult.js";
 export type { GrokLoginRequest } from "../generated/GrokLoginRequest.js";
 export type { GrokLoginUrl } from "../generated/GrokLoginUrl.js";

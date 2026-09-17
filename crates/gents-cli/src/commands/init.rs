@@ -14,10 +14,14 @@ use gents::document_config::{
     HostTools, InferenceBackend, Tools,
 };
 use gents::{
-    default_behavior_id_for_agent, default_inference_profile_id_for_behavior, load_agent_behavior,
-    load_agent_principal, load_or_create_macos_keychain_identity,
-    load_or_create_macos_secure_enclave_identity, upsert_agent_principal, AgentIdentity, BashMode,
-    Collection, CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity,
+    behavior_scope::{
+        behavior_component_id, valid_new_personal_behavior_key, BehaviorComponentPath,
+        SETUP_CONFIGURATOR_BEHAVIOR_ID,
+    },
+    default_inference_profile_id_for_behavior, load_agent_behavior, load_agent_principal,
+    load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
+    upsert_agent_principal, AgentIdentity, BashMode, Collection, CommandExecutionMode,
+    FileToolMode, InferenceProfile, KeyIdentity,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -659,12 +663,14 @@ async fn initialize_runtime_home(
             }
         });
     let existing_principal = load_agent_principal(node, agent_did).await?;
-    let default_behavior_id = existing_principal
+    let retained_default_behavior_id = existing_principal
         .as_ref()
-        .and_then(|principal| normalize_optional_string(principal.default_behavior_id.as_deref()))
-        .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
+        .and_then(|principal| normalize_optional_string(principal.default_behavior_id.as_deref()));
+    let default_behavior_id =
+        init_default_behavior_id(retained_default_behavior_id.as_deref(), args.setup_steward);
     let existing_default_behavior =
         load_agent_behavior(node, agent_did, &default_behavior_id).await?;
+    let uses_scoped_component_names = uses_scoped_component_names(&default_behavior_id);
     if let Some(behavior) = existing_default_behavior.as_ref() {
         if behavior.agent_did != agent_did {
             anyhow::bail!(
@@ -691,7 +697,11 @@ async fn initialize_runtime_home(
         principal_enabled,
     )
     .await?;
-    let tools_id = default_tools_id_for_behavior(&default_behavior_id);
+    let tools_id = if uses_scoped_component_names {
+        default_tools_id_for_behavior(&default_behavior_id)
+    } else {
+        legacy_default_tools_id_for_behavior(&default_behavior_id)
+    };
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
     // Canonical auth is a typed selection, never a raw key copy: an
@@ -732,6 +742,7 @@ async fn initialize_runtime_home(
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
+    tools.scope_behavior_id = uses_scoped_component_names.then(|| default_behavior_id.clone());
     if args.setup_steward {
         tools.self_config = Some(setup_steward_self_config());
         tools
@@ -740,9 +751,13 @@ async fn initialize_runtime_home(
             .enable_graph_tools = Some(true);
     }
     let context = AgentContext {
-        context_id: default_context_id_for_behavior(&default_behavior_id),
+        context_id: if uses_scoped_component_names {
+            default_context_id_for_behavior(&default_behavior_id)
+        } else {
+            legacy_default_context_id_for_behavior(&default_behavior_id)
+        },
         agent_did: agent_did.to_string(),
-        scope_behavior_id: None,
+        scope_behavior_id: uses_scoped_component_names.then(|| default_behavior_id.clone()),
         display_name: Some(if args.setup_steward {
             "The Engineer".to_string()
         } else {
@@ -759,9 +774,14 @@ async fn initialize_runtime_home(
         skill_ids: Vec::new(),
         tags: Vec::new(),
     };
-    let inference_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
+    let inference_profile_id = if uses_scoped_component_names {
+        behavior_component_id(&default_behavior_id, BehaviorComponentPath::Inference)
+    } else {
+        default_inference_profile_id_for_behavior(&default_behavior_id)
+    };
     let inference_profile = standard_inference_profile(
         agent_did,
+        uses_scoped_component_names.then_some(default_behavior_id.as_str()),
         &inference_profile_id,
         &backend_id,
         &model_name.to_string(),
@@ -877,10 +897,30 @@ fn replacement<T: serde::Serialize>(
 }
 
 fn default_tools_id_for_behavior(behavior_id: &str) -> String {
-    format!("{behavior_id}-tools")
+    behavior_component_id(behavior_id, BehaviorComponentPath::Tools)
 }
 
 fn default_context_id_for_behavior(behavior_id: &str) -> String {
+    behavior_component_id(behavior_id, BehaviorComponentPath::Context)
+}
+
+fn init_default_behavior_id(retained: Option<&str>, setup_steward: bool) -> String {
+    if setup_steward {
+        SETUP_CONFIGURATOR_BEHAVIOR_ID.to_owned()
+    } else {
+        retained.unwrap_or("local:default").to_owned()
+    }
+}
+
+fn uses_scoped_component_names(behavior_id: &str) -> bool {
+    behavior_id == SETUP_CONFIGURATOR_BEHAVIOR_ID || valid_new_personal_behavior_key(behavior_id)
+}
+
+fn legacy_default_tools_id_for_behavior(behavior_id: &str) -> String {
+    format!("{behavior_id}-tools")
+}
+
+fn legacy_default_context_id_for_behavior(behavior_id: &str) -> String {
     format!("{behavior_id}-context")
 }
 
@@ -1126,6 +1166,7 @@ fn resolve_tool_root_for_package(
 /// duplicate flat fields, no invented sub-documents.
 fn standard_inference_profile(
     agent_did: &str,
+    behavior_id: Option<&str>,
     profile_id: &str,
     backend_id: &str,
     model_name: &str,
@@ -1133,7 +1174,7 @@ fn standard_inference_profile(
     InferenceProfile {
         agent_did: agent_did.to_string(),
         profile_id: profile_id.to_string(),
-        scope_behavior_id: None,
+        scope_behavior_id: behavior_id.map(ToOwned::to_owned),
         display_name: Some("Default".to_string()),
         description: None,
         backend_id: backend_id.to_string(),
@@ -1543,6 +1584,32 @@ mod tests {
             args.tool_package = Some(package);
             assert_eq!(resolve_initial_tool_package(&args).unwrap(), package);
         }
+    }
+
+    #[test]
+    fn fresh_init_uses_canonical_default_and_setup_behavior_ids() {
+        assert_eq!(init_default_behavior_id(None, false), "local:default");
+        assert_eq!(
+            init_default_behavior_id(None, true),
+            SETUP_CONFIGURATOR_BEHAVIOR_ID
+        );
+        assert!(uses_scoped_component_names("local:default"));
+        assert!(uses_scoped_component_names(SETUP_CONFIGURATOR_BEHAVIOR_ID));
+    }
+
+    #[test]
+    fn reinit_retains_legacy_default_without_scoping_its_components() {
+        let retained = "did:key:zLegacy:default";
+        assert_eq!(init_default_behavior_id(Some(retained), false), retained);
+        assert!(!uses_scoped_component_names(retained));
+        assert_eq!(
+            legacy_default_context_id_for_behavior(retained),
+            format!("{retained}-context")
+        );
+        assert_eq!(
+            legacy_default_tools_id_for_behavior(retained),
+            format!("{retained}-tools")
+        );
     }
 
     /// Drift fence between init's tool packages and the directory persona

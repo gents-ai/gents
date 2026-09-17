@@ -19,6 +19,8 @@ import type {
   BehaviorDeleteRequest,
   ContextDeleteRequest,
   BehaviorSaveRequest,
+  BehaviorScaffoldCreateRequest,
+  BehaviorScaffoldCreateResult,
   CascadeCancelPreview,
   ChatSendResult,
   CodexLoginResult,
@@ -165,6 +167,9 @@ export type DesktopApiAdapter = {
   saveBehaviorConfig: (
     request: BehaviorSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
+  createBehaviorScaffold?: (
+    request: BehaviorScaffoldCreateRequest,
+  ) => Promise<BehaviorScaffoldCreateResult>;
   saveSkillConfig: (
     request: SkillSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

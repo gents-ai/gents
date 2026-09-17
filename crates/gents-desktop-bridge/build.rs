@@ -37,6 +37,7 @@ const COMMANDS: &[&str] = &[
     "desktop_config_components_apply",
     "desktop_config_components_patch",
     "desktop_behavior_save",
+    "desktop_behavior_scaffold_create",
     "desktop_skill_save",
     "desktop_skill_delete",
     "desktop_task_delete",

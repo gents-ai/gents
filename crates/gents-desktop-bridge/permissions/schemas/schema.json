@@ -355,6 +355,18 @@
           "markdownDescription": "Denies the desktop_behavior_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_behavior_scaffold_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-behavior-scaffold-create",
+          "markdownDescription": "Enables the desktop_behavior_scaffold_create command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_behavior_scaffold_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-behavior-scaffold-create",
+          "markdownDescription": "Denies the desktop_behavior_scaffold_create command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_bootstrap_summary command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-bootstrap-summary",

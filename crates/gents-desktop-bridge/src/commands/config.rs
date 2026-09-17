@@ -3,10 +3,10 @@ use gents_desktop_core::client::ClientCore;
 
 use super::super::types::{
     AgentConfigSaveRequest, BackendDeleteRequest, BackendSaveRequest, BehaviorDeleteRequest,
-    BehaviorSaveRequest, ContextDeleteRequest, InferenceProfileDeleteRequest,
-    InferenceProfileSaveRequest, ScheduleDeleteRequest, SkillDeleteRequest, SkillSaveRequest,
-    TaskDeleteRequest, ToolServiceDeleteRequest, ToolsDeleteRequest, ToolsSaveRequest,
-    TriggerDeleteRequest,
+    BehaviorSaveRequest, BehaviorScaffoldCreateRequest, ContextDeleteRequest,
+    InferenceProfileDeleteRequest, InferenceProfileSaveRequest, ScheduleDeleteRequest,
+    SkillDeleteRequest, SkillSaveRequest, TaskDeleteRequest, ToolServiceDeleteRequest,
+    ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
 };
 
 pub async fn save_agent_config(core: &ClientCore, request: AgentConfigSaveRequest) -> Result<()> {
@@ -15,6 +15,18 @@ pub async fn save_agent_config(core: &ClientCore, request: AgentConfigSaveReques
 
 pub async fn save_behavior_config(core: &ClientCore, request: BehaviorSaveRequest) -> Result<()> {
     core.save_behavior(&request.document).await
+}
+
+pub async fn create_behavior_scaffold(
+    core: &ClientCore,
+    request: BehaviorScaffoldCreateRequest,
+) -> Result<String> {
+    core.create_behavior_scaffold(
+        &request.agent_did,
+        &request.source_behavior_id,
+        &request.display_name,
+    )
+    .await
 }
 
 #[cfg_attr(test, allow(dead_code))]

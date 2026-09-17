@@ -54,6 +54,8 @@ export type {
   EventSourceSaveRequest,
   EventSourceDeleteRequest,
   BehaviorSaveRequest,
+  BehaviorScaffoldCreateRequest,
+  BehaviorScaffoldCreateResult,
   ChatSendRequest,
   MailboxItemRequest,
   CodexLoginResult,

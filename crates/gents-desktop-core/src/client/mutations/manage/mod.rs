@@ -98,7 +98,10 @@ pub async fn delete_scoped_document_local(
     .await
 }
 
-pub use behavior::{delete_agent_behavior_on, delete_agent_context_on, upsert_agent_behavior_on};
+pub use behavior::{
+    create_disabled_behavior_scaffold_on, delete_agent_behavior_on, delete_agent_context_on,
+    upsert_agent_behavior_on,
+};
 pub use inference::{delete_inference_backend_on, upsert_inference_backend_on};
 pub use principal::{
     apply_config_components_on, patch_config_components_on, upsert_agent_principal_on,

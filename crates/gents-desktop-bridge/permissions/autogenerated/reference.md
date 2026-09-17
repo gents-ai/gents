@@ -154,6 +154,32 @@ Denies the desktop_behavior_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-behavior-scaffold-create`
+
+</td>
+<td>
+
+Enables the desktop_behavior_scaffold_create command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-behavior-scaffold-create`
+
+</td>
+<td>
+
+Denies the desktop_behavior_scaffold_create command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-bootstrap-summary`
 
 </td>

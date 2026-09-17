@@ -20,6 +20,27 @@ pub async fn upsert_agent_behavior_on(
     super::apply_plan(access, "desktop.behavior.save", plan).await
 }
 
+pub async fn create_disabled_behavior_scaffold_on(
+    access: &ConfigAccess,
+    agent_did: &str,
+    source_behavior_id: &str,
+    display_name: &str,
+) -> Result<String> {
+    access
+        .transact("desktop.behavior.create_scaffold", |txn| {
+            Box::pin(async move {
+                gents::config_client::materialize_disabled_behavior_scaffold_in_txn(
+                    txn,
+                    agent_did,
+                    source_behavior_id,
+                    display_name,
+                )
+                .await
+            })
+        })
+        .await
+}
+
 #[cfg(test)]
 pub async fn upsert_agent_behavior(
     node: &EmbeddedNode,
