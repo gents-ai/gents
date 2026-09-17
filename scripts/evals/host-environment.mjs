@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { mkdir } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
+import { randomUUID } from "node:crypto";
 
 const execute = promisify(execFile);
 const image = "gents-eval-host:v1";
@@ -140,39 +141,66 @@ export class HostEnvironment {
       const { address } = await lookup(url.hostname, { family: 4 });
       hosts.push("--add-host", `${url.hostname}:${address}`);
     }
-    const id = await docker([
-      "run",
-      "--detach",
-      "--read-only",
-      "--network",
-      runtime ? "bridge" : "none",
-      ...hosts,
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--pids-limit",
-      runtime ? "256" : "64",
-      "--memory",
-      runtime ? "512m" : "128m",
-      "--cpus",
-      "0.5",
-      "--tmpfs",
-      "/host:rw,exec,nosuid,nodev,size=16m,uid=1000,gid=1000,mode=0700",
-      "--tmpfs",
-      "/tmp:rw,nosuid,nodev,noexec,size=16m",
-      ...(runtime
-        ? [
-            "--tmpfs",
-            "/runtime:rw,nosuid,nodev,noexec,size=256m,uid=1000,gid=1000,mode=0700",
-            "--publish",
-            "127.0.0.1::9191",
-          ]
-        : []),
-      "--label",
-      "gents.eval.fixture=host-v1",
-      runtime ? runtimeImage : image,
-    ]);
+    const network = runtime
+      ? await docker([
+          "network",
+          "create",
+          "--driver",
+          "bridge",
+          "--label",
+          "gents.eval.fixture=host-v1",
+          `gents-eval-host-${randomUUID()}`,
+        ])
+      : null;
+    let id;
+    try {
+      id = await docker([
+        "run",
+        "--detach",
+        "--read-only",
+        "--network",
+        network || "none",
+        ...hosts,
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--pids-limit",
+        runtime ? "256" : "64",
+        "--memory",
+        runtime ? "512m" : "128m",
+        "--cpus",
+        "0.5",
+        "--tmpfs",
+        "/host:rw,exec,nosuid,nodev,size=16m,uid=1000,gid=1000,mode=0700",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev,noexec,size=16m",
+        ...(runtime
+          ? [
+              "--tmpfs",
+              "/runtime:rw,nosuid,nodev,noexec,size=256m,uid=1000,gid=1000,mode=0700",
+              "--publish",
+              "127.0.0.1::9191",
+            ]
+          : []),
+        "--label",
+        "gents.eval.fixture=host-v1",
+        ...(network ? ["--label", `gents.eval.network=${network}`] : []),
+        runtime ? runtimeImage : image,
+      ]);
+    } catch (error) {
+      if (network) {
+        try {
+          await docker(["network", "rm", network]);
+        } catch (cleanup) {
+          throw new AggregateError(
+            [error, cleanup],
+            "Host startup and network cleanup failed",
+          );
+        }
+      }
+      throw error;
+    }
     const environment = new HostEnvironment(id);
     try {
       await environment.exec([
@@ -406,7 +434,20 @@ export class HostEnvironment {
   }
 
   async close() {
+    await this.assertOwned();
+    const [record] = JSON.parse(await docker(["inspect", this.id]));
+    const network = record.Config?.Labels?.["gents.eval.network"];
+    if (network) {
+      if (!/^[a-f0-9]{64}$/.test(network))
+        throw new Error("Invalid fixture network ID");
+      const [owned] = JSON.parse(await docker(["network", "inspect", network]));
+      if (owned.Labels?.["gents.eval.fixture"] !== "host-v1")
+        throw new Error(
+          "Refusing to remove a network not owned by this eval fixture",
+        );
+    }
     await docker(["rm", "--force", this.id]);
+    if (network) await docker(["network", "rm", network]);
   }
 
   async restoreMonitoringFaults() {

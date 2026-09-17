@@ -5,12 +5,60 @@ import {
   archiveContainerDirectory,
   hostMemoryPlan,
   validateRuntimeRevision,
+  resolveRuntimeImage,
 } from "./host-environment.mjs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+
+test(
+  "live fixture networks prevent direct cross-trial access and are cleaned up",
+  {
+    skip: process.env.GENTS_HOST_FIXTURE_TEST !== "1",
+    timeout: 180_000,
+  },
+  async () => {
+    const execute = promisify(execFile);
+    const runtimeImage = await resolveRuntimeImage();
+    const hosts = [];
+    const networks = [];
+    try {
+      for (let index = 0; index < 2; index++) {
+        const host = await HostEnvironment.start({
+          runtime: true,
+          runtimeImage,
+          endpoint: "http://127.0.0.1:8000/v1",
+        });
+        hosts.push(host);
+        const { stdout } = await execute("docker", ["inspect", host.id]);
+        const [record] = JSON.parse(stdout);
+        networks.push(record.Config.Labels["gents.eval.network"]);
+      }
+      assert.notEqual(networks[0], networks[1]);
+      const { stdout } = await execute("docker", ["inspect", hosts[1].id]);
+      const [record] = JSON.parse(stdout);
+      const address = Object.values(record.NetworkSettings.Networks)[0]
+        .IPAddress;
+      assert.match(address, /^\d+\.\d+\.\d+\.\d+$/);
+      assert.equal((await hosts[0].snapshot()).api.body, "healthy");
+      await assert.rejects(
+        hosts[0].exec([
+          "wget",
+          "-T",
+          "2",
+          "-qO-",
+          `http://${address}:8080/cgi-bin/health`,
+        ]),
+      );
+    } finally {
+      await Promise.all(hosts.map((host) => host.close()));
+    }
+    for (const network of networks)
+      await assert.rejects(execute("docker", ["network", "inspect", network]));
+  },
+);
 
 test("runtime provenance rejects stale, dirty, missing, or abbreviated revisions", () => {
   const commit = "a".repeat(40);
