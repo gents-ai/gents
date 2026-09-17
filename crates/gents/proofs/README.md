@@ -183,6 +183,9 @@ The current proof suite covers twenty practical areas:
     dismissal, at-most-one open item per owner/source tuple, fresh occurrence
     allocation after terminal rows, terminal-state immutability, deadline
     expiry, and proof that mailbox close states do not create graph edges.
+    Reply consumption binds an authenticated interactive request to the explicit
+    target and requester; a consumed item admits only its recorded request
+    (`Mailbox/Reply`). This does not grant host execution authority.
     Notification policy separates configured condition identity from runtime
     event identity; open condition content can update without changing the
     envelope or mutating a terminal row (`Mailbox/Notification`). Generated

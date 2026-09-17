@@ -94,10 +94,7 @@ impl MailboxNotificationPolicy {
                     .expected_collection
                     .as_deref()
                     .context("write_document notification requires expected_collection")?;
-                anyhow::ensure!(
-                    mailbox_close_collection(MAILBOX_CLOSE_COLLECTIONS, collection).is_some(),
-                    "unsupported mailbox close collection {collection:?}"
-                );
+                validate_collection_identifier(collection)?;
             }
             _ => anyhow::ensure!(
                 self.expected_collection.is_none(),

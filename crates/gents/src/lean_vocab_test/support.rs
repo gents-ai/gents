@@ -53,6 +53,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_notification_cases: Vec<serde_json::Value>,
+    pub(crate) mailbox_reply_cases: Vec<serde_json::Value>,
     pub(crate) graph_invocation_publication_cases: Vec<serde_json::Value>,
     pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,

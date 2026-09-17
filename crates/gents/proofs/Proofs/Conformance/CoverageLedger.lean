@@ -722,6 +722,12 @@ def caseCoverage : List CoverageEntry :=
       "MailboxNotificationCases"
       "mailbox::notification_tests::generated_notification_cases_drive_durable_writes")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "mailbox_reply_cases"
+      "MailboxReplyCases"
+      "mailbox::reply_tests::generated_reply_cases_drive_claim_validation"
+      "Decision cases cover reply matching and terminal-state eligibility. Signed-row loading, atomic request/item claim, and concurrent dismissal require transaction-owner integration tests.")
+      "mailbox" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "logical_output_obligation_cases"
       "LogicalOutputObligationCases"

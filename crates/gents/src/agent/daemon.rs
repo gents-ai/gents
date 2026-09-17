@@ -430,7 +430,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         behavior_id = %self.behavior.behavior_id,
                         request_id = %request.request_id,
                         error = %error,
-                        "rejecting request with an invalid canonical session binding"
+                        "rejecting request with an invalid canonical admission binding"
                     );
                     if let Err(rejection_error) =
                         lifecycle.reject_admission(&error.to_string()).await

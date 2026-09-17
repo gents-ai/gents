@@ -560,6 +560,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.mailbox_notification_cases,
         ),
         (
+            "mailbox_reply_cases",
+            "MailboxReplyCases",
+            &snapshot.mailbox_reply_cases,
+        ),
+        (
             "invalid_tool_progress_cases",
             "InvalidToolProgressCases",
             &snapshot.invalid_tool_progress_cases,

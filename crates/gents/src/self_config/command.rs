@@ -478,6 +478,13 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                         "event": {"mode":"event"},
                         "condition": {"mode":"condition","key":"monitor-summary"},
                     },
+                    "document_response": {
+                        "action": "write_document",
+                        "expected_collection": "Name of an installed application collection",
+                        "required_schema_field": "mailbox_item_key: String @immutable @index(unique: true)",
+                        "correlation": "The responder writes the stored MailboxItem.item_key into mailbox_item_key. A matching document resolves attention; its contents determine the workflow outcome, not mailbox status.",
+                        "authority": "Use DefraDB ACP for response writers. Do not grant the working behavior a response-writing tool when a human decision is required. Filter the event/task route on the approved decision; decline must not dispatch repairs."
+                    },
                     "notification_contract": "Set the canonical entry's notification policy before binding the surface. Event mode files one item per runtime request. Condition mode maintains one open item per requester/behavior/configured key across requests, updating its content. Use a combined summary for multiple findings. The model supplies only title, summary and payload; identity, routing and request provenance are runtime-owned. The receipt returns outcome created/reused/updated and the stored item. Terminal items are never updated or reopened.",
                 })
             } else { Value::Null },
