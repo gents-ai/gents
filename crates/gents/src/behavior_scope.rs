@@ -7,6 +7,9 @@
 use crate::Collection;
 use std::fmt;
 
+/// Stable pack-qualified identity for the built-in first-run configurator.
+pub const SETUP_CONFIGURATOR_BEHAVIOR_ID: &str = "gents:base:configurator";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeneratedNameError {
     InvalidBehaviorSlug(String),
@@ -192,6 +195,35 @@ pub fn behavior_component_id(behavior_id: &str, component: BehaviorComponentPath
     format!("{behavior_id}:{}", component.suffix())
 }
 
+/// Converts user-facing text into the canonical personal-behavior slug.
+///
+/// Runs of non-ASCII-alphanumeric characters collapse to one separator. When
+/// the display text has no usable characters, the stable fallback keeps the
+/// generated key valid while retaining the original display text separately.
+pub fn behavior_slug_from_display_name(display_name: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_separator = false;
+    for character in display_name.chars() {
+        if character.is_ascii_alphanumeric() {
+            if pending_separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.push(character.to_ascii_lowercase());
+            pending_separator = false;
+        } else if matches!(character, '\'' | '’') {
+            // Apostrophes do not create a word boundary: "Jack's" becomes
+            // "jacks", while the exact display text remains independent.
+        } else if !slug.is_empty() {
+            pending_separator = true;
+        }
+    }
+    if slug.is_empty() {
+        "behavior".to_owned()
+    } else {
+        slug
+    }
+}
+
 /// Enumerates every collection-qualified key a fully materialized behavior may
 /// occupy, including the behavior document itself. Optional components reserve
 /// their deterministic slots even while absent.
@@ -302,6 +334,23 @@ mod tests {
 
         assert_eq!(left.behavior_id, right.behavior_id);
         assert_ne!(left.display_name, right.display_name);
+    }
+
+    #[test]
+    fn display_names_produce_valid_stable_slugs() {
+        assert_eq!(
+            behavior_slug_from_display_name("New behaviour"),
+            "new-behaviour"
+        );
+        assert_eq!(
+            behavior_slug_from_display_name(" Jack's  Reviewer! "),
+            "jacks-reviewer"
+        );
+        assert_eq!(
+            behavior_slug_from_display_name("Jack’s Reviewer"),
+            "jacks-reviewer"
+        );
+        assert_eq!(behavior_slug_from_display_name("✨"), "behavior");
     }
 
     #[test]
