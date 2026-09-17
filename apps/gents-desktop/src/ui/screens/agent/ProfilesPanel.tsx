@@ -68,6 +68,39 @@ function settingsForDraft(
   };
 }
 
+type ProfileOwnedComponent = "sampling" | "execution";
+
+function profileOwnedComponentId(
+  profile: InferenceProfile,
+  component: ProfileOwnedComponent,
+) {
+  const scopeBehaviorId = profile.scope_behavior_id?.trim();
+  return scopeBehaviorId
+    ? `${scopeBehaviorId}:${component}`
+    : `${profile.profile_id}-${component}`;
+}
+
+function validateProfileOwnedComponent(
+  profile: InferenceProfile,
+  component: ProfileOwnedComponent,
+  componentId: string,
+  componentScopeBehaviorId: string | null | undefined,
+  exists: boolean,
+) {
+  const profileScope = profile.scope_behavior_id?.trim() || null;
+  const componentScope = componentScopeBehaviorId?.trim() || null;
+  if (profileScope && componentId !== `${profileScope}:${component}`) {
+    throw new Error(
+      `Scoped profile ${profile.profile_id} must use ${profileScope}:${component} as its ${component} document`,
+    );
+  }
+  if (exists && componentScope !== profileScope) {
+    throw new Error(
+      `${component} document ${componentId} has scope ${componentScope ?? "unscoped"}, but profile ${profile.profile_id} has scope ${profileScope ?? "unscoped"}`,
+    );
+  }
+}
+
 function Editor({
   shell,
   deployment,
@@ -208,7 +241,7 @@ function Editor({
     ].some((value) => value.trim());
     const effectiveSamplingId =
       next.samplingId.trim() ||
-      (hasSamplingValues ? `${profile.profile_id}-sampling` : "");
+      (hasSamplingValues ? profileOwnedComponentId(profile, "sampling") : "");
     const executionValuesPresent = [
       next.maxTurns,
       next.maxTotalTokens,
@@ -273,6 +306,24 @@ function Editor({
     const execution = deployment.inferenceExecution.find(
       (row) => row.execution_id === next.executionId.trim(),
     );
+    if (effectiveSamplingId) {
+      validateProfileOwnedComponent(
+        profile,
+        "sampling",
+        effectiveSamplingId,
+        sampling?.scope_behavior_id,
+        sampling != null,
+      );
+    }
+    if (next.executionId.trim()) {
+      validateProfileOwnedComponent(
+        profile,
+        "execution",
+        next.executionId.trim(),
+        execution?.scope_behavior_id,
+        execution != null,
+      );
+    }
     const nextProfile: InferenceProfile = {
       ...profile,
       display_name: next.displayName.trim() || null,
@@ -293,6 +344,7 @@ function Editor({
           ...sampling,
           agent_did: deployment.agentDid,
           sampling_id: effectiveSamplingId,
+          scope_behavior_id: profile.scope_behavior_id ?? null,
           temperature,
           top_p: topP,
           top_k: topK,
@@ -308,6 +360,7 @@ function Editor({
           ...execution,
           agent_did: deployment.agentDid,
           execution_id: next.executionId.trim(),
+          scope_behavior_id: profile.scope_behavior_id ?? null,
           max_turns: maxTurns,
           max_total_tokens: maxTotalTokens,
           stream_batch_ms: streamBatchMs,
@@ -357,7 +410,7 @@ function Editor({
   ) => {
     setEditedExecution((keys) => new Set(keys).add(key));
     if (value && !d.draft.executionId)
-      d.set("executionId", `${profile.profile_id}-execution`);
+      d.set("executionId", profileOwnedComponentId(profile, "execution"));
     d.set(key, value);
   };
   const selectedBackend = deployment.inferenceBackends.find(
@@ -431,7 +484,7 @@ function Editor({
               defaults.reasoningEffort as typeof d.draft.reasoningEffort,
             );
             if ((defaults.temperature || defaults.topP) && !d.draft.samplingId)
-              d.set("samplingId", `${profile.profile_id}-sampling`);
+              d.set("samplingId", profileOwnedComponentId(profile, "sampling"));
             deliberateSelectionRef.current = null;
           }
         })
@@ -479,7 +532,7 @@ function Editor({
     d.set("topP", next.topP);
     d.set("reasoningEffort", next.reasoningEffort as typeof d.draft.reasoningEffort);
     if ((next.temperature || next.topP) && !d.draft.samplingId) {
-      d.set("samplingId", `${profile.profile_id}-sampling`);
+      d.set("samplingId", profileOwnedComponentId(profile, "sampling"));
     }
   };
   const guided = recommendation

@@ -174,8 +174,8 @@ export function ManagedRuntimeAuthorityReview({
         <p className="text-sm">{authoritySummary(authority)}</p>
       </div>
       <p className="text-xs text-muted-foreground">
-        Setup remains a narrow configurator. A behavior can reduce this ceiling but
-        cannot expand it.
+        Configurator remains narrow. A behavior can reduce this ceiling but cannot
+        expand it.
       </p>
     </div>
   );

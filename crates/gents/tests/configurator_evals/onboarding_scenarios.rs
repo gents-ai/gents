@@ -673,7 +673,7 @@ async fn eval_reasoning_reaches_all_onboarding_source_profiles() -> Result<()> {
             .context("behavior snapshot missing")?
             .iter()
             .any(|row| row["behavior_id"] == source_behavior),
-        "temporary live-test behavior survived canonical Setup installation"
+        "temporary live-test behavior survived canonical Configurator installation"
     );
     db.node.shutdown().await;
     Ok(())
@@ -900,8 +900,8 @@ fn assert_global_negatives(snapshot: &Value, setup_behavior_id: &str) -> Result<
             rows.iter()
                 .find(|row| row["behavior_id"] == setup_behavior_id)
         })
-        .context("Setup behavior disappeared")?;
-    ensure!(setup["enabled"] == true, "Setup was disabled");
+        .context("Configurator behavior disappeared")?;
+    ensure!(setup["enabled"] == true, "Configurator was disabled");
     ensure!(setup["behavior_id"] == super::SETUP_BEHAVIOR_ID);
     ensure!(setup["context_id"] == format!("{}:context", super::SETUP_BEHAVIOR_ID));
     ensure!(setup["inference_profile_id"] == format!("{}:inference", super::SETUP_BEHAVIOR_ID));
@@ -914,7 +914,7 @@ fn assert_global_negatives(snapshot: &Value, setup_behavior_id: &str) -> Result<
             rows.iter()
                 .find(|row| row["profile_id"] == setup_profile_id)
         })
-        .context("Setup scoped profile disappeared")?;
+        .context("Configurator scoped profile disappeared")?;
     ensure!(setup_profile["scope_behavior_id"] == super::SETUP_BEHAVIOR_ID);
     let setup_sampling_id = format!("{}:sampling", super::SETUP_BEHAVIOR_ID);
     let setup_sampling = snapshot["sampling"]
@@ -923,7 +923,7 @@ fn assert_global_negatives(snapshot: &Value, setup_behavior_id: &str) -> Result<
             rows.iter()
                 .find(|row| row["sampling_id"] == setup_sampling_id)
         })
-        .context("Setup scoped sampling disappeared")?;
+        .context("Configurator scoped sampling disappeared")?;
     ensure!(setup_sampling["scope_behavior_id"] == super::SETUP_BEHAVIOR_ID);
     ensure!(
         setup["tags"] == serde_json::json!([gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG])

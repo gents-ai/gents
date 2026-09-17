@@ -292,4 +292,120 @@ describe("profile model recommendation ownership", () => {
       }),
     );
   });
+
+  it("creates scoped sampling and execution documents in the behavior's reserved slots", async () => {
+    const api = {
+      applyConfigComponents: vi.fn().mockResolvedValue({}),
+      getInferenceBackendRecommendation: vi
+        .fn()
+        .mockResolvedValue(recommendation(300_000)),
+      getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
+    };
+    const scoped = {
+      ...fixture,
+      inferenceProfiles: fixture.inferenceProfiles.map((profile) =>
+        profile.profile_id === "profile-a"
+          ? {
+              ...profile,
+              profile_id: "local:review:inference",
+              scope_behavior_id: "local:review",
+            }
+          : profile,
+      ),
+      inferenceSampling: [
+        {
+          agent_did: fixture.agentDid,
+          sampling_id: null,
+          top_k: 42,
+        } as never,
+      ],
+    };
+    render(
+      <ProfilesPanel
+        shell={shellWith(api)}
+        deployment={scoped}
+        item="local:review:inference"
+      />,
+    );
+    await screen.findByLabelText("Context window");
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Max turns"), "12");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(api.applyConfigComponents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          inference_profiles: [
+            expect.objectContaining({
+              sampling_id: "local:review:sampling",
+              execution_id: "local:review:execution",
+            }),
+          ],
+          inference_sampling: [
+            expect.objectContaining({
+              sampling_id: "local:review:sampling",
+              scope_behavior_id: "local:review",
+              top_k: 42,
+            }),
+          ],
+          inference_execution: [
+            expect.objectContaining({
+              execution_id: "local:review:execution",
+              scope_behavior_id: "local:review",
+              max_turns: 12,
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("rejects an existing descendant whose scope differs from the profile", async () => {
+    const api = {
+      applyConfigComponents: vi.fn().mockResolvedValue({}),
+      getInferenceBackendRecommendation: vi
+        .fn()
+        .mockResolvedValue(recommendation(300_000)),
+      getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
+    };
+    const scoped = {
+      ...fixture,
+      inferenceProfiles: fixture.inferenceProfiles.map((profile) =>
+        profile.profile_id === "profile-a"
+          ? {
+              ...profile,
+              profile_id: "local:review:inference",
+              scope_behavior_id: "local:review",
+              sampling_id: "local:review:sampling",
+            }
+          : profile,
+      ),
+      inferenceSampling: [
+        {
+          agent_did: fixture.agentDid,
+          sampling_id: "local:review:sampling",
+          scope_behavior_id: "local:other",
+          top_k: 42,
+        },
+      ],
+    };
+    render(
+      <ProfilesPanel
+        shell={shellWith(api)}
+        deployment={scoped}
+        item="local:review:inference"
+      />,
+    );
+    await screen.findByLabelText("Context window");
+    const user = userEvent.setup();
+    const name = screen.getByLabelText("Display name");
+    await user.clear(name);
+    await user.type(name, "Review profile");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "sampling document local:review:sampling has scope local:other, but profile local:review:inference has scope local:review",
+    );
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
 });

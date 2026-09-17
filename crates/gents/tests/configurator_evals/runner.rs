@@ -322,7 +322,7 @@ async fn install_setup_configurator(
         context_id: context_id.clone(),
         agent_did: agent_did.to_owned(),
         scope_behavior_id: Some(SETUP_BEHAVIOR_ID.into()),
-        display_name: Some("Live Setup".into()),
+        display_name: Some("Live Configurator".into()),
         description: Some("Live configurator acceptance".into()),
         system_prompt: Some(prompt.into()),
         tools_id: Some(tools_id.clone()),
@@ -334,7 +334,7 @@ async fn install_setup_configurator(
         tools_id,
         agent_did: agent_did.to_owned(),
         scope_behavior_id: Some(SETUP_BEHAVIOR_ID.into()),
-        display_name: Some("Live Setup tools".into()),
+        display_name: Some("Live Configurator tools".into()),
         host: Some(gents::document_config::HostTools {
             root: Some(user_home.to_owned()),
             files: Some(gents::document_config::FileTools {
@@ -726,34 +726,34 @@ async fn verify_configuration(
     let setup = behaviors
         .iter()
         .find(|behavior| behavior["behavior_id"] == setup_behavior_id)
-        .context("Setup behavior disappeared")?;
-    ensure!(setup["enabled"] == true, "Setup was disabled");
+        .context("Configurator behavior disappeared")?;
+    ensure!(setup["enabled"] == true, "Configurator was disabled");
     ensure!(setup["behavior_id"] == SETUP_BEHAVIOR_ID);
     ensure!(setup["context_id"] == format!("{SETUP_BEHAVIOR_ID}:context"));
     ensure!(setup["inference_profile_id"] == format!("{SETUP_BEHAVIOR_ID}:inference"));
     let setup_context = contexts
         .iter()
         .find(|row| row["context_id"] == format!("{SETUP_BEHAVIOR_ID}:context"))
-        .context("Setup context disappeared")?;
+        .context("Configurator context disappeared")?;
     ensure!(setup_context["scope_behavior_id"] == SETUP_BEHAVIOR_ID);
     let setup_tools = tool_rows
         .iter()
         .find(|row| row["tools_id"] == format!("{SETUP_BEHAVIOR_ID}:tools"))
-        .context("Setup tools disappeared")?;
+        .context("Configurator tools disappeared")?;
     ensure!(setup_tools["scope_behavior_id"] == SETUP_BEHAVIOR_ID);
     let setup_profile = profiles
         .iter()
         .find(|row| row["profile_id"] == format!("{SETUP_BEHAVIOR_ID}:inference"))
-        .context("Setup profile disappeared")?;
+        .context("Configurator profile disappeared")?;
     ensure!(setup_profile["scope_behavior_id"] == SETUP_BEHAVIOR_ID);
     let setup_sampling = sampling
         .iter()
         .find(|row| row["sampling_id"] == format!("{SETUP_BEHAVIOR_ID}:sampling"))
-        .context("Setup sampling disappeared")?;
+        .context("Configurator sampling disappeared")?;
     ensure!(setup_sampling["scope_behavior_id"] == SETUP_BEHAVIOR_ID);
     ensure!(
         setup["tags"] == serde_json::json!([gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG]),
-        "Setup protection tag changed"
+        "Configurator protection tag changed"
     );
 
     let graphs = rows(
