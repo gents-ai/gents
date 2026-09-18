@@ -72,6 +72,7 @@ import Proofs.GraphPipeline.FailureAttribution
 import Proofs.GraphPipeline.LogicalInvocation
 import Proofs.EthSubmission
 import Proofs.PeerRegistryDiscovery.DirectoryProjection
+import Proofs.PeerRegistryDiscovery.RootAdmission
 import Proofs.PeerRegistryDiscovery.PersonaRequest
 
 import Proofs.Conformance.InvalidToolProgress

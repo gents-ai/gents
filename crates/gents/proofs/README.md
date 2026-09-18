@@ -33,8 +33,18 @@ bridge. Discovery preserves both the containing backend’s owner and its creden
 share one validator with capability-local defaults; provider/runtime wiring still
 requires conformance.
 The canonical decoder and host/provider adapters remain conformance boundaries.
-Persona profile/root catalogs must be built for the authorized principal; the old
-loader’s unfiltered catalog queries do not satisfy the model’s scoped premise.
+Persona profile catalogs must be built for the authorized principal. WorkspaceRoot
+is instead explicit operator-local global policy: it has no principal identity and
+does not replicate, so adapters must not invent per-principal root ownership.
+Canonical root admission is component-prefix based: an exact root or a narrower
+descendant is admitted, while unresolved paths and prefix-confusable siblings
+are rejected. Root publication distinguishes an unconfigured deployment (which
+may publish its process ceiling as the default) from explicit policy with no
+enabled roots (which publishes nothing); explicit policy never falls back to the
+broader ceiling, and blank create/root-clear requests cannot widen it. Host
+canonicalization, symlink observation, nonexistent-suffix handling, and
+execution-boundary re-resolution remain explicit Rust refinement obligations;
+this model does not claim TOCTOU safety.
 
 The conformance layer must fence the new executable resolvers and guards, including
 negative references/owners, omitted/null/default round trips, explicit remote names,
@@ -287,6 +297,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/PromptAssembly/ClaudeMap.lean` | Claude tool-name map and Messages provider-input assembly: advertised reasoning metadata gates `selectedEffort` (unknown/unsupported efforts are omitted), plus `splitSystem_partition`, `systemBlocks_head`, `systemBlocks_tail_verbatim`, `toolsField_empty`, `accumulate_ignores_start_when_streamed`, `runStream_*`. Fences: `tests/conformance/prompt_assembly.rs::generated_claude_{map,stream,body}_cases_*`; the identity pin lives in `claude_messages::tests`. |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
+| `Proofs/PeerRegistryDiscovery/RootAdmission.lean` | Canonical component-and-anchor containment plus operator-local `WorkspaceRoot` publication: no-document ceiling default, explicit-root narrowing, and all-disabled revocation without fallback. Filesystem resolution and execution-boundary re-resolution are Rust refinement obligations; the model makes no TOCTOU claim. Fence: generated `root_admission_cases` consumed by `tests/conformance/persona_request.rs`. |
 | `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (one parent and one child composed state; native tools retain their own executor models), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
 | `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair; #1341 adds startup-and-periodic inference cadence and proves a live-lease startup defers both rows until an expired ordered periodic pass converges them) |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
