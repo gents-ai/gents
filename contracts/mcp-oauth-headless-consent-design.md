@@ -1,9 +1,9 @@
 # #1533 design note — MCP OAuth discovery + headless consent (analysis and test plan)
 
 Status: **analysis only** — no production source was modified. This note was authored
-against `23434bfffc47`, then reviewed and rebased onto `047a4ab9918c` (`origin/main` on
-2026-09-18). The rebase did not turn any proposed interface below into implemented
-behavior.
+against `23434bfffc47`, then reviewed and rebased onto `f399804fa1ed` (`origin/main` on
+2026-09-18). The intervening mainline changes are unrelated desktop installer/release
+work; the rebase did not turn any proposed interface below into implemented behavior.
 Companion work: #1532 (`feat/1532-mcp-bearer-auth` worktree) is concurrently building the
 operator-managed Bearer credential foundation; this note identifies the shared seams so
 neither issue builds a competing credential system.
@@ -13,7 +13,7 @@ Turn 2 (§8–§9): full prior-art reuse audit of `oauth_http.rs`, `xai_oauth_lo
 login paths, DID/ACP/P2P filtering, with a generalizable-vs-provider-specific split and
 the exact shared-interface recommendation for #1532. Still design-only until coordinated.
 
-Evidence base: repo checkout at `23434bffc`, rechecked after rebasing to `047a4ab99`;
+Evidence base: repo checkout at `23434bffc`, rechecked after rebasing to `f399804fa`;
 rmcp 1.3.0 source under
 `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-1.3.0/` (cited inline as
 `rmcp:…`); issue bodies #1532 and #1533 read via `gh issue view`.
@@ -336,19 +336,23 @@ Non-negotiable checks (each maps to a named test in §4.3):
    collapse either identifier to the origin root or guess endpoints by string joining.
 
 The rmcp `auth` feature (`rmcp::transport::auth::{AuthorizationManager, OAuthState,
-AuthorizationSession, CredentialStore, StateStore}`) already implements discovery,
-DCR, PKCE, token exchange, and refresh against `oauth2`; however it is feature-gated
-(`features = ["auth"]` adds `dep:oauth2`); its default stores are in memory, while its
-`CredentialStore`/`StateStore` traits can be backed by Gents documents/adapters. Gents
-cannot enable new optional deps casually. The
-recommendation is: **evaluate adopting `rmcp/auth` with a Gents `CredentialStore` backed
-by the OAuthCredential document before hand-rolling exchange code**; the design above
-(needs: issuer/host validation, mandatory `resource`, SSH-forwarded loopback redirect) mostly fits
-its `AuthorizationManager::discover_metadata` + `start_authorization` +
-`AuthorizationSession::handle_callback` shape. The decision (adopt vs. reuse
-`gents-chatgpt-login`-style minimal flow) belongs to the implementation phase with the
-parent; the metadata-validation owner (§2.5) and consent orchestration (§3) are needed
-either way.
+AuthorizationSession, CredentialStore, StateStore}`) implements discovery, DCR, PKCE,
+token exchange, and refresh against `oauth2`; however it is feature-gated
+(`features = ["auth"]` adds `dep:oauth2`) and **cannot be adopted as-is**. In rmcp 1.3.0
+the authorization transport logs the raw authorization code, the default discovery
+client follows redirects, path discovery falls back through reverse/root paths, and
+`start_authorization` performs DCR when no URL-provided client id is present. Those
+behaviors violate this design's redaction, no-redirect, path-aware discovery, and
+configured-public-client-first boundaries. Adoption therefore requires verified
+upstream or maintained-fork fixes for every boundary before it is an option.
+
+If a hardened rmcp path is selected, only `CredentialStore` may adapt to the
+OAuthCredential document. `StateStore` must remain the rmcp in-memory store (or a
+bounded Gents process-local wrapper) so PKCE verifier and pending consent state are
+never persisted. Until the hardening gate is met, the recommended first implementation
+is a small Gents-owned flow reusing the existing login crates' mechanisms. The
+metadata-validation owner (§2.5) and consent orchestration (§3) are required either
+way.
 
 ### 2.6 Consent orchestration — operator-owned, agent-observed (owner: new module + CLI first)
 
@@ -616,7 +620,8 @@ test runs in this worktree with `cargo test -p gents` /
 **Minimal coordination boundary for the parent to hand to #1532:**
 1. The `ToolServiceAuth` selection shape — freeze `Bearer` as a reference-only marker
    whose credential id is derived from principal + service, not caller-supplied;
-   #1533 later adds only `OAuth { provider, scopes, resource }`.
+   #1533 later adds only the reference-only `OAuth { scopes }` marker; provider and
+   resource are derived by their existing owners and are never caller-authored.
 2. The `OAuthCredential` additive columns (`issuer`, `resource`, `granted_scopes`,
    `client_registration`) — one schema change covering both issues' needs, additive and
    optional, so #1532's rows remain decodable.
@@ -635,10 +640,13 @@ only; static-token provisioning CLI is #1532 only.
 The OAuth lane must not start until the operator selects these product/security
 decisions. Recommended defaults are listed first:
 
-1. **Protocol engine:** adapt rmcp's `auth` state machine behind Gents-owned
-   `CredentialStore`/`StateStore` adapters, while keeping Gents validation stricter at
-   the metadata and destination boundaries; alternatively implement a smaller Gents
-   flow directly.
+1. **Protocol engine:** implement a smaller Gents-owned flow using the existing login
+   crates' mechanisms first. The alternative is rmcp `auth` only after upstream or a
+   maintained fork removes raw-code logging, disables discovery redirects, preserves
+   path-aware well-known discovery without root fallback, and permits the configured
+   public client path without implicit DCR. In that alternative, adapt
+   `CredentialStore` only; pending authorization uses an in-memory/process-local
+   `StateStore`, never a document adapter.
 2. **Client registration:** support operator-configured public clients first and add
    dynamic client registration only for issuers whose metadata explicitly advertises
    it; alternatively require DCR in the first slice.
