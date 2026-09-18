@@ -1,12 +1,11 @@
-# Canonical durable output (#1571). One immutable, create-only flush of a
-# source; the only place model, tool, or authored content bytes are stored, and
-# the only record of streaming progress. Decode through
-# gents_protocol::output::OutputSegment.
+# Canonical durable output (#1571): a flush, source closure, or both.
+# Decode through gents_protocol::output::OutputSegment. No separate seal collection.
 #
-# Coordinate: (request_doc_id, source, ordinal). One document per flush however
-# many streams advanced. Enumerate all twins through the ordinary request index;
-# identical replay is idempotent, differing writer/runs/payload is a conflict.
-# No separately stored synthetic key.
+# Data coordinate: (request_doc_id, source, ordinal). Closure coordinate:
+# (request_doc_id, source). Terminal-only records have no ordinal, no runs and
+# no payload; they cannot collide with a late data flush. A final flush carries
+# both coordinates. Enumerate closure conflicts before projecting its extent;
+# data outside a committed extent is inert. No unique or synthetic key.
 #
 # Indexes are deliberately few: every index adds per-commit keys, and segments
 # are the highest-volume collection. Live, sealed and lease reads are all
@@ -18,6 +17,7 @@ type AgentOutputSegment @branchable {
     request_doc_id: String @index @immutable
     # OutputSource as strict JSON: provider_turn / tool_call / authored.
     source: JSON @immutable
+    # Null on terminal-only records; otherwise dense from zero within the source.
     ordinal: Int @immutable
     # OutputWriter: request_execution or tool_execution.
     writer: JSON @immutable
@@ -25,5 +25,8 @@ type AgentOutputSegment @branchable {
     # order. The run that opens a stream carries its StreamDeclaration.
     runs: JSON @immutable
     payload: String @immutable
+    # SourceClose: closed {outcome, segments, stream_bytes} or retracted.
+    # Null on ordinary flushes. Every record has a flush, close, or both.
+    close: JSON @immutable
     created_at: String @immutable
 }

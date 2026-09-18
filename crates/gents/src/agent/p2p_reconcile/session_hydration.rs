@@ -11,7 +11,6 @@ pub use gents_protocol::session_hydration::SessionHydrationDocumentKey;
 
 pub const HYDRATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
-    "AgentOutputSeal",
     "AgentMessage",
     "AgentToolCall",
     "AgentOutputSegment",

@@ -412,7 +412,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::AGENT_REQUEST,
         "bafyreieyeycrjfo5xsumx6ddnwqwtlvt4ufjjb4ayole7dgnrsp3wplhqq"
     ),
-    // #1571 implementation layer must author fresh OutputSeal/OutputSegment
+    // #1571 implementation layer must author the fresh OutputSegment
     // pins and refresh Request/Message/ToolCall pins together.
     // No fabricated CIDs or
     // old response/spill baseline entries. Catalog coverage remains a hard gate.
@@ -603,7 +603,6 @@ pub fn fixture_lens_wasm() -> &'static [u8] {
 /// `fresh_apply_parity` and the baseline step guard enforce both constraints.
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,
-    gents_protocol::schemas::AGENT_OUTPUT_SEAL_NAME,
     gents_protocol::schemas::AGENT_MESSAGE_NAME,
     gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
     gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,

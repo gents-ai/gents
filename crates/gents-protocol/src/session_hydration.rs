@@ -12,10 +12,10 @@ const RECEIPT_SIGNATURE_DOMAIN: &str = "gents-session-hydration-receipt-v1";
 /// claimed as transcript hydration. Origin dependencies retain their ACP;
 /// following a reference never grants access to the whole origin session.
 ///
-/// Headers, seals and segments are immutable, so the manifest's exact document
+/// Headers and segment records are immutable, so the manifest's exact document
 /// identities already bind the served content; the receipt does not restate
 /// payload extents. The manifest is the authorized reference closure of the
-/// served headers: every seal a block or presentation references (including
+/// served headers: every closing record a block or presentation references (including
 /// fork origins) and the segments within their extents. Terminal selections
 /// must resolve their exact headers;
 /// no latest-visible-message fallback. Client completion requires each header
@@ -26,7 +26,6 @@ pub enum SessionHydrationCollection {
     AgentRequest,
     AgentMessage,
     AgentToolCall,
-    AgentOutputSeal,
     AgentOutputSegment,
     CompactionEntry,
 }

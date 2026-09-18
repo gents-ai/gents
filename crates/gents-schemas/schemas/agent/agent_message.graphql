@@ -17,13 +17,13 @@ type AgentMessage @branchable {
     # Fork requires absent request_doc_id; other variants require exact membership.
     publication: JSON @immutable
     # complete / partial: whether the publisher published this message whole.
-    # Never derived from the seals its blocks reference. Forks retain it.
+    # Never derived from the closing records its blocks reference. Forks retain it.
     outcome: String @immutable
     sequence: Int @index @immutable
     role: String @immutable
     native_id: String @immutable
     # [MessageBlock] as strict JSON, in native content order. Payloads are
-    # {seal_doc_id, stream} references.
+    # {close_doc_id, stream} references.
     blocks: JSON @immutable
     created_at: String @index @immutable
 }

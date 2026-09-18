@@ -1,19 +1,17 @@
-//! Canonical durable output (#1571): every byte of model, tool, and authored
-//! content is persisted once, and nothing in this model is ever updated.
+//! Canonical durable output (#1571): payloads are persisted once; small runtime
+//! presentation literals live in headers. Neither document shape is updated.
 //!
-//! Three immutable, create-only facts:
+//! Two immutable, create-only document shapes:
 //!
-//! - [`OutputSegment`] — one flush of a source: the bytes that arrived since
-//!   the last flush. The only place content lives, and the only progress fact.
-//! - [`OutputSeal`] — the one terminal fact about a source: closed with its
-//!   exact extent, or retracted.
+//! - [`OutputSegment`] — a flush, a terminal closure, or both. Large payloads
+//!   live here; normal closure rides on the final flush without another document.
 //! - [`TranscriptMessage`] — a header mirroring the native
 //!   [`crate::message::Message`] structure, with every payload string replaced
-//!   by a [`PayloadRef`] to a sealed stream.
+//!   by a [`PayloadRef`] to a closed stream, plus small presentation literals.
 //!
 //! The collections only grow, so replication is set union and every reader
-//! question is "which facts are visible": no visible seal means closure is
-//! unknown, not proof that a producer is still running. A seal with missing
+//! question is "which facts are visible": no visible closing record means closure is
+//! unknown, not proof that a producer is still running. A closing record with missing
 //! segments means the replica is incomplete. Live previews, answer streaming,
 //! completed transcripts, provider input, forks and
 //! exports are projections of these same facts through one shared
@@ -40,7 +38,7 @@ use crate::message::{
 use crate::rendered_request::CaptureScope;
 
 /// What produced a run of content. Its identity is known before the first
-/// byte arrives, so segments never wait on the seal or message that later
+/// byte arrives, so segments never wait on the closing record or message that later
 /// names them.
 ///
 /// No variant mints a new logical ID: each reuses a coordinate or document
@@ -73,7 +71,7 @@ pub enum OutputSource {
 }
 
 /// What a stream carries and where it sits in the native message. Carried by
-/// the run that opens the stream, so live views render unsealed output in
+/// the run that opens the stream, so live views render unclosed output in
 /// native structure without any control document.
 ///
 /// It names no role: provider output is assistant content and tool output is
@@ -111,43 +109,64 @@ pub enum StreamPayload {
     },
 }
 
-/// One flush of a source. Stored as `AgentOutputSegment`.
+/// One record of a source. Stored as `AgentOutputSegment`.
 ///
-/// Coordinate: `(request_doc_id, source, ordinal)`, with `ordinal` dense from
-/// zero within the source. A flush is one document however many streams
-/// advanced: `payload` is the concatenation of `runs` in arrival order, and a
-/// stream's content is the concatenation of its runs across the source's
-/// segments in `(ordinal, run)` order — the native string exactly. Writers
-/// flush where the batch interval, a size threshold, or the source's end
-/// falls, never per token; a turn that fits in one interval is one segment.
+/// A record carries a flush of bytes, the source's closure, or both:
+///
+/// - **Flush** (`ordinal` and `runs` present): the bytes that arrived since the
+///   last flush, however many streams advanced. `payload` is the concatenation
+///   of `runs` in arrival order, and a stream's content is the concatenation
+///   of its runs across the source's flushes in `(ordinal, run)` order — the
+///   native string exactly. Writers flush where the batch interval, a size
+///   threshold, or the source's end falls, never per token.
+/// - **Final flush** (also `close`): the last bytes and the closure in one
+///   document. This is the normal end of a source and costs nothing extra.
+/// - **Terminal-only** (`close` without `ordinal` or `runs`): closure written
+///   when there are no new bytes — everything was already flushed, the source
+///   produced nothing, the attempt is retracted, or recovery closes it.
+///
+/// Flushes and closure have separate coordinates so they can never collide.
+/// A flush is `(request_doc_id, source, ordinal)`, dense from zero. Closure is
+/// `(request_doc_id, source)`, and a terminal-only record occupies no ordinal.
+/// So when recovery closes a source while the superseded writer's last flush
+/// is still in flight, that flush lands at an ordinal beyond the closed extent
+/// and is inert; it is not a twin of the closing record and never becomes a
+/// reconstruction conflict.
 ///
 /// Repeated delivery of the same coordinate and content is idempotent. Two
-/// visible segments sharing a coordinate but differing in writer, runs or
-/// payload are an integrity conflict every reader must surface; the storage
-/// index is ordinary, not unique, because a unique index can hide the losing
-/// twin of a remote conflict (#1073). A replay reuses the persisted document,
-/// including its creation timestamp; an already-existing create is accepted
-/// only after verifying the stored fact.
+/// visible flushes sharing an ordinal but differing in writer, runs or
+/// payload, or two visible closures of one source, are an integrity conflict
+/// every reader must surface; the storage index is ordinary, not unique,
+/// because a unique index can hide the losing twin of a remote conflict
+/// (#1073). A replay reuses the persisted document, including its creation
+/// timestamp; an already-existing create is accepted only after verifying the
+/// stored fact.
 ///
-/// **A segment is the progress fact; progress is not recorded anywhere else.**
+/// A flush is its own streaming progress fact; it needs no duplicate renewal.
 /// A request-owned flush does not rewrite the request. It commits inside the
-/// owning runtime's existing execution write gate, which stamps `created_at`
-/// from that runtime's clock at commit (non-decreasing within a source; a
-/// replay reuses the stored value). Only that runtime, reading its own store
+/// existing `config_client::txn::MutationWriteGate`. The owner stamps
+/// `created_at` inside that gate when admitting the write; only a committed
+/// fact counts (non-decreasing within a source; replay reuses the timestamp).
+/// Only that runtime, reading its own store
 /// inside the same gate, may decide a lease expired: the request is live while
 /// its current generation has an output fact or explicit renewal newer than
-/// `execution_lease_secs`. A replica that has not yet received fresh segments
+/// `execution_lease_secs`. A replica that has not yet received fresh records
 /// observes; it never expires work.
+/// Admission rereads generation, lifecycle and effective expiry under the gate.
+/// An expired generation cannot revive itself by timestamping a fresh flush;
+/// it is rejected even if recovery has not installed a replacement yet.
 ///
-/// Only raw payload is unfenced. A flush that loses a race with recovery's
+/// Only a plain flush is unfenced. One that loses a race with recovery's
 /// generation swap is inert: it names a superseded writer, renews nothing and
-/// lies beyond the extent recovery closed. Everything that *decides* —
-/// closing or retracting a source, accepting and publishing a turn, dispatch,
+/// lies beyond the extent recovery closed. Everything that *decides* — any
+/// record carrying `close`, accepting and publishing a turn, dispatch,
 /// terminalization, recovery — still commits under the matching-generation
 /// CAS on the request, so it is definitively ordered against cancellation and
 /// recovery and a loser writes none of them. Tool-owned output follows the
-/// tool lifecycle and never revives a terminal request. There is no heartbeat
-/// and no progress counter.
+/// tool lifecycle and never revives a terminal request. There is no per-flush heartbeat
+/// or progress counter; bounded explicit renewal remains for byte-less progress.
+/// Tool-owned closure uses the tool lifecycle's terminal/delivery guard, not a
+/// request CAS that could revive the already-terminal originating request.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSegment {
@@ -158,16 +177,38 @@ pub struct OutputSegment {
     /// Exact physical request that owns the execution producing this output.
     pub request_doc_id: String,
     pub source: OutputSource,
-    pub ordinal: u32,
+    /// The source's producer, the same on every record of the source. A
+    /// terminal-only record written by recovery still names the producer; the
+    /// CAS it committed under is its authority, not a replacement identity.
     pub writer: OutputWriter,
+    /// Present exactly when `runs` is non-empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinal: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::row::deserialize_null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub runs: Vec<SegmentRun>,
+    #[serde(
+        default,
+        deserialize_with = "crate::row::deserialize_null_default",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub payload: String,
+    /// Present on the one record that ends the source. A record has `runs`,
+    /// `close`, or both; never neither. With no ordinal, runs and payload must
+    /// be empty and close must be present. No decoder may infer missing closure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<SourceClose>,
     pub created_at: String,
 }
 
 /// The next `bytes` of `payload` belong to `stream`. Runs split only at UTF-8
 /// boundaries. The run that opens a stream carries its declaration; an empty
 /// native string is an opening run of zero bytes.
+/// Runs cover the payload exactly; streams open densely from zero and declare
+/// exactly once. Missing earlier flushes never permit inventing a declaration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SegmentRun {
@@ -178,9 +219,8 @@ pub struct SegmentRun {
 }
 
 /// The existing authority that produced a source; never a new lease or host
-/// identity. Every segment names its writer, which is what lets a reader or
-/// the lease owner classify unsealed output and ignore a stale generation.
-/// The seal names the source's producer, not today's authority to recover it.
+/// identity. Every record names it, which is what lets a reader or the lease
+/// owner classify unclosed output and ignore a superseded generation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputWriter {
@@ -205,63 +245,52 @@ pub enum OutputOutcome {
     Partial,
 }
 
-/// The one terminal fact about a source. Stored as `AgentOutputSeal`.
+/// The one terminal fact about a source, carried by its closing record.
 ///
-/// Normal closure commits with the final flush. Retraction, recovery or
-/// closure after a flush seals the committed bytes without appending.
-/// Closing a request-owned source commits under the matching-generation CAS on
-/// the request, so the producer and recovery can never both close it.
-/// At most one seal per `(request_doc_id, source)`; visible twins are
-/// an integrity conflict. A sealed source accepts no further segments, and a
-/// seal stays valid after its producer's generation is no longer active.
-/// Recovery seals only the bytes already committed, under the winning request
-/// terminalization CAS; it never appends on behalf of a stale writer.
-/// Its `writer` remains the producer its segments name; the recovery CAS
-/// supplies authorization, not a replacement producer identity.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OutputSeal {
-    pub agent_did: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requester_did: Option<String>,
-    pub session_id: String,
-    pub request_doc_id: String,
-    pub source: OutputSource,
-    pub writer: OutputWriter,
-    pub disposition: SealDisposition,
-    pub created_at: String,
-}
-
+/// At most one per `(request_doc_id, source)`; visible twins are an integrity
+/// conflict. It stays valid after its producer's generation is no longer
+/// active. Closing a request-owned source commits under the
+/// matching-generation CAS on the request, so the producer and recovery can
+/// never both close it. Recovery closes exactly the flushes already committed,
+/// with a terminal-only record; it never appends bytes for a stale writer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum SealDisposition {
-    /// The exact extent: `segments` flushes, and `stream_bytes[n]` bytes in
-    /// stream `n`. A reader holding fewer segments, a gap in ordinals, or a
+pub enum SourceClose {
+    /// The exact extent: `segments` flushes (ordinals `0..segments`, including
+    /// this record's own flush if it has one) and `stream_bytes[n]` bytes in
+    /// stream `n`. A reader holding fewer flushes, a gap in ordinals, or a
     /// byte mismatch has an incomplete or conflicting replica and must not
-    /// present the content as complete. Segments beyond the extent are inert.
+    /// present the content as complete. A final flush has ordinal segments - 1.
+    /// A terminal-only record contributes no flush to the count. Every stream
+    /// has an opening run, including empty strings; a source with no streams
+    /// has segments = 0 and no stream_bytes. Beyond-extent flushes are inert:
+    /// they are excluded before data-twin checks, but never hide another close.
     Closed {
         outcome: OutputOutcome,
         segments: u32,
+        #[serde(deserialize_with = "crate::row::deserialize_null_default")]
         stream_bytes: Vec<u64>,
     },
-    /// The attempt was abandoned before retry backoff began. Its segments are
+    /// The attempt was abandoned before retry backoff began. Its flushes are
     /// retained but never referenced by a message or shown live, even when the
     /// replacement attempt has not yet emitted a byte.
     Retracted,
 }
 
-/// One sealed stream, by the seal's exact document identity. The seal is
-/// immutable, so this pins the content it names; there is no logical key or
-/// repeated extent to disagree with it. A forked message carries the same
-/// references as its origin — payloads are never copied.
+/// One stream of a closed source, by the exact identity of the record that
+/// closed it. That record is immutable, so its identity pins the extent it
+/// states; there is no logical key or repeated extent to disagree with it. A
+/// forked message carries the same references as its origin — payloads are
+/// never copied.
 ///
-/// Seals, their segments, and the request/tool provenance they name are
-/// retained across session close or removal; this stack introduces no payload
-/// GC. ACP applies to every dependency: a reference never broadens access.
+/// Closing records, the flushes within their extents, and the request/tool
+/// provenance they name are retained across session close or removal; this
+/// stack introduces no payload GC. ACP applies to every dependency: a
+/// reference never broadens access.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PayloadRef {
-    pub seal_doc_id: String,
+    pub close_doc_id: String,
     pub stream: u32,
 }
 
@@ -316,15 +345,15 @@ pub enum TerminalOutput {
 
 /// The single durable transcript message. Stored as `AgentMessage`.
 ///
-/// Create-only: written once, after every seal it references, and never
-/// updated. There is no in-flight message row; unsealed output is visible as
+/// Create-only: written once, after every closing record it references, and never
+/// updated. There is no in-flight message row; unclosed output is visible as
 /// segments. `sequence` is the order coordinate within the session and keeps
 /// its existing durable allocator. Two visible messages sharing `message_key`
 /// or `(session_id, sequence)` with different content are an integrity
 /// conflict, surfaced the same way as segment twins.
 ///
 /// A successfully accepted provider turn atomically publishes its Complete
-/// seal, assistant header and pending `AgentToolCall` rows before any tool is
+/// closing record, assistant header and pending `AgentToolCall` rows before any tool is
 /// dispatched. The assistant turn is durable, with its sequence allocated,
 /// before a tool can run or a
 /// background completion can append (#945) — the guarantee in-flight upserts
@@ -355,9 +384,9 @@ pub struct TranscriptMessage {
     pub request_doc_id: Option<String>,
     pub publication: MessagePublication,
     /// Whether this message was published whole or as kept partial output.
-    /// Set by the publisher; never derived from the seals its blocks reference
+    /// Set by the publisher; never derived from the closing records its blocks reference
     /// (a complete notification may wrap a tool's partial output), so a message
-    /// with no payloads needs no seal. Forks retain it.
+    /// with no payloads needs no closing record. Forks retain it.
     pub outcome: OutputOutcome,
     pub sequence: u32,
     pub role: MessageRole,
@@ -518,22 +547,22 @@ pub enum MediaType {
 /// fail; none of them degrades to shorter text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReconstructionError {
-    /// The seal is not visible or not authorized. While replication is behind
+    /// The closing record is not visible or not authorized. While replication is behind
     /// this is expected; the message is incomplete, not empty.
-    UnresolvedSeal { seal_doc_id: String },
-    /// A message references a retracted source or a stream the seal lacks.
+    UnresolvedClose { close_doc_id: String },
+    /// A reference names a plain flush, retracted source or absent stream.
     InvalidReference { reference: PayloadRef },
     /// An ordinal inside the sealed extent is not visible. Expected while
     /// replication is behind; the source is incomplete, not shorter.
-    MissingSegment { seal_doc_id: String, ordinal: u32 },
+    MissingSegment { close_doc_id: String, ordinal: u32 },
     /// Visible twins at a coordinate disagree in writer, runs or payload.
-    ConflictingSegments { seal_doc_id: String, ordinal: u32 },
+    ConflictingSegments { close_doc_id: String, ordinal: u32 },
     /// A segment's runs do not account for its payload, the assembled stream
     /// disagrees with the sealed byte length, or its declaration disagrees
     /// with the block that references it.
     ExtentMismatch { reference: PayloadRef, bytes: u64 },
-    /// More than one seal is visible for a source.
-    ConflictingSeals {
+    /// More than one closing record is visible for a source.
+    ConflictingClosures {
         request_doc_id: String,
         source: OutputSource,
     },
@@ -541,7 +570,7 @@ pub enum ReconstructionError {
         session_id: String,
         message_key: String,
     },
-    /// Segments within the sealed extent, or the seal, disagree about the
+    /// Segments within the sealed extent, or the closing record, disagree about the
     /// source's producer.
     InvalidWriter {
         request_doc_id: String,
@@ -559,23 +588,23 @@ pub enum ReconstructionError {
 }
 
 /// Output for a request that no message references yet, grouped by declared
-/// native position: sources with no visible seal, and closed sources awaiting
+/// native position: sources with no visible closing record, and closed sources awaiting
 /// publication (tool output before delivery, interrupted output before
 /// recovery publishes it). Retracted sources are excluded. This is the live
 /// preview and streaming view, built from the same segments the transcript
 /// will reference, so there is no rollover, overlap, or repair step.
 ///
-/// Headers, seals and segments may replicate in any order and are projected
+/// Headers, closing records and segments may replicate in any order and are projected
 /// together: a header whose segments have not arrived is incomplete, never a
 /// second live copy.
-/// Unsealed request-owned output is eligible only for the current generation
+/// Unclosed request-owned output is eligible only for the current generation
 /// of a nonterminal request; tool-owned output follows the tool lifecycle.
 /// Each segment names its writer; a missing request/tool owner observation
 /// cannot establish live eligibility. Authored sources are never shown live:
 /// they appear only with their header. This projection is an observation for
 /// display. It never decides that work expired; only the owning runtime does.
 /// Superseded sources remain retained history, not current output. Even an
-/// eligible unsealed source is only an observation: its seal may be in transit.
+/// eligible unclosed source is only an observation: its closing record may be in transit.
 /// Closed historical output never depends on today's active generation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveOutput {
@@ -597,7 +626,7 @@ pub struct LiveStream {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LiveStreamState {
     /// No terminal fact is locally visible; this does not prove remote liveness.
-    Unsealed,
+    Unclosed,
     PendingPublication {
         outcome: OutputOutcome,
     },

@@ -68,11 +68,13 @@ type AgentRequest @branchable {
     # Runtime-owned execution lease (#1571). Claim installs a fresh generation,
     # the lease length and the claim's own deadline. Streaming flushes do not
     # rewrite this row. The owning runtime alone decides expiry, inside its
-    # execution write gate: live while the current generation has an output
+    # config_client mutation gate: live while the current generation has an output
     # fact or explicit renewal newer than execution_lease_secs. Decisions
     # (close/retract, accept+publish, dispatch, terminalize, recover) keep the
-    # matching-generation CAS here and renew execution_lease_expires_at; so does
-    # progress with no output fact. Retired: execution_progress_seq.
+    # matching-generation CAS here. Fresh authorized nonterminal decisions and
+    # byte-less progress may renew; terminalization, stale writes and replay
+    # never extend a live lease. Tool-owned output retains its own lifecycle guard.
+    # Retired: execution_progress_seq.
     execution_generation: String @index
     execution_lease_secs: Int
     execution_lease_expires_at: String @index
