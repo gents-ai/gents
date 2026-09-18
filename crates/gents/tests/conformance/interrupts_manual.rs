@@ -723,6 +723,7 @@ async fn manual_run_materializes_pending_request() {
 
     let doc_id = write_manual_agent_request(
         &db.node,
+        ::identity::Did::new(db.node_identity.did().to_owned()).expect("fixture creator DID"),
         db.node_identity.did(),
         AGENT_NAME,
         "task-manual-pending",
@@ -768,6 +769,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
 
     let doc_id = write_manual_agent_request(
         &db.node,
+        ::identity::Did::new(db.node_identity.did().to_owned()).expect("fixture creator DID"),
         db.node_identity.did(),
         AGENT_NAME,
         "task-manual-claim",

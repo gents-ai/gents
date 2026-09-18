@@ -1376,7 +1376,9 @@ impl ClientCore {
     }
 
     pub async fn fire_task_now(&self, task_row: &Task, args: serde_json::Value) -> Result<String> {
-        match mutations::fire_task_now(self.node.as_ref(), task_row, args).await {
+        let actor = identity::Did::new(self.principal.did().to_owned())
+            .context("desktop principal DID is not ACP-addressable")?;
+        match mutations::fire_task_now(self.node.as_ref(), actor, task_row, args).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1407,7 +1409,9 @@ impl ClientCore {
     }
 
     pub async fn fire_schedule_now(&self, row: &Schedule) -> Result<String> {
-        match mutations::fire_schedule_now(self.node.as_ref(), row).await {
+        let actor = identity::Did::new(self.principal.did().to_owned())
+            .context("desktop principal DID is not ACP-addressable")?;
+        match mutations::fire_schedule_now(self.node.as_ref(), actor, row).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();

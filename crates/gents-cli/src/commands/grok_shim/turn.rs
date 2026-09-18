@@ -433,6 +433,8 @@ impl AsyncCommit for ProjectionCursorCommit<'_> {
 /// Configuration the ACP service binds into the turn manager.
 #[derive(Clone, Debug)]
 pub(super) struct TurnManagerConfig {
+    /// Authenticated server principal used as DefraDB's transaction actor.
+    pub actor: identity::Did,
     /// The agent did every request is submitted under.
     pub agent_did: String,
     /// The behavior id the serving shim is bound to.
@@ -1705,6 +1707,7 @@ impl TurnManager {
         {
             crate::create_goal_backed_agent_request_local(
                 &self.node,
+                self.config.actor.clone(),
                 self.config.graphql.as_ref(),
                 &self.config.agent_did,
                 &objective,
@@ -3398,6 +3401,7 @@ mod tests {
 
     fn test_config(graphql: String, agent_did: &str) -> TurnManagerConfig {
         TurnManagerConfig {
+            actor: ::identity::Did::new(agent_did.to_string()).expect("fixture creator DID"),
             agent_did: agent_did.to_string(),
             behavior_id: gents::default_behavior_id_for_agent(agent_did),
             graphql,

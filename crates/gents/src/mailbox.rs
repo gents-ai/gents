@@ -1143,6 +1143,7 @@ mod tests {
         .unwrap();
         let enqueued = crate::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
             node.as_ref(),
+            ::identity::Did::new(identity.did().to_owned()).expect("fixture creator DID"),
             identity.did(),
             "operator",
             "continue the graph",

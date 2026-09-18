@@ -238,8 +238,7 @@ impl RuntimeContext {
         )?
         .with_remote_tools(remote_tools)
         .with_output_obligations(output_obligations)
-        .with_root_execution_guard(root_execution_guard)
-        .with_operator_tool_root(self.operator_tool_root.clone());
+        .with_tool_surface_runtime_policy(root_execution_guard, self.operator_tool_root.clone());
         if let Some(compactor) = summary_compactor {
             daemon = daemon.with_compactor(compactor);
         }

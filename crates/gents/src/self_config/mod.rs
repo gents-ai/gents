@@ -1055,10 +1055,16 @@ async fn persona_mutate(
     record.local_signature = identity.sign(&record.signing_payload()).await?;
     record.validate_shape()?;
     let mutation = local_persona_request_mutation(&record);
-    crate::config_client::ConfigAccess::write_local(
+    let actor = ::identity::Did::new(identity.did().to_owned())
+        .context("self-config principal DID is not ACP-addressable")?;
+    crate::config_client::ConfigAccess::transact_local(
         node,
+        Some(actor),
         "self_config.create_persona_request",
-        &mutation,
+        |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await.map(|_| ()) })
+        },
     )
     .await?;
 

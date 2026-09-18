@@ -52,6 +52,62 @@ pub use builder::{BehaviorBuilder, GentsBuilder};
 #[cfg(test)]
 pub(crate) use document_view::load_document_runtime_view;
 
+/// Focused daemon seam for a persisted owned request and deterministic model.
+/// It does not exercise RuntimeContext's provider/client assembly, but shares
+/// its tool-surface runtime-policy attachment and the real request lifecycle,
+/// tool dispatch, provider-input, and terminal-state owners.
+#[cfg(test)]
+pub(crate) async fn process_owned_request_with_model_for_test<M>(
+    node: Arc<EmbeddedNode>,
+    behavior: Arc<ResolvedBehavior>,
+    tool_surface: Arc<crate::tool_surface::ToolSurface>,
+    tool_runtime: &crate::tool_surface::ToolRuntimeContext,
+    model: M,
+    request: crate::watcher::AgentRequest,
+) -> anyhow::Result<()>
+where
+    M: rig::completion::CompletionModel + 'static,
+{
+    let allowed_targets =
+        crate::tool_surface::resolve_subagent_target_descriptions(tool_surface.as_ref());
+    let prompt_builder = crate::prompt::LayeredPromptBuilder::new(
+        behavior.as_ref(),
+        &tool_surface,
+        &allowed_targets,
+    );
+    let preamble = prompt_builder.preamble().to_string();
+    let loop_tools = Arc::new(tool_surface.build_tools(tool_runtime).await?);
+    let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
+        node.clone(),
+        behavior.agent_did().to_string(),
+    );
+    let request_admission = crate::request_admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        behavior.principal_identity().clone(),
+        p2p_reconcile::enrollment_authority_channel().1,
+    );
+    let mut daemon = daemon::BehaviorDaemon::new(
+        node,
+        behavior,
+        Arc::new(model),
+        preamble,
+        loop_tools,
+        prompt_builder,
+        FailurePolicy::default(),
+        None,
+        crate::hook::BackgroundToolRegistry::default(),
+        crate::hook::BackgroundExecutionRegistry::default(),
+        Arc::new(runtime::StartupBarrier::ready_for_test()),
+        runtime_status,
+        1,
+        request_admission,
+    )?
+    .with_tool_surface_runtime_policy(tool_surface.root_execution_guard().cloned(), None);
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    daemon.process_request(request, shutdown_rx).await;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessLifecycleState {
     Uninitialized,

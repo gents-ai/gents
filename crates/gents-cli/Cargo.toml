@@ -48,6 +48,7 @@ futures-util = "0.3"
 flate2 = "1"
 ignore = "0.4"
 include_dir = "0.7"
+identity.workspace = true
 iroh.workspace = true
 query.workspace = true
 hostname.workspace = true
@@ -104,6 +105,5 @@ acp.workspace = true
 async-trait = "0.1"
 gents-desktop-core.workspace = true
 gents-lean-contract.workspace = true
-identity.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }
 tokio-tungstenite = "0.26.2"
