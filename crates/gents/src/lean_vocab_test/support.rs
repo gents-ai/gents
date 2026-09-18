@@ -27,6 +27,7 @@ pub(crate) struct LeanContractVocabulary<'a> {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanContractSnapshot {
     pub(crate) generated_by: String,
+    pub(crate) root_admission_cases: Vec<LeanRootAdmissionCase>,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
     /// Bridge-owner child-terminal failure projections
@@ -210,6 +211,30 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
     pub(crate) event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     pub(crate) event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanRootAdmissionCase {
+    pub(crate) name: String,
+    pub(crate) operation: String,
+    pub(crate) authored: String,
+    pub(crate) blank: bool,
+    pub(crate) observation: String,
+    pub(crate) configured: bool,
+    pub(crate) ceiling: Option<LeanCanonicalPath>,
+    pub(crate) enabled: Vec<LeanCanonicalPath>,
+    pub(crate) published: Vec<LeanCanonicalPath>,
+    pub(crate) candidate: Option<LeanCanonicalPath>,
+    pub(crate) expected: bool,
+    pub(crate) stored_requires_root: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCanonicalPath {
+    pub(crate) anchor: String,
+    pub(crate) components: Vec<String>,
 }
 
 /// One bridge-owner child-terminal failure projection

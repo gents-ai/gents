@@ -21,6 +21,54 @@ use gents::agent::persona_ops::{
 };
 use gents::agent::persona_presets;
 
+/// Register every emitted root case and reject drift in the serialized
+/// operation/text observations. The Rust implementation slice strengthens
+/// this same consumer by driving the production policy projector and persona
+/// gate; this foundation test keeps the generated contract independently
+/// reviewable.
+#[test]
+fn generated_root_admission_case_inventory_is_complete() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().root_admission_cases;
+    assert_eq!(cases.len(), 27);
+    let mut names = BTreeSet::new();
+    for case in cases {
+        assert!(
+            names.insert(case.name.as_str()),
+            "duplicate case {}",
+            case.name
+        );
+        assert_eq!(case.blank, case.authored.trim().is_empty(), "{}", case.name);
+        assert!(
+            matches!(
+                case.operation.as_str(),
+                "create" | "edit_set" | "edit_clear" | "edit_omitted"
+            ),
+            "unknown operation {} in {}",
+            case.operation,
+            case.name
+        );
+        assert!(
+            !case.observation.trim().is_empty(),
+            "{} omitted its filesystem observation",
+            case.name
+        );
+        if matches!(case.operation.as_str(), "edit_clear") {
+            assert!(
+                case.candidate.is_none(),
+                "{} clear carried a candidate",
+                case.name
+            );
+        }
+        if case.operation != "edit_omitted" {
+            assert!(
+                !case.stored_requires_root,
+                "{} marks an authored operation as stored-root-dependent",
+                case.name
+            );
+        }
+    }
+}
+
 /// Lean selectedToolFlag omission/explicit laws, through the production
 /// canonical Tools adapter rather than a second test materializer.
 #[test]

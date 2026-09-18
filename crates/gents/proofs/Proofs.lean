@@ -66,6 +66,7 @@ import Proofs.Skills
 import Proofs.EditMatch
 import Proofs.EventDelivery
 import Proofs.Conformance.EventDelivery
+import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.GraphPipeline
 import Proofs.GraphPipeline.FailureAttribution
