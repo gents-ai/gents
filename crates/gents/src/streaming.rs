@@ -15,7 +15,10 @@ mod tests;
 
 use queries::{extract_mutation_doc_id, load_response_state, load_response_state_by_key};
 
-const MAX_LIVE_REASONING_BYTES: usize = 64 * 1024;
+/// Maximum UTF-8 byte length of the reasoning preview persisted while a
+/// response is streaming. Consumers that reconstruct preview rollover must
+/// use this same bound.
+pub const MAX_LIVE_REASONING_BYTES: usize = 4 * 1024;
 
 type ResponseWriteGate = Mutex<()>;
 
@@ -72,6 +75,16 @@ struct StreamBuffer {
     lease: ExecutionWriteFence,
 }
 
+impl StreamBuffer {
+    /// Keep a buffered semantic delta eligible for persistence comfortably
+    /// before its execution lease expires. The write itself remains the sole
+    /// lease-renewal owner; an unchanged buffer has no deadline and therefore
+    /// cannot turn this scheduling guard into a heartbeat.
+    fn flush_interval(&self, configured: Duration) -> Duration {
+        configured.min(Duration::from_secs(self.lease.lease_duration_secs) / 2)
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct StreamBufferSnapshot {
     content: String,
@@ -89,7 +102,7 @@ impl DefraStreamWriter {
         }
         buffer
             .last_flush_at
-            .checked_add(self.batch_interval)
+            .checked_add(buffer.flush_interval(self.batch_interval))
             .map(tokio::time::Instant::from_std)
     }
 
@@ -147,6 +160,14 @@ impl DefraStreamWriter {
             reasoning_len = snapshot.reasoning.len(),
             "flushing streaming response snapshot"
         );
+        let (lease, persisted) = self
+            .buffers
+            .lock()
+            .await
+            .get(doc_id)
+            .map(|buffer| (buffer.lease.clone(), buffer.persisted.clone()))
+            .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={doc_id}"))?;
+        let changed_fields = snapshot_changed_fields(&snapshot, &persisted).join(",\n");
         let escaped_doc_id = escape_graphql_string(doc_id);
         let mutation = format!(
             r#"mutation {{
@@ -156,26 +177,12 @@ impl DefraStreamWriter {
                         status: {{ _eq: "streaming" }}
                     }},
                     input: {{
-                        content: "{content}",
-                        reasoning: "{reasoning}",
-                        token_count: {token_count},
-                        reasoning_progress_seq: {reasoning_progress_seq}
+                        {changed_fields}
                     }}
                 ) {{ _docID }}
             }}"#,
-            content = escape_graphql_string(&snapshot.content),
-            reasoning = escape_graphql_string(&snapshot.reasoning),
-            token_count = snapshot.token_count,
-            reasoning_progress_seq = snapshot.reasoning_progress_seq,
         );
 
-        let lease = self
-            .buffers
-            .lock()
-            .await
-            .get(doc_id)
-            .map(|buffer| buffer.lease.clone())
-            .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={doc_id}"))?;
         let resp = lease
             .execute_response_write(&self.node, &mutation, ExecutionWriteKind::Progress)
             .await?;
@@ -216,7 +223,10 @@ impl DefraStreamWriter {
         let first_visible_content = (buf.persisted.content.is_empty()
             && !buf.current.content.is_empty())
             || (buf.persisted.reasoning.is_empty() && !buf.current.reasoning.is_empty());
-        if !force && !first_visible_content && buf.last_flush_at.elapsed() < self.batch_interval {
+        if !force
+            && !first_visible_content
+            && buf.last_flush_at.elapsed() < buf.flush_interval(self.batch_interval)
+        {
             return Ok(None);
         }
         let snapshot = buf.current.clone();
@@ -365,6 +375,35 @@ impl DefraStreamWriter {
             .and_then(|d| d.get("update_AgentResponse"))
             .is_some_and(response_has_documents))
     }
+}
+
+fn snapshot_changed_fields(
+    snapshot: &StreamBufferSnapshot,
+    persisted: &StreamBufferSnapshot,
+) -> Vec<String> {
+    let mut fields = Vec::with_capacity(4);
+    if snapshot.content != persisted.content {
+        fields.push(format!(
+            "content: \"{}\"",
+            escape_graphql_string(&snapshot.content)
+        ));
+    }
+    if snapshot.reasoning != persisted.reasoning {
+        fields.push(format!(
+            "reasoning: \"{}\"",
+            escape_graphql_string(&snapshot.reasoning)
+        ));
+    }
+    if snapshot.token_count != persisted.token_count {
+        fields.push(format!("token_count: {}", snapshot.token_count));
+    }
+    if snapshot.reasoning_progress_seq != persisted.reasoning_progress_seq {
+        fields.push(format!(
+            "reasoning_progress_seq: {}",
+            snapshot.reasoning_progress_seq
+        ));
+    }
+    fields
 }
 
 impl StreamWriter for DefraStreamWriter {

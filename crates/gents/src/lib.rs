@@ -343,7 +343,7 @@ pub use schema::{
 };
 pub use session::load_history;
 pub use session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
-pub use streaming::{DefraStreamWriter, StreamWriter};
+pub use streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use template::{
     parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,
 };

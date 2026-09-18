@@ -1392,6 +1392,117 @@ mod tests {
         suffix_prefix_overlap, ContentCursor, ReasoningCursor,
     };
 
+    #[tokio::test]
+    async fn reasoning_cursor_oversized_no_overlap_segment_terminally_completes_with_durable_text()
+    {
+        use std::sync::{atomic::AtomicU64, Arc};
+        use std::time::Duration;
+
+        use tokio::sync::{mpsc, Mutex};
+
+        use super::super::super::turn_projection::TurnProjection;
+        use super::super::super::{CodexSidecar, ShimState};
+
+        let temp = tempfile::tempdir().expect("reasoning projection directory");
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .data_path(temp.path().join("node"))
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        let state = ShimState {
+            codex_home: temp.path().to_path_buf(),
+            trace_path: temp.path().join("reasoning.jsonl"),
+            cwd: temp.path().to_path_buf(),
+            fs_root: None,
+            node,
+            background_execution_registry: gents::BackgroundExecutionRegistry::default(),
+            graphql: Arc::from("http://127.0.0.1/graphql"),
+            agent_did: Arc::from("did:test:reasoning"),
+            behavior_id: Arc::from("reasoning"),
+            id_counter: Arc::new(AtomicU64::new(1)),
+            timeout: Duration::from_secs(5),
+            poll_interval: Duration::from_millis(10),
+            sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
+            auth_token: None,
+        };
+        let (outbound, mut notifications) = mpsc::unbounded_channel();
+        let mut projection =
+            TurnProjection::new(&state, "thread", "turn", temp.path().to_path_buf(), None);
+        let mut cursor = ReasoningCursor::default();
+        let first_tail = "a".repeat(gents::MAX_LIVE_REASONING_BYTES);
+        let second_tail = "b".repeat(gents::MAX_LIVE_REASONING_BYTES);
+        let durable_text = format!("{first_tail} omitted middle {second_tail}");
+        assert!(durable_text.len() > gents::MAX_LIVE_REASONING_BYTES);
+
+        let first = cursor
+            .observe(
+                "request-1",
+                &first_tail,
+                Some("1".to_string()),
+                Some("1".to_string()),
+            )
+            .delta
+            .expect("first bounded-tail delta");
+        projection
+            .append_reasoning_delta(&outbound, &first.item_id, &first.text)
+            .await
+            .expect("project first reasoning delta");
+
+        // A poll gap larger than the bounded preview has no overlap. This is
+        // existing segment behavior: the partial first item is completed and
+        // the new segment streams the latest tail. The final thread can thus
+        // show that partial prefix plus the full durable segment (a duplicate
+        // prefix). Terminal materialization, however, must complete the new
+        // segment with the exact durable text.
+        let second = cursor
+            .observe(
+                "request-1",
+                &second_tail,
+                Some("1".to_string()),
+                Some("2".to_string()),
+            )
+            .delta
+            .expect("unrecoverable bounded-tail delta");
+        assert_eq!(second.item_id, "gents-reasoning-request-1-segment-1");
+        projection
+            .append_reasoning_delta(&outbound, &second.item_id, &second.text)
+            .await
+            .expect("project latest reasoning tail");
+        projection
+            .finish_reasoning(
+                &outbound,
+                &cursor.active_item_id("request-1"),
+                Some(&durable_text),
+            )
+            .await
+            .expect("terminal durable reasoning reconciliation");
+
+        let mut completed = Vec::new();
+        while let Ok(payload) = notifications.try_recv() {
+            let notification: codex::ServerNotification =
+                serde_json::from_str(&payload).expect("Codex notification");
+            if let codex::ServerNotification::ItemCompleted(completed_item) = notification {
+                let codex::ThreadItem::Reasoning { id, content, .. } = completed_item.item else {
+                    panic!("expected reasoning completion");
+                };
+                completed.push((id, content.concat()));
+            }
+        }
+        assert_eq!(
+            completed,
+            vec![
+                ("gents-reasoning-request-1".to_string(), first_tail),
+                (
+                    "gents-reasoning-request-1-segment-1".to_string(),
+                    durable_text,
+                ),
+            ]
+        );
+    }
+
     #[test]
     fn terminal_subagent_link_gets_a_bounded_replication_window() {
         let start = tokio::time::Instant::now();
