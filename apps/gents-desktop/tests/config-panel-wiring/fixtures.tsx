@@ -395,7 +395,7 @@ export const bootstrap: BootstrapSummary = {
   desktopHome: "/tmp/gents",
   peerDirectoryPath: "/tmp/gents/peers.json",
   nodeDataDir: "/tmp/gents/node",
-  logFilePath: "/tmp/gents/logs/desktop.log",
+  diagnosticsHint: "native logging",
   agentHomeExists: true,
   desktopHomeExists: true,
   peerDirectoryExists: true,

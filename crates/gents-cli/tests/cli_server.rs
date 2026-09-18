@@ -4,6 +4,9 @@ use support::*;
 use std::fs;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::process::Command;
+
 use anyhow::{anyhow, Context, Result};
 use gents::default_behavior_id_for_agent;
 use serde_json::Value;
@@ -141,6 +144,68 @@ fn wait_for_server_exit(
     }
 }
 
+/// The per-user supervisor sends SIGTERM to the foreground `gents server`
+/// process. This deliberately signals the exact fixture PID rather than
+/// dropping its handle (which would use the test fixture's abrupt SIGKILL
+/// cleanup) so success proves the server's SIGTERM handler ran its shutdown
+/// epilogue.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_sigterm_runs_the_graceful_shutdown_path() -> Result<()> {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let agent_name = format!("cli-sigterm-{}", Uuid::new_v4().simple());
+
+    // Point the normal runtime configuration at an unopened local port: this
+    // is a fully initialized but provider-free/degraded runtime. The test is
+    // about owned-loop shutdown, not inference.
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "sigterm-no-provider",
+        ],
+    )?;
+    let port = allocate_port()?;
+    let (mut serve, readiness) =
+        spawn_server_with_ready_json(&home_dir, port, &["--p2p-transport", "none"], &[])?;
+    assert_eq!(
+        readiness.get("status").and_then(Value::as_str),
+        Some("serving"),
+        "server must be fully ready before SIGTERM: {readiness}"
+    );
+
+    let pid = serve.child.id();
+    let signal = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .context("sending SIGTERM to the exact gents server fixture PID")?;
+    assert!(signal.success(), "kill -TERM {pid} failed: {signal}");
+
+    let status = wait_for_server_exit(&mut serve, Duration::from_secs(15))?;
+    assert!(
+        status.success(),
+        "SIGTERM must be handled by the server and exit successfully, not terminate the fixture by signal: {status}"
+    );
+    assert_eq!(
+        status.signal(),
+        None,
+        "server exited because of a signal instead of completing its graceful SIGTERM shutdown: {status}"
+    );
+    assert!(
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_err(),
+        "the terminated foreground runtime still owns its HTTP port"
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -148,7 +213,11 @@ async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Res
     fs::create_dir_all(&home_dir)?;
 
     let mut serve = spawn_server(&home_dir, 0)?;
-    let status = wait_for_server_exit(&mut serve, Duration::from_secs(5))?;
+    // This is a process-startup budget, not an HTTP/readiness deadline. On
+    // macOS the instrumented CLI can spend several seconds in _dyld_start
+    // before main executes. Keep the semantic checks below (rejection with an
+    // actionable error and no published readiness) independent of that delay.
+    let status = wait_for_server_exit(&mut serve, Duration::from_secs(30))?;
     let (stdout, stderr) = serve.captured_output()?;
 
     assert!(!status.success(), "server unexpectedly exited successfully");

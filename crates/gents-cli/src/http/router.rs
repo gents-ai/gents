@@ -74,6 +74,7 @@ impl RuntimeActivationObservation {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn empty_activation_state() -> (
     Arc<OnceCell<gents::Gents>>,
     watch::Receiver<RuntimeActivationObservation>,

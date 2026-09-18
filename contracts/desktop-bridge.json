@@ -45,6 +45,10 @@
       "permissionSet": "runtime-admin"
     },
     {
+      "name": "desktop_managed_server_set_auto_start",
+      "permissionSet": "runtime-admin"
+    },
+    {
       "name": "desktop_managed_server_restart",
       "permissionSet": "runtime-admin"
     },
@@ -329,7 +333,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "7.10",
+  "contractVersion": "8.0",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -356,7 +360,9 @@
     "desktop://grok-login-url",
     "desktop://claude-login-url",
     "desktop://managed-server-updated",
-    "desktop://managed-server-tray-stop"
+    "desktop://managed-server-tray-start",
+    "desktop://managed-server-tray-stop",
+    "desktop://managed-server-tray-restart"
   ],
   "packageVersion": "0.18.0",
   "permissionSets": [
@@ -457,5 +463,5 @@
       "name": "full"
     }
   ],
-  "wireSchemaHash": "a0779d9391087d9ed8f754380c7e8ca47ee116f0f03029eb06430a0d37bb2a11"
+  "wireSchemaHash": "5f2e5db9118bf97e0434818d645b8d43eb1539b685ff85f2ecb26d66344d4f3c"
 }

@@ -16,7 +16,7 @@ pub async fn desktop_open_db_explorer<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<String, BridgeError> {
-    let status = super::managed_server::managed_server_status_for(&state).await?;
+    let status = super::managed_server::managed_server_status_for(&app, &state).await?;
     let graphql = status
         .graphql
         .as_deref()

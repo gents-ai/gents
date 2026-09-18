@@ -25,7 +25,7 @@ pub struct DesktopBootstrapSummary {
     pub desktop_home: String,
     pub peer_directory_path: String,
     pub node_data_dir: String,
-    pub log_file_path: String,
+    pub diagnostics_hint: String,
     pub agent_home_exists: bool,
     pub desktop_home_exists: bool,
     pub peer_directory_exists: bool,

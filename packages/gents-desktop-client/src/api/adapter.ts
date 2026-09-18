@@ -68,15 +68,19 @@ export function createDesktopApiAdapter(
         "desktop_managed_server_validate_root",
         { request: { path } },
       ).then((result) => result.canonicalPath),
-    commitManagedServerAutoStart: (agentName) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_start", {
-        request: { agentName },
+    commitManagedServerAutoStart: (_agentName) =>
+      invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
+        enabled: true,
       }),
     stopManagedServer: (disableAutoStart) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_stop", {
         disableAutoStart,
       }),
     openDbExplorer: () => invokeDesktop<string>("desktop_open_db_explorer"),
+    setManagedServerAutoStart: (enabled) =>
+      invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
+        enabled,
+      }),
     setSelectedAgent: (agentDid) =>
       invokeDesktop<void>("desktop_set_selected_agent", { agentDid }),
     removePeer: (peerId) =>

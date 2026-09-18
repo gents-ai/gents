@@ -60,6 +60,11 @@ pub(crate) enum Command {
         after_help = SERVER_AFTER_HELP
     )]
     Server(ServeArgs),
+    #[command(about = "Install and control the per-user native Gents runtime service")]
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
     #[command(about = "Chat with the local agent in the terminal", after_help = CHAT_AFTER_HELP)]
     Chat(ChatArgs),
     #[command(
@@ -202,6 +207,71 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SubagentCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ServiceCommand {
+    #[command(about = "Write the native user-service definition without starting it")]
+    Install(ServiceTargetArgs),
+    #[command(about = "Start the native service")]
+    Start {
+        #[command(flatten)]
+        target: ServiceTargetArgs,
+        #[arg(long, help = "Also enable the service at login")]
+        enable: bool,
+    },
+    #[command(about = "Stop and disable the native service")]
+    Stop {
+        #[command(flatten)]
+        target: ServiceTargetArgs,
+        #[arg(long, help = "Leave login-time enablement unchanged")]
+        keep_enabled: bool,
+    },
+    Restart(ServiceTargetArgs),
+    Enable(ServiceTargetArgs),
+    Disable(ServiceTargetArgs),
+    #[command(about = "Show native supervisor state (not runtime health)")]
+    Status(ServiceTargetArgs),
+    #[command(about = "Remove the service definition while preserving runtime data")]
+    Uninstall(ServiceTargetArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ServiceTargetArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "Absolute path to the gents runtime executable")]
+    pub(crate) executable: Option<PathBuf>,
+}
+
+pub(crate) enum ServiceAction {
+    Install,
+    Start { enable: bool },
+    Stop { keep_enabled: bool },
+    Restart,
+    Enable,
+    Disable,
+    Status,
+    Uninstall,
+}
+
+impl ServiceCommand {
+    pub(crate) fn into_parts(self) -> (Option<PathBuf>, Option<PathBuf>, ServiceAction) {
+        let (target, action) = match self {
+            Self::Install(target) => (target, ServiceAction::Install),
+            Self::Start { target, enable } => (target, ServiceAction::Start { enable }),
+            Self::Stop {
+                target,
+                keep_enabled,
+            } => (target, ServiceAction::Stop { keep_enabled }),
+            Self::Restart(target) => (target, ServiceAction::Restart),
+            Self::Enable(target) => (target, ServiceAction::Enable),
+            Self::Disable(target) => (target, ServiceAction::Disable),
+            Self::Status(target) => (target, ServiceAction::Status),
+            Self::Uninstall(target) => (target, ServiceAction::Uninstall),
+        };
+        (target.home, target.executable, action)
+    }
 }
 
 #[derive(clap::Subcommand)]

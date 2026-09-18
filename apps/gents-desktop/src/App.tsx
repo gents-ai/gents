@@ -12,7 +12,7 @@ import { StartupScreen } from "./components/StartupScreen";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
 import { useNativeWindowReadiness } from "./hooks/useNativeWindowReadiness";
-import { useManagedServerTrayStop } from "./hooks/useManagedServerTrayStop";
+import { useManagedServerTrayControls } from "./hooks/useManagedServerTrayControls";
 import type { DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
@@ -21,6 +21,7 @@ import {
   isMobileTauriShell,
   isMacTauriShell,
   isWindowsTauriShell,
+  supportsLocalManagedServer,
 } from "./lib/shellPlatform";
 import { AppShell } from "./ui/app/AppShell";
 import { WindowControls } from "./ui/app/WindowControls";
@@ -70,7 +71,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     return {
       api: client.api,
       listenToUpdates: (handler) => client.transport.listenClientUpdated(handler),
-      supportsManagedServer: !isMobileTauriShell(),
+      supportsManagedServer: supportsLocalManagedServer(),
     };
   }, []);
   const bridge = explicitBridge ?? defaultBridge;
@@ -88,8 +89,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   useEffect(() => {
     void startNativeSimulatorE2e();
   }, []);
-  useManagedServerTrayStop(bridge.api);
-
+  useManagedServerTrayControls(bridge.api);
   const agent = shell.selectedDeployment?.agentPrincipal.displayName ?? null;
   useEffect(() => {
     if (!isMacTauriShell()) return;

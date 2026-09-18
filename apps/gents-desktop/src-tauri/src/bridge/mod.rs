@@ -5,13 +5,13 @@ mod windows;
 
 #[cfg(desktop)]
 use gents_desktop_bridge::contract::{
+    MANAGED_SERVER_TRAY_RESTART_EVENT, MANAGED_SERVER_TRAY_START_EVENT,
     MANAGED_SERVER_TRAY_STOP_EVENT, MANAGED_SERVER_UPDATED_EVENT,
 };
 use gents_desktop_bridge::{
     init, init_tracing as install_tracing, install_runtime, AgentHomePolicy, AppMeta,
     BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, SnapshotGrants, TracingConfig,
 };
-use gents_desktop_core::client::DesktopPaths;
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(desktop)]
@@ -24,11 +24,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Listener, Manager};
 
 pub fn run() {
-    let log_path = DesktopPaths::discover()
-        .map(|paths| paths.log_file_path())
-        .unwrap_or_else(|_| std::env::temp_dir().join("gents-desktop.log"));
     install_tracing(TracingConfig {
-        log_path,
         filter: None,
         console: std::env::var("GENTS_DESKTOP_CONSOLE_LOG")
             .ok()
@@ -155,24 +151,30 @@ fn platform_bridge_config() -> BridgeConfig {
     }
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, any(target_os = "macos", target_os = "linux")))]
 fn platform_bootstrap_policy() -> BootstrapPolicy {
     BootstrapPolicy::LocalRuntimeAllowed {
         agent_home: AgentHomePolicy::Default,
     }
 }
 
-#[cfg(mobile)]
+#[cfg(any(
+    mobile,
+    all(desktop, not(any(target_os = "macos", target_os = "linux")))
+))]
 fn platform_bootstrap_policy() -> BootstrapPolicy {
     BootstrapPolicy::PairedRemoteOnly
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, any(target_os = "macos", target_os = "linux")))]
 fn platform_managed_server_policy() -> ManagedServerPolicy {
     ManagedServerPolicy::Allowed
 }
 
-#[cfg(mobile)]
+#[cfg(any(
+    mobile,
+    all(desktop, not(any(target_os = "macos", target_os = "linux")))
+))]
 fn platform_managed_server_policy() -> ManagedServerPolicy {
     ManagedServerPolicy::Disabled
 }
@@ -194,7 +196,8 @@ mod tests {
     }
 
     #[test]
-    fn desktop_build_explicitly_owns_local_runtime_authority() {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn supported_desktop_build_explicitly_owns_local_runtime_authority() {
         let config = platform_bridge_config();
         assert!(matches!(
             config.bootstrap,
@@ -202,10 +205,35 @@ mod tests {
         ));
         assert_eq!(config.managed_server, ManagedServerPolicy::Allowed);
     }
+
+    #[test]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    fn unsupported_desktop_build_is_remote_only() {
+        let config = platform_bridge_config();
+        assert!(matches!(
+            config.bootstrap,
+            BootstrapPolicy::PairedRemoteOnly
+        ));
+        assert_eq!(config.managed_server, ManagedServerPolicy::Disabled);
+    }
+
+    #[test]
+    fn tray_does_not_claim_process_readiness_while_starting() {
+        assert_eq!(
+            managed_agent_tooltip(Some("starting")),
+            "Gents agent service — starting"
+        );
+        assert_eq!(
+            managed_agent_tooltip(Some("failed")),
+            "Gents agent service — status unavailable"
+        );
+    }
 }
 
 #[cfg(desktop)]
 struct TrayRuntimeState {
+    // The desktop is tray-resident independently of agent process state. This
+    // stays true so closing the main window preserves the menu-bar frontend.
     active: Arc<AtomicBool>,
     // Native non-selected tabs can also report invisible. Only a deliberate
     // close makes the original view eligible for last-sibling cleanup.
@@ -229,49 +257,69 @@ fn tray_icon<'a>(
 #[cfg(desktop)]
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "Open Gents", true, None::<&str>)?;
-    let stop = MenuItem::with_id(app, "stop", "Stop Local Agent", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Gents", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &stop, &quit])?;
-    let active = Arc::new(AtomicBool::new(false));
+    let start = MenuItem::with_id(app, "start", "Start Agent", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", "Stop Agent", true, None::<&str>)?;
+    let restart = MenuItem::with_id(app, "restart", "Restart Agent", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Desktop", true, None::<&str>)?;
+    let menu = if cfg!(any(target_os = "macos", target_os = "linux")) {
+        Menu::with_items(app, &[&show, &start, &stop, &restart, &quit])?
+    } else {
+        Menu::with_items(app, &[&show, &quit])?
+    };
     app.manage(TrayRuntimeState {
-        active: Arc::clone(&active),
+        active: Arc::new(AtomicBool::new(true)),
         main_hidden_by_close: AtomicBool::new(false),
     });
     let tray = TrayIconBuilder::with_id("gents-managed-server")
         .menu(&menu)
-        .tooltip("Gents local agent")
+        .tooltip("Gents agent service — independent of the desktop")
         .icon(tray_icon(app)?)
         .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
+            "start" => {
+                let _ = app.emit_to("main", MANAGED_SERVER_TRAY_START_EVENT, ());
+            }
             "stop" => {
                 let _ = app.emit_to("main", MANAGED_SERVER_TRAY_STOP_EVENT, ());
-                show_main_window(app);
             }
-            "quit" => shutdown_and_quit(app),
+            "restart" => {
+                let _ = app.emit_to("main", MANAGED_SERVER_TRAY_RESTART_EVENT, ());
+            }
+            "quit" => app.exit(0),
             _ => {}
         })
         .build(app)?;
-    tray.set_visible(false)?;
+    tray.set_visible(true)?;
 
     let tray_id = tray.id().clone();
     let app_handle = app.handle().clone();
     app.listen(MANAGED_SERVER_UPDATED_EVENT, move |event| {
-        let running = serde_json::from_str::<serde_json::Value>(event.payload())
+        let state = serde_json::from_str::<serde_json::Value>(event.payload())
             .ok()
             .and_then(|value| {
                 value
                     .get("state")
                     .and_then(|state| state.as_str())
                     .map(str::to_string)
-            })
-            .is_some_and(|state| state == "running" || state == "starting");
-        active.store(running, Ordering::SeqCst);
+            });
         if let Some(tray) = app_handle.tray_by_id(&tray_id) {
-            let _ = tray.set_visible(running);
+            let _ = tray.set_tooltip(Some(managed_agent_tooltip(state.as_deref())));
         }
     });
     Ok(())
+}
+
+#[cfg(desktop)]
+fn managed_agent_tooltip(state: Option<&str>) -> &'static str {
+    match state {
+        Some("running") => "Gents agent service — running",
+        Some("starting") => "Gents agent service — starting",
+        Some("stopped") | Some("disabled") => "Gents agent service — stopped",
+        Some("external") => "Gents agent — running outside the managed service",
+        Some("failed") | None => "Gents agent service — status unavailable",
+        Some(_) => "Gents agent service — status unavailable",
+    }
 }
 
 #[cfg(desktop)]
@@ -284,28 +332,4 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         }
         let _ = window.set_focus();
     }
-}
-
-#[cfg(desktop)]
-fn shutdown_and_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Some(state) = app.try_state::<gents_desktop_bridge::state::DesktopAppState>() {
-            let server = state.managed_server.lock().await.server.take();
-            if let Some(server) = server {
-                match tokio::time::timeout(std::time::Duration::from_secs(5), server.shutdown())
-                    .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        tracing::warn!(%error, "managed local server shutdown failed during quit");
-                    }
-                    Err(_) => {
-                        tracing::warn!("managed local server shutdown timed out during quit");
-                    }
-                }
-            }
-        }
-        app.exit(0);
-    });
 }

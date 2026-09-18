@@ -8,6 +8,7 @@ import {
   isMobileTauriShell,
   isWindowsTauriShell,
   ownsAutomaticRecovery,
+  supportsLocalManagedServer,
 } from "../src/lib/shellPlatform";
 
 const windowMocks = vi.hoisted(() => ({
@@ -63,14 +64,17 @@ describe("native shell classifier", () => {
 
     expect(document.documentElement.dataset.shell).toBeUndefined();
     expect(headerIsWindowBar()).toBe(false);
+    expect(supportsLocalManagedServer()).toBe(true);
   });
 
-  it("keeps automatic shared-client recovery in the original native view", () => {
+  it("keeps automatic recovery and tray ownership in the original native view", () => {
     expect(ownsAutomaticRecovery()).toBe(true);
     enterTauri("MacIntel");
     expect(ownsAutomaticRecovery()).toBe(true);
+    expect(supportsLocalManagedServer()).toBe(true);
     windowMocks.label = "gents-view-1";
     expect(ownsAutomaticRecovery()).toBe(false);
+    expect(supportsLocalManagedServer()).toBe(true);
     enterTauri("iPhone", "iPhone", 5);
     expect(ownsAutomaticRecovery()).toBe(true);
   });
@@ -81,6 +85,7 @@ describe("native shell classifier", () => {
     applyShellPlatform();
 
     expect(isMacTauriShell()).toBe(true);
+    expect(supportsLocalManagedServer()).toBe(true);
     expect(headerIsWindowBar()).toBe(false);
     expect(document.documentElement.dataset.shell).toBe("mac");
     expect(windowMocks.onResized).not.toHaveBeenCalled();
@@ -95,6 +100,7 @@ describe("native shell classifier", () => {
     expect(isWindowsTauriShell()).toBe(true);
     expect(headerIsWindowBar()).toBe(true);
     expect(document.documentElement.dataset.shell).toBe("windows");
+    expect(supportsLocalManagedServer()).toBe(false);
   });
 
   it("classifies Linux without replacing its native window bar", () => {
@@ -105,6 +111,7 @@ describe("native shell classifier", () => {
     expect(isLinuxTauriShell()).toBe(true);
     expect(headerIsWindowBar()).toBe(false);
     expect(document.documentElement.dataset.shell).toBe("linux");
+    expect(supportsLocalManagedServer()).toBe(true);
   });
 
   it("does not mistake a touch-capable iPad for macOS", () => {
@@ -116,6 +123,7 @@ describe("native shell classifier", () => {
     expect(isMacTauriShell()).toBe(false);
     expect(headerIsWindowBar()).toBe(false);
     expect(document.documentElement.dataset.shell).toBeUndefined();
+    expect(supportsLocalManagedServer()).toBe(false);
   });
 
   it("classifies mobile only inside a mobile Tauri shell", () => {

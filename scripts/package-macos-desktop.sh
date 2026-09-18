@@ -10,6 +10,10 @@ npm ci
 node scripts/check-desktop-package-boundaries.mjs
 [[ "$(node -p 'require("./package.json").version')" == "$RELEASE_VERSION" ]]
 
+# The release workflow already built and signed the CLI in this target dir.
+# Stage that exact binary as Tauri's target-suffixed sidecar.
+bash scripts/stage-tauri-sidecar.sh --source "$CARGO_TARGET_DIR/release/gents"
+
 notary_dir=$(mktemp -d "$RUNNER_TEMP/gents-desktop-notary.XXXXXX")
 export APPLE_API_KEY_PATH="$notary_dir/AuthKey_${APPLE_API_KEY}.p8"
 trap 'rm -f "$APPLE_API_KEY_PATH"; rmdir "$notary_dir"' EXIT
@@ -21,7 +25,7 @@ umask 022
 # Reuse the CLI job's signing identity/keychain; Tauri signs and notarizes the app.
 (
   cd apps/gents-desktop
-  npm run tauri -- build --ci --bundles app,dmg -- --locked
+  npm run tauri -- build --config src-tauri/tauri.bundle.conf.json --ci --bundles app,dmg -- --locked
 )
 app="$CARGO_TARGET_DIR/release/bundle/macos/Gents.app"
 codesign --verify --deep --strict --verbose=2 "$app"
@@ -31,6 +35,9 @@ xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=4 "$app"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$RELEASE_VERSION" ]]
 [[ "$(lipo -archs "$app/Contents/MacOS/gents-desktop-tauri")" == arm64 ]]
+bundled_cli="$app/Contents/MacOS/gents"
+[[ -x "$bundled_cli" ]]
+"$bundled_cli" --version | grep -F "$RELEASE_VERSION"
 
 shopt -s nullglob
 images=("$CARGO_TARGET_DIR"/release/bundle/dmg/*"${RELEASE_VERSION}"*.dmg)
@@ -52,6 +59,8 @@ ditto "$mount_dir/Gents.app" "$smoke_dir/Gents.app"
 hdiutil detach "$mount_dir"
 codesign --verify --deep --strict "$smoke_dir/Gents.app"
 spctl --assess --type execute "$smoke_dir/Gents.app"
+[[ -x "$smoke_dir/Gents.app/Contents/MacOS/gents" ]]
+"$smoke_dir/Gents.app/Contents/MacOS/gents" --version | grep -F "$RELEASE_VERSION"
 node --input-type=module - "$smoke_dir" <<'NODE'
 import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';

@@ -54,6 +54,7 @@ hostname.workspace = true
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
+plist = "1.8"
 p2p.workspace = true
 regex = "1"
 reqwest.workspace = true
@@ -78,6 +79,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 url = "2"
 tempfile = "3"
+wait-timeout = "0.2"
 
 # `gents pack build` (src/commands/pack/build.rs) compiles a tool's source
 # through Afterburner's own compiler rather than growing a second one:

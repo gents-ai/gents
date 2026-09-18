@@ -46,7 +46,7 @@ import {
 } from "../../../lib/loadingStatus";
 import type { Shell } from "@/hooks/useShell";
 import { setupStewardPatches } from "@/lib/setupSteward";
-import { isMobileTauriShell } from "../../../lib/shellPlatform";
+import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { applyTheme, themePreference } from "@/theme";
 import { Mark } from "@/app/Mark";
@@ -305,7 +305,7 @@ export function SetupScreen({
   onCancel?: () => void;
 }) {
   const [step, setStep] = useState<Step>(initialStep);
-  const allowLocal = !isMobileTauriShell();
+  const allowLocal = supportsLocalManagedServer();
   const api = shell.api;
   const [where, setWhere] = useState<"local" | "remote">(
     allowLocal ? "local" : "remote",
@@ -480,7 +480,7 @@ export function SetupScreen({
         const status = await api.managedServerStatus();
         if (!status.pairingReady) {
           throw new Error(
-            "The hosted agent started, but secure background pairing is not ready.",
+            "The local agent started, but secure background pairing is not ready.",
           );
         }
       }
@@ -741,7 +741,7 @@ export function SetupScreen({
               selected={where === "local"}
               onSelect={() => setWhere("local")}
               title="Local agent"
-              hint="Create an agent on this Mac."
+              hint="Create an agent that runs independently in the background."
               icon={Server}
             >
               <div className="flex items-end gap-3">
@@ -803,6 +803,12 @@ export function SetupScreen({
               <p className="break-all text-xs text-muted-foreground">
                 Agent data: <span className="font-mono">{root}</span>
               </p>
+              <p className="text-xs text-muted-foreground">
+                Your operating system manages the agent as a background service. Closing
+                this window or choosing Quit Desktop leaves the agent running; use the
+                menu bar’s Stop Agent command to stop it. Start-at-login remains a
+                separate operating-system preference.
+              </p>
             </Option>
           )}
           <Option
@@ -848,7 +854,7 @@ export function SetupScreen({
     const status = projectStartupLoadingStatus(phase, true);
     const steps: [string, LoadingStepState | null][] = [
       [
-        where === "local" ? "Start hosted agent" : "Connect to server",
+        where === "local" ? "Start local agent" : "Connect to server",
         status.managedServerState,
       ],
       ["Load configuration", status.connectionState],

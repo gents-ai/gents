@@ -23,7 +23,7 @@ function deferred<T>() {
 
 describe("desktop client restart selection ordering", () => {
   it.each([true, false])(
-    "only the original view restores the managed runtime (owner=%s)",
+    "only the original view observes the managed runtime without starting it (owner=%s)",
     async (main) => {
       ownership.main = main;
       const snapshot = {
@@ -48,7 +48,7 @@ describe("desktop client restart selection ordering", () => {
         } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
       );
       await waitFor(() => expect(result.current.startupPhase).toBe("ready"));
-      expect(api.startManagedServer).toHaveBeenCalledTimes(main ? 1 : 0);
+      expect(api.startManagedServer).not.toHaveBeenCalled();
       expect(api.managedServerStatus).toHaveBeenCalledTimes(main ? 1 : 0);
       expect(api.fetchDesktopSnapshot).toHaveBeenCalledOnce();
     },

@@ -196,15 +196,15 @@ fn announce_codex_shim(
     let codex_shim_url = args.codex_shim_public_url.as_deref().unwrap_or(&bound_url);
     let launch_command =
         codex_shim_launch_command(codex_shim_url, args.codex_shim_auth_token_env.as_deref());
-    eprintln!(
+    tracing::info!(
         "Codex shim is listening on {bound_url} with state dir {}",
         bound.codex_home().display(),
     );
     if codex_shim_url != bound_url {
-        eprintln!("Codex shim public endpoint: {codex_shim_url}");
+        tracing::info!("Codex shim public endpoint: {codex_shim_url}");
     }
-    eprintln!("Codex shim event log: {}", bound.trace_path().display());
-    eprintln!("Chat from another terminal with: {launch_command}");
+    tracing::info!("Codex shim event log: {}", bound.trace_path().display());
+    tracing::info!("Chat from another terminal with: {launch_command}");
     json!({
         "websocket": codex_shim_url,
         "launch_command": launch_command,
@@ -255,7 +255,7 @@ async fn apply_pack_after_ready(
         anyhow::bail!("--apply-root is not a directory: {}", root.display());
     }
 
-    eprintln!(
+    tracing::info!(
         "Applying pack {} to in-process node (schemas/ if present, then config)…",
         root.display()
     );
@@ -265,7 +265,7 @@ async fn apply_pack_after_ready(
         .await
         .with_context(|| format!("pack schemas under {}", root.display()))?;
     if let Some(phase) = schemas.as_ref() {
-        eprintln!(
+        tracing::info!(
             "  schemas: {} ({} SDL file(s))",
             phase.status,
             phase.schema_files.len()
@@ -308,9 +308,11 @@ async fn apply_pack_after_ready(
         report.changed = true;
     }
 
-    eprintln!(
+    tracing::info!(
         "  config apply: status={} ok={} agent_did={}",
-        report.status, report.ok, report.agent_did
+        report.status,
+        report.ok,
+        report.agent_did
     );
     if !report.ok {
         anyhow::bail!(
@@ -363,11 +365,11 @@ fn spawn_codex_shim_supervisor(
                                 bound_behavior_id: bound.behavior_id().to_string(),
                             },
                         );
-                        eprintln!(
+                        tracing::info!(
                             "Codex endpoint bound: behavior {bound_behavior_id:?} became runnable; \
                              the shim is now running on {url} (no restart was needed)."
                         );
-                        eprintln!(
+                        tracing::info!(
                             "Chat from another terminal with: {}",
                             codex_shim_launch_command(&url, auth_token_env.as_deref())
                         );
@@ -390,12 +392,12 @@ fn spawn_codex_shim_supervisor(
                                 reason: format!("{:#}", error.error()),
                             },
                         );
-                        eprintln!(
+                        tracing::warn!(
                             "Codex endpoint disabled: behavior {bound_behavior_id:?} became runnable, \
                              but the shim could not bind: {:#}",
                             error.error()
                         );
-                        eprintln!(
+                        tracing::warn!(
                             "This is not something configuration can fix. Restart with --codex-shim-port <free-port>, or silence this with --no-codex-shim."
                         );
                         return;
@@ -452,7 +454,30 @@ fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
 }
 
 pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
-    serve_with_control(args, None, None).await
+    serve_foreground(args).await
+}
+
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to install SIGTERM handler; waiting for Ctrl-C");
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 async fn preflight_embedded_http_bind(addr: SocketAddr) -> Result<()> {
@@ -530,11 +555,7 @@ async fn wait_for_embedded_http_bind(
     }
 }
 
-pub(crate) async fn serve_with_control(
-    mut args: ServeArgs,
-    external_shutdown: Option<watch::Receiver<bool>>,
-    ready: Option<tokio::sync::oneshot::Sender<Value>>,
-) -> Result<()> {
+async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     args.codex_shim_public_url = args
         .codex_shim_public_url
         .as_deref()
@@ -764,31 +785,11 @@ pub(crate) async fn serve_with_control(
     // behavior readiness at `ready` and its detached children still firing, so hold a
     // sender here and forward any external signal into it.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    match external_shutdown {
-        Some(mut external) => {
-            let forward_tx = shutdown_tx.clone();
-            tokio::spawn(async move {
-                if *external.borrow() {
-                    let _ = forward_tx.send(true);
-                    return;
-                }
-                while external.changed().await.is_ok() {
-                    if *external.borrow() {
-                        let _ = forward_tx.send(true);
-                        return;
-                    }
-                }
-            });
-        }
-        None => {
-            let signal_tx = shutdown_tx.clone();
-            tokio::spawn(async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
-                    let _ = signal_tx.send(true);
-                }
-            });
-        }
-    }
+    let signal_tx = shutdown_tx.clone();
+    tokio::spawn(async move {
+        wait_for_shutdown_signal().await;
+        let _ = signal_tx.send(true);
+    });
 
     let mut run_handle = tokio::spawn(agent.run(shutdown_rx));
     loop {
@@ -868,8 +869,8 @@ pub(crate) async fn serve_with_control(
                 .await
                 {
                     Ok(bound_behavior_id) => {
-                        eprintln!("Codex endpoint pending: {:#}", error.error());
-                        eprintln!(
+                        tracing::warn!("Codex endpoint pending: {:#}", error.error());
+                        tracing::warn!(
                             "The server keeps running. The shim binds by itself once behavior {bound_behavior_id:?} \
                              becomes runnable (for example after `gents config apply`) — no restart needed."
                         );
@@ -896,7 +897,7 @@ pub(crate) async fn serve_with_control(
                     }
                     Err(binding_error) => {
                         let reason = format!("{binding_error:#}");
-                        eprintln!("Codex endpoint disabled: {reason}");
+                        tracing::warn!("Codex endpoint disabled: {reason}");
                         codex_shim_output = Some(json!({
                             "disabled": true,
                             "reason": reason,
@@ -910,8 +911,8 @@ pub(crate) async fn serve_with_control(
                 None
             }
             Err(error) => {
-                eprintln!("Codex endpoint disabled: {:#}", error.error());
-                eprintln!(
+                tracing::warn!("Codex endpoint disabled: {:#}", error.error());
+                tracing::warn!(
                     "The server keeps running without it. Fix the cause and restart, pick another port with --codex-shim-port, or silence this with --no-codex-shim."
                 );
                 codex_shim_output = Some(json!({
@@ -1173,41 +1174,38 @@ pub(crate) async fn serve_with_control(
         "grok_shim": grok_shim_output,
         "apply_root": pack_apply,
     });
-    if let Some(ready) = ready {
-        let _ = ready.send(output.clone());
-    }
     print_json(&output)?;
     if args.p2p_transport == P2pTransportArg::Iroh {
         if let Some(admission) = output.get("p2p_admission") {
-            eprintln!(
+            tracing::info!(
                 "P2P admission: pending_dags={} push_tasks={} dag_fetches={} rate_burst={} rate/s={}",
                 admission
                     .get("max_pending_dags")
-                    .and_then(Value::as_u64)
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
                 admission
                     .get("max_concurrent_push_tasks")
-                    .and_then(Value::as_u64)
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
                 admission
                     .get("max_concurrent_dag_fetches")
-                    .and_then(Value::as_u64)
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
                 admission
                     .get("rate_limit_burst")
-                    .and_then(Value::as_u64)
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
                 admission
                     .get("rate_limit_rate")
-                    .and_then(Value::as_f64)
+                    .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0),
             );
         }
-        eprintln!(
+        tracing::info!(
             "gents server is running with IROH P2P. Press Ctrl-C to stop. For the desktop demo, run `gents-desktop init`, launch `gents-desktop`, wait for `replication: subscriptions armed`, then chat."
         );
     } else {
-        eprintln!("gents server is running local-only. Press Ctrl-C to stop.");
+        tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");
     }
 
     let runtime_result = if let Some(handle) = codex_shim_handle.as_mut() {

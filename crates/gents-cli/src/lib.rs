@@ -18,6 +18,7 @@ mod graphql_access;
 mod home_state;
 mod http;
 mod interactive_backend;
+pub mod native_service;
 mod p2p_relay;
 mod request_helpers;
 mod resolve_helpers;
@@ -55,6 +56,7 @@ const DEFAULT_P2P_RATE_LIMIT_RATE: f64 = p2p::sync::DEFAULT_RATE_LIMIT_RATE;
 const DEFAULT_P2P_MAX_PENDING_DAGS: usize = p2p::sync::DEFAULT_MAX_PENDING_DAGS;
 const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
+    "gents_server::commands::serve=info,",
     "gents::agent::runtime=info,",
     "gents::agent::daemon=info,",
     "gents::agent::reconcile=info,",
@@ -397,6 +399,7 @@ async fn async_main() -> Result<()> {
         Command::Provision(args) => commands::provision::provision(args).await,
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
+        Command::Service { command } => service_command(command),
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
         Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
@@ -430,6 +433,41 @@ async fn async_main() -> Result<()> {
     };
     telemetry.shutdown();
     result
+}
+
+fn service_command(command: ServiceCommand) -> Result<()> {
+    use native_service::{NativeServiceConfig, NativeServiceManager};
+
+    let (home, executable, action) = command.into_parts();
+    let home = absolutize(resolve_home_dir(home.as_deref()))?;
+    let executable = match executable {
+        Some(path) => absolutize(path)?,
+        None => std::env::current_exe().context("resolving the gents executable")?,
+    };
+    let manager = NativeServiceManager::new(NativeServiceConfig::new(home, executable)?)?;
+    match action {
+        ServiceAction::Install => manager.install(),
+        ServiceAction::Start { enable } => manager.start(enable),
+        ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
+        ServiceAction::Restart => manager.restart(),
+        ServiceAction::Enable => manager.set_enabled(true),
+        ServiceAction::Disable => manager.set_enabled(false),
+        ServiceAction::Status => {
+            print!("{}\n", manager.status()?.summary());
+            Ok(())
+        }
+        ServiceAction::Uninstall => manager.uninstall(),
+    }
+}
+
+fn absolutize(path: PathBuf) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()
+            .context("resolving current directory")?
+            .join(path))
+    }
 }
 
 pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Result<Vec<String>> {

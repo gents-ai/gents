@@ -33,15 +33,12 @@ pub fn run() {
     let host_root = dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("gents-fixture-host");
-    let log_home = host_root.join("logs");
     let domain_home = std::env::var_os("FIXTURE_DOMAIN_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| host_root.join("domain"));
-    let _ = std::fs::create_dir_all(&log_home);
     let _ = std::fs::create_dir_all(&domain_home);
 
     install_tracing(TracingConfig {
-        log_path: log_home.join("fixture-host.log"),
         filter: None,
         console: true,
     });

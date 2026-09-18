@@ -4,7 +4,7 @@
    offers (rename the saved label, check the peer, remove). Add agent is
    the desktop's status enrolment: a server address, a request the
    server's admin approves, then the peer joins. */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { EllipsisVertical, Inbox, Plus, Server, Wifi } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
@@ -44,7 +44,7 @@ import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentHoverCard } from "./HoverCards";
-import { isMobileTauriShell } from "../../lib/shellPlatform";
+import { supportsLocalManagedServer } from "../../lib/shellPlatform";
 
 export function AgentsScreen({ shell }: { shell: Shell }) {
   const [adding, setAdding] = useState(false);
@@ -326,26 +326,47 @@ function AddAgentDialog({
   open: boolean;
   onClose: () => void;
 }) {
-  const allowLocal = !isMobileTauriShell();
+  const allowLocal = supportsLocalManagedServer();
   const [where, setWhere] = useState<"local" | "remote">(
     allowLocal ? "local" : "remote",
   );
   const [address, setAddress] = useState("");
   const [name, setName] = useState("Forge");
   const [busy, setBusy] = useState(false);
-  const ready = where === "local" ? /\S/.test(name) : /\S/.test(address);
+  const [localAuthorityReviewed, setLocalAuthorityReviewed] = useState(false);
+  useEffect(() => {
+    if (!open || !allowLocal) return;
+    const pending = shell.api.managedServerStatus?.();
+    if (!pending) return;
+    void pending.then(
+      (status) => {
+        const reviewed = Boolean(status.effectiveToolCeiling);
+        setLocalAuthorityReviewed(reviewed);
+        if (!reviewed) setWhere("remote");
+      },
+      () => {
+        setLocalAuthorityReviewed(false);
+        setWhere("remote");
+      },
+    );
+  }, [allowLocal, open, shell.api]);
+  const ready =
+    where === "local" ? localAuthorityReviewed && /\S/.test(name) : /\S/.test(address);
   const submit = async () => {
     setBusy(true);
     try {
       if (where === "local") {
         const agentName = name.trim() || "Local Agent";
+        const status = await shell.api.managedServerStatus?.();
+        if (!status?.effectiveToolCeiling) {
+          throw new Error(
+            "Complete local agent setup to review host access before adding another local agent.",
+          );
+        }
         if (shell.api.startManagedServer) {
           await shell.api.startManagedServer(agentName);
         }
         await shell.onInitLocalRuntime(agentName);
-        if (shell.api.commitManagedServerAutoStart) {
-          await shell.api.commitManagedServerAutoStart(agentName);
-        }
         toast("Local agent created");
       } else {
         const r = await shell.api.requestStatusEnrollment(address.trim());
@@ -371,7 +392,7 @@ function AddAgentDialog({
           <DialogTitle>Add agent</DialogTitle>
           <DialogDescription>
             {allowLocal
-              ? "Create an agent on this Mac, or connect to one that already runs."
+              ? "Create a background agent on this computer, or connect to one that already runs."
               : "Connect to a Gents server. Its admin approves the enrolment."}
           </DialogDescription>
         </DialogHeader>
@@ -385,6 +406,7 @@ function AddAgentDialog({
               type="button"
               role="radio"
               aria-checked={where === "local"}
+              disabled={!localAuthorityReviewed}
               onClick={() => setWhere("local")}
               className={cn(
                 "flex w-full items-center gap-3 rounded-2xl border bg-raised px-4 py-3 text-left",
@@ -397,7 +419,9 @@ function AddAgentDialog({
               <span>
                 <span className="block text-sm font-medium">Local agent</span>
                 <span className="block text-xs text-muted-foreground">
-                  Create one on this Mac
+                  {localAuthorityReviewed
+                    ? "Create one with your reviewed host access"
+                    : "Complete local agent setup to review host access first"}
                 </span>
               </span>
             </button>

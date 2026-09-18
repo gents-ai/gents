@@ -33,6 +33,12 @@ export function isMobileTauriShell(): boolean {
   return inTauri() && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
+/// Native background-service hosting is implemented with per-user launchd and
+/// systemd services. Browser harnesses retain local hosting for UI tests.
+export function supportsLocalManagedServer(): boolean {
+  return !inTauri() || isMacTauriShell() || isLinuxTauriShell();
+}
+
 /// Only Windows uses a web-rendered window bar. macOS reserves native title
 /// and tab chrome outside the webview; Linux keeps its window-manager chrome.
 export function headerIsWindowBar(): boolean {

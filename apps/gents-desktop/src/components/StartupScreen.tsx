@@ -77,7 +77,7 @@ export function StartupScreen({
 
         <ol aria-label="Startup progress" className="grid gap-2">
           {status.managedServerState ? (
-            <StartupStep label="Start hosted agent" state={status.managedServerState} />
+            <StartupStep label="Check local agent" state={status.managedServerState} />
           ) : null}
           <StartupStep label="Read saved connections" state={status.connectionState} />
           <StartupStep label="Start secure client" state={status.clientState} />

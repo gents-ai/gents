@@ -61,7 +61,6 @@ pub struct AppMeta {
 
 #[derive(Debug, Clone)]
 pub struct TracingConfig {
-    pub log_path: PathBuf,
     pub filter: Option<String>,
     pub console: bool,
 }

@@ -1,6 +1,7 @@
 SHELL := /bin/sh
 
 CARGO ?= cargo
+CARGO_TARGET_DIR ?= target
 LAKE ?= lake
 NPM ?= npm
 
@@ -138,6 +139,7 @@ help:
 	@echo "  make desktop-ui-live-e2e   Run live browser-to-runtime desktop smoke"
 	@echo "  make desktop-ui-live-e2e-real  Run live browser smoke against a configured real provider"
 	@echo "  make desktop-native-preflight  Build frontend/Rust shell and print Tauri CLI version"
+	@echo "  make desktop-native-stage-sidecar  Build and stage the release CLI for a Tauri bundle"
 	@echo "  make desktop-native-dev    Launch the native Tauri dev app for manual QA"
 	@echo "  make desktop-native-build  Build the native Tauri app bundle"
 	@echo
@@ -197,7 +199,7 @@ build:
 	$(CARGO) build
 
 build-cli:
-	$(CARGO) build -p gents-cli
+	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli $(CARGO_TARGET_FLAG)
 
 .PHONY: maintain
 maintain:
@@ -363,7 +365,7 @@ RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
 
 .PHONY: release-cli release-cli-headless fast-dev-cli dist-cli measure-build-graph measure-release-cli measure-build-attribution
 release-cli:
-	$(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
+	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
 release-cli-headless:
 	$(CARGO) build -p gents-cli --release --locked --no-default-features $(CARGO_TARGET_FLAG)
@@ -485,14 +487,22 @@ desktop-ui-live-e2e:
 desktop-ui-live-e2e-real:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:live:e2e:real
 
-desktop-native-preflight:
+DESKTOP_CLI_PROFILE ?= release
+DESKTOP_CLI_BUILD_DIR = $(CARGO_TARGET_DIR)/$(if $(TARGET),$(TARGET)/,)$(DESKTOP_CLI_PROFILE)
+DESKTOP_CLI_BINARY = $(DESKTOP_CLI_BUILD_DIR)/gents
+
+.PHONY: desktop-native-stage-sidecar
+desktop-native-stage-sidecar: release-cli
+	scripts/stage-tauri-sidecar.sh --source "$(DESKTOP_CLI_BINARY)" --target "$(TARGET_TRIPLE)"
+
+desktop-native-preflight: build-cli
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:native:preflight
 
-desktop-native-dev:
+desktop-native-dev: build-cli
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- dev
 
-desktop-native-build:
-	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build
+desktop-native-build: desktop-native-stage-sidecar
+	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json
 
 .PHONY: live-cli live-agent live-desktop-smoke
 live-cli:

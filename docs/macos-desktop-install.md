@@ -15,3 +15,14 @@ to work around an installation failure; report the macOS version and exact error
 Choose a local managed agent, review its tool root and permissions, then connect
 inference. Provider accounts and local inference servers are supplied by the user.
 Git and language toolchains are needed only for tasks that use them.
+
+Gents installs a per-user LaunchAgent, not a root daemon. The agent runs
+independently of its frontend: closing a window or choosing Quit Desktop leaves
+it running. Use the menu-bar Stop Agent control to stop it. Start at login is a
+separate preference; opening the desktop does not restart an intentionally stopped
+agent. Keep the application in its installed location so launchd can find the
+bundled runtime at the next login.
+
+Runtime diagnostics use macOS unified logging (subsystem `ai.gents`), visible in
+Console.app. Log retention follows OS policy; Gents does not maintain a separate
+rotating log file.

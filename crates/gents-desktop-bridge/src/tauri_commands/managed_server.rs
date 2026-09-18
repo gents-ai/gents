@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::{
@@ -27,20 +28,9 @@ struct ManagedPairingTarget {
     graphql: String,
 }
 
-impl From<gents_server::server_host::ServerReady> for ManagedPairingTarget {
-    fn from(ready: gents_server::server_host::ServerReady) -> Self {
-        Self {
-            agent_name: ready.agent_name,
-            agent_did: ready.agent_did,
-            graphql: ready.graphql,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredManagedServer {
-    enabled: bool,
     agent_name: String,
     #[serde(default)]
     tool_ceiling: Option<ManagedServerToolCeiling>,
@@ -55,19 +45,6 @@ struct EffectiveManagedAuthority {
 }
 
 impl EffectiveManagedAuthority {
-    fn default_home() -> Result<Self, BridgeError> {
-        let home = dirs::home_dir().ok_or_else(|| {
-            BridgeError::new(
-                BridgeErrorCode::ClientStartFailed,
-                "unable to resolve the user home directory for managed-runtime tools",
-            )
-        })?;
-        Ok(Self {
-            tool_ceiling: ManagedServerToolCeiling::Readwrite,
-            tool_root: Some(validate_tool_root(&home)?),
-        })
-    }
-
     fn from_request(
         tool_ceiling: ManagedServerToolCeiling,
         tool_root: Option<&str>,
@@ -168,29 +145,31 @@ pub async fn desktop_managed_server_validate_root(
 }
 
 #[tauri::command]
-pub async fn desktop_managed_server_status(
+pub async fn desktop_managed_server_status<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<ManagedServerStatus, BridgeError> {
-    managed_server_status_for(&state).await
+    let status = managed_server_status_for(&app, &state).await?;
+    let _ = app.emit(MANAGED_SERVER_UPDATED_EVENT, status.clone());
+    Ok(status)
 }
 
-pub(crate) async fn managed_server_status_for(
+async fn observe_managed_server_status<R: Runtime>(
+    app: &AppHandle<R>,
     state: &DesktopAppState,
 ) -> Result<ManagedServerStatus, BridgeError> {
-    ensure_allowed(state)?;
     let stored = load_preference(state).await?;
+    let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
     let managed = state.managed_server.lock().await;
-    let mut status = status_from(&managed, stored.as_ref());
+    let mut status = status_from(&managed, stored.as_ref(), Some(&native));
     drop(managed);
 
-    // A preserved runtime may be owned by another process. Re-probe it on
-    // every idle status read so onboarding retains its live DID while the
-    // existing pairing owner converges. Without this, start can discover the
-    // process but the next poll projects only the empty in-process handle.
+    // Native process state is not runtime readiness. Probe the status endpoint
+    // on every idle/starting read so the frontend gets the live DID and route.
     if should_probe_external_status(&status) {
         if let Some(agent_home) = state.policy.agent_home.as_deref() {
             if let Some(external) = matching_external_server(agent_home).await? {
-                status = project_external_status(external, stored.as_ref());
+                status = project_external_status(external, &native);
             }
         }
     }
@@ -198,18 +177,30 @@ pub(crate) async fn managed_server_status_for(
     Ok(status)
 }
 
-fn should_probe_external_status(status: &ManagedServerStatus) -> bool {
-    matches!(
-        status.state,
-        ManagedServerState::Disabled | ManagedServerState::Stopped
-    )
+/// Canonical managed-service and runtime-readiness observation shared by the
+/// status command and native desktop consumers such as DB Explorer.
+pub(crate) async fn managed_server_status_for<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<ManagedServerStatus, BridgeError> {
+    ensure_allowed(state)?;
+    observe_managed_server_status(app, state).await
+}
+
+fn should_probe_external_status(_status: &ManagedServerStatus) -> bool {
+    // Endpoint readiness is authoritative over stale bridge-local errors and
+    // native process state. The probe is a bounded single HTTP observation.
+    true
 }
 
 fn project_external_status(
     mut external: ManagedServerStatus,
-    stored: Option<&StoredManagedServer>,
+    native: &gents_server::native_service::NativeServiceStatus,
 ) -> ManagedServerStatus {
-    external.auto_start = stored.is_some_and(|stored| stored.enabled);
+    external.auto_start = native.enabled;
+    if native.job_loaded {
+        external.state = ManagedServerState::Running;
+    }
     external
 }
 
@@ -265,59 +256,18 @@ async fn start_managed_server_locked<R: Runtime>(
                 .map(|ceiling| (ceiling, stored.tool_root.as_deref()))
         }) {
             Some((ceiling, root)) => EffectiveManagedAuthority::from_request(ceiling, root)?,
-            None => EffectiveManagedAuthority::default_home()?,
+            None => {
+                return Err(BridgeError::new(
+                    BridgeErrorCode::InvalidArgument,
+                    "Complete local agent setup and review host access before starting the agent.",
+                ));
+            }
         },
     };
 
-    {
-        let managed = state.managed_server.lock().await;
-        if managed.server.is_some() {
-            let ready = managed
-                .server
-                .as_ref()
-                .expect("managed server checked above")
-                .ready()
-                .clone();
-            drop(managed);
-            let running = authority_from_ready(&ready);
-            if running != authority {
-                return Err(BridgeError::new(
-                    BridgeErrorCode::InvalidArgument,
-                    "Changing the managed runtime root or authority requires a restart.",
-                ));
-            }
-            let (tool_ceiling, tool_root) = authority.stored();
-            let committed = StoredManagedServer {
-                enabled: true,
-                agent_name: agent_name.to_string(),
-                tool_ceiling: Some(tool_ceiling),
-                tool_root,
-            };
-            save_preference(state, &committed).await?;
-            if let Some(core) = current_core(state) {
-                start_managed_runtime_pairing(
-                    state,
-                    core,
-                    agent_home.clone(),
-                    ManagedPairingTarget::from(ready),
-                )
-                .await;
-            }
-            let managed = state.managed_server.lock().await;
-            let mut status = status_from(&managed, Some(&committed));
-            drop(managed);
-            status.pairing_ready = pairing_is_ready(state, status.agent_did.as_deref()).await;
-            return Ok(status);
-        }
-    }
-
-    // Check our in-process handle before probing the port above. Once the
-    // first onboarding call has started the managed server, its HTTP status
-    // endpoint is indistinguishable from an externally launched server. The
-    // second call intentionally commits auto-start after client provisioning;
-    // probing first would return early and leave the preference disabled.
     if let Some(external) = matching_external_server(&agent_home).await? {
-        let mut external = project_external_status(external, stored.as_ref());
+        let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+        let mut external = project_external_status(external, &native);
         if external.effective_tool_ceiling != Some(authority.tool_ceiling)
             || external.effective_tool_root.as_deref()
                 != authority
@@ -341,6 +291,16 @@ async fn start_managed_server_locked<R: Runtime>(
         return Ok(external);
     }
 
+    let initial_native =
+        run_native(native_service(app, state)?, |service| service.status()).await?;
+    if initial_native.is_active_or_transitioning() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::EndpointUnreachable,
+            "The native agent service is running or transitioning but has not published runtime readiness. Wait and try again, or use Restart Agent if it does not become ready.",
+        ));
+    }
+    let initial_enabled = initial_native.enabled;
+
     {
         let mut managed = state.managed_server.lock().await;
         managed.starting = true;
@@ -348,7 +308,9 @@ async fn start_managed_server_locked<R: Runtime>(
     }
     emit_status(app, state).await;
 
-    let result: anyhow::Result<_> = async {
+    let mut attempted_native_start = false;
+    let result: anyhow::Result<()> = async {
+        ensure_default_port_identity(&agent_home).await?;
         gents_server::server_host::ensure_standard_home(
             gents_server::server_host::ProvisionOptions {
                 home: agent_home.clone(),
@@ -358,74 +320,71 @@ async fn start_managed_server_locked<R: Runtime>(
             },
         )
         .await?;
-        let mut config = gents_server::server_host::ServerConfig::standard(agent_home.clone());
-        config.http_port = first_free_http_port(config.http_port)?;
-        let server = gents_server::server_host::start_server(config).await?;
-
-        // Iroh shareable addresses include the process's ephemeral QUIC port.
-        // Refresh the persisted local peer after every managed-server start so
-        // desktop client startup never dials the previous process's endpoint.
-        // The start result is the readiness authority; re-querying the new HTTP
-        // server here races its auxiliary P2P endpoints and can drop an otherwise
-        // healthy server handle during first-run startup.
-        let _client_lifecycle = state.client_lifecycle.lock().await;
-        if let Some(core) = current_core(&state) {
-            let ready = server.ready();
-            let p2p_address = ready
-                .p2p_listen_addresses
-                .iter()
-                .find(|address| address.starts_with("endpoint"))
-                .or_else(|| ready.p2p_listen_addresses.first())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("managed Gents server readiness omitted a P2P listen address")
-                })?;
-            core.persist_local_standard_peer(
-                agent_name,
-                p2p_address,
-                &ready.agent_did,
-                &ready.graphql,
-                &agent_home.display().to_string(),
-            )
-            .await?;
-        } else {
+        let (tool_ceiling, tool_root) = authority.stored();
+        save_preference(
+            state,
+            &StoredManagedServer {
+                agent_name: agent_name.to_string(),
+                tool_ceiling: Some(tool_ceiling),
+                tool_root,
+            },
+        )
+        .await?;
+        ensure_default_port_identity(&agent_home).await?;
+        if !initial_native.installed {
+            run_native(native_service(app, state)?, |service| service.install()).await?;
+        }
+        // A start can launch the process and then fail restoring login state.
+        // Roll back the owned attempt even when that final native step fails.
+        attempted_native_start = true;
+        run_native(native_service(app, state)?, |service| service.start(false)).await?;
+        let ready = wait_for_managed_server(&agent_home).await?;
+        validate_ready_runtime(&ready, &authority, &agent_home)?;
+        if current_core(state).is_none() {
             init_standard_local_runtime(DesktopInitOptions {
-                agent_home,
+                agent_home: agent_home.clone(),
                 desktop_paths: state.policy.desktop_paths.clone(),
                 label: agent_name.to_string(),
             })
             .await?;
         }
-
-        Ok(server)
+        Ok(())
     }
     .await;
 
     match result {
-        Ok(server) => {
-            let (tool_ceiling, tool_root) = authority.stored();
-            save_preference(
-                state,
-                &StoredManagedServer {
-                    enabled: stored.is_some_and(|stored| stored.enabled),
-                    agent_name: agent_name.to_string(),
-                    tool_ceiling: Some(tool_ceiling),
-                    tool_root,
-                },
-            )
-            .await?;
-            let mut managed = state.managed_server.lock().await;
-            managed.starting = false;
-            managed.server = Some(server);
-        }
+        Ok(()) => state.managed_server.lock().await.starting = false,
         Err(error) => {
-            let message = format!("{error:#}");
+            let typed_error = error.downcast_ref::<BridgeError>().cloned();
+            let mut message = format!("{error:#}");
+            if attempted_native_start {
+                let cleanup = match native_service(app, state) {
+                    Ok(service) => {
+                        run_native(service, move |service| service.stop(!initial_enabled)).await
+                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(cleanup) = cleanup {
+                    message = combine_cleanup_error(
+                        message,
+                        "newly started native service",
+                        cleanup.message,
+                    );
+                }
+            }
             tracing::warn!(error = %message, "managed Gents server start failed");
             let mut managed = state.managed_server.lock().await;
             managed.starting = false;
             managed.last_error = Some(message.clone());
             drop(managed);
             emit_status(app, state).await;
-            return Err(BridgeError::untyped(message));
+            return Err(match typed_error {
+                Some(mut error) => {
+                    error.message = message;
+                    error
+                }
+                None => BridgeError::untyped(message),
+            });
         }
     }
 
@@ -434,9 +393,13 @@ async fn start_managed_server_locked<R: Runtime>(
         start_running_managed_pairing(state, core).await;
     }
     let stored = load_preference(state).await?;
-    let managed = state.managed_server.lock().await;
-    let mut status = status_from(&managed, stored.as_ref());
-    drop(managed);
+    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+    let mut status = if let Some(external) = matching_external_server(&agent_home).await? {
+        project_external_status(external, &native)
+    } else {
+        let managed = state.managed_server.lock().await;
+        status_from(&managed, stored.as_ref(), Some(&native))
+    };
     status.pairing_ready = pairing_is_ready(state, status.agent_did.as_deref()).await;
     Ok(status)
 }
@@ -451,23 +414,204 @@ impl From<ManagedServerToolCeiling> for gents_server::server_host::ManagedToolCe
     }
 }
 
-fn authority_from_ready(
-    ready: &gents_server::server_host::ServerReady,
-) -> EffectiveManagedAuthority {
-    EffectiveManagedAuthority {
-        tool_ceiling: match ready.tool_ceiling {
-            gents_server::server_host::ManagedToolCeiling::MetaOnly => {
-                ManagedServerToolCeiling::MetaOnly
-            }
-            gents_server::server_host::ManagedToolCeiling::Readonly => {
-                ManagedServerToolCeiling::Readonly
-            }
-            gents_server::server_host::ManagedToolCeiling::Readwrite => {
-                ManagedServerToolCeiling::Readwrite
-            }
-        },
-        tool_root: ready.tool_root.as_ref().map(PathBuf::from),
+async fn wait_for_managed_server(agent_home: &Path) -> anyhow::Result<ManagedServerStatus> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(status) = matching_external_server(agent_home).await? {
+            return Ok(status);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("native Gents service started, but runtime readiness timed out");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+fn validate_ready_runtime(
+    status: &ManagedServerStatus,
+    authority: &EffectiveManagedAuthority,
+    agent_home: &Path,
+) -> anyhow::Result<()> {
+    let expected_did = std::fs::read(agent_home.join("init.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("agent_did")
+                .and_then(serde_json::Value::as_str)
+                .filter(|did| !did.trim().is_empty())
+                .map(str::to_owned)
+        });
+    if expected_did.is_none()
+        || status.agent_did.as_deref() != expected_did.as_deref()
+        || status.effective_tool_ceiling != Some(authority.tool_ceiling)
+        || status.effective_tool_root.as_deref()
+            != authority
+                .tool_root
+                .as_ref()
+                .map(|path| path.to_string_lossy())
+                .as_deref()
+    {
+        anyhow::bail!("native runtime readiness did not match the initialized identity and reviewed host authority");
+    }
+    Ok(())
+}
+
+fn native_service<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<gents_server::native_service::NativeServiceManager, BridgeError> {
+    let home = state.policy.agent_home.clone().ok_or_else(|| {
+        BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "managed server requires a local agent home",
+        )
+    })?;
+    let executable = resolve_gents_executable(app)?;
+    let config = gents_server::native_service::NativeServiceConfig::new(home, executable)
+        .map_err(native_error)?;
+    gents_server::native_service::NativeServiceManager::new(config).map_err(native_error)
+}
+
+fn resolve_gents_executable<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, BridgeError> {
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "native Gents services are supported only on macOS and Linux",
+        ));
+    }
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("GENTS_BIN").filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err(BridgeError::new(
+                BridgeErrorCode::InvalidArgument,
+                "GENTS_BIN must be an absolute path",
+            ));
+        }
+        let executable = executable_file(&path)
+            .then(|| std::fs::canonicalize(path).ok())
+            .flatten()
+            .ok_or_else(|| {
+                BridgeError::new(
+                    BridgeErrorCode::InvalidArgument,
+                    "GENTS_BIN must name an existing executable file",
+                )
+            })?;
+        ensure_stable_service_executable(
+            &executable,
+            std::env::var_os("APPDIR").as_deref().map(Path::new),
+            std::env::var_os("APPIMAGE").as_deref().map(Path::new),
+        )?;
+        return Ok(executable);
+    }
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(parent) = current.parent() {
+            candidates.push(parent.join(gents_executable_name()));
+        }
+    }
+    if let Ok(resources) = app.path().resource_dir() {
+        candidates.push(resources.join(gents_executable_name()));
+    }
+    if let Some(search) = std::env::var_os("PATH") {
+        candidates
+            .extend(std::env::split_paths(&search).map(|dir| dir.join(gents_executable_name())));
+    }
+    let fallback = candidates.first().cloned();
+    let executable = candidates
+        .into_iter()
+        .find(|path| executable_file(path))
+        .and_then(|path| std::fs::canonicalize(path).ok())
+        .or(fallback)
+        .ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Unsupported,
+                "Could not find the Gents runtime executable. Reinstall Gents or set GENTS_BIN to its absolute path.",
+            )
+        })?;
+    ensure_stable_service_executable(
+        &executable,
+        std::env::var_os("APPDIR").as_deref().map(Path::new),
+        std::env::var_os("APPIMAGE").as_deref().map(Path::new),
+    )?;
+    Ok(executable)
+}
+
+fn ensure_stable_service_executable(
+    executable: &Path,
+    app_dir: Option<&Path>,
+    app_image: Option<&Path>,
+) -> Result<(), BridgeError> {
+    // Extracted AppRun also sets APPDIR. Only an active AppImage launcher
+    // (APPIMAGE present) makes that directory a temporary runtime location.
+    let inside_app_dir =
+        app_image.is_some() && app_dir.is_some_and(|root| executable.starts_with(root));
+    let looks_like_appimage_mount = app_image.is_some()
+        && executable.components().any(|component| {
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .starts_with(".mount_")
+        });
+    if inside_app_dir || looks_like_appimage_mount {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "The Gents CLI inside a mounted AppImage is temporary and cannot own a persistent user service. Install the .deb package or extract the AppImage to a stable location first.",
+        ));
+    }
+    Ok(())
+}
+
+fn gents_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "gents.exe"
+    } else {
+        "gents"
+    }
+}
+
+fn executable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn native_error(error: anyhow::Error) -> BridgeError {
+    let message = format!("{error:#}");
+    let code = if message.contains("supported only on macOS and Linux") {
+        BridgeErrorCode::Unsupported
+    } else {
+        BridgeErrorCode::Backend
+    };
+    BridgeError::new(code, message)
+}
+
+async fn run_native<T, F>(
+    service: gents_server::native_service::NativeServiceManager,
+    operation: F,
+) -> Result<T, BridgeError>
+where
+    T: Send + 'static,
+    F: FnOnce(gents_server::native_service::NativeServiceManager) -> anyhow::Result<T>
+        + Send
+        + 'static,
+{
+    tokio::task::spawn_blocking(move || operation(service))
+        .await
+        .map_err(|error| BridgeError::untyped(format!("native service task failed: {error}")))?
+        .map_err(native_error)
 }
 
 pub(super) async fn start_running_managed_pairing(state: &DesktopAppState, core: Arc<ClientCore>) {
@@ -475,41 +619,29 @@ pub(super) async fn start_running_managed_pairing(state: &DesktopAppState, core:
         tracing::warn!("managed pairing requires a local agent home");
         return;
     };
-    let target = state
-        .managed_server
-        .lock()
-        .await
-        .server
-        .as_ref()
-        .map(|server| ManagedPairingTarget::from(server.ready().clone()));
-    let (target, external) = match target {
-        Some(target) => (Some(target), false),
-        None => match matching_external_server(&agent_home).await {
-            Ok(status) => (status.as_ref().and_then(pairing_target), true),
-            Err(error) => {
-                tracing::warn!(
-                    target: "gents_desktop::managed_server",
-                    error = %error,
-                    "failed to inspect external managed runtime for background pairing"
-                );
-                (None, true)
-            }
-        },
-    };
-    let Some(target) = target else { return };
-    if external {
-        if let Err(error) = core
-            .refresh_local_standard_peer(&agent_home, &target.agent_name)
-            .await
-        {
+    let target = match matching_external_server(&agent_home).await {
+        Ok(status) => status.as_ref().and_then(pairing_target),
+        Err(error) => {
             tracing::warn!(
                 target: "gents_desktop::managed_server",
-                agent_did = %target.agent_did,
                 error = %error,
-                "failed to refresh external managed runtime route before pairing"
+                "failed to inspect native managed runtime for background pairing"
             );
-            return;
+            None
         }
+    };
+    let Some(target) = target else { return };
+    if let Err(error) = core
+        .refresh_local_standard_peer(&agent_home, &target.agent_name)
+        .await
+    {
+        tracing::warn!(
+            target: "gents_desktop::managed_server",
+            agent_did = %target.agent_did,
+            error = %error,
+            "failed to refresh native managed runtime route before pairing"
+        );
+        return;
     }
     start_managed_runtime_pairing(state, core, agent_home, target).await;
 }
@@ -661,13 +793,8 @@ async fn matching_external_server(
     agent_home: &std::path::Path,
 ) -> Result<Option<ManagedServerStatus>, BridgeError> {
     let config = gents_server::server_host::ServerConfig::standard(agent_home.to_path_buf());
-    let payload = match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
-        &config.status_url(),
-    )
-    .await
-    {
-        Ok(payload) => payload,
-        Err(_) => return Ok(None),
+    let Some(payload) = default_port_payload(Some(agent_home)).await? else {
+        return Ok(None);
     };
     let live_did = payload
         .get("agent_did")
@@ -676,7 +803,7 @@ async fn matching_external_server(
     // A process on the default port is only *our* managed server when this
     // home is already initialized as that identity. A fresh first-run home
     // must not adopt a neighbor's `gents server` and then fail reading
-    // init.json; identity mismatch also means we should bind another port.
+    // init.json. Start separately rejects a foreign identity on the fixed port.
     if !gents_server::server_host::initialized_home(agent_home) {
         return Ok(None);
     }
@@ -711,6 +838,54 @@ async fn matching_external_server(
     }))
 }
 
+async fn default_port_payload(
+    agent_home: Option<&Path>,
+) -> Result<Option<serde_json::Value>, BridgeError> {
+    let Some(agent_home) = agent_home else {
+        return Ok(None);
+    };
+    let config = gents_server::server_host::ServerConfig::standard(agent_home.to_path_buf());
+    match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&config.status_url())
+        .await
+    {
+        Ok(payload) => Ok(Some(payload)),
+        Err(_) => Ok(None),
+    }
+}
+
+async fn ensure_default_port_identity(agent_home: &Path) -> Result<(), BridgeError> {
+    let Some(payload) = default_port_payload(Some(agent_home)).await? else {
+        return Ok(());
+    };
+    let live_did = payload
+        .get("agent_did")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let initialized_did = read_initialized_did(agent_home).await;
+    ensure_matching_identity(
+        initialized_did.as_deref(),
+        live_did,
+        gents_server::server_host::ServerConfig::standard(agent_home.to_path_buf()).http_port,
+    )
+}
+
+fn ensure_native_owns_running_endpoint(
+    endpoint_running: bool,
+    native_job_loaded: bool,
+) -> Result<(), BridgeError> {
+    if endpoint_running && !native_job_loaded {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "The running local agent is not owned by the native Gents service. Stop it explicitly before using managed controls.",
+        ));
+    }
+    Ok(())
+}
+
+fn combine_cleanup_error(original: String, owner: &str, cleanup: String) -> String {
+    format!("{original}; additionally failed to stop the {owner}: {cleanup}")
+}
+
 #[tauri::command]
 pub async fn desktop_managed_server_stop<R: Runtime>(
     app: AppHandle<R>,
@@ -722,33 +897,57 @@ pub async fn desktop_managed_server_stop<R: Runtime>(
     stop_managed_server_locked(&app, disable_auto_start, &state).await
 }
 
+#[tauri::command]
+pub async fn desktop_managed_server_set_auto_start<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+    state: State<'_, DesktopAppState>,
+) -> Result<ManagedServerStatus, BridgeError> {
+    ensure_allowed(&state)?;
+    let _lifecycle = state.managed_server_lifecycle.lock().await;
+    if let Err(error) = run_native(native_service(&app, &state)?, move |service| {
+        service.set_enabled(enabled)
+    })
+    .await
+    {
+        state.managed_server.lock().await.last_error = Some(error.message.clone());
+        emit_status(&app, &state).await;
+        return Err(error);
+    }
+    drop(_lifecycle);
+    desktop_managed_server_status(app, state).await
+}
+
 async fn stop_managed_server_locked<R: Runtime>(
     app: &AppHandle<R>,
     disable_auto_start: bool,
     state: &DesktopAppState,
 ) -> Result<ManagedServerStatus, BridgeError> {
-    let server = {
+    {
         let mut managed = state.managed_server.lock().await;
         managed.starting = false;
         managed.last_error = None;
-        managed.server.take()
-    };
-    drain_managed_runtime_pairing(&state).await;
-    if let Some(server) = server {
-        server
-            .shutdown()
-            .await
-            .map_err(|error| BridgeError::untyped(error.to_string()))?;
     }
-    if disable_auto_start {
-        let mut stored = load_preference(&state).await?.unwrap_or_default();
-        stored.enabled = false;
-        save_preference(&state, &stored).await?;
+    let endpoint_running = default_port_payload(state.policy.agent_home.as_deref())
+        .await?
+        .is_some();
+    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+    if let Some(agent_home) = state.policy.agent_home.as_deref() {
+        ensure_default_port_identity(agent_home).await?;
+    }
+    ensure_native_owns_running_endpoint(endpoint_running, native.job_loaded)?;
+    drain_managed_runtime_pairing(&state).await;
+    if let Err(error) = run_native(native_service(app, state)?, move |service| {
+        service.stop(disable_auto_start)
+    })
+    .await
+    {
+        state.managed_server.lock().await.last_error = Some(error.message.clone());
+        emit_status(app, state).await;
+        return Err(error);
     }
     emit_status(app, state).await;
-    let stored = load_preference(state).await?;
-    let managed = state.managed_server.lock().await;
-    Ok(status_from(&managed, stored.as_ref()))
+    observe_managed_server_status(app, state).await
 }
 
 #[tauri::command]
@@ -763,30 +962,144 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         request.tool_ceiling,
         request.tool_root.as_deref(),
     )?;
-    let previous_did = state
-        .managed_server
-        .lock()
-        .await
-        .server
-        .as_ref()
-        .map(|server| server.ready().agent_did.clone());
-    if let (Some(core), Some(agent_did)) = (current_core(&state), previous_did.as_deref()) {
-        core.mark_managed_runtime_restarting(agent_did)
-            .await
-            .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    }
-    stop_managed_server_locked(&app, false, &state).await?;
+    let agent_home = state.policy.agent_home.clone().ok_or_else(|| {
+        BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "managed server requires a local agent home",
+        )
+    })?;
+    let endpoint_running = default_port_payload(Some(&agent_home)).await?.is_some();
+    let previous_did = matching_external_server(&agent_home)
+        .await?
+        .and_then(|status| status.agent_did);
     let (tool_ceiling, tool_root) = authority.stored();
-    start_managed_server_locked(
-        &app,
-        ManagedServerStartRequest {
-            agent_name: request.agent_name,
-            tool_ceiling: Some(tool_ceiling),
-            tool_root,
+    let service_status =
+        match run_native(native_service(&app, &state)?, |service| service.status()).await {
+            Ok(status) => status,
+            Err(error) => {
+                state.managed_server.lock().await.last_error = Some(error.message.clone());
+                emit_status(&app, &state).await;
+                return Err(error);
+            }
+        };
+    ensure_default_port_identity(&agent_home).await?;
+    ensure_native_owns_running_endpoint(endpoint_running, service_status.job_loaded)?;
+    drain_managed_runtime_pairing(&state).await;
+    let was_enabled = service_status.enabled;
+    let provision = gents_server::server_host::ProvisionOptions {
+        home: agent_home.clone(),
+        agent_name: request.agent_name.clone(),
+        tool_ceiling: tool_ceiling.into(),
+        tool_root: authority.tool_root.clone(),
+    };
+    if let Err(error) = stop_before_reprovision(
+        || async { run_native(native_service(&app, &state)?, |service| service.stop(false)).await },
+        || async {
+            gents_server::server_host::ensure_standard_home(provision)
+                .await
+                .map_err(|error| BridgeError::untyped(format!("{error:#}")))
         },
-        &state,
+        || async {
+            save_preference(
+                &state,
+                &StoredManagedServer {
+                    agent_name: request.agent_name.clone(),
+                    tool_ceiling: Some(tool_ceiling),
+                    tool_root: tool_root.clone(),
+                },
+            )
+            .await
+        },
     )
     .await
+    {
+        state.managed_server.lock().await.last_error = Some(error.message.clone());
+        emit_status(&app, &state).await;
+        return Err(error);
+    }
+    if let (Some(core), Some(agent_did)) = (current_core(&state), previous_did.as_deref()) {
+        if let Err(error) = core.mark_managed_runtime_restarting(agent_did).await {
+            let message = format!(
+                "The agent was stopped, but desktop restart bookkeeping failed: {error:#}. Retry Restart Agent."
+            );
+            state.managed_server.lock().await.last_error = Some(message.clone());
+            emit_status(&app, &state).await;
+            return Err(BridgeError::untyped(message));
+        }
+    }
+    if let Err(error) = run_native(native_service(&app, &state)?, move |service| {
+        service.start(was_enabled)
+    })
+    .await
+    {
+        // Native start may have launched the process before a later step
+        // failed (for example restoring disabled-at-login state on macOS).
+        let cleanup = match native_service(&app, &state) {
+            Ok(service) => run_native(service, move |service| service.stop(!was_enabled)).await,
+            Err(error) => Err(error),
+        };
+        let message = match cleanup {
+            Ok(()) => error.message,
+            Err(cleanup) => {
+                combine_cleanup_error(error.message, "restarted native service", cleanup.message)
+            }
+        };
+        state.managed_server.lock().await.last_error = Some(message.clone());
+        emit_status(&app, &state).await;
+        return Err(BridgeError::new(error.code, message));
+    }
+    let readiness = async {
+        let ready = wait_for_managed_server(&agent_home)
+            .await
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        validate_ready_runtime(&ready, &authority, &agent_home)
+            .map_err(|error| BridgeError::untyped(error.to_string()))
+    }
+    .await;
+    if let Err(error) = readiness {
+        let cleanup = match native_service(&app, &state) {
+            Ok(service) => run_native(service, move |service| service.stop(!was_enabled)).await,
+            Err(error) => Err(error),
+        };
+        let message = match cleanup {
+            Ok(()) => error.message,
+            Err(cleanup) => {
+                combine_cleanup_error(error.message, "restarted native service", cleanup.message)
+            }
+        };
+        state.managed_server.lock().await.last_error = Some(message.clone());
+        emit_status(&app, &state).await;
+        return Err(BridgeError::new(error.code, message));
+    }
+    emit_status(&app, &state).await;
+    if let Some(core) = current_core(&state) {
+        start_running_managed_pairing(&state, core).await;
+    }
+    let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
+    let mut status = matching_external_server(&agent_home)
+        .await?
+        .map(|external| project_external_status(external, &native))
+        .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
+    status.pairing_ready = pairing_is_ready(&state, status.agent_did.as_deref()).await;
+    Ok(status)
+}
+
+async fn stop_before_reprovision<S, StopFuture, P, ProvisionFuture, W, WriteFuture>(
+    stop: S,
+    provision: P,
+    write_preference: W,
+) -> Result<(), BridgeError>
+where
+    S: FnOnce() -> StopFuture,
+    StopFuture: Future<Output = Result<(), BridgeError>>,
+    P: FnOnce() -> ProvisionFuture,
+    ProvisionFuture: Future<Output = Result<(), BridgeError>>,
+    W: FnOnce() -> WriteFuture,
+    WriteFuture: Future<Output = Result<(), BridgeError>>,
+{
+    stop().await?;
+    provision().await?;
+    write_preference().await
 }
 
 fn ensure_allowed(state: &DesktopAppState) -> Result<(), BridgeError> {
@@ -802,34 +1115,24 @@ fn ensure_allowed(state: &DesktopAppState) -> Result<(), BridgeError> {
 fn status_from(
     managed: &crate::state::ManagedServerState,
     stored: Option<&StoredManagedServer>,
+    native: Option<&gents_server::native_service::NativeServiceStatus>,
 ) -> ManagedServerStatus {
-    let ready = managed.server.as_ref().map(|server| server.ready());
-    let effective = ready.map(authority_from_ready);
     ManagedServerStatus {
-        state: if ready.is_some() {
-            ManagedServerState::Running
-        } else if managed.starting {
+        state: if managed.starting || native.is_some_and(|status| status.job_loaded) {
             ManagedServerState::Starting
         } else if managed.last_error.is_some() {
             ManagedServerState::Failed
-        } else if stored.is_some_and(|stored| stored.enabled) {
+        } else if native.is_some_and(|status| status.installed) {
             ManagedServerState::Stopped
         } else {
             ManagedServerState::Disabled
         },
-        auto_start: stored.is_some_and(|stored| stored.enabled),
-        agent_name: ready
-            .map(|ready| ready.agent_name.clone())
-            .or_else(|| stored.map(|stored| stored.agent_name.clone())),
-        agent_did: ready.map(|ready| ready.agent_did.clone()),
-        graphql: ready.map(|ready| ready.graphql.clone()),
-        effective_tool_ceiling: effective.as_ref().map(|value| value.tool_ceiling),
-        effective_tool_root: effective.as_ref().and_then(|value| {
-            value
-                .tool_root
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned())
-        }),
+        auto_start: native.is_some_and(|status| status.enabled),
+        agent_name: stored.map(|stored| stored.agent_name.clone()),
+        agent_did: None,
+        graphql: None,
+        effective_tool_ceiling: stored.and_then(|value| value.tool_ceiling),
+        effective_tool_root: stored.and_then(|value| value.tool_root.clone()),
         suggested_tool_root: suggested_tool_root(),
         pairing_ready: false,
         error: managed.last_error.clone(),
@@ -852,12 +1155,18 @@ fn parse_tool_ceiling(value: &str) -> Option<ManagedServerToolCeiling> {
 }
 
 async fn emit_status<R: Runtime>(app: &AppHandle<R>, state: &DesktopAppState) {
-    let stored = load_preference(state).await.ok().flatten();
-    let managed = state.managed_server.lock().await;
-    let _ = app.emit(
-        MANAGED_SERVER_UPDATED_EVENT,
-        status_from(&managed, stored.as_ref()),
-    );
+    let status = match observe_managed_server_status(app, state).await {
+        Ok(status) => status,
+        Err(error) => {
+            let stored = load_preference(state).await.ok().flatten();
+            let managed = state.managed_server.lock().await;
+            let mut status = status_from(&managed, stored.as_ref(), None);
+            status.state = ManagedServerState::Failed;
+            status.error = Some(error.message);
+            status
+        }
+    };
+    let _ = app.emit(MANAGED_SERVER_UPDATED_EVENT, status);
 }
 
 async fn read_initialized_did(agent_home: &std::path::Path) -> Option<String> {
@@ -873,43 +1182,16 @@ async fn read_initialized_did(agent_home: &std::path::Path) -> Option<String> {
         })
 }
 
-fn first_free_http_port(preferred: u16) -> anyhow::Result<u16> {
-    let extras = [9291_u16, 9391, 9491, 9591, 9691, 9791, 9891];
-    for port in
-        std::iter::once(preferred).chain(extras.into_iter().filter(|port| *port != preferred))
-    {
-        if port_is_free(port) {
-            return Ok(port);
-        }
-    }
-    anyhow::bail!(
-        "no free local port for the hosted agent (tried {preferred} and 9291–9891). Stop the other Gents server occupying those ports and try again."
-    )
-}
-
-fn port_is_free(port: u16) -> bool {
-    // SO_REUSEADDR lets a second bind to 127.0.0.1 succeed while another
-    // process already listens on *:port. Probe with connect first.
-    if std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-        std::time::Duration::from_millis(150),
-    )
-    .is_ok()
-    {
-        return false;
-    }
-    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
-}
-
 fn ensure_matching_identity(
     initialized_did: Option<&str>,
     live_did: &str,
     port: u16,
 ) -> Result<(), BridgeError> {
-    if initialized_did.is_some_and(|initialized| initialized != live_did) {
+    if !matches!(initialized_did, Some(initialized) if !initialized.trim().is_empty() && !live_did.trim().is_empty() && initialized == live_did)
+    {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
-            format!("port {port} is occupied by a different Gents identity"),
+            format!("port {port} does not advertise the initialized Gents identity"),
         ));
     }
     Ok(())
@@ -962,7 +1244,6 @@ mod tests {
     #[test]
     fn status_priority_is_starting_then_failed_then_stopped_then_disabled() {
         let stored = StoredManagedServer {
-            enabled: true,
             agent_name: "local".to_string(),
             tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
             tool_root: Some("/Users/test".to_string()),
@@ -973,21 +1254,28 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            status_from(&runtime, Some(&stored)).state,
+            status_from(&runtime, Some(&stored), None).state,
             ManagedServerState::Starting
         );
         runtime.starting = false;
         assert_eq!(
-            status_from(&runtime, Some(&stored)).state,
+            status_from(&runtime, Some(&stored), None).state,
             ManagedServerState::Failed
         );
         runtime.last_error = None;
+        let installed = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: false,
+            job_loaded: false,
+            enabled: true,
+            detail: None,
+        };
         assert_eq!(
-            status_from(&runtime, Some(&stored)).state,
+            status_from(&runtime, Some(&stored), Some(&installed)).state,
             ManagedServerState::Stopped
         );
         assert_eq!(
-            status_from(&runtime, None).state,
+            status_from(&runtime, None, None).state,
             ManagedServerState::Disabled
         );
     }
@@ -995,12 +1283,11 @@ mod tests {
     #[test]
     fn idle_status_reprobes_and_preserves_an_external_runtime_identity() {
         let stored = StoredManagedServer {
-            enabled: true,
             agent_name: "local".to_string(),
             tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
             tool_root: Some("/Users/test".to_string()),
         };
-        let idle = status_from(&ManagedServerRuntimeState::default(), Some(&stored));
+        let idle = status_from(&ManagedServerRuntimeState::default(), Some(&stored), None);
         assert!(should_probe_external_status(&idle));
 
         let external = project_external_status(
@@ -1016,13 +1303,151 @@ mod tests {
                 pairing_ready: false,
                 error: None,
             },
-            Some(&stored),
+            &gents_server::native_service::NativeServiceStatus {
+                installed: true,
+                running: false,
+                job_loaded: false,
+                enabled: true,
+                detail: None,
+            },
         );
 
         assert_eq!(external.state, ManagedServerState::External);
         assert_eq!(external.agent_did.as_deref(), Some("did:key:preserved"));
         assert!(external.auto_start);
-        assert!(!should_probe_external_status(&external));
+        assert!(should_probe_external_status(&external));
+    }
+
+    #[test]
+    fn native_running_without_endpoint_readiness_is_starting() {
+        let native = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: true,
+            job_loaded: true,
+            enabled: true,
+            detail: None,
+        };
+        let status = status_from(&ManagedServerRuntimeState::default(), None, Some(&native));
+        assert_eq!(status.state, ManagedServerState::Starting);
+        assert!(should_probe_external_status(&status));
+
+        let observed = project_external_status(
+            ManagedServerStatus {
+                state: ManagedServerState::External,
+                auto_start: false,
+                agent_name: Some("local".to_string()),
+                agent_did: Some("did:key:ready".to_string()),
+                graphql: Some("http://127.0.0.1:9191/graphql".to_string()),
+                effective_tool_ceiling: Some(ManagedServerToolCeiling::MetaOnly),
+                effective_tool_root: None,
+                suggested_tool_root: None,
+                pairing_ready: false,
+                error: None,
+            },
+            &native,
+        );
+        assert_eq!(observed.state, ManagedServerState::Running);
+    }
+
+    #[test]
+    fn loaded_native_job_owns_a_ready_endpoint_between_process_states() {
+        let native = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: false,
+            job_loaded: true,
+            enabled: false,
+            detail: None,
+        };
+        let observed = project_external_status(
+            ManagedServerStatus {
+                state: ManagedServerState::External,
+                auto_start: true,
+                agent_name: Some("local".to_string()),
+                agent_did: Some("did:key:ready".to_string()),
+                graphql: Some("http://127.0.0.1:9191/graphql".to_string()),
+                effective_tool_ceiling: Some(ManagedServerToolCeiling::MetaOnly),
+                effective_tool_root: None,
+                suggested_tool_root: None,
+                pairing_ready: false,
+                error: None,
+            },
+            &native,
+        );
+        assert_eq!(observed.state, ManagedServerState::Running);
+        assert!(!observed.auto_start);
+    }
+
+    #[test]
+    fn stale_local_failure_still_allows_runtime_readiness_probe() {
+        let runtime = ManagedServerRuntimeState {
+            last_error: Some("an earlier start failed".to_string()),
+            ..Default::default()
+        };
+        let status = status_from(&runtime, None, None);
+        assert_eq!(status.state, ManagedServerState::Failed);
+        assert!(should_probe_external_status(&status));
+    }
+
+    #[tokio::test]
+    async fn failed_native_stop_does_not_reprovision_authority() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let provisioned = AtomicBool::new(false);
+        let preference_written = AtomicBool::new(false);
+        let result = stop_before_reprovision(
+            || async { Err(BridgeError::untyped("stop failed")) },
+            || async {
+                provisioned.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+            || async {
+                preference_written.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!provisioned.load(Ordering::SeqCst));
+        assert!(!preference_written.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn reviewed_preference_is_written_before_native_restart_attempt() {
+        use std::sync::{Arc, Mutex};
+
+        let order = Arc::new(Mutex::new(Vec::new()));
+        stop_before_reprovision(
+            {
+                let order = Arc::clone(&order);
+                move || async move {
+                    order.lock().unwrap().push("stop");
+                    Ok(())
+                }
+            },
+            {
+                let order = Arc::clone(&order);
+                move || async move {
+                    order.lock().unwrap().push("provision");
+                    Ok(())
+                }
+            },
+            {
+                let order = Arc::clone(&order);
+                move || async move {
+                    order.lock().unwrap().push("preference");
+                    Ok(())
+                }
+            },
+        )
+        .await
+        .unwrap();
+        order.lock().unwrap().push("native-start-failed");
+
+        assert_eq!(
+            *order.lock().unwrap(),
+            ["stop", "provision", "preference", "native-start-failed"]
+        );
     }
 
     #[test]
@@ -1032,14 +1457,56 @@ mod tests {
         assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
         assert!(error.message.contains("port 9191"));
         ensure_matching_identity(Some("did:key:local"), "did:key:local", 9191).unwrap();
+        assert!(ensure_matching_identity(None, "did:key:local", 9191).is_err());
+        assert!(ensure_matching_identity(Some(""), "did:key:local", 9191).is_err());
+        assert!(ensure_matching_identity(Some("did:key:local"), "", 9191).is_err());
     }
 
     #[test]
-    fn first_free_http_port_skips_a_bound_preferred_port() {
-        let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral bind");
-        let preferred = occupied.local_addr().expect("local addr").port();
-        let chosen = first_free_http_port(preferred).expect("fallback port");
-        assert_ne!(chosen, preferred);
+    fn managed_stop_rejects_a_manually_owned_endpoint() {
+        assert!(ensure_native_owns_running_endpoint(true, false).is_err());
+        assert!(ensure_native_owns_running_endpoint(true, true).is_ok());
+        assert!(ensure_native_owns_running_endpoint(false, false).is_ok());
+    }
+
+    #[test]
+    fn cleanup_failure_preserves_the_original_failure() {
+        let combined = combine_cleanup_error(
+            "readiness failed".to_string(),
+            "newly started native service",
+            "stop failed".to_string(),
+        );
+        assert!(combined.contains("readiness failed"));
+        assert!(combined.contains("stop failed"));
+    }
+
+    #[test]
+    fn appimage_mount_cannot_be_persisted_as_service_executable() {
+        assert!(ensure_stable_service_executable(
+            Path::new("/opt/gents/squashfs-root/usr/bin/gents"),
+            Some(Path::new("/opt/gents/squashfs-root")),
+            None,
+        )
+        .is_ok());
+        let mounted = Path::new("/tmp/.mount_Gents123/usr/bin/gents");
+        assert!(ensure_stable_service_executable(
+            mounted,
+            Some(Path::new("/tmp/.mount_Gents123")),
+            Some(Path::new("/downloads/Gents.AppImage")),
+        )
+        .is_err());
+        assert!(ensure_stable_service_executable(
+            mounted,
+            None,
+            Some(Path::new("/downloads/Gents.AppImage")),
+        )
+        .is_err());
+        assert!(ensure_stable_service_executable(
+            Path::new("/opt/gents/gents"),
+            Some(Path::new("/tmp/.mount_Gents123")),
+            Some(Path::new("/downloads/Gents.AppImage")),
+        )
+        .is_ok());
     }
 
     #[test]

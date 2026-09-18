@@ -43,10 +43,10 @@ impl TelemetryGuard {
         };
 
         if let Err(error) = provider.force_flush() {
-            eprintln!("force flushing OTLP tracer provider failed: {error}");
+            tracing::warn!(%error, "force flushing OTLP tracer provider failed");
         }
         if let Err(error) = provider.shutdown() {
-            eprintln!("shutting down OTLP tracer provider failed: {error}");
+            tracing::warn!(%error, "shutting down OTLP tracer provider failed");
         }
     }
 }
@@ -61,15 +61,20 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
     let env_filter = with_default_transport_noise_filters(
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter)),
     );
+    let native = gents::native_logging::service_logging_enabled()
+        .then(|| gents::native_logging::layer("runtime"))
+        .flatten();
+    let console = native.is_none();
 
     if !otlp_enabled_from_env() {
         tracing_subscriber::registry()
             .with(env_filter)
-            .with(
+            .with(native.map(|layer| layer.with_filter(log_rate_ceiling())))
+            .with(console.then(|| {
                 fmt::layer()
                     .with_writer(std::io::stderr)
-                    .with_filter(log_rate_ceiling()),
-            )
+                    .with_filter(log_rate_ceiling())
+            }))
             .try_init()
             .context("initializing tracing subscriber")?;
         return Ok(TelemetryGuard {
@@ -87,11 +92,12 @@ pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
 
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(
+        .with(native.map(|layer| layer.with_filter(log_rate_ceiling())))
+        .with(console.then(|| {
             fmt::layer()
                 .with_writer(std::io::stderr)
-                .with_filter(log_rate_ceiling()),
-        )
+                .with_filter(log_rate_ceiling())
+        }))
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .try_init()
         .context("initializing tracing subscriber")?;

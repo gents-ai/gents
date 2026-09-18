@@ -45,7 +45,7 @@ export function projectStartupLoadingStatus(
       return {
         failed: false,
         title: "Bringing Gents online",
-        currentLabel: "Checking the hosted agent",
+        currentLabel: "Checking the background agent",
         managedServerState: "active",
         connectionState: "pending",
         clientState: "pending",
@@ -72,7 +72,7 @@ export function projectStartupLoadingStatus(
       return {
         failed: true,
         title: "Startup paused",
-        currentLabel: "The hosted agent could not start",
+        currentLabel: "The background agent could not be checked",
         managedServerState: "error",
         connectionState: "pending",
         clientState: "pending",

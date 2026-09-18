@@ -13,6 +13,9 @@ version=$(node -p 'require("./package.json").version')
 dpkg -i "${debs[0]}"
 binary=/usr/bin/gents-desktop-tauri
 [[ -x "$binary" ]]
+cli=/usr/bin/gents
+[[ -x "$cli" ]]
+"$cli" --version | grep -F "$version"
 if ldd "$binary" | grep -q 'not found'; then
   echo "Installed desktop has unresolved shared libraries" >&2
   exit 1
@@ -49,7 +52,19 @@ smoke() {
 }
 smoke deb "$binary"
 chmod +x "${images[0]}"
-smoke appimage "$(realpath "${images[0]}")"
+appimage_path=$(realpath "${images[0]}")
+smoke appimage "$appimage_path"
+
+# Inspect and execute the AppImage-bundled CLI without installing a service.
+appimage_extract=$(mktemp -d /tmp/gents-appimage-extract.XXXXXX)
+(
+  cd "$appimage_extract"
+  "$appimage_path" --appimage-extract >/dev/null
+)
+appimage_cli=$(find "$appimage_extract/squashfs-root" -type f -name gents -perm -u+x -print -quit)
+[[ -n "$appimage_cli" ]]
+"$appimage_cli" --version | grep -F "$version"
+rm -rf -- "$appimage_extract"
 
 mkdir -p target/desktop-dist
 cp "${debs[0]}" "target/desktop-dist/gents-desktop_${version}_amd64.deb"

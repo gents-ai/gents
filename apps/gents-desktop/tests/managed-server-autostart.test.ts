@@ -33,7 +33,7 @@ describe("managed server launch restoration", () => {
     expect(api.startManagedServer).not.toHaveBeenCalled();
   });
 
-  it("restores an opted-in server before client bootstrap", async () => {
+  it("leaves an enabled stopped service to the OS manager", async () => {
     const api = apiWithManagedServer({
       state: "stopped",
       autoStart: true,
@@ -49,15 +49,10 @@ describe("managed server launch restoration", () => {
 
     await restoreManagedServer(api);
 
-    expect(api.startManagedServer).toHaveBeenCalledOnce();
-    expect(api.startManagedServer).toHaveBeenCalledWith("Workshop Agent");
+    expect(api.startManagedServer).not.toHaveBeenCalled();
   });
 
-  it("coalesces concurrent restoration attempts", async () => {
-    let releaseStart: (() => void) | undefined;
-    const startPending = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
+  it("coalesces concurrent service observations", async () => {
     const api = apiWithManagedServer({
       state: "stopped",
       autoStart: true,
@@ -70,30 +65,12 @@ describe("managed server launch restoration", () => {
       pairingReady: false,
       error: null,
     });
-    vi.mocked(api.startManagedServer).mockImplementation(async () => {
-      await startPending;
-      return {
-        state: "running",
-        autoStart: true,
-        agentName: "Workshop Agent",
-        agentDid: null,
-        graphql: null,
-        effectiveToolCeiling: "readwrite",
-        effectiveToolRoot: "/Users/test",
-        suggestedToolRoot: "/Users/test",
-        pairingReady: true,
-        error: null,
-      };
-    });
-
     const first = restoreManagedServer(api);
     const second = restoreManagedServer(api);
-    await vi.waitFor(() => expect(api.startManagedServer).toHaveBeenCalledOnce());
-    releaseStart?.();
     await Promise.all([first, second]);
 
     expect(api.managedServerStatus).toHaveBeenCalledOnce();
-    expect(api.startManagedServer).toHaveBeenCalledOnce();
+    expect(api.startManagedServer).not.toHaveBeenCalled();
   });
 
   it("does not start the client for an uncommitted local peer", () => {

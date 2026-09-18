@@ -986,6 +986,32 @@ Denies the desktop_managed_server_restart command without any pre-configured sco
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-managed-server-set-auto-start`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_set_auto_start command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-set-auto-start`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_set_auto_start command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-managed-server-start`
 
 </td>

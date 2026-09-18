@@ -623,7 +623,7 @@ export function createDesktopUiHarness(
         desktopHome: "/tmp/gents-bombadil/desktop",
         peerDirectoryPath: "/tmp/gents-bombadil/peers.json",
         nodeDataDir: "/tmp/gents-bombadil/node",
-        logFilePath: "/tmp/gents-bombadil/desktop.log",
+        diagnosticsHint: "native logging",
         agentHomeExists: true,
         desktopHomeExists: true,
         peerDirectoryExists: true,
@@ -855,6 +855,10 @@ export function createDesktopUiHarness(
           },
           async commitManagedServerAutoStart(agentName) {
             managedServer = { ...managedServer, autoStart: true, agentName };
+            return clone(managedServer);
+          },
+          async setManagedServerAutoStart(enabled) {
+            managedServer = { ...managedServer, autoStart: enabled };
             return clone(managedServer);
           },
           async restartManagedServer(agentName, authority) {

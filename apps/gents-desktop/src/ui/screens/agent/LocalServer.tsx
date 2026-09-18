@@ -1,6 +1,5 @@
-/* The local agent's server, as the desktop supervises it: its state,
-   whether it starts with the app, and Start / Stop. Only the local
-   deployment has one; peers run their own. */
+/* The OS-managed local agent service. The desktop observes and controls it,
+   but does not own its process lifetime. */
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type {
@@ -22,13 +21,24 @@ import { Fact, Group, Row } from "./rows";
 export function LocalServer({ shell }: { shell: Shell }) {
   const api = shell.api;
   const [status, setStatus] = useState<ManagedServerStatus | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editingAuthority, setEditingAuthority] = useState(false);
   const [toolCeiling, setToolCeiling] =
     useState<ManagedServerAuthorityInput["toolCeiling"]>("readwrite");
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
   const [authorityError, setAuthorityError] = useState<string | null>(null);
-  const load = () => api.managedServerStatus?.().then(setStatus, () => setStatus(null));
+  const load = () =>
+    api.managedServerStatus?.().then(
+      (next) => {
+        setStatus(next);
+        setStatusError(null);
+      },
+      (error: unknown) => {
+        setStatus(null);
+        setStatusError(`Could not check the background agent: ${String(error)}`);
+      },
+    );
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,10 +117,10 @@ export function LocalServer({ shell }: { shell: Shell }) {
             variant="outline"
             disabled={busy || status?.state === "external"}
             onClick={() =>
-              void act("Server stopped", () => api.stopManagedServer?.(false))
+              void act("Agent stopped", () => api.stopManagedServer?.(false))
             }
           >
-            {busy ? <Spinner /> : null} Stop
+            {busy ? <Spinner /> : null} Stop agent
           </Button>
         ) : (
           <Button
@@ -118,21 +128,23 @@ export function LocalServer({ shell }: { shell: Shell }) {
             variant="brand"
             disabled={busy || status?.state === "starting"}
             onClick={() =>
-              void act("Server started", () => api.startManagedServer?.(name))
+              void act("Agent started", () => api.startManagedServer?.(name))
             }
           >
-            {busy || status?.state === "starting" ? <Spinner /> : null} Start
+            {busy || status?.state === "starting" ? <Spinner /> : null} Start agent
           </Button>
         )
       }
     >
       <Row
         label="State"
-        description="Supervised by the desktop; external means something else runs it."
+        description="Agent readiness is checked against the OS service and runtime endpoint. Pairing and desktop connectivity are observed separately."
       >
         <span className="flex items-center gap-2">
-          {status?.error && (
-            <span className="text-xs text-destructive">{status.error}</span>
+          {(statusError || status?.error) && (
+            <span role="alert" className="text-xs text-destructive">
+              {statusError || status?.error}
+            </span>
           )}
           <Badge
             variant={
@@ -148,24 +160,35 @@ export function LocalServer({ shell }: { shell: Shell }) {
         </span>
       </Row>
       <Row
-        label="Start with the app"
-        description="Auto-start the server when the desktop opens."
+        label="Desktop app"
+        description="Closing the window keeps controls in the menu bar. Quit Desktop closes only this frontend; the agent keeps running."
+      >
+        <Fact>Independent</Fact>
+      </Row>
+      <Row
+        label="Start at login"
+        description="Let your operating system—not the desktop app—start the agent when you sign in. Stop agent keeps this preference, so it may start again at your next login."
       >
         <Switch
+          aria-label="Start at login"
           checked={status?.autoStart ?? false}
           disabled={busy || !status}
           onCheckedChange={(on) =>
             void act(on ? "Auto-start on" : "Auto-start off", () =>
-              on
-                ? api.commitManagedServerAutoStart?.(name)
-                : api.stopManagedServer?.(true),
+              api.setManagedServerAutoStart?.(on),
             )
           }
         />
       </Row>
       <Row
+        label="Native logs"
+        description="Agent runtime diagnostics are separate from desktop connectivity and pairing observations."
+      >
+        <Fact mono>{shell.snapshot?.bootstrap?.diagnosticsHint ?? "System logs"}</Fact>
+      </Row>
+      <Row
         label="Host access"
-        description="Runtime-confirmed process ceiling. Changes require one managed restart."
+        description="Reviewed host access, confirmed by the runtime while running. Changing access stops the OS service, saves your choices, and starts it again."
       >
         <div className="grid justify-items-end gap-1 text-right">
           <Fact>{status?.effectiveToolCeiling ?? "—"}</Fact>
@@ -179,7 +202,14 @@ export function LocalServer({ shell }: { shell: Shell }) {
       </Row>
       {editingAuthority && home ? (
         <div className="grid gap-4 border-t border-border/60 pt-4">
-          <p className="text-sm font-medium">Restart-required access change</p>
+          <div>
+            <p className="text-sm font-medium">Restart-required access change</p>
+            <p className="text-xs text-muted-foreground">
+              The agent keeps its current access unless the native service stops
+              successfully. It restarts only after the reviewed root and ceiling are
+              saved.
+            </p>
+          </div>
           <ManagedRuntimeAuthorityPicker
             home={home}
             toolCeiling={toolCeiling}

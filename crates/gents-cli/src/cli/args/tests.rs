@@ -81,6 +81,40 @@ fn parse_server(extra: &[&str]) -> ServeArgs {
 }
 
 #[test]
+fn native_service_commands_keep_install_and_start_separate() {
+    let install = Cli::try_parse_from([
+        "gents",
+        "service",
+        "install",
+        "--home",
+        "/tmp/gents home",
+        "--executable",
+        "/opt/Gents Runtime/gents",
+    ])
+    .unwrap();
+    let Command::Service {
+        command: ServiceCommand::Install(target),
+    } = install.command
+    else {
+        panic!("expected service install")
+    };
+    assert_eq!(target.home.unwrap(), PathBuf::from("/tmp/gents home"));
+    assert_eq!(
+        target.executable.unwrap(),
+        PathBuf::from("/opt/Gents Runtime/gents")
+    );
+
+    let start = Cli::try_parse_from(["gents", "service", "start", "--enable"]).unwrap();
+    let Command::Service {
+        command: ServiceCommand::Start { enable, .. },
+    } = start.command
+    else {
+        panic!("expected service start")
+    };
+    assert!(enable);
+}
+
+#[test]
 fn chat_goal_submission_flags_are_opt_in_and_budget_requires_objective() {
     let cli = Cli::try_parse_from([
         "gents",

@@ -50,6 +50,7 @@ pub mod inference_setup;
 pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
+pub mod native_logging;
 pub mod oauth_credential;
 pub(crate) mod oauth_http;
 pub mod openai_wire;

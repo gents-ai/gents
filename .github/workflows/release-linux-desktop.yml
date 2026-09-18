@@ -57,9 +57,13 @@ jobs:
             echo "Release tag does not match package version" >&2
             exit 1
           fi
+      - name: Build and stage managed runtime CLI
+        run: |
+          cargo build --release --locked -p gents-cli
+          bash scripts/stage-tauri-sidecar.sh --source target/release/gents
       - name: Build desktop installers with embedded managed runtime
         working-directory: apps/gents-desktop
-        run: npm run tauri -- build --ci --bundles deb,appimage -- --locked
+        run: npm run tauri -- build --config src-tauri/tauri.bundle.conf.json --ci --bundles deb,appimage -- --locked
       - name: Verify and smoke-test installed package
         run: bash scripts/verify-linux-desktop.sh
       - name: Retain installers and checksums

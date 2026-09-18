@@ -206,4 +206,34 @@ describe("desktop bridge contract", () => {
       "desktop_managed_server_restart",
     ]);
   });
+
+  it("changes native login enablement without starting or stopping the runtime", async () => {
+    const status = {
+      state: "running",
+      autoStart: false,
+      agentName: "Workshop Agent",
+      agentDid: "did:key:agent",
+      graphql: "http://127.0.0.1:9191/graphql",
+      effectiveToolCeiling: "meta-only",
+      effectiveToolRoot: null,
+      suggestedToolRoot: "/Users/test",
+      pairingReady: true,
+      error: null,
+    };
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_managed_server_set_auto_start: (args) => {
+          expect(args).toEqual({ enabled: false });
+          return status;
+        },
+      },
+    });
+
+    await expect(
+      createDesktopClient(transport).api.setManagedServerAutoStart?.(false),
+    ).resolves.toEqual(status);
+    expect(transport.calls.map(({ command }) => command)).toEqual([
+      "desktop_managed_server_set_auto_start",
+    ]);
+  });
 });

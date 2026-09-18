@@ -119,6 +119,12 @@ afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev =
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
 
+[target.'cfg(target_vendor = "apple")'.dependencies]
+tracing-oslog = "0.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tracing-journald = "0.3"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",

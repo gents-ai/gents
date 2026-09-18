@@ -4627,7 +4627,9 @@ dependencies = [
  "tokio-util",
  "toml 0.8.2",
  "tracing",
+ "tracing-journald",
  "tracing-opentelemetry",
+ "tracing-oslog",
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-bash",
@@ -4720,6 +4722,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "p2p",
+ "plist",
  "query",
  "regex",
  "reqwest 0.12.28",
@@ -4738,6 +4741,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "wait-timeout",
 ]
 
 [[package]]
@@ -12709,6 +12713,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-journald"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d3a81ed245bfb62592b1e2bc153e77656d94ee6a0497683a65a12ccaf2438d0"
+dependencies = [
+ "libc",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tracing-log"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12731,6 +12746,18 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "web-time",
+]
+
+[[package]]
+name = "tracing-oslog"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d76902d2a8d5f9f55a81155c08971734071968c90f2d9bfe645fe700579b2950"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "tracing-core",
+ "tracing-subscriber",
 ]
 
 [[package]]
