@@ -141,7 +141,7 @@ impl Tool for ReadOnlyBashTool {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "One executable name or path from the read-only allowlist, not a shell command string. Example: {\"command\":\"ls\",\"args\":[\"crates\"]}."
+                        "description": format!("One executable name or path, not a shell command string. Base read-only executables: {}. Configured argv restrictions and command-specific safety checks still apply. Example: {{\"command\":\"ls\",\"args\":[\"crates\"]}}.", self.policy.read_only_allowlist().join(", "))
                     },
                     "args": {
                         "type": "array",

@@ -26,6 +26,14 @@ use crate::document_config::Tools;
 use crate::tool_surface::SelfConfigProcessCeiling;
 use crate::toolset::CommandNetworkMode;
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "behavior {behavior_id} not found; self-config is anchored on the running behavior document"
+)]
+pub(super) struct MissingBehavior {
+    pub behavior_id: String,
+}
+
 /// How a self-config write lands: config documents are watched by the control
 /// reconciler; a committed patch applies at the next generation swap, not to
 /// the in-flight turn. Surfaced in tool descriptions and result payloads.
@@ -153,10 +161,10 @@ impl SelfConfigCore {
         )
         .await?
         else {
-            bail!(
-                "behavior {} not found; self-config is anchored on the running behavior document",
-                self.behavior_id
-            );
+            return Err(MissingBehavior {
+                behavior_id: self.behavior_id.clone(),
+            }
+            .into());
         };
         let owner = doc.get("agent_did").and_then(Value::as_str).unwrap_or("");
         if owner != self.agent_did {

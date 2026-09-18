@@ -304,6 +304,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         behavior.deadline_duration = Duration::from_secs(120);
         let mut selection = ResolvedToolSelection::default();
         selection.write_tools = vec![WriteToolDecl {
+            notification: None,
             tool_name: "write_oneshot_result".into(),
             collection: "OneshotOutput".into(),
             description: "Persist the required one-shot output.".into(),

@@ -141,17 +141,44 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
-            if predicate(&snapshot) {
-                return snapshot;
-            }
+        let snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        if snapshot.as_ref().is_some_and(&predicate) {
+            return snapshot.unwrap();
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}"
+            "timed out waiting for runtime snapshot for {agent_did}; last snapshot: {snapshot:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+fn ready_after(snapshot: &RuntimeSnapshot, generation: i64) -> bool {
+    snapshot.process_state == "ready"
+        && snapshot.reconcile_phase == "idle"
+        && snapshot.active_generation > generation
+        && snapshot.last_reconcile_error.is_empty()
+}
+
+#[test]
+fn readiness_survives_noop_observation_without_losing_generation_fence() {
+    let mut snapshot = RuntimeSnapshot {
+        process_state: "ready".into(),
+        reconcile_phase: "idle".into(),
+        active_generation: 1,
+        router_generation: 1,
+        default_behavior_id: "default".into(),
+        last_reconcile_result: "startup".into(),
+        last_reconcile_error: String::new(),
+    };
+    assert!(ready_after(&snapshot, 0));
+    snapshot.last_reconcile_result = "noop".into();
+    assert!(ready_after(&snapshot, 0));
+    assert!(!ready_after(&snapshot, 1));
+    snapshot.active_generation = 2;
+    assert!(ready_after(&snapshot, 1));
+    snapshot.last_reconcile_error = "failed apply".into();
+    assert!(!ready_after(&snapshot, 1));
 }
 
 async fn fetch_schedule_agent_requests(
@@ -214,10 +241,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation >= 1
-            && snapshot.last_reconcile_result == "startup"
+        ready_after(snapshot, 0)
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -244,10 +268,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     .await;
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation > initial_generation
-            && snapshot.last_reconcile_result == "applied"
+        ready_after(snapshot, initial_generation)
     })
     .await;
     assert_eq!(reconciled.default_behavior_id, default_behavior_id);
@@ -272,10 +293,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     )
     .await;
     let disabled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation > reconciled.active_generation
-            && snapshot.last_reconcile_result == "applied"
+        ready_after(snapshot, reconciled.active_generation)
     })
     .await;
     assert!(
@@ -332,10 +350,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation >= 1
-            && snapshot.last_reconcile_result == "startup"
+        ready_after(snapshot, 0)
     })
     .await;
 
@@ -354,10 +369,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     create_schedule(db.node.as_ref(), &agent_did, TRIGGER_ID, TASK_ID).await;
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation > startup.active_generation
-            && snapshot.last_reconcile_result == "applied"
+        ready_after(snapshot, startup.active_generation)
     })
     .await;
     assert!(
@@ -443,10 +455,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation >= 1
-            && snapshot.last_reconcile_result == "startup"
+        ready_after(snapshot, 0)
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -475,10 +484,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     .await;
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation > initial_generation
-            && snapshot.last_reconcile_result == "applied"
+        ready_after(snapshot, initial_generation)
     })
     .await;
     assert_eq!(reconciled.default_behavior_id, default_behavior_id);

@@ -415,16 +415,13 @@ mod tests {
     }
 
     #[test]
-    fn mailbox_envelope_is_immutable_except_for_close_state() {
+    fn mailbox_envelope_is_immutable_except_for_content_and_close_state() {
         let immutable_fields = [
             "item_key",
             "requester_did",
             "agent_did",
             "kind",
             "action",
-            "title",
-            "summary",
-            "payload",
             "source_kind",
             "source_id",
             "session_id",
@@ -438,7 +435,15 @@ mod tests {
             "deadline_at",
             "created_at",
         ];
-        let mutable_close_fields = ["status", "updated_at", "resolved_at", "resolved_doc_id"];
+        let mutable_fields = [
+            "title",
+            "summary",
+            "payload",
+            "status",
+            "updated_at",
+            "resolved_at",
+            "resolved_doc_id",
+        ];
         let field_line = |field: &str| {
             MAILBOX_ITEM
                 .lines()
@@ -455,7 +460,7 @@ mod tests {
                 "MailboxItem.{field} must be immutable"
             );
         }
-        for field in mutable_close_fields {
+        for field in mutable_fields {
             assert!(
                 !field_line(field).contains("@immutable"),
                 "MailboxItem.{field} is close state and must remain mutable"

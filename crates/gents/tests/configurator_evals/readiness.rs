@@ -1,93 +1,4 @@
 use std::path::Path;
-use tree_sitter::{Node, Parser};
-
-fn invokes_script(argv: &[String], cwd: &Path, script: &Path) -> bool {
-    let [shell, argument] = argv else {
-        return false;
-    };
-    matches!(shell.as_str(), "sh" | "/bin/sh")
-        && !argument.starts_with('-')
-        && cwd
-            .join(argument)
-            .canonicalize()
-            .ok()
-            .zip(script.canonicalize().ok())
-            .is_some_and(|(actual, expected)| actual == expected)
-}
-
-fn safe_expansions(node: Node<'_>, source: &str) -> bool {
-    match node.kind() {
-        "command_substitution"
-        | "process_substitution"
-        | "variable_assignment"
-        | "arithmetic_expansion"
-        | "expansion" => return false,
-        "simple_expansion" if &source[node.byte_range()] != "$?" => return false,
-        "heredoc_redirect" => {
-            // Only literal heredocs: their contents are data, never invocation evidence.
-            let text = &source[node.byte_range()];
-            return text.trim_start().starts_with("<<'");
-        }
-        _ => {}
-    }
-    let mut cursor = node.walk();
-    let safe = node
-        .named_children(&mut cursor)
-        .all(|child| safe_expansions(child, source));
-    safe
-}
-
-// A successful receipt proves the final && chain ran, not earlier statements.
-fn visit(node: Node<'_>, source: &str, cwd: &Path, script: &Path) -> Option<bool> {
-    match node.kind() {
-        "comment" => Some(false),
-        "program" | "list" => {
-            let mut found = false;
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.is_named() {
-                    if child.kind() == "comment" {
-                        continue;
-                    }
-                    let invoked = visit(child, source, cwd, script)?;
-                    if node.kind() == "program" {
-                        found = invoked;
-                    } else {
-                        found |= invoked;
-                    }
-                } else if child.kind() == ";" && node.kind() == "program" {
-                    continue;
-                } else if child.kind() != "&&" {
-                    return None;
-                }
-            }
-            Some(found)
-        }
-        "redirected_statement" => {
-            let body = node.child_by_field_name("body")?;
-            let mut cursor = node.walk();
-            if node.named_children(&mut cursor).any(|child| {
-                child.id() != body.id()
-                    && child.kind() != "heredoc_redirect"
-                    && child.kind() != "file_redirect"
-            }) {
-                return None;
-            }
-            visit(body, source, cwd, script)
-        }
-        "command" => {
-            let name = node.child_by_field_name("name")?;
-            let name = shlex::split(&source[name.byte_range()])?;
-            let [name] = name.as_slice() else { return None };
-            if matches!(name.as_str(), "sh" | "/bin/sh") {
-                let argv = shlex::split(&source[node.byte_range()])?;
-                return invokes_script(&argv, cwd, script).then_some(true);
-            }
-            matches!(name.as_str(), "mkdir" | "chmod" | "cat" | "echo" | "true").then_some(false)
-        }
-        _ => None,
-    }
-}
 
 pub fn recorded_command(call: &serde_json::Value, root: &Path) -> bool {
     if call["tool_name"] != "bash_unrestricted" || call["lifecycle_state"] != "completed" {
@@ -104,47 +15,68 @@ pub fn recorded_command(call: &serde_json::Value, root: &Path) -> bool {
     if metadata["exit_code"] != 0 || metadata["ok"] != true || metadata["timed_out"] == true {
         return false;
     }
-    let Some(args) = call["args"]
-        .as_str()
-        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+    let Some(argv) = metadata["argv"].as_array() else {
+        return false;
+    };
+    let [shell, argument] = argv.as_slice() else {
+        return false;
+    };
+    let (Some("sh" | "/bin/sh"), Some(argument), Some(cwd)) =
+        (shell.as_str(), argument.as_str(), metadata["cwd"].as_str())
     else {
         return false;
     };
-    let Some(command) = args["command"].as_str() else {
-        return false;
-    };
-    let cwd = root.join(args["cwd"].as_str().unwrap_or("."));
-    let script = root.join("readiness/test.sh");
-    let program;
-    if let Some(extra) = args["args"].as_array().filter(|args| !args.is_empty()) {
-        let Some(argv) = std::iter::once(Some(command.to_owned()))
-            .chain(extra.iter().map(|arg| arg.as_str().map(str::to_owned)))
-            .collect::<Option<Vec<_>>>()
-        else {
-            return false;
-        };
-        if invokes_script(&argv, &cwd, &script) {
-            return true;
-        }
-        let [shell, flag, body] = argv.as_slice() else {
-            return false;
-        };
-        if !matches!(shell.as_str(), "sh" | "/bin/sh") || !matches!(flag.as_str(), "-c" | "-lc") {
-            return false;
-        }
-        program = body.clone();
-    } else {
-        program = command.to_owned();
+    // The process owner records the admitted invocation, not model-authored arguments.
+    // Shell programs are deliberately not interpreted as execution evidence.
+    !argument.starts_with('-')
+        && root
+            .join(cwd)
+            .join(argument)
+            .canonicalize()
+            .ok()
+            .zip(root.join("readiness/test.sh").canonicalize().ok())
+            .is_some_and(|(actual, expected)| actual == expected)
+}
+
+#[test]
+fn readiness_uses_process_receipt_not_submitted_arguments_or_stdout() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("readiness")).unwrap();
+    std::fs::write(root.path().join("readiness/test.sh"), "# fixture").unwrap();
+    for (argv, cwd, accepted) in [
+        (serde_json::json!(["sh", "readiness/test.sh"]), ".", true),
+        (serde_json::json!(["/bin/sh", "test.sh"]), "readiness", true),
+        (
+            serde_json::json!(["sh", "-n", "readiness/test.sh"]),
+            ".",
+            false,
+        ),
+        (serde_json::json!(["echo", "readiness/test.sh"]), ".", false),
+        (
+            serde_json::json!(["sh", "-c", "sh readiness/test.sh"]),
+            ".",
+            false,
+        ),
+    ] {
+        let mut call = serde_json::json!({
+            "tool_name":"bash_unrestricted", "lifecycle_state":"completed",
+            "args":"deliberately irrelevant",
+            "result":format!("gents_exec: {}", serde_json::json!({
+                "ok":true,"exit_code":0,"timed_out":false,"argv":argv,"cwd":cwd
+            }))
+        });
+        assert_eq!(recorded_command(&call, root.path()), accepted);
+        call["lifecycle_state"] = "failed".into();
+        assert!(!recorded_command(&call, root.path()));
     }
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_bash::LANGUAGE.into())
-        .expect("Bash grammar");
-    let Some(tree) = parser.parse(&program, None) else {
-        return false;
-    };
-    let node = tree.root_node();
-    !node.has_error()
-        && safe_expansions(node, &program)
-        && visit(node, &program, &cwd, &script) == Some(true)
+    for result in [
+        "BUILD_TEST_OK",
+        "gents_exec: {\"ok\":true,\"exit_code\":0}",
+        "gents_exec: {\"ok\":true,\"exit_code\":0,\"timed_out\":true,\"argv\":[\"sh\",\"readiness/test.sh\"],\"cwd\":\".\"}",
+    ] {
+        assert!(!recorded_command(&serde_json::json!({
+            "tool_name":"bash_unrestricted","lifecycle_state":"completed",
+            "args":"{\"command\":\"sh readiness/test.sh\"}","result":result
+        }), root.path()));
+    }
 }

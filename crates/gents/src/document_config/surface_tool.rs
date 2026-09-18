@@ -491,6 +491,7 @@ mod tests {
     #[test]
     fn create_entry_without_kind_round_trips() {
         let decl = WriteToolDecl {
+            notification: None,
             tool_name: "write_finding".into(),
             collection: "Finding".into(),
             description: "create one finding".into(),

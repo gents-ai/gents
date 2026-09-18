@@ -71,6 +71,20 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     );
 
     let write_tool = WriteFileTool::new(context.clone());
+    let read_only = ReadOnlyBashTool::new(
+        context.clone(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        vec!["cmp".into(), "sha256sum".into()],
+    );
+    let read_only_def = crate::llm::tool::Tool::definition(&read_only, String::new()).await;
+    let commands = read_only_def.parameters["properties"]["command"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(commands.contains("cmp, sha256sum"));
+    assert!(
+        !commands.contains("curl"),
+        "advertise the configured policy, not a parallel catalog"
+    );
     let write_def = crate::llm::tool::Tool::definition(&write_tool, String::new()).await;
     assert_eq!(
         write_def.parameters["required"],
@@ -1205,6 +1219,13 @@ fn read_only_policy_forbidden_prefix_overrides_configured_diagnostic_prefix() {
 #[test]
 fn generated_command_policy_cases_match_rust_validation() {
     for case in lean_command_policy_cases() {
+        if case.category == "read_only_argv_safety" {
+            assert_eq!(
+                case.read_only_allowlist,
+                default_read_only_commands(),
+                "Lean and runtime read-only defaults must agree"
+            );
+        }
         let mode = rust_command_execution_mode(&case.mode);
         let network_mode = rust_command_network_mode(&case.network_mode);
         let lookup_command = std::path::Path::new(&case.command)

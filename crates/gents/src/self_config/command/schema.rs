@@ -45,12 +45,9 @@ impl ConfigCommandTool {
             );
             crate::config_client::preview_schema_install(&access, sdl).await?
         } else {
-            crate::config_client::apply_schema_install(
-                &access,
-                sdl,
-                digest.context("--digest from schema preview install is required")?,
-            )
-            .await?
+            let digest = digest.context("--digest from schema preview install is required")?;
+            self.execution.enter_mutation();
+            crate::config_client::apply_schema_install(&access, sdl, digest).await?
         };
         Ok(serde_json::to_string_pretty(&json!({
             "plan": plan,

@@ -1020,12 +1020,16 @@ async fn write_tools_register_under_declared_names() {
 
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
+    node.add_schema("type ActionRequest { summary: String }")
+        .await
+        .unwrap();
 
     let surface = BehaviorToolConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_defra_query: false,
             write_tools: vec![WriteToolDecl {
+                notification: None,
                 tool_name: "request_action".to_string(),
                 collection: "ActionRequest".to_string(),
                 description: "Request an action".to_string(),
@@ -1209,6 +1213,7 @@ fn malformed_write_tool_is_rejected_during_configuration() {
         "ops",
         ResolvedToolSelection {
             write_tools: vec![WriteToolDecl {
+                notification: None,
                 tool_name: "broken_tool".to_string(),
                 collection: "  ".to_string(),
                 description: String::new(),
@@ -1233,6 +1238,7 @@ fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
         ResolvedToolSelection {
             enable_defra_query: false,
             write_tools: vec![WriteToolDecl {
+                notification: None,
                 tool_name: "context_budget".to_string(),
                 collection: "ActionRequest".to_string(),
                 description: String::new(),

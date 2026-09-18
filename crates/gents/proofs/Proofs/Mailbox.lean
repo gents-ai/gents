@@ -2,3 +2,5 @@ import Proofs.Mailbox.State
 import Proofs.Mailbox.Transition
 import Proofs.Mailbox.Properties
 import Proofs.Mailbox.Executable
+import Proofs.Mailbox.Notification
+import Proofs.Mailbox.Reply

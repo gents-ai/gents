@@ -307,6 +307,8 @@ mod tests {
     async fn spawn_runtime_router(graphql: String) -> anyhow::Result<SocketAddr> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
+        let (activation_runtime, activation_observation) =
+            crate::http::router::empty_activation_state();
         let router = crate::http::runtime_contract_router(
             graphql,
             "identity-test-agent".to_string(),
@@ -317,6 +319,8 @@ mod tests {
             None,
             crate::http::enrollment::empty_issuer_handle(),
             crate::http::enrollment::empty_decision_service_handle(),
+            activation_runtime,
+            activation_observation,
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;

@@ -29,6 +29,7 @@ pub mod compaction;
 pub(crate) mod completion_factory;
 pub mod config;
 pub mod config_client;
+pub mod configuration_discovery;
 pub mod defra_query;
 pub mod defra_write;
 pub mod descendant_graph;

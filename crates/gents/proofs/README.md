@@ -16,7 +16,7 @@ Historical bridge references below are not evidence that this target already run
 | Document vocabulary | `ConfigDocuments` supplies apply, self-config, and sync projections with canonical names and field lists. Nested groups are values, not new documents. |
 | Authoring and inference | `Configuration` resolves a behavior into one `ResolvedSessionConfig`: actual context content plus inference. Typed document lookups use `(agent_did, logical ID)` and share one owner check; Task and graph stages reuse this result. Compact defaults, explicit auth, and backend/credential-scoped discovery retain their own boundaries. |
 | Graph selection | `GraphPipeline/Configuration` resolves authorized installed capabilities through that same Task resolver. Foreign capability ownership is preserved. Event groups reuse `Triggers/Groups` validation and candidate resolution, with graph bounds checked at delivery. |
-| Context and permissions | `Skills` uses an explicit context whitelist and preserves tool authority exactly. `PromptAssembly/Template` retains task rendering only; its existing assembler carries literal context text, with task substitutions confined to the task slot. `ToolPolicy/Configuration` enforces exact service/tool selection, independent presentation, background subsets, and tool-local limits alongside the existing ceiling lattice. |
+| Context and permissions | `Skills` uses an explicit context whitelist and preserves tool authority exactly. `PromptAssembly/Template` retains task rendering only; its existing assembler carries literal context text, with task substitutions confined to the task slot. `ToolPolicy/Configuration` enforces exact service/tool selection, independent presentation, background subsets, and tool-local limits alongside the existing ceiling lattice. `ToolPolicy/WriteInput` enforces typed scalar input, nullability, required fields, and caller exclusion from runtime-filled fields; 256 generated cases exercise the bounded writer's input validator. |
 | Event groups | Trigger and callback consumers share `EventGroupKey`, candidate eligibility and the durable clock in `EventDelivery/Group`. Callback input and group origin live on the existing invocation and survive its transitions; retries do not reproject live sources. |
 | Self-configuration | Existing patch/validate/guard owner remains. Canonical nested fields replace flattened legacy fields; the opt-in no-lockout guard consumes decoded enablement; `SelfConfig/Auth` permits environment/OAuth reference edits while preventing new raw-key writes. |
 | Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their principal once, so same-label documents from different principals coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. |
@@ -182,7 +182,14 @@ The current proof suite covers twenty practical areas:
 19. Human-attention mailbox: requester/agent identity stamping, owner-only
     dismissal, at-most-one open item per owner/source tuple, fresh occurrence
     allocation after terminal rows, terminal-state immutability, deadline
-    expiry, and proof that mailbox close states do not create graph edges
+    expiry, and proof that mailbox close states do not create graph edges.
+    Reply consumption binds an authenticated interactive request to the explicit
+    target and requester; a consumed item admits only its recorded request
+    (`Mailbox/Reply`). This does not grant host execution authority.
+    Notification policy separates configured condition identity from runtime
+    event identity; open condition content can update without changing the
+    envelope or mutating a terminal row (`Mailbox/Notification`). Generated
+    cases exercise the database write owner and its typed receipts.
 20. Request execution leases (#1341): opaque fresh ownership generations,
     claim deadlines, renewal only from persisted semantic response/tool/
     transcript progress, expiry/drop recovery, matching-generation terminal

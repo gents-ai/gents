@@ -149,6 +149,7 @@ mod tests {
         merged
             .write_tools
             .push(crate::document_config::WriteToolDecl {
+                notification: None,
                 tool_name: "record_finding".into(),
                 collection: "Finding".into(),
                 description: "Record a finding".into(),

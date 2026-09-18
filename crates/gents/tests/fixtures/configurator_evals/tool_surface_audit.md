@@ -11,7 +11,7 @@ values for nested groups and runtime ceilings enforced by existing owners.
 
 | Capability | Model configuration path | Remaining execution/authoring coverage |
 | --- | --- | --- |
-| Host files and commands | `behavior create --preset write/readonly --root`; `tools edit --behavior` host group | Builder readiness executes a shell test; completed corrected and supplemental cohorts each passed pagoda creation 1/10, with deadlines and inconclusive animation checks reported separately in README |
+| Host files and commands | `behavior create --preset write/readonly --root`; `tools edit --behavior` host group | Builder readiness executes a shell test. The host-steward suite checks real isolated service, disk and backup effects; historical artwork results are retained in HISTORICAL_COHORTS.md, not part of the current baseline. |
 | Background commands | Host bash background flags and timeout settings | Existing runtime tests; add consumer process start/observe/cancel case |
 | Named CLI tools | Host cli selection | Requires installed executable and a runtime execution check |
 | MCP | Remote service/tool allowlists and presentation; `mcp-service get/preview/edit` | Existing services only; missing service creation and catalog discovery in config |

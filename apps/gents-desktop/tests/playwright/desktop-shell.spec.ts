@@ -64,6 +64,34 @@ async function finishDialogObservation(page: Page) {
   });
 }
 
+async function expectAppShellAtViewport(
+  page: Page,
+  viewport: { width: number; height: number },
+) {
+  await expect
+    .poll(() =>
+      page.getByTestId("app-shell").evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return {
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          left: bounds.left,
+          top: bounds.top,
+          right: bounds.right,
+          bottom: bounds.bottom,
+        };
+      }),
+    )
+    .toEqual({
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      left: 0,
+      top: 0,
+      right: viewport.width,
+      bottom: viewport.height,
+    });
+}
+
 test.describe("kit shell", () => {
   test("keyboard focus opens the rail flyout", async ({ page }) => {
     test.skip(test.info().project.name === "chromium-narrow", "No desktop rail");
@@ -102,6 +130,7 @@ test.describe("kit shell", () => {
       { width: 1180, height: 696 },
     ]) {
       await page.setViewportSize(viewport);
+      await expectAppShellAtViewport(page, viewport);
       await expectNoPageHorizontalOverflow(page);
       await expect(composer(page)).toBeVisible();
       const bounds = await page.evaluate(() => {

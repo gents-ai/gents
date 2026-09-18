@@ -101,6 +101,8 @@ def defaultReadOnlyAllowlist : List String :=
   , "rg"
   , "wc"
   , "stat"
+  , "cmp"
+  , "sha256sum"
   , "file"
   , "git"
   , "date"
@@ -223,7 +225,15 @@ def commandPolicyOrderingCases : List CommandPolicyCase :=
   ]
 
 def readOnlySafetyCases : List CommandPolicyCase :=
-  [ readOnlySafetyCase
+  [ readOnlySafetyCase "compare_backup_contents" "cmp" "cmp"
+      ["/host/backups/records.txt", "/host/data/records.txt"]
+  , readOnlySafetyCase "checksum_backup_contents" "sha256sum" "sha256sum"
+      ["/host/backups/records.txt", "/host/data/records.txt"]
+  , readOnlySafetyCase "checksum_manifest_verification_is_read_only" "sha256sum" "sha256sum"
+      ["--check", "/host/checksums.txt"]
+  , readOnlySafetyCase "comparison_does_not_admit_shell_execution" "sh" "sh"
+      ["-c", "cmp a b"]
+  , readOnlySafetyCase
       "read_only_git_status_allows"
       "git"
       "git"

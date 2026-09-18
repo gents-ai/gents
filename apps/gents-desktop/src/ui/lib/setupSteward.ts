@@ -1,4 +1,4 @@
-/* First-run Setup behavior: a stable configurator that creates the user's
+/* First-run Engineer behavior: a stable configurator that creates the user's
    working behavior through the canonical persona request owner. */
 import type {
   ConfigComponentPatch,
@@ -31,7 +31,7 @@ export function setupStewardPatches(
       collection: "AgentBehavior",
       id: behavior.behaviorId,
       changes: {
-        display_name: "Setup",
+        display_name: "The Engineer",
         description: SETUP_STEWARD_DESCRIPTION,
         tags: Array.from(
           new Set([...(behavior.tags ?? []), SETUP_STEWARD_BEHAVIOR_TAG]),
@@ -44,7 +44,7 @@ export function setupStewardPatches(
       collection: "AgentContext",
       id: context.context_id,
       changes: {
-        display_name: "Setup",
+        display_name: "The Engineer",
         system_prompt: SETUP_STEWARD_PROMPT,
       },
     });

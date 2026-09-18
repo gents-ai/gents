@@ -3100,6 +3100,16 @@ pub(crate) enum MailboxCommand {
     Show(MailboxItemArgs),
     #[command(about = "Dismiss one open mailbox item as its owner")]
     Dismiss(MailboxItemArgs),
+    #[command(about = "Submit a signed reply using a mailbox item's existing route")]
+    Reply(MailboxReplyArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct MailboxReplyArgs {
+    #[command(flatten)]
+    pub(crate) item: MailboxItemArgs,
+    #[arg(value_name = "MESSAGE")]
+    pub(crate) message: String,
 }
 
 #[derive(clap::Args)]

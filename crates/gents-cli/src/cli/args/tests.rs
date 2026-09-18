@@ -2,6 +2,29 @@ use super::*;
 use clap::{CommandFactory, Parser};
 use std::sync::{Mutex, OnceLock};
 
+#[test]
+fn mailbox_reply_requires_an_item_and_explicit_message() {
+    let cli = Cli::try_parse_from([
+        "gents",
+        "mailbox",
+        "reply",
+        "item-doc",
+        "Approve the proposed repair",
+        "--home",
+        "/tmp/reply-home",
+    ])
+    .unwrap();
+    let Command::Mailbox {
+        command: MailboxCommand::Reply(args),
+    } = cli.command
+    else {
+        panic!("expected mailbox reply");
+    };
+    assert_eq!(args.item.doc_id, "item-doc");
+    assert_eq!(args.message, "Approve the proposed repair");
+    assert!(Cli::try_parse_from(["gents", "mailbox", "reply", "item-doc"]).is_err());
+}
+
 struct EnvVarGuard {
     saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
     _lock: std::sync::MutexGuard<'static, ()>,

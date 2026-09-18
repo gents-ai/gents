@@ -911,6 +911,7 @@ async fn run_agent_owned(
     let router_shutdown = shutdown.clone();
     let router_admission_gate = admission_gate.clone();
     let router_runtime_status = runtime_status.clone();
+    let router_runtime_snapshot_observer = agent.runtime_snapshot_observer.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::Router(
             super::router::run_router(
@@ -920,6 +921,7 @@ async fn run_agent_owned(
                 router_shutdown,
                 router_admission_gate,
                 router_runtime_status,
+                router_runtime_snapshot_observer,
             )
             .await,
         )

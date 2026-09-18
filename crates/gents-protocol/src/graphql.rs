@@ -342,13 +342,26 @@ impl Default for GraphqlRequestOptions {
     }
 }
 
+async fn graphql_http_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+    CLIENT
+        .get_or_try_init(|| async {
+            // Native certificate loading can block; initialize once off the executor.
+            tokio::task::spawn_blocking(|| reqwest::Client::builder().build())
+                .await?
+                .map_err(anyhow::Error::from)
+        })
+        .await
+}
+
 pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOptions) -> bool {
-    let client = match reqwest::Client::builder().timeout(options.timeout).build() {
+    let client = match graphql_http_client().await {
         Ok(client) => client,
         Err(_) => return false,
     };
     match client
         .post(graphql)
+        .timeout(options.timeout)
         .json(&serde_json::json!({ "query": "{ __typename }" }))
         .send()
         .await
@@ -374,14 +387,13 @@ async fn execute_graphql_async_with_tx(
     options: GraphqlRequestOptions,
     txn_id: Option<&str>,
 ) -> Result<serde_json::Value> {
-    let client = reqwest::Client::builder()
-        .timeout(options.timeout)
-        .build()?;
+    let client = graphql_http_client().await?;
     let mut last_error = None;
 
     for attempt in 0..options.max_attempts.max(1) {
         let mut request = client
             .post(graphql)
+            .timeout(options.timeout)
             .json(&serde_json::json!({ "query": query }));
         if let Some(id) = txn_id {
             request = request.header("x-defradb-tx", id);
@@ -1347,6 +1359,39 @@ mod tx_tests {
             .await
             .unwrap();
         assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), None);
+    }
+
+    #[tokio::test]
+    async fn shared_graphql_client_preserves_per_request_timeouts() {
+        let first = graphql_http_client().await.unwrap();
+        let second = graphql_http_client().await.unwrap();
+        assert!(std::ptr::eq(first, second));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+        let app = Router::new().route(
+            "/",
+            post(|| async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Json(serde_json::json!({ "data": { "ok": true } }))
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut options = GraphqlRequestOptions {
+            timeout: Duration::from_millis(10),
+            max_attempts: 1,
+            retry_backoff: Duration::ZERO,
+        };
+        assert!(execute_graphql_async(&endpoint, "{ ok }", options)
+            .await
+            .is_err());
+        options.timeout = Duration::from_secs(2);
+        assert_eq!(
+            execute_graphql_async(&endpoint, "{ ok }", options)
+                .await
+                .unwrap()["data"]["ok"],
+            true
+        );
+        server.abort();
     }
 
     async fn assert_execute_graphql_async_retries_error(first_error_message: &str) {

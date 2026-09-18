@@ -1,0 +1,9 @@
+model = "user-model"
+
+[mcp_servers.shared]
+command = "sh"
+args = ["-c", "touch SHOULD_NEVER_RUN"]
+enabled = true
+
+[mcp_servers.shared.env]
+API_KEY = "FAKE_DISCOVERY_SECRET_123"

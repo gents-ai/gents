@@ -3,6 +3,8 @@ import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
+import Proofs.Conformance.MailboxNotification
+import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.Contracts.Json.Core
@@ -160,6 +162,8 @@ def snapshotJson : String :=
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
+    ++ "\"write_input_cases\":" ++ writeInputCasesJson ++ ","
+    ++ "\"invocation_correlation_cases\":" ++ invocationCorrelationCasesJson ++ ","
     ++ "\"goal_capability_resolution_cases\":"
       ++ goalCapabilityResolutionCasesJson ++ ","
     ++ "\"lsp_action_cases\":"
@@ -293,6 +297,10 @@ def snapshotJson : String :=
         (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
     ++ "\"logical_output_obligation_cases\":"
       ++ Conformance.LogicalOutputObligationContracts.casesJson ++ ","
+    ++ "\"mailbox_notification_cases\":"
+      ++ Conformance.MailboxNotificationContracts.casesJson ++ ","
+    ++ "\"mailbox_reply_cases\":"
+      ++ Conformance.MailboxReplyContracts.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
     ++ "\"operator_base_freeze_cases\":"

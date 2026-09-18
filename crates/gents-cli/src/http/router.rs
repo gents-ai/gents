@@ -9,6 +9,7 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
+use tokio::sync::{watch, OnceCell};
 
 use crate::http::enrollment::{EnrollmentDecisionServiceHandle, EnrollmentOfferIssuerHandle};
 use crate::http::fleet::load_fleet_snapshot;
@@ -45,6 +46,41 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
     pub(crate) enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
     pub(crate) enrollment_decisions: EnrollmentDecisionServiceHandle,
+    pub(crate) activation_runtime: Arc<OnceCell<gents::Gents>>,
+    pub(crate) activation_observation: watch::Receiver<RuntimeActivationObservation>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RuntimeActivationObservation {
+    pub(crate) event: Option<(u64, String, Result<(), String>)>,
+    pub(crate) router: Option<(u64, String)>,
+}
+
+impl RuntimeActivationObservation {
+    pub(crate) fn successful_for(&self, generation: u64, fingerprint: &str) -> bool {
+        self.event
+            .as_ref()
+            .is_some_and(|(event_generation, event_fingerprint, result)| {
+                *event_generation == generation
+                    && event_fingerprint == fingerprint
+                    && result.is_ok()
+            })
+            && self
+                .router
+                .as_ref()
+                .is_some_and(|(router_generation, router_fingerprint)| {
+                    *router_generation == generation && router_fingerprint == fingerprint
+                })
+    }
+}
+
+pub(crate) fn empty_activation_state() -> (
+    Arc<OnceCell<gents::Gents>>,
+    watch::Receiver<RuntimeActivationObservation>,
+) {
+    let (sender, receiver) = watch::channel(RuntimeActivationObservation::default());
+    drop(sender);
+    (Arc::new(OnceCell::new()), receiver)
 }
 
 pub(crate) fn runtime_contract_router(
@@ -60,6 +96,8 @@ pub(crate) fn runtime_contract_router(
     codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
     enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
     enrollment_decisions: EnrollmentDecisionServiceHandle,
+    activation_runtime: Arc<OnceCell<gents::Gents>>,
+    activation_observation: watch::Receiver<RuntimeActivationObservation>,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
@@ -81,6 +119,8 @@ pub(crate) fn runtime_contract_router(
         codex_shim_health,
         enrollment_offer_issuer,
         enrollment_decisions,
+        activation_runtime,
+        activation_observation,
     };
 
     let mut router = Router::new()
@@ -88,6 +128,7 @@ pub(crate) fn runtime_contract_router(
         .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
         .route("/status", get(status_handler))
+        .route("/activation", get(activation_handler))
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))
         .route("/self", get(self_handler))
@@ -116,6 +157,94 @@ pub(crate) fn runtime_contract_router(
     }
 
     router.with_state(state)
+}
+
+async fn activation_handler(State(state): State<RuntimeHttpState>) -> Response {
+    match tokio::time::timeout(Duration::from_secs(30), wait_for_activation(state)).await {
+        Ok(response) => response,
+        Err(_) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            axum::Json(json!({"error":"runtime did not activate the exact desired configuration"})),
+        )
+            .into_response(),
+    }
+}
+
+async fn wait_for_activation(state: RuntimeHttpState) -> Response {
+    let Some(runtime) = state.activation_runtime.get() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error":"runtime activation probe is not ready"})),
+        )
+            .into_response();
+    };
+    let mut observed = state.activation_observation;
+    loop {
+        // Mark before resolving: an acknowledgement that arrives while the
+        // canonical resolver awaits remains visible to this iteration.
+        drop(observed.borrow_and_update());
+        let expected = match runtime.document_runtime_configuration_fingerprint().await {
+            Ok(value) => value,
+            Err(error) => return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(
+                    json!({"error":format!("resolving desired runtime configuration: {error:#}")}),
+                ),
+            )
+                .into_response(),
+        };
+        let current = observed.borrow().clone();
+        if let Some((generation, fingerprint, result)) = current
+            .event
+            .as_ref()
+            .filter(|(_, fingerprint, _)| fingerprint == &expected)
+        {
+            if let Err(error) = result {
+                return (StatusCode::CONFLICT, axum::Json(json!({"error":"event-source activation failed", "generation":generation, "fingerprint":fingerprint, "detail":error}))).into_response();
+            }
+            if current.successful_for(*generation, fingerprint) {
+                let readiness = match crate::commands::status::load_live_behavior_readiness(
+                    &state.graphql,
+                    &state.agent_did,
+                )
+                .await
+                {
+                    Ok(Some(row)) => gents_protocol::row::decode_behavior_readiness_snapshot(
+                        &row,
+                        &state.agent_did,
+                    )
+                    .ok(),
+                    Ok(None) | Err(_) => None,
+                };
+                let ready = readiness.is_some_and(|snapshot| {
+                    snapshot.process_state.accepts_work()
+                        && snapshot.active_generation == *generation
+                        && snapshot.router_generation == *generation
+                });
+                if !ready {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        axum::Json(json!({"error":"runtime readiness is not current for activated generation"})),
+                    )
+                        .into_response();
+                }
+                // Re-resolve after observing the acknowledgement: a concurrent
+                // writer must never receive a fence for its predecessor.
+                match runtime.document_runtime_configuration_fingerprint().await {
+                    Ok(actual) if actual == expected => return (StatusCode::OK, axum::Json(json!({"generation":generation,"fingerprint":fingerprint}))).into_response(),
+                    Ok(_) => continue,
+                    Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({"error":format!("resolving desired runtime configuration: {error:#}")}))).into_response(),
+                }
+            }
+        }
+        if observed.changed().await.is_err() {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(json!({"error":"runtime activation observer stopped"})),
+            )
+                .into_response();
+        }
+    }
 }
 
 async fn enrollment_decision_handler(
@@ -583,6 +712,7 @@ mod tests {
     use super::*;
 
     fn state() -> RuntimeHttpState {
+        let (activation_runtime, activation_observation) = empty_activation_state();
         RuntimeHttpState {
             graphql: "http://127.0.0.1:9181/api/v0/graphql".to_string(),
             agent_name: "amy".to_string(),
@@ -596,7 +726,32 @@ mod tests {
             codex_shim_health: None,
             enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
+            activation_runtime,
+            activation_observation,
         }
+    }
+
+    #[test]
+    fn activation_observation_requires_one_successful_exact_tuple() {
+        let observed = RuntimeActivationObservation {
+            event: Some((4, "desired".into(), Ok(()))),
+            router: Some((4, "desired".into())),
+        };
+        assert!(observed.successful_for(4, "desired"));
+        assert!(!observed.successful_for(5, "desired"));
+        assert!(!observed.successful_for(4, "other"));
+
+        let failed = RuntimeActivationObservation {
+            event: Some((4, "desired".into(), Err("seed failed".into()))),
+            router: Some((4, "desired".into())),
+        };
+        assert!(!failed.successful_for(4, "desired"));
+
+        let torn = RuntimeActivationObservation {
+            event: Some((4, "desired".into(), Ok(()))),
+            router: Some((5, "desired".into())),
+        };
+        assert!(!torn.successful_for(4, "desired"));
     }
 
     fn behavior(id: &str, enabled: bool, model_name: &str) -> SelfBehavior {

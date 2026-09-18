@@ -539,13 +539,19 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
         if matches!(backend.auth, BackendAuth::PrincipalOAuth) {
             continue;
         }
-        if let Err(error) = probe_shared_backend(node, &backend).await {
+        if let Err(error) = discover_shared_backend(node, &backend).await {
             tracing::warn!(agent_did = %backend.agent_did, backend_id = %backend.backend_id, %error, "startup backend probe failed; preserving previous observations");
         }
     }
 }
 
-async fn probe_shared_backend(node: &EmbeddedNode, backend: &InferenceBackend) -> Result<()> {
+/// Discover one persisted shared-credential backend through the canonical
+/// provider and observation owners. Callers must resolve and authorize the
+/// backend document first; this function never accepts a free-standing URL.
+pub(crate) async fn discover_shared_backend(
+    node: &EmbeddedNode,
+    backend: &InferenceBackend,
+) -> Result<InferenceBackendObservation> {
     backend.validate()?;
     let discovery_timeout =
         std::time::Duration::from_secs(backend.discovery_timeout_secs.unwrap_or(10) as u64);
@@ -583,7 +589,10 @@ async fn probe_shared_backend(node: &EmbeddedNode, backend: &InferenceBackend) -
         HEALTHY_PROBE_STATUS,
         chrono::Utc::now(),
     )
-    .await
+    .await?;
+    lookup_backend_observation(node, &backend.agent_did, &backend.backend_id)
+        .await?
+        .context("discovered backend observation is missing")
 }
 
 #[cfg(test)]

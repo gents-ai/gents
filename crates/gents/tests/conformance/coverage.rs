@@ -172,7 +172,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 54);
-    assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 48);
+    assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 52);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
@@ -555,6 +555,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.logical_output_obligation_cases,
         ),
         (
+            "mailbox_notification_cases",
+            "MailboxNotificationCases",
+            &snapshot.mailbox_notification_cases,
+        ),
+        (
+            "mailbox_reply_cases",
+            "MailboxReplyCases",
+            &snapshot.mailbox_reply_cases,
+        ),
+        (
             "invalid_tool_progress_cases",
             "InvalidToolProgressCases",
             &snapshot.invalid_tool_progress_cases,
@@ -647,6 +657,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "tool_policy_cases".to_string(),
             "ToolPolicyCases".to_string(),
+        ));
+    }
+    if !snapshot.write_input_cases.is_empty() {
+        emitted.insert((
+            "write_input_cases".to_string(),
+            "WriteInputCases".to_string(),
+        ));
+    }
+    if !snapshot.invocation_correlation_cases.is_empty() {
+        emitted.insert((
+            "invocation_correlation_cases".to_string(),
+            "InvocationCorrelationCases".to_string(),
         ));
     }
     if !lean_goal_capability_resolution_cases().is_empty() {

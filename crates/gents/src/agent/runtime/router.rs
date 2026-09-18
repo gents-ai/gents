@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
+use crate::agent::RuntimeSnapshotObserver;
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle};
 use crate::runtime_snapshot::{
     effective_behavior_admission, ActiveRuntimeSnapshot, EffectiveBehaviorAdmission,
@@ -109,6 +110,7 @@ pub(super) async fn run_router(
     mut shutdown: watch::Receiver<bool>,
     admission_gate: RuntimeAdmissionGate,
     runtime_status: RuntimeStatusHandle,
+    runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
 ) -> Result<()> {
     if *shutdown.borrow() {
         return Ok(());
@@ -125,6 +127,7 @@ pub(super) async fn run_router(
         shutdown,
         admission_gate.clone(),
         runtime_status,
+        runtime_snapshot_observer,
     )
     .await;
     if result.is_err() {
@@ -144,6 +147,7 @@ pub(super) async fn run_router_with_watcher<W>(
     mut shutdown: watch::Receiver<bool>,
     admission_gate: RuntimeAdmissionGate,
     runtime_status: RuntimeStatusHandle,
+    runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
 ) -> Result<()>
 where
     W: Watcher,
@@ -164,6 +168,7 @@ where
                 &mut admission_changed,
                 &mut readiness_changed,
                 Some(&runtime_status),
+                runtime_snapshot_observer.as_deref(),
             )
             .await?
         else {
@@ -296,6 +301,7 @@ pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
         crate::behavior_readiness_publisher::BehaviorAdmissionObservation,
     >,
     runtime_status: Option<&RuntimeStatusHandle>,
+    runtime_snapshot_observer: Option<&dyn RuntimeSnapshotObserver>,
 ) -> Result<
     Option<(
         AgentRequest,
@@ -349,6 +355,12 @@ where
             {
                 admission_gate.close().await;
                 return Err(error);
+            }
+            if let Some(observer) = runtime_snapshot_observer {
+                observer.on_router_generation_activated(
+                    routed_snapshot.generation,
+                    &routed_snapshot.configuration_fingerprint(),
+                );
             }
         }
         if let Some(request) = pending_request.take() {

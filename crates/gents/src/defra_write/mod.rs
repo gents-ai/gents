@@ -1,44 +1,19 @@
 //! Declarative, schema-bounded single-collection write tool.
 //!
-//! `defra_write` is the write-side sibling of [`crate::defra_query`]. Where
-//! `DefraQueryTool` is one read tool that can read any (in-scope) collection, a
-//! [`BoundedWriteTool`] is the opposite shape: each instance is locked to a
-//! single [`WriteToolDecl`] — one collection and one fixed field set — and
-//! writes exactly one validated document per call. The agent never names the
-//! collection or invents fields; the declaration is the contract.
-//!
-//! ## Dynamic per-instance tool name
-//!
-//! Unlike `DefraQueryTool` (a single tool with a shared
-//! `const NAME: &str = "defra_query"`), bounded write tools are *named per
-//! declaration*: a `request_action` decl and a `record_finding` decl are
-//! distinct tools backed by the same type. The native [`crate::llm::tool::Tool`] trait
-//! supports this directly: it requires a `const NAME` but also exposes a
-//! `fn name(&self) -> String` that defaults to that const — and which we
-//! override here to return `self.decl.tool_name`. The blanket
-//! `impl<T: Tool> ToolDyn for T` in `crate::llm::tool` forwards `name()`, so dynamic dispatch
-//! (B4's job) sees the per-instance name with no extra machinery.
-//!
-//! The `const NAME` on this impl is therefore a *placeholder* that is never the
-//! advertised identity; per-instance identity always comes from
-//! [`Tool::name`]/[`Tool::definition`]'s `name`.
-//!
-//! The alternative — implementing `ToolDyn` by hand like
-//! `toolset::cli_tool::CliTool` — also yields a runtime `name()`, but its
-//! `call(&self, args: String)` signature is the wrong shape for the typed,
-//! directly-callable contract this task's tests drive. Overriding `Tool::name`
-//! gives both the typed `call(Args)` and the dynamic name, so it is the better
-//! fit.
+//! The declaration owns the tool name and permitted fields; DefraDB owns their
+//! types. Each call writes one document through the configuration transaction
+//! owner and returns its canonical receipt, including runtime-filled metadata.
 
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDefinition;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
 use crate::document_config::WriteToolDecl;
-use crate::graphql::escape_graphql_string;
+
+mod input;
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
@@ -90,7 +65,36 @@ impl BoundedWriteTool {
         }
         self.decl
             .validate()
-            .map_err(|error| anyhow!("invalid bounded write tool declaration: {error}"))
+            .map_err(|error| anyhow!("invalid bounded write tool declaration: {error}"))?;
+        self.field_types()?;
+        Ok(())
+    }
+
+    fn field_types(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let collection = self
+            .node
+            .get_collection(&self.decl.collection)?
+            .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
+        self.decl
+            .fields
+            .iter()
+            .map(|field| {
+                let schema_field = collection
+                    .fields
+                    .iter()
+                    .find(|f| f.name == field.name)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "field `{}` is absent from `{}`",
+                            field.name,
+                            self.decl.collection
+                        )
+                    })?;
+                let schema = schema_field.kind.graphql_type_name();
+                input::parameters(schema)?;
+                Ok((field.name.clone(), schema.to_owned()))
+            })
+            .collect()
     }
 
     fn build_mutation(&self, args: &Map<String, Value>) -> Result<String> {
@@ -99,6 +103,7 @@ impl BoundedWriteTool {
         // (the centralized identifier-validation boundary), so bare-identifier
         // interpolation below is safe without a second per-site check here.
         self.ensure_well_formed()?;
+        let types = self.field_types()?;
 
         for key in args.keys() {
             let field = self.decl.fields.iter().find(|field| &field.name == key);
@@ -117,13 +122,18 @@ impl BoundedWriteTool {
         }
 
         for field in &self.decl.fields {
-            if field.fill.is_none() && field.required && !args.contains_key(&field.name) {
-                bail!(
-                    "required field `{}` missing for tool `{}`",
-                    field.name,
-                    self.decl.tool_name
-                );
-            }
+            input::validate_input(
+                &types[&field.name],
+                field.required,
+                field.fill.is_some(),
+                args.get(&field.name),
+            )
+            .with_context(|| {
+                format!(
+                    "invalid field `{}` for tool `{}`",
+                    field.name, self.decl.tool_name
+                )
+            })?;
         }
 
         let mut input_parts = Vec::new();
@@ -141,19 +151,22 @@ impl BoundedWriteTool {
                     &filled
                 }
             };
-            let raw = match value {
-                Value::String(s) => s.clone(),
-                Value::Null => String::new(),
-                other => other.to_string(),
-            };
-            let escaped = escape_graphql_string(&raw);
-            input_parts.push(format!("{}: \"{}\"", field.name, escaped));
+            let literal = input::literal(&types[&field.name], value)
+                .with_context(|| format!("invalid field `{}`", field.name))?;
+            input_parts.push(format!("{}: {}", field.name, literal));
         }
 
         Ok(format!(
-            "mutation {{ add_{collection}(input: {{ {input} }}) {{ _docID }} }}",
+            "mutation {{ add_{collection}(input: {{ {input} }}) {{ _docID {fields} }} }}",
             collection = self.decl.collection,
             input = input_parts.join(", "),
+            fields = self
+                .decl
+                .fields
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
         ))
     }
 }
@@ -172,16 +185,25 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         let mut properties = Map::new();
         let mut required = Vec::new();
+        let types = match self.field_types() {
+            Ok(types) => types,
+            Err(error) => {
+                tracing::error!(tool = %self.decl.tool_name, %error, "bounded writer schema unavailable");
+                return ToolDefinition {
+                    name: self.decl.tool_name.clone(),
+                    description: "Unavailable: collection schema could not be resolved.".into(),
+                    parameters: json!({"type":"object", "properties":{}, "additionalProperties":false}),
+                };
+            }
+        };
         for field in &self.decl.fields {
             if field.fill.is_some() {
                 continue;
             }
             properties.insert(
                 field.name.clone(),
-                json!({
-                    "type": "string",
-                    "description": format!("Value for the `{}` field.", field.name),
-                }),
+                input::parameters(&types[&field.name])
+                    .expect("field_types validates supported schemas"),
             );
             if field.required {
                 required.push(Value::String(field.name.clone()));
@@ -195,6 +217,7 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
                 "type": "object",
                 "properties": properties,
                 "required": required,
+                "additionalProperties": false,
             }),
         }
     }
@@ -209,31 +232,23 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
         )
         .await?;
 
-        let doc_id = extract_doc_id(resp.data.as_ref(), &self.decl.collection)
+        let document = resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get(format!("add_{}", self.decl.collection)))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .ok_or_else(|| anyhow!("write returned no canonical document"))?;
+        let doc_id = document
+            .get("_docID")
+            .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("write to {:?} returned no _docID", self.decl.collection))?;
-
-        Ok(format!("created {} {}", self.decl.collection, doc_id))
+        Ok(
+            json!({"collection":self.decl.collection, "document_id":doc_id,
+            "document":document})
+            .to_string(),
+        )
     }
-}
-
-fn extract_doc_id(data: Option<&Value>, collection: &str) -> Option<String> {
-    let data = data?;
-    let add_key = format!("add_{collection}");
-    let create_key = format!("create_{collection}");
-    let field = data.get(&add_key).or_else(|| data.get(&create_key))?;
-
-    field
-        .get("_docID")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            field
-                .as_array()
-                .and_then(|rows| rows.first())
-                .and_then(|row| row.get("_docID"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
 }
 
 #[cfg(test)]

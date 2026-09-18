@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,7 +8,54 @@ import {
   snapshotRun,
   startDashboard,
   usageFromEvidence,
+  stageUsageFromEvidence,
 } from "./watch.mjs";
+import { summarizeUsage, renderUsage } from "./usage.mjs";
+
+test("stage usage preserves partial coverage, model isolation and repeated input", () => {
+  const stages = stageUsageFromEvidence([
+    {
+      name: "preview-inference.json",
+      modified: 1,
+      data: {
+        InferenceCall: [
+          { prompt_tokens: 100, completion_tokens: 10 },
+          { prompt_tokens: 150, completion_tokens: 0 },
+          { prompt_tokens: null, completion_tokens: null },
+        ],
+      },
+    },
+    { name: "preview-tools.json", data: { AgentToolCall: [{}] } },
+    {
+      name: "apply-inference.json",
+      modified: 2,
+      data: { InferenceCall: [{}] },
+    },
+  ]);
+  assert.equal(stages[0].input, 250);
+  assert.equal(stages[0].peakInput, 150);
+  assert.equal(stages[0].inputReportedCalls, 2);
+  assert.equal(stages[0].outputReportedCalls, 2);
+  assert.equal(stages[0].calls, 3);
+  assert.equal(stages[0].tools, 1);
+  assert.equal(stages[1].input, null);
+  const result = summarizeUsage({
+    directory: "/test",
+    trials: [
+      { model: "one", trial: 1, stageUsage: stages },
+      { model: "one", trial: 2, stageUsage: stages },
+      { model: "two", trial: 1, stageUsage: stages },
+      { model: "one", trial: 3 },
+    ],
+  });
+  assert.equal(result.stages.length, 4);
+  assert.equal(result.stages[0].input, 500);
+  assert.equal(result.stages[0].peakInput, 150);
+  assert.equal(result.stages[0].inputReportedCalls, 4);
+  assert.equal(result.trials.length, 6);
+  assert.match(renderUsage(result), /4\/6 \/ 4\/6/);
+  assert.match(renderUsage(result), /not unique or uncached prefill/);
+});
 
 test("usage counts saved calls once and distinguishes unknown tokens from zero", () => {
   const document = {
@@ -68,10 +115,13 @@ async function fixture() {
     join(directory, "report.json"),
     JSON.stringify({
       schema_version: 1,
+      updated_at: "2026-09-16T00:00:00Z",
       models: ["model"],
       planned: 2,
+      unfinished: 2,
       runs_per_model: 2,
       concurrency: 1,
+      stage_timeout_secs: 1800,
       summaries: [
         {
           cases: [{ case_id: "onboarding" }, { case_id: "builder-readiness" }],
@@ -95,6 +145,32 @@ async function fixture() {
   );
   return { directory, evidence };
 }
+
+test("dashboard cache excludes raw tool and provider payloads", async () => {
+  const { directory, evidence } = await fixture();
+  const raw = "private transcript ".repeat(10000);
+  await writeFile(
+    join(evidence, "onboarding-tools.json"),
+    JSON.stringify({
+      AgentToolCall: [{ args: raw, result: raw }],
+    }),
+  );
+  await writeFile(
+    join(evidence, "onboarding-inference.json"),
+    JSON.stringify({
+      InferenceCall: [
+        { prompt_tokens: 123, completion_tokens: 4, response: raw },
+      ],
+    }),
+  );
+  const cache = new Map();
+  const snapshot = await snapshotRun(directory, cache);
+  assert.equal(snapshot.trials[0].usage.tools, 1);
+  assert.equal(snapshot.trials[0].usage.input, 123);
+  assert.ok(
+    !JSON.stringify([...cache.values()]).includes("private transcript"),
+  );
+});
 
 test("watching existing receipts preserves verdicts, pending work and interrupted state without writing", async () => {
   const { directory, evidence } = await fixture();
@@ -120,8 +196,84 @@ test("watching existing receipts preserves verdicts, pending work and interrupte
     finished_at: "2026-09-16T00:01:00Z",
   };
   view = renderDashboard(snapshot, { now: Date.parse("2026-09-16T01:00:00Z") });
-  assert.match(view, /INTERRUPTED  1:00/);
+  assert.match(view, /INTERRUPTED \/ NON-PASSING  1:00/);
   assert.match(view, /unfinished/);
+});
+
+test("stage progress attributes requests and exposes stalled work as non-passing", async () => {
+  const { directory, evidence } = await fixture();
+  await writeFile(
+    join(evidence, "builder-readiness-progress.json"),
+    JSON.stringify({
+      stage: "builder-readiness",
+      phase: "observing",
+      request_id: "request-visible-123",
+      lifecycle_state: "processing",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+    }),
+  );
+  const snapshot = await snapshotRun(directory);
+  assert.equal(snapshot.trials[0].requestId, "request-visible-123");
+  const view = renderDashboard(snapshot, {
+    now: Date.parse("2026-09-16T00:31:00Z"),
+    columns: 160,
+    rows: 30,
+  });
+  assert.match(view, /STALLED \/ NON-PASSING/);
+  assert.match(view, /stalled/);
+  assert.match(view, /request-visi/);
+});
+
+test("nested candidate progress and usage remain distinct without following symlinks", async () => {
+  const { directory, evidence } = await fixture();
+  for (const candidate of ["improvement", "regression"]) {
+    const path = join(evidence, candidate);
+    await mkdir(path);
+    await writeFile(
+      join(path, "candidate-edit-inference.json"),
+      JSON.stringify({
+        InferenceCall: [{ prompt_tokens: 100, completion_tokens: 20 }],
+      }),
+    );
+    await writeFile(
+      join(path, "candidate-edit-tools.json"),
+      JSON.stringify({ AgentToolCall: [{ args: "private transcript" }] }),
+    );
+  }
+  await writeFile(
+    join(evidence, "regression", "candidate-edit-progress.json"),
+    JSON.stringify({
+      stage: "candidate-edit",
+      request_id: "candidate-request",
+      lifecycle_state: "processing",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:01Z",
+    }),
+  );
+  const outside = join(directory, "private");
+  await mkdir(outside);
+  await writeFile(
+    join(outside, "secret-progress.json"),
+    JSON.stringify({ stage: "must-not-read", request_id: "secret" }),
+  );
+  await symlink(outside, join(evidence, "linked"), "junction");
+  const cache = new Map();
+  const snapshot = await snapshotRun(directory, cache);
+  const trial = snapshot.trials[0];
+  assert.equal(trial.current, "regression/candidate-edit");
+  assert.equal(trial.requestId, "candidate-request");
+  assert.equal(trial.usage.input, 200);
+  assert.equal(trial.usage.output, 40);
+  assert.equal(trial.usage.tools, 2);
+  assert.deepEqual(trial.stageUsage.map((row) => row.stage).sort(), [
+    "improvement/candidate-edit",
+    "regression/candidate-edit",
+  ]);
+  assert.ok(
+    !JSON.stringify([...cache.values()]).includes("private transcript"),
+  );
+  assert.ok(!JSON.stringify(snapshot).includes("must-not-read"));
 });
 
 test("TTY display restores the cursor and screen on stop", async () => {

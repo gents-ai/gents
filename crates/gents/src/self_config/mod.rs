@@ -6,6 +6,8 @@
 //! chain. Persona requests reuse the existing signed admission and reconciliation path.
 
 mod command;
+mod execution;
+pub use execution::ConfigExecutionReceipt;
 mod ops;
 mod read;
 #[cfg(test)]
@@ -298,6 +300,59 @@ fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
             "no-lockout guard: backend must remain enabled"
         );
         Ok(())
+    });
+    request
+}
+fn local_backend_create_request(
+    owner: String,
+    backend_id: String,
+    endpoint: String,
+    name: Option<String>,
+    wire_api: Option<crate::openai_wire::OpenAiWireApi>,
+) -> ApplyRequest<'static> {
+    let mut patch = vec![
+        (
+            "name".into(),
+            Some(json!(name.unwrap_or_else(|| format!("Local {backend_id}")))),
+        ),
+        (
+            "provider_kind".into(),
+            Some(json!(crate::BackendProviderKind::OpenAiCompatible)),
+        ),
+        ("endpoint".into(), Some(json!(endpoint))),
+        ("auth".into(), Some(json!({"kind": "unauthenticated"}))),
+    ];
+    if let Some(wire_api) = wire_api {
+        patch.push(("openai_wire_api".into(), Some(json!(wire_api))));
+    }
+    let mut request = ApplyRequest::new(SelfConfigTarget::InferenceBackend, patch);
+    request.allow_create = true;
+    request.require_create = true;
+    request.guard_selected_chain = false;
+    request.resolve_unique = Box::new(move |_| Ok(backend_id.clone()));
+    request.on_create = Box::new(move |id, merged| {
+        merged.insert("backend_id".into(), json!(id));
+        merged.insert("agent_did".into(), json!(owner));
+        Ok(())
+    });
+    request.validate = Box::new(move |_, _, _, merged| {
+        let merged = merged.clone();
+        Box::pin(async move {
+            let backend: crate::InferenceBackend = decode_merged("InferenceBackend", &merged)?;
+            anyhow::ensure!(
+                backend.provider_kind == crate::BackendProviderKind::OpenAiCompatible
+                    && matches!(
+                        backend.auth,
+                        crate::document_config::BackendAuth::Unauthenticated
+                    ),
+                "model-facing backend creation is limited to unauthenticated OpenAI-compatible local servers"
+            );
+            anyhow::ensure!(
+                backend.enabled,
+                "a newly created local backend must be enabled for discovery"
+            );
+            backend.validate()
+        })
     });
     request
 }
@@ -2050,6 +2105,7 @@ pub fn build_self_config_tools(
         dry_run: config.dry_run,
         allow_pack_install: config.enable_pack_install,
         process_ceiling: config.process_ceiling.clone(),
+        execution: Arc::new(execution::ExecutionObservation::default()),
     }));
     tools
 }
