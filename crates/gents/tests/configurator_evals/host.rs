@@ -30,6 +30,31 @@ async fn control(args: &[&str]) -> Result<Value> {
 }
 
 impl Host {
+    /// Wait for the hosted runtime to acknowledge the exact configuration it
+    /// currently resolves.  The runtime owns both resolution and activation;
+    /// this controller only consumes its read-only fence.
+    pub async fn wait_for_activation(&self) -> Result<()> {
+        let ConfigAccess::Graphql(graphql) = &self.access else {
+            anyhow::bail!("host activation fence requires GraphQL access");
+        };
+        let endpoint = graphql
+            .strip_suffix("/api/v0/graphql")
+            .context("host GraphQL endpoint has unexpected path")?;
+        let response = reqwest::Client::new()
+            .get(format!("{endpoint}/activation"))
+            .timeout(std::time::Duration::from_secs(35))
+            .send()
+            .await
+            .context("waiting for hosted runtime activation")?;
+        ensure!(
+            response.status().is_success(),
+            "hosted runtime did not activate configuration: status={} body={}",
+            response.status(),
+            response.text().await.unwrap_or_default()
+        );
+        Ok(())
+    }
+
     pub async fn restore(&self) -> Result<()> {
         let receipt = control(&["restore", &self.id]).await?;
         reporting::write_json_new(&self.evidence.join("host-restoration.json"), &receipt)
@@ -285,7 +310,7 @@ impl Host {
 
     pub async fn configure_trial(&self) -> Result<()> {
         use gents::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        use gents::document_config::{InferenceProfile, InferenceSampling, Tools};
+        use gents::document_config::{InferenceProfile, InferenceSampling};
         let snapshot = configuration_snapshot(&self.access).await?;
         let owner = snapshot["AgentPrincipal"][0]["agent_did"]
             .as_str()
@@ -301,19 +326,6 @@ impl Host {
             Collection::InferenceSampling,
             serde_json::to_value(sampling)?,
         )];
-        for row in snapshot["Tools"].as_array().context("tools missing")? {
-            let mut tools: Tools =
-                super::host_scenarios::decode_configuration(Collection::Tools, row)?;
-            let bash = tools
-                .host
-                .get_or_insert_with(Default::default)
-                .bash
-                .get_or_insert_with(Default::default);
-            bash.mode = gents::tool_surface::BashMode::Unrestricted;
-            bash.execution_mode = Some(gents::toolset::CommandExecutionMode::Unrestricted);
-            bash.read_only_commands = None;
-            documents.push((Collection::Tools, serde_json::to_value(tools)?));
-        }
         for row in snapshot["InferenceProfile"]
             .as_array()
             .context("profiles missing")?
@@ -526,11 +538,13 @@ async fn isolated_host_runtime_survives_restart_without_changing_configuration()
     let mut host = Host::start(root.path()).await?;
     let result: Result<()> = async {
         host.configure_trial().await?;
+        host.wait_for_activation().await?;
         let before = configuration_snapshot(&host.access).await?;
         ensure!(before["AgentPrincipal"]
             .as_array()
             .is_some_and(|rows| rows.len() == 1));
         host.restart("restart").await?;
+        host.wait_for_activation().await?;
         let after = configuration_snapshot(&host.access).await?;
         ensure!(
             before == after,
@@ -541,6 +555,7 @@ async fn isolated_host_runtime_survives_restart_without_changing_configuration()
         ensure!(host.snapshot("faulted").await?["api"]["exit_code"] == 1);
         let candidate = host.fork(&root.path().join("candidate")).await?;
         let candidate_check: Result<()> = async {
+            candidate.wait_for_activation().await?;
             ensure!(
                 configuration_snapshot(&candidate.access).await? == before,
                 "candidate fork changed canonical configuration"
@@ -555,6 +570,7 @@ async fn isolated_host_runtime_survives_restart_without_changing_configuration()
         let retired = candidate.close().await;
         retired?;
         host.resume("after-candidate").await?;
+        host.wait_for_activation().await?;
         candidate_check?;
         ensure!(
             configuration_snapshot(&host.access).await? == before,

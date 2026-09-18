@@ -102,6 +102,9 @@ pub(super) async fn run_trial(
                 host.request(&prepared.engineer, CASES[2].as_str(), CONFIGURE)
                     .await?
                     .ensure_completed()?;
+                host.wait_for_activation()
+                    .await
+                    .map_err(stages::infrastructure)?;
                 let configured = configuration_snapshot(&host.access)
                     .await
                     .map_err(stages::infrastructure)?;

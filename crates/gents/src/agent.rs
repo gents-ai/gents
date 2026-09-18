@@ -93,6 +93,11 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
         configuration_fingerprint: &str,
         result: Result<(), &str>,
     );
+
+    /// The request router has durably acknowledged this generation.  This is
+    /// deliberately separate from publication: callers that submit work need
+    /// the router, not merely a resolved snapshot.
+    fn on_router_generation_activated(&self, _generation: u64, _configuration_fingerprint: &str) {}
 }
 
 #[derive(Default)]

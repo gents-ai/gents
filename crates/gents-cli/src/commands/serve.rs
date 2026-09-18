@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
+use crate::http::router::RuntimeActivationObservation;
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
 use crate::{
@@ -51,15 +52,27 @@ struct RuntimeConfigurationObservation {
 struct CliRuntimeSnapshotObserver {
     runnable_tx: watch::Sender<Vec<String>>,
     configuration_tx: watch::Sender<Option<RuntimeConfigurationObservation>>,
+    activation_tx: watch::Sender<RuntimeActivationObservation>,
 }
 
 impl gents::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
     fn on_event_sources_reconciled(
         &self,
-        _generation: u64,
-        _configuration_fingerprint: &str,
-        _result: Result<(), &str>,
+        generation: u64,
+        configuration_fingerprint: &str,
+        result: Result<(), &str>,
     ) {
+        let fingerprint = configuration_fingerprint.to_string();
+        let result = result.map_err(str::to_owned);
+        self.activation_tx.send_modify(|observation| {
+            if observation
+                .event
+                .as_ref()
+                .is_none_or(|(prior_generation, _, _)| generation >= *prior_generation)
+            {
+                observation.event = Some((generation, fingerprint, result));
+            }
+        });
     }
 
     fn on_generation_published(
@@ -75,6 +88,19 @@ impl gents::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
                 generation,
                 fingerprint: configuration_fingerprint.to_string(),
             }));
+    }
+
+    fn on_router_generation_activated(&self, generation: u64, configuration_fingerprint: &str) {
+        let fingerprint = configuration_fingerprint.to_string();
+        self.activation_tx.send_modify(|observation| {
+            if observation
+                .router
+                .as_ref()
+                .is_none_or(|(prior_generation, _)| generation >= *prior_generation)
+            {
+                observation.router = Some((generation, fingerprint));
+            }
+        });
     }
 }
 
@@ -647,6 +673,8 @@ pub(crate) async fn serve_with_control(
     let bind_probe_path = format!("/_gents/http-bind/{}", Uuid::new_v4().simple());
     let enrollment_offer_issuer = crate::http::enrollment::empty_issuer_handle();
     let enrollment_decisions = crate::http::enrollment::empty_decision_service_handle();
+    let activation_runtime = Arc::new(tokio::sync::OnceCell::new());
+    let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
     let extra_routes = runtime_contract_router(
         graphql_url.clone(),
         agent_name.clone(),
@@ -657,6 +685,8 @@ pub(crate) async fn serve_with_control(
         Some(codex_shim_health.clone()),
         enrollment_offer_issuer.clone(),
         enrollment_decisions.clone(),
+        activation_runtime.clone(),
+        activation_rx,
     )
     .merge(embedded_http_probe_router(
         &bind_probe_path,
@@ -710,6 +740,7 @@ pub(crate) async fn serve_with_control(
             runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                 runnable_tx,
                 configuration_tx,
+                activation_tx,
             })),
             ..Default::default()
         },
@@ -724,6 +755,9 @@ pub(crate) async fn serve_with_control(
     })?;
     let background_execution_registry = agent.background_execution_registry();
     let runtime_configuration_probe = agent.clone();
+    activation_runtime
+        .set(agent.clone())
+        .map_err(|_| anyhow::anyhow!("runtime activation probe was initialized twice"))?;
 
     // Aborting the run task would skip run_agent's shutdown epilogue, leaving
     // behavior readiness at `ready` and its detached children still firing, so hold a
@@ -1826,5 +1860,61 @@ mod shim_host_tests {
         let over_gauge = ((i64::MAX as u128) + 1).to_string();
         let huge_pending = parse_server(&["--p2p-max-pending-dags", &over_gauge]);
         assert!(resolve_server_p2p_config(tempdir.path(), &huge_pending).is_err());
+    }
+
+    #[test]
+    fn activation_observer_keeps_exact_channels_and_ignores_older_callbacks() {
+        let (runnable_tx, _) = watch::channel(Vec::new());
+        let (configuration_tx, _) = watch::channel(None);
+        let (activation_tx, activation_rx) =
+            watch::channel(RuntimeActivationObservation::default());
+        let observer = CliRuntimeSnapshotObserver {
+            runnable_tx,
+            configuration_tx,
+            activation_tx,
+        };
+
+        gents::RuntimeSnapshotObserver::on_router_generation_activated(&observer, 4, "desired");
+        gents::RuntimeSnapshotObserver::on_event_sources_reconciled(
+            &observer,
+            4,
+            "desired",
+            Ok(()),
+        );
+        assert!(activation_rx.borrow().successful_for(4, "desired"));
+
+        gents::RuntimeSnapshotObserver::on_event_sources_reconciled(
+            &observer,
+            3,
+            "old",
+            Err("old failure"),
+        );
+        gents::RuntimeSnapshotObserver::on_router_generation_activated(&observer, 3, "old");
+        let observed = activation_rx.borrow();
+        assert!(observed.successful_for(4, "desired"));
+        assert!(!observed.successful_for(3, "old"));
+    }
+
+    #[test]
+    fn activation_observer_retains_matching_event_failure() {
+        let (runnable_tx, _) = watch::channel(Vec::new());
+        let (configuration_tx, _) = watch::channel(None);
+        let (activation_tx, activation_rx) =
+            watch::channel(RuntimeActivationObservation::default());
+        let observer = CliRuntimeSnapshotObserver {
+            runnable_tx,
+            configuration_tx,
+            activation_tx,
+        };
+        gents::RuntimeSnapshotObserver::on_router_generation_activated(&observer, 8, "desired");
+        gents::RuntimeSnapshotObserver::on_event_sources_reconciled(
+            &observer,
+            8,
+            "desired",
+            Err("seed failed"),
+        );
+        let observed = activation_rx.borrow();
+        assert!(matches!(observed.event.as_ref(), Some((8, _, Err(_)))));
+        assert!(!observed.successful_for(8, "desired"));
     }
 }

@@ -45,6 +45,10 @@ pub(super) async fn evaluate(
             )
             .await?
             .ensure_completed()?;
+        candidate
+            .wait_for_activation()
+            .await
+            .map_err(stages::infrastructure)?;
         let after = configuration_snapshot(&candidate.access)
             .await
             .map_err(stages::infrastructure)?;

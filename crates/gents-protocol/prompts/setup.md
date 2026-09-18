@@ -15,7 +15,7 @@ Keep configuration minimal. Reuse suitable documents and profiles, edit in place
 
 ## Use the existing tools
 
-Use the config tool for configuration changes, not shell commands that bypass it. Read relevant existing state and exact IDs. Use command-path --help/-h or config help RESOURCE for current fields, examples, and defaults; do not guess or recreate another configuration interface.
+Use the native config tool for configuration reads, help, previews, and changes; never send config commands to Bash. Read relevant existing state and exact IDs. For help, call config with {"argv":["behavior","--help"]} (or the relevant resource). Follow that command's fields and examples; do not guess or recreate another configuration interface.
 
 Keep command words in argv, native JSON values in set, optional removals in clear, and named options in options. Never stringify objects or arrays inside these fields. Omitted fields preserve values; replacing a nested group replaces that whole group, so preserve unrelated settings. For connected new documents, plan preview with native options.documents validates proposed references without requiring temporary published artifacts. It is not schema publication or runtime readiness. After an error, reread state and correct the failed operation instead of duplicating completed work.
 

@@ -295,6 +295,9 @@ pub(super) async fn prepare_monitor(host: &Host, evidence: &Path) -> Result<Prep
     host.configure_trial()
         .await
         .map_err(stages::infrastructure)?;
+    host.wait_for_activation()
+        .await
+        .map_err(stages::infrastructure)?;
     let before = configuration_snapshot(&host.access)
         .await
         .map_err(stages::infrastructure)?;
@@ -329,6 +332,9 @@ pub(super) async fn prepare_monitor(host: &Host, evidence: &Path) -> Result<Prep
             )
             .await?
             .ensure_completed()?;
+            host.wait_for_activation()
+                .await
+                .map_err(stages::infrastructure)?;
             let configured = configuration_snapshot(&host.access)
                 .await
                 .map_err(stages::infrastructure)?;

@@ -48,14 +48,21 @@ const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["pack", "install"|"update", PACKAGE, --digest SHA256, [--inference-slot NAME=PROFILE_ID] [--var NAME=VALUE]]
 
 Behavior create/clone/disable flags: --id, --from, --display-name, --description,
---system-prompt, --root, --preset, --profile, and --default. PATCH_FLAGS are
-repeated --set FIELD=JSON and --clear FIELD; omitted fields preserve.
-Model calls should put native JSON patch values in the top-level set object,
-field removals in clear, and named options in options (keys without --). JSON-valued options use native JSON objects.
+--system-prompt, --root, --preset, --profile, and --default. In native tool calls,
+put those named create/clone options in options (for example options.id), not set;
+the create/clone behavior ID is never positional. PATCH_FLAGS are repeated
+--set FIELD=JSON and --clear FIELD where the command help lists them; omitted
+fields preserve.
+This tool is a native config API, not a shell. Put native JSON patch values in the
+top-level set object for commands whose help accepts PATCH_FLAGS (including
+datastore create/edit), removals in clear, and named options in options (keys
+without --). Behavior create/clone options use options, not set. JSON-valued
+options use native JSON objects.
 For datastore, automation and mcp-service document commands, target_id supplies
 the document ID instead of its positional argv operand. Never supply both.
 Example: {"argv":["automation","preview","task","ID"],"options":{"behavior":"BEHAVIOR_ID"},"set":{"prompt_template":"Read {{ doc.message }}","enabled":true}}
-Do not JSON-stringify values inside set; CLI --set syntax is optional.
+Do not JSON-stringify values inside set. The --set/--clear/--mailbox forms below
+are CLI argv notation; in this native tool use set, clear, and options.mailbox.
 Use RESOURCE --help (or -h), RESOURCE OPERATION --help, or help RESOURCE before a write."#;
 
 const DATA_MODEL: &str = "A principal owns exact-ID configuration documents. Requests, tasks, and sessions select a Behavior. Behavior -> Context controls the system prompt, selected skills, compaction, and one Tools document; Tools contains nested host, built-in, integration, MCP, and self-config settings. Behavior -> InferenceProfile -> Backend controls model execution; the profile selects model and reasoning effort and may reference sampling and execution settings. A Trigger selects a Task and a Schedule or EventSource. A Pack declares configuration and inference roles; installation binds every role to an existing principal-owned profile, then publishes the pack's documents and graph revision without copying inference configuration. Reads never mutate. Document edits are sparse patches: omission preserves, explicit --clear removes an optional value, and preview/apply validate same-principal references within the document transaction. Schema registration is node-wide and separate from document publication; it never grants document access. Credentials and OAuth consent remain operator-owned and are never returned by config.";
@@ -192,7 +199,7 @@ impl Tool for ConfigCommandTool {
         ToolDefinition {
             name: Self::NAME.to_owned(),
             description: format!(
-                "Inspect and change this principal's configuration. Put command words in argv; use target_id for datastore, automation and mcp-service document IDs, or the positional ID shown in help (never both). Put patch values directly in set as JSON, optional removals in clear, and named options in options (keys without --). Use native JSON for object-valued options such as mailbox. Do not stringify or escape JSON inside set or options. Example: {{\"argv\":[\"behavior\",\"context\",\"preview\"],\"options\":{{\"behavior\":\"ID\"}},\"set\":{{\"system_prompt\":\"Your literal prompt\"}}}}. {DATA_MODEL} Enabled resources: {}. Common reads: [\"behavior\",\"list\"] and [\"behavior\",\"get\",BEHAVIOR_ID]. Append --help or -h to a command path, or call [\"help\",RESOURCE], for syntax and fields before writing.",
+                "Inspect and change this principal's configuration through a native API, never a shell. Put command words in argv; use target_id for datastore, automation and mcp-service document IDs, or the positional ID shown in help (never both). Put patch values directly in set for commands whose help accepts patch fields (including datastore create/edit), optional removals in clear, and named behavior create/clone options in options (keys without --; behavior creation uses options.id, never a positional ID). Use native JSON for object-valued options such as mailbox. Do not stringify or escape JSON inside set or options. Example patch: {{\"argv\":[\"behavior\",\"context\",\"preview\"],\"options\":{{\"behavior\":\"ID\"}},\"set\":{{\"system_prompt\":\"Your literal prompt\"}}}}. Example create: {{\"argv\":[\"behavior\",\"create\"],\"options\":{{\"id\":\"monitor\",\"display-name\":\"Monitor\",\"system-prompt\":\"Observe only\",\"preset\":\"readonly\",\"profile\":\"PROFILE_ID\"}}}}. {DATA_MODEL} Enabled resources: {}. Common reads: [\"behavior\",\"list\"] and [\"behavior\",\"get\",BEHAVIOR_ID]. Append --help or -h to a command path, or call [\"help\",RESOURCE], for syntax and fields before writing.",
                 resources.join(", ")
             ),
             parameters: json!({
@@ -207,7 +214,7 @@ impl Tool for ConfigCommandTool {
                     "target_id": {"type":"string", "description":"Named document ID for datastore, automation or mcp-service get/preview/create/edit commands. Omit the positional ID from argv when using this. Behavior selection remains options.behavior."},
                     "set": {"type":"object", "additionalProperties":true, "description":"Patch fields with native JSON values, not FIELD=JSON strings. Omitted fields stay unchanged; nested objects replace the complete group."},
                     "clear": {"type":"array", "items":{"type":"string"}, "description":"Optional fields to remove explicitly. Do not also supply them in set."},
-                    "options": {"type":"object", "additionalProperties":true, "description":"Named options without --. Text options (behavior, system-prompt, root, profile, sdl, digest) use literal strings. Structured options such as mailbox use native JSON objects, never JSON-encoded strings. Boolean switches remain in argv."}
+                    "options": {"type":"object", "additionalProperties":true, "description":"Named options without --. Text options (behavior, id, display-name, system-prompt, root, profile, sdl, digest) use literal strings. Behavior create/clone uses options (including id), not set or positional IDs. Structured options such as mailbox use native JSON objects, never JSON-encoded strings. Boolean switches remain in argv."}
                 },
                 "required": ["argv"],
                 "additionalProperties": false
@@ -346,7 +353,7 @@ This uses the publication owner's canonical type and retained-reference validati
   preview install --sdl SDL
   install --sdl SDL --digest SHA256
 Use DefraDB GraphQL SDL, for example: type WorkItem { message: String correlation: String }
-Preview returns artifact_digest and collection contracts without writes. Install requires that exact digest and revalidates the contracts. Existing schemas must match exactly; incompatible changes and SDL mixing existing/new collections are rejected. This supports additive registration, not schema migration or deletion. Submit at most 64 KiB of SDL.
+Preview returns artifact_digest and collection contracts without writes. The digest is over the exact SDL bytes: retain and resubmit the identical SDL string with that digest for install. Install revalidates the contracts. Existing schemas must match exactly; incompatible changes and SDL mixing existing/new collections are rejected. This supports additive registration, not schema migration or deletion. Submit at most 64 KiB of SDL.
 Schemas are node-wide, not principal-owned documents. Registration does not grant document access: DefraDB ACP remains authoritative, and behaviors need explicit datastore collection/surface selection. Publish the schema first, then create the datastore surface and task/event-source/trigger documents. These are separate operations, not one atomic transaction."#
             }
             Some("skill") => {
@@ -370,6 +377,7 @@ Every source is explicit and opt-in. User PATH is the selected application's con
   preview create|edit SURFACE_ID --mailbox POLICY_JSON [--set FIELD=JSON]
   create|edit SURFACE_ID --mailbox POLICY_JSON [--set FIELD=JSON]
 Fields come from DatastoreToolSurface: display_name, enabled, entries, tags.
+The --mailbox and --set forms above are CLI argv notation. Native calls use target_id, options.mailbox, and set.
 Model example: {"argv":["datastore","preview","create"],"target_id":"monitor-notifications","set":{"display_name":"Monitor notifications"}}
 SURFACE_ID names the tool-surface configuration (monitor-notifications here), not a mailbox or collection. For the existing MailboxItem collection, use options.mailbox with a notification policy; the runtime supplies the protected canonical file_mailbox_item declaration. Example: {"argv":["datastore","preview","create"],"target_id":"monitor-notifications","options":{"mailbox":{"identity":{"mode":"condition","key":"host-health"},"kind":"flag","action":"ack"}},"set":{"enabled":true}}. --mailbox replaces entries with that one canonical declaration and cannot be combined with setting or clearing entries; use a separate surface for observation tools. Do not create a replacement mailbox collection. Create with the same ID and fields after preview, then select that ID in the working Tools.datastore.datastore_tool_surface_ids. Definition, selection and runtime execution are separate checks.
 Entries are canonical schema-bounded create/query declarations. Owner and surface_id are immutable. Bind an existing surface using config tools edit --behavior BEHAVIOR_ID --set datastore=JSON, preserving the other datastore settings. Editing a surface used by protected Setup is rejected. Schema registration is a separate operation."#
@@ -433,6 +441,7 @@ The service must already exist under this principal."#
   preview KIND ID [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
   edit KIND ID [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
 Tasks belong to the selected behavior. Triggers may reference only its tasks. Schedules and event sources are included only through those trigger links.
+For automation only, preview/edit are exact-ID upserts: a missing ID is previewed or created with the supplied fields; an existing ID is patched. Use target_id in native calls to supply ID and options.behavior to select the working behavior. The --set/--clear forms above are CLI argv notation; native calls use set/clear.
 For per-document triggers, parallel (default) allows independent invocations; serial skips a fire while prior work is active (it is not a queue); latest_only supersedes prior active work. Use parallel when every input must produce an output, including inputs arriving before the previous request finishes.
 Task templates use MiniJinja: {{ doc.message }} reads a source document field; {{ args.name }} reads an invocation argument. Missing values fail rendering; use an explicit default filter for optional fields. Go-style {{.message}} is invalid. Syntax is checked before publication, while available document fields depend on the linked source schema.
 Render every source field the behavior needs into the prompt, or grant an explicit scoped read tool. For example, passing only {{ doc.correlation }} does not give the behavior the message to transform.
@@ -2061,6 +2070,59 @@ mod tests {
                 .into_argv()
                 .is_err());
         }
+    }
+
+    #[test]
+    fn native_behavior_create_uses_options_and_never_a_positional_id_or_patch() {
+        let params: ConfigCommandParams = serde_json::from_value(json!({
+            "argv": ["behavior", "create"],
+            "options": {
+                "id": "monitor",
+                "display-name": "Monitor",
+                "system-prompt": "Observe only",
+                "preset": "readonly",
+                "profile": "default-profile"
+            }
+        }))
+        .unwrap();
+        let argv = params.into_argv().unwrap();
+        let created = behavior_params("create", None, &argv[2..]).unwrap();
+        assert_eq!(created.behavior_id.as_deref(), Some("monitor"));
+        assert_eq!(created.display_name, StringUpdate::Set("Monitor".into()));
+
+        let invalid: ConfigCommandParams = serde_json::from_value(json!({
+            "argv": ["behavior", "create", "monitor"],
+            "set": {"display_name": "Monitor"}
+        }))
+        .unwrap();
+        assert!(behavior_params("create", None, &invalid.into_argv().unwrap()[2..]).is_err());
+    }
+
+    #[test]
+    fn native_datastore_create_adapts_mailbox_options_and_set_to_argv() {
+        let params: ConfigCommandParams = serde_json::from_value(json!({
+            "argv": ["datastore", "preview", "create"],
+            "target_id": "monitor-mailbox",
+            "options": {"mailbox": {"identity": {"mode": "event"}, "kind": "flag", "action": "ack"}},
+            "set": {"enabled": true}
+        }))
+        .unwrap();
+        let argv = params.into_argv().unwrap();
+        assert_eq!(
+            argv[..5],
+            [
+                "datastore",
+                "preview",
+                "create",
+                "monitor-mailbox",
+                "--mailbox"
+            ]
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&argv[5]).unwrap(),
+            json!({"identity": {"mode": "event"}, "kind": "flag", "action": "ack"})
+        );
+        assert_eq!(&argv[6..], ["--set", "enabled=true"]);
     }
 
     #[test]

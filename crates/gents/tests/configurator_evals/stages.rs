@@ -856,6 +856,20 @@ fn classify_request_outcome(
             .map(Vec::as_slice)
             .unwrap_or(&[])
     };
+    // Tool-budget exhaustion can also drop the provider stream. Classify from
+    // terminal runtime evidence, never arbitrary tool-result prose.
+    let invalid_tool_call_budget_exhausted = rows("AgentRequest")
+        .iter()
+        .filter_map(|row| row["failure_reason"].as_str())
+        .chain(
+            rows("AgentResponse")
+                .iter()
+                .filter_map(|row| row["error_message"].as_str()),
+        )
+        .any(|reason| reason.contains("invalid_tool_call_budget_exhausted"));
+    if invalid_tool_call_budget_exhausted {
+        return Some("tool");
+    }
     let inference_failed = rows("InferenceCall").iter().any(|row| {
         matches!(row["call_state"].as_str(), Some("failed" | "error"))
             || row["failure_reason"]
@@ -908,6 +922,31 @@ fn request_failure_taxonomy_uses_structured_observations_and_preserves_unknown()
             )
         ),
         Some("unknown")
+    );
+    assert_eq!(
+        classify_request_outcome(
+            "failed",
+            false,
+            &serde_json::json!({
+                "AgentRequest":[{
+                    "lifecycle_state":"failed",
+                    "failure_reason":"agent stream failed: CompletionError: ProviderError: invalid_tool_call_budget_exhausted: limit=8, used=8"
+                }],
+                "AgentResponse":[{
+                    "status":"error",
+                    "error_message":"invalid_tool_call_budget_exhausted: limit=8, used=8"
+                }],
+                "InferenceCall":[{
+                    "call_state":"failed",
+                    "failure_reason":"StreamDroppedBeforeTerminalResponse"
+                }],
+                "AgentToolCall":[{
+                    "lifecycle_state":"failed",
+                    "tool_failure_class":"policyDenied"
+                }]
+            })
+        ),
+        Some("tool")
     );
     assert_eq!(
         classify_request_outcome(

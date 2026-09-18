@@ -66,7 +66,7 @@ Use --write for sandboxed writes scoped to the tool root.";
 
 pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
-    let tool_package = resolve_init_tool_package(args.write_tools, args.yolo, args.tool_package)?;
+    let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
     if matches!(tool_package, ToolPackageArg::Yolo) {
         eprintln!("{YOLO_WARNING}");
@@ -722,15 +722,10 @@ async fn initialize_runtime_home(
         args.enable_defra_query,
         args.disable_defra_query,
     );
-    // Setup is a configurator, not the coding behavior itself. Keep its
-    // initially selected host tools read-only even when the process ceiling is
-    // unrestricted; self-configuration can grant a later request exactly the
-    // workspace capabilities the user asks for.
-    let selected_tool_package = initial_tools_package(tool_package, args.setup_steward);
     let mut tools = tools_for_package(
         agent_did,
         &tools_id,
-        selected_tool_package,
+        tool_package,
         tool_root.clone(),
         args.enable_memory,
         enable_defra_query,
@@ -978,14 +973,6 @@ fn tools_for_package(
     }
 }
 
-fn initial_tools_package(process_package: ToolPackageArg, setup_steward: bool) -> ToolPackageArg {
-    if setup_steward {
-        ToolPackageArg::Readonly
-    } else {
-        process_package
-    }
-}
-
 /// The seeded permissive preset, migrated to the canonical nested `Tools`
 /// shape: explicitly enabled meta-adjacent and DefraDB query capabilities,
 /// every privilege-bearing host capability absent. Absence grants nothing —
@@ -1034,6 +1021,14 @@ fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth>
         // an explicit absent auth is the honest record, never a silent grant.
         (None, None) => Ok(BackendAuth::Unauthenticated),
     }
+}
+
+fn resolve_initial_tool_package(args: &InitArgs) -> Result<ToolPackageArg> {
+    resolve_init_tool_package(
+        args.write_tools || (args.setup_steward && !args.yolo && args.tool_package.is_none()),
+        args.yolo,
+        args.tool_package,
+    )
 }
 
 fn resolve_init_tool_package(
@@ -1491,9 +1486,8 @@ mod tests {
     }
 
     #[test]
-    fn setup_steward_starts_readonly_under_an_unrestricted_process_ceiling() {
-        let selected = initial_tools_package(ToolPackageArg::Yolo, true);
-        assert_eq!(selected, ToolPackageArg::Readonly);
+    fn setup_steward_uses_the_selected_process_permissions() {
+        let selected = ToolPackageArg::Yolo;
         assert_eq!(
             tool_ceiling_for_package(ToolPackageArg::Yolo),
             ToolCeilingArg::Readwrite
@@ -1510,8 +1504,8 @@ mod tests {
         );
         let host = tools.host.expect("setup host tools");
         assert_eq!(host.root.as_deref(), Some("/"));
-        assert_eq!(host.files.unwrap().mode, FileToolMode::ReadOnly);
-        assert_eq!(host.bash.unwrap().mode, BashMode::ReadOnly);
+        assert_eq!(host.files.unwrap().mode, FileToolMode::ReadWrite);
+        assert_eq!(host.bash.unwrap().mode, BashMode::Unrestricted);
         assert_eq!(
             setup_steward_self_config().self_config_categories,
             Some(vec![
@@ -1525,6 +1519,26 @@ mod tests {
             ])
         );
         assert_eq!(setup_steward_self_config().enable_pack_install, Some(true));
+    }
+
+    #[test]
+    fn engineer_defaults_to_write_without_overriding_explicit_restrictions() {
+        let mut args = init_args();
+        args.setup_steward = true;
+        assert_eq!(
+            resolve_initial_tool_package(&args).unwrap(),
+            ToolPackageArg::Write
+        );
+        for package in [
+            ToolPackageArg::Minimal,
+            ToolPackageArg::Introspection,
+            ToolPackageArg::Readonly,
+            ToolPackageArg::Write,
+            ToolPackageArg::Yolo,
+        ] {
+            args.tool_package = Some(package);
+            assert_eq!(resolve_initial_tool_package(&args).unwrap(), package);
+        }
     }
 
     /// Drift fence between init's tool packages and the directory persona
