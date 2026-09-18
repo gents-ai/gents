@@ -1,6 +1,6 @@
 # macOS desktop installation
 
-On an Apple Silicon Mac, download `gents-desktop_0.18.0_aarch64.dmg` from the
+On an Apple Silicon Mac, download `gents-desktop_0.18.1_aarch64.dmg` from the
 GitHub release. Open the disk image, drag **Gents** to **Applications**, and launch
 it from there. Intel Macs are not included in this release.
 

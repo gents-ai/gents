@@ -6,6 +6,8 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.18.1 - 2026-09-18
+
 ### Added
 
 - Embed the DefraDB Explorer: `gents serve` hosts the vendored embedded build
@@ -13,6 +15,13 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
   the desktop settings menu gains a Developer → DB Explorer option that opens
   it for the managed runtime in a dedicated window (bridge contract 7.10,
   `desktop_open_db_explorer`).
+
+### Fixed
+
+- Return the runtime control watcher to idle after a successful visible
+  reconcile instead of polling the full configuration graph every second.
+  Failed reloads and transient resolution errors continue to retry, and local
+  operator configuration writes still hot-reload.
 
 ## 0.17.0 - 2026-09-11
 
