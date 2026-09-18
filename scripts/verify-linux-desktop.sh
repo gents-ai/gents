@@ -20,27 +20,34 @@ fi
 required=$(objdump -T "$binary" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -Vu | tail -1)
 [[ -n "$required" && "$(printf '%s\n' 2.36 "$required" | sort -V | tail -1)" == 2.36 ]]
 
-# Fresh ordinary user: no source checkout, Vite, CLI, or pre-existing agent home.
-smoke_root=$(mktemp -d /tmp/gents-desktop-smoke.XXXXXX)
-smoke_user="gents-smoke-${smoke_root##*.}"
-useradd --home-dir "$smoke_root" --no-create-home --shell /bin/bash "$smoke_user"
-chown "$smoke_user" "$smoke_root"
-set +e
-# shellcheck disable=SC2016 # The non-root shell resolves its positional argument.
-timeout --kill-after=5s 20s runuser -u "$smoke_user" -- \
-  env GENTS_HOME="$smoke_root/agent" GENTS_DESKTOP_HOME="$smoke_root/desktop" \
-  bash -c 'cd "$1" && exec dbus-run-session -- xvfb-run -a /usr/bin/gents-desktop-tauri' bash "$smoke_root" \
-  > target/desktop-smoke.log 2>&1
-status=$?
-set -e
-if [[ "$status" != 124 ]]; then
-  cat target/desktop-smoke.log
-  echo "Desktop exited before the startup smoke deadline (status $status)" >&2
-  exit 1
-fi
-if grep -Ei 'panicked at|failed to (initialize|create).*webview' target/desktop-smoke.log; then
-  exit 1
-fi
+smoke() {
+  local label="$1" executable="$2" smoke_root smoke_user status log
+  # Each installer gets an ordinary user and fresh home, without Vite or a CLI.
+  smoke_root=$(mktemp -d /tmp/gents-desktop-smoke.XXXXXX)
+  smoke_user="gents-smoke-${smoke_root##*.}"
+  log="target/desktop-smoke-${label}.log"
+  useradd --home-dir "$smoke_root" --no-create-home --shell /bin/bash "$smoke_user"
+  chown "$smoke_user" "$smoke_root"
+  set +e
+  # shellcheck disable=SC2016 # The non-root shell resolves its positional arguments.
+  timeout --kill-after=5s 20s runuser -u "$smoke_user" -- \
+    env GENTS_HOME="$smoke_root/agent" GENTS_DESKTOP_HOME="$smoke_root/desktop" APPIMAGE_EXTRACT_AND_RUN=1 \
+    bash -c 'cd "$1" && exec dbus-run-session -- xvfb-run -a "$2"' bash "$smoke_root" "$executable" \
+    > "$log" 2>&1
+  status=$?
+  set -e
+  if [[ "$status" != 124 ]]; then
+    cat "$log"
+    echo "$label exited before the startup smoke deadline (status $status)" >&2
+    exit 1
+  fi
+  if grep -Ei 'panicked at|failed to (initialize|create).*webview' "$log"; then
+    exit 1
+  fi
+}
+smoke deb "$binary"
+chmod +x "${images[0]}"
+smoke appimage "$(realpath "${images[0]}")"
 
 mkdir -p target/desktop-dist
 cp "${debs[0]}" "target/desktop-dist/gents-desktop_${version}_amd64.deb"

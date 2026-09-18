@@ -1,4 +1,4 @@
-name: Release macOS gents
+name: Release macOS CLI and desktop
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
         description: Release version without the v prefix; must match workspace.package.version.
         required: true
         type: string
-        default: "0.17.1"
+        default: "0.18.0"
       codesign_timestamp:
         description: Timestamp mode for codesign. Signed releases notarize, so timestamping must succeed unless dry_run_unsigned is true.
         required: true
@@ -65,7 +65,7 @@ env:
 
 jobs:
   build-sign-package:
-    name: Build, sign, and package macOS CLI
+    name: Build, sign, and package macOS CLI and desktop
     # Release artifacts remain isolated under CARGO_RELEASE_TARGET_ROOT. Pin the
     # job to the registration that owns the trusted release target tree so a
     # normal source edit reuses prior release artifacts instead of randomly
@@ -73,7 +73,7 @@ jobs:
     # enabled below: rustc invocations still cannot consume PR-populated cache
     # objects.
     runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-desktop]
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v7
@@ -120,7 +120,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown, wasm32-wasip1
 
       - name: Install protobuf compiler
         run: .github/scripts/setup-protoc.sh
@@ -337,51 +337,30 @@ jobs:
           fi
           echo "APPLE_TEAM_ID=${apple_team_id}" >> "${GITHUB_ENV}"
 
-          # The release/entitlements.plist requests `keychain-access-groups`, a
-          # RESTRICTED entitlement. On a Developer-ID, hardened-runtime binary
-          # distributed outside the App Store, a restricted entitlement with no
-          # embedded provisioning profile makes AMFI SIGKILL the process at launch
-          # (exit 137, no output) — which made every released binary un-launchable
-          # on macOS. Until a provisioning-profile path exists for Secure Enclave
-          # identities, sign the standard release WITHOUT the entitlement so the
-          # binary launches; it notarizes fine with hardened runtime alone. Opt in
-          # only when the repo var MACOS_APPLY_SE_ENTITLEMENTS is "true" (and a
-          # provisioning profile is in place).
+          # Wasmtime publishes code with mprotect, not MAP_JIT. Keep its runtime
+          # entitlement separate from restricted, provisioned keychain access.
+          cp release/entitlements.plist "${entitlements_path}"
           apply_entitlements="${MACOS_APPLY_SE_ENTITLEMENTS:-false}"
           if [[ "${apply_entitlements}" == "true" ]]; then
-            sed "s/__APPLE_TEAM_ID__/${apple_team_id}/g" release/entitlements.plist > "${entitlements_path}"
-            plutil -lint "${entitlements_path}"
-            echo "Signing WITH keychain-access-groups entitlement (MACOS_APPLY_SE_ENTITLEMENTS=true)."
-          else
-            entitlements_path=""
-            echo "Signing without the keychain-access-groups entitlement (default); see release-macos.yml for the Secure Enclave caveat."
+            /usr/libexec/PlistBuddy -c 'Add :keychain-access-groups array' \
+              -c "Add :keychain-access-groups:0 string ${apple_team_id}.${MACOS_KEYCHAIN_ACCESS_GROUP_BASE}" \
+              "${entitlements_path}"
           fi
+          plutil -lint "${entitlements_path}"
 
           security unlock-keychain -p "${MACOS_CODESIGN_KEYCHAIN_PASSWORD}" "${keychain_path}"
           echo "Signing with native macOS identity from ${keychain_path}."
 
           sign_with_timestamp_arg() {
             local timestamp_arg="$1"
-            # Avoid empty-array expansion under `set -u` (unsafe on bash 3.2);
-            # branch on whether an entitlements file was rendered instead.
-            if [[ -n "${entitlements_path}" ]]; then
-              codesign \
-                --force \
-                --sign "${signing_identity}" \
-                --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
-                --options runtime \
-                --entitlements "${entitlements_path}" \
-                "${timestamp_arg}" \
-                "${binary_path}"
-            else
-              codesign \
-                --force \
-                --sign "${signing_identity}" \
-                --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
-                --options runtime \
-                "${timestamp_arg}" \
-                "${binary_path}"
-            fi
+            codesign \
+              --force \
+              --sign "${signing_identity}" \
+              --identifier "${MACOS_CODESIGN_IDENTIFIER}" \
+              --options runtime \
+              --entitlements "${entitlements_path}" \
+              "${timestamp_arg}" \
+              "${binary_path}"
           }
 
           codesign --remove-signature "${binary_path}" 2>/dev/null || true
@@ -692,6 +671,39 @@ jobs:
             "${DSYM_CHECKSUM_FILE}" \
             "${METRICS_FILE}" \
             --clobber
+
+      - uses: actions/setup-node@v6
+        if: env.SIGNING_ENABLED == 'true'
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Build and verify signed desktop installer
+        if: env.SIGNING_ENABLED == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY_NAME }}
+          APPLE_API_KEY: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+        run: bash scripts/package-macos-desktop.sh
+
+      - name: Verify signed WebAssembly execution
+        if: env.SIGNING_ENABLED == 'true'
+        run: node scripts/verify-macos-wasm.mjs "$CARGO_TARGET_DIR/release/gents"
+
+      - name: Retain verified desktop installer
+        if: env.SIGNING_ENABLED == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-desktop-aarch64-apple-darwin
+          path: ${{ runner.temp }}/gents-desktop-dist/*
+          if-no-files-found: error
+
+      - name: Attach desktop installer to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && env.SIGNING_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/gents-desktop-dist/* --clobber
 
       - name: Restore keychain search list
         if: always()

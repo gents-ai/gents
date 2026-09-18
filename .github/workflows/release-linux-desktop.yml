@@ -73,7 +73,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: gents-desktop-linux-smoke
-          path: target/desktop-smoke.log
+          path: target/desktop-smoke-*.log
           if-no-files-found: ignore
 
   publish:
@@ -98,4 +98,4 @@ jobs:
               --notes "Gents release with Linux x86_64 desktop installers." \
               || gh release view "$GITHUB_REF_NAME" >/dev/null
           fi
-          gh release upload "$GITHUB_REF_NAME" dist/*
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
