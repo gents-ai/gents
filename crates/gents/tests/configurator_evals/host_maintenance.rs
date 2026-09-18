@@ -26,7 +26,7 @@ pub(super) fn provenance() -> Result<reporting::RunProvenance> {
     use reporting::EvidenceSource as Source;
     reporting::RunProvenance::current(
         "host-maintenance",
-        "maintenance-v5-readwrite-bash",
+        "maintenance-v6-effect-boundaries",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         "engineer-eval-sampling",
         1.0,

@@ -28,7 +28,7 @@ const APPROVE: &str = include_str!("../fixtures/configurator_evals/host/approve-
 pub(super) fn provenance() -> Result<reporting::RunProvenance> {
     reporting::RunProvenance::current(
         "host-steward",
-        "host-observations-v8-readwrite-bash",
+        "host-observations-v9-effect-boundaries",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         "engineer-eval-sampling",
         1.0,
@@ -139,6 +139,9 @@ fn verify_prompt_only_candidate(
     }
     let mut restored = after.clone();
     restored["AgentContext"][index]["system_prompt"] = original["system_prompt"].clone();
+    if candidate["system_prompt"] != original["system_prompt"] {
+        restore_description(&mut restored["AgentContext"][index], &original)?;
+    }
     for (index, task) in after["Task"]
         .as_array()
         .context("tasks missing")?
@@ -163,6 +166,7 @@ fn verify_prompt_only_candidate(
             );
             changed.push((gents::Collection::Task, task.clone()));
             restored["Task"][index]["prompt_template"] = original["prompt_template"].clone();
+            restore_description(&mut restored["Task"][index], original)?;
             if original.get("updated_at").is_some() {
                 restored["Task"][index]["updated_at"] = original["updated_at"].clone();
             }
@@ -177,6 +181,24 @@ fn verify_prompt_only_candidate(
         "candidate changed configuration outside existing monitor and task prompts"
     );
     Ok(changed)
+}
+
+fn restore_description(candidate: &mut Value, original: &Value) -> Result<()> {
+    ensure!(
+        candidate
+            .get("description")
+            .is_none_or(|value| value.is_null() || value.is_string()),
+        "candidate description must be text or null"
+    );
+    let fields = candidate
+        .as_object_mut()
+        .context("candidate must be an object")?;
+    if let Some(value) = original.get("description") {
+        fields.insert("description".into(), value.clone());
+    } else {
+        fields.remove("description");
+    }
+    Ok(())
 }
 
 #[test]
@@ -242,6 +264,8 @@ fn improvement_scope_requires_an_in_place_unshared_prompt_and_complete_snapshot(
     );
     let mut both = task_only.clone();
     both["AgentContext"][0]["system_prompt"] = "Warn at 70%".into();
+    both["AgentContext"][0]["description"] = "Earlier disk warnings".into();
+    both["Task"][0]["description"] = "Check disk at 70% and preserve backup checks".into();
     assert_eq!(
         verify_prompt_only_candidate(&before, &both, "monitor")
             .unwrap()
@@ -252,6 +276,7 @@ fn improvement_scope_requires_an_in_place_unshared_prompt_and_complete_snapshot(
         (0, "behavior_id", "other"),
         (0, "hooks", "command"),
         (1, "prompt_template", "Changed unrelated task"),
+        (1, "description", "Changed unrelated task description"),
     ] {
         let mut invalid = both.clone();
         invalid["Task"][index][field] = value.into();
@@ -919,13 +944,6 @@ pub(super) fn verify_monitor_authority(tools: &gents::document_config::Tools) ->
                 .is_none_or(|mode| mode == gents::toolset::CommandExecutionMode::Unrestricted),
         "monitor requires read/write bash in the isolated host"
     );
-    ensure!(
-        host.files.as_ref().is_none_or(|files| matches!(
-            files.mode,
-            gents::tool_surface::FileToolMode::Off | gents::tool_surface::FileToolMode::ReadOnly
-        )),
-        "monitor files must stay read-only"
-    );
     verify_no_auxiliary_authority(tools)
 }
 
@@ -983,7 +1001,7 @@ fn bash_access_does_not_grant_auxiliary_monitor_tools() {
     let tools = Tools {
         host: Some(HostTools {
             files: Some(FileTools {
-                mode: gents::tool_surface::FileToolMode::ReadOnly,
+                mode: gents::tool_surface::FileToolMode::ReadWrite,
                 ..Default::default()
             }),
             bash: Some(BashTools {

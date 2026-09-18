@@ -42,6 +42,8 @@ the coordinator's container control socket.
    inference documents, a working behavior with read/write Bash, enabled schedule and
    document trigger sharing a task, and canonical mailbox grants. Follow actual
    references; do not require model-selected names to match fixture strings.
+   File tools may also be read/write; observation-only stages are checked against
+   actual host effects, not a file-tool mode restriction.
    Check all selected tool groups and datastore surfaces, not just file/bash
    modes: no extra executors or configuration writers,
    delegated execution, host hooks, or writes outside observations and mailbox.
@@ -69,10 +71,11 @@ the coordinator's container control socket.
 9. Isolated improvement: stop the original and fork its offline home. Ask the
    Engineer to update the monitor's existing Context and Task instructions to
    warn at 70% disk usage, wherever that policy is expressed. Require unchanged
-   identities, permissions, bindings, and all other configuration, then
+   identities, permissions, bindings, and all other configuration. Descriptions
+   on the edited Context/Task may change alongside their instructions. Then
    grade healthy operation, a real 70–79% disk condition, and stale-backup
    detection. Retire the candidate, verify the original is unchanged, promote
-   only the accepted prompt changes together through the canonical configuration transaction,
+   only the accepted instruction/description changes together through the canonical configuration transaction,
    and verify exact read-back.
 10. Rejected regression: fork the improved runtime and create an explicitly
     disposable candidate that suppresses backup notifications but still records
