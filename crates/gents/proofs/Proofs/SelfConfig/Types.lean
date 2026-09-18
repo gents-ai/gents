@@ -3,14 +3,19 @@ import Proofs.ConfigDocuments
 namespace SelfConfig
 
 abbrev Target := ConfigDocuments.Collection
-/-- Existing self-config families plus their extracted subdocuments. Pack-owned
-callback modules, keys, graph definitions, and placements do not become writable
-merely because the shared catalog knows about them. -/
+/-- Self-config families plus their extracted subdocuments. Subagent targets,
+eth tools, and the callback automation family are agent-writable; module
+material (`wasm_bytes`, args, signer, provenance) stays operator-managed via
+`protectedKey`, so modules arrive through packs and are only tuned here. Keys,
+graph definitions, and placements do not become writable merely because the
+shared catalog knows about them: key material and ACP stay outside the model's
+authority, and placements wait on the workspace-integration design. -/
 def allTargets : List Target :=
   [.agentBehavior, .agentContext, .compaction, .tools, .inferenceProfile,
    .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy,
    .inferenceBackend, .toolServiceRegistry, .task, .schedule, .trigger, .eventSource,
-   .datastoreToolSurface, .skill]
+   .datastoreToolSurface, .skill, .subagentTarget, .ethTool, .callback,
+   .callbackBinding, .callbackModule]
 abbrev Target.collectionName (t : Target) := ConfigDocuments.Collection.collectionName t
 abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField t
 abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t

@@ -86,7 +86,12 @@ def examples : List (Target × FieldKey × FieldValue) :=
   , (.task, "prompt_template", "Review {{doc}}")
   , (.schedule, "cadence", "{interval_secs: 3600}")
   , (.trigger, "source", "{kind: schedule, schedule_id: schedule-1}")
-  , (.eventSource, "group", "{expected_count: {kind: fixed, count: 3}}") ]
+  , (.eventSource, "group", "{expected_count: {kind: fixed, count: 3}}")
+  , (.subagentTarget, "behavior_id", "behavior-1")
+  , (.ethTool, "rpc_url", "https://mainnet.example/rpc")
+  , (.callback, "handler", "{kind: module, module_id: module-1}")
+  , (.callbackBinding, "event_source_id", "source-1")
+  , (.callbackModule, "fuel_limit", "1000000") ]
 
 def examplesToRows : List CaseRow := examples.map fun (t, k, v) =>
   { name := t.collectionName ++ "_configured_field_accepted"
@@ -131,6 +136,14 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .inferenceProfile, guarded := false, validates := true
     , doc := [("sampling_id", "sampling-1")]
     , patch := [("sampling_id", none)] }
+  , { name := "callback_module_wasm_patch_rejected"
+    , target := .callbackModule, guarded := false, validates := true
+    , doc := [("module_id", "module-1"), ("agent_did", "did:key:agent-a")]
+    , patch := [("wasm_bytes", some "AAAA")] }
+  , { name := "subagent_target_owner_patch_rejected"
+    , target := .subagentTarget, guarded := false, validates := true
+    , doc := [("target_id", "tier-1"), ("agent_did", "did:key:agent-a")]
+    , patch := [("agent_did", some "did:key:agent-b")] }
   ]
 
 def selfConfigCases : List CaseWitness :=

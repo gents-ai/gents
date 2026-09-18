@@ -35,7 +35,9 @@ const CONFIG_USAGE: &str = r#"config commands (argv excludes the tool name):
   ["skill", "import", SKILL_ID, PATH]
   ["discovery", "scan", "--source", SOURCE_ID, claude|codex|grok, user|project, PATH, ...]
   ["mcp-service", "preview"|"edit", SERVICE_ID, PATCH_FLAGS]
-  ["automation", "get", task|schedule|trigger|event-source, ID, [--behavior BEHAVIOR_ID]]
+  ["automation", "get", task|schedule|trigger|event-source|callback|callback-binding|callback-module, ID, [--behavior BEHAVIOR_ID]]
+  ["subagent-target", "get"|"preview"|"edit", TARGET_ID, PATCH_FLAGS]
+  ["eth-tool", "get"|"preview"|"edit", TOOL_ID, PATCH_FLAGS]
   ["schema", "get", COLLECTION]
   ["schema", "preview", "install", --sdl SDL]
   ["schema", "install", --sdl SDL, --digest SHA256]
@@ -274,6 +276,8 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
         ("tools", "tools"),
         ("tools", "datastore"),
         ("tools", "skill"),
+        ("tools", "subagent-target"),
+        ("tools", "eth-tool"),
         ("profile", "profile"),
         ("backend", "backend"),
         ("mcp_service", "mcp-service"),
@@ -325,6 +329,18 @@ impl ConfigCommandTool {
             "backend" => self.backend(&argv[1..]).await,
             "mcp-service" => self.mcp_service(&argv[1..]).await,
             "automation" => self.automation(&argv[1..]).await,
+            "subagent-target" => {
+                self.id_document_resource(
+                    "subagent-target",
+                    SelfConfigTarget::SubagentTarget,
+                    &argv[1..],
+                )
+                .await
+            }
+            "eth-tool" => {
+                self.id_document_resource("eth-tool", SelfConfigTarget::EthTool, &argv[1..])
+                    .await
+            }
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
             "skill" => self.skill(&argv[1..]).await,
@@ -435,12 +451,27 @@ Create is deliberately limited to an enabled, unauthenticated OpenAI-compatible 
   edit SERVICE_ID [--set FIELD=JSON] [--clear FIELD]
 The service must already exist under this principal."#
             }
+            Some("subagent-target") => {
+                r#"subagent-target commands:
+  get TARGET_ID
+  preview TARGET_ID [--set FIELD=JSON] [--clear FIELD]
+  edit TARGET_ID [--set FIELD=JSON] [--clear FIELD]
+Preview/edit are exact-ID upserts: a missing TARGET_ID is created with the supplied fields; an existing one is patched. A SubagentTarget names a destination behavior for native delegation: set target_agent_did, behavior_id, and name, then reference TARGET_ID from Tools.subagents.target_ids to allow spawning it. Same-principal references are validated at preview/publication."#
+            }
+            Some("eth-tool") => {
+                r#"eth-tool commands:
+  get TOOL_ID
+  preview TOOL_ID [--set FIELD=JSON] [--clear FIELD]
+  edit TOOL_ID [--set FIELD=JSON] [--clear FIELD]
+Preview/edit are exact-ID upserts. An EthTool declares chain access: rpc_url, chain_id, query_methods, calls, and an optional key_binding_id referencing an existing ChainKeyBinding. Key material itself is operator-managed; this command only selects an existing binding and never returns or edits keys."#
+            }
             Some("automation") => {
                 r#"automation commands:
-  get task|schedule|trigger|event-source ID [--behavior BEHAVIOR_ID]
+  get task|schedule|trigger|event-source|callback|callback-binding|callback-module ID [--behavior BEHAVIOR_ID]
   preview KIND ID [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
   edit KIND ID [--behavior BEHAVIOR_ID] [--set FIELD=JSON] [--clear FIELD]
 Tasks belong to the selected behavior. Triggers may reference only its tasks. Schedules and event sources are included only through those trigger links.
+Callbacks connect event sources to handlers: a CallbackBinding selects an event_source_id and callback_id; a Callback names its handler and capabilities; a CallbackModule is tuned here (enabled, fuel/memory/input/output limits) but its module material (wasm_bytes, canonical_args, signer, provenance) is operator-managed and arrives through packs — it cannot be set by these commands.
 For automation only, preview/edit are exact-ID upserts: a missing ID is previewed or created with the supplied fields; an existing ID is patched. Use target_id in native calls to supply ID and options.behavior to select the working behavior. The --set/--clear forms above are CLI argv notation; native calls use set/clear.
 For per-document triggers, parallel (default) allows independent invocations; serial skips a fire while prior work is active (it is not a queue); latest_only supersedes prior active work. Use parallel when every input must produce an output, including inputs arriving before the previous request finishes.
 Task templates use MiniJinja: {{ doc.message }} reads a source document field; {{ args.name }} reads an invocation argument. Missing values fail rendering; use an explicit default filter for optional fields. Go-style {{.message}} is invalid. Syntax is checked before publication, while available document fields depend on the linked source schema.
@@ -453,7 +484,7 @@ Results can feed later stages. Use canonical graph tools or graph packs for coor
                 r#"cleanup commands:
   preview --target RESOURCE=ID [--target RESOURCE=ID ...]
   remove --digest SHA256 --target RESOURCE=ID [--target RESOURCE=ID ...]
-Resources: behavior, context, tools, profile, sampling, execution, retry-policy, compaction, backend, mcp-service, task, schedule, trigger, event-source.
+Resources: behavior, context, tools, profile, sampling, execution, retry-policy, compaction, backend, mcp-service, task, schedule, trigger, event-source, subagent-target, eth-tool, callback, callback-binding, callback-module.
 Cleanup is exact-ID, same-principal, and reference-aware. Preview performs the same complete retained-reference validation without writing and returns the digest required by remove. Remove requires the same target set and refuses if any target changed, then revalidates and deletes the whole set atomically, so related unreferenced cycles can be removed together. A retained document may never be left with a missing reference. Behavior/context cleanup requires the behavior catalog grant; the protected Setup behavior cannot be removed."#
             }
             Some("pack") if self.allow_pack_install => {
@@ -980,6 +1011,16 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             "get" => {
                 let (behavior_id, rest) = extract_behavior_target(&argv[3..])?;
                 anyhow::ensure!(rest.is_empty(), "automation get accepts KIND, ID, and --behavior BEHAVIOR_ID");
+                if matches!(
+                    target,
+                    SelfConfigTarget::Callback
+                        | SelfConfigTarget::CallbackBinding
+                        | SelfConfigTarget::CallbackModule
+                ) {
+                    // Callbacks are principal-scoped: they attach to event
+                    // sources through bindings, not to the selected behavior.
+                    return self.exact_read(target, id).await;
+                }
                 let core = self.target_core(behavior_id.as_deref(), "automation")?;
                 self.automation_read(&core, target, id).await
             }
@@ -996,6 +1037,42 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             }
             other => bail!(
                 "unknown automation command {other:?}; accepted: get, preview, edit; run config help automation"
+            ),
+        }
+    }
+
+    /// Exact-ID upsert resources in the tools category (subagent targets and
+    /// eth tools) share the automation handler shape: get reads by ID,
+    /// preview/edit create a missing ID or patch an existing one.
+    async fn id_document_resource(
+        &self,
+        resource: &'static str,
+        target: SelfConfigTarget,
+        argv: &[String],
+    ) -> Result<String> {
+        self.ensure_resource("tools")?;
+        let verb = argv.first().map(String::as_str).with_context(|| {
+            format!("{resource} command is required; run config help {resource}")
+        })?;
+        let id = required_resource_id(argv.get(1), &format!("{resource} ID"))?;
+        match verb {
+            "get" => {
+                anyhow::ensure!(argv.len() == 2, "{resource} get accepts one ID");
+                self.exact_read(target, id).await
+            }
+            "preview" | "edit" => {
+                let (behavior_id, rest) = extract_behavior_target(&argv[2..])?;
+                let core = self.target_core(behavior_id.as_deref(), resource)?;
+                let patch = parse_patch(&rest, target)?;
+                self.patch(
+                    &core,
+                    verb,
+                    protect_working_behavior(automation_request(&core, target, id.clone(), patch)),
+                )
+                .await
+            }
+            other => bail!(
+                "unknown {resource} command {other:?}; accepted: get, preview, edit; run config help {resource}"
             ),
         }
     }
@@ -1497,7 +1574,7 @@ fn default_behavior_params(action: &str, behavior_id: &str) -> ConfigurePersonaP
     }
 }
 
-fn cleanup_target(name: &str) -> Result<SelfConfigTarget> {
+pub(super) fn cleanup_target(name: &str) -> Result<SelfConfigTarget> {
     match name {
         "behavior" => Ok(SelfConfigTarget::AgentBehavior),
         "context" => Ok(SelfConfigTarget::AgentContext),
@@ -1513,6 +1590,11 @@ fn cleanup_target(name: &str) -> Result<SelfConfigTarget> {
         "schedule" => Ok(SelfConfigTarget::Schedule),
         "trigger" => Ok(SelfConfigTarget::Trigger),
         "event-source" => Ok(SelfConfigTarget::EventSource),
+        "subagent-target" => Ok(SelfConfigTarget::SubagentTarget),
+        "eth-tool" => Ok(SelfConfigTarget::EthTool),
+        "callback" => Ok(SelfConfigTarget::Callback),
+        "callback-binding" => Ok(SelfConfigTarget::CallbackBinding),
+        "callback-module" => Ok(SelfConfigTarget::CallbackModule),
         other => bail!(
             "unknown cleanup resource {other:?}; run config help cleanup for accepted resources"
         ),
@@ -1640,7 +1722,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                 "display_name": "string|null",
                 "host": {"root":"string|null; absent uses runtime cwd", "files":{"mode":"Off|ReadOnly|ReadWrite (default Off)","timeout_secs":"positive integer|null"}, "bash":{"mode":"Off|ReadOnly|Unrestricted (default Off)","execution_mode":"read_only|workspace_write|artifact_write|unrestricted|null","network_mode":"inherit|disabled|enabled|null","allowed_argv_prefixes":"array<array<string>>|null","forbidden_argv_prefixes":"array<array<string>>|null","read_only_commands":"array<string>|null","background_enabled":"boolean; default false","timeout_secs":"positive integer|null; default 120","max_timeout_secs":"positive integer|null","background_timeout_secs":"positive integer|null; default 36000","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600"}, "cli":"array<{name:string,timeout_secs?:positive integer}>; default []"},
                 "remote": {"services":"array<{mcp_service_id:string,tool_names:array<string>,style:flat|discovery(default),required:boolean(default false),background_tool_names:array<string>,connect_timeout_secs?:integer,discovery_timeout_secs?:integer,timeout_secs?:integer,stale_timeout_secs?:integer,background_timeout_secs?:integer,wait_timeout_secs?:integer,max_wait_timeout_secs?:integer}>; default []"},
-                "subagents": {"target_ids":"array<existing same-principal SubagentTarget ID>; default []","spawn_enabled":"boolean|null","steering_enabled":"boolean|null","background_enabled":"boolean|null","default_await_mode":"foreground|background|null","allow_cross_principal":"boolean|null","cross_principal_spawn_timeout_secs":"positive integer|null; default 60","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600"},
+                "subagents": {"target_ids":"array<same-principal SubagentTarget ID (create with subagent-target preview/edit)>; default []","spawn_enabled":"boolean|null","steering_enabled":"boolean|null","background_enabled":"boolean|null","default_await_mode":"foreground|background|null","allow_cross_principal":"boolean|null","cross_principal_spawn_timeout_secs":"positive integer|null; default 60","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600"},
                 "built_ins": {"enable_graph_tools":"boolean|null","enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_memory":"boolean|null","enable_session_history_tool":"boolean|null","enable_context_budget":"boolean|null","timeout_secs":"positive integer|null; absent uses enclosing request deadline"},
                 "datastore": {"enable_defra_query":"boolean|null","defra_query_collections":"array<string>|null","datastore_tool_surface_ids":"array<existing same-principal DatastoreToolSurface ID>|null","timeout_secs":"positive integer|null"},
                 "integrations": {"lsp":{"config":"JSON encoded as a string|null","timeout_secs":"positive integer|null; default 20","max_timeout_secs":"positive integer|null; maximum 300","rpc_timeout_secs":"positive integer|null; default 30"},"eth_tool_ids":"array<existing same-principal EthTool ID>|null"},
@@ -1717,7 +1799,37 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                     "display_name":"string|null","source_collection":"valid GraphQL collection name","event_kind":"created|null; default created","filter":"GraphQL filter fragment|null","correlation_field":"GraphQL field name|null","group":"{expected_count?:positive integer|{source_field:string},timeout_secs?:positive integer,min_count?:positive integer}|null","workspace_authority":"canonical workspace authority object|null","tags":"array<string>; default []"
                 }),
             ),
+            patch_contract(
+                SelfConfigTarget::Callback,
+                json!({
+                    "display_name":"string|null","description":"string|null","handler":"{kind:built_in,emitter:create_workspace}|{kind:module,module_id:existing same-principal CallbackModule ID}","capabilities":"array<string>; default []","enabled":"boolean; default true","tags":"array<string>; default []"
+                }),
+            ),
+            patch_contract(
+                SelfConfigTarget::CallbackBinding,
+                json!({
+                    "event_source_id":"existing same-principal EventSource ID","callback_id":"existing same-principal Callback ID","input_fields":"array<source document field name>; default []","enabled":"boolean; default true","tags":"array<string>; default []"
+                }),
+            ),
+            patch_contract(
+                SelfConfigTarget::CallbackModule,
+                json!({
+                    "abi_version":"integer|null","enabled":"boolean; default true","fuel_limit":"positive integer|null","memory_pages":"positive integer|null","max_input_bytes":"positive integer|null","max_output_bytes":"positive integer|null","tags":"array<string>; default []"
+                }),
+            ),
         ],
+        Some("subagent-target") => vec![patch_contract(
+            SelfConfigTarget::SubagentTarget,
+            json!({
+                "target_agent_did":"destination principal DID; same-principal for local delegation","behavior_id":"existing behavior ID owned by the destination principal","name":"model-facing target name","description":"string|null","tags":"array<string>; default []"
+            }),
+        )],
+        Some("eth-tool") => vec![patch_contract(
+            SelfConfigTarget::EthTool,
+            json!({
+                "display_name":"string|null","enabled":"boolean; default true","chain_id":"integer|null","rpc_url":"string|null","rpc_timeout_secs":"positive integer|null","query_methods":"array<string>|null","calls":"array<string>|null","key_binding_id":"existing same-principal ChainKeyBinding ID|null","tags":"array<string>; default []"
+            }),
+        )],
         _ => Vec::new(),
     };
     Value::Array(contracts)
