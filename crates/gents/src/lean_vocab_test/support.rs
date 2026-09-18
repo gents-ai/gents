@@ -7,6 +7,45 @@ use serde::Deserialize;
 
 pub(crate) type LeanFeatureMatrix = BTreeMap<String, BTreeMap<String, LeanFeatureMatrixCell>>;
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanConfigurationNamingCases {
+    pub(crate) validation: Vec<LeanConfigurationNamingValidationCase>,
+    pub(crate) personal_allocations: Vec<LeanPersonalBehaviorAllocationCase>,
+    pub(crate) components: Vec<LeanBehaviorComponentNamingCase>,
+    pub(crate) display_name_independent: bool,
+    pub(crate) legacy_stored_key_accepted: bool,
+    pub(crate) new_personal_key_valid: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanConfigurationNamingValidationCase {
+    pub(crate) key: String,
+    pub(crate) valid: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPersonalBehaviorAllocationCase {
+    pub(crate) ordinal: usize,
+    pub(crate) behavior_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanBehaviorComponentNamingCase {
+    pub(crate) suffix: String,
+    pub(crate) id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanBehaviorScopeCase {
+    pub(crate) name: String,
+    pub(crate) valid: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LeanVocabulary<'a> {
     pub(crate) lean_file: &'a str,
@@ -855,9 +894,34 @@ pub(super) enum LeanVocabularyParseError<'a> {
 }
 
 static LEAN_CONTRACT_SNAPSHOT: OnceLock<LeanContractSnapshot> = OnceLock::new();
+static LEAN_CONFIGURATION_NAMING_CASES: OnceLock<LeanConfigurationNamingCases> = OnceLock::new();
+static LEAN_BEHAVIOR_SCOPE_CASES: OnceLock<Vec<LeanBehaviorScopeCase>> = OnceLock::new();
 
 pub(crate) fn lean_contract_snapshot() -> &'static LeanContractSnapshot {
     LEAN_CONTRACT_SNAPSHOT.get_or_init(load_lean_contract_snapshot)
+}
+
+pub(crate) fn lean_configuration_naming_cases() -> &'static LeanConfigurationNamingCases {
+    LEAN_CONFIGURATION_NAMING_CASES.get_or_init(|| {
+        let value = lean_contract_snapshot()
+            .configuration_scope_cases
+            .get("naming_cases")
+            .cloned()
+            .expect("Lean configuration_scope_cases must emit naming_cases");
+        serde_json::from_value(value).expect("Lean naming_cases must match its typed contract")
+    })
+}
+
+pub(crate) fn lean_behavior_scope_cases() -> &'static [LeanBehaviorScopeCase] {
+    LEAN_BEHAVIOR_SCOPE_CASES.get_or_init(|| {
+        let value = lean_contract_snapshot()
+            .configuration_scope_cases
+            .get("behavior_scope_cases")
+            .cloned()
+            .expect("Lean configuration_scope_cases must emit behavior_scope_cases");
+        serde_json::from_value(value)
+            .expect("Lean behavior_scope_cases must match its typed contract")
+    })
 }
 
 pub(crate) fn lean_workspace_cases() -> &'static [LeanWorkspaceCase] {

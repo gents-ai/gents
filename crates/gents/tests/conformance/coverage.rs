@@ -1364,6 +1364,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));
+    assert!(
+        !crate::lean_vocab_test::lean_configuration_naming_cases()
+            .validation
+            .is_empty(),
+        "configuration_scope_cases must include generated naming witnesses"
+    );
+    assert!(
+        !crate::lean_vocab_test::lean_behavior_scope_cases().is_empty(),
+        "configuration_scope_cases must include behavior scope witnesses"
+    );
     emitted.insert((
         "configuration_scope_cases".into(),
         "ConfigurationScopeCases".into(),

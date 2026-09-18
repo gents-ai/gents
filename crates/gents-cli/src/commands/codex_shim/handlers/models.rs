@@ -571,6 +571,7 @@ mod tests {
         InferenceProfile {
             agent_did: "did:test:codex-shim".to_string(),
             profile_id: profile_id.to_string(),
+            scope_behavior_id: None,
             display_name: None,
             description: None,
             backend_id: "backend-a".to_string(),
@@ -895,7 +896,7 @@ mod tests {
         apply_model_selection(&access, agent_did, "default", &selection)
             .await
             .expect("an advertised profile must pass validation and commit");
-        let updated = gents::load_agent_behavior(node.as_ref(), "default")
+        let updated = gents::load_agent_behavior(node.as_ref(), agent_did, "default")
             .await
             .expect("reload behavior")
             .expect("behavior remains present");
@@ -1014,7 +1015,7 @@ mod tests {
         apply_model_selection(&access, owner, "selected", &selection)
             .await
             .unwrap();
-        let selected = gents::load_agent_behavior(&node, "selected")
+        let selected = gents::load_agent_behavior(&node, owner, "selected")
             .await
             .unwrap()
             .unwrap();
@@ -1037,7 +1038,7 @@ mod tests {
             original
         );
         assert_eq!(
-            gents::load_agent_behavior(&node, "neighbor")
+            gents::load_agent_behavior(&node, owner, "neighbor")
                 .await
                 .unwrap()
                 .unwrap()
@@ -1059,7 +1060,7 @@ mod tests {
             before
         );
         assert_eq!(
-            gents::load_agent_behavior(&node, "selected")
+            gents::load_agent_behavior(&node, owner, "selected")
                 .await
                 .unwrap()
                 .unwrap(),
@@ -1089,7 +1090,7 @@ mod tests {
             before
         );
         assert_eq!(
-            gents::load_agent_behavior(&node, "selected")
+            gents::load_agent_behavior(&node, owner, "selected")
                 .await
                 .unwrap()
                 .unwrap(),
@@ -1115,7 +1116,7 @@ mod tests {
             before
         );
         assert_eq!(
-            gents::load_agent_behavior(&node, "selected")
+            gents::load_agent_behavior(&node, owner, "selected")
                 .await
                 .unwrap()
                 .unwrap(),

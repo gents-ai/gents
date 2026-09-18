@@ -10,14 +10,18 @@ use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::document_config::{
-    AgentBehavior, AgentContext, BackendAuth, BashTools, BuiltInTools, DatastoreTools, FileTools,
-    HostTools, InferenceBackend, Tools,
+    AgentBehavior, AgentContext, AgentPrincipal, BackendAuth, BashTools, BuiltInTools,
+    DatastoreTools, FileTools, HostTools, InferenceBackend, Tools,
 };
 use gents::{
-    default_behavior_id_for_agent, default_inference_profile_id_for_behavior, load_agent_behavior,
-    load_agent_principal, load_or_create_macos_keychain_identity,
-    load_or_create_macos_secure_enclave_identity, upsert_agent_principal, AgentIdentity, BashMode,
-    Collection, CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity,
+    behavior_scope::{
+        behavior_component_id, reserved_behavior_slots, BehaviorComponentPath,
+        SETUP_CONFIGURATOR_BEHAVIOR_ID,
+    },
+    default_inference_profile_id_for_behavior, load_agent_behavior,
+    load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
+    AgentIdentity, BashMode, Collection, CommandExecutionMode, FileToolMode, InferenceProfile,
+    KeyIdentity,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -624,6 +628,88 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
     }
 }
 
+struct ExistingInitClosure {
+    scoped: bool,
+    context: Option<AgentContext>,
+    profile: InferenceProfile,
+}
+
+async fn load_existing_init_principal(
+    access: &ConfigAccess,
+    agent_did: &str,
+) -> Result<Option<AgentPrincipal>> {
+    access
+        .transact("init.inspect_existing_principal", |txn| {
+            Box::pin(async move {
+                gents::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentPrincipal,
+                    agent_did,
+                    agent_did,
+                )
+                .await?
+                .map(|(_, value)| serde_json::from_value(value))
+                .transpose()
+                .context("decoding existing AgentPrincipal")
+            })
+        })
+        .await
+}
+
+async fn load_existing_init_closure(
+    access: &ConfigAccess,
+    agent_did: &str,
+    behavior: &AgentBehavior,
+) -> Result<ExistingInitClosure> {
+    access
+        .transact("init.inspect_existing_closure", |txn| {
+            Box::pin(async move {
+                let references = gents::ConfigReferences::load_in_txn(txn, agent_did).await?;
+                references.validate()?;
+                let (_, profile) = gents::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    Collection::InferenceProfile,
+                    agent_did,
+                    &behavior.inference_profile_id,
+                )
+                .await?
+                .with_context(|| {
+                    format!(
+                        "existing behavior {:?} references missing inference profile {:?}",
+                        behavior.behavior_id, behavior.inference_profile_id
+                    )
+                })?;
+                let profile: InferenceProfile = serde_json::from_value(profile)?;
+                let context = match behavior.context_id.as_deref() {
+                    Some(context_id) => gents::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        Collection::AgentContext,
+                        agent_did,
+                        context_id,
+                    )
+                    .await?
+                    .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
+                    .transpose()?
+                    .with_context(|| {
+                        format!(
+                            "existing behavior {:?} references missing context {context_id:?}",
+                            behavior.behavior_id
+                        )
+                    })?
+                    .into(),
+                    None => None,
+                };
+                Ok(ExistingInitClosure {
+                    scoped: profile.scope_behavior_id.as_deref()
+                        == Some(behavior.behavior_id.as_str()),
+                    context,
+                    profile,
+                })
+            })
+        })
+        .await
+}
+
 async fn initialize_runtime_home(
     access: &ConfigAccess,
     args: &InitArgs,
@@ -658,12 +744,22 @@ async fn initialize_runtime_home(
                 backend_id.clone()
             }
         });
-    let existing_principal = load_agent_principal(node, agent_did).await?;
-    let default_behavior_id = existing_principal
+    let existing_principal = load_existing_init_principal(access, agent_did).await?;
+    let retained_default_behavior_id = existing_principal
         .as_ref()
-        .and_then(|principal| normalize_optional_string(principal.default_behavior_id.as_deref()))
-        .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
-    let existing_default_behavior = load_agent_behavior(node, &default_behavior_id).await?;
+        .and_then(|principal| normalize_optional_string(principal.default_behavior_id.as_deref()));
+    let default_behavior_id =
+        init_default_behavior_id(retained_default_behavior_id.as_deref(), args.setup_steward);
+    let existing_default_behavior =
+        load_agent_behavior(node, agent_did, &default_behavior_id).await?;
+    let existing_closure = match existing_default_behavior.as_ref() {
+        Some(behavior) => Some(load_existing_init_closure(access, agent_did, behavior).await?),
+        None => None,
+    };
+    let uses_scoped_component_names = existing_closure
+        .as_ref()
+        .map(|closure| closure.scoped)
+        .unwrap_or(true);
     if let Some(behavior) = existing_default_behavior.as_ref() {
         if behavior.agent_did != agent_did {
             anyhow::bail!(
@@ -682,15 +778,35 @@ async fn initialize_runtime_home(
         .as_ref()
         .map(|principal| principal.enabled)
         .unwrap_or(true);
-    upsert_agent_principal(
-        node,
-        agent_did,
-        Some(&principal_display_name),
-        Some(&default_behavior_id),
-        principal_enabled,
-    )
-    .await?;
-    let tools_id = default_tools_id_for_behavior(&default_behavior_id);
+    let principal = AgentPrincipal {
+        agent_did: agent_did.to_owned(),
+        display_name: Some(principal_display_name),
+        default_behavior_id: Some(default_behavior_id.clone()),
+        enabled: principal_enabled,
+        created_at: existing_principal
+            .as_ref()
+            .and_then(|principal| principal.created_at.clone())
+            .or_else(|| Some(chrono::Utc::now().to_rfc3339())),
+        created_by: existing_principal
+            .as_ref()
+            .and_then(|principal| principal.created_by.clone())
+            .or_else(|| Some(agent_did.to_owned())),
+        tags: existing_principal
+            .as_ref()
+            .map(|principal| principal.tags.clone())
+            .unwrap_or_default(),
+    };
+    let tools_id = existing_closure
+        .as_ref()
+        .and_then(|closure| closure.context.as_ref())
+        .and_then(|context| context.tools_id.clone())
+        .unwrap_or_else(|| {
+            if uses_scoped_component_names {
+                default_tools_id_for_behavior(&default_behavior_id)
+            } else {
+                legacy_default_tools_id_for_behavior(&default_behavior_id)
+            }
+        });
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
     // Canonical auth is a typed selection, never a raw key copy: an
@@ -731,6 +847,7 @@ async fn initialize_runtime_home(
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
+    tools.scope_behavior_id = uses_scoped_component_names.then(|| default_behavior_id.clone());
     if args.setup_steward {
         tools.self_config = Some(setup_steward_self_config());
         tools
@@ -739,8 +856,19 @@ async fn initialize_runtime_home(
             .enable_graph_tools = Some(true);
     }
     let context = AgentContext {
-        context_id: default_context_id_for_behavior(&default_behavior_id),
+        context_id: existing_closure
+            .as_ref()
+            .and_then(|closure| closure.context.as_ref())
+            .map(|context| context.context_id.clone())
+            .unwrap_or_else(|| {
+                if uses_scoped_component_names {
+                    default_context_id_for_behavior(&default_behavior_id)
+                } else {
+                    legacy_default_context_id_for_behavior(&default_behavior_id)
+                }
+            }),
         agent_did: agent_did.to_string(),
+        scope_behavior_id: uses_scoped_component_names.then(|| default_behavior_id.clone()),
         display_name: Some(if args.setup_steward {
             "The Engineer".to_string()
         } else {
@@ -757,9 +885,19 @@ async fn initialize_runtime_home(
         skill_ids: Vec::new(),
         tags: Vec::new(),
     };
-    let inference_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
+    let inference_profile_id = existing_closure
+        .as_ref()
+        .map(|closure| closure.profile.profile_id.clone())
+        .unwrap_or_else(|| {
+            if uses_scoped_component_names {
+                behavior_component_id(&default_behavior_id, BehaviorComponentPath::Inference)
+            } else {
+                default_inference_profile_id_for_behavior(&default_behavior_id)
+            }
+        });
     let inference_profile = standard_inference_profile(
         agent_did,
+        uses_scoped_component_names.then_some(default_behavior_id.as_str()),
         &inference_profile_id,
         &backend_id,
         &model_name.to_string(),
@@ -808,6 +946,7 @@ async fn initialize_runtime_home(
     inference_profile.validate()?;
     let wide_open_preset_id = wide_open_tools_id_for_agent(agent_did);
     let plan = DesiredStateApplyPlan::new(vec![
+        replacement(Collection::AgentPrincipal, &principal)?,
         replacement(Collection::InferenceBackend, &backend_doc)?,
         replacement(Collection::Tools, &tools)?,
         replacement(Collection::AgentContext, &context)?,
@@ -818,7 +957,29 @@ async fn initialize_runtime_home(
     access
         .transact("init.initialize_runtime_home", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            let fresh_scoped_behavior =
+                existing_default_behavior.is_none() && uses_scoped_component_names;
+            let reserved_slots = reserved_behavior_slots(&default_behavior_id).collect::<Vec<_>>();
+            Box::pin(async move {
+                if fresh_scoped_behavior {
+                    for slot in reserved_slots {
+                        anyhow::ensure!(
+                            gents::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                slot.collection,
+                                agent_did,
+                                &slot.logical_id,
+                            )
+                            .await?
+                            .is_none(),
+                            "fresh behavior component slot {} {:?} is already occupied",
+                            slot.collection.graphql_type(),
+                            slot.logical_id,
+                        );
+                    }
+                }
+                apply_desired_state_plan(txn, plan).await.map(|_| ())
+            })
         })
         .await?;
     // Health and discovery are runtime-owned observations, so the desired
@@ -875,10 +1036,26 @@ fn replacement<T: serde::Serialize>(
 }
 
 fn default_tools_id_for_behavior(behavior_id: &str) -> String {
-    format!("{behavior_id}-tools")
+    behavior_component_id(behavior_id, BehaviorComponentPath::Tools)
 }
 
 fn default_context_id_for_behavior(behavior_id: &str) -> String {
+    behavior_component_id(behavior_id, BehaviorComponentPath::Context)
+}
+
+fn init_default_behavior_id(retained: Option<&str>, setup_steward: bool) -> String {
+    if setup_steward {
+        SETUP_CONFIGURATOR_BEHAVIOR_ID.to_owned()
+    } else {
+        retained.unwrap_or("local:default").to_owned()
+    }
+}
+
+fn legacy_default_tools_id_for_behavior(behavior_id: &str) -> String {
+    format!("{behavior_id}-tools")
+}
+
+fn legacy_default_context_id_for_behavior(behavior_id: &str) -> String {
     format!("{behavior_id}-context")
 }
 
@@ -938,6 +1115,7 @@ fn tools_for_package(
     Tools {
         tools_id: tools_id.to_string(),
         agent_did: agent_did.to_string(),
+        scope_behavior_id: None,
         display_name: Some(
             match tool_package {
                 ToolPackageArg::Minimal => "Minimal Tools",
@@ -1123,6 +1301,7 @@ fn resolve_tool_root_for_package(
 /// duplicate flat fields, no invented sub-documents.
 fn standard_inference_profile(
     agent_did: &str,
+    behavior_id: Option<&str>,
     profile_id: &str,
     backend_id: &str,
     model_name: &str,
@@ -1130,6 +1309,7 @@ fn standard_inference_profile(
     InferenceProfile {
         agent_did: agent_did.to_string(),
         profile_id: profile_id.to_string(),
+        scope_behavior_id: behavior_id.map(ToOwned::to_owned),
         display_name: Some("Default".to_string()),
         description: None,
         backend_id: backend_id.to_string(),
@@ -1539,6 +1719,150 @@ mod tests {
             args.tool_package = Some(package);
             assert_eq!(resolve_initial_tool_package(&args).unwrap(), package);
         }
+    }
+
+    #[test]
+    fn fresh_init_uses_canonical_default_and_setup_behavior_ids() {
+        assert_eq!(init_default_behavior_id(None, false), "local:default");
+        assert_eq!(
+            init_default_behavior_id(None, true),
+            SETUP_CONFIGURATOR_BEHAVIOR_ID
+        );
+    }
+
+    #[test]
+    fn reinit_retains_legacy_default_without_scoping_its_components() {
+        let retained = "did:key:zLegacy:default";
+        assert_eq!(init_default_behavior_id(Some(retained), false), retained);
+        assert_eq!(
+            legacy_default_context_id_for_behavior(retained),
+            format!("{retained}-context")
+        );
+        assert_eq!(
+            legacy_default_tools_id_for_behavior(retained),
+            format!("{retained}-tools")
+        );
+    }
+
+    #[tokio::test]
+    async fn reinit_uses_stored_scope_and_preserves_legacy_component_ids() -> Result<()> {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node.clone());
+        let owner = "did:key:init-legacy-local";
+        let documents = [
+            (Collection::AgentPrincipal, json!({"agent_did":owner,"display_name":"Legacy","default_behavior_id":"local:default","created_at":"retained","created_by":owner,"tags":["keep"]})),
+            (Collection::InferenceBackend, json!({"agent_did":owner,"backend_id":"legacy-backend","name":"Legacy backend","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+            (Collection::Tools, json!({"agent_did":owner,"tools_id":"legacy-tools"})),
+            (Collection::AgentContext, json!({"agent_did":owner,"context_id":"legacy-context","system_prompt":"old","tools_id":"legacy-tools"})),
+            (Collection::InferenceProfile, json!({"agent_did":owner,"profile_id":"legacy-profile","backend_id":"legacy-backend","model_name":"old-model"})),
+            (Collection::AgentBehavior, json!({"agent_did":owner,"behavior_id":"local:default","context_id":"legacy-context","inference_profile_id":"legacy-profile"})),
+        ]
+        .into_iter()
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect();
+        let plan = DesiredStateApplyPlan::new(documents)?;
+        access
+            .transact("test.init.legacy_seed", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan).await?;
+                    Ok(())
+                })
+            })
+            .await?;
+
+        let args = init_args();
+        initialize_runtime_home(&access, &args, owner, ToolPackageArg::Readonly).await?;
+        let behavior = load_agent_behavior(&node, owner, "local:default")
+            .await?
+            .unwrap();
+        assert_eq!(behavior.context_id.as_deref(), Some("legacy-context"));
+        assert_eq!(behavior.inference_profile_id, "legacy-profile");
+        let principal = load_existing_init_principal(&access, owner).await?.unwrap();
+        assert_eq!(principal.created_at.as_deref(), Some("retained"));
+        assert_eq!(principal.tags, vec!["keep"]);
+        access
+            .transact("test.init.legacy_verify", |txn| {
+                Box::pin(async move {
+                    for (collection, id) in [
+                        (Collection::Tools, "legacy-tools"),
+                        (Collection::AgentContext, "legacy-context"),
+                        (Collection::InferenceProfile, "legacy-profile"),
+                    ] {
+                        let (_, value) = gents::config_client::read_desired_state_record_in_txn(
+                            txn, collection, owner, id,
+                        )
+                        .await?
+                        .with_context(|| format!("missing retained {id}"))?;
+                        assert!(value
+                            .get("scope_behavior_id")
+                            .and_then(serde_json::Value::as_str)
+                            .is_none());
+                    }
+                    Ok(())
+                })
+            })
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fresh_init_slot_collision_keeps_principal_default_unchanged() -> Result<()> {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node.clone());
+        let owner = "did:key:init-collision";
+        gents::ensure_agent_principal(&node, owner).await?;
+        let collision = json!({
+            "agent_did":owner,
+            "compaction_id":"local:default:compaction",
+            "display_name":"Unrelated retained compaction"
+        });
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::Compaction,
+            add: collision.clone(),
+            update: collision,
+        }])?;
+        access
+            .transact("test.init.collision_seed", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan).await?;
+                    Ok(())
+                })
+            })
+            .await?;
+
+        let error = initialize_runtime_home(&access, &init_args(), owner, ToolPackageArg::Readonly)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("already occupied"));
+        let principal = gents::load_agent_principal(&node, owner).await?.unwrap();
+        assert_eq!(principal.default_behavior_id, None);
+        assert!(load_agent_behavior(&node, owner, "local:default")
+            .await?
+            .is_none());
+        access
+            .transact("test.init.collision_verify", |txn| {
+                Box::pin(async move {
+                    assert!(gents::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        Collection::Compaction,
+                        owner,
+                        "local:default:compaction",
+                    )
+                    .await?
+                    .is_some());
+                    Ok(())
+                })
+            })
+            .await?;
+        Ok(())
     }
 
     /// Drift fence between init's tool packages and the directory persona

@@ -12,6 +12,12 @@ prompt sidecars needed to install the pack; there are no per-collection JSON
 document fragments. AgentContext, Tools, Task, EventSource, and Trigger
 documents in that bundle define all four stages.
 
+Installed roles use `gents:security-scan:{role}` keys, including
+`gents:security-scan:scan-plan` and `gents:security-scan:scan-investigate`.
+Each role receives deterministic `:context`, `:tools`, and inference component
+IDs; “Scan batch planner” and “Batch investigator” remain independent display
+names.
+
 ```text
 [runner kickoff: ported scan engine runs, output embedded in the single seed doc]
 

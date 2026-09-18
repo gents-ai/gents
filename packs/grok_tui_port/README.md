@@ -16,6 +16,11 @@ prompt sidecars needed to install the pack; there are no per-collection JSON
 document fragments. The bundled code-review dependency is configured through
 the scenario's dependency environment instead of copied configuration rows.
 
+Installed roles use `gents:grok-tui-port:{role}` keys, for example
+`gents:grok-tui-port:port-recon`. Its owned context and inference closure uses
+the same key plus deterministic suffixes such as `:context`, `:tools`, and
+`:inference`; display names remain independent labels.
+
 Every model-driven Task also provisions a controller-owned durable goal. Its
 tool surface exposes only `get_goal` and `update_goal`—never model-side goal
 creation—and the stage prompt completes that goal only after its required

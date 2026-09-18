@@ -3,10 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use gents::behavior_scope::{behavior_component_id, BehaviorComponentPath};
 use gents::graphql::escape_graphql_string;
 use gents::{
-    cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    AgentIdentity, DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity, ToolCeiling,
+    cli_tool, AgentIdentity, DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity,
+    ToolCeiling,
 };
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow};
@@ -107,23 +108,33 @@ async fn seed_live_behavior_documents(
     };
     use gents::document_config::PackConfig;
     use serde_json::json;
-    let behavior_id = default_behavior_id_for_agent(agent_did);
-    let subagent_behavior_id = format!("{agent_did}:live-repo-audit-subagent");
+    let behavior_id = "local:default".to_owned();
+    let subagent_behavior_id = "local:repo-audit-subagent".to_owned();
     let backend_id = format!("{agent_name}-backend");
     let subagent_backend_id = if subagent_backend.is_some() {
         format!("{agent_name}-subagent-backend")
     } else {
         backend_id.clone()
     };
-    let tools_id = format!("{behavior_id}-tools");
-    let subagent_tools_id = format!("{subagent_behavior_id}-tools");
-    let inference_profile_id = default_inference_profile_id_for_behavior(&behavior_id);
-    let subagent_profile_id = default_inference_profile_id_for_behavior(&subagent_behavior_id);
-    let context_id = format!("{behavior_id}-context");
-    let subagent_context_id = format!("{subagent_behavior_id}-context");
-    let execution_id = format!("{behavior_id}-execution");
-    let sampling_id = format!("{behavior_id}-sampling");
-    let compaction_id = format!("{behavior_id}-compaction");
+    let tools_id = behavior_component_id(&behavior_id, BehaviorComponentPath::Tools);
+    let subagent_tools_id =
+        behavior_component_id(&subagent_behavior_id, BehaviorComponentPath::Tools);
+    let inference_profile_id =
+        behavior_component_id(&behavior_id, BehaviorComponentPath::Inference);
+    let subagent_profile_id =
+        behavior_component_id(&subagent_behavior_id, BehaviorComponentPath::Inference);
+    let context_id = behavior_component_id(&behavior_id, BehaviorComponentPath::Context);
+    let subagent_context_id =
+        behavior_component_id(&subagent_behavior_id, BehaviorComponentPath::Context);
+    let execution_id = behavior_component_id(&behavior_id, BehaviorComponentPath::Execution);
+    let subagent_execution_id =
+        behavior_component_id(&subagent_behavior_id, BehaviorComponentPath::Execution);
+    let sampling_id = behavior_component_id(&behavior_id, BehaviorComponentPath::Sampling);
+    let subagent_sampling_id =
+        behavior_component_id(&subagent_behavior_id, BehaviorComponentPath::Sampling);
+    let compaction_id = behavior_component_id(&behavior_id, BehaviorComponentPath::Compaction);
+    let subagent_compaction_id =
+        behavior_component_id(&subagent_behavior_id, BehaviorComponentPath::Compaction);
     let target_id = format!("{behavior_id}-subagent-target");
     let subagent = subagent_backend.unwrap_or(backend);
     let config = json!({
@@ -133,25 +144,34 @@ async fn seed_live_behavior_documents(
             {"agent_did":agent_did,"behavior_id":subagent_behavior_id,"display_name":"Live Repo Audit Subagent","context_id":subagent_context_id,"inference_profile_id":subagent_profile_id}
         ],
         "contexts":[
-            {"agent_did":agent_did,"context_id":context_id,"system_prompt":"You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks.","tools_id":tools_id,"compaction_id":compaction_id},
-            {"agent_did":agent_did,"context_id":subagent_context_id,"system_prompt":"You are Amy's local repo audit subagent inside a live desktop integration test. Read only the exact files requested by the parent and return concise findings.","tools_id":subagent_tools_id,"compaction_id":compaction_id}
+            {"agent_did":agent_did,"context_id":context_id,"scope_behavior_id":behavior_id,"system_prompt":"You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks.","tools_id":tools_id,"compaction_id":compaction_id},
+            {"agent_did":agent_did,"context_id":subagent_context_id,"scope_behavior_id":subagent_behavior_id,"system_prompt":"You are Amy's local repo audit subagent inside a live desktop integration test. Read only the exact files requested by the parent and return concise findings.","tools_id":subagent_tools_id,"compaction_id":subagent_compaction_id}
         ],
         "tools":[
-            {"agent_did":agent_did,"tools_id":tools_id,"display_name":"Live Repo Audit Tools",
+            {"agent_did":agent_did,"tools_id":tools_id,"scope_behavior_id":behavior_id,"display_name":"Live Repo Audit Tools",
              "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"Unrestricted","background_enabled":true}},
              "built_ins":{"enable_context_budget":true},
              "subagents":{"target_ids":[target_id],"spawn_enabled":true,"steering_enabled":true,"background_enabled":true,"allow_cross_principal":false,"cross_principal_spawn_timeout_secs":60}},
-            {"agent_did":agent_did,"tools_id":subagent_tools_id,"display_name":"Live Repo Audit Subagent Tools",
+            {"agent_did":agent_did,"tools_id":subagent_tools_id,"scope_behavior_id":subagent_behavior_id,"display_name":"Live Repo Audit Subagent Tools",
              "host":{"files":{"mode":"ReadOnly"}},"built_ins":{"enable_context_budget":true}}
         ],
         "subagent_targets":[{"agent_did":agent_did,"target_id":target_id,"target_agent_did":agent_did,"behavior_id":subagent_behavior_id,"name":"repo-audit-subagent","description":"Local repository audit subagent for the desktop live fixture"}],
         "inference_profiles":[
-            {"agent_did":agent_did,"profile_id":inference_profile_id,"display_name":"Live Repo Audit Profile","backend_id":backend_id,"model_name":backend.model_name,"context_window":131072,"max_output_tokens":1024,"sampling_id":sampling_id,"execution_id":execution_id},
-            {"agent_did":agent_did,"profile_id":subagent_profile_id,"display_name":"Live Repo Audit Subagent Profile","backend_id":subagent_backend_id,"model_name":subagent.model_name,"context_window":131072,"max_output_tokens":1024,"sampling_id":sampling_id,"execution_id":execution_id}
+            {"agent_did":agent_did,"profile_id":inference_profile_id,"scope_behavior_id":behavior_id,"display_name":"Live Repo Audit Profile","backend_id":backend_id,"model_name":backend.model_name,"context_window":131072,"max_output_tokens":1024,"sampling_id":sampling_id,"execution_id":execution_id},
+            {"agent_did":agent_did,"profile_id":subagent_profile_id,"scope_behavior_id":subagent_behavior_id,"display_name":"Live Repo Audit Subagent Profile","backend_id":subagent_backend_id,"model_name":subagent.model_name,"context_window":131072,"max_output_tokens":1024,"sampling_id":subagent_sampling_id,"execution_id":subagent_execution_id}
         ],
-        "inference_sampling":[{"agent_did":agent_did,"sampling_id":sampling_id,"temperature":0.0}],
-        "inference_execution":[{"agent_did":agent_did,"execution_id":execution_id,"max_turns":20,"stream_batch_ms":250,"stream_liveness_timeout_secs":60,"deadline_duration_secs":300}],
-        "compactions":[{"agent_did":agent_did,"compaction_id":compaction_id,"strategy":"StripThenSummarize","threshold":0.95}]
+        "inference_sampling":[
+            {"agent_did":agent_did,"sampling_id":sampling_id,"scope_behavior_id":behavior_id,"temperature":0.0},
+            {"agent_did":agent_did,"sampling_id":subagent_sampling_id,"scope_behavior_id":subagent_behavior_id,"temperature":0.0}
+        ],
+        "inference_execution":[
+            {"agent_did":agent_did,"execution_id":execution_id,"scope_behavior_id":behavior_id,"max_turns":20,"stream_batch_ms":250,"stream_liveness_timeout_secs":60,"deadline_duration_secs":300},
+            {"agent_did":agent_did,"execution_id":subagent_execution_id,"scope_behavior_id":subagent_behavior_id,"max_turns":20,"stream_batch_ms":250,"stream_liveness_timeout_secs":60,"deadline_duration_secs":300}
+        ],
+        "compactions":[
+            {"agent_did":agent_did,"compaction_id":compaction_id,"scope_behavior_id":behavior_id,"strategy":"StripThenSummarize","threshold":0.95},
+            {"agent_did":agent_did,"compaction_id":subagent_compaction_id,"scope_behavior_id":subagent_behavior_id,"strategy":"StripThenSummarize","threshold":0.95}
+        ]
     });
     ConfigAccess::transact_local(core.node(), None, "desktop.fixture.config", |txn| {
         let mut config = config.clone();

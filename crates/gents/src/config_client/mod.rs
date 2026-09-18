@@ -22,6 +22,7 @@
 //!   value; explicit clearing requires `field: null`.
 
 mod agent_behavior;
+mod behavior_closure;
 mod common;
 mod desired_state;
 mod graphql;
@@ -43,6 +44,12 @@ pub(crate) fn is_classified_transaction_conflict(error: &anyhow::Error) -> bool 
 pub mod patch;
 
 pub use agent_behavior::write_agent_behavior_document;
+pub use behavior_closure::{
+    delete_behavior_closure_in_txn, ensure_behavior_component_patchable_in_txn,
+    is_behavior_system_tag, materialize_behavior_closure_candidate_in_txn,
+    materialize_behavior_closure_in_txn, materialize_disabled_behavior_scaffold_in_txn,
+    plan_behavior_closure, plan_behavior_closure_with_overlays,
+};
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 #[cfg(test)]
 pub(crate) use desired_state::canonical_struct_fields;

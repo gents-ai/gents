@@ -2,6 +2,7 @@ import type { DesktopTransport } from "../transport.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type {
   CascadeCancelPreview,
+  BehaviorScaffoldCreateResult,
   ChatSendResult,
   CodexLoginResult,
   DesktopClientSnapshot,
@@ -171,6 +172,11 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_behavior_save", {
         request,
       }),
+    createBehaviorScaffold: (request) =>
+      invokeDesktop<BehaviorScaffoldCreateResult>(
+        "desktop_behavior_scaffold_create",
+        { request },
+      ),
     saveSkillConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_skill_save", { request }),
     deleteSkillConfig: (request) =>

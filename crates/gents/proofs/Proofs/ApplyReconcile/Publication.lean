@@ -1,4 +1,5 @@
 import Proofs.ApplyReconcile.Manifest
+import Proofs.Configuration
 
 namespace ApplyReconcile
 
@@ -14,6 +15,22 @@ def refsPresent (m : Manifest) (source : DocRef) : Option DesiredFields → Bool
 def Manifest.referencesClosed (m : Manifest) : Bool :=
   decide (∀ d ∈ m.support, refsPresent m d (m.docs d) = true)
 
+/-- The publication owner receives the manifest together with the canonical
+typed projection used to validate behavior-owned scope. Keeping the projection
+in the candidate makes the transaction decision indivisible: callers cannot
+publish documents and validate their ownership graph in separate steps. -/
+structure ScopedCandidate where
+  manifest : Manifest
+  scopeGraph : Configuration.ScopedConfigRegistry
+  /-- Set only by the canonical decoder that produced both projections from the
+  same candidate documents. -/
+  projectionMatches : Bool
+
+def ScopedCandidate.valid (candidate : ScopedCandidate) : Bool :=
+  candidate.manifest.referencesClosed &&
+    candidate.projectionMatches &&
+    Configuration.behaviorScopesValid candidate.scopeGraph
+
 /-- Publish desired fields atomically through the existing database transaction
 owner. Live observations retain their existing owner. Failed validation leaves
 both desired and live state unchanged. This is the target contract, not a claim
@@ -21,6 +38,15 @@ that the current per-document Rust installer already implements it. -/
 def publish (old : LiveState) (candidate : Manifest) : LiveState :=
   if candidate.referencesClosed then
     { desired := candidate.docs, live := old.live }
+  else old
+
+/-- Publish a behavior closure only when ordinary references and the canonical
+scope graph both validate. The graph accepts complete legacy/unscoped closures;
+scoped closures reject mixed ownership, cross-binding, and unreachable
+documents. -/
+def publishScoped (old : LiveState) (candidate : ScopedCandidate) : LiveState :=
+  if candidate.valid then
+    { desired := candidate.manifest.docs, live := old.live }
   else old
 
 theorem closed_lookup_same_owner (m : Manifest) (h : m.referencesClosed = true)
@@ -80,6 +106,71 @@ never an intermediate prefix. -/
 theorem publication_all_or_nothing (old : LiveState) (m : Manifest) :
     (publish old m).desired = m.docs ∨ publish old m = old := by
   unfold publish
+  split
+  · exact Or.inl rfl
+  · exact Or.inr rfl
+
+theorem scoped_publication_realizes (old : LiveState) (candidate : ScopedCandidate)
+    (h : candidate.valid = true) :
+    (publishScoped old candidate).desired = candidate.manifest.docs := by
+  simp [publishScoped, h]
+
+theorem scoped_publication_preserves_observations
+    (old : LiveState) (candidate : ScopedCandidate) :
+    (publishScoped old candidate).live = old.live := by
+  unfold publishScoped
+  split <;> rfl
+
+theorem rejected_scoped_publication_unchanged
+    (old : LiveState) (candidate : ScopedCandidate)
+    (h : candidate.valid = false) : publishScoped old candidate = old := by
+  simp [publishScoped, h]
+
+theorem scoped_publication_requires_closed_references
+    (old : LiveState) (candidate : ScopedCandidate)
+    (h : (publishScoped old candidate).desired = candidate.manifest.docs)
+    (distinct : old.desired ≠ candidate.manifest.docs) :
+    candidate.manifest.referencesClosed = true := by
+  by_contra invalid
+  have hv : candidate.valid = false := by
+    simp [ScopedCandidate.valid, Bool.eq_false_iff, invalid]
+  have unchanged := rejected_scoped_publication_unchanged old candidate hv
+  exact distinct (by simpa [unchanged] using h)
+
+theorem scoped_publication_requires_valid_ownership
+    (old : LiveState) (candidate : ScopedCandidate)
+    (h : (publishScoped old candidate).desired = candidate.manifest.docs)
+    (distinct : old.desired ≠ candidate.manifest.docs) :
+    Configuration.behaviorScopesValid candidate.scopeGraph = true := by
+  by_contra invalid
+  have hv : candidate.valid = false := by
+    simp [ScopedCandidate.valid, Bool.eq_false_iff, invalid]
+  have unchanged := rejected_scoped_publication_unchanged old candidate hv
+  exact distinct (by simpa [unchanged] using h)
+
+theorem scoped_publication_requires_matching_projection
+    (old : LiveState) (candidate : ScopedCandidate)
+    (h : (publishScoped old candidate).desired = candidate.manifest.docs)
+    (distinct : old.desired ≠ candidate.manifest.docs) :
+    candidate.projectionMatches = true := by
+  by_contra invalid
+  have hv : candidate.valid = false := by
+    simp [ScopedCandidate.valid, Bool.eq_false_iff, invalid]
+  have unchanged := rejected_scoped_publication_unchanged old candidate hv
+  exact distinct (by simpa [unchanged] using h)
+
+theorem scoped_publication_idempotent (old : LiveState)
+    (candidate : ScopedCandidate) :
+    publishScoped (publishScoped old candidate) candidate =
+      publishScoped old candidate := by
+  unfold publishScoped
+  split <;> rfl
+
+theorem scoped_publication_all_or_nothing (old : LiveState)
+    (candidate : ScopedCandidate) :
+    (publishScoped old candidate).desired = candidate.manifest.docs ∨
+      publishScoped old candidate = old := by
+  unfold publishScoped
   split
   · exact Or.inl rfl
   · exact Or.inr rfl

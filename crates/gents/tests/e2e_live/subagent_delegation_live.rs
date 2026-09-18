@@ -1513,6 +1513,7 @@ async fn configure_behavior(
     let context = AgentContext {
         context_id: context_id.clone(),
         agent_did: agent_did.to_string(),
+        scope_behavior_id: None,
         display_name: None,
         description: None,
         system_prompt: Some(system_prompt.to_string()),

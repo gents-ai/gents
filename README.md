@@ -27,6 +27,13 @@ gents codex     # launch Codex against the Gents app-server shim
 For worked document-driven scenarios, use `gents pack list` and see the
 [pack catalog and authoring guide](packs/README.md).
 
+Generated behavior keys expose their scope: bundled roles install as
+`namespace:pack:role` (for example `gents:code-review:review-recon`), while
+personal behaviors use `local:slug`. Owned mutable components append stable
+suffixes such as `:context`, `:tools`, and `:inference`. Display names are
+independent labels, so renaming what a person sees does not change sessions or
+configuration references.
+
 The binary also carries an immutable catalog of useful graphs. Cataloging is
 read-only. Interactive init can configure OpenAI API access, ChatGPT/Codex
 OAuth, Grok OAuth, Claude subscription OAuth, a local model, or a custom

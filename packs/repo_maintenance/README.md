@@ -8,6 +8,11 @@ prompt sidecars needed to install the pack; there are no per-collection JSON
 document fragments. The bundle connects AgentContext, Tools, Task, EventSource,
 Trigger, callback, inference, and repository-placement documents directly.
 
+Installed roles use `gents:repo-maintenance:{role}` keys, for example
+`gents:repo-maintenance:maintenance-recon`. Each behavior owns deterministic
+`:context`, `:tools`, and inference component IDs while its descriptive display
+name remains independent.
+
 ```text
 MaintenanceJob -> recon -> N MaintenanceArea scanners
                -> MaintenanceCandidate + MaintenanceScanResult

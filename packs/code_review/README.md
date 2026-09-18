@@ -6,6 +6,13 @@ Install with `gents pack install code_review --home <home>` and run with
 Use the same home and principal for installation and execution. Bind the three
 declared slots to profiles already configured for that principal:
 
+The four installed behavior IDs are `gents:code-review:review-recon`,
+`gents:code-review:review-scan`, `gents:code-review:review-verify`, and
+`gents:code-review:review-triage`. Each has deterministic owned component IDs,
+for example `gents:code-review:review-recon:context` and
+`gents:code-review:review-recon:inference`. The visible names such as “Review
+reconnaissance” remain independent labels.
+
 ```sh
 gents pack install code_review --home ./.gents --agent-did "$REVIEW_AGENT_DID" \
   --preview \
@@ -30,8 +37,8 @@ its configured scratch-write sandbox. Unsupported hosts report a policy error.
 The graph requests read-only workspace authority. Verification can write
 scratch artifacts through its configured bash tools; reviewed source remains
 read-only. Review output is evidence, not permission to merge. Inference resolves
-through each stage's Task -> Behavior -> the user profile bound to its named
-slot. The pack declares `coordinator` for recon/triage, `worker` for parallel
+through each stage's Task -> Behavior -> a scoped copy of the user profile
+selected for its named slot. The pack declares `coordinator` for recon/triage, `worker` for parallel
 scans, and `verifier` for adversarial verification. Installation creates no
 inference configuration and fills each document's owner from the requested
 `--agent-did`; behavior, context, tools,
@@ -39,9 +46,10 @@ tasks, capabilities and the intent inherit that explicit installation owner.
 Capabilities explicitly permit that installation owner through
 `${GENTS_PACK_AGENT_DID}`, which the common loader binds to `--agent-did`.
 Empty caller lists deny access. The authored documents and their references live
-in `pack_config.json`; prompt files remain literal sidecars. Connectivity,
-credentials, model selection, effort, sampling, execution, and concurrency stay
-on the selected user profiles and backends.
+in `pack_config.json`; prompt files remain literal sidecars. Selected source
+profiles remain unchanged. Connectivity and credentials stay on shared
+backends; model, effort, sampling, and execution values are copied independently
+into each installed behavior closure.
 
 ## Inputs, outputs and completion
 

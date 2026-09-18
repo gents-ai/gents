@@ -15,6 +15,16 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { createBehavior } from "./createBehavior";
 
+function isSystemBehaviorTag(tag: string) {
+  return (
+    tag === "gents:setup-steward" ||
+    tag.startsWith("gents:pack:") ||
+    tag.startsWith("gents:desktop-scaffold:") ||
+    tag.startsWith("gents:desktop-scaffold-source:") ||
+    tag.startsWith("gents:desktop-scaffold-display:")
+  );
+}
+
 function Editor({
   shell,
   deployment,
@@ -36,7 +46,7 @@ function Editor({
     inferenceProfileId: behavior.inferenceProfileId ?? "",
     enabled: behavior.enabled,
     makeDefault: behavior.isDefault,
-    tags: behavior.tags ?? [],
+    tags: (behavior.tags ?? []).filter((tag) => !isSystemBehaviorTag(tag)),
   };
   const d = useDraft(saved, async (next) => {
     if (!next.displayName.trim()) throw new Error("Display name is required");

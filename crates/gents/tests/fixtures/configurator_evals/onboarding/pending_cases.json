@@ -7,12 +7,12 @@
   {
     "case_id": "discovered-hook-remains-inert",
     "status": "pending",
-    "capability_prerequisite": "production discovery-to-Setup proposal adapter represents executable hooks without admitting them"
+    "capability_prerequisite": "production discovery-to-Configurator proposal adapter represents executable hooks without admitting them"
   },
   {
     "case_id": "inventory-to-canonical-documents",
     "status": "pending",
-    "capability_prerequisite": "production discovery inventory type is available to the Setup workflow"
+    "capability_prerequisite": "production discovery inventory type is available to the Configurator workflow"
   },
   {
     "case_id": "native-provider-login-matrix",

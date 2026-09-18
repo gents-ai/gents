@@ -211,6 +211,13 @@ async fn patch_config_components_in_txn(
         .context("component patch requires an existing principal")?;
     let mut documents = Vec::with_capacity(patches.len());
     for (target, id, patch) in patches {
+        gents::config_client::ensure_behavior_component_patchable_in_txn(
+            txn,
+            agent_did,
+            target.collection(),
+            id,
+        )
+        .await?;
         let (_, retained) =
             read_desired_state_record_in_txn(txn, target.collection(), agent_did, id)
                 .await?
@@ -490,6 +497,44 @@ mod tests {
         assert_eq!(before.0["discovery_timeout_secs"], 8);
         assert_eq!(before.0["tags"], json!(["retained"]));
         assert_eq!(before.1["model_name"], "selected");
+        let shared_profile_plan = DesiredStateApplyPlan::new(
+            ["legacy-a", "legacy-b"]
+                .into_iter()
+                .map(|behavior_id| {
+                    let value = json!({
+                        "agent_did": owner,
+                        "behavior_id": behavior_id,
+                        "inference_profile_id": "profile"
+                    });
+                    DesiredStateApplyDocument {
+                        collection: Collection::AgentBehavior,
+                        add: value.clone(),
+                        update: value,
+                    }
+                })
+                .collect(),
+        )?;
+        ConfigAccess::transact_local(&node, None, "test.patch.shared", |txn| {
+            let plan = &shared_profile_plan;
+            Box::pin(async move {
+                apply_desired_state_plan(txn, plan).await?;
+                Ok(())
+            })
+        })
+        .await?;
+        let shared_error = patch_config_components(
+            &node,
+            owner,
+            &[patch(
+                SelfConfigTarget::InferenceProfile,
+                "profile",
+                json!({"model_name":"unsafe-shared-edit"}),
+            )],
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{shared_error:#}").contains("shared by 2 behaviors"));
+        assert_eq!(read().await?.1["model_name"], "selected");
         assert!(patch_config_components(&node, owner, &[
             patch(SelfConfigTarget::InferenceBackend," backend ",json!({"endpoint":"http://changed:9000/v1","auth":{"kind":"api_key","key":"replace"}})),
             patch(SelfConfigTarget::InferenceProfile,"profile",json!({"model_name":"replacement", "context_window":0})),

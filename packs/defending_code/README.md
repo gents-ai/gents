@@ -15,6 +15,12 @@ prompt sidecars needed to install the pack; there are no per-collection JSON
 document fragments. The bundle connects AgentContext, Tools, Task, EventSource,
 Trigger, callback, inference, and repository-placement documents directly.
 
+Installed roles use `gents:defending-code:{role}` keys, for example
+`gents:defending-code:defend-plan`. Its mutable closure uses deterministic keys
+such as `gents:defending-code:defend-plan:context`, `:tools`, and `:inference`.
+Authored display names remain the operator-facing labels and can differ from
+these keys.
+
 ```text
 DefendingCodeJob
   -> DefenseThreatModel

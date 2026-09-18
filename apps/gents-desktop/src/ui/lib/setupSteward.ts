@@ -13,11 +13,15 @@ export const SETUP_STEWARD_PROMPT = sharedSetupPrompt;
 export const SETUP_STEWARD_DESCRIPTION =
   "Walks you through configuring Gents for the work you want to do.";
 export const SETUP_STEWARD_BEHAVIOR_TAG = "gents:setup-steward";
+export const SETUP_CONFIGURATOR_BEHAVIOR_ID = "gents:base:configurator";
 
 export function setupStewardPatches(
   deployment: DeploymentView,
 ): ConfigComponentPatch[] {
   const behavior =
+    deployment.behaviors.find(
+      (row) => row.behaviorId === SETUP_CONFIGURATOR_BEHAVIOR_ID,
+    ) ??
     deployment.behaviors.find((row) => row.tags.includes(SETUP_STEWARD_BEHAVIOR_TAG)) ??
     deployment.behaviors.find((row) => row.isDefault) ??
     deployment.behaviors[0];

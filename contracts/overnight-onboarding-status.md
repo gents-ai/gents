@@ -10,7 +10,7 @@
 - Configuration panels use canonical documents and mutation owners. Guided
   controls, validation, and save/reload coverage are catalogued in
   `tools-context-ui-coverage.md`; fields listed there as JSON-only remain so.
-- Setup remains a protected configurator. Working behaviors, profiles, tools,
+- Configurator (`gents:base:configurator`) remains protected. Working behaviors, profiles, tools,
   network narrowing, graph packs, and background processes use their existing
   runtime owners rather than parallel configuration paths.
 - Desktop composer admission, selection, draft ownership, async callbacks, and
@@ -56,11 +56,12 @@ observed results rather than the presence of controls.
   credential expiry, discovery, model choice, and reasoning settings for each
   supported provider; exercise local unauthenticated inference separately.
 - Persistence: backend/profile/model/sampling survive navigation and restart;
-  placeholder configuration never masks the Setup-needed state.
+  placeholder configuration never masks the Configurator-needed state.
 - Chat: first response, follow-up, double-submit rejection, stop, navigation
   during streaming, session reopen, draft restoration, and restart/reopen.
-- Configurator: create a separate working behavior, retain Setup, choose an exact
-  profile, inspect effective permissions, and run a task.
+- Configurator: create a separate `local:{slug}` working behavior, retain
+  `gents:base:configurator`, copy settings from an exact profile while sharing
+  only its backend connection, inspect effective permissions, and run a task.
 - Graph/background: install and run through native tools, continue chatting,
   inspect durable results, and cancel safely.
 - Contexts/Tools: linked document selectors, subagent targets, exact remote-tool

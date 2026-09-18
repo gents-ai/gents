@@ -7,6 +7,7 @@ import type {
   ConfigComponentsApplyRequest,
   ContextDeleteRequest,
   BehaviorSaveRequest,
+  BehaviorScaffoldCreateRequest,
   CodexLoginResult,
   DesktopApiAdapter,
   InferenceProbeResult,
@@ -64,6 +65,31 @@ export function createDesktopShellConfigActions({
     try {
       const next = await mutateSnapshot(() => api.saveBehaviorConfig(request));
       return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingBehaviorConfig(false);
+      setSavingConfig(false);
+    }
+  }
+
+  async function onCreateBehaviorScaffold(request: BehaviorScaffoldCreateRequest) {
+    setSavingBehaviorConfig(true);
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const createScaffold = api.createBehaviorScaffold;
+      if (!createScaffold) {
+        throw new Error("behavior scaffold creation is unavailable");
+      }
+      let behaviorId = "";
+      await mutateSnapshot(async () => {
+        const result = await createScaffold(request);
+        behaviorId = result.behaviorId;
+        return result.snapshot;
+      });
+      return behaviorId;
     } catch (err) {
       setError(String(err));
       throw err;
@@ -386,6 +412,7 @@ export function createDesktopShellConfigActions({
     onPatchConfigComponents,
     onApplyConfigComponents,
     onSaveBehaviorConfig,
+    onCreateBehaviorScaffold,
     onDeleteSkillConfig,
     onDeleteContextConfig,
     onDeleteTaskConfig,

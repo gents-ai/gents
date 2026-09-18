@@ -178,7 +178,7 @@ pub(super) async fn verify_skill_workflow(
     );
     ensure!(
         setup_before == behavior_configuration(node, owner, Some(setup)).await?,
-        "skill import changed Setup"
+        "skill import changed Configurator"
     );
     let mut builder_after = behavior_configuration(node, owner, None).await?;
     let skills = builder_after["context"]["skill_ids"]
@@ -209,7 +209,7 @@ pub(super) async fn verify_skill_workflow(
         .context("Builder identity")?;
     ensure!(
         !workspace.join("readiness/skill-check.txt").exists(),
-        "Setup executed the skill instead of configuring Builder"
+        "Configurator executed the skill instead of configuring Builder"
     );
     let executed = stages::execute(
         activation,
@@ -350,7 +350,7 @@ async fn run_document_automation(
     activation.wait().await?;
     ensure!(
         setup_before == behavior_configuration(node, owner, Some(setup)).await?,
-        "automation changed Setup"
+        "automation changed Configurator"
     );
     let mut builder_after = behavior_configuration(node, owner, None).await?;
     let datastore = &builder_after["tools"]["datastore"];

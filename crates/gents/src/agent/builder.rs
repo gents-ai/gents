@@ -597,6 +597,7 @@ impl PendingAgentBehavior {
         let compaction = crate::document_config::CompactionConfig {
             compaction_id: self.name.clone(),
             agent_did: principal.agent_did.clone(),
+            scope_behavior_id: None,
             display_name: None,
             strategy: self.compaction_strategy,
             threshold: Some(self.compaction_threshold),

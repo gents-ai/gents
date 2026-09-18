@@ -1116,6 +1116,37 @@ impl ClientCore {
         }
     }
 
+    pub async fn create_behavior_scaffold(
+        &self,
+        agent_did: &str,
+        source_behavior_id: &str,
+        display_name: &str,
+        request_id: &str,
+    ) -> Result<String> {
+        let access = self.operator_access(agent_did)?;
+        let result = mutations::create_disabled_behavior_scaffold_on(
+            &access,
+            agent_did,
+            source_behavior_id,
+            display_name,
+            request_id,
+        )
+        .await;
+        match result {
+            Ok(behavior_id) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                tracing::info!(
+                    target: "gents_desktop_core::writes",
+                    row_id = %behavior_id,
+                    "desktop behavior scaffold created"
+                );
+                Ok(behavior_id)
+            }
+            Err(error) => Err(self.record_mutation_error("create behavior scaffold", error)),
+        }
+    }
+
     pub async fn patch_config_components(
         &self,
         agent_did: &str,

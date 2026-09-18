@@ -13,7 +13,9 @@ pub use inference::{
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
 pub use loader::{decode_pack_config, load_pack_config};
-pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
+pub(crate) use provenance::{
+    pack_artifact_document_digest, prepare_pack_materialization_plan_in_txn,
+};
 pub use provenance::{pack_origin_from_tags, pack_origin_tag};
 
 #[path = "pack_asset_path.rs"]

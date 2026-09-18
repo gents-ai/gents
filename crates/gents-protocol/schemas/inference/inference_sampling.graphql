@@ -1,6 +1,7 @@
 type InferenceSampling @branchable @index(fields: ["agent_did", "sampling_id"], unique: true) {
     sampling_id: String
     agent_did: String @index
+    scope_behavior_id: String @index
     display_name: String
     temperature: Float
     top_p: Float

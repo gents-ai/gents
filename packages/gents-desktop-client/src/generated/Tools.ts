@@ -12,7 +12,11 @@ import type { SubagentTools } from "./SubagentTools.js";
  * Groups are embedded in this document and share its ownership. Missing groups
  * expose no capabilities. External service, surface, and target refs remain explicit.
  */
-export type Tools = { tools_id: string, agent_did: string, display_name?: string | null, host?: HostTools | null, remote?: RemoteTools | null, subagents?: SubagentTools | null, built_ins?: BuiltInTools | null, datastore?: DatastoreTools | null, integrations?: IntegrationTools | null, self_config?: SelfConfigTools | null,
+export type Tools = { tools_id: string, agent_did: string,
+/**
+ * Owning behavior for generated closure documents; absent on unscoped existing data.
+ */
+scope_behavior_id?: string | null, display_name?: string | null, host?: HostTools | null, remote?: RemoteTools | null, subagents?: SubagentTools | null, built_ins?: BuiltInTools | null, datastore?: DatastoreTools | null, integrations?: IntegrationTools | null, self_config?: SelfConfigTools | null,
 /**
  * Optional UI/discovery labels. References, never tags, determine execution.
  */

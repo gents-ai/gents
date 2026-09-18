@@ -6,8 +6,7 @@ use crate::graphql::escape_graphql_string;
 
 use super::references::ConfigReferences;
 use super::serde_helpers::{
-    default_enabled, deserialize_default_on_null, deserialize_enabled, first_row_with_doc_id,
-    is_enabled, rows_with_doc_id,
+    default_enabled, deserialize_default_on_null, deserialize_enabled, is_enabled, rows_with_doc_id,
 };
 
 /// Selects context and inference as one unit. Behaviors are reusable
@@ -77,44 +76,38 @@ impl AgentBehavior {
 
 pub async fn load_agent_behavior(
     node: &EmbeddedNode,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<Option<AgentBehavior>> {
-    Ok(load_agent_behavior_record(node, behavior_id)
+    Ok(load_agent_behavior_record(node, agent_did, behavior_id)
         .await?
         .map(|(_, behavior)| behavior))
 }
 
 pub(crate) async fn load_agent_behavior_record(
     node: &EmbeddedNode,
+    agent_did: &str,
     behavior_id: &str,
 ) -> Result<Option<(String, AgentBehavior)>> {
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let query = format!(
-        r#"{{
-            AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{escaped_behavior_id}" }} }},
-                limit: 1
-            ) {{
-                _docID
-                behavior_id
-                agent_did
-                display_name
-                description
-                context_id
-                inference_profile_id
-                enabled
-                tags
-                created_at
-            }}
-        }}"#
-    );
-
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("query AgentBehavior failed: {:?}", resp.errors);
-    }
-
-    Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentBehavior"))
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "document_config.agent_behavior.read",
+        |txn| {
+            Box::pin(async move {
+                crate::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::collection::Collection::AgentBehavior,
+                    agent_did,
+                    behavior_id,
+                )
+                .await?
+                .map(|(doc_id, value)| Ok((doc_id, serde_json::from_value(value)?)))
+                .transpose()
+            })
+        },
+    )
+    .await
 }
 
 pub async fn list_agent_behaviors(

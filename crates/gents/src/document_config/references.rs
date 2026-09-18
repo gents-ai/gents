@@ -1,7 +1,7 @@
 //! Same-owner configuration closure over the complete transaction snapshot.
 //! Ordinary references never fall back to foreign documents or old snapshots.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{ensure, Context, Result};
 use serde::de::DeserializeOwned;
@@ -99,7 +99,7 @@ impl ConfigReferences {
         for ((collection, _), document) in &self.documents {
             self.validate_document(*collection, document)?;
         }
-        Ok(())
+        self.validate_behavior_scopes()
     }
 
     /// Check a single conservative prune against every current referrer,
@@ -117,7 +117,212 @@ impl ConfigReferences {
         for ((kind, _), document) in &self.documents {
             candidate.validate_document(*kind, document)?;
         }
+        candidate.validate_behavior_scopes()
+    }
+
+    /// Validate the behavior-owned configuration graph after ordinary
+    /// references and document-local invariants have succeeded.
+    ///
+    /// A behavior closure is either wholly legacy-unscoped or wholly scoped to
+    /// that behavior. Only the seven mutable owned collections participate;
+    /// backend, skill, service, subagent, datastore, and integration references
+    /// remain reusable leaves. Every scoped document must also be reachable by
+    /// an owned edge from the behavior named by `scope_behavior_id`.
+    fn validate_behavior_scopes(&self) -> Result<()> {
+        let behaviors = self
+            .documents
+            .iter()
+            .filter(|((collection, _), _)| *collection == Collection::AgentBehavior)
+            .map(|(_, value)| decode::<AgentBehavior>(value))
+            .collect::<Result<Vec<_>>>()?;
+        let behavior_ids = behaviors
+            .iter()
+            .map(|behavior| behavior.behavior_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut reachable = BTreeSet::new();
+
+        for behavior in &behaviors {
+            let profile: InferenceProfile =
+                self.owned_document(Collection::InferenceProfile, &behavior.inference_profile_id)?;
+            ensure_root_scope(
+                &behavior.behavior_id,
+                Collection::InferenceProfile,
+                &profile.profile_id,
+                profile.scope_behavior_id.as_deref(),
+            )?;
+            let closure_scope = profile.scope_behavior_id.as_deref();
+
+            if let Some(context_id) = behavior.context_id.as_deref() {
+                let context: AgentContext =
+                    self.owned_document(Collection::AgentContext, context_id)?;
+                ensure_root_scope(
+                    &behavior.behavior_id,
+                    Collection::AgentContext,
+                    &context.context_id,
+                    context.scope_behavior_id.as_deref(),
+                )?;
+                ensure_owned_scope(
+                    Collection::AgentContext,
+                    &context.context_id,
+                    context.scope_behavior_id.as_deref(),
+                    closure_scope,
+                )?;
+                self.walk_context(&context, closure_scope, &mut reachable)?;
+            }
+
+            self.walk_profile(&profile, closure_scope, &mut reachable)?;
+        }
+
+        for ((collection, id), value) in &self.documents {
+            if !is_behavior_owned(*collection) {
+                continue;
+            }
+            let Some(scope_behavior_id) = value.get("scope_behavior_id").and_then(Value::as_str)
+            else {
+                continue;
+            };
+            ensure!(
+                behavior_ids.contains(scope_behavior_id),
+                "{} {id} scope_behavior_id {scope_behavior_id:?} names a missing AgentBehavior",
+                collection.graphql_type()
+            );
+            ensure!(
+                reachable.contains(&(*collection, id.clone())),
+                "{} {id} is scoped to behavior {scope_behavior_id:?} but is not reachable from that behavior",
+                collection.graphql_type()
+            );
+        }
+
         Ok(())
+    }
+
+    fn walk_context(
+        &self,
+        context: &AgentContext,
+        expected_scope: Option<&str>,
+        reachable: &mut BTreeSet<(Collection, String)>,
+    ) -> Result<()> {
+        ensure_owned_scope(
+            Collection::AgentContext,
+            &context.context_id,
+            context.scope_behavior_id.as_deref(),
+            expected_scope,
+        )?;
+        reachable.insert((Collection::AgentContext, context.context_id.clone()));
+
+        if let Some(tools_id) = context.tools_id.as_deref() {
+            let tools: Tools = self.owned_document(Collection::Tools, tools_id)?;
+            ensure_owned_scope(
+                Collection::Tools,
+                &tools.tools_id,
+                tools.scope_behavior_id.as_deref(),
+                expected_scope,
+            )?;
+            reachable.insert((Collection::Tools, tools.tools_id));
+        }
+        if let Some(compaction_id) = context.compaction_id.as_deref() {
+            let compaction: CompactionConfig =
+                self.owned_document(Collection::Compaction, compaction_id)?;
+            self.walk_compaction(&compaction, expected_scope, reachable)?;
+        }
+        Ok(())
+    }
+
+    fn walk_compaction(
+        &self,
+        compaction: &CompactionConfig,
+        expected_scope: Option<&str>,
+        reachable: &mut BTreeSet<(Collection, String)>,
+    ) -> Result<()> {
+        ensure_owned_scope(
+            Collection::Compaction,
+            &compaction.compaction_id,
+            compaction.scope_behavior_id.as_deref(),
+            expected_scope,
+        )?;
+        reachable.insert((Collection::Compaction, compaction.compaction_id.clone()));
+        if let Some(profile_id) = compaction.inference_profile_id.as_deref() {
+            let profile: InferenceProfile =
+                self.owned_document(Collection::InferenceProfile, profile_id)?;
+            self.walk_profile(&profile, expected_scope, reachable)?;
+        }
+        Ok(())
+    }
+
+    fn walk_profile(
+        &self,
+        profile: &InferenceProfile,
+        expected_scope: Option<&str>,
+        reachable: &mut BTreeSet<(Collection, String)>,
+    ) -> Result<()> {
+        ensure_owned_scope(
+            Collection::InferenceProfile,
+            &profile.profile_id,
+            profile.scope_behavior_id.as_deref(),
+            expected_scope,
+        )?;
+        reachable.insert((Collection::InferenceProfile, profile.profile_id.clone()));
+
+        if let Some(sampling_id) = profile.sampling_id.as_deref() {
+            let sampling: InferenceSampling =
+                self.owned_document(Collection::InferenceSampling, sampling_id)?;
+            ensure_owned_scope(
+                Collection::InferenceSampling,
+                &sampling.sampling_id,
+                sampling.scope_behavior_id.as_deref(),
+                expected_scope,
+            )?;
+            reachable.insert((Collection::InferenceSampling, sampling.sampling_id));
+        }
+        if let Some(execution_id) = profile.execution_id.as_deref() {
+            let execution: InferenceExecution =
+                self.owned_document(Collection::InferenceExecution, execution_id)?;
+            self.walk_execution(&execution, expected_scope, reachable)?;
+        }
+        Ok(())
+    }
+
+    fn walk_execution(
+        &self,
+        execution: &InferenceExecution,
+        expected_scope: Option<&str>,
+        reachable: &mut BTreeSet<(Collection, String)>,
+    ) -> Result<()> {
+        ensure_owned_scope(
+            Collection::InferenceExecution,
+            &execution.execution_id,
+            execution.scope_behavior_id.as_deref(),
+            expected_scope,
+        )?;
+        reachable.insert((
+            Collection::InferenceExecution,
+            execution.execution_id.clone(),
+        ));
+        if let Some(retry_policy_id) = execution.retry_policy_id.as_deref() {
+            let retry: InferenceRetryPolicy =
+                self.owned_document(Collection::InferenceRetryPolicy, retry_policy_id)?;
+            ensure_owned_scope(
+                Collection::InferenceRetryPolicy,
+                &retry.retry_policy_id,
+                retry.scope_behavior_id.as_deref(),
+                expected_scope,
+            )?;
+            reachable.insert((Collection::InferenceRetryPolicy, retry.retry_policy_id));
+        }
+        Ok(())
+    }
+
+    fn owned_document<T: DeserializeOwned>(&self, collection: Collection, id: &str) -> Result<T> {
+        decode(
+            self.documents
+                .get(&(collection, id.to_owned()))
+                .with_context(|| {
+                    format!(
+                        "behavior scope traversal missing {} {id:?}",
+                        collection.graphql_type()
+                    )
+                })?,
+        )
     }
 
     pub(crate) fn validate_document(&self, collection: Collection, value: &Value) -> Result<()> {
@@ -425,6 +630,50 @@ impl ConfigReferences {
         }
         Ok(())
     }
+}
+
+fn is_behavior_owned(collection: Collection) -> bool {
+    matches!(
+        collection,
+        Collection::AgentContext
+            | Collection::Tools
+            | Collection::Compaction
+            | Collection::InferenceProfile
+            | Collection::InferenceSampling
+            | Collection::InferenceExecution
+            | Collection::InferenceRetryPolicy
+    )
+}
+
+fn ensure_root_scope(
+    behavior_id: &str,
+    collection: Collection,
+    id: &str,
+    actual_scope: Option<&str>,
+) -> Result<()> {
+    ensure!(
+        actual_scope.is_none() || actual_scope == Some(behavior_id),
+        "AgentBehavior {behavior_id} references {} {id} scoped to {:?}; expected legacy null or {behavior_id:?}",
+        collection.graphql_type(),
+        actual_scope
+    );
+    Ok(())
+}
+
+fn ensure_owned_scope(
+    collection: Collection,
+    id: &str,
+    actual_scope: Option<&str>,
+    expected_scope: Option<&str>,
+) -> Result<()> {
+    ensure!(
+        actual_scope == expected_scope,
+        "{} {id} scope_behavior_id {:?} does not match its owned closure scope {:?}",
+        collection.graphql_type(),
+        actual_scope,
+        expected_scope
+    );
+    Ok(())
 }
 
 fn decode<T: DeserializeOwned>(value: &Value) -> Result<T> {

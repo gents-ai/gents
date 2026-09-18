@@ -4,7 +4,11 @@
  * Retry policy selected by InferenceExecution. Unset fields preserve the existing
  * owned-loop defaults and classification; retries share the request deadline/budget.
  */
-export type InferenceRetryPolicy = { agent_did: string, retry_policy_id: string, display_name?: string | null, max_transport_retries?: number | null, backoff_ms?: Array<number> | null, max_resample_retries?: number | null, allow_repair?: boolean | null,
+export type InferenceRetryPolicy = { agent_did: string, retry_policy_id: string,
+/**
+ * Owning behavior for generated closure documents; absent on unscoped existing data.
+ */
+scope_behavior_id?: string | null, display_name?: string | null, max_transport_retries?: number | null, backoff_ms?: Array<number> | null, max_resample_retries?: number | null, allow_repair?: boolean | null,
 /**
  * Default interactive successor ceiling, resolved onto the initial request.
  * Its retry chain retains that ceiling; this is not a human approval gate.

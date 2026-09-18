@@ -11,7 +11,11 @@ export type AgentContext = {
 /**
  * Logical configuration key; `_docID` is the storage identity.
  */
-context_id: string, agent_did: string, display_name?: string | null, description?: string | null,
+context_id: string, agent_did: string,
+/**
+ * Owning behavior for generated closure documents; absent on unscoped existing data.
+ */
+scope_behavior_id?: string | null, display_name?: string | null, description?: string | null,
 /**
  * Literal system instructions, used unchanged when assembling the preamble.
  * No template evaluation; dynamic prompt templates belong to tasks.

@@ -7,6 +7,11 @@ containing its `DatastoreToolSurface`, least-privilege `Tools`, tasks,
 sidecars needed to install the pack; there are no per-collection JSON document
 fragments.
 
+The two roles install as `gents:pipeline:exp-stage1` and
+`gents:pipeline:exp-stage2`. Their mutable components use deterministic suffixes
+such as `:context`, `:tools`, and `:inference`; the “Pipeline stage 1/2” display
+names are labels rather than identifiers.
+
 ```text
 create ExperimentJob
         │

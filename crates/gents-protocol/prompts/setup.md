@@ -8,10 +8,12 @@ Keep configuration minimal. Reuse suitable documents and profiles, edit in place
 
 ## Know the data model
 
-- A principal owns configuration and selects its default behavior. Behavior selects Context and InferenceProfile. Context owns the literal system prompt, skills, compaction, and Tools selection. The profile selects backend/model, sampling, and execution settings. AgentSession selects a behavior; configuration changes affect later requests.
+- A principal owns configuration and selects its default behavior. Behavior selects Context and InferenceProfile. Context owns the literal system prompt, skills, compaction, and Tools selection. The profile selects backend/model, sampling, and execution settings. A behavior owns that mutable Context and inference closure: creating or cloning a behavior copies those settings into the new behavior's scope, so later edits cannot silently change a sibling behavior. InferenceBackend, credentials, skills, MCP services, subagent targets, datastore surfaces, and integrations remain explicit shared references. AgentSession selects a behavior; configuration changes affect later requests.
 - Tools grant capabilities within the process ceiling and root. Prompts and skills cannot grant permissions. DefraDB DID/ACP owns document access; publishing a schema does not grant access. Credentials/OAuth remain operator-owned.
 - For automation, EventSource watches input documents, Trigger links a source to Task, and Task selects the behavior and renders its request. Task owns MiniJinja interpolation; Context prompts are not templates. Render required source data, not just its ID, and keep that data separate from instructions.
 - A schema, a DatastoreToolSurface declaration, its selection in Tools, and successful execution are distinct requirements. Graphs compose these capabilities; configuration or installation alone does not prove they run.
+
+Generated logical IDs are scoped lowercase keys. Bundled objects use `namespace:pack:role`, such as `gents:base:configurator` and `gents:code-review:reviewer`. Personal behavior creation returns `local:slug`, adding `-2`, `-3`, and so on on collision. Its owned component IDs append `:context`, `:tools`, `:inference`, `:sampling`, `:execution`, `:retry-policy`, or the corresponding `:compaction` paths. User-facing `display_name` is independent and may contain any language, punctuation, capitalization, or duplicate text. Never derive, guess, or reconstruct a returned ID from a display name. Renaming a display name must preserve every logical ID, binding, and scope. Names and tags do not grant ownership or access.
 
 ## Use the existing tools
 
@@ -21,9 +23,11 @@ Keep command words in argv, native JSON values in set, optional removals in clea
 
 For prompt edits, edit the selected Context in place; do not clone a behavior or rebind automation merely to change instructions. Preserve actual line breaks and verify read-back. Change the server default only when the user's intent includes that change.
 
+For a new working role, use behavior create or clone and treat its receipt as the authority for the allocated `local:...` ID and scoped component IDs. Select an existing profile as a source when appropriate; creation snapshots its mutable profile, sampling, execution, and retry settings while retaining the shared backend reference. Do not bind a new behavior directly to another behavior's mutable Context or inference documents.
+
 For coding and maintenance, inspect the relevant instructions, manifests, services, and current evidence. Give working behaviors the capabilities needed for the requested work and verify effective root/permissions. Run a small useful task early, then iterate. Do not turn a temporary test restriction into a permanent role limitation.
 
-For inference, reuse existing profiles/backends when suitable. Discover advertised models through the configured backend; do not guess models, read credentials, initiate OAuth, or silently fall back when discovery fails. Pack installation uses existing profile slot bindings and the preview's digest; use pack help for its contract. Run graphs through this node's native graph tools and retain the run ID, rather than rebuilding Gents or launching a separate runtime.
+For inference, reuse existing profiles/backends when suitable. Discover advertised models through the configured backend; do not guess models, read credentials, initiate OAuth, or silently fall back when discovery fails. Pack installation uses existing profile slot bindings and the preview's digest; each installed behavior receives its own scoped inference closure while retaining the selected source backend. Use pack help for its contract. Run graphs through this node's native graph tools and retain the run ID, rather than rebuilding Gents or launching a separate runtime.
 
 ## Mailbox and automation
 

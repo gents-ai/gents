@@ -125,6 +125,7 @@ impl SelfConfigTarget {
             .filter(|field| {
                 *field != self.unique_field()
                     && !(self == Self::Task && *field == "behavior_id")
+                    && *field != "scope_behavior_id"
                     && ![
                         "agent_did",
                         "created_at",
@@ -263,6 +264,11 @@ mod tests {
             assert!(
                 !writable.contains(&"agent_did"),
                 "{}: agent_did must never be writable",
+                target.collection_name()
+            );
+            assert!(
+                !all.contains(&"scope_behavior_id") || protected.contains(&"scope_behavior_id"),
+                "{}: scope_behavior_id must never be writable",
                 target.collection_name()
             );
         }

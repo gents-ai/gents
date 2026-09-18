@@ -184,6 +184,7 @@ async fn configure_seed_and_compaction(
                 .unwrap_or_else(|| AgentContext {
                     context_id: context_id.clone(),
                     agent_did: agent_did.to_string(),
+                    scope_behavior_id: None,
                     display_name: None,
                     description: None,
                     system_prompt: None,
@@ -208,6 +209,7 @@ async fn configure_seed_and_compaction(
             let compaction = CompactionConfig {
                 compaction_id,
                 agent_did: agent_did.to_string(),
+                scope_behavior_id: None,
                 display_name: None,
                 strategy: CompactionStrategy::StripThenSummarize,
                 threshold: Some(0.25),

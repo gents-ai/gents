@@ -11,9 +11,13 @@ use defra_node::EmbeddedNode;
 use gents_protocol::persona::LocalPersonaRequestRecord;
 
 use super::persona_presets;
+use crate::behavior_scope::{
+    behavior_slug_from_display_name, personal_behavior_key_candidates, reserved_behavior_slots,
+};
 use crate::config_client::{
-    apply_desired_state_plan, read_desired_state_document_in_txn, ConfigAccess, ConfigApplyTxn,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
+    apply_desired_state_plan, materialize_behavior_closure_candidate_in_txn,
+    read_desired_state_document_in_txn, read_desired_state_record_in_txn, ConfigAccess,
+    ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::document_config::{
     AgentBehavior as AgentBehaviorDocument, AgentContext, AgentPrincipal, BashTools, BuiltInTools,
@@ -469,47 +473,24 @@ pub fn decide_persona_request(
 }
 
 fn slugify(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut pending_sep = false;
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            if pending_sep && !out.is_empty() {
-                out.push('-');
-            }
-            out.push(ch.to_ascii_lowercase());
-            pending_sep = false;
-        } else {
-            pending_sep = true;
-        }
-    }
-    out
+    behavior_slug_from_display_name(input)
 }
 
-/// Derive a globally-unique `AgentBehavior.behavior_id` from a persona name:
-/// `{agent_did}:{slug}`, with `-2`, `-3`, … appended on collision against
-/// `existing` (this agent's current behaviors). The `agent_did` prefix keeps
-/// ids globally unique across agents without needing to scan the whole
-/// collection; collision detection only needs to consider this agent's own
-/// behaviors.
-///
-/// Callers must run the repair scan (does a behavior already exist with
-/// `context_id == context-{request_key}`?) BEFORE calling this — deriving
-/// an id on every retry of an already-applied create would see its own prior
-/// output in `existing` and mint a `-2` duplicate instead of recognizing the
-/// repair.
+/// Derive a preview personal behavior ID. Transactional publication performs
+/// the stronger allocation across every reserved component slot.
 pub fn derive_behavior_id(
-    agent_did: &str,
+    _agent_did: &str,
     persona_name: &str,
     existing: &BTreeMap<String, BehaviorRef>,
 ) -> String {
     let slug = slugify(persona_name);
-    let base = format!("{agent_did}:{slug}");
+    let base = format!("local:{slug}");
     if !existing.contains_key(&base) {
         return base;
     }
     let mut n = 2;
     loop {
-        let candidate = format!("{agent_did}:{slug}-{n}");
+        let candidate = format!("local:{slug}-{n}");
         if !existing.contains_key(&candidate) {
             return candidate;
         }
@@ -531,6 +512,7 @@ fn tools_from_preset(
     Ok(Tools {
         tools_id,
         agent_did: owner.into(),
+        scope_behavior_id: None,
         display_name: Some(format!("{name} tools")),
         host: Some(HostTools {
             root,
@@ -562,6 +544,8 @@ fn tools_from_preset(
 pub struct PersonaApplyOutcome {
     pub behavior_id: String,
     pub repaired: bool,
+    /// The request receipt was published atomically with this configuration.
+    pub receipt_written: bool,
 }
 
 async fn load_config<T: serde::de::DeserializeOwned>(
@@ -601,8 +585,31 @@ pub async fn apply_persona_request(
     ConfigAccess::Local(node.clone()).transact("persona.apply", |txn| Box::pin(async move {
         let op = doc.op.as_ref().context("persona operation missing")?;
         let owner = &doc.agent_did;
-        let context_id = format!("context-{}", doc.request_key);
-        let tools_id = format!("tools-{}", doc.request_key);
+        let mut receipt_row = false;
+        if !doc.doc_id.trim().is_empty() {
+            let response = txn.execute(&format!(
+                "{{ PersonaConfigRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{ _docID request_key agent_did status applied_behavior_id }} }}",
+                crate::graphql::escape_graphql_string(&doc.doc_id)
+            )).await?;
+            let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "PersonaConfigRequest");
+            anyhow::ensure!(rows.len() <= 1, "ambiguous persona request receipt");
+            if let Some(row) = rows.first() {
+                anyhow::ensure!(row.get("request_key").and_then(serde_json::Value::as_str) == Some(doc.request_key.as_str()), "persona receipt request key changed");
+                anyhow::ensure!(row.get("agent_did").and_then(serde_json::Value::as_str) == Some(owner.as_str()), "persona receipt principal changed");
+                receipt_row = true;
+                if let Some(behavior_id) = row.get("applied_behavior_id").and_then(serde_json::Value::as_str).filter(|id| !id.is_empty()) {
+                    anyhow::ensure!(
+                        row.get("status").and_then(serde_json::Value::as_str) == Some("applied"),
+                        "persona receipt has an applied behavior without applied status"
+                    );
+                    anyhow::ensure!(
+                        read_desired_state_record_in_txn(txn, Collection::AgentBehavior, owner, behavior_id).await?.is_some(),
+                        "persona receipt references missing behavior {behavior_id:?} for principal {owner:?}"
+                    );
+                    return Ok(PersonaApplyOutcome { behavior_id: behavior_id.to_owned(), repaired: true, receipt_written: true });
+                }
+            }
+        }
         // Use the same principal-scoped canonical codec as the desired-state loader.
         let (fields, _) = crate::config_client::config_projection(Collection::AgentBehavior, None)?;
         let response = txn.execute(&format!("{{ AgentBehavior(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{ {} }} }}",
@@ -612,13 +619,6 @@ pub async fn apply_persona_request(
             let behavior: AgentBehaviorDocument = serde_json::from_value(value)?;
             anyhow::ensure!(current.insert(behavior.behavior_id.clone(), behavior).is_none(), "ambiguous persona behavior within principal");
         }
-        if matches!(op, PersonaOp::Create {..}) {
-            let repaired: Vec<_> = current.values().filter(|b| b.context_id.as_deref() == Some(&context_id)).collect();
-            anyhow::ensure!(repaired.len() <= 1, "persona request context is bound by multiple behaviors");
-            if let Some(behavior) = repaired.first() {
-                return Ok(PersonaApplyOutcome {behavior_id:behavior.behavior_id.clone(),repaired:true});
-            }
-        }
         let source_id = match op {
             PersonaOp::Create {clone_from} => clone_from.as_deref(),
             PersonaOp::Edit | PersonaOp::Disable => Some(doc.behavior_id.as_deref().context("persona behavior missing")?),
@@ -627,20 +627,55 @@ pub async fn apply_persona_request(
         if matches!(op, PersonaOp::Create {clone_from:Some(_)}) {
             anyhow::ensure!(source.as_ref().is_some_and(|source| source.enabled), "clone source is disabled");
         }
+        if matches!(op, PersonaOp::Edit | PersonaOp::Disable) {
+            anyhow::ensure!(
+                source.as_ref().is_none_or(|source| {
+                    source.behavior_id
+                        != crate::behavior_scope::SETUP_CONFIGURATOR_BEHAVIOR_ID
+                        && !source
+                            .tags
+                            .iter()
+                            .any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)
+                }),
+                "protected configurator behavior cannot be modified"
+            );
+        }
+        let create = matches!(op, PersonaOp::Create {..});
+        let target_behavior_id = if create {
+            let slug = slugify(doc.persona_name.as_deref().context("persona name missing")?);
+            let mut selected = None;
+            for candidate in personal_behavior_key_candidates(&slug)? {
+                let mut occupied = false;
+                for slot in reserved_behavior_slots(&candidate) {
+                    if read_desired_state_record_in_txn(txn, slot.collection, owner, &slot.logical_id).await?.is_some() {
+                        occupied = true;
+                        break;
+                    }
+                }
+                if !occupied {
+                    selected = Some(candidate);
+                    break;
+                }
+            }
+            selected.context("personal behavior ID space exhausted")?
+        } else {
+            doc.behavior_id.clone().context("persona behavior missing")?
+        };
         let mut behavior = if let Some(source) = source.clone() { source } else {
-            serde_json::from_value(serde_json::json!({"behavior_id":derive_behavior_id(owner, doc.persona_name.as_deref().context("persona name missing")?, &current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)})).collect()), "agent_did":owner,
+            serde_json::from_value(serde_json::json!({"behavior_id":target_behavior_id, "agent_did":owner,
                 "inference_profile_id":doc.profile_id.as_deref().context("persona profile missing")?}))?
         };
         if matches!(op, PersonaOp::Disable) {
             behavior.enabled = false;
             apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(vec![replacement(Collection::AgentBehavior, &behavior)?])?).await?;
-            return Ok(PersonaApplyOutcome {behavior_id:behavior.behavior_id,repaired:false});
+            if doc.make_default {
+                anyhow::bail!("disabled behavior cannot be the default");
+            }
+            write_persona_receipt(txn, doc, receipt_row, &behavior.behavior_id).await?;
+            return Ok(PersonaApplyOutcome {behavior_id:behavior.behavior_id,repaired:false,receipt_written:receipt_row});
         }
-        let create = matches!(op, PersonaOp::Create {..});
         if create {
-            let name = doc.persona_name.as_deref().context("behavior display_name missing")?;
-            let catalog = current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)})).collect();
-            behavior.behavior_id = derive_behavior_id(owner, name, &catalog);
+            behavior.behavior_id = target_behavior_id.clone();
             behavior.created_at = None;
             behavior.enabled = true;
             behavior
@@ -655,32 +690,36 @@ pub async fn apply_persona_request(
         if source.is_none() || doc.edits("description") || (create && doc.description.is_some()) {
             behavior.description = doc.description.clone();
         }
-        if create || doc.edits("profile_id") {
+        if source.is_none() || doc.edits("profile_id") || (create && doc.profile_id.is_some()) {
             let profile = doc.profile_id.as_deref().context("behavior profile_id cannot be cleared")?;
             anyhow::ensure!(!profile.trim().is_empty(), "behavior profile_id must not be blank");
             behavior.inference_profile_id = profile.into();
         }
-        let mut context: AgentContext = match source.as_ref().and_then(|b| b.context_id.as_deref()) {
-            Some(id) => load_config(txn, Collection::AgentContext, owner, id).await?,
-            None => serde_json::from_value(serde_json::json!({"context_id":context_id,"agent_did":owner}))?,
+        let source_context_id = source.as_ref().and_then(|b| b.context_id.clone());
+        let need_context = source_context_id.is_some() || source.is_none() || doc.system_prompt.is_some()
+            || doc.description.is_some() || doc.edits("system_prompt") || doc.edits("description")
+            || doc.edits("root") || doc.edits("preset");
+        let mut context: Option<AgentContext> = match source_context_id.as_deref() {
+            Some(id) => Some(load_config(txn, Collection::AgentContext, owner, id).await?),
+            None if need_context => Some(serde_json::from_value(serde_json::json!({"context_id":format!("persona-source:{}:context", doc.request_key),"agent_did":owner}))?),
+            None => None,
         };
-        let existing_context = context.clone();
-        let existing_tools: Option<Tools> = match context.tools_id.as_deref() {
+        let existing_tools: Option<Tools> = match context.as_ref().and_then(|context| context.tools_id.as_deref()) {
             Some(id) => Some(load_config(txn, Collection::Tools, owner, id).await?), None => None,
         };
         if create {
             if let Some(system_prompt) = &doc.system_prompt {
-                context.system_prompt = Some(system_prompt.clone());
+                if let Some(context) = &mut context { context.system_prompt = Some(system_prompt.clone()); }
             }
         } else if doc.edits("system_prompt") {
-            context.system_prompt = doc.system_prompt.clone();
+            if let Some(context) = &mut context { context.system_prompt = doc.system_prompt.clone(); }
         }
         // The command exposes one concise description because Behavior and
         // Context are materialized as one reusable interface. Keep both
         // canonical owners coherent instead of leaving the context opaque in
         // later inspect/edit flows.
         if source.is_none() || doc.edits("description") || (create && doc.description.is_some()) {
-            context.description = doc.description.clone();
+            if let Some(context) = &mut context { context.description = doc.description.clone(); }
         }
         let root = doc.root.as_ref().filter(|root| !root.trim().is_empty()).cloned();
         let preset = doc.preset.as_deref().unwrap_or("").trim();
@@ -695,7 +734,7 @@ pub async fn apply_persona_request(
                     .and_then(|host| host.root.clone())
             };
             Some(tools_from_preset(
-                tools_id.clone(),
+                existing_tools.as_ref().map(|tools| tools.tools_id.clone()).unwrap_or_else(|| format!("persona-source:{}:tools", doc.request_key)),
                 owner,
                 effective_name,
                 preset,
@@ -705,34 +744,73 @@ pub async fn apply_persona_request(
         // Omitted edit fields preserve their canonical values. A present root
         // with a null payload explicitly clears only the root narrowing.
         if root.is_some() || (!create && doc.edits("root")) {
-            if tools.is_none() && root.is_some() { tools = Some(Tools {tools_id:tools_id.clone(),agent_did:owner.clone(),..Default::default()}); }
+            if tools.is_none() && root.is_some() {
+                tools = Some(Tools {
+                    tools_id: format!("persona-source:{}:tools", doc.request_key),
+                    agent_did: owner.clone(),
+                    scope_behavior_id: None,
+                    ..Default::default()
+                });
+            }
             if let Some(tools) = &mut tools {
                 if let Some(host) = &mut tools.host { host.root = root.clone(); }
                 else if root.is_some() { tools.host = Some(HostTools {root:root.clone(),..Default::default()}); }
             }
         }
-        let change_context = create || context != existing_context || tools != existing_tools;
-        let mut documents = Vec::new();
-        if change_context {
-            context.context_id = context_id;
-            if let Some(mut tools) = tools {
-                tools.tools_id = tools_id.clone();
-                context.tools_id = Some(tools_id);
-                documents.push(replacement(Collection::Tools, &tools)?);
+        let mut overlays = Vec::new();
+        if let Some(mut context) = context {
+            if let Some(tools) = tools {
+                context.tools_id = Some(tools.tools_id.clone());
+                overlays.push((Collection::Tools, serde_json::to_value(tools)?));
             } else { context.tools_id = None; }
             behavior.context_id = Some(context.context_id.clone());
-            documents.push(replacement(Collection::AgentContext, &context)?);
+            overlays.push((Collection::AgentContext, serde_json::to_value(context)?));
+        } else {
+            behavior.context_id = None;
         }
-        documents.push(replacement(Collection::AgentBehavior, &behavior)?);
+        materialize_behavior_closure_candidate_in_txn(
+            txn,
+            &behavior,
+            overlays,
+            &target_behavior_id,
+            behavior.display_name.as_deref(),
+        ).await?;
         if doc.make_default {
             let mut principal: AgentPrincipal =
                 load_config(txn, Collection::AgentPrincipal, owner, owner).await?;
-            principal.default_behavior_id = Some(behavior.behavior_id.clone());
-            documents.push(replacement(Collection::AgentPrincipal, &principal)?);
+            principal.default_behavior_id = Some(target_behavior_id.clone());
+            apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(vec![replacement(Collection::AgentPrincipal, &principal)?])?).await?;
         }
-        apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await?;
-        Ok(PersonaApplyOutcome {behavior_id:behavior.behavior_id,repaired:false})
+        write_persona_receipt(txn, doc, receipt_row, &target_behavior_id).await?;
+        Ok(PersonaApplyOutcome {behavior_id:target_behavior_id,repaired:false,receipt_written:receipt_row})
     })).await
+}
+
+async fn write_persona_receipt(
+    txn: &ConfigApplyTxn<'_>,
+    doc: &PersonaRequestDoc,
+    receipt_row: bool,
+    behavior_id: &str,
+) -> Result<()> {
+    if !receipt_row {
+        return Ok(());
+    }
+    let processed_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let response = txn.execute(&format!(
+        "mutation {{ update_PersonaConfigRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, input: {{status: \"applied\", status_detail: \"\", applied_behavior_id: \"{}\", processed_at: \"{}\"}}) {{ _docID }} }}",
+        crate::graphql::escape_graphql_string(&doc.doc_id),
+        crate::graphql::escape_graphql_string(behavior_id),
+        crate::graphql::escape_graphql_string(&processed_at),
+    )).await?;
+    let rows = gents_protocol::graphql::graphql_rows_from_response(
+        &response,
+        "update_PersonaConfigRequest",
+    );
+    anyhow::ensure!(
+        rows.len() == 1,
+        "persona request receipt disappeared during apply"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1195,31 +1273,39 @@ mod tests {
     #[test]
     fn derives_slugged_id() {
         let id = derive_behavior_id("did:key:agent", "Research Assistant!!", &BTreeMap::new());
-        assert_eq!(id, "did:key:agent:research-assistant");
+        assert_eq!(id, "local:research-assistant");
+    }
+
+    #[test]
+    fn derives_stable_nonempty_slug_for_unicode_only_name() {
+        let first = derive_behavior_id("did:key:agent", "研究員", &BTreeMap::new());
+        let second = derive_behavior_id("did:key:other", "研究員", &BTreeMap::new());
+        assert_eq!(first, second);
+        assert_eq!(first, "local:behavior");
     }
 
     #[test]
     fn derives_collision_suffix() {
         let mut existing = BTreeMap::new();
         existing.insert(
-            "did:key:agent:research-assistant".to_string(),
+            "local:research-assistant".to_string(),
             BehaviorRef {
                 enabled: true,
                 protected: false,
             },
         );
         let id = derive_behavior_id("did:key:agent", "Research Assistant", &existing);
-        assert_eq!(id, "did:key:agent:research-assistant-2");
+        assert_eq!(id, "local:research-assistant-2");
 
         existing.insert(
-            "did:key:agent:research-assistant-2".to_string(),
+            "local:research-assistant-2".to_string(),
             BehaviorRef {
                 enabled: true,
                 protected: false,
             },
         );
         let id = derive_behavior_id("did:key:agent", "Research Assistant", &existing);
-        assert_eq!(id, "did:key:agent:research-assistant-3");
+        assert_eq!(id, "local:research-assistant-3");
     }
 
     #[test]
@@ -1263,6 +1349,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_suffixes_when_a_reserved_component_slot_is_occupied() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let owner = "did:key:agent";
+        seed_persona_validation_references(&node, owner).await?;
+        let response = node
+            .execute(&format!(
+                r#"mutation {{ create_AgentContext(input: {{context_id:"local:research-assistant:context",agent_did:"{}"}}) {{_docID}} }}"#,
+                crate::graphql::escape_graphql_string(owner)
+            ))
+            .await;
+        crate::graphql::ensure_no_errors(&response, "seed reserved context slot")?;
+
+        let outcome = apply_persona_request(
+            &node,
+            &create_doc(PersonaOp::Create { clone_from: None }),
+            &base_catalog(),
+        )
+        .await?;
+        assert_eq!(outcome.behavior_id, "local:research-assistant-2");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn canonical_persona_create_clone_edit_disable_and_atomic_replay() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
@@ -1272,9 +1382,7 @@ mod tests {
         doc.root = Some("/original".into());
         let catalog = base_catalog();
         let created = apply_persona_request(&node, &doc, &catalog).await?;
-        let replay = apply_persona_request(&node, &doc, &catalog).await?;
-        assert_eq!(created.behavior_id, replay.behavior_id);
-        assert!(replay.repaired);
+        assert_eq!(created.behavior_id, "local:research-assistant");
         let original: AgentBehaviorDocument = read(
             &node,
             Collection::AgentBehavior,
@@ -1282,7 +1390,10 @@ mod tests {
             &created.behavior_id,
         )
         .await?;
-        assert_eq!(original.inference_profile_id, "profile-1");
+        assert_eq!(
+            original.inference_profile_id,
+            "local:research-assistant:inference"
+        );
         assert_eq!(
             original.description.as_deref(),
             Some("Researches a focused question")
@@ -1340,7 +1451,7 @@ mod tests {
         let cloned = apply_persona_request(&node, &doc, &catalog).await?;
         let behavior: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
-        assert_eq!(behavior.inference_profile_id, "profile-2");
+        assert_eq!(behavior.inference_profile_id, "local:cloned:inference");
         assert_eq!(behavior.description, original.description);
         let clone_context: AgentContext = read(
             &node,
@@ -1361,6 +1472,7 @@ mod tests {
         assert_ne!(clone_tools.tools_id, source_tools.tools_id);
         let mut copied_tools = clone_tools.clone();
         copied_tools.tools_id = source_tools.tools_id.clone();
+        copied_tools.scope_behavior_id = source_tools.scope_behavior_id.clone();
         assert_eq!(copied_tools, source_tools);
 
         // A sparse rename carries no profile/root/prompt values. The signed
@@ -1378,7 +1490,7 @@ mod tests {
         let renamed: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
         assert_eq!(renamed.display_name.as_deref(), Some("Renamed clone"));
-        assert_eq!(renamed.inference_profile_id, "profile-2");
+        assert_eq!(renamed.inference_profile_id, "local:cloned:inference");
         assert_eq!(renamed.context_id, behavior.context_id);
         let renamed_context: AgentContext = read(
             &node,

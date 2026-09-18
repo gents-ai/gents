@@ -1972,6 +1972,11 @@ pub(crate) struct ConfigShowArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        help = "Principal DID for owner-qualified behavior lookup; defaults to the initialized home identity"
+    )]
+    pub(crate) agent_did: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
 }
@@ -1991,7 +1996,7 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) disabled: bool,
 }
 
-/// Replace one canonical behavior document through the shared config writer.
+/// Update metadata on an existing canonical behavior document.
 #[derive(clap::Args)]
 pub(crate) struct BehaviorUpsertArgs {
     #[arg(long)]
@@ -2006,12 +2011,12 @@ pub(crate) struct BehaviorUpsertArgs {
     pub(crate) description: Option<String>,
     #[arg(
         long,
-        help = "Optional AgentContext reference owned by this agent (literal prompt, skills, tools, compaction)"
+        help = "Existing AgentContext reference; must exactly match the behavior because this command only updates metadata"
     )]
     pub(crate) context_id: Option<String>,
     #[arg(
         long,
-        help = "Required InferenceProfile reference; Task -> Behavior -> Profile is the only model-selection path"
+        help = "Existing InferenceProfile reference; must exactly match the behavior because this command only updates metadata"
     )]
     pub(crate) inference_profile_id: String,
     #[arg(long = "tag", help = "Optional UI/discovery label (repeatable)")]

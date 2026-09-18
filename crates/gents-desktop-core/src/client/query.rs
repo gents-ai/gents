@@ -87,15 +87,15 @@ pub(super) const SCHEDULE_OBSERVATION_FIELDS: &str = "trigger_id next_run_at";
 pub(super) const TRIGGER_FIELDS: &str = "agent_did trigger_id display_name description task_id source enabled concurrency created_at updated_at tags";
 pub(super) const TRIGGER_OBSERVATION_FIELDS: &str =
     "trigger_id last_attempt_at last_fired_source_doc_id last_status last_error fire_count";
-pub(super) const TOOLS_FIELDS: &str = "tools_id agent_did display_name host remote subagents built_ins datastore integrations self_config tags";
-pub(super) const AGENT_CONTEXT_FIELDS: &str = "context_id agent_did display_name description system_prompt tools_id compaction_id skill_ids tags";
-pub(super) const COMPACTION_CONFIG_FIELDS: &str = "compaction_id agent_did display_name strategy threshold keep_recent_tokens tool_result_max_chars summary_max_output_tokens summary_file_list_max inference_profile_id tags";
+pub(super) const TOOLS_FIELDS: &str = "tools_id agent_did scope_behavior_id display_name host remote subagents built_ins datastore integrations self_config tags";
+pub(super) const AGENT_CONTEXT_FIELDS: &str = "context_id agent_did scope_behavior_id display_name description system_prompt tools_id compaction_id skill_ids tags";
+pub(super) const COMPACTION_CONFIG_FIELDS: &str = "compaction_id agent_did scope_behavior_id display_name strategy threshold keep_recent_tokens tool_result_max_chars summary_max_output_tokens summary_file_list_max inference_profile_id tags";
 pub(super) const INFERENCE_BACKEND_FIELDS: &str = "backend_id agent_did name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 pub(super) const INFERENCE_BACKEND_OBSERVATION_FIELDS: &str =
     "backend_id catalogs last_probe probe_status";
-pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id agent_did display_name description backend_id model_name reasoning_effort context_window max_output_tokens sampling_id execution_id tags";
-pub(super) const INFERENCE_SAMPLING_FIELDS: &str = "sampling_id agent_did display_name temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty tags";
-pub(super) const INFERENCE_EXECUTION_FIELDS: &str = "execution_id agent_did display_name max_turns max_total_tokens stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_policy_id tags";
+pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id agent_did scope_behavior_id display_name description backend_id model_name reasoning_effort context_window max_output_tokens sampling_id execution_id tags";
+pub(super) const INFERENCE_SAMPLING_FIELDS: &str = "sampling_id agent_did scope_behavior_id display_name temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty tags";
+pub(super) const INFERENCE_EXECUTION_FIELDS: &str = "execution_id agent_did scope_behavior_id display_name max_turns max_total_tokens stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_policy_id tags";
 pub(super) const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id agent_did display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_agent_did enabled tags";
 pub(super) const EVENT_SOURCE_FIELDS: &str = "event_source_id agent_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
 pub(super) const SUBAGENT_TARGET_FIELDS: &str =

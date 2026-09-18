@@ -253,6 +253,7 @@ pub async fn configure_subagent_behavior(
                 .unwrap_or_else(|| AgentContext {
                     context_id: context_id.clone(),
                     agent_did: agent_did.to_string(),
+                    scope_behavior_id: None,
                     display_name: None,
                     description: None,
                     system_prompt: None,
@@ -361,6 +362,7 @@ pub async fn configure_behavior_tools(
                 .unwrap_or_else(|| AgentContext {
                     context_id: context_id.clone(),
                     agent_did: agent_did.to_string(),
+                    scope_behavior_id: None,
                     display_name: None,
                     description: None,
                     system_prompt: None,

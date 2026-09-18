@@ -2,7 +2,7 @@
 
 Sources: canonical `document_config/tools.rs`, runtime `tool_surface/build.rs`
 and `tool_surface/behavior_config.rs`, desired-state `config_client/desired_state.rs`,
-model command dispatch in `self_config/command.rs`, and CLI/desktop Setup grants.
+model command dispatch in `self_config/command.rs`, and CLI/desktop Configurator grants.
 
 Configuration selection, document authoring, and successful execution are separate
 coverage requirements. The table records the current implementation, not promised
@@ -20,7 +20,7 @@ values for nested groups and runtime ceilings enforced by existing owners.
 | Goals | Separate goal tools and creation flags | Goal declarations and terminal states have existing owners; consumer case pending |
 | Memory/history/context budget | Independent built-in flags | Selection available; live exercise cases pending |
 | Datastore queries | Datastore query flag and exact collection allowlist | Bind to working behavior and execute bounded query |
-| Datastore create/query surfaces | `datastore get/preview create/preview edit/create/edit`; bind through Tools.datastore | Transactional preview/edit/Setup-protection tests pass; bounded discovery absent. Surface syntax is checked on publication; live schema and tool collisions are checked by runtime binding/execution owners |
+| Datastore create/query surfaces | `datastore get/preview create/preview edit/create/edit`; bind through Tools.datastore | Transactional preview/edit/Configurator-protection tests pass; bounded discovery absent. Surface syntax is checked on publication; live schema and tool collisions are checked by runtime binding/execution owners |
 | Schemas | `schema get/preview install/install`; shared additive schema contract/publication owner with packs and CLI | Node-wide contracts, not document ACP grants; model command regressions pass, exercised in 10/10 successful model-authored automation trials |
 | LSP | Integrations.lsp settings | Needs installed/indexed server; presence is not readiness |
 | Ethereum | Integrations.eth_tool_ids selects owned EthTool documents | No model config authoring for EthTool; signing keys/credentials stay operator-owned |
@@ -38,7 +38,7 @@ diagnostic exposed accepted invalid syntax. Subsequent automation cohorts passed
 appropriately bounded datastore access.
 Audit gaps for other
 referenced documents must remain visible until implemented and exercised. Do not
-grant all operational capabilities to Setup merely to test a working behavior.
+grant all operational capabilities to Configurator merely to test a working behavior.
 
 The progressive eval retains artifacts and distinguishes prerequisite failures,
 model request failures, infrastructure errors and independent acceptance failures.

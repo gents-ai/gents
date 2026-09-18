@@ -696,7 +696,7 @@ impl DefraSessionHook {
         // would produce an orphan that can never be claimed. Reject cleanly
         // with a service_unavailable payload instead of writing the orphan.
         if target_host == SubagentTargetHost::Local {
-            match load_agent_behavior(&self.node, behavior_id).await {
+            match load_agent_behavior(&self.node, &target.target_agent_did, behavior_id).await {
                 Ok(None) => {
                     return self
                         .fail_spawn_subagent_tool_call(

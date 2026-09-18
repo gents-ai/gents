@@ -56,7 +56,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         .default_behavior_id
         .clone()
         .expect("principal has a default behavior");
-    let mut behavior = gents::load_agent_behavior(&db.node, &behavior_id)
+    let mut behavior = gents::load_agent_behavior(&db.node, &did, &behavior_id)
         .await
         .unwrap()
         .expect("default behavior exists");

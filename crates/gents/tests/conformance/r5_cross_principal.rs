@@ -247,6 +247,7 @@ async fn boot_child_agent(case: &LeanR5CrossPrincipalCase) -> RunningChildAgent 
     .await;
     upsert_active_child_behavior_from_default(
         db.node.as_ref(),
+        &child_agent_did,
         &default_behavior_id,
         &case.target_behavior_id,
     )
@@ -418,10 +419,11 @@ async fn spawn_from_parent_hook(
 
 async fn upsert_active_child_behavior_from_default(
     node: &EmbeddedNode,
+    child_agent_did: &str,
     default_behavior_id: &str,
     target_behavior_id: &str,
 ) {
-    let mut behavior = load_agent_behavior(node, default_behavior_id)
+    let mut behavior = load_agent_behavior(node, child_agent_did, default_behavior_id)
         .await
         .expect("load default child behavior")
         .expect("default child behavior");

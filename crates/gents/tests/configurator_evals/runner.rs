@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
 use futures::{FutureExt, StreamExt};
-use gents::document_config::{AgentContext, InferenceProfile, InferenceSampling, Tools};
+use gents::document_config::{
+    AgentContext, AgentPrincipal, InferenceProfile, InferenceSampling, Tools,
+};
 use gents::{AgentIdentity, Collection};
 use serde_json::Value;
 use tracing::Instrument;
@@ -87,6 +89,7 @@ fn suite_id() -> &'static str {
 const EVAL_COHORT: &str = "configurator-temperature-1-top-p-0.95-v1";
 const EVAL_GRADER: &str = "configurator-process-receipts-v3-no-artwork";
 const EVAL_SAMPLING_ID: &str = "configurator-eval-sampling-v1";
+pub(super) const SETUP_BEHAVIOR_ID: &str = "gents:base:configurator";
 const EVAL_TEMPERATURE: f64 = 1.0;
 const EVAL_TOP_P: f64 = 0.95;
 
@@ -308,16 +311,18 @@ fn excerpt(value: &str, max_chars: usize) -> String {
 async fn install_setup_configurator(
     node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
-    setup_behavior_id: &str,
+    source_behavior_id: &str,
     user_home: &str,
+    source_sampling_id: &str,
 ) {
-    let context_id = format!("{setup_behavior_id}:config-context");
-    let tools_id = format!("{setup_behavior_id}:config-tools");
+    let context_id = format!("{SETUP_BEHAVIOR_ID}:context");
+    let tools_id = format!("{SETUP_BEHAVIOR_ID}:tools");
     let prompt = gents_protocol::SETUP_STEWARD_PROMPT;
     let context = AgentContext {
         context_id: context_id.clone(),
         agent_did: agent_did.to_owned(),
-        display_name: Some("Live Setup".into()),
+        scope_behavior_id: Some(SETUP_BEHAVIOR_ID.into()),
+        display_name: Some("Live Configurator".into()),
         description: Some("Live configurator acceptance".into()),
         system_prompt: Some(prompt.into()),
         tools_id: Some(tools_id.clone()),
@@ -328,7 +333,8 @@ async fn install_setup_configurator(
     let tools = Tools {
         tools_id,
         agent_did: agent_did.to_owned(),
-        display_name: Some("Live Setup tools".into()),
+        scope_behavior_id: Some(SETUP_BEHAVIOR_ID.into()),
+        display_name: Some("Live Configurator tools".into()),
         host: Some(gents::document_config::HostTools {
             root: Some(user_home.to_owned()),
             files: Some(gents::document_config::FileTools {
@@ -340,17 +346,51 @@ async fn install_setup_configurator(
         self_config: Some(gents::agent::persona_ops::setup_steward_self_config()),
         ..Default::default()
     };
-    let behavior = gents::list_agent_behaviors(node, agent_did)
+    let source_behavior = gents::list_agent_behaviors(node, agent_did)
         .await
         .unwrap()
         .into_iter()
-        .find(|behavior| behavior.behavior_id == setup_behavior_id)
+        .find(|behavior| behavior.behavior_id == source_behavior_id)
         .expect("setup behavior");
+    let source_profile_id = source_behavior.inference_profile_id.clone();
+    let mut profile = gents::load_inference_profile(node, agent_did, &source_profile_id)
+        .await
+        .unwrap()
+        .expect("setup source profile");
+    let owner = gents::graphql::escape_graphql_string(agent_did);
+    let sampling_id = gents::graphql::escape_graphql_string(source_sampling_id);
+    let mut sampling: InferenceSampling = serde_json::from_value(
+        rows(
+            node,
+            &format!(r#"{{ InferenceSampling(filter: {{agent_did: {{_eq: "{owner}"}}, sampling_id: {{_eq: "{sampling_id}"}}}}, limit: 1) {{agent_did sampling_id scope_behavior_id display_name temperature top_p top_k min_p seed frequency_penalty presence_penalty repetition_penalty tags}} }}"#),
+            "InferenceSampling",
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("setup source sampling"),
+    )
+    .unwrap();
+    sampling.sampling_id = format!("{SETUP_BEHAVIOR_ID}:sampling");
+    sampling.scope_behavior_id = Some(SETUP_BEHAVIOR_ID.into());
+    profile.profile_id = format!("{SETUP_BEHAVIOR_ID}:inference");
+    profile.scope_behavior_id = Some(SETUP_BEHAVIOR_ID.into());
+    profile.sampling_id = Some(sampling.sampling_id.clone());
+    profile.reasoning_effort = eval_reasoning_effort().expect("valid eval reasoning effort");
     let behavior = gents::document_config::AgentBehavior {
+        behavior_id: SETUP_BEHAVIOR_ID.into(),
+        display_name: Some("Configurator".into()),
         context_id: Some(context_id),
+        inference_profile_id: format!("{SETUP_BEHAVIOR_ID}:inference"),
         tags: vec![gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG.into()],
-        ..behavior
+        ..source_behavior
     };
+    let mut principal: AgentPrincipal = gents::load_agent_principal(node, agent_did)
+        .await
+        .unwrap()
+        .expect("setup principal");
+    principal.default_behavior_id = Some(SETUP_BEHAVIOR_ID.into());
     let plan = gents::config_client::DesiredStateApplyPlan::new(
         [
             (
@@ -362,6 +402,18 @@ async fn install_setup_configurator(
                 Collection::AgentBehavior,
                 serde_json::to_value(behavior).unwrap(),
             ),
+            (
+                Collection::InferenceSampling,
+                serde_json::to_value(sampling).unwrap(),
+            ),
+            (
+                Collection::InferenceProfile,
+                serde_json::to_value(profile).unwrap(),
+            ),
+            (
+                Collection::AgentPrincipal,
+                serde_json::to_value(principal).unwrap(),
+            ),
         ]
         .into_iter()
         .map(
@@ -372,6 +424,27 @@ async fn install_setup_configurator(
             },
         )
         .collect(),
+    )
+    .unwrap()
+    .with_removals(
+        (source_behavior_id != SETUP_BEHAVIOR_ID)
+            .then(|| {
+                [
+                    (
+                        Collection::AgentBehavior,
+                        agent_did.to_owned(),
+                        source_behavior_id.to_owned(),
+                    ),
+                    (
+                        Collection::InferenceProfile,
+                        agent_did.to_owned(),
+                        source_profile_id,
+                    ),
+                ]
+            })
+            .into_iter()
+            .flatten()
+            .collect(),
     )
     .unwrap();
     gents::ConfigAccess::transact_local(node, None, "test.live_configurator", |txn| {
@@ -391,7 +464,6 @@ async fn install_eval_profiles(
     agent_did: &str,
     backend_id: &str,
     model: &str,
-    setup_behavior_id: &str,
 ) {
     let reasoning_effort = eval_reasoning_effort().expect("valid eval reasoning effort");
     let sampling = InferenceSampling {
@@ -402,7 +474,6 @@ async fn install_eval_profiles(
         top_p: Some(EVAL_TOP_P),
         ..Default::default()
     };
-    let setup_profile = gents::default_inference_profile_id_for_behavior(setup_behavior_id);
     let profiles = [("high", "High"), ("medium", "Medium"), ("low", "Low")]
         .into_iter()
         .map(|(profile_id, display_name)| InferenceProfile {
@@ -414,17 +485,7 @@ async fn install_eval_profiles(
             sampling_id: Some(EVAL_SAMPLING_ID.to_owned()),
             reasoning_effort,
             ..Default::default()
-        })
-        .chain(std::iter::once(InferenceProfile {
-            agent_did: agent_did.to_owned(),
-            profile_id: setup_profile,
-            backend_id: backend_id.to_owned(),
-            model_name: model.to_owned(),
-            display_name: Some("Live default behavior".to_owned()),
-            sampling_id: Some(EVAL_SAMPLING_ID.to_owned()),
-            reasoning_effort,
-            ..Default::default()
-        }));
+        });
     let documents = std::iter::once((
         Collection::InferenceSampling,
         serde_json::to_value(sampling).expect("serialize eval sampling"),
@@ -515,7 +576,7 @@ async fn verify_configuration(
     let profiles = rows(
         node,
         &format!(
-            r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{profile_id backend_id model_name sampling_id}} }}"#
+            r#"{{ InferenceProfile(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{profile_id scope_behavior_id backend_id model_name sampling_id}} }}"#
         ),
         "InferenceProfile",
     )
@@ -532,18 +593,18 @@ async fn verify_configuration(
     let sampling = rows(
         node,
         &format!(
-            r#"{{ InferenceSampling(filter: {{agent_did: {{_eq: "{owner}"}}, sampling_id: {{_eq: "{EVAL_SAMPLING_ID}"}}}}) {{temperature top_p seed}} }}"#
+            r#"{{ InferenceSampling(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{sampling_id scope_behavior_id temperature top_p seed}} }}"#
         ),
         "InferenceSampling",
     )
     .await?;
-    ensure!(
-        sampling.len() == 1,
-        "eval sampling document is missing or duplicated"
-    );
-    ensure!(sampling[0]["temperature"] == EVAL_TEMPERATURE);
-    ensure!(sampling[0]["top_p"] == EVAL_TOP_P);
-    ensure!(sampling[0]["seed"].is_null());
+    let eval_sampling = sampling
+        .iter()
+        .find(|row| row["sampling_id"] == EVAL_SAMPLING_ID)
+        .context("eval sampling document is missing")?;
+    ensure!(eval_sampling["temperature"] == EVAL_TEMPERATURE);
+    ensure!(eval_sampling["top_p"] == EVAL_TOP_P);
+    ensure!(eval_sampling["seed"].is_null());
 
     let behaviors = rows(
         node,
@@ -561,7 +622,7 @@ async fn verify_configuration(
     let contexts = rows(
         node,
         &format!(
-            r#"{{ AgentContext(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{context_id system_prompt tools_id}} }}"#
+            r#"{{ AgentContext(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{context_id scope_behavior_id system_prompt tools_id}} }}"#
         ),
         "AgentContext",
     )
@@ -569,7 +630,7 @@ async fn verify_configuration(
     let tool_rows = rows(
         node,
         &format!(
-            r#"{{ Tools(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{tools_id host self_config}} }}"#
+            r#"{{ Tools(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{tools_id scope_behavior_id host self_config}} }}"#
         ),
         "Tools",
     )
@@ -577,12 +638,38 @@ async fn verify_configuration(
     let mut builder_id = None;
     for (display_name, profile_id, file_mode) in expected {
         let behavior = exact_named_behavior(&behaviors, display_name)?;
-        ensure!(
-            behavior["inference_profile_id"] == profile_id,
-            "{display_name} uses the wrong inference profile"
+        let behavior_id = behavior["behavior_id"]
+            .as_str()
+            .with_context(|| format!("{display_name} has no behavior ID"))?;
+        let expected_behavior_id = format!(
+            "local:{}",
+            display_name.to_ascii_lowercase().replace(' ', "-")
         );
+        ensure!(
+            behavior_id == expected_behavior_id,
+            "{display_name} uses the wrong personal behavior ID"
+        );
+        let scoped_profile_id = format!("{behavior_id}:inference");
+        ensure!(behavior["inference_profile_id"] == scoped_profile_id);
+        let source_profile = profiles
+            .iter()
+            .find(|profile| profile["profile_id"] == profile_id)
+            .with_context(|| format!("source profile {profile_id:?} disappeared"))?;
+        let scoped_profile = profiles
+            .iter()
+            .find(|profile| profile["profile_id"] == scoped_profile_id)
+            .with_context(|| format!("{display_name} scoped profile is missing"))?;
+        ensure!(scoped_profile["scope_behavior_id"] == behavior_id);
+        ensure!(scoped_profile["backend_id"] == source_profile["backend_id"]);
+        ensure!(scoped_profile["model_name"] == source_profile["model_name"]);
+        ensure!(scoped_profile["sampling_id"] == format!("{behavior_id}:sampling"));
+        let scoped_sampling = sampling
+            .iter()
+            .find(|row| row["sampling_id"] == format!("{behavior_id}:sampling"))
+            .with_context(|| format!("{display_name} scoped sampling is missing"))?;
+        ensure!(scoped_sampling["scope_behavior_id"] == behavior_id);
         if display_name == "Builder" {
-            builder_id = behavior["behavior_id"].as_str().map(str::to_owned);
+            builder_id = Some(behavior_id.to_owned());
         }
         let context_id = behavior["context_id"]
             .as_str()
@@ -591,6 +678,8 @@ async fn verify_configuration(
             .iter()
             .find(|context| context["context_id"] == context_id)
             .with_context(|| format!("{display_name} context is missing"))?;
+        ensure!(context_id == format!("{behavior_id}:context"));
+        ensure!(context["scope_behavior_id"] == behavior_id);
         ensure!(
             context["system_prompt"]
                 .as_str()
@@ -604,6 +693,8 @@ async fn verify_configuration(
             .iter()
             .find(|tools| tools["tools_id"] == tools_id)
             .with_context(|| format!("{display_name} Tools document is missing"))?;
+        ensure!(tools_id == format!("{behavior_id}:tools"));
+        ensure!(tools["scope_behavior_id"] == behavior_id);
         ensure!(
             tools["host"]["root"] == user_home,
             "{display_name} tool root does not equal the requested user home"
@@ -635,11 +726,34 @@ async fn verify_configuration(
     let setup = behaviors
         .iter()
         .find(|behavior| behavior["behavior_id"] == setup_behavior_id)
-        .context("Setup behavior disappeared")?;
-    ensure!(setup["enabled"] == true, "Setup was disabled");
+        .context("Configurator behavior disappeared")?;
+    ensure!(setup["enabled"] == true, "Configurator was disabled");
+    ensure!(setup["behavior_id"] == SETUP_BEHAVIOR_ID);
+    ensure!(setup["context_id"] == format!("{SETUP_BEHAVIOR_ID}:context"));
+    ensure!(setup["inference_profile_id"] == format!("{SETUP_BEHAVIOR_ID}:inference"));
+    let setup_context = contexts
+        .iter()
+        .find(|row| row["context_id"] == format!("{SETUP_BEHAVIOR_ID}:context"))
+        .context("Configurator context disappeared")?;
+    ensure!(setup_context["scope_behavior_id"] == SETUP_BEHAVIOR_ID);
+    let setup_tools = tool_rows
+        .iter()
+        .find(|row| row["tools_id"] == format!("{SETUP_BEHAVIOR_ID}:tools"))
+        .context("Configurator tools disappeared")?;
+    ensure!(setup_tools["scope_behavior_id"] == SETUP_BEHAVIOR_ID);
+    let setup_profile = profiles
+        .iter()
+        .find(|row| row["profile_id"] == format!("{SETUP_BEHAVIOR_ID}:inference"))
+        .context("Configurator profile disappeared")?;
+    ensure!(setup_profile["scope_behavior_id"] == SETUP_BEHAVIOR_ID);
+    let setup_sampling = sampling
+        .iter()
+        .find(|row| row["sampling_id"] == format!("{SETUP_BEHAVIOR_ID}:sampling"))
+        .context("Configurator sampling disappeared")?;
+    ensure!(setup_sampling["scope_behavior_id"] == SETUP_BEHAVIOR_ID);
     ensure!(
         setup["tags"] == serde_json::json!([gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG]),
-        "Setup protection tag changed"
+        "Configurator protection tag changed"
     );
 
     let graphs = rows(
@@ -661,19 +775,29 @@ async fn verify_configuration(
         "code_review graph has no active revision"
     );
     for (behavior_id, profile_id) in [
-        ("review-recon", "high"),
-        ("review-scan", "medium"),
-        ("review-verify", "high"),
-        ("review-triage", "high"),
+        ("gents:code-review:review-recon", "high"),
+        ("gents:code-review:review-scan", "medium"),
+        ("gents:code-review:review-verify", "high"),
+        ("gents:code-review:review-triage", "high"),
     ] {
         let installed = behaviors
             .iter()
             .find(|behavior| behavior["behavior_id"] == behavior_id)
             .with_context(|| format!("installed pack behavior {behavior_id:?} is missing"))?;
         ensure!(
-            installed["inference_profile_id"] == profile_id,
+            installed["inference_profile_id"] == format!("{behavior_id}:inference"),
             "installed pack behavior {behavior_id:?} has the wrong slot binding"
         );
+        let source = profiles
+            .iter()
+            .find(|profile| profile["profile_id"] == profile_id)
+            .with_context(|| format!("pack source profile {profile_id:?} is missing"))?;
+        let scoped = profiles
+            .iter()
+            .find(|profile| profile["profile_id"] == format!("{behavior_id}:inference"))
+            .with_context(|| format!("pack scoped profile for {behavior_id:?} is missing"))?;
+        ensure!(scoped["scope_behavior_id"] == behavior_id);
+        ensure!(scoped["backend_id"] == source["backend_id"]);
     }
     Ok(())
 }
@@ -705,7 +829,7 @@ async fn run_eval_trial(
         gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)
             .expect("retained trial principal identity"),
     );
-    let (agent_did, setup_behavior_id) = match provider {
+    let (agent_did, source_setup_behavior_id) = match provider {
         LiveProvider::D4f => {
             bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await
         }
@@ -713,16 +837,17 @@ async fn run_eval_trial(
             bind_openrouter_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await
         }
     };
-    install_eval_profiles(
+    install_eval_profiles(db.node.as_ref(), &agent_did, provider.backend_id(), &model).await;
+    install_eval_workspace_root(db.node.as_ref(), &user_home).await;
+    install_setup_configurator(
         db.node.as_ref(),
         &agent_did,
-        provider.backend_id(),
-        &model,
-        &setup_behavior_id,
+        &source_setup_behavior_id,
+        &user_home,
+        EVAL_SAMPLING_ID,
     )
     .await;
-    install_eval_workspace_root(db.node.as_ref(), &user_home).await;
-    install_setup_configurator(db.node.as_ref(), &agent_did, &setup_behavior_id, &user_home).await;
+    let setup_behavior_id = SETUP_BEHAVIOR_ID.to_owned();
     let observer = Arc::new(stages::ActivationObserver::default());
     let (agent, runtime) = boot_d4f_agent_with_options(
         &db,

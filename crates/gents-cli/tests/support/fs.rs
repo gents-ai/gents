@@ -2,7 +2,6 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use gents::{default_behavior_id_for_agent, default_inference_profile_id_for_behavior};
 use serde_json::Value;
 
 use super::graphql::escape_graphql_string;
@@ -154,8 +153,8 @@ pub async fn assert_runtime_init_state(
 ) -> Result<()> {
     use super::graphql::{first_graphql_row, graphql_query};
 
-    let default_behavior_id = default_behavior_id_for_agent(agent_did);
-    let default_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
+    let default_behavior_id = "local:default".to_string();
+    let default_profile_id = "local:default:inference".to_string();
     let query = format!(
         r#"{{
             AgentPrincipal(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{

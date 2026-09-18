@@ -27,8 +27,12 @@ use serde_json::{json, Value};
 
 use crate::agent::p2p_reconcile::{GraphqlPersonaRequestStore, PersonaRequestStore};
 use crate::agent::persona_ops::{
-    decide_persona_request, derive_behavior_id, local_persona_request_mutation, PersonaOp,
-    PersonaRequestDoc, PersonaVerdict,
+    decide_persona_request, local_persona_request_mutation, PersonaOp, PersonaRequestDoc,
+    PersonaVerdict,
+};
+use crate::behavior_scope::{
+    behavior_component_id, behavior_slug_from_display_name, find_available_personal_behavior_key,
+    BehaviorComponentPath,
 };
 use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::graphql::escape_graphql_string;
@@ -116,30 +120,32 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
 }
 
 /// Model-facing patches may target any owned working behavior, but never the
-/// protected Setup configurator. Keep that policy inside the same transaction
+/// protected Configurator. Keep that policy inside the same transaction
 /// as validation/publication so a stale preflight cannot authorize a write.
 fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
     let target = request.target;
     let validate = request.validate;
     request.validate = Box::new(move |txn, anchor, stored, merged| {
         let validation = validate(txn, anchor, stored, merged);
-        let protected = anchor
-            .doc
-            .get("tags")
-            .and_then(Value::as_array)
-            .is_some_and(|tags| {
-                tags.iter().any(|tag| {
-                    tag.as_str() == Some(crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG)
-                })
-            });
+        let protected = anchor.doc.get("behavior_id").and_then(Value::as_str)
+            == Some(crate::behavior_scope::SETUP_CONFIGURATOR_BEHAVIOR_ID)
+            || anchor
+                .doc
+                .get("tags")
+                .and_then(Value::as_array)
+                .is_some_and(|tags| {
+                    tags.iter().any(|tag| {
+                        tag.as_str() == Some(crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG)
+                    })
+                });
         if protected {
             return Box::pin(async {
-                bail!("target behavior is the protected Setup configurator; select a working behavior")
+                bail!("target behavior is the protected Configurator; select a working behavior")
             });
         }
         Box::pin(async move {
             // Context and Tools are reusable documents. A targeted edit must
-            // not mutate another behavior (especially Setup) through a shared
+            // not mutate another behavior (especially Configurator) through a shared
             // reference. Keep the observation and rejection in the same
             // transaction as the canonical patch publication, matching the
             // Lean siblingToolsAllowed contract.
@@ -882,10 +888,39 @@ async fn persona_preview(
         PersonaVerdict::Reject(detail) => Some(detail.clone()),
     };
     let behavior_id = match &op {
-        PersonaOp::Create { .. } => args
-            .display_name
-            .value()
-            .map(|name| derive_behavior_id(agent_did, name, &catalog.behaviors)),
+        PersonaOp::Create { .. } => match args.display_name.value() {
+            Some(name) => {
+                let slug = behavior_slug_from_display_name(name);
+                Some(
+                    crate::config_client::ConfigAccess::transact_local(
+                        node,
+                        None,
+                        "self_config.persona.preview_id",
+                        |txn| {
+                            let slug = slug.clone();
+                            Box::pin(async move {
+                                let snapshot =
+                                    crate::document_config::ConfigReferences::load_in_txn(
+                                        txn, agent_did,
+                                    )
+                                    .await?;
+                                find_available_personal_behavior_key(&slug, |collection, id| {
+                                    snapshot.documents().any(
+                                        |((candidate_collection, candidate_id), _)| {
+                                            *candidate_collection == collection
+                                                && candidate_id == id
+                                        },
+                                    )
+                                })?
+                                .context("personal behavior ID space exhausted")
+                            })
+                        },
+                    )
+                    .await?,
+                )
+            }
+            None => None,
+        },
         PersonaOp::Edit | PersonaOp::Disable => args.behavior_id.clone(),
     };
     let inherited = match operation {
@@ -927,9 +962,9 @@ async fn persona_preview(
         "operation": operation,
         "proposed_ids": {
             "behavior_id": behavior_id,
-            "context_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("context-{request_key}")),
-            "tools_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("tools-{request_key}")),
-            "profile_id": args.profile_id.value(),
+            "context_id": behavior_id.as_deref().map(|id| behavior_component_id(id, BehaviorComponentPath::Context)),
+            "tools_id": behavior_id.as_deref().map(|id| behavior_component_id(id, BehaviorComponentPath::Tools)),
+            "profile_id": behavior_id.as_deref().map(|id| behavior_component_id(id, BehaviorComponentPath::Inference)),
         },
         "proposed_values": {
             "display_name": args.display_name.value(),
@@ -944,7 +979,7 @@ async fn persona_preview(
         "preset_requested": preset_requested,
         "inherited_config": inherited_config,
         "process_ceiling": process_ceiling,
-        "note": "Preview checks request admission without writing; it does not verify materialization or runtime readiness. Preset values are requested authority, narrowed by the process ceiling at runtime. Inspect the applied behavior for effective authority. Applied create IDs use the admitted request key and will differ from these preview-only IDs.",
+        "note": "Preview checks request admission without writing; it does not verify materialization or runtime readiness. Preset values are requested authority, narrowed by the process ceiling at runtime. Inspect the applied behavior for effective authority.",
     }))
     .map_err(|error| anyhow!("serialize behavior preview: {error}"))
 }
@@ -1145,11 +1180,31 @@ async fn persona_mutate(
             "system_prompt",
         )?;
         verify_string("/documents/Tools/host/root", &args.root, "root")?;
-        verify_string(
-            "/behavior/inference_profile_id",
-            &args.profile_id,
-            "profile_id",
-        )?;
+        if let Some(requested_profile_id) = args.profile_id.value() {
+            let requested_profile =
+                crate::load_inference_profile(node, agent_did, requested_profile_id)
+                    .await?
+                    .with_context(|| {
+                        format!(
+                    "applied behavior request source profile {requested_profile_id:?} disappeared"
+                )
+                    })?;
+            let materialized_profile = crate::load_inference_profile(node, agent_did, &profile_id)
+                .await?
+                .context("applied behavior request cannot re-read its materialized profile")?;
+            anyhow::ensure!(
+                profile_id
+                    == crate::behavior_scope::behavior_component_id(
+                        applied_behavior_id,
+                        crate::behavior_scope::BehaviorComponentPath::Inference,
+                    )
+                    && materialized_profile.scope_behavior_id.as_deref()
+                        == Some(applied_behavior_id)
+                    && materialized_profile.backend_id == requested_profile.backend_id
+                    && materialized_profile.model_name == requested_profile.model_name,
+                "applied behavior request reported success but materialized inference does not match the requested source profile"
+            );
+        }
         if let Some(preset) = args.preset.value() {
             let fields = crate::agent::persona_presets::preset_fields(preset)
                 .context("applied behavior request used an unknown preset")?;
@@ -1496,10 +1551,13 @@ impl PackInstaller {
             agent_did: self.core.agent_did().to_owned(),
             inference_slots: inference.bindings.clone(),
         };
-        let prepared = crate::graph_package::prepare_loaded_graph_package_install(
-            &access, &package, &bindings,
-        )
-        .await?;
+        let prepared = if operation == "update" {
+            crate::graph_package::prepare_loaded_graph_package_update(&access, &package, &bindings)
+                .await?
+        } else {
+            crate::graph_package::prepare_loaded_graph_package_install(&access, &package, &bindings)
+                .await?
+        };
         let materialized_ids = prepared
             .desired_state
             .documents()
@@ -1592,14 +1650,25 @@ impl PackInstaller {
         };
         let external_dependencies = package.manifest.external_dependencies.clone();
         let plugins = package.manifest.metadata.plugins.clone();
-        let receipt = crate::graph_package::install_loaded_graph_package(
-            &access,
-            self.core.agent_did(),
-            &package,
-            &bindings,
-            None,
-        )
-        .await?;
+        let receipt = if operation == "update" {
+            crate::graph_package::update_loaded_graph_package(
+                &access,
+                self.core.agent_did(),
+                &package,
+                &bindings,
+                None,
+            )
+            .await?
+        } else {
+            crate::graph_package::install_loaded_graph_package(
+                &access,
+                self.core.agent_did(),
+                &package,
+                &bindings,
+                None,
+            )
+            .await?
+        };
         let activation = crate::graph_pipeline::activate_graph_revision_with_access(
             &access,
             self.core.agent_did(),

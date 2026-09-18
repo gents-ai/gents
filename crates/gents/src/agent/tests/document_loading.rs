@@ -89,6 +89,7 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
         &crate::document_config::InferenceSampling {
             agent_did: did.clone(),
             sampling_id: sampling_id.clone(),
+            scope_behavior_id: None,
             temperature: Some(0.2),
             top_p: Some(0.95),
             top_k: Some(40),
@@ -120,6 +121,7 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
         &crate::document_config::InferenceExecution {
             agent_did: did.clone(),
             execution_id: execution_id.clone(),
+            scope_behavior_id: None,
             max_turns: Some(8),
             stream_batch_ms: Some(500),
             stream_liveness_timeout_secs: Some(45),

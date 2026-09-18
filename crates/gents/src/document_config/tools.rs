@@ -21,6 +21,10 @@ use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 pub struct Tools {
     pub tools_id: String,
     pub agent_did: String,
+    /// Owning behavior for generated closure documents; absent on unscoped existing data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub scope_behavior_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,

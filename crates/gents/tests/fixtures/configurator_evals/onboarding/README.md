@@ -11,7 +11,7 @@ diagnostic against an explicitly selected D4F endpoint.
 | Case | Automated status | Evidence |
 | --- | --- | --- |
 | Fresh user configures one coding behavior and performs a harmless task | Live | Canonical Behavior/Context/Tools queries, exact files, completed shell tool call |
-| Setup re-entry twice preserves the authored prompt and creates no duplicates | Live | Full selected-config snapshot equality after each pass |
+| Configurator re-entry twice preserves the authored prompt and creates no duplicates | Live | Full selected-config snapshot equality after each pass |
 | Conflicting user/project preferences require a choice; disabled remote tool stays inert | Live with supplied inventory fixture | Snapshot equality and zero remote grants |
 | Root outside published authority is rejected, then the next request recovers within the allowed root | Live | Rejected tool outcome, unchanged snapshot, recovered canonical behavior |
 | Change default, restart runtime, and use a fresh session | Live | Principal default, post-restart AgentSession behavior, exact task artifact |
@@ -63,7 +63,7 @@ entry into a write-capable operation, not a claim that a commit succeeded.
 Repeat checks preserve notification identity and require complete findings;
 condition-policy content updates are allowed, not mistaken for duplicates.
 The harness prepares its own invocation definitions before taking the baseline;
-no prefix-based exclusions hide model-authored documents. After Setup finishes, the
+no prefix-based exclusions hide model-authored documents. After Configurator finishes, the
 harness writes only an `EvalMailboxInput` document; it neither creates the monitor's
 automation nor directly invokes its behavior. Acceptance checks the resulting
 request's source document, trigger, behavior, rendered input and completed state
@@ -82,7 +82,7 @@ GENTS_D4F_MODEL=GLM-5.3-Flash-NVFP4 make live-mailbox-eval
 GENTS_LIVE_CONFIG_RUNS=1 GENTS_LIVE_CONFIG_CONCURRENCY=1 \
 GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 make live-mailbox-eval
 
-# Request thinking at high effort on Setup and every seeded working profile:
+# Request thinking at high effort on Configurator and every seeded working profile:
 GENTS_LIVE_CONFIG_REASONING_EFFORT=high \
 GENTS_LIVE_CONFIG_RUNS=30 GENTS_LIVE_CONFIG_CONCURRENCY=30 \
 GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 make live-mailbox-eval
@@ -110,36 +110,36 @@ runtime home under `trials/`; model endpoints are shared but databases are not.
 
 ### General onboarding
 
-Use a fresh synthetic home and an explicit runtime root. Do not point Setup or a
+Use a fresh synthetic home and an explicit runtime root. Do not point Configurator or a
 working behavior at a personal home.
 
 1. Start Gents with the synthetic root published as its only workspace root and
    with one existing inference backend. Create `onboarding-high`,
    `onboarding-medium`, and `onboarding-low` profiles referencing a sampling
    document with temperature `1` and top-p `0.95`.
-2. In Setup, submit `fresh_setup.md` after replacing `{{USER_HOME}}`. Confirm the
+2. In Configurator, submit `fresh_setup.md` after replacing `{{USER_HOME}}`. Confirm the
    preview, then query AgentBehavior, AgentContext, Tools, AgentPrincipal,
    InferenceBackend, InferenceProfile, InferenceSampling and OAuthCredential.
-   Verify one `Onboarding Builder`, explicit write root, preserved Setup, one
+   Verify one `Onboarding Builder`, explicit write root, preserved Configurator, one
    backend, and zero credentials or unrelated grants.
 3. Start a fresh `Onboarding Builder` session and submit `harmless_task.md`.
    Inspect the completed shell tool outcome and verify the two exact files.
-4. Submit `reentry.md` twice through Setup. Re-query the canonical documents and
+4. Submit `reentry.md` twice through Configurator. Re-query the canonical documents and
    confirm the entire selected configuration is unchanged, including the prompt
    marker and document counts.
-5. Supply `discovery_conflict.json` to `conflict.md`. Confirm Setup asks for the
+5. Supply `discovery_conflict.json` to `conflict.md`. Confirm Configurator asks for the
    unresolved scope choice and performs no write. Confirm the disabled MCP item
    produced no service or Tools grant.
 6. Replace `{{FORBIDDEN_ROOT}}` in `rejected_authority.md` with an existing path
    outside the published root. Inspect the failed preview/tool result and confirm
    no `Forbidden Root Builder` or other document was created.
 7. On the next request, submit `recovery.md` with the allowed root. Confirm one
-   `Recovered Builder`, while the previous builder, default and Setup remain.
+   `Recovered Builder`, while the previous builder, default and Configurator remain.
 8. Submit `change_default.md`, restart the runtime without changing its database,
    and open a fresh session using the principal default. Submit
    `after_restart.md`; verify its exact file and that AgentSession.behavior_id is
    the recovered behavior.
-9. Re-query final state. Confirm Setup and both working behaviors remain, user
+9. Re-query final state. Confirm Configurator and both working behaviors remain, user
    edits survive, and there are zero unexpected credentials, backends, remote
    services, datastore surfaces, subagent grants, or duplicates.
 

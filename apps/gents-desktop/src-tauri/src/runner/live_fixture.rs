@@ -446,7 +446,6 @@ mod tests {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::Router;
-    use gents::default_behavior_id_for_agent;
     use gents_desktop_core::client::ClientCore;
     use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentRequestRow};
     use serde_json::Value;
@@ -522,7 +521,7 @@ mod tests {
         mock: &MockChatEndpoint,
     ) -> Result<()> {
         let agent_did = fixture.agent_did().to_string();
-        let behavior_id = default_behavior_id_for_agent(&agent_did);
+        let behavior_id = "local:default".to_owned();
         let skill_id = "desktop-review";
         let skill_body = "UNIQUE_DESKTOP_SKILL_BODY_USE_THIS_REVIEW_PROTOCOL";
         let task = "summarize the current workspace state";

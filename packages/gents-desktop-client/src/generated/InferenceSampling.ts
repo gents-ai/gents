@@ -4,7 +4,11 @@
  * Optional sampling overrides shared by inference profiles. Unsupported explicit
  * settings must be rejected for the selected provider/model rather than ignored.
  */
-export type InferenceSampling = { agent_did: string, sampling_id: string, display_name?: string | null, temperature?: number | null, top_p?: number | null, top_k?: number | null,
+export type InferenceSampling = { agent_did: string, sampling_id: string,
+/**
+ * Owning behavior for generated closure documents; absent on unscoped existing data.
+ */
+scope_behavior_id?: string | null, display_name?: string | null, temperature?: number | null, top_p?: number | null, top_k?: number | null,
 /**
  * Requested provider seed; does not guarantee deterministic provider output.
  */

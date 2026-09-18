@@ -1,6 +1,247 @@
 use super::*;
 use serde_json::json;
 
+fn behavior_scope_documents(scope: Option<&str>) -> Vec<(Collection, Value)> {
+    vec![
+        (
+            Collection::AgentBehavior,
+            json!({
+                "behavior_id":"behavior", "agent_did":"owner",
+                "context_id":"context", "inference_profile_id":"inference"
+            }),
+        ),
+        (
+            Collection::AgentContext,
+            json!({
+                "context_id":"context", "agent_did":"owner",
+                "scope_behavior_id":scope, "tools_id":"tools",
+                "compaction_id":"compaction", "skill_ids":["shared-skill"]
+            }),
+        ),
+        (
+            Collection::Tools,
+            json!({
+                "tools_id":"tools", "agent_did":"owner",
+                "scope_behavior_id":scope
+            }),
+        ),
+        (
+            Collection::Compaction,
+            json!({
+                "compaction_id":"compaction", "agent_did":"owner",
+                "scope_behavior_id":scope,
+                "inference_profile_id":"compaction-inference"
+            }),
+        ),
+        (
+            Collection::InferenceProfile,
+            json!({
+                "profile_id":"inference", "agent_did":"owner",
+                "scope_behavior_id":scope, "backend_id":"shared-backend",
+                "model_name":"model", "sampling_id":"sampling",
+                "execution_id":"execution"
+            }),
+        ),
+        (
+            Collection::InferenceProfile,
+            json!({
+                "profile_id":"compaction-inference", "agent_did":"owner",
+                "scope_behavior_id":scope, "backend_id":"shared-backend",
+                "model_name":"model", "sampling_id":"compaction-sampling",
+                "execution_id":"compaction-execution"
+            }),
+        ),
+        (
+            Collection::InferenceSampling,
+            json!({
+                "sampling_id":"sampling", "agent_did":"owner",
+                "scope_behavior_id":scope
+            }),
+        ),
+        (
+            Collection::InferenceSampling,
+            json!({
+                "sampling_id":"compaction-sampling", "agent_did":"owner",
+                "scope_behavior_id":scope
+            }),
+        ),
+        (
+            Collection::InferenceExecution,
+            json!({
+                "execution_id":"execution", "agent_did":"owner",
+                "scope_behavior_id":scope, "retry_policy_id":"retry"
+            }),
+        ),
+        (
+            Collection::InferenceExecution,
+            json!({
+                "execution_id":"compaction-execution", "agent_did":"owner",
+                "scope_behavior_id":scope,
+                "retry_policy_id":"compaction-retry"
+            }),
+        ),
+        (
+            Collection::InferenceRetryPolicy,
+            json!({
+                "retry_policy_id":"retry", "agent_did":"owner",
+                "scope_behavior_id":scope
+            }),
+        ),
+        (
+            Collection::InferenceRetryPolicy,
+            json!({
+                "retry_policy_id":"compaction-retry", "agent_did":"owner",
+                "scope_behavior_id":scope
+            }),
+        ),
+        (
+            Collection::InferenceBackend,
+            json!({
+                "backend_id":"shared-backend", "agent_did":"owner",
+                "name":"Shared backend", "provider_kind":"OpenAiCompatible",
+                "endpoint":"http://localhost:8000/v1",
+                "auth":{"kind":"unauthenticated"}
+            }),
+        ),
+        (
+            Collection::Skill,
+            json!({"skill_id":"shared-skill", "agent_did":"owner"}),
+        ),
+    ]
+}
+
+fn validate_behavior_scope_documents(documents: Vec<(Collection, Value)>) -> Result<()> {
+    ConfigReferences::from_documents("owner", documents)?.validate()
+}
+
+#[test]
+fn behavior_scope_graph_accepts_complete_scoped_and_legacy_closures() {
+    validate_behavior_scope_documents(behavior_scope_documents(Some("behavior"))).unwrap();
+    validate_behavior_scope_documents(behavior_scope_documents(None)).unwrap();
+}
+
+#[test]
+fn behavior_scope_graph_rejects_mixed_closures_and_cross_behavior_aliases() {
+    for (collection, id) in [
+        (Collection::AgentContext, "context"),
+        (Collection::Tools, "tools"),
+        (Collection::Compaction, "compaction"),
+        (Collection::InferenceSampling, "sampling"),
+        (Collection::InferenceExecution, "execution"),
+        (Collection::InferenceRetryPolicy, "retry"),
+    ] {
+        let mut documents = behavior_scope_documents(Some("behavior"));
+        documents
+            .iter_mut()
+            .find(|(candidate, value)| {
+                *candidate == collection && value[collection.unique_field()].as_str() == Some(id)
+            })
+            .unwrap()
+            .1
+            .as_object_mut()
+            .unwrap()
+            .remove("scope_behavior_id");
+        assert!(
+            validate_behavior_scope_documents(documents).is_err(),
+            "mixed closure accepted unscoped {} {id}",
+            collection.graphql_type()
+        );
+    }
+
+    let mut documents = behavior_scope_documents(Some("behavior"));
+    documents.push((
+        Collection::AgentBehavior,
+        json!({
+            "behavior_id":"other", "agent_did":"owner",
+            "inference_profile_id":"inference"
+        }),
+    ));
+    let error = validate_behavior_scope_documents(documents)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("AgentBehavior other references InferenceProfile inference"));
+}
+
+#[test]
+fn behavior_scope_graph_rejects_missing_behaviors_and_every_scoped_orphan_kind() {
+    let mut missing = behavior_scope_documents(Some("behavior"));
+    missing.push((
+        Collection::AgentContext,
+        json!({
+            "context_id":"missing-behavior-context", "agent_did":"owner",
+            "scope_behavior_id":"absent"
+        }),
+    ));
+    let error = validate_behavior_scope_documents(missing)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("names a missing AgentBehavior"), "{error}");
+
+    let orphans = [
+        (
+            Collection::AgentContext,
+            json!({"context_id":"orphan-context", "agent_did":"owner", "scope_behavior_id":"behavior"}),
+        ),
+        (
+            Collection::Tools,
+            json!({"tools_id":"orphan-tools", "agent_did":"owner", "scope_behavior_id":"behavior"}),
+        ),
+        (
+            Collection::Compaction,
+            json!({"compaction_id":"orphan-compaction", "agent_did":"owner", "scope_behavior_id":"behavior"}),
+        ),
+        (
+            Collection::InferenceProfile,
+            json!({
+                "profile_id":"orphan-profile", "agent_did":"owner",
+                "scope_behavior_id":"behavior", "backend_id":"shared-backend",
+                "model_name":"model"
+            }),
+        ),
+        (
+            Collection::InferenceSampling,
+            json!({"sampling_id":"orphan-sampling", "agent_did":"owner", "scope_behavior_id":"behavior"}),
+        ),
+        (
+            Collection::InferenceExecution,
+            json!({"execution_id":"orphan-execution", "agent_did":"owner", "scope_behavior_id":"behavior"}),
+        ),
+        (
+            Collection::InferenceRetryPolicy,
+            json!({"retry_policy_id":"orphan-retry", "agent_did":"owner", "scope_behavior_id":"behavior"}),
+        ),
+    ];
+    for (collection, orphan) in orphans {
+        let mut documents = behavior_scope_documents(Some("behavior"));
+        documents.push((collection, orphan));
+        let error = validate_behavior_scope_documents(documents)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("is scoped to behavior \"behavior\" but is not reachable"),
+            "{} orphan returned {error}",
+            collection.graphql_type()
+        );
+    }
+}
+
+#[test]
+fn ordinary_reference_errors_precede_behavior_scope_errors() {
+    let mut documents = behavior_scope_documents(Some("behavior"));
+    let behavior = documents
+        .iter_mut()
+        .find(|(collection, _)| *collection == Collection::AgentBehavior)
+        .unwrap();
+    behavior.1["inference_profile_id"] = json!("missing-profile");
+    let error = validate_behavior_scope_documents(documents)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("references missing InferenceProfile \"missing-profile\""),
+        "{error}"
+    );
+}
+
 #[test]
 fn candidate_tools_reuse_surface_expansion_and_collision_guards() {
     let tools = json!({"tools_id":"tools", "agent_did":"owner",
