@@ -207,6 +207,16 @@ impl Default for ResolvedToolSelection {
 }
 
 impl ResolvedToolSelection {
+    /// Whether the selected host-facing capabilities need the shared cwd/root.
+    /// Keep this predicate beside the canonical selection so configuration
+    /// admission and execution cannot drift as host capabilities are added.
+    pub(crate) fn requires_filesystem_root(&self) -> bool {
+        self.file_tools != FileToolMode::Off
+            || self.bash != BashMode::Off
+            || !self.cli_tool_names.is_empty()
+            || self.enable_lsp
+    }
+
     /// Project the canonical `document_config::Tools` nested groups.
     ///
     /// Disabled-by-absence: an omitted group or unset flag grants nothing. There
@@ -289,9 +299,11 @@ impl ResolvedToolSelection {
 
         Ok(Self {
             file_tools,
-            // Tools.host.root is the shared default cwd for files, bash, CLI, LSP,
-            // and task commands. Relative paths resolve against runtime cwd in the
-            // existing root owner (tool_surface/build.rs); absent uses runtime cwd.
+            // Tools.host.root is the shared default cwd for files, bash, CLI,
+            // LSP, and task commands. The canonical root owner rejects authored
+            // relative paths and requires an explicit admitted root whenever
+            // WorkspaceRoot policy is configured. Absence retains the legacy
+            // runtime default only when no such policy exists.
             file_tool_root: host
                 .and_then(|host| host.root.as_deref())
                 .map(str::trim)

@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::lean_contract_snapshot;
 use gents::agent::persona_ops::{
     decide_persona_request, BehaviorRef, PersonaCatalogView, PersonaOp, PersonaRequestDoc,
     PersonaVerdict,
@@ -167,6 +168,8 @@ fn catalog_with(
 ) -> PersonaCatalogView {
     PersonaCatalogView {
         allowed_roots: roots.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>(),
+        root_policy_configured: !roots.is_empty(),
+        operator_ceiling: None,
         available_profile_ids: profiles
             .iter()
             .map(|s| s.to_string())
@@ -180,6 +183,7 @@ fn catalog_with(
                     BehaviorRef {
                         enabled: *enabled,
                         protected: false,
+                        ..Default::default()
                     },
                 )
             })
@@ -209,10 +213,211 @@ fn create_doc(op: PersonaOp) -> PersonaRequestDoc {
         persona_name: Some("Research Assistant".to_string()),
         description: Some("Researches a focused question".to_string()),
         system_prompt: Some("Research the question and cite evidence.".to_string()),
-        root: None,
+        root: Some("/workspace/root".to_string()),
         preset: Some(persona_presets::PRESET_WRITE.to_string()),
         profile_id: Some("profile-1".to_string()),
         ..Default::default()
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn generated_root_admission_cases_drive_production_root_policy() {
+    let mut names = BTreeSet::new();
+    for case in &lean_contract_snapshot().root_admission_cases {
+        assert!(
+            names.insert(case.name.as_str()),
+            "duplicate case {}",
+            case.name
+        );
+        assert_eq!(
+            case.authored.trim().is_empty(),
+            case.blank,
+            "Lean blank observation drifted for {}",
+            case.name
+        );
+        let sandbox = tempfile::tempdir().expect("case sandbox");
+        let materialize = |anchor: &str, components: &[String]| {
+            let mut path = sandbox.path().join(anchor);
+            path.extend(components);
+            path
+        };
+        let ceiling = case
+            .ceiling
+            .as_ref()
+            .map(|path| materialize(&path.anchor, &path.components));
+        if let Some(ceiling) = &ceiling {
+            std::fs::create_dir_all(ceiling).expect("policy ceiling");
+        }
+        let invalid_ceiling = if case.observation == "invalid_ceiling" {
+            let link = sandbox.path().join("invalid-ceiling");
+            std::os::unix::fs::symlink(sandbox.path().join("absent-ceiling-target"), &link)
+                .expect("broken ceiling symlink");
+            Some(link)
+        } else {
+            None
+        };
+        let enabled = case
+            .enabled
+            .iter()
+            .map(|path| materialize(&path.anchor, &path.components))
+            .collect::<Vec<_>>();
+        for root in &enabled {
+            std::fs::create_dir_all(root).expect("enabled root");
+        }
+        let mut documents = enabled
+            .iter()
+            .map(|root| gents::tool_surface::WorkspaceRootDocument {
+                root_path: Some(root.to_string_lossy().into_owned()),
+                enabled: Some(true),
+            })
+            .collect::<Vec<_>>();
+        if case.configured && documents.is_empty() && case.observation != "invalid_ceiling" {
+            documents.push(gents::tool_surface::WorkspaceRootDocument {
+                root_path: ceiling
+                    .as_ref()
+                    .map(|root| root.to_string_lossy().into_owned()),
+                enabled: Some(false),
+            });
+        }
+        let policy = gents::tool_surface::project_workspace_root_policy(
+            documents,
+            invalid_ceiling.as_deref().or(ceiling.as_deref()),
+        );
+        assert_eq!(policy.configured, case.configured, "{}", case.name);
+        let roots = case
+            .published
+            .iter()
+            .map(|path| materialize(&path.anchor, &path.components))
+            .collect::<Vec<_>>();
+        for root in &roots {
+            std::fs::create_dir_all(root).expect("published root");
+        }
+        let roots = roots
+            .into_iter()
+            .map(|root| std::fs::canonicalize(root).expect("canonical published root"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            policy.published.iter().cloned().collect::<BTreeSet<_>>(),
+            roots.iter().cloned().collect::<BTreeSet<_>>(),
+            "production publication disagrees with modeled publication for {}",
+            case.name
+        );
+        let resolved_candidate = case
+            .candidate
+            .as_ref()
+            .map(|path| materialize(&path.anchor, &path.components));
+        // Lean anchors are abstract volume identities. On Unix the refinement
+        // materializes them as disjoint sandbox subtrees; the native Windows
+        // volume-prefix rule is separately fenced in root_admission unit tests.
+        let candidate = match case.observation.as_str() {
+            "blank" | "clear" | "inactive" => None,
+            "existing" | "explicit_restriction" | "invalid_ceiling" => {
+                let path = resolved_candidate.clone().expect("modeled candidate");
+                std::fs::create_dir_all(&path).expect("existing candidate");
+                Some(path)
+            }
+            "nonexistent" => Some(resolved_candidate.clone().expect("modeled candidate")),
+            "unresolved" => {
+                let link = roots[0].join(format!("broken-{}", case.name));
+                std::os::unix::fs::symlink(roots[0].join("absent-target"), &link)
+                    .expect("broken symlink");
+                Some(link)
+            }
+            "symlink" => {
+                let target = resolved_candidate.clone().expect("modeled target");
+                std::fs::create_dir_all(&target).expect("symlink target");
+                let link = if case.expected {
+                    sandbox.path().join("links").join(&case.name)
+                } else {
+                    roots[0].join(format!("link-{}", case.name))
+                };
+                std::fs::create_dir_all(link.parent().expect("link parent")).expect("link parent");
+                std::os::unix::fs::symlink(&target, &link).expect("symlink");
+                assert_eq!(
+                    std::fs::canonicalize(&link).expect("resolved symlink"),
+                    std::fs::canonicalize(&target).expect("canonical target")
+                );
+                Some(link)
+            }
+            "traversal" => {
+                let target = resolved_candidate.clone().expect("modeled target");
+                std::fs::create_dir_all(&target).expect("traversal target");
+                let target = std::fs::canonicalize(target).expect("canonical traversal target");
+                let root = &roots[0];
+                let traversing = if let Ok(relative) = target.strip_prefix(root) {
+                    let detour = root.join("detour");
+                    std::fs::create_dir_all(&detour).expect("traversal detour");
+                    detour.join("..").join(relative)
+                } else {
+                    let parent = root.parent().expect("published root parent");
+                    root.join("..").join(
+                        target
+                            .strip_prefix(parent)
+                            .expect("outside candidate shares modeled parent"),
+                    )
+                };
+                assert_eq!(
+                    std::fs::canonicalize(&traversing).expect("resolved traversal"),
+                    std::fs::canonicalize(&target).expect("canonical target")
+                );
+                Some(traversing)
+            }
+            other => panic!("unhandled Lean filesystem observation {other}"),
+        };
+
+        let mut catalog = base_catalog();
+        catalog.allowed_roots = roots
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        catalog.root_policy_configured = case.configured;
+        catalog.operator_ceiling = ceiling;
+        let mut doc = match case.operation.as_str() {
+            "create" => create_doc(PersonaOp::Create { clone_from: None }),
+            "edit_set" | "edit_clear" | "edit_omitted" => {
+                let mut doc = create_doc(PersonaOp::Edit);
+                doc.op_raw = "edit".to_string();
+                doc.behavior_id = Some("existing-enabled".to_string());
+                if case.operation != "edit_omitted" {
+                    doc.edit_fields = vec!["root".to_string()];
+                }
+                doc
+            }
+            other => panic!("unhandled Lean persona operation {other}"),
+        };
+        if case.operation == "edit_omitted" {
+            let target = catalog
+                .behaviors
+                .get_mut("existing-enabled")
+                .expect("fixture behavior");
+            target.root_required = case.stored_requires_root;
+            target.root = if case.blank {
+                Some(case.authored.clone())
+            } else {
+                candidate
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+            };
+        }
+        doc.root = if matches!(case.operation.as_str(), "edit_clear" | "edit_omitted") {
+            None
+        } else if case.blank {
+            Some(case.authored.clone())
+        } else {
+            Some(
+                candidate
+                    .expect("nonblank case has a filesystem candidate")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        };
+        let admitted = decide_persona_request(&doc, &catalog) == PersonaVerdict::Admit;
+        assert_eq!(
+            admitted, case.expected,
+            "production gate disagrees with generated case {} ({})",
+            case.name, case.observation
+        );
     }
 }
 

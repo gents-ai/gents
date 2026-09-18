@@ -204,11 +204,30 @@ fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<
     request
 }
 fn tools_request(
-    _core: &SelfConfigCore,
+    core: &SelfConfigCore,
     patch: SelfConfigPatch,
     allow_pack_install: bool,
 ) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::Tools, "tools_id", patch);
+    let ceiling_root = core.process_ceiling().root.clone();
+    request.normalize = Box::new(move |txn, _, _, merged| {
+        let ceiling_root = ceiling_root.clone();
+        Box::pin(async move {
+            let policy = crate::tool_surface::load_workspace_root_policy_in_txn(
+                txn,
+                ceiling_root.as_deref(),
+            )
+            .await?;
+            let mut tools = decode_merged::<crate::document_config::Tools>("Tools", merged)?;
+            crate::tool_surface::canonicalize_tools_root(&mut tools, &policy)?;
+            let canonical = serde_json::to_value(tools)?
+                .as_object()
+                .context("canonical Tools document must be an object")?
+                .clone();
+            *merged = canonical;
+            Ok(())
+        })
+    });
     request.validate = Box::new(move |_, _, _, merged| {
         let merged = merged.clone();
         Box::pin(async move {
@@ -1144,7 +1163,26 @@ async fn persona_mutate(
             &args.system_prompt,
             "system_prompt",
         )?;
-        verify_string("/documents/Tools/host/root", &args.root, "root")?;
+        if args.root.is_present() {
+            let effective_root = effective_config
+                .pointer("/documents/Tools/host/root")
+                .and_then(Value::as_str);
+            match args.root.value() {
+                Some(requested_root) => {
+                    let canonical_requested = crate::tool_surface::resolve_configured_tool_root(
+                        std::path::Path::new(requested_root),
+                    )?;
+                    anyhow::ensure!(
+                        effective_root == Some(canonical_requested.to_string_lossy().as_ref()),
+                        "applied behavior request reported success but root does not match the canonical requested value"
+                    );
+                }
+                None => anyhow::ensure!(
+                    effective_root.is_none(),
+                    "applied behavior request reported success but did not clear root"
+                ),
+            }
+        }
         verify_string(
             "/behavior/inference_profile_id",
             &args.profile_id,

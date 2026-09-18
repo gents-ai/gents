@@ -1084,6 +1084,126 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn started_daemon_rechecks_workspace_root_policy_for_each_fresh_request() {
+        let data_path = std::env::temp_dir().join(format!(
+            "daemon-workspace-root-recheck-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(&data_path)
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let selected = workspace.path().join("selected");
+        std::fs::create_dir_all(&selected).unwrap();
+        let selected = std::fs::canonicalize(selected).unwrap();
+        let escaped_selected = crate::graphql::escape_graphql_string(&selected.to_string_lossy());
+        let created = node
+            .execute(&format!(
+                r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#
+            ))
+            .await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        let workspace_root_doc_id =
+            crate::graphql::single_mutation_document(&created, "create_WorkspaceRoot")
+                .unwrap()
+                .expect("created WorkspaceRoot")["_docID"]
+                .as_str()
+                .expect("WorkspaceRoot document id")
+                .to_owned();
+
+        let behavior = test_behavior();
+        let requester_did = behavior.agent_did().to_string();
+        let first = create_routed_request(node.as_ref(), &behavior, &requester_did).await;
+        let prompt_builder = LayeredPromptBuilder::for_behavior(
+            &behavior.system_prompt,
+            &behavior.behavior_id,
+            &[],
+            false,
+            &[],
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            behavior.agent_did().to_string(),
+        );
+        let request_identity = behavior.principal_identity().clone();
+        let mut daemon = BehaviorDaemon::new(
+            node.clone(),
+            behavior.clone(),
+            Arc::new(CountingReplyModel(calls.clone())),
+            prompt_builder.preamble().to_string(),
+            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+            prompt_builder,
+            FailurePolicy::default(),
+            None,
+            BackgroundToolRegistry::default(),
+            BackgroundExecutionRegistry::default(),
+            Arc::new(StartupBarrier::ready_for_test()),
+            runtime_status,
+            1,
+            crate::request_admission::AgentRequestAdmissionVerifier::new(
+                node.clone(),
+                request_identity,
+                crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+            ),
+        )
+        .unwrap()
+        .with_root_execution_guard(Some(crate::tool_surface::RootExecutionGuard {
+            behavior_id: behavior.behavior_id.clone(),
+            selected_root: Some(selected.clone()),
+            ceiling_root: Some(selected.clone()),
+        }));
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        daemon.process_request(first, shutdown_rx.clone()).await;
+        assert!(
+            calls.load(Ordering::SeqCst) > 0,
+            "the admitted request must reach the provider before revocation"
+        );
+        let calls_before_revocation = calls.load(Ordering::SeqCst);
+
+        let escaped_doc_id = crate::graphql::escape_graphql_string(&workspace_root_doc_id);
+        let revoked = node
+            .execute(&format!(
+                r#"mutation {{ update_WorkspaceRoot(filter: {{_docID: {{_eq:"{escaped_doc_id}"}}}}, input: {{enabled:false}}) {{_docID}} }}"#
+            ))
+            .await;
+        assert!(!revoked.has_errors(), "{:?}", revoked.errors);
+        let second = create_routed_request(node.as_ref(), &behavior, &requester_did).await;
+        let second_doc_id = second.doc_id.clone();
+        daemon.process_request(second, shutdown_rx).await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            calls_before_revocation,
+            "the revoked fresh request must fail before provider exposure"
+        );
+        let escaped_request_doc_id = crate::graphql::escape_graphql_string(&second_doc_id);
+        let rejected = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc_id}"}}}}, limit:1) {{lifecycle_state}} }}"#
+            ))
+            .await;
+        assert!(!rejected.has_errors(), "{:?}", rejected.errors);
+        let lifecycle_state = rejected
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("lifecycle_state"))
+            .and_then(serde_json::Value::as_str);
+        assert_eq!(lifecycle_state, Some("failed"));
+
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(data_path);
+    }
+
+    #[tokio::test]
     async fn daemon_final_claim_rechecks_revocation_and_accepts_exact_replacement() {
         let data_path = std::env::temp_dir().join(format!(
             "daemon-enrollment-final-claim-{}",

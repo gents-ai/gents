@@ -28,10 +28,16 @@ use crate::Collection;
 /// `AgentBehavior` rows; this module does not load it itself.
 #[derive(Debug, Clone, Default)]
 pub struct PersonaCatalogView {
-    /// Published cwd choices within the authorized principal scope. An empty
-    /// requested root is always fine regardless of this set (it means "no
-    /// root restriction"), so this set only gates *non-empty* requests.
+    /// Published global operator-local cwd choices after the process-ceiling
+    /// meet. WorkspaceRoot has no principal identity in its schema.
     pub allowed_roots: BTreeSet<String>,
+    /// Presence of any WorkspaceRoot document, including disabled rows. When
+    /// true, a blank requested root is a widening attempt, not permission to
+    /// inherit the broader process ceiling.
+    pub root_policy_configured: bool,
+    /// Process ceiling used to refresh WorkspaceRoot policy inside the apply
+    /// transaction. Observation only; it is not another persisted config.
+    pub operator_ceiling: Option<std::path::PathBuf>,
     /// Inference profile ids published for this deployment.
     pub available_profile_ids: BTreeSet<String>,
     /// Enabled `AgentPrincipal` DIDs on this deployment. Every op requires
@@ -50,6 +56,12 @@ pub struct PersonaCatalogView {
 pub struct BehaviorRef {
     pub enabled: bool,
     pub protected: bool,
+    /// Canonical Tools.host.root currently stored for this behavior, when it
+    /// has a Tools document. Omitted edit fields preserve and re-admit it.
+    pub root: Option<String>,
+    /// True when the stored Tools selection has a host-facing capability that
+    /// needs the shared filesystem root.
+    pub root_required: bool,
 }
 
 pub const SETUP_STEWARD_BEHAVIOR_TAG: &str = "gents:setup-steward";
@@ -258,15 +270,85 @@ fn enumerate_bounded(values: &BTreeSet<String>) -> String {
 fn validate_root(root: Option<&str>, catalog: &PersonaCatalogView) -> Option<String> {
     let root = root.unwrap_or("").trim();
     if root.is_empty() {
+        if catalog.root_policy_configured {
+            return Some(format!(
+                "root is required while explicit WorkspaceRoot policy is configured — pick a descendant of the published allowed_roots: {}",
+                enumerate_bounded(&catalog.allowed_roots)
+            ));
+        }
         return None;
     }
-    if !catalog.allowed_roots.contains(root) {
+    if !std::path::Path::new(root).is_absolute() {
         return Some(format!(
-            r#"root "{root}" is not allowed — pick from the published allowed_roots: {}"#,
+            r#"root "{root}" must be absolute — pick a descendant of the published allowed_roots: {}"#,
             enumerate_bounded(&catalog.allowed_roots)
         ));
     }
-    None
+    let policy = crate::tool_surface::WorkspaceRootPolicy {
+        configured: catalog.root_policy_configured,
+        published: catalog.allowed_roots.iter().map(Into::into).collect(),
+    };
+    match policy.admit(std::path::Path::new(root)) {
+        Ok(crate::tool_surface::RootAdmission::Admitted(_)) => None,
+        Ok(denied @ crate::tool_surface::RootAdmission::Denied { .. }) => Some(format!(
+            r#"root "{root}" is not allowed ({}) — pick a descendant of the published allowed_roots: {}"#,
+            denied.denial_reason().expect("denied outcome has a reason"),
+            enumerate_bounded(&catalog.allowed_roots)
+        )),
+        Err(error) => Some(format!(
+            r#"root "{root}" could not be resolved safely against published allowed_roots: {error:#}"#
+        )),
+    }
+}
+
+fn validate_root_before_persistence(
+    doc: &PersonaRequestDoc,
+    catalog: &PersonaCatalogView,
+) -> Result<Option<std::path::PathBuf>> {
+    let validates_root = matches!(doc.op, Some(PersonaOp::Create { .. }))
+        || matches!(doc.op, Some(PersonaOp::Edit)) && doc.edits("root");
+    if validates_root {
+        if let Some(message) = validate_root(doc.root.as_deref(), catalog) {
+            return Err(persona_root_rejection(format!(
+                "persona root rejected immediately before persistence: {message}"
+            )));
+        }
+        let root = doc.root.as_deref().unwrap_or("").trim();
+        if !root.is_empty() {
+            let policy = crate::tool_surface::WorkspaceRootPolicy {
+                configured: catalog.root_policy_configured,
+                published: catalog.allowed_roots.iter().map(Into::into).collect(),
+            };
+            return match policy.admit(std::path::Path::new(root)).map_err(|error| {
+                persona_root_rejection(format!(
+                    "persona root rejected immediately before persistence: {error:#}"
+                ))
+            })? {
+                crate::tool_surface::RootAdmission::Admitted(root) => Ok(Some(root)),
+                denied @ crate::tool_surface::RootAdmission::Denied { .. } => {
+                    Err(persona_root_rejection(format!(
+                        "persona root rejected immediately before persistence: {}",
+                        denied.denial_reason().expect("denied outcome has a reason")
+                    )))
+                }
+            };
+        }
+    }
+    Ok(None)
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct PersonaRootPolicyRejection(String);
+
+fn persona_root_rejection(detail: String) -> anyhow::Error {
+    anyhow::Error::new(PersonaRootPolicyRejection(detail))
+}
+
+pub(crate) fn persona_root_rejection_detail(error: &anyhow::Error) -> Option<String> {
+    error
+        .downcast_ref::<PersonaRootPolicyRejection>()
+        .map(ToString::to_string)
 }
 
 fn validate_profile(profile_id: Option<&str>, catalog: &PersonaCatalogView) -> Option<String> {
@@ -417,6 +499,12 @@ pub fn decide_persona_request(
             if doc.edits("root") {
                 if let Some(msg) = validate_root(doc.root.as_deref(), catalog) {
                     return PersonaVerdict::Reject(msg);
+                }
+            } else if target.root_required {
+                if let Some(msg) = validate_root(target.root.as_deref(), catalog) {
+                    return PersonaVerdict::Reject(format!(
+                        "stored Tools root is no longer admissible: {msg}"
+                    ));
                 }
             }
             if doc.edits("profile_id") {
@@ -595,10 +683,11 @@ fn replacement(
 /// cloning or changing tools cannot leave half-applied context/behavior documents.
 pub async fn apply_persona_request(
     node: &Arc<EmbeddedNode>,
+    actor: identity::Did,
     doc: &PersonaRequestDoc,
-    _catalog: &PersonaCatalogView,
+    catalog: &PersonaCatalogView,
 ) -> Result<PersonaApplyOutcome> {
-    ConfigAccess::Local(node.clone()).transact("persona.apply", |txn| Box::pin(async move {
+    ConfigAccess::transact_local(node, Some(actor), "persona.apply", |txn| Box::pin(async move {
         let op = doc.op.as_ref().context("persona operation missing")?;
         let owner = &doc.agent_did;
         let context_id = format!("context-{}", doc.request_key);
@@ -628,7 +717,7 @@ pub async fn apply_persona_request(
             anyhow::ensure!(source.as_ref().is_some_and(|source| source.enabled), "clone source is disabled");
         }
         let mut behavior = if let Some(source) = source.clone() { source } else {
-            serde_json::from_value(serde_json::json!({"behavior_id":derive_behavior_id(owner, doc.persona_name.as_deref().context("persona name missing")?, &current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)})).collect()), "agent_did":owner,
+            serde_json::from_value(serde_json::json!({"behavior_id":derive_behavior_id(owner, doc.persona_name.as_deref().context("persona name missing")?, &current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG), ..Default::default()})).collect()), "agent_did":owner,
                 "inference_profile_id":doc.profile_id.as_deref().context("persona profile missing")?}))?
         };
         if matches!(op, PersonaOp::Disable) {
@@ -639,7 +728,7 @@ pub async fn apply_persona_request(
         let create = matches!(op, PersonaOp::Create {..});
         if create {
             let name = doc.persona_name.as_deref().context("behavior display_name missing")?;
-            let catalog = current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG)})).collect();
+            let catalog = current.iter().map(|(id,b)| (id.clone(), BehaviorRef {enabled:b.enabled, protected:b.tags.iter().any(|tag| tag == SETUP_STEWARD_BEHAVIOR_TAG), ..Default::default()})).collect();
             behavior.behavior_id = derive_behavior_id(owner, name, &catalog);
             behavior.created_at = None;
             behavior.enabled = true;
@@ -682,7 +771,25 @@ pub async fn apply_persona_request(
         if source.is_none() || doc.edits("description") || (create && doc.description.is_some()) {
             context.description = doc.description.clone();
         }
-        let root = doc.root.as_ref().filter(|root| !root.trim().is_empty()).cloned();
+        // Refresh the global operator-local WorkspaceRoot policy inside this
+        // same configuration transaction. The preview/admission catalog may
+        // be stale by publication time; disabled or changed roots must win
+        // before any persona documents are persisted.
+        let fresh_root_policy = crate::tool_surface::load_workspace_root_policy_in_txn(
+            txn,
+            catalog.operator_ceiling.as_deref(),
+        )
+        .await?;
+        let fresh_catalog = PersonaCatalogView {
+            allowed_roots: fresh_root_policy.published_strings().collect(),
+            root_policy_configured: fresh_root_policy.configured,
+            operator_ceiling: catalog.operator_ceiling.clone(),
+            available_profile_ids: catalog.available_profile_ids.clone(),
+            known_agent_dids: catalog.known_agent_dids.clone(),
+            behaviors: catalog.behaviors.clone(),
+        };
+        let root = validate_root_before_persistence(doc, &fresh_catalog)?
+            .map(|root| root.to_string_lossy().into_owned());
         let preset = doc.preset.as_deref().unwrap_or("").trim();
         let effective_name = behavior.display_name.as_deref().unwrap_or(&behavior.behavior_id);
         let mut tools = if create && !preset.is_empty() || doc.edits("preset") {
@@ -710,6 +817,13 @@ pub async fn apply_persona_request(
                 if let Some(host) = &mut tools.host { host.root = root.clone(); }
                 else if root.is_some() { tools.host = Some(HostTools {root:root.clone(),..Default::default()}); }
             }
+        }
+        if let Some(tools) = &mut tools {
+            crate::tool_surface::canonicalize_tools_root(tools, &fresh_root_policy).map_err(
+                |error| persona_root_rejection(format!(
+                    "persona root rejected immediately before persistence: {error:#}"
+                )),
+            )?;
         }
         let change_context = create || context != existing_context || tools != existing_tools;
         let mut documents = Vec::new();
@@ -754,6 +868,12 @@ pub(crate) async fn seed_persona_validation_references(
 mod tests {
     use super::*;
 
+    const TEST_ACTOR_DID: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+    fn test_actor() -> identity::Did {
+        identity::Did::new(TEST_ACTOR_DID.to_string()).expect("valid test ACP actor")
+    }
+
     fn catalog_with(
         roots: &[&str],
         profiles: &[&str],
@@ -761,6 +881,8 @@ mod tests {
     ) -> PersonaCatalogView {
         PersonaCatalogView {
             allowed_roots: roots.iter().map(|s| s.to_string()).collect(),
+            root_policy_configured: !roots.is_empty(),
+            operator_ceiling: roots.first().map(std::path::PathBuf::from),
             available_profile_ids: profiles.iter().map(|s| s.to_string()).collect(),
             known_agent_dids: BTreeSet::from(["did:key:agent".to_string()]),
             behaviors: behaviors
@@ -771,6 +893,7 @@ mod tests {
                         BehaviorRef {
                             enabled: *enabled,
                             protected: false,
+                            ..Default::default()
                         },
                     )
                 })
@@ -802,7 +925,7 @@ mod tests {
             persona_name: Some("Research Assistant".to_string()),
             description: Some("Researches a focused question".to_string()),
             system_prompt: Some("Research the question and cite evidence.".to_string()),
-            root: None,
+            root: Some("/workspace/root".to_string()),
             preset: Some(persona_presets::PRESET_WRITE.to_string()),
             profile_id: Some("profile-1".to_string()),
             ..Default::default()
@@ -917,7 +1040,7 @@ mod tests {
         let mut doc = create_doc(PersonaOp::Create { clone_from: None });
         doc.request_key = "promoted".into();
         doc.make_default = true;
-        let outcome = apply_persona_request(&node, &doc, &base_catalog()).await?;
+        let outcome = apply_persona_request(&node, test_actor(), &doc, &base_catalog()).await?;
         let principal: AgentPrincipal =
             read(&node, Collection::AgentPrincipal, owner, owner).await?;
         assert_eq!(
@@ -933,24 +1056,42 @@ mod tests {
 
     #[test]
     fn rejects_root_not_allowed() {
+        let allowed = tempfile::tempdir().expect("allowed root");
+        let outside = tempfile::tempdir().expect("outside root");
+        let allowed = allowed.path().to_string_lossy().into_owned();
+        let outside = outside.path().to_string_lossy().into_owned();
+        let catalog = catalog_with(&[allowed.as_str()], &["profile-1"], &[]);
         let mut doc = create_doc(PersonaOp::Create { clone_from: None });
-        doc.root = Some("/not/allowed".to_string());
-        let verdict = decide_persona_request(&doc, &base_catalog());
+        doc.root = Some(outside.clone());
+        let verdict = decide_persona_request(&doc, &catalog);
         assert_eq!(
             verdict,
-            PersonaVerdict::Reject(
-                r#"root "/not/allowed" is not allowed — pick from the published allowed_roots: [/workspace/root]"#
-                    .to_string()
-            )
+            PersonaVerdict::Reject(format!(
+                r#"root "{outside}" is not allowed (resolved path is outside the allowed roots) — pick a descendant of the published allowed_roots: [{allowed}]"#
+            ))
         );
     }
 
     #[test]
-    fn empty_root_is_admitted() {
+    fn empty_root_is_rejected_under_explicit_policy() {
         let mut doc = create_doc(PersonaOp::Create { clone_from: None });
         doc.root = Some("".to_string());
         let verdict = decide_persona_request(&doc, &base_catalog());
-        assert_eq!(verdict, PersonaVerdict::Admit);
+        assert!(matches!(
+            verdict,
+            PersonaVerdict::Reject(detail) if detail.contains("root is required")
+        ));
+    }
+
+    #[test]
+    fn relative_root_is_rejected() {
+        let mut doc = create_doc(PersonaOp::Create { clone_from: None });
+        doc.root = Some("relative/project".to_string());
+        let verdict = decide_persona_request(&doc, &base_catalog());
+        assert!(matches!(
+            verdict,
+            PersonaVerdict::Reject(detail) if detail.contains("must be absolute")
+        ));
     }
 
     #[test]
@@ -1180,6 +1321,64 @@ mod tests {
     }
 
     #[test]
+    fn omitted_edit_revalidates_active_stored_root_without_requiring_inactive_tools() {
+        let allowed = tempfile::tempdir().expect("allowed root");
+        let descendant = allowed.path().join("project");
+        std::fs::create_dir_all(&descendant).expect("descendant");
+        let outside = tempfile::tempdir().expect("outside root");
+        let mut catalog = base_catalog();
+        catalog.allowed_roots = BTreeSet::from([std::fs::canonicalize(allowed.path())
+            .expect("canonical allowed")
+            .to_string_lossy()
+            .into_owned()]);
+        catalog.root_policy_configured = true;
+        let target = catalog
+            .behaviors
+            .get_mut("existing-enabled")
+            .expect("fixture behavior");
+        target.root_required = true;
+        target.root = Some(descendant.to_string_lossy().into_owned());
+
+        let mut doc = create_doc(PersonaOp::Edit);
+        doc.behavior_id = Some("existing-enabled".to_string());
+        doc.root = None;
+        doc.edit_fields = vec!["display_name".to_string()];
+        assert_eq!(
+            decide_persona_request(&doc, &catalog),
+            PersonaVerdict::Admit
+        );
+
+        catalog
+            .behaviors
+            .get_mut("existing-enabled")
+            .expect("fixture behavior")
+            .root = Some(outside.path().to_string_lossy().into_owned());
+        assert!(matches!(
+            decide_persona_request(&doc, &catalog),
+            PersonaVerdict::Reject(detail) if detail.contains("stored Tools root is no longer admissible")
+        ));
+
+        catalog
+            .behaviors
+            .get_mut("existing-enabled")
+            .expect("fixture behavior")
+            .root = None;
+        assert!(matches!(
+            decide_persona_request(&doc, &catalog),
+            PersonaVerdict::Reject(detail) if detail.contains("root is required")
+        ));
+        catalog
+            .behaviors
+            .get_mut("existing-enabled")
+            .expect("fixture behavior")
+            .root_required = false;
+        assert_eq!(
+            decide_persona_request(&doc, &catalog),
+            PersonaVerdict::Admit
+        );
+    }
+
+    #[test]
     fn admits_happy_disable() {
         let mut doc = create_doc(PersonaOp::Disable);
         doc.op_raw = "disable".to_string();
@@ -1206,6 +1405,7 @@ mod tests {
             BehaviorRef {
                 enabled: true,
                 protected: false,
+                ..Default::default()
             },
         );
         let id = derive_behavior_id("did:key:agent", "Research Assistant", &existing);
@@ -1216,6 +1416,7 @@ mod tests {
             BehaviorRef {
                 enabled: true,
                 protected: false,
+                ..Default::default()
             },
         );
         let id = derive_behavior_id("did:key:agent", "Research Assistant", &existing);
@@ -1269,10 +1470,10 @@ mod tests {
         let owner = "did:key:agent";
         seed_persona_validation_references(&node, owner).await?;
         let mut doc = create_doc(PersonaOp::Create { clone_from: None });
-        doc.root = Some("/original".into());
+        doc.root = Some("/workspace/root/original".into());
         let catalog = base_catalog();
-        let created = apply_persona_request(&node, &doc, &catalog).await?;
-        let replay = apply_persona_request(&node, &doc, &catalog).await?;
+        let created = apply_persona_request(&node, test_actor(), &doc, &catalog).await?;
+        let replay = apply_persona_request(&node, test_actor(), &doc, &catalog).await?;
         assert_eq!(created.behavior_id, replay.behavior_id);
         assert!(replay.repaired);
         let original: AgentBehaviorDocument = read(
@@ -1337,7 +1538,7 @@ mod tests {
         doc.system_prompt = None;
         doc.root = None;
         doc.profile_id = Some("profile-2".into());
-        let cloned = apply_persona_request(&node, &doc, &catalog).await?;
+        let cloned = apply_persona_request(&node, test_actor(), &doc, &catalog).await?;
         let behavior: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
         assert_eq!(behavior.inference_profile_id, "profile-2");
@@ -1374,7 +1575,7 @@ mod tests {
         doc.root = None;
         doc.profile_id = None;
         doc.edit_fields = vec!["display_name".into()];
-        apply_persona_request(&node, &doc, &catalog).await?;
+        apply_persona_request(&node, test_actor(), &doc, &catalog).await?;
         let renamed: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
         assert_eq!(renamed.display_name.as_deref(), Some("Renamed clone"));
@@ -1400,14 +1601,14 @@ mod tests {
                 .host
                 .as_ref()
                 .and_then(|host| host.root.as_deref()),
-            Some("/original")
+            Some("/workspace/root/original")
         );
 
         // Replacing only the permission preset preserves the existing root.
         doc.request_key = "preset-preserves-root".into();
         doc.preset = Some("readonly".into());
         doc.edit_fields = vec!["preset".into()];
-        apply_persona_request(&node, &doc, &catalog).await?;
+        apply_persona_request(&node, test_actor(), &doc, &catalog).await?;
         let preset_behavior: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
         let preset_context: AgentContext = read(
@@ -1429,7 +1630,7 @@ mod tests {
                 .host
                 .as_ref()
                 .and_then(|host| host.root.as_deref()),
-            Some("/original")
+            Some("/workspace/root/original")
         );
 
         // Root clearing and preset replacement must not mutate a shared source.
@@ -1438,7 +1639,7 @@ mod tests {
         doc.description = Some("Edited behavior and context".into());
         doc.system_prompt = Some("Edited literal instructions".into());
         doc.edit_fields = vec!["description".into(), "system_prompt".into(), "root".into()];
-        apply_persona_request(&node, &doc, &catalog).await?;
+        apply_persona_request(&node, test_actor(), &doc, &catalog).await?;
         let edited: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
         let edited_context: AgentContext = read(
@@ -1471,7 +1672,7 @@ mod tests {
         doc.request_key = "preset".into();
         doc.preset = Some("readonly".into());
         doc.edit_fields = vec!["preset".into()];
-        apply_persona_request(&node, &doc, &catalog).await?;
+        apply_persona_request(&node, test_actor(), &doc, &catalog).await?;
         let preset: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
         let preset_context: AgentContext = read(
@@ -1495,7 +1696,7 @@ mod tests {
         );
         doc.op = Some(PersonaOp::Disable);
         doc.edit_fields.clear();
-        apply_persona_request(&node, &doc, &catalog).await?;
+        apply_persona_request(&node, test_actor(), &doc, &catalog).await?;
         let mut disabled: AgentBehaviorDocument =
             read(&node, Collection::AgentBehavior, owner, &cloned.behavior_id).await?;
         assert!(!disabled.enabled);
@@ -1511,9 +1712,11 @@ mod tests {
         seed_persona_validation_references(&node, "did:key:foreign").await?;
         crate::document_config::ensure_agent_principal(&node, "did:key:agent").await?;
         let doc = create_doc(PersonaOp::Create { clone_from: None });
-        assert!(apply_persona_request(&node, &doc, &base_catalog())
-            .await
-            .is_err());
+        assert!(
+            apply_persona_request(&node, test_actor(), &doc, &base_catalog())
+                .await
+                .is_err()
+        );
         let result = node
             .execute("{ AgentBehavior {behavior_id} AgentContext {context_id} Tools {tools_id} }")
             .await;
@@ -1521,6 +1724,98 @@ mod tests {
         for name in ["AgentBehavior", "AgentContext", "Tools"] {
             assert_eq!(result.data.as_ref().unwrap()[name], serde_json::json!([]));
         }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn apply_rechecks_root_after_admission_before_persistence() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let owner = "did:key:agent";
+        seed_persona_validation_references(&node, owner).await?;
+        let allowed = tempfile::tempdir()?;
+        let inside = allowed.path().join("inside");
+        std::fs::create_dir_all(&inside)?;
+        let outside = tempfile::tempdir()?;
+        let link = allowed.path().join("selection");
+        std::os::unix::fs::symlink(&inside, &link)?;
+        let catalog = catalog_with(
+            &[allowed.path().to_str().context("utf-8 root")?],
+            &["profile-1"],
+            &[],
+        );
+        let mut doc = create_doc(PersonaOp::Create { clone_from: None });
+        doc.root = Some(link.to_string_lossy().into_owned());
+        assert_eq!(
+            decide_persona_request(&doc, &catalog),
+            PersonaVerdict::Admit
+        );
+
+        std::fs::remove_file(&link)?;
+        std::os::unix::fs::symlink(outside.path(), &link)?;
+        let error = apply_persona_request(&node, test_actor(), &doc, &catalog)
+            .await
+            .expect_err("changed symlink must fail the publication-boundary check");
+        assert!(
+            error
+                .to_string()
+                .contains("rejected immediately before persistence"),
+            "{error:#}"
+        );
+        let response = node.execute("{ AgentBehavior {behavior_id} }").await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        assert_eq!(
+            response.data.as_ref().expect("response data")["AgentBehavior"],
+            serde_json::json!([])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn apply_reloads_workspace_root_policy_inside_transaction() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let owner = "did:key:agent";
+        seed_persona_validation_references(&node, owner).await?;
+        let ceiling = tempfile::tempdir()?;
+        let selected = ceiling.path().join("selected");
+        std::fs::create_dir_all(&selected)?;
+        let selected_text = selected.to_string_lossy().into_owned();
+        let catalog = catalog_with(&[&selected_text], &["profile-1"], &[]);
+        let mut doc = create_doc(PersonaOp::Create { clone_from: None });
+        doc.root = Some(selected_text.clone());
+        assert_eq!(
+            decide_persona_request(&doc, &catalog),
+            PersonaVerdict::Admit,
+            "preflight sees the stale enabled catalog"
+        );
+
+        let escaped = crate::graphql::escape_graphql_string(&selected_text);
+        ConfigAccess::write_local(
+            &node,
+            "test.persona.revoked_root",
+            &format!(
+                r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped}", enabled:false}}) {{_docID}} }}"#
+            ),
+        )
+        .await?;
+
+        let error = apply_persona_request(&node, test_actor(), &doc, &catalog)
+            .await
+            .expect_err("the transaction-local policy reload must observe revocation");
+        assert!(
+            error
+                .to_string()
+                .contains("rejected immediately before persistence"),
+            "{error:#}"
+        );
+        let response = node.execute("{ AgentBehavior {behavior_id} }").await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        assert_eq!(
+            response.data.as_ref().expect("response data")["AgentBehavior"],
+            serde_json::json!([])
+        );
         Ok(())
     }
 }

@@ -44,6 +44,7 @@ use defra_node::{EmbeddedNode, EventName};
 use gents_protocol::persona::{
     LocalPersonaRequestRecord, PERSONA_AUTHORITY_ENROLLMENT, PERSONA_AUTHORITY_LOCAL_SELF,
 };
+use identity::Did;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
@@ -69,6 +70,9 @@ pub struct PersonaTickOutcome {
 
 #[async_trait]
 pub trait PersonaRequestStore: Send + Sync {
+    /// Runtime principal that owns reconciler-authored materialization and
+    /// terminal-state writes at DefraDB's ACP boundary.
+    fn runtime_actor(&self) -> Result<Did>;
     /// Rows with `status == "pending"`; terminal rows are filtered by the
     /// store's own query (or fixture), not by the tick.
     async fn load_pending_requests(&self) -> Result<Vec<PersonaRequestDoc>>;
@@ -191,9 +195,26 @@ async fn process_one_request(
                     return Ok(());
                 }
             }
-            let apply_outcome = apply_persona_request(node, &authorized_doc, &catalog)
-                .await
-                .context("apply admitted persona request")?;
+            let actor = store
+                .runtime_actor()
+                .context("resolve persona runtime ACP actor")?;
+            let apply_outcome =
+                match apply_persona_request(node, actor, &authorized_doc, &catalog).await {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        if let Some(detail) =
+                            crate::agent::persona_ops::persona_root_rejection_detail(&error)
+                        {
+                            store
+                                .mark_rejected(&doc.doc_id, &detail)
+                                .await
+                                .context("mark transaction-time persona root rejection")?;
+                            outcome.rejected.insert(doc.request_key.clone());
+                            return Ok(());
+                        }
+                        return Err(error).context("apply admitted persona request");
+                    }
+                };
             store
                 .mark_applied(&doc.doc_id, &apply_outcome.behavior_id)
                 .await
@@ -391,12 +412,9 @@ async fn sweep_persona_requests(store: &GraphqlPersonaRequestStore, node: &Arc<E
 
 pub struct GraphqlPersonaRequestStore {
     node: Arc<EmbeddedNode>,
-    /// Operator tool-root ceiling (`--tool-root`); see
-    /// `directory_projection::filter_roots_to_ceiling`. `None` when the
-    /// caller has no ceiling in scope (e.g. the self-config tool's read-only
-    /// `list`): admission always runs against the reconciler's own
-    /// ceiling-aware store, so a `None` here can never admit an unusable
-    /// root.
+    /// Operator tool-root ceiling (`--tool-root`) used by the canonical
+    /// WorkspaceRoot policy projector. `None` means this caller has no
+    /// process ceiling observation, not that explicit root policy is absent.
     ceiling_root: Option<std::path::PathBuf>,
     enrollment_authority: Option<EnrollmentAuthorityHandle>,
     identity: Option<Arc<dyn AgentIdentity>>,
@@ -451,6 +469,17 @@ impl GraphqlPersonaRequestStore {
 
 #[async_trait]
 impl PersonaRequestStore for GraphqlPersonaRequestStore {
+    fn runtime_actor(&self) -> Result<Did> {
+        let did = self
+            .identity
+            .as_ref()
+            .context("persona request store has no runtime principal identity")?
+            .did();
+        Did::new(did.to_owned()).map_err(|error| {
+            anyhow::anyhow!("runtime principal DID is not ACP-addressable: {error}")
+        })
+    }
+
     async fn load_pending_requests(&self) -> Result<Vec<PersonaRequestDoc>> {
         let query = r#"{
             PersonaConfigRequest(filter: { status: { _eq: "pending" } }) {
@@ -530,25 +559,33 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
     async fn mark_applied(&self, doc_id: &str, behavior_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = mark_applied_mutation(doc_id, behavior_id, &now);
-        crate::config_client::ConfigAccess::write_local_response(
+        let actor = self.runtime_actor()?;
+        crate::config_client::ConfigAccess::transact_local(
             &self.node,
+            Some(actor),
             "p2p.mark_persona_applied",
-            &mutation,
+            |txn| {
+                let mutation = &mutation;
+                Box::pin(async move { txn.execute_local_response(mutation).await.map(|_| ()) })
+            },
         )
         .await
-        .map(|_| ())
     }
 
     async fn mark_rejected(&self, doc_id: &str, detail: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = mark_rejected_mutation(doc_id, detail, &now);
-        crate::config_client::ConfigAccess::write_local_response(
+        let actor = self.runtime_actor()?;
+        crate::config_client::ConfigAccess::transact_local(
             &self.node,
+            Some(actor),
             "p2p.mark_persona_rejected",
-            &mutation,
+            |txn| {
+                let mutation = &mutation;
+                Box::pin(async move { txn.execute_local_response(mutation).await.map(|_| ()) })
+            },
         )
         .await
-        .map(|_| ())
     }
 }
 
@@ -570,6 +607,9 @@ async fn load_catalog_view_from_node(
     ceiling_root: Option<&std::path::Path>,
 ) -> Result<PersonaCatalogView> {
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let (tools_fields, _) =
+        crate::config_client::config_projection(crate::Collection::Tools, None)?;
+    let tools_fields = tools_fields.join(" ");
     let query = format!(
         r#"{{
             AgentPrincipal(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
@@ -585,8 +625,16 @@ async fn load_catalog_view_from_node(
             }}
             AgentBehavior(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
                 behavior_id
+                context_id
                 enabled
                 tags
+            }}
+            AgentContext(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
+                context_id
+                tools_id
+            }}
+            Tools(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
+                {tools_fields}
             }}
         }}"#
     );
@@ -603,21 +651,14 @@ async fn load_catalog_view_from_node(
             })
             .collect();
 
-    // Ceiling-filtered through the same predicate the directory catalog
-    // publishes with, so admission can never admit a root the serve-time
-    // guard would refuse (#1051): the `root ∈ allowed_roots` conjunct
-    // enforces the operator ceiling for free.
-    let allowed_roots: BTreeSet<String> =
-        crate::agent::directory_projection::filter_roots_to_ceiling(
-            rows::<WorkspaceRootRow>(&response, "WorkspaceRoot")?
-                .into_iter()
-                .filter(|row| row.enabled.unwrap_or(false))
-                .filter_map(|row| row.root_path)
-                .collect(),
-            ceiling_root,
-        )
-        .into_iter()
-        .collect();
+    // WorkspaceRoot is global operator-local policy by schema. Preserve row
+    // presence (including disabled rows), because explicit revocation must
+    // publish an empty set instead of falling back to the process ceiling.
+    let root_policy = crate::tool_surface::project_workspace_root_policy(
+        rows::<crate::tool_surface::WorkspaceRootDocument>(&response, "WorkspaceRoot")?,
+        ceiling_root,
+    );
+    let allowed_roots: BTreeSet<String> = root_policy.published_strings().collect();
 
     let available_profile_ids: BTreeSet<String> =
         rows::<InferenceProfileRow>(&response, "InferenceProfile")?
@@ -625,28 +666,64 @@ async fn load_catalog_view_from_node(
             .filter_map(|row| row.profile_id)
             .collect();
 
+    let contexts = rows::<AgentContextCatalogRow>(&response, "AgentContext")?
+        .into_iter()
+        .filter_map(|row| Some((row.context_id?, row.tools_id)))
+        .collect::<BTreeMap<_, _>>();
+    let tools = rows::<crate::document_config::Tools>(&response, "Tools")?
+        .into_iter()
+        .map(|tools| (tools.tools_id.clone(), tools))
+        .collect::<BTreeMap<_, _>>();
+
     let behaviors: BTreeMap<String, BehaviorRef> =
         rows::<AgentBehaviorCatalogRow>(&response, "AgentBehavior")?
             .into_iter()
-            .filter_map(|row| {
-                let behavior_id = row.behavior_id?.trim().to_string();
+            .map(|row| -> Result<Option<(String, BehaviorRef)>> {
+                let Some(raw_behavior_id) = row.behavior_id.as_deref() else {
+                    return Ok(None);
+                };
+                let behavior_id = raw_behavior_id.trim().to_string();
                 if behavior_id.is_empty() {
-                    return None;
+                    return Ok(None);
                 }
-                Some((
+                let stored_tools = row
+                    .context_id
+                    .as_ref()
+                    .and_then(|context_id| contexts.get(context_id))
+                    .and_then(Option::as_ref)
+                    .and_then(|tools_id| tools.get(tools_id));
+                let selection = stored_tools
+                    .map(crate::tool_surface::ResolvedToolSelection::from_document)
+                    .transpose()
+                    .with_context(|| format!("decode Tools for behavior {behavior_id}"))?;
+                Ok(Some((
                     behavior_id,
                     BehaviorRef {
                         enabled: row.enabled.unwrap_or(true),
                         protected: row.tags.as_deref().unwrap_or_default().iter().any(|tag| {
                             tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
                         }),
+                        root: stored_tools
+                            .and_then(|tools| tools.host.as_ref())
+                            .and_then(|host| host.root.as_deref())
+                            .map(str::trim)
+                            .filter(|root| !root.is_empty())
+                            .map(ToOwned::to_owned),
+                        root_required: selection
+                            .as_ref()
+                            .is_some_and(|selection| selection.requires_filesystem_root()),
                     },
-                ))
+                )))
             })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
             .collect();
 
     Ok(PersonaCatalogView {
         allowed_roots,
+        root_policy_configured: root_policy.configured,
+        operator_ceiling: ceiling_root.map(std::path::Path::to_path_buf),
         available_profile_ids,
         known_agent_dids,
         behaviors,
@@ -826,14 +903,6 @@ struct AgentPrincipalCatalogRow {
 }
 
 #[derive(Deserialize)]
-struct WorkspaceRootRow {
-    #[serde(default)]
-    root_path: Option<String>,
-    #[serde(default)]
-    enabled: Option<bool>,
-}
-
-#[derive(Deserialize)]
 struct InferenceProfileRow {
     #[serde(default)]
     profile_id: Option<String>,
@@ -844,9 +913,19 @@ struct AgentBehaviorCatalogRow {
     #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
+    context_id: Option<String>,
+    #[serde(default)]
     enabled: Option<bool>,
     #[serde(default)]
     tags: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct AgentContextCatalogRow {
+    #[serde(default)]
+    context_id: Option<String>,
+    #[serde(default)]
+    tools_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -854,6 +933,12 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    const TEST_ACTOR_DID: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+    fn test_actor() -> Did {
+        Did::new(TEST_ACTOR_DID.to_string()).expect("valid test ACP actor")
+    }
 
     async fn build_node(tempdir: &tempfile::TempDir) -> Arc<EmbeddedNode> {
         let node = EmbeddedNode::builder()
@@ -912,6 +997,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_loads_the_stored_tools_root_for_omitted_edit_admission() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = build_apply_node(&tempdir).await;
+        let authored = tempfile::tempdir()?;
+        let selected = authored.path().join("project");
+        std::fs::create_dir_all(&selected)?;
+
+        let mut doc = pending_create_doc("stored-root", "did:key:agent");
+        doc.root = Some(selected.to_string_lossy().into_owned());
+        let catalog = happy_catalog("did:key:agent");
+        let applied = apply_persona_request(&node, test_actor(), &doc, &catalog).await?;
+
+        let loaded = load_catalog_view_from_node(&node, "did:key:agent", None).await?;
+        let behavior = loaded
+            .behaviors
+            .get(&applied.behavior_id)
+            .context("applied behavior missing from catalog")?;
+        assert!(behavior.root_required);
+        assert_eq!(
+            behavior.root.as_deref(),
+            Some(std::fs::canonicalize(selected)?.to_string_lossy().as_ref())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn catalog_marks_the_setup_steward_as_protected() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let node = build_apply_node(&tempdir).await;
@@ -941,6 +1052,8 @@ mod tests {
     fn happy_catalog(agent_did: &str) -> PersonaCatalogView {
         PersonaCatalogView {
             allowed_roots: BTreeSet::new(),
+            root_policy_configured: false,
+            operator_ceiling: None,
             available_profile_ids: BTreeSet::from(["profile-1".to_string()]),
             known_agent_dids: BTreeSet::from([agent_did.to_string()]),
             behaviors: BTreeMap::new(),
@@ -1041,6 +1154,7 @@ mod tests {
         fail_catalog_for: BTreeSet<String>,
         applied: Mutex<Vec<(String, String)>>,
         rejected: Mutex<Vec<(String, String)>>,
+        terminal: Mutex<BTreeSet<String>>,
         fail_mark_applied_once: Mutex<BTreeSet<String>>,
         revoke_after_first_authorization: bool,
         authorization_calls: Mutex<usize>,
@@ -1048,11 +1162,18 @@ mod tests {
 
     #[async_trait]
     impl PersonaRequestStore for FixtureStore {
+        fn runtime_actor(&self) -> Result<Did> {
+            Ok(test_actor())
+        }
+
         async fn load_pending_requests(&self) -> Result<Vec<PersonaRequestDoc>> {
+            let terminal = self.terminal.lock().unwrap();
             Ok(self
                 .all
                 .iter()
-                .filter(|doc| doc.status.as_deref() == Some("pending"))
+                .filter(|doc| {
+                    doc.status.as_deref() == Some("pending") && !terminal.contains(&doc.doc_id)
+                })
                 .cloned()
                 .collect())
         }
@@ -1113,6 +1234,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((request_key.to_string(), behavior_id.to_string()));
+            self.terminal
+                .lock()
+                .unwrap()
+                .insert(request_key.to_string());
             Ok(())
         }
 
@@ -1121,8 +1246,57 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((request_key.to_string(), detail.to_string()));
+            self.terminal
+                .lock()
+                .unwrap()
+                .insert(request_key.to_string());
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn transaction_time_root_revocation_terminally_rejects_once() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = build_apply_node(&tempdir).await;
+        let allowed = tempfile::tempdir()?;
+        let selected = allowed.path().join("selected");
+        std::fs::create_dir_all(&selected)?;
+        let selected_text = selected.to_string_lossy().into_owned();
+        let escaped = crate::graphql::escape_graphql_string(&selected_text);
+        ensure_no_errors(
+            &node
+                .execute(&format!(
+                    r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped}", enabled:false}}) {{_docID}} }}"#
+                ))
+                .await,
+            "seed revoked WorkspaceRoot",
+        )?;
+
+        let mut doc = pending_create_doc("req-root-revoked", "did:key:agent");
+        doc.root = Some(selected_text.clone());
+        let mut catalog = happy_catalog("did:key:agent");
+        catalog.allowed_roots = BTreeSet::from([selected_text]);
+        catalog.root_policy_configured = true;
+        let store = FixtureStore {
+            all: vec![doc],
+            catalog_by_agent: BTreeMap::from([("did:key:agent".to_string(), catalog)]),
+            ..Default::default()
+        };
+
+        let first = reconcile_persona_tick(&store, &node).await?;
+        assert_eq!(
+            first.rejected,
+            BTreeSet::from(["req-root-revoked".to_string()])
+        );
+        assert_eq!(store.rejected.lock().unwrap().len(), 1);
+        assert!(store.rejected.lock().unwrap()[0]
+            .1
+            .contains("rejected immediately before persistence"));
+
+        let second = reconcile_persona_tick(&store, &node).await?;
+        assert_eq!(second, PersonaTickOutcome::default());
+        assert_eq!(store.rejected.lock().unwrap().len(), 1);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1343,6 +1517,7 @@ mod tests {
                         .tags
                         .iter()
                         .any(|tag| tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG),
+                    ..Default::default()
                 },
             );
         }
@@ -1555,10 +1730,9 @@ mod tests {
         Ok(())
     }
 
-    /// #1051: the reconciler's catalog view is ceiling-filtered, so the
-    /// `root ∈ allowed_roots` conjunct rejects a root the serve-time
-    /// operator-ceiling guard would refuse — a persona can no longer be
-    /// admitted-yet-unusable.
+    /// #1051: the reconciler's catalog view is ceiling-filtered, so canonical
+    /// descendant admission rejects a root the serve-time operator-ceiling
+    /// guard would refuse — a persona can no longer be admitted-yet-unusable.
     #[tokio::test]
     async fn ceiling_filtered_view_rejects_out_of_ceiling_root() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
