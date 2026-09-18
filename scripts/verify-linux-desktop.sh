@@ -28,10 +28,12 @@ smoke() {
   log="target/desktop-smoke-${label}.log"
   useradd --home-dir "$smoke_root" --no-create-home --shell /bin/bash "$smoke_user"
   chown "$smoke_user" "$smoke_root"
+  install -d -o "$smoke_user" -m 0700 "$smoke_root/runtime" "$smoke_root/tmp"
   set +e
   # shellcheck disable=SC2016 # The non-root shell resolves its positional arguments.
   timeout --kill-after=5s 20s runuser -u "$smoke_user" -- \
-    env GENTS_HOME="$smoke_root/agent" GENTS_DESKTOP_HOME="$smoke_root/desktop" APPIMAGE_EXTRACT_AND_RUN=1 \
+    env GENTS_HOME="$smoke_root/agent" GENTS_DESKTOP_HOME="$smoke_root/desktop" \
+    XDG_RUNTIME_DIR="$smoke_root/runtime" TMPDIR="$smoke_root/tmp" APPIMAGE_EXTRACT_AND_RUN=1 \
     bash -c 'cd "$1" && exec dbus-run-session -- xvfb-run -a "$2"' bash "$smoke_root" "$executable" \
     > "$log" 2>&1
   status=$?
