@@ -6,6 +6,14 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+### Added
+
+- Embed the DefraDB Explorer: `gents serve` hosts the vendored embedded build
+  at `/explorer/` on its HTTP listener (same-origin with the DefraDB API), and
+  the desktop settings menu gains a Developer → DB Explorer option that opens
+  it for the managed runtime in a dedicated window (bridge contract 7.10,
+  `desktop_open_db_explorer`).
+
 ## 0.17.0 - 2026-09-11
 
 ### Changed

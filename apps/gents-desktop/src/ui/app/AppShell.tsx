@@ -17,6 +17,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -98,6 +99,7 @@ function SettingsMenu({
   nav,
   onNav,
   showNav,
+  onOpenDbExplorer,
   trigger,
   children,
 }: {
@@ -105,6 +107,8 @@ function SettingsMenu({
   onNav: (mode: NavMode) => void;
   /** the side nav choices only make sense where there is a side nav */
   showNav: boolean;
+  /** opens the runtime's DB explorer window; absent where the bridge lacks it */
+  onOpenDbExplorer?: (() => void) | null;
   trigger: ReactElement;
   children: ReactNode;
 }) {
@@ -149,6 +153,17 @@ function SettingsMenu({
             </DropdownMenuGroup>
           </>
         )}
+        {onOpenDbExplorer && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Developer</DropdownMenuLabel>
+              <DropdownMenuItem onClick={onOpenDbExplorer}>
+                DB Explorer
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -168,6 +183,7 @@ export function AppShell({
   error,
   onDismissError,
   onReconnect,
+  onOpenDbExplorer,
   children,
 }: {
   route: Route;
@@ -184,6 +200,8 @@ export function AppShell({
   error?: string | null;
   onDismissError?: () => void;
   onReconnect?: () => Promise<void>;
+  /** developer option: opens the runtime's DB explorer window */
+  onOpenDbExplorer?: (() => void) | null;
   children: ReactNode;
 }) {
   const [nav, setNav] = useState<NavMode>(navPreference);
@@ -200,6 +218,7 @@ export function AppShell({
       nav={nav}
       onNav={onNav}
       showNav={wide}
+      onOpenDbExplorer={onOpenDbExplorer}
       trigger={
         <button
           type="button"
@@ -216,6 +235,7 @@ export function AppShell({
       nav={nav}
       onNav={onNav}
       showNav={wide}
+      onOpenDbExplorer={onOpenDbExplorer}
       trigger={
         <button
           type="button"

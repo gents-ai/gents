@@ -1,5 +1,6 @@
 pub mod chat;
 pub mod config;
+pub mod db_explorer;
 pub mod e2e;
 pub mod inference_setup;
 pub mod lifecycle;

@@ -129,6 +129,7 @@ permissions = [
   "allow-desktop-managed-server-stop",
   "allow-desktop-managed-server-restart",
   "allow-desktop-managed-server-validate-root",
+  "allow-desktop-open-db-explorer",
 ]
 
 [[set]]

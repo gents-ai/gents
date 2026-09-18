@@ -99,6 +99,8 @@ export type DesktopApiAdapter = {
   stopManagedServer?: (
     disableAutoStart: boolean,
   ) => Promise<ManagedServerStatus>;
+  /** Opens the managed runtime's DB explorer window; resolves to its URL. */
+  openDbExplorer?: () => Promise<string>;
   setSelectedAgent: (agentDid: string | null) => Promise<void>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;

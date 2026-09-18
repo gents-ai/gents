@@ -53,6 +53,10 @@
       "permissionSet": "runtime-admin"
     },
     {
+      "name": "desktop_open_db_explorer",
+      "permissionSet": "runtime-admin"
+    },
+    {
       "name": "desktop_session_snapshot",
       "permissionSet": "session-read"
     },
@@ -325,7 +329,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "7.9",
+  "contractVersion": "7.10",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",

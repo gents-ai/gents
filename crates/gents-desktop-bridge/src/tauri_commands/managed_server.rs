@@ -171,8 +171,14 @@ pub async fn desktop_managed_server_validate_root(
 pub async fn desktop_managed_server_status(
     state: State<'_, DesktopAppState>,
 ) -> Result<ManagedServerStatus, BridgeError> {
-    ensure_allowed(&state)?;
-    let stored = load_preference(&state).await?;
+    managed_server_status_for(&state).await
+}
+
+pub(crate) async fn managed_server_status_for(
+    state: &DesktopAppState,
+) -> Result<ManagedServerStatus, BridgeError> {
+    ensure_allowed(state)?;
+    let stored = load_preference(state).await?;
     let managed = state.managed_server.lock().await;
     let mut status = status_from(&managed, stored.as_ref());
     drop(managed);
@@ -188,7 +194,7 @@ pub async fn desktop_managed_server_status(
             }
         }
     }
-    status.pairing_ready = pairing_is_ready(&state, status.agent_did.as_deref()).await;
+    status.pairing_ready = pairing_is_ready(state, status.agent_did.as_deref()).await;
     Ok(status)
 }
 

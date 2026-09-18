@@ -835,6 +835,18 @@
           "markdownDescription": "Denies the desktop_observer_metrics command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_open_db_explorer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-open-db-explorer",
+          "markdownDescription": "Enables the desktop_open_db_explorer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_open_db_explorer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-open-db-explorer",
+          "markdownDescription": "Denies the desktop_open_db_explorer command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_operations_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-operations-snapshot",
@@ -1369,10 +1381,10 @@
           "markdownDescription": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`"
         },
         {
-          "description": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`\n- `allow-desktop-managed-server-restart`\n- `allow-desktop-managed-server-validate-root`",
+          "description": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`\n- `allow-desktop-managed-server-restart`\n- `allow-desktop-managed-server-validate-root`\n- `allow-desktop-open-db-explorer`",
           "type": "string",
           "const": "runtime-admin",
-          "markdownDescription": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`\n- `allow-desktop-managed-server-restart`\n- `allow-desktop-managed-server-validate-root`"
+          "markdownDescription": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`\n- `allow-desktop-managed-server-restart`\n- `allow-desktop-managed-server-validate-root`\n- `allow-desktop-open-db-explorer`"
         },
         {
           "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-context-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-inference-setup-catalog`\n- `allow-desktop-inference-models-discover`\n- `allow-desktop-inference-model-recommendation`\n- `allow-desktop-inference-backend-recommendation`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-claude-login`\n- `allow-desktop-claude-login-cancel`\n- `allow-desktop-provider-account-disconnect`",

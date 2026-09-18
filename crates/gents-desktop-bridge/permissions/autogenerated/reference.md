@@ -1194,6 +1194,32 @@ Denies the desktop_observer_metrics command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-open-db-explorer`
+
+</td>
+<td>
+
+Enables the desktop_open_db_explorer command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-open-db-explorer`
+
+</td>
+<td>
+
+Denies the desktop_open_db_explorer command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-operations-snapshot`
 
 </td>

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createDesktopClient } from "@source-inc/gents-desktop-client";
 import { MemoryNavProvider, useNav, type Nav } from "@gents/shell";
 import { Toaster } from "@gents/ui/components/sonner";
+import { toast } from "sonner";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -182,6 +183,14 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     return null;
   }
 
+  const openDbExplorer = shell.api.openDbExplorer
+    ? () => {
+        void shell.api.openDbExplorer?.().catch((e: unknown) => {
+          toast(`DB explorer failed to open: ${String(e)}`);
+        });
+      }
+    : null;
+
   return (
     <>
       <TooltipProvider>
@@ -205,6 +214,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
             error={shell.error}
             onDismissError={shell.clearError}
             onReconnect={shell.reconnect}
+            onOpenDbExplorer={openDbExplorer}
           >
             {route.name === "sessions" && <SessionsScreen shell={shell} />}
             {route.name === "session" && <SessionScreen shell={shell} />}

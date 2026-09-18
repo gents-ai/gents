@@ -76,6 +76,7 @@ export function createDesktopApiAdapter(
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_stop", {
         disableAutoStart,
       }),
+    openDbExplorer: () => invokeDesktop<string>("desktop_open_db_explorer"),
     setSelectedAgent: (agentDid) =>
       invokeDesktop<void>("desktop_set_selected_agent", { agentDid }),
     removePeer: (peerId) =>
