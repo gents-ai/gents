@@ -15,9 +15,9 @@ const RECEIPT_SIGNATURE_DOMAIN: &str = "gents-session-hydration-receipt-v1";
 /// Headers, seals and segments are immutable, so the manifest's exact document
 /// identities already bind the served content; the receipt does not restate
 /// payload extents. The manifest is the authorized reference closure of the
-/// served headers: each governing seal (even with zero streams), every seal a
-/// block or presentation references (including fork origins), and the segments
-/// within their extents. Terminal selections must resolve their exact headers;
+/// served headers: every seal a block or presentation references (including
+/// fork origins) and the segments within their extents. Terminal selections
+/// must resolve their exact headers;
 /// no latest-visible-message fallback. Client completion requires each header
 /// to reconstruct. Mutable request/tool lifecycle facts still require their
 /// existing owner checks; the manifest does not bind those documents' revisions.

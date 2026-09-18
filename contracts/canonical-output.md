@@ -11,9 +11,9 @@ Output is three immutable, create-only facts; nothing in it is ever updated.
 
 | Fact | Collection | Says |
 | --- | --- | --- |
-| `OutputSegment` | `AgentOutputSegment` | These bytes, at `(request_doc_id, source, stream, ordinal)`. Ordinal zero declares the original writer, role, payload kind and native position. |
-| `OutputSeal` | `AgentOutputSeal` | This source is finished: closed with the exact extent of every stream, or retracted. At most one per source. |
-| `TranscriptMessage` | `AgentMessage` | This native message, with one governing `outcome_seal_doc_id` and payload `{seal_doc_id, stream}` references. |
+| `OutputSegment` | `AgentOutputSegment` | One flush of a source, at `(request_doc_id, source, ordinal)`: who wrote it, and the bytes that arrived since the last flush, sliced by stream. The run that opens a stream declares its payload kind and native position. |
+| `OutputSeal` | `AgentOutputSeal` | This source is finished: closed (complete or partial) with its exact extent, or retracted. At most one per source. |
+| `TranscriptMessage` | `AgentMessage` | This native message, published complete or partial, with payload `{seal_doc_id, stream}` references. |
 
 Every byte of model, tool and authored content is stored once, in a segment.
 The collections only grow, so replication is set union and a reader only asks
@@ -26,7 +26,7 @@ display-update frequency. Live views, transcripts, provider input, forks,
 hydration and exports are projections through one shared reconstruction.
 
 An accepted provider turn atomically publishes its Complete seal, assistant
-header and pending tool rows before dispatch. Interrupted/failed partial headers
+header and pending tool rows before dispatch. Partial headers
 may retain tool-call provenance, but only with terminal, nondispatchable rows.
 Dispatch still checks existing request/tool cancellation, deadline and policy
 owners. Publication is durable intent, not permission to execute after cancellation.
@@ -46,26 +46,73 @@ retry boundary. Preserve call order and the cumulative invalid-tool budget: stop
 dispatch must account for every published undispatched call through the existing
 terminal owner, not silently drop it.
 
-Each header's governing Closed seal supplies its outcome, including a zero-stream
-seal for empty or URL-only content. Other seals are dependencies: a complete authored
-notification can describe a failed tool without becoming a failed message. Forks
-keep the governing seal. `AgentRequest.terminal_output` separately selects the exact
+`OutputOutcome` is completeness only: `Complete` or `Partial`. Why output was cut
+short, and whether the request or tool succeeded, stay with the request and tool
+lifecycles and are not classified a second time. The publisher sets a header's
+outcome directly; it is never derived from the seals its blocks reference, so a
+complete notification can wrap a tool's partial output and a message with no
+payloads needs no seal. `AgentRequest.terminal_output` separately selects the exact
 final assistant header (or explicit `NoMessage`) with terminalization. Late background
 messages cannot change that selection.
+
+## Progress is stored once
+
+A segment is the progress fact. Streaming no longer rewrites `AgentRequest`: the
+per-flush `(generation, expiry, progress_seq)` CAS — 42k versions of one field over
+85 requests in #1543 — is retired along with `execution_progress_seq`.
+
+- Claim installs `execution_generation`, `execution_lease_secs` and the claim's own
+  `execution_lease_expires_at`.
+- The lease is live until the later of that deadline and `created_at +
+  execution_lease_secs` of the newest segment, seal or header written by the
+  current generation. Readers and the recovery sweep derive it from one
+  `request_doc_id` scan; nothing restates it.
+- The existing owner writes `execution_lease_expires_at` again only for semantic
+  progress that produces no output fact (a long silent tool, a wait).
+- Fencing becomes inertness. A write validates its generation in-transaction, but
+  correctness does not rest on that read: a stale generation's segment names a
+  stale writer, never counts as progress, and lies outside any extent recovery
+  sealed. Terminalization and recovery keep their matching-generation CAS on the
+  request; they no longer race progress writes for the row.
+
+Lean must prove the remodel before anything relies on it: derived liveness equals
+the old renewed deadline on every trace that writes output; stale segments cannot
+extend a lease, enter a sealed extent or reach a message; exact replay does not
+renew. If a required property fails, the fallback is an explicit renewal at a
+slow fixed cadence, never a return to per-flush rewrites.
+
+## Commit budget
+
+Payload is no longer the cost; per-commit bookkeeping is (~1 KiB each in #1543).
+The model is sized in documents per unit of work, and these are the targets the
+benchmark holds it to:
+
+| Work | Documents |
+| --- | --- |
+| Streaming flush | 1 segment, whatever number of streams advanced; 0 request rewrites |
+| Provider turn that fits one batch interval | 1 segment + 1 seal + 1 header (+ pending tool rows), one transaction |
+| Whole authored or user message | 1 segment + 1 seal + 1 header, one transaction |
+| Tool result | its output segments + 1 seal at terminalization + 1 header at delivery |
+| Truncation markers, separators, notification wrappers | 0: inline literals in the header's presentation |
+| Retried attempt | + 1 retracted seal |
+
+Still open, for the first measurement on real DefraDB: whether the segment
+collection needs its `agent_did` / `requester_did` indexes or only the fields (reads
+are `request_doc_id` scans), and the default batch interval and size threshold.
 
 ## Deletion and ownership
 
 | Deleted contract / implementation handoff | Surviving owner and obligation | Layer |
 | --- | --- | --- |
-| `AgentResponse` SDL, row and catalog entries (deleted) | `AgentRequest.lifecycle_state`, `failure_reason`, `terminalized_at` own terminal status/error/time; `InferenceCall` owns usage. `terminal_output` replaces final-message selection for subagent delivery. `interrupt_requested_at` remains intent; a governing Interrupted seal describes partial output, not a second request status. | Spec |
-| Response progress counters, cumulative text/reasoning writes | `lifecycle/execution_lease.rs`: fresh request-owned segment progress renews the existing lease atomically; exact replay does not. Tool-owned output uses the existing tool lifecycle and never revives a terminal request. | Lean → conformance → runtime |
+| `AgentResponse` SDL, row and catalog entries (deleted) | `AgentRequest.lifecycle_state`, `failure_reason`, `terminalized_at` own terminal status/error/time; `InferenceCall` owns usage. `terminal_output` replaces final-message selection for subagent delivery. `interrupt_requested_at` remains intent; a `Partial` outcome describes kept output, not a second request status. | Spec |
+| Response progress counters, cumulative text/reasoning writes, per-flush lease CAS, `execution_progress_seq` | `lifecycle/execution_lease.rs` keeps claim, explicit byte-less renewal, and the matching-generation terminal/recovery CAS. Liveness is derived from the current generation's newest output fact (see *Progress is stored once*); exact replay creates nothing and so renews nothing. `watcher`, `lifecycle/recovery.rs`, `runtime_trace.rs` read derived liveness instead of the counter. Tool-owned output uses the existing tool lifecycle and never revives a terminal request. | Lean → conformance → runtime |
 | Response `materialized_*`, response/request dual terminalization | `lifecycle/materialize.rs` and terminal owner: final header publication, terminal lifecycle and `TerminalOutput` selection commit atomically. `background_tools.rs::load_child_final_response` and bridge recovery resolve that exact scoped message. Missing selection/header/seal/segments is incomplete, never latest-message fallback. Explicit NoMessage handles pre-output failure. Recovery seals committed bytes with the original producer binding. | Lean → conformance → runtime |
-| Stream-processor cumulative previews, in-flight message upserts, retraction resets | `agent/stream_processor.rs`: batched immutable segments with producer binding on ordinal zero; a Retracted seal commits before retry backoff. `agent/loop_stream.rs`: dispatch follows accepted seal/header publication with the boundaries above. `rendered_request/scope.rs` must allocate non-reused scopes across reclaim/restart. | Lean → conformance → runtime |
+| Stream-processor cumulative previews, in-flight message upserts, retraction resets | `agent/stream_processor.rs`: one immutable segment per flush, naming its writer and slicing its payload by stream; a Retracted seal commits before retry backoff. `agent/loop_stream.rs`: dispatch follows accepted seal/header publication with the boundaries above. `rendered_request/scope.rs` must allocate non-reused scopes across reclaim/restart. | Lean → conformance → runtime |
 | Tool `args`, `result`, `partial_output_*`; `AgentToolResult` SDL/row (deleted) | `AgentToolCall` owns execution/delivery only and is created pending with the assistant header. The provider turn owns argument bytes; the tool source owns output; tool terminalization seals empty and nonempty output before delivery. Existing completion notification owner composes authored wrappers by reference. | Spec → runtime |
-| `truncation/spill.rs`, spill links and discarded-spill flags | Owned provider-input boundary writes `PresentedPayload`: exact UTF-8 output ranges plus authored marker/separator streams. Preserve head/tail behavior and line normalization; retrieval hints name the tool call. Unreferenced retained output is not proof of delivery. `read_tool_output` reads the original stream. | Lean → conformance → runtime |
+| `truncation/spill.rs`, spill links and discarded-spill flags | Owned provider-input boundary writes `PresentedPayload`: exact UTF-8 output ranges plus inline literal markers/separators. Preserve head/tail behavior and line normalization; retrieval hints name the tool call. Unreferenced retained output is not proof of delivery. `read_tool_output` reads the original stream. | Lean → conformance → runtime |
 | Legacy `decode_persisted_message` / `present_persisted_message` and fallback tests (deleted) | Shared strict reconstruction produces native `Message`; existing `present_message` remains a rendering function. Missing seals, conflicts, malformed JSON/media and illegal role/block combinations fail explicitly. | Spec → runtime |
 | `session/fork.rs` payload/tool/spill copies and spill remapping | Fork owner copies headers only, with `MessagePublication::Fork`, child-scoped message keys/sequences and no live request membership. Blocks keep the origin's seal references unchanged. Origin tool IDs remain provenance, not child executable rows. Compaction cursors still target retained child headers. | Lean → conformance → runtime |
-| Session-only hydration completeness | Existing owner serves authorized header closure: governing seals even with no payloads, payload/presentation seals, fork origins and segments. Terminal selections resolve exact headers. Immutable IDs bind output content; mutable request/tool observations retain their owner checks. Receipt format stays unchanged; missing dependencies remain incomplete, denied dependencies reject. | Spec → Lean → conformance → runtime |
+| Session-only hydration completeness | Existing owner serves authorized header closure: every referenced seal, fork origins and the segments within their extents. Terminal selections resolve exact headers. Immutable IDs bind output content; mutable request/tool observations retain their owner checks. Receipt format stays unchanged; missing dependencies remain incomplete, denied dependencies reject. | Spec → Lean → conformance → runtime |
 | Response/spill desktop stores, queries, merge heuristics and CLI projections | Shared output reconstruction supplies native messages and live streams; request lifecycle supplies status. No consumer-local text repair or short-message fallback. Parent session removal cannot cascade into retained origin dependencies; no output GC is introduced here. | Consumers |
 | Mailbox (retained, not an AgentResponse consumer) | `mailbox/reply.rs` consumes authenticated start-request replies at claim and records the request document. `mailbox.rs` resolves write-document items through correlated domain documents; ack remains explicit. None is redirected to final assistant messages. | No semantic change |
 
@@ -95,9 +142,10 @@ or drop those collections from the client-to-runtime direction.
 cover: retraction without replacement bytes; stale/replayed writes; at most one
 seal per source and no segment after it; header publication before tool
 dispatch; background output after request termination; recovery publication;
-empty streams and zero-stream governing seals; mixed dependency outcomes;
-gaps and twins; headers arriving before seals or segments; missing ordinal-zero
-bindings and superseded unsealed writers; exact terminal selection before header
+empty streams and sources; a complete message over partial dependencies;
+gaps and twins; headers arriving before seals or segments; multi-stream
+flushes and run/payload accounting; superseded unsealed writers; derived lease
+liveness, byte-less renewal and stale-write inertness; exact terminal selection before header
 arrival, explicit NoMessage and late background delivery; native block order and
 signed reasoning; line-normalized presentation; fork authorization/retention and
 reference closure. Dispatch cases include the boundaries above and replace the old

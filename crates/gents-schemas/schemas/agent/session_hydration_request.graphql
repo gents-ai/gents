@@ -17,7 +17,7 @@ type SessionHydrationRequest @branchable {
     status_detail: String
     served_doc_count: Int
     # Canonical sorted JSON array of exact {collection, doc_id} identities: the
-    # authorized closure including governing seals and terminally selected
+    # authorized closure including referenced seals and terminally selected
     # headers (#1571). Header/seal/segment IDs bind immutable output; request
     # and tool lifecycle revisions still require existing owner checks.
     served_manifest_json: String

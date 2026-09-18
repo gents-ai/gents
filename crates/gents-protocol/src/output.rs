@@ -3,9 +3,10 @@
 //!
 //! Three immutable, create-only facts:
 //!
-//! - [`OutputSegment`] — a run of payload bytes. The only place content lives.
-//! - [`OutputSeal`] — the one terminal fact about a source: closed with exact
-//!   stream extents, or retracted.
+//! - [`OutputSegment`] — one flush of a source: the bytes that arrived since
+//!   the last flush. The only place content lives, and the only progress fact.
+//! - [`OutputSeal`] — the one terminal fact about a source: closed with its
+//!   exact extent, or retracted.
 //! - [`TranscriptMessage`] — a header mirroring the native
 //!   [`crate::message::Message`] structure, with every payload string replaced
 //!   by a [`PayloadRef`] to a sealed stream.
@@ -64,25 +65,23 @@ pub enum OutputSource {
     /// request's active execution.
     ToolCall { tool_call_doc_id: String },
     /// Content the requester or runtime supplies whole: the prompt as placed in
-    /// the transcript, request context, output-obligation reminders,
-    /// presentation markers, and background-completion notifications. `key` is
-    /// the existing request-scoped idempotency key of that content.
+    /// the transcript, request context and output-obligation reminders. `key`
+    /// is the existing request-scoped idempotency key of that content. Small
+    /// runtime-written text around other output (truncation markers,
+    /// notification wrappers) is an inline presentation literal, not a source.
     Authored { key: String },
 }
 
 /// What a stream carries and where it sits in the native message. Carried by
-/// the stream's first segment, so live views render unsealed output in native
-/// structure without any control document.
+/// the run that opens the stream, so live views render unsealed output in
+/// native structure without any control document.
+///
+/// It names no role: provider output is assistant content, tool output is a
+/// tool result, and authored content arrives whole and is published with its
+/// seal and header in one transaction, so it is never live without its header.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamDeclaration {
-    /// All declarations of a source agree on its original producer. The seal
-    /// must agree too, including when recovery closes the source. A reader
-    /// can classify unsealed output without waiting for its terminal seal.
-    pub writer: OutputWriter,
-    /// Authored sources may supply system, user or assistant content; a key
-    /// or text payload alone does not determine its presentation role.
-    pub role: MessageRole,
     pub block_index: u32,
     pub part_index: u32,
     pub payload: StreamPayload,
@@ -111,30 +110,34 @@ pub enum StreamPayload {
     },
 }
 
-/// One immutable run of payload. Stored as `AgentOutputSegment`.
+/// One flush of a source. Stored as `AgentOutputSegment`.
 ///
-/// Coordinate: `(request_doc_id, source, stream, ordinal)`. `stream` numbers
-/// the payloads within a source in the order they open; `ordinal` is dense
-/// from zero within a stream. Every stream has an ordinal-zero segment, which
-/// carries its declaration; an empty native string is that one segment with an
-/// empty payload. Concatenating a stream's payloads in ordinal order yields
-/// the native string exactly. Writers split only where the batch interval, a
-/// size threshold, or a stream boundary falls — never per token.
+/// Coordinate: `(request_doc_id, source, ordinal)`, with `ordinal` dense from
+/// zero within the source. A flush is one document however many streams
+/// advanced: `payload` is the concatenation of `runs` in arrival order, and a
+/// stream's content is the concatenation of its runs across the source's
+/// segments in `(ordinal, run)` order — the native string exactly. Writers
+/// flush where the batch interval, a size threshold, or the source's end
+/// falls, never per token; a turn that fits in one interval is one segment.
 ///
 /// Repeated delivery of the same coordinate and content is idempotent. Two
-/// visible segments sharing a coordinate but differing in payload or
-/// declaration are an integrity conflict every reader must surface; the
-/// storage index is ordinary, not unique, because a unique index can hide the
-/// losing twin of a remote conflict (#1073).
-/// A replay reuses the persisted document, including its creation timestamp;
-/// recreating the same payload with fresh metadata is not identical genesis.
-/// An already-existing create is accepted only after verifying the stored fact.
+/// visible segments sharing a coordinate but differing in writer, runs or
+/// payload are an integrity conflict every reader must surface; the storage
+/// index is ordinary, not unique, because a unique index can hide the losing
+/// twin of a remote conflict (#1073). A replay reuses the persisted document,
+/// including its creation timestamp; an already-existing create is accepted
+/// only after verifying the stored fact.
 ///
-/// Writing a segment is semantic progress. The source's existing owner admits
-/// it: request-owned progress commits through the execution-lease CAS and
-/// renews the lease in the same transaction (exact replay does not renew);
-/// tool-owned output commits through the tool lifecycle and never revives a
-/// terminal request. There is no separate heartbeat.
+/// **A segment is the progress fact; progress is not recorded anywhere else.**
+/// Request-owned output does not rewrite the request: the execution lease is
+/// live until `created_at + execution_lease_secs` of the newest segment, seal
+/// or header written by the request's current generation (or the claim's own
+/// deadline if later). The write validates, in its transaction, that its
+/// generation is current and unexpired, but fencing does not depend on that
+/// read: a stale generation's segment names a stale writer, never counts as
+/// progress, and lies outside any extent recovery already sealed, so it is
+/// inert. Tool-owned output follows the tool lifecycle and never revives a
+/// terminal request. There is no heartbeat and no progress counter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSegment {
@@ -145,19 +148,29 @@ pub struct OutputSegment {
     /// Exact physical request that owns the execution producing this output.
     pub request_doc_id: String,
     pub source: OutputSource,
-    pub stream: u32,
     pub ordinal: u32,
-    /// Present exactly on ordinal zero.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub declaration: Option<StreamDeclaration>,
+    pub writer: OutputWriter,
+    pub runs: Vec<SegmentRun>,
     pub payload: String,
     pub created_at: String,
 }
 
+/// The next `bytes` of `payload` belong to `stream`. Runs split only at UTF-8
+/// boundaries. The run that opens a stream carries its declaration; an empty
+/// native string is an opening run of zero bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SegmentRun {
+    pub stream: u32,
+    pub bytes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declaration: Option<StreamDeclaration>,
+}
+
 /// The existing authority that produced a source; never a new lease or host
-/// identity. Recorded on ordinal-zero declarations and the seal, never on
-/// subsequent payload segments. This identifies the producer, not today's
-/// authority to recover that producer's output.
+/// identity. Every segment names its writer, which is what lets a reader or
+/// the lease owner classify unsealed output and ignore a stale generation.
+/// The seal names the source's producer, not today's authority to recover it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputWriter {
@@ -168,31 +181,30 @@ pub enum OutputWriter {
     ToolExecution { tool_call_doc_id: String },
 }
 
-/// Why a source's content ends where it does. Partial output kept after
-/// interruption or failure is an explicit outcome, never a complete source
-/// with silently shorter text. A message's outcome comes from its explicit
-/// governing seal, not a reduction over the payload dependencies it references.
+/// Whether content ends where its producer meant it to. This is completeness
+/// only: partial output is kept and labelled, never presented as a complete
+/// source with silently shorter text. Why it was cut short — interruption,
+/// provider failure, deadline — and whether the producing operation succeeded
+/// are owned by the request and tool lifecycles and are not classified again
+/// here. A tool that fails with its full output has complete output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputOutcome {
     Complete,
-    Interrupted,
-    Failed,
+    Partial,
 }
 
 /// The one terminal fact about a source. Stored as `AgentOutputSeal`.
 ///
-/// Normal closure commits with any remaining buffered segments. Retraction,
-/// recovery or closure after a flush can seal committed bytes without appending.
-/// A zero-stream source may
-/// seal without any segments (for example, a URL-only message).
+/// Normal closure commits with the final flush. Retraction, recovery or
+/// closure after a flush seals the committed bytes without appending.
 /// At most one seal per `(request_doc_id, source)`; visible twins are
 /// an integrity conflict. A sealed source accepts no further segments, and a
 /// seal stays valid after its producer's generation is no longer active.
 /// Recovery seals only the bytes already committed, under the winning request
 /// terminalization CAS; it never appends on behalf of a stale writer.
-/// Its `writer` remains the original producer from the declarations; the
-/// recovery CAS supplies authorization, not a replacement producer identity.
+/// Its `writer` remains the producer its segments name; the recovery CAS
+/// supplies authorization, not a replacement producer identity.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSeal {
@@ -210,24 +222,19 @@ pub struct OutputSeal {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SealDisposition {
-    /// `streams[n]` is the exact extent of stream `n`. A reader holding fewer
-    /// segments, a gap in ordinals, or a byte mismatch has an incomplete or
-    /// conflicting replica and must not present the content as complete.
+    /// The exact extent: `segments` flushes, and `stream_bytes[n]` bytes in
+    /// stream `n`. A reader holding fewer segments, a gap in ordinals, or a
+    /// byte mismatch has an incomplete or conflicting replica and must not
+    /// present the content as complete. Segments beyond the extent are inert.
     Closed {
         outcome: OutputOutcome,
-        streams: Vec<StreamExtent>,
+        segments: u32,
+        stream_bytes: Vec<u64>,
     },
     /// The attempt was abandoned before retry backoff began. Its segments are
     /// retained but never referenced by a message or shown live, even when the
     /// replacement attempt has not yet emitted a byte.
     Retracted,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StreamExtent {
-    pub segments: u32,
-    pub bytes: u64,
 }
 
 /// One sealed stream, by the seal's exact document identity. The seal is
@@ -309,7 +316,7 @@ pub enum TerminalOutput {
 /// before a tool can run or a
 /// background completion can append (#945) — the guarantee in-flight upserts
 /// used to provide. Dispatch and recovery read arguments through the block.
-/// Interrupted/failed partial turns may publish diagnostic headers, but any
+/// Partial turns may publish diagnostic headers, but any
 /// retained tool-call blocks name terminal, nondispatchable lifecycle rows.
 /// Pending intent is not execution permission: the existing tool owner checks
 /// current request ownership, cancellation/deadline and policy at dispatch.
@@ -334,13 +341,11 @@ pub struct TranscriptMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_doc_id: Option<String>,
     pub publication: MessagePublication,
-    /// The source responsible for this message's outcome. Must be a Closed
-    /// seal, even if blocks contain no payload references (URL media/empty
-    /// content). Provider messages use their provider seal; authored wrappers
-    /// use their authored seal; tool-result messages use their tool seal.
-    /// Other referenced seals are dependencies, not competing message outcomes.
-    /// Forks retain the origin's governing seal without live request membership.
-    pub outcome_seal_doc_id: String,
+    /// Whether this message was published whole or as kept partial output.
+    /// Set by the publisher; never derived from the seals its blocks reference
+    /// (a complete notification may wrap a tool's partial output), so a message
+    /// with no payloads needs no seal. Forks retain it.
+    pub outcome: OutputOutcome,
     pub sequence: u32,
     pub role: MessageRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -423,8 +428,9 @@ pub struct PresentedPayload {
 }
 
 /// Deterministic byte composition, not a rerun of mutable truncation policy.
-/// Ranges index the full output at UTF-8 boundaries. Authored pieces reference
-/// ordinary authored streams (markers, normalized separators, retrieval hints).
+/// Ranges index the full output at UTF-8 boundaries. Literals are the small
+/// runtime-written pieces between them (markers, normalized separators,
+/// retrieval hints, notification wrappers), stored once, inline, here.
 /// This represents line normalization and head/tail presentation without a
 /// second copy of selected tool bytes. Retrieval hints identify the tool call,
 /// never the retired spill collection. Empty parts means an empty presentation.
@@ -439,7 +445,7 @@ pub enum PayloadPresentation {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PresentationPart {
     OutputRange { start_byte: u64, end_byte: u64 },
-    Authored { text: PayloadRef },
+    Literal { text: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -504,17 +510,14 @@ pub enum ReconstructionError {
     UnresolvedSeal { seal_doc_id: String },
     /// A message references a retracted source or a stream the seal lacks.
     InvalidReference { reference: PayloadRef },
-    /// Fewer segments are visible than the seal's extent.
-    Incomplete {
-        reference: PayloadRef,
-        visible_segments: u32,
-    },
-    /// An ordinal inside the sealed extent is absent.
-    Gap { reference: PayloadRef, ordinal: u32 },
-    /// Visible twins at a coordinate disagree in payload or declaration.
-    ConflictingSegments { reference: PayloadRef, ordinal: u32 },
-    /// The assembled stream disagrees with the sealed byte length, or its
-    /// declaration disagrees with the block that references it.
+    /// An ordinal inside the sealed extent is not visible. Expected while
+    /// replication is behind; the source is incomplete, not shorter.
+    MissingSegment { seal_doc_id: String, ordinal: u32 },
+    /// Visible twins at a coordinate disagree in writer, runs or payload.
+    ConflictingSegments { seal_doc_id: String, ordinal: u32 },
+    /// A segment's runs do not account for its payload, the assembled stream
+    /// disagrees with the sealed byte length, or its declaration disagrees
+    /// with the block that references it.
     ExtentMismatch { reference: PayloadRef, bytes: u64 },
     /// More than one seal is visible for a source.
     ConflictingSeals {
@@ -525,7 +528,8 @@ pub enum ReconstructionError {
         session_id: String,
         message_key: String,
     },
-    /// Source declarations or the seal disagree about the original producer.
+    /// Segments within the sealed extent, or the seal, disagree about the
+    /// source's producer.
     InvalidWriter {
         request_doc_id: String,
         source: OutputSource,
@@ -553,7 +557,8 @@ pub enum ReconstructionError {
 /// second live copy.
 /// Unsealed request-owned output is eligible only for the current generation
 /// of a nonterminal request; tool-owned output follows the tool lifecycle.
-/// Missing owner/declaration observations cannot establish live eligibility.
+/// Each segment names its writer; a missing request/tool owner observation
+/// cannot establish live eligibility.
 /// Superseded sources remain retained history, not current output. Even an
 /// eligible unsealed source is only an observation: its seal may be in transit.
 /// Closed historical output never depends on today's active generation.
@@ -569,9 +574,9 @@ pub struct LiveStream {
     pub stream: u32,
     pub declaration: StreamDeclaration,
     pub state: LiveStreamState,
-    /// Contiguous payload from ordinal zero; stops at the first gap.
+    /// This stream's bytes from the source's contiguous segments, starting at
+    /// ordinal zero and stopping at the first missing one.
     pub text: String,
-    pub next_ordinal: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

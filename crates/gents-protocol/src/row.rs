@@ -148,10 +148,12 @@ pub struct AgentRequestRow {
     pub claimed_at: Option<String>,
     #[serde(default)]
     pub execution_generation: Option<String>,
+    /// Lease length installed at claim. Liveness is derived from the current
+    /// generation's newest output fact; streaming does not rewrite this row.
+    #[serde(default)]
+    pub execution_lease_secs: Option<i64>,
     #[serde(default)]
     pub execution_lease_expires_at: Option<String>,
-    #[serde(default)]
-    pub execution_progress_seq: Option<i64>,
     #[serde(default)]
     pub background_completion_input_through_sequence: Option<i64>,
     #[serde(default)]

@@ -65,11 +65,16 @@ type AgentRequest @branchable {
     terminal_redrive_attempts: Int @index
     created_at: String @index @immutable
     claimed_at: String
-    # Runtime-owned execution lease. A fresh generation is installed at claim;
-    # only persisted semantic progress may renew its deadline.
+    # Runtime-owned execution lease (#1571). Claim installs a fresh generation,
+    # the lease length and the claim's own deadline. Streaming does not rewrite
+    # this row: the lease is live until the later of execution_lease_expires_at
+    # and created_at + execution_lease_secs of the newest AgentOutputSegment,
+    # AgentOutputSeal or AgentMessage written by the current generation. The
+    # existing owner writes execution_lease_expires_at again only for semantic
+    # progress that produces no output fact. Retired: execution_progress_seq.
     execution_generation: String @index
+    execution_lease_secs: Int
     execution_lease_expires_at: String @index
-    execution_progress_seq: Int
     background_completion_input_through_sequence: Int
     background_completion_notification_keys_json: String
     # Runtime-derived execution deadline; intentionally excluded from requester signatures.
