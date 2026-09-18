@@ -36,6 +36,8 @@ shopt -s nullglob
 images=("$CARGO_TARGET_DIR"/release/bundle/dmg/*"${RELEASE_VERSION}"*.dmg)
 [[ ${#images[@]} == 1 ]]
 # Staple the installer too, so installation does not depend on a Gatekeeper lookup.
+codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "${images[0]}"
+codesign --verify --strict "${images[0]}"
 xcrun notarytool submit "${images[0]}" --key "$APPLE_API_KEY_PATH" \
   --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
 xcrun stapler staple "${images[0]}"
