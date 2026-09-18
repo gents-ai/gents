@@ -1808,12 +1808,17 @@ mod tests {
     /// order. The service/node must drop before the `TempDir` in every test.
     async fn test_service() -> (tempfile::TempDir, AcpService) {
         let (staging, config) = config().await;
+        let identity = gents::KeyIdentity::load_or_create(staging.path().join("actor.key"), None)
+            .expect("test signing identity");
+        let actor = ::identity::Did::new(gents::AgentIdentity::did(&identity).to_owned())
+            .expect("fixture creator DID");
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
             .expect("runtime schemas");
         let turns = Arc::new(TurnManager::new(
             config.node.clone(),
             super::super::turn::TurnManagerConfig {
+                actor,
                 agent_did: config.agent_did.to_string(),
                 behavior_id: config.behavior_id.to_string(),
                 graphql: "http://127.0.0.1:8000/api/v0/graphql".to_string(),
@@ -2534,6 +2539,7 @@ mod tests {
             gents::KeyIdentity::load_or_create(identity_dir.path().join("agent.key"), None)
                 .expect("test signing identity");
         let agent_did = gents::AgentIdentity::did(&identity).to_string();
+        let actor = ::identity::Did::new(agent_did.clone()).expect("fixture creator DID");
         let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
         let config = AcpServiceConfig {
             node,
@@ -2557,6 +2563,7 @@ mod tests {
         let turns = Arc::new(TurnManager::new(
             config.node.clone(),
             super::super::turn::TurnManagerConfig {
+                actor,
                 agent_did: config.agent_did.to_string(),
                 behavior_id: config.behavior_id.to_string(),
                 graphql,

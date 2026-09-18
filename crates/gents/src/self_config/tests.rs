@@ -5,6 +5,75 @@
 use super::command::{behavior_params, help_patch_contracts};
 use super::*;
 
+#[derive(Clone)]
+struct RootReadModel {
+    path: String,
+    turns: Arc<std::sync::atomic::AtomicUsize>,
+    provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[allow(refining_impl_trait)]
+impl rig::completion::CompletionModel for RootReadModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        unreachable!("the acceptance test constructs its deterministic model directly")
+    }
+
+    async fn completion(
+        &self,
+        _request: rig::completion::CompletionRequest,
+    ) -> Result<rig::completion::CompletionResponse<()>, rig::completion::CompletionError> {
+        Err(rig::completion::CompletionError::ProviderError(
+            "non-streaming completion is unused".into(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        request: rig::completion::CompletionRequest,
+    ) -> Result<rig::streaming::StreamingCompletionResponse<()>, rig::completion::CompletionError>
+    {
+        use std::sync::atomic::Ordering;
+
+        if !request.tools.iter().any(|tool| tool.name == "read_file") {
+            let stream: rig::streaming::StreamingResult<()> = Box::pin(futures::stream::iter([
+                Ok(rig::streaming::RawStreamingChoice::Message(
+                    "workspace-root-check".into(),
+                )),
+                Ok(rig::streaming::RawStreamingChoice::FinalResponse(())),
+            ]));
+            return Ok(rig::streaming::StreamingCompletionResponse::stream(stream));
+        }
+        self.provider_inputs
+            .lock()
+            .expect("provider input capture")
+            .push(serde_json::to_string(&request.chat_history).expect("serialize provider input"));
+        let choices = if self.turns.fetch_add(1, Ordering::SeqCst) == 0 {
+            vec![
+                rig::streaming::RawStreamingChoice::ToolCall(
+                    rig::streaming::RawStreamingToolCall::new(
+                        "root-read".into(),
+                        "read_file".into(),
+                        json!({"path": self.path}),
+                    ),
+                ),
+                rig::streaming::RawStreamingChoice::FinalResponse(()),
+            ]
+        } else {
+            vec![
+                rig::streaming::RawStreamingChoice::Message("root check complete".into()),
+                rig::streaming::RawStreamingChoice::FinalResponse(()),
+            ]
+        };
+        let stream: rig::streaming::StreamingResult<()> =
+            Box::pin(futures::stream::iter(choices.into_iter().map(Ok)));
+        Ok(rig::streaming::StreamingCompletionResponse::stream(stream))
+    }
+}
+
 fn config(categories: &[&str]) -> SelfConfigToolConfig {
     SelfConfigToolConfig {
         enabled: true,
@@ -3326,6 +3395,295 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
                 .to_string_lossy()
                 .as_ref()
         )
+    );
+}
+
+#[tokio::test]
+async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tools() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("descendant-root-self-config");
+    let owner = identity.did().to_string();
+    let seed_behavior = "beh-test";
+    crate::test_support::install_test_behavior(&node, &owner, seed_behavior).await;
+    crate::upsert_agent_principal(&node, &owner, None, Some(seed_behavior), true)
+        .await
+        .expect("bind default behavior");
+
+    let operator_root = tempfile::tempdir().expect("operator root");
+    let selected_root = operator_root.path().join("projects").join("mandrake");
+    std::fs::create_dir_all(&selected_root).expect("selected descendant root");
+    std::fs::write(
+        selected_root.join("marker.txt"),
+        "fresh request sees descendant\n",
+    )
+    .expect("marker file");
+    let sibling_root = operator_root.path().join("projects").join("other");
+    std::fs::create_dir_all(&sibling_root).expect("sibling root");
+    let sibling_marker = sibling_root.join("not-authorized.txt");
+    std::fs::write(
+        &sibling_marker,
+        "operator ceiling must not widen selection\n",
+    )
+    .expect("sibling marker");
+    let original_transcript = operator_root.path().join("original-transcript.txt");
+    std::fs::write(&original_transcript, "private transcript fixture\n")
+        .expect("original transcript fixture");
+
+    let selected_text = selected_root.to_string_lossy().into_owned();
+    let escaped_selected = crate::graphql::escape_graphql_string(&selected_text);
+    let fixture_actor = ::identity::Did::new(owner.clone()).expect("fixture creator DID");
+    let workspace_root_mutation = format!(
+        r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#
+    );
+    crate::config_client::ConfigAccess::transact_local(
+        &node,
+        Some(fixture_actor.clone()),
+        "test.persona.workspace_root",
+        |txn| {
+            let mutation = &workspace_root_mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await.map(|_| ()) })
+        },
+    )
+    .await
+    .expect("publish selected WorkspaceRoot");
+
+    let mut tool_config = config(&["persona"]);
+    tool_config.behavior_id = seed_behavior.into();
+    tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
+        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tool_surface::BashMode::Off,
+        root: Some(operator_root.path().to_path_buf()),
+    };
+    let persona_tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity.clone()),
+        &tool_config,
+    );
+    let profile_id = format!("{seed_behavior}:inference");
+    let command = |preview: bool| {
+        let mut argv = vec!["behavior".to_string()];
+        if preview {
+            argv.push("preview".to_string());
+        }
+        argv.extend([
+            "create".to_string(),
+            "--display-name".to_string(),
+            "Mandrake descendant".to_string(),
+            "--system-prompt".to_string(),
+            "Use only the selected workspace.".to_string(),
+            "--root".to_string(),
+            selected_text.clone(),
+            "--preset".to_string(),
+            "readonly".to_string(),
+            "--profile".to_string(),
+            profile_id.clone(),
+            "--default".to_string(),
+        ]);
+        argv
+    };
+    let preview: Value = serde_json::from_str(
+        &call_config_tool(&persona_tools, command(true))
+            .await
+            .expect("behavior preview accepts the published descendant"),
+    )
+    .expect("preview json");
+    assert_eq!(preview["committed"], false);
+    assert_eq!(preview["admitted"], true);
+    assert!(load_persona_rows_for_test(&node, &owner).await.is_empty());
+
+    let tool = take_persona_tool(persona_tools);
+    let apply_args = json!({"argv": command(false)}).to_string();
+    let call_handle = tokio::spawn(async move { tool.call(apply_args).await });
+    let mut request_key = None;
+    for _ in 0..50 {
+        if let Some(row) = load_persona_rows_for_test(&node, &owner)
+            .await
+            .into_iter()
+            .next()
+        {
+            request_key = row.request_key;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let request_key = request_key.expect("behavior create authors PersonaConfigRequest");
+    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
+        node.clone(),
+        Some(operator_root.path().to_path_buf()),
+        identity.clone(),
+    );
+    let outcome = crate::agent::p2p_reconcile::reconcile_persona_tick(&store, &node)
+        .await
+        .expect("persona reconcile tick");
+    assert!(outcome.applied.contains(&request_key), "{outcome:?}");
+    let output = call_handle
+        .await
+        .expect("behavior create task joins")
+        .expect("behavior create observes applied status");
+    assert!(output.contains("\"status\": \"applied\""), "{output}");
+
+    let behaviors = crate::list_agent_behaviors(&node, &owner)
+        .await
+        .expect("list materialized behaviors");
+    let created = behaviors
+        .iter()
+        .find(|behavior| behavior.behavior_id != seed_behavior)
+        .expect("persona reconciler materialized one behavior");
+    let runtime_view = crate::agent::document_view::load_document_runtime_view(&node, &owner)
+        .await
+        .expect("fresh runtime view after persona publication");
+    let context_id = created.context_id.as_ref().expect("created context");
+    let tools_id = runtime_view.contexts[context_id]
+        .value
+        .tools_id
+        .as_ref()
+        .expect("created tools");
+    let canonical_selected =
+        std::fs::canonicalize(&selected_root).expect("canonical selected root");
+    assert_eq!(
+        runtime_view.tools[tools_id]
+            .value
+            .host
+            .as_ref()
+            .and_then(|host| host.root.as_deref()),
+        Some(canonical_selected.to_string_lossy().as_ref()),
+        "persona apply must persist the canonical selected root, not the operator ceiling"
+    );
+
+    let snapshot = crate::agent::resolve_document_runtime_snapshot(
+        node.as_ref(),
+        &crate::agent::DocumentResolveContext {
+            identity: identity.clone(),
+            tool_ceiling: crate::tool_surface::ToolCeiling::readonly_at(operator_root.path()),
+            backend_health: Default::default(),
+        },
+    )
+    .await
+    .expect("fresh request runtime snapshot");
+    let runtime_behavior = snapshot
+        .behaviors
+        .get(&created.behavior_id)
+        .expect("fresh request behavior is runnable")
+        .clone();
+    let surface = Arc::new(
+        runtime_behavior
+            .tools
+            .resolve(node.as_ref(), &owner)
+            .await
+            .expect("resolve fresh-request tool surface"),
+    );
+    let runtime = crate::tool_surface::ToolRuntimeContext::oneshot_with_agent_did(
+        node.clone(),
+        owner.clone(),
+    );
+
+    let cases = [
+        (
+            "selected descendant",
+            "marker.txt".to_string(),
+            "fresh request sees descendant",
+            None,
+        ),
+        (
+            "sibling under operator ceiling",
+            sibling_marker.to_string_lossy().into_owned(),
+            "outside the allowed tool root",
+            Some("operator ceiling must not widen selection"),
+        ),
+        (
+            "original transcript path",
+            original_transcript.to_string_lossy().into_owned(),
+            "outside the allowed tool root",
+            Some("private transcript fixture"),
+        ),
+    ];
+    for (label, path, expected_result, forbidden_content) in cases {
+        let request_doc_id = crate::write_manual_agent_request(
+            &node,
+            fixture_actor.clone(),
+            &owner,
+            &created.behavior_id,
+            &format!("descendant-root-{label}"),
+            "Read the requested workspace path.",
+            json!({}),
+        )
+        .await
+        .expect("enqueue a fresh request for the reconciled behavior");
+        let request = crate::request_admission::load_request_for_admission_test(
+            node.as_ref(),
+            &request_doc_id,
+        )
+        .await
+        .expect("load the fresh request through the admission representation");
+        assert_eq!(request.behavior_id, created.behavior_id);
+        let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        crate::agent::process_owned_request_with_model_for_test(
+            node.clone(),
+            runtime_behavior.clone(),
+            surface.clone(),
+            &runtime,
+            RootReadModel {
+                path,
+                turns: turns.clone(),
+                provider_inputs: provider_inputs.clone(),
+            },
+            request,
+        )
+        .await
+        .expect("run the persisted request through the production owned loop");
+        assert!(
+            turns.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "{label}: provider did not receive the tool-result turn"
+        );
+        assert!(
+            provider_inputs
+                .lock()
+                .expect("provider inputs")
+                .iter()
+                .any(|input| input.contains(expected_result)),
+            "{label}: provider did not receive the expected tool result/denial: {:?}",
+            provider_inputs.lock().expect("provider inputs")
+        );
+        if let Some(forbidden_content) = forbidden_content {
+            assert!(
+                provider_inputs
+                    .lock()
+                    .expect("provider inputs")
+                    .iter()
+                    .all(|input| !input.contains(forbidden_content)),
+                "{label}: denied file contents reached provider input: {:?}",
+                provider_inputs.lock().expect("provider inputs")
+            );
+        }
+
+        let escaped_request_doc = crate::graphql::escape_graphql_string(&request_doc_id);
+        let observed = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc}"}}}}) {{lifecycle_state}} }}"#
+            ))
+            .await;
+        assert!(!observed.has_errors(), "{label}: {:?}", observed.errors);
+        let data = observed.data.as_ref().expect("owned-loop observations");
+        assert_eq!(
+            data["AgentRequest"][0]["lifecycle_state"], "completed",
+            "{label}: fresh owned request did not complete"
+        );
+    }
+    let persisted_after_requests =
+        crate::agent::document_view::load_document_runtime_view(&node, &owner)
+            .await
+            .expect("reload persisted Tools after fresh owned requests");
+    assert_eq!(
+        persisted_after_requests.tools[tools_id]
+            .value
+            .host
+            .as_ref()
+            .and_then(|host| host.root.as_deref()),
+        Some(canonical_selected.to_string_lossy().as_ref()),
+        "fresh request acceptance must not widen persisted/effective root"
     );
 }
 

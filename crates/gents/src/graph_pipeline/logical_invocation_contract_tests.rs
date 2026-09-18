@@ -749,7 +749,7 @@ async fn plain_graph_root_factory_fences_publication_and_cancellation() {
         .await
         .unwrap();
     let receipt = crate::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
-        &node, identity.did(), "test-behavior", "Plain graph root", crate::lifecycle::ExecutionOrigin::Scheduled,
+        &node, ::identity::Did::new(identity.did().to_owned()).unwrap(), identity.did(), "test-behavior", "Plain graph root", crate::lifecycle::ExecutionOrigin::Scheduled,
         lineage.clone(), None, None, Some("plain-factory-root"), None, Some(&trigger_doc),
     ).await.unwrap();
     let rows = persisted_requests(&node).await;
@@ -795,7 +795,7 @@ async fn plain_graph_root_factory_fences_publication_and_cancellation() {
     .unwrap();
     let closed = publication_state(&node).await;
     let error = crate::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
-        &node, identity.did(), "test-behavior", "Too late", crate::lifecycle::ExecutionOrigin::Scheduled,
+        &node, ::identity::Did::new(identity.did().to_owned()).unwrap(), identity.did(), "test-behavior", "Too late", crate::lifecycle::ExecutionOrigin::Scheduled,
         lineage, None, None, Some("denied-plain-factory-root"), None, Some(&trigger_doc),
     ).await.expect_err("cancelled graph rejects the actual root factory");
     assert!(
@@ -820,6 +820,7 @@ async fn goal_backed_graph_root_factory_rolls_back_after_cancellation() {
     ).await.unwrap();
     let receipt = crate::goal::submit_goal_backed_request_local(
         &node,
+        ::identity::Did::new(identity.did().to_owned()).unwrap(),
         identity.did(),
         &create.session_id,
         "Finish the extra stage",
@@ -876,6 +877,7 @@ async fn goal_backed_graph_root_factory_rolls_back_after_cancellation() {
     ).await.unwrap();
     let error = crate::goal::submit_goal_backed_request_local(
         &node,
+        ::identity::Did::new(identity.did().to_owned()).unwrap(),
         identity.did(),
         &denied.session_id,
         "Do not create this obligation",

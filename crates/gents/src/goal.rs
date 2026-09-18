@@ -1870,10 +1870,12 @@ async fn load_goal_backed_request_by_retry_key(
 /// Embedded-runtime counterpart of [`submit_goal_backed_request`].
 ///
 /// Trigger materialization uses this to publish a Task-declared Goal and its
-/// first request in one transaction, then recover the exact request binding by
-/// its unique retry key if commit acknowledgement is ambiguous.
+/// first request in one transaction authenticated as `actor`, then recover the
+/// exact request binding by its unique retry key if commit acknowledgement is
+/// ambiguous.
 pub async fn submit_goal_backed_request_local(
     node: &EmbeddedNode,
+    actor: ::identity::Did,
     agent_did: &str,
     session_id: &str,
     objective: &str,
@@ -1882,7 +1884,7 @@ pub async fn submit_goal_backed_request_local(
 ) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
     let staged = crate::config_client::ConfigAccess::transact_local(
         node,
-        None,
+        Some(actor),
         "goal.submit_backed_request_local",
         move |txn| {
             Box::pin(async move {

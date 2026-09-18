@@ -228,6 +228,18 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         self
     }
 
+    /// Attach the filesystem-policy observations assembled with a tool
+    /// surface. Production RuntimeContext and focused owned-loop tests share
+    /// this step so request-time root revalidation cannot be test-only wiring.
+    pub(super) fn with_tool_surface_runtime_policy(
+        self,
+        guard: Option<crate::tool_surface::RootExecutionGuard>,
+        operator_root: Option<PathBuf>,
+    ) -> Self {
+        self.with_root_execution_guard(guard)
+            .with_operator_tool_root(operator_root)
+    }
+
     /// Request-scoped compaction options: the daemon-lifetime knobs plus the
     /// claimed deadline of the request this compaction serves. The deadline is
     /// a required argument so no call site can omit it — the compactor's

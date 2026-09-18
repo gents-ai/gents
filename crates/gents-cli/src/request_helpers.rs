@@ -470,6 +470,7 @@ pub(crate) async fn create_goal_backed_agent_request(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_goal_backed_agent_request_local(
     node: &defra_node::EmbeddedNode,
+    actor: identity::Did,
     graphql: &str,
     agent_did: &str,
     objective: &str,
@@ -492,6 +493,7 @@ pub(crate) async fn create_goal_backed_agent_request_local(
     .await?;
     gents::goal::submit_goal_backed_request_local(
         node,
+        actor,
         agent_did,
         session_id,
         objective,
