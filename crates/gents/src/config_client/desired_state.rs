@@ -436,6 +436,13 @@ pub async fn apply_desired_state_plan(
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
         let existing = read_record(txn, document.collection, owner, id).await?;
+        // Only configuration changes are diagnostic events. Keeping this at
+        // the common desired-state owner covers packs, self-config, and
+        // direct writers without making runtime resolution log on every
+        // reconcile.
+        let changed = existing
+            .as_ref()
+            .is_none_or(|(_, current)| current != &document.update);
         let name = document.collection.graphql_type();
         let (mutation, input) = if let Some((doc_id, _)) = existing {
             let mut update = document.update.clone();
@@ -462,6 +469,20 @@ pub async fn apply_desired_state_plan(
             .await?;
         extract_mutation_doc_id(&response, name)?;
         counts.increment(document.collection);
+        if changed && document.collection == Collection::InferenceBackend {
+            // DesiredStateApplyPlan already validates this canonical document.
+            // A diagnostic must never turn an accepted configuration write into
+            // a failed one if that invariant changes in the future.
+            if let Ok(backend) =
+                serde_json::from_value::<crate::InferenceBackend>(document.update.clone())
+            {
+                crate::OpenAiWireApi::warn_if_ignored(
+                    backend.provider_kind,
+                    backend.openai_wire_api,
+                    &backend.backend_id,
+                );
+            }
+        }
     }
     for (collection, owner, id) in plan.removals() {
         if let Some((doc_id, _)) = read_record(txn, *collection, owner, id).await? {

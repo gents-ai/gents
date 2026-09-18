@@ -57,7 +57,6 @@ impl InferenceBackend {
             openai_wire_api: OpenAiWireApi::effective_for_provider(
                 self.provider_kind,
                 self.openai_wire_api,
-                &self.backend_id,
             ),
             backend_endpoint: self.endpoint.clone(),
             backend_auth: self.auth.clone(),

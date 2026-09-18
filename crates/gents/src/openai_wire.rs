@@ -34,49 +34,41 @@ impl OpenAiWireApi {
     pub fn effective_for_provider(
         provider_kind: BackendProviderKind,
         configured: Option<Self>,
-        backend_id: &str,
     ) -> Self {
         match provider_kind {
             BackendProviderKind::OpenAiCompatible => configured.unwrap_or(Self::ChatCompletions),
-            BackendProviderKind::OpenRouter => {
-                if let Some(value) = configured {
-                    tracing::warn!(
-                        backend_id = %backend_id,
-                        openai_wire_api = value.as_str(),
-                        provider_kind = %provider_kind,
-                        "openai_wire_api is ignored for this backend provider"
-                    );
-                }
-                Self::ChatCompletions
-            }
-            BackendProviderKind::ChatGptCodex => {
-                if let Some(value) = configured {
-                    tracing::warn!(
-                        backend_id = %backend_id,
-                        openai_wire_api = value.as_str(),
-                        provider_kind = %provider_kind,
-                        "openai_wire_api is ignored for this backend provider"
-                    );
-                }
-                Self::Responses
-            }
+            BackendProviderKind::OpenRouter => Self::ChatCompletions,
+            BackendProviderKind::ChatGptCodex => Self::Responses,
             // The Grok proxy serves both wires and the official client picks
             // per model; default Responses, honor an explicit override.
             BackendProviderKind::XaiGrokOAuth => configured.unwrap_or(Self::Responses),
             // Claude is not an OpenAI wire provider; ChatCompletions is only a
             // placeholder so SamplingConfig / loop_config keep compiling. The
             // Messages HTTP wire (`claude_messages`) ignores openai_wire_api.
-            BackendProviderKind::ClaudeCliSubscription => {
-                if let Some(value) = configured {
-                    tracing::warn!(
-                        backend_id = %backend_id,
-                        openai_wire_api = value.as_str(),
-                        provider_kind = %provider_kind,
-                        "openai_wire_api is ignored for this backend provider"
-                    );
-                }
-                Self::ChatCompletions
-            }
+            BackendProviderKind::ClaudeCliSubscription => Self::ChatCompletions,
+        }
+    }
+
+    pub(crate) fn warn_if_ignored(
+        provider_kind: BackendProviderKind,
+        configured: Option<Self>,
+        backend_id: &str,
+    ) {
+        let Some(configured) = configured else {
+            return;
+        };
+        if matches!(
+            provider_kind,
+            BackendProviderKind::OpenRouter
+                | BackendProviderKind::ChatGptCodex
+                | BackendProviderKind::ClaudeCliSubscription
+        ) {
+            tracing::warn!(
+                backend_id,
+                openai_wire_api = configured.as_str(),
+                provider_kind = %provider_kind,
+                "openai_wire_api is ignored for this backend provider"
+            );
         }
     }
 }
@@ -94,18 +86,13 @@ mod tests {
     #[test]
     fn resolves_effective_wire_api_by_provider() {
         assert_eq!(
-            OpenAiWireApi::effective_for_provider(
-                BackendProviderKind::OpenAiCompatible,
-                None,
-                "local",
-            ),
+            OpenAiWireApi::effective_for_provider(BackendProviderKind::OpenAiCompatible, None,),
             OpenAiWireApi::ChatCompletions
         );
         assert_eq!(
             OpenAiWireApi::effective_for_provider(
                 BackendProviderKind::OpenAiCompatible,
                 Some(OpenAiWireApi::Responses),
-                "local",
             ),
             OpenAiWireApi::Responses
         );
@@ -113,7 +100,6 @@ mod tests {
             OpenAiWireApi::effective_for_provider(
                 BackendProviderKind::OpenRouter,
                 Some(OpenAiWireApi::Responses),
-                "openrouter",
             ),
             OpenAiWireApi::ChatCompletions
         );
@@ -121,7 +107,6 @@ mod tests {
             OpenAiWireApi::effective_for_provider(
                 BackendProviderKind::ChatGptCodex,
                 Some(OpenAiWireApi::ChatCompletions),
-                "codex",
             ),
             OpenAiWireApi::Responses
         );
@@ -129,7 +114,6 @@ mod tests {
             OpenAiWireApi::effective_for_provider(
                 BackendProviderKind::ClaudeCliSubscription,
                 Some(OpenAiWireApi::Responses),
-                "claude",
             ),
             OpenAiWireApi::ChatCompletions
         );
@@ -140,14 +124,13 @@ mod tests {
         // The Grok proxy serves both wires; the official client picks per
         // model. Default to Responses, but let operators pin chat_completions.
         assert_eq!(
-            OpenAiWireApi::effective_for_provider(BackendProviderKind::XaiGrokOAuth, None, "grok",),
+            OpenAiWireApi::effective_for_provider(BackendProviderKind::XaiGrokOAuth, None),
             OpenAiWireApi::Responses
         );
         assert_eq!(
             OpenAiWireApi::effective_for_provider(
                 BackendProviderKind::XaiGrokOAuth,
                 Some(OpenAiWireApi::ChatCompletions),
-                "grok",
             ),
             OpenAiWireApi::ChatCompletions
         );

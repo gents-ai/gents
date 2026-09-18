@@ -69,8 +69,57 @@ where
         }
         let mut fields = EventFields::default();
         event.record(&mut fields);
+        fields.0.insert(
+            "level".to_owned(),
+            event.metadata().level().as_str().to_owned(),
+        );
         lock(&self.events).push(fields.0);
     }
+}
+
+#[tokio::test]
+async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema("type WriteTelemetryLevelProbe { value: String }")
+        .await
+        .unwrap();
+    let telemetry = EventCapture::default();
+    let events = Arc::clone(&telemetry.events);
+    let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
+    let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
+
+    ConfigAccess::transact_local(&node, None, "test.clean_noop", |_| {
+        Box::pin(async { Ok::<_, anyhow::Error>(()) })
+    })
+    .await
+    .unwrap();
+    ConfigAccess::transact_local(&node, None, "test.non_noop", |txn| {
+        Box::pin(async move {
+            txn.execute(r#"mutation { create_WriteTelemetryLevelProbe(input: { value: "changed" }) { _docID } }"#)
+                .await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    })
+    .await
+    .unwrap();
+
+    let events = lock(&events);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].get("level").map(String::as_str), Some("DEBUG"));
+    assert_eq!(
+        events[0].get("outcome").map(String::as_str),
+        Some("committed")
+    );
+    assert_eq!(
+        events[0].get("affected_documents").map(String::as_str),
+        Some("0")
+    );
+    assert_eq!(events[1].get("level").map(String::as_str), Some("INFO"));
+    assert_eq!(
+        events[1].get("affected_documents").map(String::as_str),
+        Some("1")
+    );
+    node.shutdown().await;
 }
 
 #[tokio::test]

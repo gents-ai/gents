@@ -2,7 +2,26 @@ use super::*;
 use crate::config_client::ConfigAccess;
 use defra_node::EmbeddedNode;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
+use tracing_subscriber::{Layer, Registry};
+
+#[derive(Clone, Default)]
+struct IgnoredWireWarningCapture(Arc<Mutex<Vec<tracing::Level>>>);
+
+impl<S> Layer<S> for IgnoredWireWarningCapture
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _: LayerContext<'_, S>) {
+        if event.metadata().target() == "gents::openai_wire" {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(*event.metadata().level());
+        }
+    }
+}
 
 fn backend(owner: &str, id: &str) -> Value {
     json!({"agent_did":owner,"backend_id":id,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})
@@ -104,6 +123,36 @@ async fn apply_with_counts(
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
         .await
+}
+
+#[tokio::test]
+async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_owner() -> Result<()>
+{
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    let access = ConfigAccess::Local(node.clone());
+    let capture = IgnoredWireWarningCapture::default();
+    let warnings = Arc::clone(&capture.0);
+    let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
+    let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
+
+    let mut backend = backend("did:key:owner", "ignored-wire");
+    backend["provider_kind"] = json!("OpenRouter");
+    backend["openai_wire_api"] = json!("responses");
+    apply(&access, vec![document(backend.clone())]).await?;
+    apply(&access, vec![document(backend.clone())]).await?;
+    backend["openai_wire_api"] = json!("chat_completions");
+    apply(&access, vec![document(backend)]).await?;
+
+    assert_eq!(
+        *warnings
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        vec![tracing::Level::WARN, tracing::Level::WARN],
+        "the generic desired-state owner warns for create/change, never an unchanged replay"
+    );
+    node.shutdown().await;
+    Ok(())
 }
 
 #[test]
