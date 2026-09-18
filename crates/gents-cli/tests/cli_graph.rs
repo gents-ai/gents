@@ -8,8 +8,8 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use support::{
-    agent_did_from_init, allocate_port, run_cli_failure_stderr, run_cli_failure_stderr_with_env,
-    run_cli_json, run_cli_json_with_env, run_init_json, spawn_server_with_ready_json,
+    agent_did_from_init, allocate_port, run_cli_failure_stderr, run_cli_json, run_cli_text,
+    run_init_json, spawn_server_with_ready_json,
 };
 
 fn required_str<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
@@ -83,11 +83,40 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
         "--force-rebind-concrete-did",
     ];
     let first = run_cli_json(temp.path(), &args)?;
-    anyhow::ensure!(first["ok"] == true, "{first}");
+    anyhow::ensure!(first["apply"]["counts"]["AgentBehavior"] == 2, "{first}");
+    let before_root = temp.path().join("before");
+    run_cli_text(
+        temp.path(),
+        &[
+            "config",
+            "export",
+            "--home",
+            home_arg,
+            "--root",
+            before_root.to_str().context("export path")?,
+        ],
+    )?;
+    let before = support::read_json_file(&before_root.join("pack_config.json"))?;
     let second = run_cli_json(temp.path(), &args)?;
     anyhow::ensure!(
-        second["ok"] == true && second["changed"] == false,
+        second["apply"] == first["apply"] && second["digest"] == first["digest"],
         "{second}"
+    );
+    let after_root = temp.path().join("after");
+    run_cli_text(
+        temp.path(),
+        &[
+            "config",
+            "export",
+            "--home",
+            home_arg,
+            "--root",
+            after_root.to_str().context("export path")?,
+        ],
+    )?;
+    anyhow::ensure!(
+        before == support::read_json_file(&after_root.join("pack_config.json"))?,
+        "reinstall changed canonical configuration"
     );
     Ok(())
 }
@@ -156,6 +185,10 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
         "server did not become ready: {readiness}"
     );
 
+    let profile = format!("{owner_did}:default-profile");
+    let coordinator = format!("coordinator={profile}");
+    let worker = format!("worker={profile}");
+    let verifier = format!("verifier={profile}");
     let install_args = [
         "pack",
         "install",
@@ -164,10 +197,15 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
         home_arg,
         "--output",
         "json",
+        "--inference-slot",
+        &coordinator,
+        "--inference-slot",
+        &worker,
+        "--inference-slot",
+        &verifier,
     ];
-    let review_env = [("GENTS_REVIEW_MODEL", "test-review-model")];
-    let first = run_cli_json_with_env(tempdir.path(), &install_args, &review_env)?;
-    let second = run_cli_json_with_env(tempdir.path(), &install_args, &review_env)?;
+    let first = run_cli_json(tempdir.path(), &install_args)?;
+    let second = run_cli_json(tempdir.path(), &install_args)?;
     anyhow::ensure!(
         first.get("install") == second.get("install"),
         "repeated install changed its durable receipt\nfirst: {first}\nsecond: {second}"
@@ -179,7 +217,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     );
 
     let wrong_actor = "did:key:z6MkvGraphPackageIntruder";
-    let denial = run_cli_failure_stderr_with_env(
+    let denial = run_cli_failure_stderr(
         tempdir.path(),
         &[
             "pack",
@@ -190,7 +228,6 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
             "--agent-did",
             wrong_actor,
         ],
-        &review_env,
     )?;
     anyhow::ensure!(
         denial.contains("package owner principal is missing"),

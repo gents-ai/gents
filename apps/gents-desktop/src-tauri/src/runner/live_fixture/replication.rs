@@ -106,6 +106,9 @@ pub(super) async fn wait_for_connected_peer(
     peer_id: &str,
     label: &str,
 ) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), core.request_p2p_repair())
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out requesting peer repair on {label}"))??;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if is_connected_peer(core, peer_id).await? {
@@ -113,6 +116,35 @@ pub(super) async fn wait_for_connected_peer(
         }
         if Instant::now() >= deadline {
             anyhow::bail!("timed out waiting for connected peer {peer_id} on {label}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+pub(super) async fn wait_for_ready_peer_status(
+    core: &ClientCore,
+    peer_id: &str,
+    label: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let snapshot = core.sync_state();
+        let dial_ready = snapshot
+            .peers
+            .iter()
+            .any(|peer| peer.peer_id == peer_id && peer.dial_succeeded);
+        let durable_ready = snapshot
+            .directory
+            .iter()
+            .any(|peer| peer.peer_id == peer_id && peer.is_chat_ready_at(chrono::Utc::now()));
+        if dial_ready && durable_ready {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let observed = snapshot.peers.iter().find(|peer| peer.peer_id == peer_id);
+            anyhow::bail!(
+                "timed out waiting for ready peer status {peer_id} on {label}; observed={observed:?}"
+            );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

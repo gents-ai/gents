@@ -54,6 +54,14 @@ struct CliRuntimeSnapshotObserver {
 }
 
 impl gents::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
+    fn on_event_sources_reconciled(
+        &self,
+        _generation: u64,
+        _configuration_fingerprint: &str,
+        _result: Result<(), &str>,
+    ) {
+    }
+
     fn on_generation_published(
         &self,
         generation: u64,

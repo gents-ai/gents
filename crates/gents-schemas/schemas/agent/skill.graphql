@@ -4,6 +4,7 @@ type Skill @branchable @index(fields: ["agent_did", "skill_id"], unique: true) {
     name: String @index
     description: String
     instructions: String
+    source_directory: String
     tool_refs: [String!]
     display_name: String
     interface_json: String

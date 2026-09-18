@@ -205,6 +205,8 @@ pub enum ClaimOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ClaimAdmissionError {
+    #[error("session {session_id} requester scope mismatch: {reason}")]
+    SessionScopeMismatch { session_id: String, reason: String },
     #[error(
         "session {session_id} is pinned to behavior {existing_behavior_id} and cannot switch to {requested_behavior_id}"
     )]
@@ -223,7 +225,7 @@ pub(crate) fn is_claim_admission_error(error: &anyhow::Error) -> bool {
 // it. Re-exported so `crate::lifecycle::ExecutionOrigin` is unchanged.
 pub use gents_loop::execution_origin::ExecutionOrigin;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TriggerLineage {
     pub trigger_id: Option<String>,
     pub trigger_kind: Option<String>,

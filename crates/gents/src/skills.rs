@@ -14,6 +14,9 @@
 
 use std::collections::BTreeSet;
 
+pub mod import;
+pub use import::{parse_skill_md, SkillFrontmatter};
+
 #[derive(Debug, Clone)]
 pub struct Skill {
     pub skill_id: String,
@@ -21,6 +24,7 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub instructions: String,
+    pub source_directory: Option<String>,
     pub tool_refs: Vec<String>,
     pub display_name: Option<String>,
     pub enabled: bool,
@@ -126,7 +130,14 @@ pub fn render_skill_catalog(skills: &[Skill]) -> Option<String> {
 }
 
 pub fn render_activated_skill(skill: &Skill, ceiling: &SkillToolCeiling) -> String {
-    let mut out = format!("Skill: {}\n\n{}", skill_label(skill), skill.instructions);
+    let mut out = format!("Skill: {}\n\n", skill_label(skill));
+    if let Some(directory) = &skill.source_directory {
+        out.push_str(&format!(
+            "Source directory: {}. Resolve supporting-file paths relative to this directory, not the working directory. This location grants no file or execution permissions; use your existing tools and report unavailable paths.\n\n",
+            serde_json::to_string(directory).expect("serialize skill directory")
+        ));
+    }
+    out.push_str(&skill.instructions);
     let missing = missing_tool_refs(skill, ceiling);
     if !missing.is_empty() {
         out.push_str(&format!(
@@ -414,6 +425,7 @@ mod tests {
             name: format!("{id}-name"),
             description: format!("{id}-desc"),
             instructions: format!("{id}-instructions"),
+            source_directory: None,
             tool_refs: tool_refs.iter().map(|s| s.to_string()).collect(),
             display_name: None,
             enabled: true,
@@ -427,6 +439,24 @@ mod tests {
 
     fn ids(skills: &[&Skill]) -> Vec<String> {
         skills.iter().map(|s| s.skill_id.clone()).collect()
+    }
+
+    /// Conformance to Skills.source_directory_preserves_tool_authority.
+    #[test]
+    fn source_directory_informs_references_without_granting_tools() {
+        let mut imported = skill("review", "did:p", &["read_file", "bash"]);
+        let ceiling = ceiling(&["read_file"]);
+        let before = skill_tools(&imported, &ceiling)
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        imported.source_directory = Some("/skills/code review".into());
+        assert_eq!(skill_tools(&imported, &ceiling), before);
+        let rendered = render_activated_skill(&imported, &ceiling);
+        assert!(rendered.contains("/skills/code review"));
+        assert!(rendered.contains("relative to this directory"));
+        assert!(rendered.contains(&imported.instructions));
+        assert_eq!(missing_tool_refs(&imported, &ceiling), vec!["bash"]);
     }
 
     #[test]

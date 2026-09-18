@@ -29,6 +29,7 @@ mod inference_backend;
 mod inference_profile;
 mod retry;
 mod schema_contract;
+mod schema_install;
 mod txn;
 pub(crate) mod write_telemetry;
 
@@ -43,6 +44,8 @@ pub mod patch;
 
 pub use agent_behavior::write_agent_behavior_document;
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
+#[cfg(test)]
+pub(crate) use desired_state::canonical_struct_fields;
 pub use desired_state::read_record as read_desired_state_record_in_txn;
 pub use desired_state::{
     apply_desired_state_plan, config_projection, DesiredStateApplyCounts,
@@ -50,11 +53,15 @@ pub use desired_state::{
 };
 pub(crate) use desired_state::{
     desired_state_document_digest, read_desired_state_document_in_txn, validate_desired_state_plan,
-    verify_existing_desired_state_plan,
 };
 pub use inference_backend::{load_inference_backend_in_txn, write_inference_backend_document};
 pub use inference_profile::write_inference_profile_document;
 pub(crate) use schema_contract::collection_schema_contract_digest;
+pub use schema_contract::SchemaFieldDelta;
+pub use schema_install::{
+    apply_additive_schema_install, apply_schema_install, preview_additive_schema_install,
+    preview_schema_install, SchemaInstallPlan,
+};
 pub use tools::write_tools_document;
 pub(crate) use txn::TransactionOutcome;
 pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry};

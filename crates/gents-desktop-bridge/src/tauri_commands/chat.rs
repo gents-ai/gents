@@ -32,6 +32,13 @@ pub async fn desktop_session_snapshot(
             .find(|session| session.session_id == session_id)
             .map(|session| session.agent_did.clone())
     });
+    let request_id = request_id.or_else(|| {
+        let store = core.store().snapshot();
+        agent_did.as_deref().map_or_else(
+            || store.latest_request_id_for_session(&session_id),
+            |agent_did| store.latest_request_id_for_session_for_agent(&session_id, agent_did),
+        )
+    });
 
     if let Some(agent_did) = agent_did.as_deref() {
         if let Err(error) = core
@@ -67,21 +74,59 @@ pub async fn desktop_session_snapshot(
     } else {
         None
     };
-    let page_read = gents_desktop_core::client::load_session_transcript_page(
-        core.node(),
-        &session_id,
-        agent_did.as_deref(),
-        requester_scope.as_deref(),
-        timeline_before_item_key.as_deref(),
-        timeline_limit,
-    );
+    let operator_access = agent_did
+        .as_deref()
+        .and_then(|agent_did| core.operator_graphql(agent_did))
+        .map(gents::config_client::ConfigAccess::Graphql);
+    let page_read = async {
+        match operator_access.as_ref() {
+            Some(access) => {
+                gents_desktop_core::client::load_session_transcript_page_on(
+                    access,
+                    &session_id,
+                    agent_did.as_deref(),
+                    requester_scope.as_deref(),
+                    timeline_before_item_key.as_deref(),
+                    timeline_limit,
+                )
+                .await
+            }
+            None => {
+                gents_desktop_core::client::load_session_transcript_page(
+                    core.node(),
+                    &session_id,
+                    agent_did.as_deref(),
+                    requester_scope.as_deref(),
+                    timeline_before_item_key.as_deref(),
+                    timeline_limit,
+                )
+                .await
+            }
+        }
+    };
     let (transcript_page, context_store) = if timeline_before_item_key.is_none() {
-        let context_read = gents_desktop_core::client::load_session_context_store(
-            core.node(),
-            &session_id,
-            agent_did.as_deref(),
-            requester_scope.as_deref(),
-        );
+        let context_read = async {
+            match operator_access.as_ref() {
+                Some(access) => {
+                    gents_desktop_core::client::load_session_context_store_on(
+                        access,
+                        &session_id,
+                        agent_did.as_deref(),
+                        requester_scope.as_deref(),
+                    )
+                    .await
+                }
+                None => {
+                    gents_desktop_core::client::load_session_context_store(
+                        core.node(),
+                        &session_id,
+                        agent_did.as_deref(),
+                        requester_scope.as_deref(),
+                    )
+                    .await
+                }
+            }
+        };
         let (page, context) = tokio::join!(page_read, context_read);
         let page = page.map_err(|error| BridgeError::untyped(error.to_string()))?;
         let context = match context {
@@ -172,6 +217,26 @@ pub async fn desktop_session_live_delta(
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
+    let agent_did = agent_did.or_else(|| {
+        core.store()
+            .snapshot()
+            .sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .map(|session| session.agent_did.clone())
+    });
+    // The live cursor is owned by the desktop replica. A local-standard
+    // agent's operator GraphQL is a different DefraDB node, so a delta from
+    // the replica can remain permanently "processing" after the agent has
+    // committed its response and tool calls. Returning no delta promotes the
+    // controller to its bounded full-session read, which refreshes the exact
+    // request and transcript from the operator endpoint.
+    if agent_did
+        .as_deref()
+        .is_some_and(|agent_did| core.operator_graphql(agent_did).is_some())
+    {
+        return Ok(None);
+    }
     Ok(Some(build_session_live_delta(
         core.as_ref(),
         &session_id,

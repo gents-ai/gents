@@ -21,11 +21,13 @@ pub fn load_pack_config(
         .context("pack has no configuration")?;
     let bytes = read_asset(path).with_context(|| format!("reading pack config {path}"))?;
     let value: Value = serde_json::from_slice(&bytes).context("parsing pack config JSON")?;
-    decode_pack_config(value, Some(options), environment, &|_, _, reference| {
+    let config = decode_pack_config(value, Some(options), environment, &|_, _, reference| {
         let mut prompt = reference.to_owned();
         hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;
         Ok(prompt)
-    })
+    })?;
+    super::inference::validate_pack_inference_authoring(manifest, &config)?;
+    Ok(config)
 }
 
 /// Decode canonical authoring for both distributed packs and local configuration.

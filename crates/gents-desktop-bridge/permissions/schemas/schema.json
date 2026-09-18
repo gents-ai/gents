@@ -391,6 +391,30 @@
           "markdownDescription": "Denies the desktop_chat_send command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_claude_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-claude-login",
+          "markdownDescription": "Enables the desktop_claude_login command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_claude_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-claude-login",
+          "markdownDescription": "Denies the desktop_claude_login command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_claude_login_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-claude-login-cancel",
+          "markdownDescription": "Enables the desktop_claude_login_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_claude_login_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-claude-login-cancel",
+          "markdownDescription": "Denies the desktop_claude_login_cancel command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_client_shutdown command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-client-shutdown",
@@ -475,6 +499,18 @@
           "markdownDescription": "Denies the desktop_config_components_patch command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_context_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-context-delete",
+          "markdownDescription": "Enables the desktop_context_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_context_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-context-delete",
+          "markdownDescription": "Denies the desktop_context_delete command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_event_source_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-event-source-delete",
@@ -523,6 +559,42 @@
           "markdownDescription": "Denies the desktop_grok_login_cancel command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_inference_backend_recommendation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-inference-backend-recommendation",
+          "markdownDescription": "Enables the desktop_inference_backend_recommendation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_inference_backend_recommendation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-inference-backend-recommendation",
+          "markdownDescription": "Denies the desktop_inference_backend_recommendation command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_inference_model_recommendation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-inference-model-recommendation",
+          "markdownDescription": "Enables the desktop_inference_model_recommendation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_inference_model_recommendation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-inference-model-recommendation",
+          "markdownDescription": "Denies the desktop_inference_model_recommendation command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_inference_models_discover command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-inference-models-discover",
+          "markdownDescription": "Enables the desktop_inference_models_discover command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_inference_models_discover command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-inference-models-discover",
+          "markdownDescription": "Denies the desktop_inference_models_discover command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_inference_profile_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-inference-profile-delete",
@@ -545,6 +617,18 @@
           "type": "string",
           "const": "deny-desktop-inference-profile-save",
           "markdownDescription": "Denies the desktop_inference_profile_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_inference_setup_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-inference-setup-catalog",
+          "markdownDescription": "Enables the desktop_inference_setup_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_inference_setup_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-inference-setup-catalog",
+          "markdownDescription": "Denies the desktop_inference_setup_catalog command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_init_local_standard command without any pre-configured scope.",
@@ -643,6 +727,18 @@
           "markdownDescription": "Denies the desktop_mailbox_start_request command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_managed_server_restart command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-managed-server-restart",
+          "markdownDescription": "Enables the desktop_managed_server_restart command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_managed_server_restart command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-managed-server-restart",
+          "markdownDescription": "Denies the desktop_managed_server_restart command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_managed_server_start command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-managed-server-start",
@@ -677,6 +773,18 @@
           "type": "string",
           "const": "deny-desktop-managed-server-stop",
           "markdownDescription": "Denies the desktop_managed_server_stop command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_managed_server_validate_root command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-managed-server-validate-root",
+          "markdownDescription": "Enables the desktop_managed_server_validate_root command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_managed_server_validate_root command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-managed-server-validate-root",
+          "markdownDescription": "Denies the desktop_managed_server_validate_root command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_native_e2e_config command without any pre-configured scope.",
@@ -1261,16 +1369,16 @@
           "markdownDescription": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`"
         },
         {
-          "description": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`",
+          "description": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`\n- `allow-desktop-managed-server-restart`\n- `allow-desktop-managed-server-validate-root`",
           "type": "string",
           "const": "runtime-admin",
-          "markdownDescription": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`"
+          "markdownDescription": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`\n- `allow-desktop-managed-server-restart`\n- `allow-desktop-managed-server-validate-root`"
         },
         {
-          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-provider-account-disconnect`",
+          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-context-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-inference-setup-catalog`\n- `allow-desktop-inference-models-discover`\n- `allow-desktop-inference-model-recommendation`\n- `allow-desktop-inference-backend-recommendation`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-claude-login`\n- `allow-desktop-claude-login-cancel`\n- `allow-desktop-provider-account-disconnect`",
           "type": "string",
           "const": "config-write",
-          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-provider-account-disconnect`"
+          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-config-components-apply`\n- `allow-desktop-config-components-patch`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-trigger-delete`\n- `allow-desktop-event-source-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tools-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-context-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tools-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-inference-setup-catalog`\n- `allow-desktop-inference-models-discover`\n- `allow-desktop-inference-model-recommendation`\n- `allow-desktop-inference-backend-recommendation`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-claude-login`\n- `allow-desktop-claude-login-cancel`\n- `allow-desktop-provider-account-disconnect`"
         },
         {
           "description": "Read redacted provider account metadata\n#### This permission set includes:\n\n- `allow-desktop-provider-accounts-list`",

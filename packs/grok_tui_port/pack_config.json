@@ -6,105 +6,105 @@
       "display_name": "Converge parallel Grok port slices",
       "description": "Semantically stitch, compile, test, and commit the serially applied path-disjoint slices.",
       "context_id": "port-converge-context",
-      "inference_profile_id": "grok-port-implement-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "port-final-review",
       "display_name": "Full review of the combined Grok port trunk",
       "description": "Run the bundled four-stage review graph after the combined convergence commit and repair confirmed findings.",
       "context_id": "port-final-review-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:reviewer"
     },
     {
       "behavior_id": "port-implement",
       "display_name": "Implement one Grok wire surface in a bound workspace",
       "description": "Edit the Gents tree to speak the mapped Grok surface.",
       "context_id": "port-implement-context",
-      "inference_profile_id": "grok-port-implement-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "port-integrate",
       "display_name": "Integration acknowledgement for an accepted unit",
       "description": "Acknowledge a reviewed sealed workspace; the host applies the diff.",
       "context_id": "port-integrate-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "port-integrate-record",
       "display_name": "Record a durable host integration",
       "description": "Close one logical integration slot from an integrator receipt.",
       "context_id": "port-integrate-record-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "port-live",
       "display_name": "Live GLM probes through the Grok wire",
       "description": "Drive real prompts at the integrated shim and record wire plus Gents observations.",
       "context_id": "port-live-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "port-live-review",
       "display_name": "Adversarial live-report",
       "description": "Fail closed unless each non-ignore surface has wire and document evidence.",
       "context_id": "port-live-review-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:reviewer"
     },
     {
       "behavior_id": "port-live-worker",
       "display_name": "Live GLM foreground subagent worker",
       "description": "Deterministic same-principal foreground subagent target for the live subagent edge.",
       "context_id": "port-live-worker-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "port-plan",
       "display_name": "Cluster surfaces into work units",
       "description": "Reducer over the closed PortSurface ledger.",
       "context_id": "port-plan-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "port-plan-skip",
       "display_name": "Close a non-executable Grok port plan",
       "description": "Write sentinel closure and integrate rows without provisioning a workspace.",
       "context_id": "port-plan-skip-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "port-publish",
       "display_name": "Open one PR from the integrated trunk",
       "description": "Unbound on the operator checkout. Host already applied accepted sealed diffs.",
       "context_id": "port-publish-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "port-recon",
       "display_name": "Map Grok TUI feature surfaces",
       "description": "Read grok-build call sites and emit PortSurface rows.",
       "context_id": "port-recon-context",
-      "inference_profile_id": "grok-port-recon-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "port-recon-audit",
       "display_name": "Audit the closed Grok wire ledger",
       "description": "Reject incomplete, path-only, or out-of-bounds reconnaissance before planning.",
       "context_id": "port-recon-audit-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:reviewer"
     },
     {
       "behavior_id": "port-retry",
       "display_name": "Plan a fresh repair attempt",
       "description": "Preserve a rejected seal and create a new attempt workspace request.",
       "context_id": "port-retry-context",
-      "inference_profile_id": "grok-port-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "port-review",
       "display_name": "Adversarial Grok call-site review",
       "description": "Accept or reject an implementation against grok-build evidence.",
       "context_id": "port-review-context",
-      "inference_profile_id": "grok-port-review-profile"
+      "inference_profile_id": "gents:inference-slot:reviewer"
     }
   ],
   "contexts": [
@@ -2405,172 +2405,6 @@
           ]
         }
       ]
-    }
-  ],
-  "inference_backends": [
-    {
-      "backend_id": "grok-port-backend-ws1",
-      "name": "Grok TUI port backend",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_GROK_PORT_ENDPOINT_1:-http://127.0.0.1:8000/v1}",
-      "auth": {
-        "kind": "unauthenticated"
-      },
-      "max_concurrent": 16,
-      "max_queue_depth": 100
-    }
-  ],
-  "inference_profiles": [
-    {
-      "profile_id": "grok-port-implement-profile",
-      "display_name": "Grok TUI parallel implementation profile",
-      "backend_id": "grok-port-backend-ws1",
-      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
-      "reasoning_effort": "high",
-      "context_window": 524288,
-      "max_output_tokens": 65536,
-      "sampling_id": "grok-port-implement-profile-sampling",
-      "execution_id": "grok-port-implement-profile-execution"
-    },
-    {
-      "profile_id": "grok-port-profile",
-      "display_name": "Grok TUI port profile",
-      "backend_id": "grok-port-backend-ws1",
-      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
-      "reasoning_effort": "high",
-      "context_window": 524288,
-      "max_output_tokens": 65536,
-      "sampling_id": "grok-port-profile-sampling",
-      "execution_id": "grok-port-profile-execution"
-    },
-    {
-      "profile_id": "grok-port-recon-profile",
-      "display_name": "Grok TUI reconnaissance profile",
-      "backend_id": "grok-port-backend-ws1",
-      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
-      "reasoning_effort": "high",
-      "context_window": 524288,
-      "max_output_tokens": 65536,
-      "sampling_id": "grok-port-recon-profile-sampling",
-      "execution_id": "grok-port-recon-profile-execution"
-    },
-    {
-      "profile_id": "grok-port-review-profile",
-      "display_name": "Sealed Grok slice review profile",
-      "backend_id": "grok-port-backend-ws1",
-      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
-      "reasoning_effort": "high",
-      "context_window": 524288,
-      "max_output_tokens": 32768,
-      "sampling_id": "grok-port-review-profile-sampling",
-      "execution_id": "grok-port-review-profile-execution"
-    }
-  ],
-  "inference_sampling": [
-    {
-      "sampling_id": "grok-port-implement-profile-sampling",
-      "display_name": "Grok TUI parallel implementation profile sampling",
-      "temperature": 0.2,
-      "top_p": 0.95
-    },
-    {
-      "sampling_id": "grok-port-profile-sampling",
-      "display_name": "Grok TUI port profile sampling",
-      "temperature": 1.0,
-      "top_p": 0.95
-    },
-    {
-      "sampling_id": "grok-port-recon-profile-sampling",
-      "display_name": "Grok TUI reconnaissance profile sampling",
-      "temperature": 0.1,
-      "top_p": 0.95
-    },
-    {
-      "sampling_id": "grok-port-review-profile-sampling",
-      "display_name": "Sealed Grok slice review profile sampling",
-      "temperature": 0.1,
-      "top_p": 0.95
-    }
-  ],
-  "inference_execution": [
-    {
-      "execution_id": "grok-port-implement-profile-execution",
-      "display_name": "Grok TUI parallel implementation profile execution",
-      "retry_policy_id": "grok-port-implement-profile-retry",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000
-    },
-    {
-      "execution_id": "grok-port-profile-execution",
-      "display_name": "Grok TUI port profile execution",
-      "retry_policy_id": "grok-port-profile-retry",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000
-    },
-    {
-      "execution_id": "grok-port-recon-profile-execution",
-      "display_name": "Grok TUI reconnaissance profile execution",
-      "retry_policy_id": "grok-port-recon-profile-retry",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000
-    },
-    {
-      "execution_id": "grok-port-review-profile-execution",
-      "display_name": "Sealed Grok slice review profile execution",
-      "retry_policy_id": "grok-port-review-profile-retry",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000
-    }
-  ],
-  "inference_retry_policies": [
-    {
-      "retry_policy_id": "grok-port-implement-profile-retry",
-      "display_name": "Grok TUI parallel implementation profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 2,
-      "allow_repair": true
-    },
-    {
-      "retry_policy_id": "grok-port-profile-retry",
-      "display_name": "Grok TUI port profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 32,
-      "allow_repair": true
-    },
-    {
-      "retry_policy_id": "grok-port-recon-profile-retry",
-      "display_name": "Grok TUI reconnaissance profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 32,
-      "allow_repair": true
-    },
-    {
-      "retry_policy_id": "grok-port-review-profile-retry",
-      "display_name": "Sealed Grok slice review profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 2,
-      "allow_repair": true
     }
   ],
   "tasks": [

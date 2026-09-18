@@ -1,0 +1,9 @@
+[package]
+name = "gents-login-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tiny_http = "0.12"

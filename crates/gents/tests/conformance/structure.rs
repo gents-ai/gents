@@ -116,11 +116,15 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("SessionRecovery", WorkspaceTest("crates/gents-desktop-core/src/client/mutations/chat/request/tests.rs")),
         (
             "Skills",
-            Gap("#460 — implementation slices unshipped; fence lands with them"),
+            WorkspaceTest("crates/gents/src/skills.rs"),
         ),
         (
             "StorageObservation",
             Boundary("daemon-visible classification is an accepted boundary (Boundaries.lean)"),
+        ),
+        (
+            "StorageWriteGate",
+            WorkspaceTest("crates/gents/src/admission/stream_guard/conformance.rs"),
         ),
         (
             "StreamingResponse",

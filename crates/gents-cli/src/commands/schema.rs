@@ -160,6 +160,17 @@ async fn apply_schema_inputs(
         patch_files.push(apply_patch_file(access, &input.path).await?);
     }
 
+    for input in inputs
+        .iter()
+        .filter(|input| input.kind == SchemaInputKind::Sdl)
+    {
+        let sdl = fs::read_to_string(&input.path)?;
+        gents::config_client::preview_additive_schema_install(access, &sdl)
+            .await?
+            .require_satisfied()
+            .with_context(|| format!("schema series did not satisfy {}", input.path.display()))?;
+    }
+
     Ok(PackSchemaPhase {
         status: "schema_applied",
         root: root.display().to_string(),
@@ -237,46 +248,21 @@ fn classify_schema_input(path: &Path) -> Option<SchemaInputKind> {
 async fn apply_sdl_file(access: &ConfigAccess, path: &Path) -> Result<SchemaApplyFileResult> {
     let sdl = fs::read_to_string(path)
         .with_context(|| format!("reading schema SDL {}", path.display()))?;
-    let collections = collection_names_from_sdl(&sdl)
-        .with_context(|| format!("parsing schema SDL {}", path.display()))?;
-    if collections.is_empty() {
-        anyhow::bail!(
-            "schema SDL {} did not declare any collections",
-            path.display()
-        );
-    }
-
-    let existing = existing_collections(access, &collections).await?;
-    if existing.len() == collections.len() {
-        return Ok(SchemaApplyFileResult {
-            path: path.display().to_string(),
-            status: "already_exists",
-            collections,
-        });
-    }
-    if !existing.is_empty() {
-        let missing = collections
-            .iter()
-            .filter(|collection| !existing.contains(*collection))
-            .cloned()
-            .collect::<Vec<_>>();
-        anyhow::bail!(
-            "schema SDL {} mixes existing collections ({}) and missing collections ({}); split it into a new-collection SDL and additive patch files",
-            path.display(),
-            existing.into_iter().collect::<Vec<_>>().join(", "),
-            missing.join(", ")
-        );
-    }
-
-    access
-        .add_schema(&sdl)
+    let plan = gents::config_client::preview_additive_schema_install(access, &sdl)
         .await
-        .with_context(|| format!("adding schema {}", path.display()))?;
-
+        .with_context(|| format!("preview schema SDL {}", path.display()))?;
+    let receipt =
+        gents::config_client::apply_additive_schema_install(access, &sdl, &plan.artifact_digest)
+            .await
+            .with_context(|| format!("publish schema SDL {}", path.display()))?;
     Ok(SchemaApplyFileResult {
         path: path.display().to_string(),
-        status: "applied",
-        collections,
+        status: if receipt.requires_publication {
+            "applied"
+        } else {
+            "already_exists"
+        },
+        collections: receipt.collection_contracts.into_keys().collect(),
     })
 }
 
@@ -329,33 +315,6 @@ async fn apply_patch_file(access: &ConfigAccess, path: &Path) -> Result<SchemaAp
         skipped_fields,
         version_id,
     })
-}
-
-fn collection_names_from_sdl(sdl: &str) -> Result<Vec<String>> {
-    let mut names = query::parse_sdl(sdl)?
-        .into_iter()
-        .map(|collection| collection.name)
-        .collect::<Vec<_>>();
-    names.sort();
-    names.dedup();
-    Ok(names)
-}
-
-async fn existing_collections(
-    access: &ConfigAccess,
-    collections: &[String],
-) -> Result<BTreeSet<String>> {
-    let mut existing = BTreeSet::new();
-    for collection in collections {
-        if collection_exists(access, collection).await? {
-            existing.insert(collection.clone());
-        }
-    }
-    Ok(existing)
-}
-
-async fn collection_exists(access: &ConfigAccess, collection: &str) -> Result<bool> {
-    Ok(access.collection_fields(collection).await?.is_some())
 }
 
 async fn collection_field_names(
@@ -634,6 +593,56 @@ mod pack_schema_tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn cli_sdl_apply_checks_contracts_and_reports_reinstall_accurately() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("widget.graphql");
+        let node = std::sync::Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        let access = ConfigAccess::Local(node.clone());
+        fs::write(&path, "type Widget { message: String }").unwrap();
+        assert_eq!(
+            apply_sdl_file(&access, &path).await.unwrap().status,
+            "applied"
+        );
+        assert_eq!(
+            apply_sdl_file(&access, &path).await.unwrap().status,
+            "already_exists"
+        );
+        fs::write(&path, "type Widget { message: Int }").unwrap();
+        let error = apply_sdl_file(&access, &path).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("does not match requested schema"),
+            "{error:#}"
+        );
+        fs::write(
+            &path,
+            "type Widget { message: String } type OtherWidget { message: String }",
+        )
+        .unwrap();
+        assert!(apply_sdl_file(&access, &path).await.is_err());
+        assert!(node.get_collection("OtherWidget").unwrap().is_none());
+        fs::write(&path, "type Widget { message: String pending: String }").unwrap();
+        let inputs = discover_schema_inputs(dir.path(), &[]).unwrap();
+        let error = apply_schema_inputs(&access, dir.path(), &inputs)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("missing declared fields"),
+            "{error:#}"
+        );
+        assert!(!access
+            .collection_fields("Widget")
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("pending"));
+    }
 
     #[test]
     fn pack_schemas_dir_absent_means_skip() {

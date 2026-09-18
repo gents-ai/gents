@@ -12,7 +12,7 @@ use uuid::Uuid;
 /// reconciler, `crates/gents/src/agent/p2p_reconcile/persona_requests.rs`).
 /// The CLI submits a `PersonaConfigRequest` row over HTTP GraphQL and polls
 /// it to a terminal status — the exact channel the reconciler and the
-/// agent's own `configure_persona` self-config tool use — so this test
+/// agent's own `config behavior` self-config tool use — so this test
 /// exercises the real end-to-end path against a running `gents server`,
 /// following the harness precedent in `cli_config_workspace_root.rs`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -62,6 +62,8 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             &agent_did,
             "--display-name",
             "Research Assistant",
+            "--system-prompt",
+            "Research the requested topic and write a concise evidence-backed report.",
             "--preset",
             "write",
             "--profile-id",
@@ -184,6 +186,8 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             &agent_did,
             "--display-name",
             "Readonly Persona",
+            "--system-prompt",
+            "Inspect the requested files and report findings without modifying them.",
             "--preset",
             "readonly",
             "--profile-id",

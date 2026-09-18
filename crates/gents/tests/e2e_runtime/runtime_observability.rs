@@ -22,6 +22,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 struct RuntimeEventObserver {
     process_state_tx: watch::Sender<ProcessLifecycleState>,
     generation_tx: watch::Sender<u64>,
+    event_sources_tx: watch::Sender<Option<(u64, String)>>,
 }
 
 impl ProcessLifecycleObserver for RuntimeEventObserver {
@@ -31,6 +32,17 @@ impl ProcessLifecycleObserver for RuntimeEventObserver {
 }
 
 impl RuntimeSnapshotObserver for RuntimeEventObserver {
+    fn on_event_sources_reconciled(
+        &self,
+        generation: u64,
+        fingerprint: &str,
+        result: Result<(), &str>,
+    ) {
+        assert!(result.is_ok(), "subscription seeding failed: {result:?}");
+        self.event_sources_tx
+            .send_replace(Some((generation, fingerprint.to_owned())));
+    }
+
     fn on_generation_published(
         &self,
         generation: u64,
@@ -108,9 +120,11 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     let (process_state_tx, mut process_state_rx) =
         watch::channel(ProcessLifecycleState::Uninitialized);
     let (generation_tx, mut generation_rx) = watch::channel(0);
+    let (event_sources_tx, mut event_sources_rx) = watch::channel(None);
     let observer = Arc::new(RuntimeEventObserver {
         process_state_tx,
         generation_tx,
+        event_sources_tx,
     });
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
@@ -128,7 +142,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     let default_behavior_id = agent.default_behavior_id().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
+    let handle = tokio::spawn(agent.clone().run(shutdown_rx));
 
     wait_for_observed(
         &mut process_state_rx,
@@ -146,6 +160,20 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     .await;
     assert_eq!(startup.default_behavior_id, default_behavior_id);
     assert!(startup.last_reconcile_error.is_empty());
+    let initial_fingerprint = agent
+        .document_runtime_configuration_fingerprint()
+        .await
+        .unwrap();
+    wait_for_observed(
+        &mut event_sources_rx,
+        "initial subscription configuration",
+        |ready| {
+            ready
+                .as_ref()
+                .is_some_and(|(_, fingerprint)| fingerprint == &initial_fingerprint)
+        },
+    )
+    .await;
 
     gents::config_client::ConfigAccess::transact_local(
         db.node.as_ref(),
@@ -195,6 +223,22 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     )
     .await
     .unwrap();
+
+    let expected_fingerprint = agent
+        .document_runtime_configuration_fingerprint()
+        .await
+        .unwrap();
+    assert_ne!(expected_fingerprint, initial_fingerprint);
+    wait_for_observed(
+        &mut event_sources_rx,
+        "updated subscription configuration",
+        |ready| {
+            ready.as_ref().is_some_and(|(generation, fingerprint)| {
+                *generation >= 2 && fingerprint == &expected_fingerprint
+            })
+        },
+    )
+    .await;
 
     wait_for_observed(&mut generation_rx, "runtime generation 2", |generation| {
         *generation >= 2

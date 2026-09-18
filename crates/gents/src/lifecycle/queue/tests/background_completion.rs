@@ -1,6 +1,334 @@
 use super::*;
 use crate::lifecycle::RequestTerminalOutcome;
 
+/// Model-driven witnesses for AgentSession.preserveControlSession: an enrolled
+/// desktop parent and runtime-signed controls share the existing session, while
+/// foreign physical ancestry cannot grant its scope.
+#[tokio::test]
+async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ancestry() {
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+    for source in [
+        QueueSource::BackgroundCompletion,
+        QueueSource::Steering,
+        QueueSource::Goal,
+    ] {
+        let db = test_db("desktop-control-scope").await;
+        let desktop = crate::identity::KeyIdentity::load_or_create(
+            db._tempdir.path().join("desktop.key"),
+            None,
+        )
+        .unwrap();
+        let session_id = "desktop-owned-session";
+        let mut create = AgentRequestCreate::base(
+            "desktop-parent",
+            db.agent_did(),
+            desktop.did(),
+            TEST_BEHAVIOR_ID,
+            session_id,
+            "run work",
+            "interactive",
+            "2030-01-01T00:00:00Z",
+            AgentRequestAdmissionRecord::enrollment(
+                desktop.did(),
+                "enrollment",
+                "digest",
+                db.agent_did(),
+                1,
+                "2099-01-01T00:00:00Z",
+            ),
+        );
+        crate::sign_agent_request_create(&desktop, &mut create)
+            .await
+            .unwrap();
+        let response = db.node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let parent = crate::request_binding::load_agent_request(&db.node, "desktop-parent")
+            .await
+            .unwrap()
+            .unwrap();
+        // Materialize and finish the enrolled desktop turn through the real
+        // lifecycle, before its longer-lived background work completes.
+        let writer = crate::streaming::DefraStreamWriter::new(
+            db.node.clone(),
+            db.agent_did(),
+            std::time::Duration::ZERO,
+        );
+        let mut parent_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+            db.node.clone(),
+            TEST_BEHAVIOR_ID,
+            db.agent_did(),
+            parent.clone(),
+            60,
+            ExecutionOrigin::Interactive,
+            "backend-test",
+        );
+        assert_eq!(
+            parent_lifecycle.claim_with_identity().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        parent_lifecycle
+            .begin_owned_execution(&writer)
+            .await
+            .unwrap();
+        parent_lifecycle
+            .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+            .await
+            .unwrap();
+        session::ensure_session_with_behavior_id_and_requester_did(
+            &db.node,
+            session_id,
+            TEST_BEHAVIOR_ID,
+            db.agent_did(),
+            TEST_BEHAVIOR_ID,
+            Some(desktop.did()),
+        )
+        .await
+        .unwrap();
+        let query = format!("{{ AgentSession {{ {} }} }}", session::AGENT_SESSION_FIELDS);
+        let before = db.node.execute(&query).await.data.unwrap();
+        let mutation = if source == QueueSource::Goal {
+            let mut continuation = prepare_goal_continuation(
+                &parent,
+                TEST_BEHAVIOR_ID.into(),
+                "goal",
+                "continue",
+                1,
+                false,
+                "2030-01-01T00:00:01Z",
+            )
+            .unwrap();
+            crate::sign_agent_request_create(db.identity.as_ref(), &mut continuation)
+                .await
+                .unwrap();
+            continuation.graphql_mutation().unwrap()
+        } else {
+            session_request_create_mutation(
+                &parent,
+                TEST_BEHAVIOR_ID,
+                "continue",
+                ExecutionOrigin::Scheduled,
+                RequestInput {
+                    queue: Some(hints(source, QueuePolicy::Append)),
+                    ..Default::default()
+                },
+                "runtime-control",
+                "2030-01-01T00:00:01Z",
+                None,
+            )
+            .await
+            .unwrap()
+        };
+        let response = db.node.execute(&mutation).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let request_id = if source == QueueSource::Goal {
+            goal_continuation_identity("goal", &parent.request_id, 1)
+                .unwrap()
+                .request_id
+        } else {
+            "runtime-control".into()
+        };
+        let request = crate::request_binding::load_agent_request(&db.node, &request_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(request.requester_did.as_deref(), Some(db.agent_did()));
+        let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+            db.node.clone(),
+            TEST_BEHAVIOR_ID,
+            db.agent_did(),
+            request.clone(),
+            60,
+            ExecutionOrigin::Scheduled,
+            "backend-test",
+        );
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        assert_eq!(
+            db.node.execute(&query).await.data.unwrap(),
+            before,
+            "control must preserve exact user observation and session owner"
+        );
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        lifecycle
+            .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+            .await
+            .unwrap();
+
+        let next = session_request_create_mutation(
+            &request,
+            TEST_BEHAVIOR_ID,
+            "second-hop",
+            ExecutionOrigin::Scheduled,
+            wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
+            "second-control",
+            "2030-01-01T00:00:02Z",
+            None,
+        )
+        .await
+        .unwrap();
+        let response = db.node.execute(&next).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let second = crate::request_binding::load_agent_request(&db.node, "second-control")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+            db.node.clone(),
+            TEST_BEHAVIOR_ID,
+            db.agent_did(),
+            second,
+            60,
+            ExecutionOrigin::Scheduled,
+            "backend-test",
+        );
+        assert_eq!(
+            second_lifecycle.claim_with_identity().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        assert_eq!(db.node.execute(&query).await.data.unwrap(), before);
+        second_lifecycle
+            .begin_owned_execution(&writer)
+            .await
+            .unwrap();
+        second_lifecycle
+            .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+            .await
+            .unwrap();
+
+        let forged = session_request_create_mutation(
+            &request,
+            TEST_BEHAVIOR_ID,
+            "signed-original",
+            ExecutionOrigin::Scheduled,
+            wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
+            "forged-control",
+            "2030-01-01T00:00:03Z",
+            None,
+        )
+        .await
+        .unwrap()
+        .replace("signed-original", "unsigned-tampering");
+        let response = db.node.execute(&forged).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let forged = crate::request_binding::load_agent_request(&db.node, "forged-control")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut forged_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+            db.node.clone(),
+            TEST_BEHAVIOR_ID,
+            db.agent_did(),
+            forged,
+            60,
+            ExecutionOrigin::Scheduled,
+            "backend-test",
+        );
+        let error = forged_lifecycle.claim_with_identity().await.unwrap_err();
+        assert!(
+            crate::lifecycle::is_claim_admission_error(&error),
+            "{error:#}"
+        );
+        forged_lifecycle
+            .reject_admission(&error.to_string())
+            .await
+            .unwrap();
+        let failed = db.node.execute("{ AgentRequest(filter: { request_id: { _eq: \"forged-control\" } }) { lifecycle_state failure_reason } AgentResponse(filter: { request_id: { _eq: \"forged-control\" } }) { status error_message } }").await;
+        let failed = failed.data.unwrap();
+        assert_eq!(failed["AgentRequest"][0]["lifecycle_state"], "failed");
+        assert_eq!(failed["AgentResponse"][0]["status"], "error");
+        assert_eq!(
+            failed["AgentResponse"][0]["error_message"],
+            error.to_string()
+        );
+
+        // The next enrolled user request can use the same canonical session.
+        let mut followup = create.clone();
+        followup.initial_lifecycle_state = RequestLifecycleState::Pending;
+        followup.request_id = "desktop-followup".into();
+        followup.retry_root_request = Some(followup.request_id.clone());
+        followup.created_at = "2030-01-01T00:00:04Z".into();
+        followup.content = "is it finished?".into();
+        crate::sign_agent_request_create(&desktop, &mut followup)
+            .await
+            .unwrap();
+        let response = db.node.execute(&followup.graphql_mutation().unwrap()).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let followup = crate::request_binding::load_agent_request(&db.node, "desktop-followup")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut followup_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+            db.node.clone(),
+            TEST_BEHAVIOR_ID,
+            db.agent_did(),
+            followup,
+            60,
+            ExecutionOrigin::Interactive,
+            "backend-test",
+        );
+        assert_eq!(
+            followup_lifecycle.claim_with_identity().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        let after = db.node.execute(&query).await.data.unwrap();
+        assert_eq!(after["AgentSession"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            after["AgentSession"][0]["_docID"],
+            before["AgentSession"][0]["_docID"]
+        );
+        assert_eq!(after["AgentSession"][0]["requester_did"], desktop.did());
+
+        // Valid runtime signature but a physical parent from another session.
+        let mut foreign_parent = parent.clone();
+        foreign_parent.session_id = "other-session".into();
+        let bad = session_request_create_mutation(
+            &foreign_parent,
+            TEST_BEHAVIOR_ID,
+            "bad",
+            ExecutionOrigin::Scheduled,
+            wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
+            "foreign-control",
+            "2030-01-01T00:00:02Z",
+            None,
+        )
+        .await
+        .unwrap();
+        let response = db.node.execute(&bad).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        // An existing other-session owner must not authorize the mismatched parent.
+        session::ensure_session_with_behavior_id_and_requester_did(
+            &db.node,
+            "other-session",
+            TEST_BEHAVIOR_ID,
+            db.agent_did(),
+            TEST_BEHAVIOR_ID,
+            Some(desktop.did()),
+        )
+        .await
+        .unwrap();
+        let bad = crate::request_binding::load_agent_request(&db.node, "foreign-control")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+            db.node.clone(),
+            TEST_BEHAVIOR_ID,
+            db.agent_did(),
+            bad,
+            60,
+            ExecutionOrigin::Scheduled,
+            "backend-test",
+        );
+        let error = lifecycle.claim_with_identity().await.unwrap_err();
+        assert!(
+            crate::lifecycle::is_claim_admission_error(&error),
+            "{error:#}"
+        );
+    }
+}
+
 fn root_parent(agent_did: &str, session_id: &str) -> AgentRequest {
     let mut parent = parent_request(agent_did, session_id);
     parent.subagent_depth = 0;

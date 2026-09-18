@@ -36,6 +36,8 @@ pub enum SelfConfigTarget {
     Schedule,
     Trigger,
     EventSource,
+    DatastoreToolSurface,
+    Skill,
 }
 pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
     "behavior",
@@ -47,7 +49,7 @@ pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
     "persona",
 ];
 pub const DEFAULT_SELF_CONFIG_CATEGORIES: [&str; 3] = ["behavior", "tools", "profile"];
-pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 14] = [
+pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 16] = [
     SelfConfigTarget::AgentBehavior,
     SelfConfigTarget::AgentContext,
     SelfConfigTarget::Compaction,
@@ -62,6 +64,8 @@ pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 14] = [
     SelfConfigTarget::Schedule,
     SelfConfigTarget::Trigger,
     SelfConfigTarget::EventSource,
+    SelfConfigTarget::DatastoreToolSurface,
+    SelfConfigTarget::Skill,
 ];
 impl SelfConfigTarget {
     pub fn collection(self) -> crate::Collection {
@@ -80,6 +84,8 @@ impl SelfConfigTarget {
             Self::Schedule => crate::Collection::Schedule,
             Self::Trigger => crate::Collection::Trigger,
             Self::EventSource => crate::Collection::EventSource,
+            Self::DatastoreToolSurface => crate::Collection::DatastoreToolSurface,
+            Self::Skill => crate::Collection::Skill,
         }
     }
     pub fn collection_name(self) -> &'static str {
@@ -96,7 +102,7 @@ impl SelfConfigTarget {
     pub fn category(self) -> &'static str {
         match self {
             Self::AgentBehavior | Self::AgentContext => "behavior",
-            Self::Tools => "tools",
+            Self::Tools | Self::DatastoreToolSurface | Self::Skill => "tools",
             Self::Compaction
             | Self::InferenceProfile
             | Self::InferenceSampling

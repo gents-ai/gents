@@ -6,11 +6,11 @@ use gents::graphql::escape_graphql_string;
 use gents::AgentIdentity;
 use serde::Deserialize;
 
-use super::steward_loop_live::{
-    bind_d4f_backend, boot_d4f_agent, wait_for_assistant_answer, wait_for_request_terminal,
-};
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::create_runtime_request;
+use crate::support::live_inference::{
+    bind_d4f_backend, boot_d4f_agent, wait_for_assistant_answer, wait_for_request_terminal,
+};
 use crate::support::{first_optional_row, test_db};
 
 #[derive(Debug, Deserialize)]

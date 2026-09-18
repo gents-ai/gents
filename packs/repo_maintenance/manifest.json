@@ -44,5 +44,27 @@
     "tasks/maintenance_verify_task/prompt.md"
   ],
   "dependencies": [],
-  "config": "pack_config.json"
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "coordinator",
+      "description": "Repository inventory, triage, integration, and publication.",
+      "behaviors": [
+        "maintenance-execute-skip",
+        "maintenance-integrate",
+        "maintenance-publish",
+        "maintenance-recon",
+        "maintenance-triage",
+        "maintenance-verify"
+      ]
+    },
+    {
+      "name": "scanner",
+      "description": "Bounded parallel concern scans and work-package execution.",
+      "behaviors": [
+        "maintenance-execute",
+        "maintenance-scan"
+      ]
+    }
+  ]
 }

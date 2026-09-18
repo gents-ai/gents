@@ -1375,6 +1375,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
         backend_auth: crate::document_config::BackendAuth::Unauthenticated,
         model_name: "default".to_string(),
+        resolved_reasoning_efforts: None,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,

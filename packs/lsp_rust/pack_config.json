@@ -5,7 +5,7 @@
       "behavior_id": "lsp-coder",
       "display_name": "LSP rust-analyzer coder",
       "context_id": "lsp-coder-context",
-      "inference_profile_id": "exp-profile"
+      "inference_profile_id": "gents:inference-slot:coder"
     }
   ],
   "contexts": [
@@ -31,44 +31,6 @@
           "config": "{\"servers\":{\"rust-analyzer\":{\"warmup_timeout_ms\":60000,\"workspace_ready_timings\":{\"initial\":45000},\"settings\":{\"rust-analyzer\":{\"checkOnSave\":false}}}}}"
         }
       }
-    }
-  ],
-  "inference_backends": [
-    {
-      "backend_id": "exp-deepseek",
-      "name": "DeepSeek V4 Flash (workstation-1)",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_EXP_ENDPOINT:-http://127.0.0.1:8080/v1}",
-      "auth": {
-        "kind": "unauthenticated"
-      },
-      "max_concurrent": 4,
-      "max_queue_depth": 100
-    }
-  ],
-  "inference_profiles": [
-    {
-      "profile_id": "exp-profile",
-      "display_name": "Experiment default",
-      "backend_id": "exp-deepseek",
-      "model_name": "${GENTS_EXP_MODEL:-d4f}",
-      "max_output_tokens": 8192,
-      "sampling_id": "exp-profile-sampling",
-      "execution_id": "exp-profile-execution"
-    }
-  ],
-  "inference_sampling": [
-    {
-      "sampling_id": "exp-profile-sampling",
-      "display_name": "Experiment default sampling",
-      "temperature": 0.2
-    }
-  ],
-  "inference_execution": [
-    {
-      "execution_id": "exp-profile-execution",
-      "display_name": "Experiment default execution"
     }
   ],
   "tasks": [

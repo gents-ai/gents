@@ -6,7 +6,7 @@ use gents::config_client::{
 };
 use gents::document_config::PackConfig;
 use gents::self_config::build_self_config_tools;
-use gents::tool_surface::SelfConfigToolConfig;
+use gents::tool_surface::{BashMode, FileToolMode, SelfConfigProcessCeiling, SelfConfigToolConfig};
 use gents::Collection;
 use serde_json::{json, Value};
 
@@ -66,6 +66,9 @@ fn tool_config(categories: &[&str], no_lockout: bool, dry_run: bool) -> SelfConf
         categories: categories.iter().map(|s| s.to_string()).collect(),
         no_lockout,
         dry_run,
+        enable_pack_install: false,
+        enable_graph_tools: false,
+        process_ceiling: Default::default(),
     }
 }
 
@@ -74,13 +77,73 @@ async fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<String, String> {
+    let argv = legacy_test_call_as_config_argv(name, &args);
     tools
         .iter()
-        .find(|tool| tool.name() == name)
-        .unwrap_or_else(|| panic!("missing tool {name}"))
-        .call(args.to_string())
+        .find(|tool| tool.name() == "config")
+        .unwrap_or_else(|| panic!("missing config tool for {name}"))
+        .call(json!({"argv": argv}).to_string())
         .await
         .map_err(|error| format!("{error:#}"))
+}
+
+fn legacy_test_call_as_config_argv(name: &str, args: &Value) -> Vec<String> {
+    let patch = |mut argv: Vec<String>, value: &Value| {
+        for (field, value) in value.as_object().expect("patch object") {
+            argv.extend(["--set".into(), format!("{field}={value}")]);
+        }
+        argv
+    };
+    match name {
+        "get_my_config" if args.get("preview").is_none() => vec!["get".into()],
+        "get_my_config" => {
+            let preview = &args["preview"];
+            let category = preview["category"].as_str().unwrap();
+            let kind = preview.get("kind").and_then(Value::as_str);
+            let head = match (category, kind) {
+                ("behavior", Some("context")) => {
+                    vec!["behavior".into(), "context".into(), "preview".into()]
+                }
+                ("tools", _) => vec!["tools".into(), "preview".into()],
+                ("profile", target) => {
+                    let mut head = vec!["profile".into(), "preview".into()];
+                    if let Some(target) = target {
+                        head.push(target.replace('_', "-"));
+                    }
+                    head
+                }
+                ("backend", _) => vec!["backend".into(), "preview".into()],
+                _ => panic!("unsupported preview in config e2e: {preview}"),
+            };
+            patch(head, &preview["patch"])
+        }
+        "configure_behavior" => {
+            assert_eq!(args.get("target").and_then(Value::as_str), Some("context"));
+            patch(
+                vec!["behavior".into(), "context".into(), "edit".into()],
+                &args["patch"],
+            )
+        }
+        "configure_tools" => patch(vec!["tools".into(), "edit".into()], &args["patch"]),
+        "configure_profile" => {
+            let mut head = vec!["profile".into(), "edit".into()];
+            if let Some(target) = args.get("target").and_then(Value::as_str) {
+                head.push(target.replace('_', "-"));
+            }
+            patch(head, &args["patch"])
+        }
+        "configure_backend" => patch(vec!["backend".into(), "edit".into()], &args["patch"]),
+        "configure_automation" => patch(
+            vec![
+                "automation".into(),
+                "edit".into(),
+                args["kind"].as_str().unwrap().replace('_', "-"),
+                args["id"].as_str().unwrap().into(),
+            ],
+            &args["patch"],
+        ),
+        _ => panic!("unsupported test call {name}: {args}"),
+    }
 }
 
 #[tokio::test]
@@ -188,12 +251,13 @@ async fn configure_tools_respects_gate_and_no_lockout() {
 async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
     let db = test_db("self-config-read").await;
     seed_config(&db.node).await;
-    let tools = build_self_config_tools(
-        db.node.clone(),
-        AGENT_DID.into(),
-        None,
-        &tool_config(&["behavior", "tools", "profile", "backend"], false, true),
-    );
+    let mut config = tool_config(&["behavior", "tools", "profile", "backend"], false, true);
+    config.process_ceiling = SelfConfigProcessCeiling {
+        file_mode: FileToolMode::ReadWrite,
+        bash_mode: BashMode::Unrestricted,
+        root: None,
+    };
+    let tools = build_self_config_tools(db.node.clone(), AGENT_DID.into(), None, &config);
     let output = call_tool(&tools, "get_my_config", json!({})).await.unwrap();
     let config: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(config["behavior"]["behavior_id"], BEHAVIOR_ID);
@@ -204,6 +268,19 @@ async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
         config["documents"]["InferenceBackend"]["backend_id"],
         BACKEND_ID
     );
+    assert_eq!(
+        config["runtime_effective"]["process_ceiling"]["file_mode"],
+        "ReadWrite"
+    );
+    assert_eq!(
+        config["runtime_effective"]["process_ceiling"]["bash_mode"],
+        "Unrestricted"
+    );
+    assert_eq!(
+        config["runtime_effective"]["behavior_narrowing"]["requested_file_mode"],
+        "Off"
+    );
+    assert_eq!(config["runtime_effective"]["effective"]["file_mode"], "Off");
     assert!(
         !output.contains(SECRET),
         "backend credentials must never leave the read owner"

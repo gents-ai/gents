@@ -17,7 +17,7 @@ use rand::RngCore;
 use reqwest::StatusCode;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use tiny_http::{Header, Response, Server, StatusCode as TinyStatusCode};
+use tiny_http::{Response, Server};
 use tokio::sync::{mpsc, Notify};
 use url::Url;
 
@@ -139,7 +139,7 @@ pub fn run_login_server(options: LoginOptions) -> io::Result<LoginServer> {
                         &state,
                     ).await;
                     let (status, body, completed) = outcome.into_parts();
-                    let response = text_response(status, body);
+                    let response = callback_response(status, body);
                     let _ = tokio::task::spawn_blocking(move || request.respond(response)).await;
                     if let Some(result) = completed {
                         break result;
@@ -220,7 +220,7 @@ async fn handle_callback_request(
         tracing::warn!("rejected ChatGPT OAuth callback with mismatched state");
         return CallbackOutcome::Continue {
             status: 400,
-            body: "OAuth state mismatch. Return to the terminal and retry sign-in.".to_string(),
+            body: "OAuth state mismatch. Return to Gents and retry sign-in.".to_string(),
         };
     }
     if let Some(error) = params.get("error") {
@@ -263,12 +263,8 @@ async fn handle_callback_request(
     }
 }
 
-fn text_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
-    let mut response = Response::from_string(body).with_status_code(TinyStatusCode(status));
-    if let Ok(header) = Header::from_bytes("Content-Type", "text/plain; charset=utf-8") {
-        response.add_header(header);
-    }
-    response
+fn callback_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
+    gents_login_ui::response(status, body)
 }
 
 fn bind_server(port: u16) -> io::Result<Server> {

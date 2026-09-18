@@ -141,7 +141,7 @@ pub fn jwt_expiration(jwt: &str) -> Option<DateTime<Utc>> {
         .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
 }
 
-fn jwt_payload(jwt: &str) -> Option<Value> {
+pub(crate) fn jwt_payload(jwt: &str) -> Option<Value> {
     let mut parts = jwt.split('.');
     let (_header, payload, signature) = (parts.next()?, parts.next()?, parts.next()?);
     if payload.is_empty() || signature.is_empty() || parts.next().is_some() {

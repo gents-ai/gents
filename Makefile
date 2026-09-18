@@ -407,7 +407,7 @@ check-cli-headless:
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
 
-.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli
+.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-evals test-evals-browser live-configurator-eval
 test: test-agent test-cli
 
 test-agent:
@@ -415,6 +415,17 @@ test-agent:
 
 test-agent-conformance:
 	$(CARGO) test -p gents --test conformance
+
+test-evals:
+	node --test scripts/evals/report.test.mjs scripts/evals/watch.test.mjs
+	$(CARGO) test -p gents --test e2e_configurator
+
+test-evals-browser:
+	$(NPM) run test:evals
+	$(CARGO) test -p gents --test e2e_configurator browser_checker_accepts_static_fixture_without_live_inference -- --ignored
+
+live-configurator-eval:
+	node scripts/evals/run-configurator.mjs $(CARGO)
 
 test-agent-e2e:
 	$(CARGO) test -p gents --test e2e_lifecycle

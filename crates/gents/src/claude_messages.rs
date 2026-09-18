@@ -39,7 +39,8 @@ pub(crate) const OAUTH_BETA: &str = "oauth-2025-04-20";
 // wire body for token accounting, and this crate's live transport builds the
 // identical body to send. Re-exported so this module's callers are unchanged.
 pub use gents_loop::claude_messages_body::{
-    build_messages_body, build_messages_body_native, CLAUDE_CODE_IDENTITY,
+    apply_reasoning_parameters, build_messages_body, build_messages_body_native,
+    ADVERTISED_REASONING_EFFORTS_PARAM, CLAUDE_CODE_IDENTITY,
 };
 
 /// Fail-closed outcomes of the Messages tool-block parser. Display strings are

@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn authoring_rejects_invalid_rendering_syntax_without_invocation_values() {
+    for source in ["{{.message}}", "{{ doc.message", "{% if doc.message %}"] {
+        let error = parse_template_for_validation(source).unwrap_err();
+        assert!(error.to_string().contains("MiniJinja"));
+    }
+    parse_template_for_validation("Process {{ doc.message }} for {{ args.name }}").unwrap();
+}
+
+#[test]
 fn renders_event_var() {
     let scope = TemplateScope {
         event: serde_json::json!({"fired_at": "2026-04-21T00:00:00Z", "trigger_kind": "schedule"}),

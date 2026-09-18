@@ -18,6 +18,7 @@ import type {
   InferenceBackendView,
   InterruptRequestResult,
   MCPServiceHealthView,
+  ManagedServerStatus,
   McpServiceProbeResult,
   SubagentTreeView,
   SyncHealthView,
@@ -141,6 +142,7 @@ export type MobilePerformanceHarnessController = {
   reset(): void;
   snapshot(): MobilePerformanceHarnessSnapshot;
   recordCommit(commit: MobilePerformanceCommit): void;
+  finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
 };
@@ -167,6 +169,8 @@ export const MOBILE_PERFORMANCE_FIXTURE = {
   shortSessionTimelineItems: 1,
   largeSessionTimelineItems: 600,
   transcriptPageSize: 40,
+  typingBurstCharacters: 160,
+  typingLoadedPages: 5,
   streamUpdateCount: 50,
   repeatedNavigationCount: 10,
 } as const;
@@ -193,6 +197,13 @@ export function createDesktopUiHarness(
   let sessionSeq = 1;
   let rowCount = 42;
   let deployment = createDeployment();
+  if (scenario === "empty-fleet") {
+    deployment = {
+      ...deployment,
+      inferenceBackends: [],
+      inferenceProfiles: [],
+    };
+  }
   if (scenario === "backend-unavailable") {
     deployment = {
       ...deployment,
@@ -220,7 +231,7 @@ export function createDesktopUiHarness(
           itemKey: "mailbox-mobile-key",
           requesterDid: "did:key:z6MkRequesterWithAnUnbrokenIdentifierForMobile",
           agentDid: AGENT_DID,
-          status: "pending",
+          status: "open",
           kind: "notification",
           action: "ack",
           title:
@@ -245,6 +256,20 @@ export function createDesktopUiHarness(
     };
   }
   let removed = false;
+  let provisioned = scenario !== "empty-fleet";
+  let pairingStatusReads = 0;
+  let managedServer: ManagedServerStatus = {
+    state: "disabled",
+    autoStart: false,
+    agentName: null,
+    agentDid: null,
+    graphql: null,
+    effectiveToolCeiling: null,
+    effectiveToolRoot: null,
+    suggestedToolRoot: "/tmp/gents-bombadil/workspace",
+    pairingReady: false,
+    error: null,
+  };
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
@@ -425,6 +450,15 @@ export function createDesktopUiHarness(
         : []),
     ],
   });
+  if (scenario === "empty-fleet") {
+    sessions.clear();
+    deployment = {
+      ...deployment,
+      sessions: [],
+      inferenceBackends: [],
+      inferenceProfiles: [],
+    };
+  }
   if (scenario === "session-hydration") {
     sessions.set("session-remote", {
       sessionId: "session-remote",
@@ -564,7 +598,12 @@ export function createDesktopUiHarness(
   }
 
   function snapshot() {
-    const deployments = scenario === "empty-fleet" || removed ? [] : [deployment];
+    const visibleDeployment = {
+      ...deployment,
+      dialSucceeded: p2pStatus === "healthy",
+      chatSafe: p2pStatus === "healthy",
+    };
+    const deployments = !provisioned || removed ? [] : [visibleDeployment];
     const health = {
       status: p2pStatus,
       connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
@@ -589,19 +628,18 @@ export function createDesktopUiHarness(
         desktopHomeExists: true,
         peerDirectoryExists: true,
         clientStateExists: true,
-        savedPeers:
-          scenario === "empty-fleet"
-            ? []
-            : [
-                {
-                  peerId: deployment.peerId,
-                  label: deployment.label,
-                  agentDid: deployment.agentDid,
-                  addr: deployment.addr,
-                  graphql: deployment.graphql,
-                  source: deployment.source,
-                },
-              ],
+        savedPeers: !provisioned
+          ? []
+          : [
+              {
+                peerId: deployment.peerId,
+                label: deployment.label,
+                agentDid: deployment.agentDid,
+                addr: deployment.addr,
+                graphql: deployment.graphql,
+                source: deployment.source,
+              },
+            ],
       },
       client: {
         localPeerId: "peer-bombadil-local",
@@ -748,6 +786,14 @@ export function createDesktopUiHarness(
     },
     async initLocalStandardRuntime(request) {
       const label = request.label.trim() || "Bombadil UI Agent";
+      provisioned = true;
+      deployment = {
+        ...deployment,
+        // Background pairing installs an enrollment route for the managed DID.
+        source: "enrollment",
+        label,
+        agentPrincipal: { ...deployment.agentPrincipal, displayName: label },
+      };
       const summary: InitSummary = {
         status: "ready",
         source: "bombadil-harness",
@@ -774,6 +820,78 @@ export function createDesktopUiHarness(
       notify("runtime");
       return snapshot();
     },
+    ...(scenario === "empty-fleet"
+      ? ({
+          async managedServerStatus() {
+            if (managedServer.state === "running" && !managedServer.pairingReady) {
+              pairingStatusReads += 1;
+              if (pairingStatusReads >= 2) {
+                managedServer = { ...managedServer, pairingReady: true };
+              }
+            }
+            return clone(managedServer);
+          },
+          async startManagedServer(agentName, authority) {
+            pairingStatusReads = 0;
+            managedServer = {
+              ...managedServer,
+              state: "running",
+              agentName,
+              agentDid: AGENT_DID,
+              graphql: "http://127.0.0.1:9181/api/v0/graphql",
+              effectiveToolCeiling:
+                authority?.toolCeiling ??
+                managedServer.effectiveToolCeiling ??
+                "readwrite",
+              effectiveToolRoot:
+                authority !== undefined
+                  ? authority.toolRoot
+                  : (managedServer.effectiveToolRoot ??
+                    "/tmp/gents-bombadil/workspace"),
+              pairingReady: false,
+              error: null,
+            };
+            return clone(managedServer);
+          },
+          async commitManagedServerAutoStart(agentName) {
+            managedServer = { ...managedServer, autoStart: true, agentName };
+            return clone(managedServer);
+          },
+          async restartManagedServer(agentName, authority) {
+            pairingStatusReads = 0;
+            managedServer = {
+              ...managedServer,
+              state: "running",
+              agentName,
+              agentDid: AGENT_DID,
+              effectiveToolCeiling: authority.toolCeiling,
+              effectiveToolRoot: authority.toolRoot,
+              pairingReady: false,
+              error: null,
+            };
+            return clone(managedServer);
+          },
+          async validateManagedServerRoot(path) {
+            if (path.includes("missing")) {
+              throw new Error(`Cannot access ${path}: directory does not exist`);
+            }
+            return path.trim();
+          },
+          async stopManagedServer(disableAutoStart) {
+            managedServer = {
+              ...managedServer,
+              state: disableAutoStart ? "disabled" : "stopped",
+              autoStart: disableAutoStart ? false : managedServer.autoStart,
+              agentDid: null,
+              graphql: null,
+              effectiveToolCeiling: null,
+              effectiveToolRoot: null,
+              pairingReady: false,
+            };
+            return clone(managedServer);
+          },
+        } satisfies Partial<DesktopApiAdapter>)
+      : {}),
     async setSelectedAgent() {
       return undefined;
     },
@@ -1229,8 +1347,10 @@ export function createDesktopUiHarness(
             instructions: document.instructions ?? null,
             toolRefs: document.tool_refs ?? [],
             displayName: document.display_name ?? null,
+            interfaceJson: document.interface_json ?? null,
             enabled: document.enabled ?? true,
             createdAt: document.created_at ?? null,
+            tags: document.tags ?? [],
           })),
         ],
         inferenceProfiles: [
@@ -1241,6 +1361,51 @@ export function createDesktopUiHarness(
               ),
           ),
           ...(request.document.inference_profiles ?? []),
+        ],
+        inferenceBackends: [
+          ...deployment.inferenceBackends.filter(
+            (backend) =>
+              !request.document.inference_backends?.some(
+                (candidate) => candidate.backend_id === backend.backendId,
+              ),
+          ),
+          ...(request.document.inference_backends ?? []).map((backend) => ({
+            backendId: backend.backend_id,
+            name: backend.name,
+            providerKind: backend.provider_kind,
+            openaiWireApi: backend.openai_wire_api ?? null,
+            endpoint: backend.endpoint,
+            authKind: backend.auth.kind,
+            connectTimeoutSecs: backend.connect_timeout_secs ?? null,
+            discoveryTimeoutSecs: backend.discovery_timeout_secs ?? null,
+            apiKeyConfigured: backend.auth.kind === "api_key",
+            apiKeyEnvVar:
+              backend.auth.kind === "environment" ? backend.auth.variable : null,
+            maxConcurrent: backend.max_concurrent ?? null,
+            maxQueueDepth: backend.max_queue_depth ?? null,
+            enabled: backend.enabled ?? true,
+            tags: backend.tags ?? [],
+            models: [],
+            probeStatus: "healthy",
+          })),
+        ],
+        inferenceSampling: [
+          ...deployment.inferenceSampling.filter(
+            (sampling) =>
+              !request.document.inference_sampling?.some(
+                (candidate) => candidate.sampling_id === sampling.sampling_id,
+              ),
+          ),
+          ...(request.document.inference_sampling ?? []),
+        ],
+        inferenceExecution: [
+          ...deployment.inferenceExecution.filter(
+            (execution) =>
+              !request.document.inference_execution?.some(
+                (candidate) => candidate.execution_id === execution.execution_id,
+              ),
+          ),
+          ...(request.document.inference_execution ?? []),
         ],
         toolServiceRegistries: [
           ...deployment.toolServiceRegistries.filter(
@@ -1410,8 +1575,10 @@ export function createDesktopUiHarness(
           instructions: document.instructions ?? null,
           toolRefs: document.tool_refs ?? [],
           displayName: document.display_name?.trim() || name,
+          interfaceJson: document.interface_json ?? null,
           enabled: document.enabled ?? true,
           createdAt: document.created_at ?? STARTED_AT,
+          tags: document.tags ?? [],
         }),
       };
       return snapshot();
@@ -1784,6 +1951,222 @@ export function createDesktopUiHarness(
       };
       return snapshot();
     },
+    async getInferenceSetupCatalog() {
+      return {
+        executionDefaults: {
+          maxTurns: 250,
+          maxTotalTokens: null,
+          streamBatchMs: 100,
+          streamLivenessSecs: 1800,
+          deadlineSecs: 86400,
+        },
+        contractVersion: 1,
+        defaultsVersion: "2026-09-14.1",
+        providers: [
+          {
+            id: "openai" as const,
+            displayName: "OpenAI",
+            description: "Sign in with ChatGPT or use an OpenAI API key.",
+            authMethods: ["chat_gpt_oauth" as const, "api_key" as const],
+            authOptions: [
+              {
+                method: "chat_gpt_oauth" as const,
+                displayName: "ChatGPT sign-in",
+                defaultEndpoint: "https://chatgpt.com/backend-api/codex",
+              },
+              {
+                method: "api_key" as const,
+                displayName: "OpenAI API key",
+                defaultEndpoint: "https://api.openai.com/v1",
+              },
+            ],
+            defaultAuthMethod: "chat_gpt_oauth" as const,
+            defaultEndpoint: "https://chatgpt.com/backend-api/codex",
+          },
+          {
+            id: "anthropic" as const,
+            displayName: "Anthropic",
+            description: "Use a Claude Pro or Max subscription.",
+            authMethods: ["claude_oauth" as const],
+            authOptions: [
+              {
+                method: "claude_oauth" as const,
+                displayName: "Claude sign-in",
+                defaultEndpoint: "claude-cli://subscription",
+              },
+            ],
+            defaultAuthMethod: "claude_oauth" as const,
+            defaultEndpoint: "claude-cli://subscription",
+          },
+          {
+            id: "grok" as const,
+            displayName: "Grok",
+            description: "Use SuperGrok or an eligible X Premium+ subscription.",
+            authMethods: ["grok_oauth" as const],
+            authOptions: [
+              {
+                method: "grok_oauth" as const,
+                displayName: "Grok sign-in",
+                defaultEndpoint: "https://cli-chat-proxy.grok.com/v1",
+              },
+            ],
+            defaultAuthMethod: "grok_oauth" as const,
+            defaultEndpoint: "https://cli-chat-proxy.grok.com/v1",
+          },
+          {
+            id: "local" as const,
+            displayName: "Local",
+            description: "OpenAI-compatible local server.",
+            authMethods: ["optional_api_key" as const],
+            authOptions: [
+              {
+                method: "optional_api_key" as const,
+                displayName: "Endpoint + optional key",
+                defaultEndpoint: "http://workstation-1:8000/v1",
+              },
+            ],
+            defaultAuthMethod: "optional_api_key" as const,
+            defaultEndpoint: "http://workstation-1:8000/v1",
+          },
+          {
+            id: "openrouter" as const,
+            displayName: "OpenRouter",
+            description: "Use one API key for OpenRouter's advertised models.",
+            authMethods: ["api_key" as const],
+            authOptions: [
+              {
+                method: "api_key" as const,
+                displayName: "OpenRouter API key",
+                defaultEndpoint: "https://openrouter.ai/api/v1",
+              },
+            ],
+            defaultAuthMethod: "api_key" as const,
+            defaultEndpoint: "https://openrouter.ai/api/v1",
+          },
+        ],
+      };
+    },
+    async discoverInferenceModels(request) {
+      const modelName =
+        request.provider === "local"
+          ? "GLM-5.3-Flash-NVFP4"
+          : request.provider === "anthropic"
+            ? "claude-sonnet-5"
+            : request.provider === "grok"
+              ? "grok-4.6"
+              : "gpt-5.6-sol";
+      const recommendation = await adapter.getInferenceModelRecommendation({
+        provider: request.provider,
+        authMethod: request.authMethod,
+        modelName,
+        displayName: null,
+        contextWindow: null,
+        maxContextWindow: null,
+        maxOutputTokens: null,
+        reasoningEfforts: null,
+      });
+      return {
+        requestKey: request.requestKey,
+        contractVersion: 1,
+        defaultsVersion: "2026-09-14.1",
+        requestedEndpoint: request.endpoint,
+        effectiveEndpoint: request.endpoint,
+        backendName:
+          request.provider === "local"
+            ? "Local server"
+            : request.provider === "anthropic"
+              ? "Anthropic"
+              : request.provider === "grok"
+                ? "Grok"
+                : "ChatGPT",
+        providerKind:
+          request.provider === "local"
+            ? "OpenAiCompatible"
+            : request.provider === "anthropic"
+              ? "ClaudeCliSubscription"
+              : request.provider === "grok"
+                ? "XaiGrokOAuth"
+                : "ChatGptCodex",
+        openaiWireApi: request.provider === "local" ? "chat_completions" : "responses",
+        reachable: true,
+        models: [
+          {
+            advertised: {
+              model_name: modelName,
+              display_name: null,
+              context_window: null,
+              max_context_window: null,
+              max_output_tokens: null,
+              reasoning_efforts: null,
+            },
+            recommendation,
+          },
+        ],
+        failure: null,
+        manualEntryAllowed: false,
+      };
+    },
+    async getInferenceModelRecommendation(request) {
+      const fixture = request.modelName === "GLM-5.3-Flash-NVFP4";
+      if (request.provider === "anthropic")
+        return {
+          defaultsVersion: "2026-09-14.3",
+          summary: "Anthropic defaults",
+          contextWindow: { recommended: 1000000, min: 1, max: 1000000 },
+          maxOutputTokens: { recommended: 64000, min: 1, max: 128000 },
+          temperature: null,
+          topP: null,
+          reasoningEffort: {
+            recommended: "high",
+            choices: ["low", "medium", "high", "xhigh", "max"],
+          },
+          maxConcurrent: { recommended: 8, min: 1, max: null },
+        };
+      return {
+        defaultsVersion: "2026-09-14.1",
+        summary: fixture
+          ? "Gents recommends temperature 1 and top-p 0.95 for this workstation model."
+          : "Gents recommends medium reasoning.",
+        contextWindow:
+          request.provider === "openai"
+            ? { recommended: 272000, min: 1, max: 872000 }
+            : null,
+        maxOutputTokens: null,
+        temperature: fixture ? { recommended: 1, min: 0, max: 2, step: 0.05 } : null,
+        topP:
+          fixture || request.provider === "grok"
+            ? { recommended: 0.95, min: 0, max: 1, step: 0.05 }
+            : null,
+        reasoningEffort: fixture
+          ? null
+          : { recommended: "medium" as const, choices: ["low", "medium", "high"] },
+        maxConcurrent: { recommended: 1, min: 1, max: null },
+      };
+    },
+    async getInferenceBackendRecommendation(request) {
+      const selection =
+        request.providerKind === "ClaudeCliSubscription"
+          ? { provider: "anthropic" as const, authMethod: "claude_oauth" as const }
+          : request.providerKind === "XaiGrokOAuth"
+            ? { provider: "grok" as const, authMethod: "grok_oauth" as const }
+            : request.providerKind === "ChatGptCodex"
+              ? { provider: "openai" as const, authMethod: "chat_gpt_oauth" as const }
+              : request.providerKind === "OpenRouter"
+                ? { provider: "openrouter" as const, authMethod: "api_key" as const }
+                : {
+                    provider: "local" as const,
+                    authMethod: "optional_api_key" as const,
+                  };
+      return adapter.getInferenceModelRecommendation({
+        ...selection,
+        modelName: request.modelName,
+        displayName: request.displayName,
+        contextWindow: request.contextWindow,
+        maxContextWindow: request.maxContextWindow,
+        maxOutputTokens: request.maxOutputTokens,
+        reasoningEfforts: request.reasoningEfforts,
+      });
+    },
     async probeInferenceEndpoint() {
       return {
         reachable: true,
@@ -1819,6 +2202,17 @@ export function createDesktopUiHarness(
       return result;
     },
     async cancelGrokLogin() {},
+    async claudeLogin(agentDid) {
+      return {
+        docId: `credential-${agentDid}-claude`,
+        credentialId: "credential-claude",
+        agentDid,
+        provider: "claude-subscription",
+        accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        enabled: true,
+      };
+    },
+    async cancelClaudeLogin() {},
     async listSubagentTree(request) {
       const tree: SubagentTreeView = {
         rootRequestId: request.rootRequestId,
@@ -2025,6 +2419,36 @@ export function createDesktopUiHarness(
           },
           recordCommit(commit) {
             commits.push(commit);
+          },
+          finishStreaming() {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const timelineItems = session.timelineItems.map((item, index) =>
+              item.kind === "liveAssistant" && item.itemKey === "large-live"
+                ? {
+                    kind: "assistantMessage" as const,
+                    itemKey: item.itemKey,
+                    sequence: index,
+                    content: item.content,
+                    reasoning: item.reasoning,
+                    timestamp: STARTED_AT,
+                  }
+                : item,
+            );
+            sessions.set("session-large", {
+              ...session,
+              status: "completed",
+              turnState: "completed",
+              timelineItems,
+              latestResponse: session.latestResponse
+                ? { ...session.latestResponse, status: "completed" }
+                : null,
+              activeResponseOverlay: null,
+            });
+            syncSessions();
+            notify("store");
           },
           streamUpdate() {
             const sequence = appendStreamChunk();
@@ -2487,8 +2911,10 @@ function createDeployment(): DeploymentView {
         instructions: "Inspect host health, telemetry freshness, and recent errors.",
         toolRefs: ["mcp-observability.inspect_host", "mcp-observability.query_logs"],
         displayName: "Host diagnostics",
+        interfaceJson: null,
         enabled: true,
         createdAt: STARTED_AT,
+        tags: [],
       },
       {
         skillId: "fleet-summary",
@@ -2499,8 +2925,10 @@ function createDeployment(): DeploymentView {
           "Compare backend health, silent hosts, and posted steward status.",
         toolRefs: ["mcp-observability.fleet_status"],
         displayName: "Fleet summary",
+        interfaceJson: null,
         enabled: true,
         createdAt: STARTED_AT,
+        tags: [],
       },
     ],
     tasks: [

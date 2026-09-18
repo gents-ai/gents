@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use gents::agent::persona_ops::setup_steward_self_config;
 use gents::config::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -55,6 +56,8 @@ Work like a strong command-line operator:
 You have write-capable local tools. When the user asks you to make a change, you may edit files and use write-capable shell actions deliberately. Read the relevant state first, make the smallest effective change, and report the concrete outcome.
 
 For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
+
+const SETUP_STEWARD_SYSTEM_PROMPT: &str = gents_protocol::SETUP_STEWARD_PROMPT;
 
 const YOLO_WARNING: &str = "\
 WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
@@ -707,7 +710,10 @@ async fn initialize_runtime_home(
         discovery_timeout_secs: None,
         max_concurrent: Some(args.max_concurrent),
         max_queue_depth: Some(args.max_queue_depth),
-        enabled: true,
+        // First-run must not activate the placeholder model merely because an
+        // unrelated service happens to answer on the default localhost port.
+        // Selecting inference enables this backend through the normal config owner.
+        enabled: initial_backend_enabled(args),
         tags: Vec::new(),
     };
 
@@ -716,21 +722,41 @@ async fn initialize_runtime_home(
         args.enable_defra_query,
         args.disable_defra_query,
     );
-    let tools = tools_for_package(
+    // Setup is a configurator, not the coding behavior itself. Keep its
+    // initially selected host tools read-only even when the process ceiling is
+    // unrestricted; self-configuration can grant a later request exactly the
+    // workspace capabilities the user asks for.
+    let selected_tool_package = initial_tools_package(tool_package, args.setup_steward);
+    let mut tools = tools_for_package(
         agent_did,
         &tools_id,
-        tool_package,
+        selected_tool_package,
         tool_root.clone(),
         args.enable_memory,
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
+    if args.setup_steward {
+        tools.self_config = Some(setup_steward_self_config());
+        tools
+            .built_ins
+            .get_or_insert_with(Default::default)
+            .enable_graph_tools = Some(true);
+    }
     let context = AgentContext {
         context_id: default_context_id_for_behavior(&default_behavior_id),
         agent_did: agent_did.to_string(),
-        display_name: Some("Default".to_string()),
+        display_name: Some(if args.setup_steward {
+            "Setup".to_string()
+        } else {
+            "Default".to_string()
+        }),
         description: None,
-        system_prompt: Some(standard_system_prompt(tool_package).to_string()),
+        system_prompt: Some(if args.setup_steward {
+            SETUP_STEWARD_SYSTEM_PROMPT.to_string()
+        } else {
+            standard_system_prompt(tool_package).to_string()
+        }),
         tools_id: Some(tools_id.clone()),
         compaction_id: None,
         skill_ids: Vec::new(),
@@ -749,12 +775,24 @@ async fn initialize_runtime_home(
     let behavior = AgentBehavior {
         behavior_id: default_behavior_id.clone(),
         agent_did: agent_did.to_string(),
-        display_name: Some("Default".to_string()),
-        description: None,
+        display_name: Some(if args.setup_steward {
+            "Setup".to_string()
+        } else {
+            "Default".to_string()
+        }),
+        description: if args.setup_steward {
+            Some("Walks you through configuring Gents for the work you want to do.".to_string())
+        } else {
+            None
+        },
         context_id: Some(context.context_id.clone()),
         inference_profile_id: inference_profile_id.clone(),
         enabled: true,
-        tags: Vec::new(),
+        tags: if args.setup_steward {
+            vec![gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG.to_string()]
+        } else {
+            Vec::new()
+        },
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
     // One canonical publication: every init-owned document is staged into a
@@ -919,6 +957,7 @@ fn tools_for_package(
         remote: None,
         subagents: None,
         built_ins: Some(BuiltInTools {
+            enable_graph_tools: None,
             enable_goal_tools: privileged.then_some(true),
             enable_goal_creation: Some(false),
             enable_memory: Some(enable_memory),
@@ -936,6 +975,14 @@ fn tools_for_package(
         integrations: None,
         self_config: None,
         tags: Vec::new(),
+    }
+}
+
+fn initial_tools_package(process_package: ToolPackageArg, setup_steward: bool) -> ToolPackageArg {
+    if setup_steward {
+        ToolPackageArg::Readonly
+    } else {
+        process_package
     }
 }
 
@@ -1166,6 +1213,10 @@ fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig>
     )
 }
 
+fn initial_backend_enabled(args: &InitArgs) -> bool {
+    !args.setup_steward || args.model_name.is_some() || args.backend_preset.is_some()
+}
+
 fn resolve_init_model_name(args: &InitArgs) -> Result<&str> {
     if let Some(explicit) = args.model_name.as_deref() {
         let model_name = explicit.trim();
@@ -1385,12 +1436,26 @@ mod tests {
             write_tools: false,
             yolo: false,
             tool_package: None,
+            setup_steward: false,
             tool_root: None,
             enable_memory: false,
             disable_defra_query: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
         }
+    }
+
+    #[test]
+    fn setup_steward_placeholder_is_disabled_until_inference_is_selected() {
+        let mut args = init_args();
+        args.setup_steward = true;
+        args.model_name = None;
+        assert!(!initial_backend_enabled(&args));
+        args.model_name = Some("selected-model".into());
+        assert!(initial_backend_enabled(&args));
+        args.model_name = None;
+        args.setup_steward = false;
+        assert!(initial_backend_enabled(&args));
     }
 
     #[test]
@@ -1405,6 +1470,10 @@ mod tests {
             vec!["AgentRequest".to_string(), "AgentResponse".to_string()],
         );
 
+        assert!(
+            tools.self_config.is_none(),
+            "readonly init leaves self-config off unless --setup-steward"
+        );
         let built_ins = tools.built_ins.as_ref().unwrap();
         assert_eq!(built_ins.enable_memory, Some(true));
         let datastore = tools.datastore.as_ref().unwrap();
@@ -1419,6 +1488,68 @@ mod tests {
         let host = tools.host.as_ref().unwrap();
         assert_eq!(host.files.as_ref().unwrap().mode, FileToolMode::ReadOnly);
         assert_eq!(host.bash.as_ref().unwrap().mode, BashMode::ReadOnly);
+    }
+
+    #[test]
+    fn setup_steward_starts_readonly_under_an_unrestricted_process_ceiling() {
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Keep Setup unchanged"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("--default"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("AgentSession selects a behavior"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Unsafe or invalid request"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("Verify the result"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config pack install"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("--inference-slot NAME=PROFILE_ID"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("--digest DIGEST"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config behavior"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config tools preview --behavior BEHAVIOR_ID"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config tools edit --behavior BEHAVIOR_ID"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("enable_graph_tools=true"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("bash.network_mode=\"disabled\""));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT
+            .contains("config behavior preview edit BEHAVIOR_ID --set FIELD=JSON"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("config behavior default BEHAVIOR_ID"));
+        assert!(!SETUP_STEWARD_SYSTEM_PROMPT.contains("config behavior tools"));
+        assert!(!SETUP_STEWARD_SYSTEM_PROMPT.contains("behavior edit --id"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT
+            .contains("test enforcement before claiming network isolation"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT.contains("run_graph"));
+        assert!(SETUP_STEWARD_SYSTEM_PROMPT
+            .contains("Never infer its language or workflow from a directory name"));
+        assert!(!SETUP_STEWARD_SYSTEM_PROMPT
+            .contains("configure this behavior and context as a focused coding agent"));
+        let selected = initial_tools_package(ToolPackageArg::Yolo, true);
+        assert_eq!(selected, ToolPackageArg::Readonly);
+        assert_eq!(
+            tool_ceiling_for_package(ToolPackageArg::Yolo),
+            ToolCeilingArg::Readwrite
+        );
+
+        let tools = tools_for_package(
+            "did:key:z-init",
+            "setup-tools",
+            selected,
+            Some(PathBuf::from("/")),
+            false,
+            false,
+            Vec::new(),
+        );
+        let host = tools.host.expect("setup host tools");
+        assert_eq!(host.root.as_deref(), Some("/"));
+        assert_eq!(host.files.unwrap().mode, FileToolMode::ReadOnly);
+        assert_eq!(host.bash.unwrap().mode, BashMode::ReadOnly);
+        assert_eq!(
+            setup_steward_self_config().self_config_categories,
+            Some(vec![
+                "behavior".to_string(),
+                "tools".to_string(),
+                "profile".to_string(),
+                "persona".to_string(),
+                "backend".to_string(),
+                "mcp_service".to_string(),
+                "automation".to_string(),
+            ])
+        );
+        assert_eq!(setup_steward_self_config().enable_pack_install, Some(true));
     }
 
     /// Drift fence between init's tool packages and the directory persona

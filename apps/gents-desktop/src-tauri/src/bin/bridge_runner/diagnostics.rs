@@ -82,10 +82,33 @@ pub(crate) async fn build_desktop_client_snapshot(
     fixture: &LiveBridgeFixture,
 ) -> DesktopClientSnapshot {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
+    if let Err(error) = overlay_fixture_operator_config(fixture).await {
+        tracing::warn!(
+            agent_did = fixture.agent_did(),
+            error = %error,
+            "live bridge runtime-owned config overlay failed"
+        );
+    }
     DesktopClientSnapshot {
         bootstrap: fixture.build_bootstrap_summary().await,
         client: Some(build_runtime_snapshot(fixture.desktop_core().as_ref()).await),
     }
+}
+
+/// The live fixture owns the real runtime node, but deliberately advertises a
+/// dummy operator GraphQL URL because its P2P topology is managed in-process.
+/// Load that node directly through the normal query owner, then use the same
+/// operator overlay as production so runtime observations gain their truthful
+/// agent source instead of being mistaken for unscoped replica rows.
+async fn overlay_fixture_operator_config(fixture: &LiveBridgeFixture) -> anyhow::Result<()> {
+    if let Some(error) = refresh_store_with_timeout(fixture.remote_core().as_ref()).await {
+        anyhow::bail!(error);
+    }
+    let remote = fixture.remote_core().store().snapshot();
+    let local = fixture.desktop_core().store().snapshot();
+    let overlayed = local.overlay_agent_operator_config(fixture.agent_did(), &remote);
+    fixture.desktop_core().store().replace_snapshot(overlayed);
+    Ok(())
 }
 
 pub(crate) async fn build_desktop_session_snapshot(

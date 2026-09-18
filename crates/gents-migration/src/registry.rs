@@ -285,7 +285,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::SKILL_NAME,
         gents_protocol::schemas::SKILL,
-        "bafyreiadshuzujbs6t25khjmk5mjiahia7t6crcyhzdp6m3kwxkgaerzk4"
+        "bafyreid2jdacgvz4kn2qp3cgdzjshwiwrdylinjwevpadgs5qsbemqn2na"
     ),
     baseline_entry!(
         gents_protocol::schemas::DATASTORE_TOOL_SURFACE_NAME,
@@ -575,7 +575,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
         gents_protocol::schemas::PERSONA_CONFIG_REQUEST,
-        "bafyreidoth5phfvohyp2mzpuocyf2nqxjzu367ytomvpr57lopqjysmgta"
+        "bafyreifiqjzd54m5csohv3njzpvzz5k244xqfyurpbi5p3d2elfjiptzmy"
     ),
     baseline_entry!(
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,

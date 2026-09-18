@@ -230,7 +230,10 @@ pub struct InferenceBackendView {
     pub max_concurrent: Option<i64>,
     pub max_queue_depth: Option<i64>,
     pub enabled: Option<bool>,
+    pub tags: Vec<String>,
     pub models: Vec<String>,
+    /// Canonical provider advertisements for model-specific editing controls.
+    pub advertised_models: Vec<gents::document_config::AdvertisedModel>,
     pub probe_status: Option<String>,
 }
 
@@ -296,10 +299,13 @@ pub struct SkillView {
     pub name: Option<String>,
     pub description: Option<String>,
     pub instructions: Option<String>,
+    pub source_directory: Option<String>,
     pub tool_refs: Vec<String>,
     pub display_name: Option<String>,
+    pub interface_json: Option<String>,
     pub enabled: Option<bool>,
     pub created_at: Option<String>,
+    pub tags: Vec<String>,
 }
 
 /// Authored trigger and its observed delivery state share one read-only envelope.

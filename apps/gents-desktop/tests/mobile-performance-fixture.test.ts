@@ -81,6 +81,18 @@ describe("mobile performance fixture structural budgets", () => {
     expect(serializedBytes(older)).toBeLessThanOrEqual(16 * 1024);
   });
 
+  it("exposes a fixed long-transcript typing workload", () => {
+    expect(MOBILE_PERFORMANCE_FIXTURE.typingBurstCharacters).toBeGreaterThanOrEqual(
+      100,
+    );
+    expect(MOBILE_PERFORMANCE_FIXTURE.typingBurstCharacters).toBeLessThanOrEqual(200);
+    expect(MOBILE_PERFORMANCE_FIXTURE.typingLoadedPages).toBeGreaterThanOrEqual(3);
+    expect(
+      MOBILE_PERFORMANCE_FIXTURE.typingLoadedPages *
+        MOBILE_PERFORMANCE_FIXTURE.transcriptPageSize,
+    ).toBeLessThanOrEqual(MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems);
+  });
+
   it("streams a verified suffix instead of another session snapshot", async () => {
     const harness = createDesktopUiHarness({ scenario: "mobile-performance" });
     const tip = await harness.adapter.fetchSessionSnapshot(

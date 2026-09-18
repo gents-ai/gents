@@ -6,56 +6,56 @@
       "display_name": "Isolated maintenance executor",
       "description": "Creates one branch worktree, performs its bounded cleanup, and records validation.",
       "context_id": "maintenance-execute-context",
-      "inference_profile_id": "maintenance-scan-profile"
+      "inference_profile_id": "gents:inference-slot:scanner"
     },
     {
       "behavior_id": "maintenance-execute-skip",
       "display_name": "Zero-finding maintenance skip",
       "description": "Records skipped execution without creating a workspace.",
       "context_id": "maintenance-execute-skip-context",
-      "inference_profile_id": "maintenance-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "maintenance-integrate",
       "display_name": "Typed maintenance integrator",
       "description": "Inspects the sealed workspace; the host applies the sealed diff.",
       "context_id": "maintenance-integrate-context",
-      "inference_profile_id": "maintenance-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "maintenance-publish",
       "display_name": "Maintenance PR reviewer and publisher",
       "description": "Reviews the assembled commit series, opens one PR, and drives it toward green.",
       "context_id": "maintenance-publish-context",
-      "inference_profile_id": "maintenance-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "maintenance-recon",
       "display_name": "Maintenance reconnaissance",
       "description": "Partitions a repository maintenance into a closed set of areas.",
       "context_id": "maintenance-recon-context",
-      "inference_profile_id": "maintenance-recon-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "maintenance-scan",
       "display_name": "Maintenance area scanner",
       "description": "Inspects one repository area and records findings.",
       "context_id": "maintenance-scan-context",
-      "inference_profile_id": "maintenance-scan-profile"
+      "inference_profile_id": "gents:inference-slot:scanner"
     },
     {
       "behavior_id": "maintenance-triage",
       "display_name": "Maintenance triage",
       "description": "Ranks verified findings and writes the final report.",
       "context_id": "maintenance-triage-context",
-      "inference_profile_id": "maintenance-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "maintenance-verify",
       "display_name": "Adversarial maintenance verification",
       "description": "Refutes or confirms every candidate against freshly read code.",
       "context_id": "maintenance-verify-context",
-      "inference_profile_id": "maintenance-verify-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     }
   ],
   "contexts": [
@@ -1225,176 +1225,6 @@
           ]
         }
       ]
-    }
-  ],
-  "inference_backends": [
-    {
-      "backend_id": "maintenance-backend",
-      "name": "GLM maintenance coordinator backend",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_MAINTENANCE_COORDINATOR_ENDPOINT:-http://127.0.0.1:8080/v1}",
-      "auth": {
-        "kind": "unauthenticated"
-      },
-      "max_concurrent": 4,
-      "max_queue_depth": 100
-    },
-    {
-      "backend_id": "maintenance-scanner-backend",
-      "name": "Parallel maintenance scanner backend",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_MAINTENANCE_SCANNER_ENDPOINT:-http://127.0.0.1:8080/v1}",
-      "auth": {
-        "kind": "unauthenticated"
-      },
-      "max_concurrent": 8,
-      "max_queue_depth": 100
-    }
-  ],
-  "inference_profiles": [
-    {
-      "profile_id": "maintenance-profile",
-      "display_name": "Code maintenance profile",
-      "backend_id": "maintenance-backend",
-      "model_name": "${GENTS_MAINTENANCE_COORDINATOR_MODEL:-GLM-5.2}",
-      "context_window": 262144,
-      "max_output_tokens": 65536,
-      "sampling_id": "maintenance-profile-sampling",
-      "execution_id": "maintenance-profile-execution"
-    },
-    {
-      "profile_id": "maintenance-recon-profile",
-      "display_name": "Long-running maintenance planning profile",
-      "backend_id": "maintenance-backend",
-      "model_name": "${GENTS_MAINTENANCE_COORDINATOR_MODEL:-GLM-5.2}",
-      "context_window": 262144,
-      "max_output_tokens": 65536,
-      "sampling_id": "maintenance-recon-profile-sampling",
-      "execution_id": "maintenance-recon-profile-execution"
-    },
-    {
-      "profile_id": "maintenance-scan-profile",
-      "display_name": "Long-running parallel maintenance scanner profile",
-      "backend_id": "maintenance-scanner-backend",
-      "model_name": "${GENTS_MAINTENANCE_SCANNER_MODEL:-GLM-5.2}",
-      "context_window": 262144,
-      "max_output_tokens": 65536,
-      "sampling_id": "maintenance-scan-profile-sampling",
-      "execution_id": "maintenance-scan-profile-execution"
-    },
-    {
-      "profile_id": "maintenance-verify-profile",
-      "display_name": "Long-running adversarial verifier profile",
-      "backend_id": "maintenance-backend",
-      "model_name": "${GENTS_MAINTENANCE_COORDINATOR_MODEL:-GLM-5.2}",
-      "context_window": 262144,
-      "max_output_tokens": 65536,
-      "sampling_id": "maintenance-verify-profile-sampling",
-      "execution_id": "maintenance-verify-profile-execution"
-    }
-  ],
-  "inference_sampling": [
-    {
-      "sampling_id": "maintenance-profile-sampling",
-      "display_name": "Code maintenance profile sampling",
-      "temperature": 1.0,
-      "top_p": 0.95
-    },
-    {
-      "sampling_id": "maintenance-recon-profile-sampling",
-      "display_name": "Long-running maintenance planning profile sampling",
-      "temperature": 1.0,
-      "top_p": 0.95
-    },
-    {
-      "sampling_id": "maintenance-scan-profile-sampling",
-      "display_name": "Long-running parallel maintenance scanner profile sampling",
-      "temperature": 1.0,
-      "top_p": 0.95
-    },
-    {
-      "sampling_id": "maintenance-verify-profile-sampling",
-      "display_name": "Long-running adversarial verifier profile sampling",
-      "temperature": 1.0,
-      "top_p": 0.95
-    }
-  ],
-  "inference_execution": [
-    {
-      "execution_id": "maintenance-profile-execution",
-      "display_name": "Code maintenance profile execution",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000,
-      "retry_policy_id": "maintenance-profile-retry"
-    },
-    {
-      "execution_id": "maintenance-recon-profile-execution",
-      "display_name": "Long-running maintenance planning profile execution",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000,
-      "retry_policy_id": "maintenance-recon-profile-retry"
-    },
-    {
-      "execution_id": "maintenance-scan-profile-execution",
-      "display_name": "Long-running parallel maintenance scanner profile execution",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000,
-      "retry_policy_id": "maintenance-scan-profile-retry"
-    },
-    {
-      "execution_id": "maintenance-verify-profile-execution",
-      "display_name": "Long-running adversarial verifier profile execution",
-      "max_turns": 1000000,
-      "stream_batch_ms": 5000,
-      "retry_policy_id": "maintenance-verify-profile-retry"
-    }
-  ],
-  "inference_retry_policies": [
-    {
-      "retry_policy_id": "maintenance-profile-retry",
-      "display_name": "Code maintenance profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 32
-    },
-    {
-      "retry_policy_id": "maintenance-recon-profile-retry",
-      "display_name": "Long-running maintenance planning profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 32
-    },
-    {
-      "retry_policy_id": "maintenance-scan-profile-retry",
-      "display_name": "Long-running parallel maintenance scanner profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 32
-    },
-    {
-      "retry_policy_id": "maintenance-verify-profile-retry",
-      "display_name": "Long-running adversarial verifier profile retry",
-      "max_transport_retries": 720,
-      "backoff_ms": [
-        5000,
-        30000,
-        120000
-      ],
-      "max_resample_retries": 32
     }
   ],
   "tasks": [

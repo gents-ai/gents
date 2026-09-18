@@ -84,6 +84,15 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
         configuration_fingerprint: &str,
         runnable_behavior_ids: &[String],
     );
+
+    /// Subscription/seed outcome for this exact configuration. Success is not
+    /// a group-recovery/drain guarantee; errors do not authorize reseeding.
+    fn on_event_sources_reconciled(
+        &self,
+        generation: u64,
+        configuration_fingerprint: &str,
+        result: Result<(), &str>,
+    );
 }
 
 #[derive(Default)]
@@ -357,6 +366,7 @@ pub(crate) fn behavior_config_from_documents(
         backend_endpoint: backend.backend_endpoint,
         backend_auth: backend.backend_auth,
         model_name: inference.profile.model_name.clone(),
+        resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),
         context_window: inference.context_window()?,
         max_output_tokens: inference.max_output_tokens()?,
         max_turns: inference.max_turns()?,

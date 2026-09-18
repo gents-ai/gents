@@ -591,6 +591,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<ResolvedBehavior> {
         backend_endpoint: "http://localhost:0/v1".to_string(),
         backend_auth: crate::document_config::BackendAuth::Unauthenticated,
         model_name: crate::config::DEFAULT_MODEL_NAME.to_string(),
+        resolved_reasoning_efforts: None,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,

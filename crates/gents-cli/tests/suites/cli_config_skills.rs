@@ -201,6 +201,81 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     )?;
     assert_eq!(list.get("count").and_then(Value::as_u64), Some(0));
 
+    // Local source locations are rediscovered on import, not copied into an
+    // exported SKILL.md as if they were portable identity.
+    let source = tempdir.path().join("coding-check");
+    fs::create_dir_all(&source)?;
+    fs::write(
+        source.join("SKILL.md"),
+        "---\nname: coding-check\ndescription: Check code\n---\nRead references/checklist.md.\n",
+    )?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "import",
+            source.join("SKILL.md").to_str().unwrap(),
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+        ],
+    )?;
+    let show_skill = || {
+        run_cli_json(
+            &home_dir,
+            &[
+                "config",
+                "skill",
+                "show",
+                "--graphql",
+                &graphql,
+                "--skill-id",
+                "coding-check",
+            ],
+        )
+    };
+    assert_eq!(
+        show_skill()?["source_directory"].as_str(),
+        source.canonicalize()?.to_str()
+    );
+    let exported = tempdir.path().join("exported");
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "export",
+            exported.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+        ],
+    )?;
+    let exported_skill = exported.join("coding-check");
+    assert!(
+        !fs::read_to_string(exported_skill.join("SKILL.md"))?.contains(source.to_str().unwrap())
+    );
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "import",
+            exported_skill.to_str().unwrap(),
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+        ],
+    )?;
+    assert_eq!(
+        show_skill()?["source_directory"].as_str(),
+        exported_skill.canonicalize()?.to_str()
+    );
+
     Ok(())
 }
 

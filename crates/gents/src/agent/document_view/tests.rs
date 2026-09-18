@@ -1556,6 +1556,7 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
             refresh_token: "refresh-token".to_string(),
             expires_in: Some(3600),
             scope: None,
+            account_id: None,
         },
         chrono::Utc::now(),
     );
@@ -1770,6 +1771,7 @@ fn runtime_skill_projection_is_canonical_across_map_insertion_order() {
                 name: Some(skill_id.to_string()),
                 description: None,
                 instructions: Some(format!("Instructions for {skill_id}")),
+                source_directory: Some(format!("/skills/{skill_id}")),
                 tool_refs: Vec::new(),
                 display_name: None,
                 interface_json: None,
@@ -1785,6 +1787,13 @@ fn runtime_skill_projection_is_canonical_across_map_insertion_order() {
     let mut reverse = empty_runtime_view("did:key:owner");
     reverse.skills.insert("zeta".to_string(), skill("zeta"));
     reverse.skills.insert("alpha".to_string(), skill("alpha"));
+
+    assert_eq!(
+        super::snapshot::sorted_skills(&forward)[0]
+            .source_directory
+            .as_deref(),
+        Some("/skills/alpha")
+    );
 
     let forward_ids = super::snapshot::sorted_skills(&forward)
         .into_iter()

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { resolve } from "node:path";
+import { constants, accessSync, statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
@@ -43,6 +44,58 @@ export type {
 const RUNNER_START_TIMEOUT_MS = 300_000;
 const REQUEST_TIMEOUT_MS = 600_000;
 const REPO_ROOT = resolve(process.cwd(), "../..");
+export const LIVE_RUNNER_BINARY_ENV = "GENTS_TAURI_LIVE_RUNNER_BINARY";
+
+/**
+ * Resolve the live runner process. A prebuilt override avoids Cargo's build lock,
+ * but its caller owns ensuring that the explicitly selected binary is fresh.
+ */
+export function createLiveBridgeRunnerInvocation(
+  options: LiveBridgeRunnerOptions = {},
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const configuredBinary = env[LIVE_RUNNER_BINARY_ENV]?.trim();
+  let command = "cargo";
+  let runnerArgs = [
+    "run",
+    "-p",
+    "gents-desktop-tauri",
+    "--bin",
+    "bridge_runner",
+    "--quiet",
+    "--",
+  ];
+  if (configuredBinary) {
+    if (!isAbsolute(configuredBinary))
+      throw new Error(`${LIVE_RUNNER_BINARY_ENV} must be an absolute path`);
+    try {
+      if (!statSync(configuredBinary).isFile()) throw new Error("not a file");
+      accessSync(configuredBinary, constants.X_OK);
+    } catch (error) {
+      throw new Error(
+        `${LIVE_RUNNER_BINARY_ENV} must name an executable file: ${configuredBinary}`,
+        { cause: error },
+      );
+    }
+    command = configuredBinary;
+    runnerArgs = [];
+  }
+  appendRunnerArg(runnerArgs, "--inference-url", options.inferenceUrl);
+  appendRunnerArg(runnerArgs, "--model-name", options.modelName);
+  appendRunnerArg(runnerArgs, "--provider", options.provider);
+  appendRunnerArg(runnerArgs, "--api-key", options.apiKey);
+  appendRunnerArg(runnerArgs, "--api-key-env-var", options.apiKeyEnvVar);
+  appendRunnerArg(runnerArgs, "--subagent-inference-url", options.subagentInferenceUrl);
+  appendRunnerArg(runnerArgs, "--subagent-model-name", options.subagentModelName);
+  appendRunnerArg(runnerArgs, "--subagent-provider", options.subagentProvider);
+  appendRunnerArg(runnerArgs, "--subagent-api-key", options.subagentApiKey);
+  appendRunnerArg(
+    runnerArgs,
+    "--subagent-api-key-env-var",
+    options.subagentApiKeyEnvVar,
+  );
+  return { command, runnerArgs };
+}
 
 export class LiveBridgeRunner implements TauriDriverBridge {
   readonly sentRequests: TauriDriverChatRequest[] = [];
@@ -86,34 +139,8 @@ export class LiveBridgeRunner implements TauriDriverBridge {
 
   static async start(options: LiveBridgeRunnerOptions = {}) {
     assertLiveBridgeRunnerPlatform();
-    const runnerArgs = [
-      "run",
-      "-p",
-      "gents-desktop-tauri",
-      "--bin",
-      "bridge_runner",
-      "--quiet",
-      "--",
-    ];
-    appendRunnerArg(runnerArgs, "--inference-url", options.inferenceUrl);
-    appendRunnerArg(runnerArgs, "--model-name", options.modelName);
-    appendRunnerArg(runnerArgs, "--provider", options.provider);
-    appendRunnerArg(runnerArgs, "--api-key", options.apiKey);
-    appendRunnerArg(runnerArgs, "--api-key-env-var", options.apiKeyEnvVar);
-    appendRunnerArg(
-      runnerArgs,
-      "--subagent-inference-url",
-      options.subagentInferenceUrl,
-    );
-    appendRunnerArg(runnerArgs, "--subagent-model-name", options.subagentModelName);
-    appendRunnerArg(runnerArgs, "--subagent-provider", options.subagentProvider);
-    appendRunnerArg(runnerArgs, "--subagent-api-key", options.subagentApiKey);
-    appendRunnerArg(
-      runnerArgs,
-      "--subagent-api-key-env-var",
-      options.subagentApiKeyEnvVar,
-    );
-    const child = spawn("cargo", runnerArgs, {
+    const { command, runnerArgs } = createLiveBridgeRunnerInvocation(options);
+    const child = spawn(command, runnerArgs, {
       cwd: REPO_ROOT,
       // Detachment makes bounded process-group cleanup possible. An abrupt
       // SIGKILL of this Node harness can still strand the group; the enclosing

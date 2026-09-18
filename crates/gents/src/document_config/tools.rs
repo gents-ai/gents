@@ -202,6 +202,10 @@ pub enum RemoteToolStyle {
     Discovery,
 }
 
+impl RemoteToolStyle {
+    pub const ALL: [Self; 2] = [Self::Flat, Self::Discovery];
+}
+
 /// Select MCP services with per-service settings. Empty means no remote tools.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
@@ -343,6 +347,11 @@ pub struct SubagentTools {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct BuiltInTools {
+    /// Native graph discovery/run/status/result/cancel, independent of self-config
+    /// and pack installation. Existing graph caller admission still applies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_graph_tools: Option<bool>,
     /// Independent goal get/update capability. Unset is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -466,10 +475,15 @@ pub struct SelfConfigTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub self_config_no_lockout: Option<bool>,
-    /// Opt-in guardrail: `get_my_config` accepts a patch preview.
+    /// Opt-in guardrail: `config` accepts document patch previews.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub self_config_dry_run: Option<bool>,
+    /// Opt-in authority to install and activate bundled graph packs for this
+    /// principal. Disabled by absence and never implied by general self-config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_pack_install: Option<bool>,
     /// Optional execution cap per tool call. Unset retains the existing enclosing
     /// tool-call/request deadline without introducing an independent timer.
     #[serde(skip_serializing_if = "Option::is_none")]

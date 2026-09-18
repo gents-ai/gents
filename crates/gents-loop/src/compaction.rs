@@ -237,6 +237,8 @@ pub enum ReductionMode {
 }
 
 impl CompactionStrategy {
+    pub const ALL: [Self; 2] = [Self::StripToolResults, Self::StripThenSummarize];
+
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::StripToolResults => "StripToolResults",

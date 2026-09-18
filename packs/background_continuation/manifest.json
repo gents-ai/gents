@@ -20,5 +20,21 @@
     "tasks/background_parent_task/prompt.md"
   ],
   "dependencies": [],
-  "config": "pack_config.json"
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "coordinator",
+      "description": "Owns the durable continuation and synthesizes worker results.",
+      "behaviors": [
+        "background-parent"
+      ]
+    },
+    {
+      "name": "worker",
+      "description": "Runs bounded background investigations.",
+      "behaviors": [
+        "background-worker"
+      ]
+    }
+  ]
 }

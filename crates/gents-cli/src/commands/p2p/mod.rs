@@ -2,7 +2,7 @@ mod access;
 mod collections;
 mod connect;
 mod documents;
-mod enrollment_admin;
+pub(crate) mod enrollment_admin;
 mod network;
 mod output;
 mod pairings;

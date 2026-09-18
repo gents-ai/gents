@@ -47,6 +47,13 @@ pub struct SubmitRequestOptions {
     /// Mailbox item `_docID` that caused this user submission. Only the
     /// mailbox compose route sets this field.
     pub caused_by_source_doc_id: Option<String>,
+    /// Canonical causal lineage for non-chat interactive entry points such as
+    /// a manual Task run. Ordinary chat leaves this empty.
+    pub trigger_lineage: TriggerLineage,
+    /// Stable identity for owners that atomically compose this request with
+    /// other durable documents (for example Goal + GoalCreationClaim).
+    /// Ordinary interactive chat leaves this unset.
+    pub retry_key: Option<String>,
 }
 
 pub async fn submit_request(
@@ -61,6 +68,87 @@ pub async fn submit_request(
     behavior_id: Option<&str>,
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
+    let (result, create) = build_request_submission(
+        node,
+        store,
+        session_id,
+        agent_did,
+        requester_did,
+        signer,
+        admission,
+        content,
+        behavior_id,
+        options,
+    )
+    .await?;
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+    execute_mutation(node, &mutation, "submit_request").await?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn submit_goal_backed_request(
+    node: &EmbeddedNode,
+    store: &ClientStore,
+    access: &ConfigAccess,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: &str,
+    signer: &dyn gents::identity::AgentIdentity,
+    admission: AgentRequestAdmissionRecord,
+    content: &str,
+    behavior_id: Option<&str>,
+    mut options: SubmitRequestOptions,
+    objective: &str,
+    token_budget: Option<i64>,
+) -> Result<SubmittedRequest> {
+    if options.retry_key.is_none() {
+        options.retry_key = Some(format!(
+            "desktop-goal-request:{}",
+            normalize_required("session_id", session_id)?
+        ));
+    }
+    let (result, create) = build_request_submission(
+        node,
+        store,
+        session_id,
+        agent_did,
+        requester_did,
+        signer,
+        admission,
+        content,
+        behavior_id,
+        options,
+    )
+    .await?;
+    gents::goal::submit_goal_backed_request(
+        access,
+        agent_did,
+        session_id,
+        objective,
+        token_budget,
+        &create,
+    )
+    .await?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn build_request_submission(
+    node: &EmbeddedNode,
+    store: &ClientStore,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: &str,
+    signer: &dyn gents::identity::AgentIdentity,
+    admission: AgentRequestAdmissionRecord,
+    content: &str,
+    behavior_id: Option<&str>,
+    options: SubmitRequestOptions,
+) -> Result<(
+    SubmittedRequest,
+    gents_protocol::request_admission::AgentRequestCreate,
+)> {
     let session_id = normalize_required("session_id", session_id)?;
     let agent_did = normalize_required("agent_did", agent_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
@@ -118,9 +206,12 @@ pub async fn submit_request(
                 .valid_until
                 .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
             trigger_lineage: TriggerLineage {
-                source_doc_id: options.caused_by_source_doc_id,
-                ..Default::default()
+                source_doc_id: options
+                    .caused_by_source_doc_id
+                    .or(options.trigger_lineage.source_doc_id),
+                ..options.trigger_lineage
             },
+            retry_key: options.retry_key,
             ..RequestSpec::new(
                 RequestIdentity {
                     request_id: request_id.clone(),
@@ -138,15 +229,15 @@ pub async fn submit_request(
         RequestSigner::Identity(signer),
     )
     .await?;
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    execute_mutation(node, &mutation, "submit_request").await?;
-
-    Ok(SubmittedRequest {
-        request_id,
-        session_id: session_id.to_string(),
-        agent_did: agent_did.to_string(),
-        behavior_id: binding.behavior_id,
-    })
+    Ok((
+        SubmittedRequest {
+            request_id,
+            session_id: session_id.to_string(),
+            agent_did: agent_did.to_string(),
+            behavior_id: binding.behavior_id,
+        },
+        create,
+    ))
 }
 
 async fn validate_mailbox_submission_cause(
@@ -734,6 +825,8 @@ pub async fn resend_request(
             // InferenceProfile; there are no per-request overrides to carry.
             input: stale.input.unwrap_or_default(),
             caused_by_source_doc_id: None,
+            trigger_lineage: TriggerLineage::default(),
+            retry_key: None,
         },
     )
     .await

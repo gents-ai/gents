@@ -137,10 +137,15 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    #[command(about = "List, inspect, install and exercise document packs")]
+    #[command(about = "List, inspect, build, publish, install and exercise packs")]
     Pack {
         #[command(subcommand)]
         command: PackCommand,
+    },
+    #[command(about = "Build, publish, install, and run Afterburner plugins")]
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
     },
     #[command(about = "Run and observe installed graphs")]
     Graph {
@@ -246,6 +251,79 @@ pub(crate) enum PackCommand {
     Init(PackInitArgs),
     /// Seed an installed scenario against an already-serving node.
     Seed(PackSeedArgs),
+    /// Compile a pack's plugins and pack the whole pack into one `.tar.gz`.
+    Build(PackBuildArgs),
+    /// Search the pack registry.
+    Search(PackSearchArgs),
+    /// Publish a built `.tar.gz` to the pack registry.
+    Publish(PackPublishArgs),
+    /// Download a pack's `.tar.gz` from the registry without installing it.
+    Fetch(PackFetchArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackFetchArgs {
+    #[arg(help = "Pack to download, as `name` or `namespace/name`")]
+    pub(crate) package: String,
+    #[arg(long, help = "Version to download; defaults to the latest published")]
+    pub(crate) version: Option<String>,
+    #[arg(
+        long,
+        help = "Where to write the .tar.gz; defaults to <name>-<version>.tar.gz here"
+    )]
+    pub(crate) out: Option<std::path::PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackBuildArgs {
+    #[arg(
+        required_unless_present = "all",
+        help = "Pack directory to compile and pack (its manifest.json and declared assets)"
+    )]
+    pub(crate) dir: Option<PathBuf>,
+    #[arg(
+        long,
+        conflicts_with_all = ["dir", "out"],
+        help = "Build every pack under packs/ into a .tar.gz beside it, instead of one directory"
+    )]
+    pub(crate) all: bool,
+    #[arg(
+        long,
+        help = "Where to write the .tar.gz; defaults to <dir>/../<name>-<version>.tar.gz"
+    )]
+    pub(crate) out: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackSearchArgs {
+    #[arg(help = "Search terms; omit to list every published pack")]
+    pub(crate) query: Option<String>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackPublishArgs {
+    #[arg(help = "Path to the .tar.gz file to publish")]
+    pub(crate) file: PathBuf,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Bearer token for the registry. Defaults to GENTS_REGISTRY_TOKEN"
+    )]
+    pub(crate) token: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -260,9 +338,22 @@ pub(crate) struct PackInstallArgs {
     pub(crate) package: String,
     #[arg(
         long,
-        help = "JSON file containing explicit owner, role, deployment, and model bindings"
+        help = "JSON file containing agent_did and an optional inference_slots map"
     )]
     pub(crate) bindings: Option<PathBuf>,
+    #[arg(
+        long = "inference-slot",
+        value_name = "NAME=PROFILE_ID",
+        action = clap::ArgAction::Append,
+        help = "Bind a declared inference slot to an existing principal-owned profile; repeat for every slot"
+    )]
+    pub(crate) inference_slots: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Inspect slots, usable profiles, and effective bindings without writing"
+    )]
+    pub(crate) preview: bool,
     #[command(flatten)]
     pub(crate) scope: GraphScopeArgs,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json,
@@ -274,6 +365,11 @@ pub(crate) struct PackInstallArgs {
         help = "Explicitly rebind concrete identities in document packs to the target node"
     )]
     pub(crate) force_rebind_concrete_did: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL, used when the pack is not bundled in this binary. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -398,6 +494,94 @@ pub(crate) struct PackSeedArgs {
     pub(crate) http_port: u16,
     #[arg(long, help = "If set, print the talk-page URL with ?run=")]
     pub(crate) page_port: Option<u16>,
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum PluginCommand {
+    /// Compile one Afterburner package directory into a standalone `.afb`.
+    Build(PluginBuildArgs),
+    /// Publish a built `.afb` to the plugin registry.
+    Publish(PluginPublishArgs),
+    /// Download and install a plugin into the home so gents can run it.
+    Install(PluginInstallArgs),
+    /// List the plugins installed under a home.
+    List(PluginListArgs),
+    /// Remove an installed plugin from a home.
+    Remove(PluginRemoveArgs),
+    /// Run an installed plugin once and print what it returned.
+    Run(PluginRunArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginBuildArgs {
+    #[arg(help = "Directory of the Afterburner package to compile (its own afb.toml)")]
+    pub(crate) dir: PathBuf,
+    #[arg(
+        long,
+        help = "Where to write the .afb; defaults to <dir>/../<namespace>-<name>-<version>.afb"
+    )]
+    pub(crate) out: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginPublishArgs {
+    #[arg(help = "Path to the .afb file to publish")]
+    pub(crate) file: PathBuf,
+    #[arg(
+        long,
+        help = "Plugin registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Bearer token for the registry. Defaults to GENTS_REGISTRY_TOKEN"
+    )]
+    pub(crate) token: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginInstallArgs {
+    #[arg(help = "Plugin to install, as `name` or `namespace/name`")]
+    pub(crate) name: String,
+    #[arg(long, help = "Version to install; defaults to the latest published")]
+    pub(crate) version: Option<String>,
+    #[arg(
+        long,
+        help = "Plugin registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(long, help = "Home to install into; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginListArgs {
+    #[arg(
+        long,
+        help = "Home to list installed plugins from; defaults to ~/.gents"
+    )]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginRemoveArgs {
+    #[arg(help = "Installed plugin to remove, as `name` or `namespace/name`")]
+    pub(crate) name: String,
+    #[arg(long, help = "Home to remove the plugin from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginRunArgs {
+    #[arg(help = "Installed plugin to run, as `name` or `namespace/name`")]
+    pub(crate) name: String,
+    #[arg(
+        long,
+        help = "Canonical JSON argument delivered to the plugin on stdin; defaults to null"
+    )]
+    pub(crate) input: Option<String>,
+    #[arg(long, help = "Home to run the plugin from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -670,6 +854,12 @@ pub(crate) struct InitArgs {
         help = "Bootstrap a named tool package. Defaults to readonly; --write and --yolo are shorthands for the write and yolo packages"
     )]
     pub(crate) tool_package: Option<ToolPackageArg>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Seed the default behavior as a first-run setup steward with self-config tools"
+    )]
+    pub(crate) setup_steward: bool,
     #[arg(
         long,
         help = "Root directory for local file/bash tools. Defaults to the current working directory"
@@ -1531,7 +1721,7 @@ pub(crate) enum ConfigCommand {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
-pub(crate) enum ToolCeilingArg {
+pub enum ToolCeilingArg {
     MetaOnly,
     Readonly,
     Readwrite,
@@ -1713,9 +1903,9 @@ pub(crate) struct SkillImportArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) agent_did: String,
-    /// Directory tree to scan for `SKILL.md` files (Codex skill layout:
-    /// `<dir>/<skill-name>/SKILL.md` + optional `agents/openai.yaml`).
-    #[arg(value_name = "DIR")]
+    /// A SKILL.md file, skill directory, or directory tree to scan. Each
+    /// skill may include optional agents/openai.yaml metadata.
+    #[arg(value_name = "PATH")]
     pub(crate) dir: PathBuf,
     /// Import skills as disabled.
     #[arg(long)]
@@ -1841,6 +2031,13 @@ pub(crate) struct BehaviorCreateArgs {
     pub(crate) agent_did: String,
     #[arg(long, help = "Persona display name")]
     pub(crate) display_name: String,
+    #[arg(long, help = "Concise purpose for the created behavior")]
+    pub(crate) description: Option<String>,
+    #[arg(
+        long,
+        help = "Complete behavior instructions; required with --preset and optional as a clone override"
+    )]
+    pub(crate) system_prompt: Option<String>,
     #[arg(
         long,
         help = "Built-in permission preset (readonly|write); mutually exclusive with --clone-from"
@@ -1874,6 +2071,10 @@ pub(crate) struct BehaviorCloneArgs {
     pub(crate) source_behavior_id: String,
     #[arg(long, help = "Display name for the cloned persona")]
     pub(crate) display_name: String,
+    #[arg(long, help = "Override the source behavior/context description")]
+    pub(crate) description: Option<String>,
+    #[arg(long, help = "Override the source context system prompt")]
+    pub(crate) system_prompt: Option<String>,
     #[arg(long, help = "Override the source's workspace root scope")]
     pub(crate) root: Option<String>,
     #[arg(

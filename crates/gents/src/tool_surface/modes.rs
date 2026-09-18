@@ -16,6 +16,8 @@ pub enum FileToolMode {
 }
 
 impl FileToolMode {
+    pub const ALL: [Self; 3] = [Self::Off, Self::ReadOnly, Self::ReadWrite];
+
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim() {
             "" | "Off" => Ok(Self::Off),
@@ -52,6 +54,8 @@ pub enum BashMode {
 }
 
 impl BashMode {
+    pub const ALL: [Self; 3] = [Self::Off, Self::ReadOnly, Self::Unrestricted];
+
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim() {
             "" | "Off" => Ok(Self::Off),
@@ -66,6 +70,14 @@ impl BashMode {
             Self::Off => 0,
             Self::ReadOnly => 1,
             Self::Unrestricted => 2,
+        }
+    }
+
+    pub(crate) fn meet(self, other: Self) -> Self {
+        if self.rank() <= other.rank() {
+            self
+        } else {
+            other
         }
     }
 }

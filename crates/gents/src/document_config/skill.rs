@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Document-layer view of a `Skill` row (decision D1). Mirrors
-/// `crates/gents-protocol/schemas/agent/skill.graphql`.
+/// `crates/gents-schemas/schemas/agent/skill.graphql`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -17,6 +17,10 @@ pub struct SkillDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub instructions: Option<String>,
+    /// Local supporting-file base, not portable identity or an access grant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub source_directory: Option<String>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null"

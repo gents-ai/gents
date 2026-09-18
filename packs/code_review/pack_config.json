@@ -6,28 +6,28 @@
       "display_name": "Review reconnaissance",
       "description": "Partitions a repository review into a closed set of areas.",
       "context_id": "review-recon-context",
-      "inference_profile_id": "review-recon-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     },
     {
       "behavior_id": "review-scan",
       "display_name": "Review area scanner",
       "description": "Inspects one repository area and records findings.",
       "context_id": "review-scan-context",
-      "inference_profile_id": "review-scan-profile"
+      "inference_profile_id": "gents:inference-slot:worker"
     },
     {
       "behavior_id": "review-verify",
       "display_name": "Adversarial review verification",
       "description": "Refutes or confirms every candidate against freshly read code.",
       "context_id": "review-verify-context",
-      "inference_profile_id": "review-verify-profile"
+      "inference_profile_id": "gents:inference-slot:verifier"
     },
     {
       "behavior_id": "review-triage",
       "display_name": "Review triage",
       "description": "Ranks verified findings and writes the final report.",
       "context_id": "review-triage-context",
-      "inference_profile_id": "review-profile"
+      "inference_profile_id": "gents:inference-slot:coordinator"
     }
   ],
   "contexts": [
@@ -322,61 +322,6 @@
           ]
         }
       ]
-    }
-  ],
-  "inference_backends": [
-    {
-      "backend_id": "review-backend",
-      "name": "Code review backend",
-      "provider_kind": "OpenAiCompatible",
-      "openai_wire_api": "chat_completions",
-      "endpoint": "${GENTS_REVIEW_ENDPOINT:-http://127.0.0.1:8080/v1}",
-      "auth": {"kind": "unauthenticated"},
-      "max_concurrent": 8
-    }
-  ],
-  "inference_sampling": [
-    {"sampling_id": "review-sampling", "temperature": 1.0, "top_p": 0.95}
-  ],
-  "inference_execution": [
-    {"execution_id": "review-execution", "max_turns": 1000}
-  ],
-  "inference_profiles": [
-    {
-      "profile_id": "review-recon-profile",
-      "display_name": "Review recon profile",
-      "backend_id": "review-backend",
-      "model_name": "${GENTS_REVIEW_MODEL}",
-      "reasoning_effort": "high",
-      "sampling_id": "review-sampling",
-      "execution_id": "review-execution"
-    },
-    {
-      "profile_id": "review-scan-profile",
-      "display_name": "Review scan profile",
-      "backend_id": "review-backend",
-      "model_name": "${GENTS_REVIEW_MODEL}",
-      "reasoning_effort": "high",
-      "sampling_id": "review-sampling",
-      "execution_id": "review-execution"
-    },
-    {
-      "profile_id": "review-verify-profile",
-      "display_name": "Review verify profile",
-      "backend_id": "review-backend",
-      "model_name": "${GENTS_REVIEW_MODEL}",
-      "reasoning_effort": "high",
-      "sampling_id": "review-sampling",
-      "execution_id": "review-execution"
-    },
-    {
-      "profile_id": "review-profile",
-      "display_name": "Review triage profile",
-      "backend_id": "review-backend",
-      "model_name": "${GENTS_REVIEW_MODEL}",
-      "reasoning_effort": "high",
-      "sampling_id": "review-sampling",
-      "execution_id": "review-execution"
     }
   ],
   "tasks": [

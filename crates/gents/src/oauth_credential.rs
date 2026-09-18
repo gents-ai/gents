@@ -17,6 +17,27 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled";
+
+/// Display metadata only. Never use decoded, unverified claims for authorization
+/// or overwrite the account ID used by a provider's authentication headers.
+pub fn account_display_label(credential: &OAuthCredential) -> Option<String> {
+    let claims = credential
+        .id_token
+        .as_deref()
+        .and_then(crate::chatgpt_oauth_refresh::jwt_payload)
+        .or_else(|| crate::chatgpt_oauth_refresh::jwt_payload(&credential.access_token));
+    let field = |key: &str| {
+        claims
+            .as_ref()
+            .and_then(|value| value.get(key))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+    };
+    field("email")
+        .or_else(|| credential.account_id.clone())
+        .or_else(|| field("sub"))
+}
 const REFRESH_SKEW: Duration = Duration::minutes(5);
 /// After a failed refresh the bearer serves that failure again for this long
 /// instead of POSTing the provider's token endpoint on every request. While
@@ -318,6 +339,21 @@ pub async fn list_oauth_credentials(
         .collect()
 }
 
+/// Read agent-scoped credentials through the selected canonical control-plane
+/// access. Desktop-managed runtimes use their operator GraphQL endpoint here;
+/// callers must not fall back to a replicated client copy for private tokens.
+pub async fn list_oauth_credentials_on(
+    access: &crate::config_client::ConfigAccess,
+    agent_did: &str,
+) -> Result<Vec<OAuthCredential>> {
+    let response = access
+        .execute(&oauth_credentials_for_agent_query(agent_did))
+        .await?;
+    oauth_credentials_from_response(&response)
+        .into_iter()
+        .collect()
+}
+
 pub async fn lookup_oauth_credential_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
@@ -346,6 +382,15 @@ pub async fn upsert_oauth_credential(
     let response =
         crate::config_client::ConfigAccess::write_local(node, "oauth_credential.upsert", &mutation)
             .await?;
+    gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+}
+
+pub async fn upsert_oauth_credential_on(
+    access: &crate::config_client::ConfigAccess,
+    credential: &OAuthCredential,
+) -> Result<String> {
+    let mutation = oauth_credential_upsert_mutation(credential);
+    let response = access.write("oauth_credential.upsert", &mutation).await?;
     gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
 }
 
@@ -802,6 +847,27 @@ mod tests {
             last_refresh: Some(DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap()),
             enabled: true,
         }
+    }
+
+    #[test]
+    fn account_label_is_display_only_and_prefers_email() {
+        use base64::Engine;
+        let mut credential = sample_credential();
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"email":"person@example.test","sub":"provider-user"}"#);
+        credential.id_token = Some(format!("header.{payload}.signature"));
+        assert_eq!(
+            account_display_label(&credential).as_deref(),
+            Some("person@example.test")
+        );
+        assert_eq!(credential.account_id.as_deref(), Some("acct-1"));
+        credential.id_token = None;
+        assert_eq!(
+            account_display_label(&credential).as_deref(),
+            Some("acct-1")
+        );
+        credential.account_id = None;
+        assert_eq!(account_display_label(&credential), None);
     }
 
     #[test]

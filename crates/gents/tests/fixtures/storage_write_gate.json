@@ -1,0 +1,1 @@
+[{"name":"shared_task_completion_suspended","independently_scheduled":false,"storage_returns":true,"expected_gate_held":true},{"name":"independent_completion","independently_scheduled":true,"storage_returns":true,"expected_gate_held":false},{"name":"elapsed_not_completion","independently_scheduled":true,"storage_returns":false,"expected_gate_held":true}]

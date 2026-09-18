@@ -17,8 +17,8 @@ default = [
 ]
 agent-memory = []
 typescript = ["dep:ts-rs", "gents-loop/typescript"]
-# Gates the e2e_live test binary out of default builds: every test in it is
-# live-inference-gated, so default runs paid a ~160MB link to execute nothing.
+# Gates the optional live-inference collection out of default builds.
+# Configurator regressions are default-built separately in e2e_configurator.
 live-e2e = []
 
 # All other test binaries are auto-discovered; this explicit target overrides
@@ -74,6 +74,7 @@ query.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 regex = "1"
 schemars = "1"
 sha2.workspace = true
@@ -96,6 +97,26 @@ rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-cli
 tokio-util = "0.7"
 tempfile = "3"
 
+# The pack container (src/pack_archive.rs). A pack travels as a
+# gzip-compressed tar; `tar`/`flate2` build and read it.
+tar = "0.4"
+flate2 = "1"
+
+# `afterburner_afb::Afb` parses a plugin's compiled `.afb` (src/pack_archive.rs
+# reads a pack's declared assets, one of which may be a plugin's artifact;
+# src/plugin.rs parses that artifact to classify it before ever running it).
+afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "dd0b702f62164fe3ce25806f71eff71889308c98" }
+afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "dd0b702f62164fe3ce25806f71eff71889308c98" }
+# The plugin runner (src/plugin.rs): runs a plugin's compiled `.afb` via
+# Afterburner's own `afb_run::run_afb_bytes`, the library entry point built
+# for an embedder that needs to run a package without the `burn` CLI's
+# registry-client weight (`bin` feature, pulled in separately by
+# `gents-cli`). Pinned to the same rev as the other afterburner-* crates
+# above so all of them always agree on the `.afb`/`Manifold` wire shapes.
+afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "dd0b702f62164fe3ce25806f71eff71889308c98", default-features = false, features = [
+    "afb-run",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
 
@@ -111,11 +132,15 @@ windows-sys = { version = "0.61.2", features = [
 [dev-dependencies]
 acp.workspace = true
 axum = "0.8"
+db.workspace = true
 defra-node.workspace = true
+document.workspace = true
 proptest = "1"
+schema.workspace = true
+shlex = "1.3"
+tree-sitter = "0.25"
+tree-sitter-bash = "0.25.1"
 storage.workspace = true
-tar = "0.4"
-zstd = "0.13"
 gents-lean-contract.workspace = true
 gents-callback-fixture-create-workspace = { path = "../gents-callbacks/fixture_create_workspace", default-features = false }
 jsonschema = { version = "0.46.5", default-features = false }

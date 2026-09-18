@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use gents::document_config::SkillDocument;
 use gents::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
@@ -22,23 +23,11 @@ fn gql_string_list(values: &[String]) -> String {
     format!("[{items}]")
 }
 
-struct SkillInput {
-    skill_id: String,
-    agent_did: String,
-    name: Option<String>,
-    description: Option<String>,
-    instructions: Option<String>,
-    tool_refs: Vec<String>,
-    display_name: Option<String>,
-    interface_json: Option<String>,
-    enabled: bool,
-}
-
 /// Upsert a Skill document, returning its `_docID`. An empty `tool_refs` is
 /// written as `null`, not `[]` (DefraDB cannot type an empty array literal):
 /// `null` is accepted on create and, crucially, CLEARS a previously non-empty
 /// list on the upsert's update path (omitting it would leave the stale value).
-async fn upsert_skill(access: &ConfigAccess, skill: &SkillInput) -> Result<String> {
+async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<String> {
     let skill_id = escape_graphql_string(&skill.skill_id);
     let tool_refs = if skill.tool_refs.is_empty() {
         "tool_refs: null".to_string()
@@ -50,6 +39,7 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillInput) -> Result<Strin
         gql_opt_string("name", skill.name.as_deref()),
         gql_opt_string("description", skill.description.as_deref()),
         gql_opt_string("instructions", skill.instructions.as_deref()),
+        gql_opt_string("source_directory", skill.source_directory.as_deref()),
         gql_opt_string("display_name", skill.display_name.as_deref()),
         gql_opt_string("interface_json", skill.interface_json.as_deref()),
         format!("enabled: {}", skill.enabled),
@@ -83,16 +73,19 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
         None => args.instructions.clone(),
     };
     let access = ConfigAccess::Graphql(args.graphql.clone());
-    let skill = SkillInput {
+    let skill = SkillDocument {
         skill_id: args.skill_id.clone(),
         agent_did: args.agent_did.clone(),
         name: args.name.clone(),
         description: args.description.clone(),
         instructions,
+        source_directory: None,
         tool_refs: args.tool_refs.clone(),
         display_name: args.display_name.clone(),
         interface_json: None,
         enabled: args.enabled,
+        created_at: None,
+        tags: Vec::new(),
     };
     let doc_id = upsert_skill(&access, &skill).await?;
     print_json(&json!({
@@ -196,52 +189,9 @@ pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Resu
     Ok(())
 }
 
-#[derive(Default, serde::Deserialize)]
-struct SkillFrontmatter {
-    name: Option<String>,
-    description: Option<String>,
-}
-
-#[derive(Default, serde::Deserialize)]
-struct OpenAiYaml {
-    interface: Option<serde_yaml::Value>,
-    dependencies: Option<OpenAiDependencies>,
-}
-#[derive(Default, serde::Deserialize)]
-struct OpenAiDependencies {
-    #[serde(default)]
-    tools: Vec<OpenAiTool>,
-}
-#[derive(Default, serde::Deserialize)]
-struct OpenAiTool {
-    value: Option<String>,
-}
-
-fn parse_skill_md(contents: &str) -> (SkillFrontmatter, String) {
-    let mut lines = contents.lines();
-    if lines.next().map(str::trim) == Some("---") {
-        let mut yaml = String::new();
-        let mut closed = false;
-        let mut body = Vec::new();
-        for line in lines {
-            if !closed {
-                if line.trim() == "---" {
-                    closed = true;
-                    continue;
-                }
-                yaml.push_str(line);
-                yaml.push('\n');
-            } else {
-                body.push(line);
-            }
-        }
-        if closed {
-            let frontmatter = serde_yaml::from_str(&yaml).unwrap_or_default();
-            return (frontmatter, body.join("\n").trim().to_string());
-        }
-    }
-    (SkillFrontmatter::default(), contents.trim().to_string())
-}
+use gents::skills::import::load_skill_source;
+#[cfg(test)]
+use gents::skills::{import::OpenAiYaml, parse_skill_md};
 
 fn skill_id_from_dir(dir: &std::path::Path) -> Option<String> {
     let raw = dir.file_name()?.to_string_lossy();
@@ -287,15 +237,26 @@ fn find_skill_dirs(root: &std::path::Path, max_depth: usize) -> Vec<std::path::P
 }
 
 pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
-    if !args.dir.is_dir() {
-        anyhow::bail!("{} is not a directory", args.dir.display());
-    }
+    let source = std::fs::canonicalize(&args.dir)
+        .with_context(|| format!("resolving {}", args.dir.display()))?;
     let access = ConfigAccess::Graphql(args.graphql.clone());
 
     let mut imported = Vec::new();
     let mut errors = Vec::new();
 
-    for dir in find_skill_dirs(&args.dir, 6) {
+    let sources = if source.is_file() {
+        anyhow::ensure!(
+            source.file_name().is_some_and(|name| name == "SKILL.md"),
+            "expected SKILL.md"
+        );
+        vec![source
+            .parent()
+            .context("SKILL.md has no parent")?
+            .to_path_buf()]
+    } else {
+        find_skill_dirs(&source, 6)
+    };
+    for dir in sources {
         let Some(skill_id) = skill_id_from_dir(&dir) else {
             errors.push(json!({
                 "dir": dir.display().to_string(),
@@ -303,66 +264,25 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
             }));
             continue;
         };
-        let contents = match std::fs::read_to_string(dir.join("SKILL.md")) {
-            Ok(contents) => contents,
+        let loaded = match load_skill_source(&dir, &skill_id, &args.agent_did, |path| {
+            std::fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))
+        }) {
+            Ok(skill) => skill,
             Err(error) => {
-                errors.push(
-                    json!({ "skill_id": skill_id, "error": format!("reading SKILL.md: {error}") }),
-                );
+                errors.push(json!({"skill_id": skill_id, "error": format!("{error:#}")}));
                 continue;
             }
         };
-        let (frontmatter, body) = parse_skill_md(&contents);
-
-        let mut tool_refs = Vec::new();
-        let mut display_name = None;
-        let mut interface_json = None;
-        if let Ok(yaml) = std::fs::read_to_string(dir.join("agents").join("openai.yaml")) {
-            match serde_yaml::from_str::<OpenAiYaml>(&yaml) {
-                Ok(parsed) => {
-                    if let Some(deps) = parsed.dependencies {
-                        tool_refs = deps
-                            .tools
-                            .into_iter()
-                            .filter_map(|tool| tool.value)
-                            .filter(|value| !value.trim().is_empty())
-                            .collect();
-                    }
-                    if let Some(interface) = parsed.interface {
-                        display_name = interface
-                            .get("display_name")
-                            .and_then(serde_yaml::Value::as_str)
-                            .filter(|value| !value.trim().is_empty())
-                            .map(ToOwned::to_owned);
-                        interface_json = serde_json::to_string(&interface).ok();
-                    }
-                }
-                Err(error) => errors.push(json!({
-                    "skill_id": skill_id,
-                    "error": format!("parsing agents/openai.yaml: {error}"),
-                })),
-            }
-        }
-
-        let name = frontmatter.name.clone().unwrap_or_else(|| skill_id.clone());
-        let skill = SkillInput {
-            skill_id: skill_id.clone(),
-            agent_did: args.agent_did.clone(),
-            name: Some(name.clone()),
-            description: frontmatter.description.clone(),
-            instructions: (!body.is_empty()).then_some(body),
-            tool_refs: tool_refs.clone(),
-            display_name,
-            interface_json,
-            enabled: !args.disabled,
-        };
+        let name = loaded.name.clone().unwrap_or_else(|| skill_id.clone());
+        let mut skill = loaded;
+        skill.enabled = !args.disabled;
 
         if args.dry_run {
             imported.push(json!({
                 "skill_id": skill_id,
                 "name": name,
-                "description": frontmatter.description,
-                "tool_refs": tool_refs,
+                "description": skill.description,
+                "tool_refs": skill.tool_refs,
                 "source": dir.join("SKILL.md").display().to_string(),
             }));
             continue;
@@ -528,7 +448,7 @@ mod tests {
     fn parse_skill_md_splits_frontmatter_and_body() {
         let md =
             "---\nname: Research\ndescription: Find sources\n---\n\nAlways cite your sources.\n";
-        let (fm, body) = parse_skill_md(md);
+        let (fm, body) = parse_skill_md(md).unwrap();
         assert_eq!(fm.name.as_deref(), Some("Research"));
         assert_eq!(fm.description.as_deref(), Some("Find sources"));
         assert_eq!(body, "Always cite your sources.");
@@ -536,7 +456,7 @@ mod tests {
 
     #[test]
     fn parse_skill_md_without_frontmatter_is_all_body() {
-        let (fm, body) = parse_skill_md("Just instructions.\n");
+        let (fm, body) = parse_skill_md("Just instructions.\n").unwrap();
         assert!(fm.name.is_none());
         assert_eq!(body, "Just instructions.");
     }
@@ -578,7 +498,7 @@ mod tests {
             "instructions": "Always cite your sources.\n\nUse primary references.",
         });
         let md = render_skill_md(&skill).unwrap();
-        let (fm, body) = parse_skill_md(&md);
+        let (fm, body) = parse_skill_md(&md).unwrap();
         assert_eq!(fm.name.as_deref(), Some("Research"));
         assert_eq!(
             fm.description.as_deref(),

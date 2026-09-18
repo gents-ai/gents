@@ -165,6 +165,15 @@ pub(crate) async fn resolve_target_agent_did(
     .await
 }
 
+pub(crate) fn rebind_manifest_to_agent(
+    manifest: &mut DesiredStateManifest,
+    target_agent_did: &str,
+    force_rebind_concrete_did: bool,
+) -> Result<()> {
+    enforce_manifest_rebind_safety(manifest, target_agent_did, force_rebind_concrete_did)?;
+    rebind_manifest_agent_did(manifest, target_agent_did)
+}
+
 fn validation_report_for_manifest(
     root_display: String,
     manifest: &DesiredStateManifest,

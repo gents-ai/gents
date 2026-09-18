@@ -114,6 +114,7 @@ pub async fn desktop_client_start<R: Runtime>(
     // command cannot leave the store open while a second start races it.
     // Never hold the std::sync::Mutex across an await (future must be Send).
     if let Some(core) = current_core(&state) {
+        super::managed_server::start_running_managed_pairing(&state, Arc::clone(&core)).await;
         return build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
             .await
             .map_err(BridgeError::untyped);
@@ -129,6 +130,8 @@ pub async fn desktop_client_start<R: Runtime>(
             "desktop client start completed without installing a live client",
         )
     })?;
+
+    super::managed_server::start_running_managed_pairing(&state, Arc::clone(&core)).await;
 
     build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
         .await
@@ -174,12 +177,15 @@ async fn run_detached_client_start<R: Runtime>(
     paths: gents_desktop_core::client::DesktopPaths,
     progress_tx: watch::Sender<ClientStartProgress>,
 ) {
-    let start_result = start_client_core_async(paths).await;
-
     let state = app.state::<DesktopAppState>();
-    // Serialize install against shutdown so we never leave an untracked open DB
-    // or install over a concurrent tear-down without coordination.
+    // Own the lifecycle before opening the peer directory and embedded node,
+    // not only while installing the result. Managed-runtime restart refreshes
+    // its ephemeral P2P endpoint under this same lock. Without covering the
+    // open, that refresh can observe no installed core while the detached
+    // starter already holds the peer-directory lease, then fail trying to use
+    // the offline writer for the same directory.
     let _lifecycle_guard = state.client_lifecycle.lock().await;
+    let start_result = start_client_core_async(paths).await;
 
     match start_result {
         Ok(core) => {
@@ -296,6 +302,11 @@ pub async fn desktop_client_shutdown<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
+    // Enrollment authoring temporarily installs bootstrap replication state.
+    // Let that bounded operation unwind before dropping its core instead of
+    // aborting the future between install and cleanup.
+    let _managed_lifecycle = state.managed_server_lifecycle.lock().await;
+    super::managed_server::drain_managed_runtime_pairing(&state).await;
     // Drain in-flight start first (without lifecycle) so the starter can install
     // and we can then take the core cleanly. Retry if a start sneaks in between
     // drain and the lifecycle lock.

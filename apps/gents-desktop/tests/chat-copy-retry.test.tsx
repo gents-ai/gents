@@ -14,6 +14,12 @@ import { copyText } from "@source-inc/gents-desktop-ui";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
+const currentIntent = {
+  acceptsComposeIntent: (captured: number) => captured === 0,
+  advanceComposeIntent: vi.fn(),
+  captureComposeIntent: () => 0,
+};
+
 const readyBehaviorReadiness = {
   kind: "ready",
   behaviorId: "default",
@@ -335,6 +341,8 @@ describe("error card retry", () => {
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
     const actions = createDesktopShellChatActions({
+      submissionInFlight: { current: false },
+      ...currentIntent,
       api,
       draft: "",
       behaviorReadiness: readyBehaviorReadiness,
@@ -342,6 +350,7 @@ describe("error card retry", () => {
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       selectedDeployment: deployment,
+      deployments: [deployment],
       selectedSessionId: "s1",
       pendingMailboxCauseId: null,
       session,
@@ -394,12 +403,15 @@ describe("error card retry", () => {
       operationalState: operationalStateFor(unavailableBehaviorReadiness),
     });
     const common = {
+      submissionInFlight: { current: false },
+      ...currentIntent,
       api: { retryRequest } as unknown as DesktopApiAdapter,
       draft: "",
       newSessionAgentRef: { current: null },
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       selectedDeployment: deployment,
+      deployments: [deployment],
       selectedSessionId: "s1",
       pendingMailboxCauseId: null,
       session,
@@ -465,13 +477,16 @@ describe("error card retry", () => {
     });
 
     const actions = createDesktopShellChatActions({
+      ...currentIntent,
       api: { sendChatMessage } as unknown as DesktopApiAdapter,
+      submissionInFlight: { current: false },
       behaviorReadiness: readyBehaviorReadiness,
       draft: "check the upgrade",
       newSessionAgentRef: { current: null },
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       selectedDeployment: deployment,
+      deployments: [deployment],
       selectedSessionId: "s1",
       pendingMailboxCauseId: null,
       setDraft,
@@ -497,6 +512,8 @@ describe("error card retry", () => {
         lifecycleState: "pending",
       }),
     );
-    expect(setDraft).toHaveBeenCalledWith("");
+    const clearAccepted = setDraft.mock.calls[0][0] as (current: string) => string;
+    expect(clearAccepted("check the upgrade")).toBe("");
+    expect(clearAccepted("newer draft")).toBe("newer draft");
   });
 });

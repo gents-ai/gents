@@ -29,6 +29,14 @@ pub enum TemplateError {
 pub(crate) const MAX_TEMPLATE_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_RENDERED_BYTES: usize = 1024 * 1024;
 
+/// Authoring and execution use the same grammar and undefined-value policy.
+fn environment() -> Environment<'static> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.set_auto_escape_callback(|_| AutoEscape::None);
+    env
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariableRef {
     pub path: Vec<String>,
@@ -48,9 +56,7 @@ pub fn render_template(template: &str, scope: &TemplateScope) -> Result<String, 
         )));
     }
 
-    let mut env = Environment::new();
-    env.set_undefined_behavior(UndefinedBehavior::Strict);
-    env.set_auto_escape_callback(|_| AutoEscape::None);
+    let env = environment();
 
     let context = {
         let mut ctx = serde_json::Map::new();
@@ -100,6 +106,14 @@ pub fn parse_template_for_validation(template: &str) -> Result<Vec<VariableRef>,
             MAX_TEMPLATE_BYTES
         )));
     }
+
+    // The reference scanner is not a syntax parser. Compile with the rendering
+    // owner before accepting configuration, without needing invocation values.
+    environment().template_from_str(template).map_err(|error| {
+        TemplateError::Parse(format!(
+            "{error}; use MiniJinja syntax, e.g. {{{{ doc.message }}}} for a document field or {{{{ args.name }}}} for a task argument"
+        ))
+    })?;
 
     let bytes = template.as_bytes();
     let mut refs: Vec<VariableRef> = Vec::new();

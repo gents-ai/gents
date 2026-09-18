@@ -6,7 +6,9 @@ import {
   gotoHarness,
   openChat,
   openConfig,
+  openConfigSection,
   test,
+  type TestInfo,
 } from "../playwright/desktopTest";
 
 type ScreenshotReviewEntry = {
@@ -16,7 +18,7 @@ type ScreenshotReviewEntry = {
 };
 
 test.describe("desktop stable screenshot states", () => {
-  test("captures core shell states", async ({ page }, testInfo) => {
+  test("captures core kit shell states", async ({ page }, testInfo) => {
     const screenshots: ScreenshotReviewEntry[] = [];
     const captureReviewScreenshot = async (
       state: string,
@@ -32,91 +34,68 @@ test.describe("desktop stable screenshot states", () => {
     };
 
     await gotoHarness(page);
-    await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
-    await captureReviewScreenshot(
-      "fleet dashboard",
-      "default",
-      "stable-fleet-dashboard",
-    );
+    await expect(page.getByTestId("sessions-screen")).toBeVisible();
+    await captureReviewScreenshot("sessions", "default", "stable-sessions");
 
     await openChat(page);
-    await expect(page.getByTestId("transcript-panel")).toBeVisible();
-    await captureReviewScreenshot(
-      "chat transcript",
-      "default",
-      "stable-chat-transcript",
-    );
-
-    await gotoHarness(page, "coding");
-    await openChat(page);
-    await expect(page.getByTestId("tool-intro-bash")).toBeVisible();
-    await captureReviewScreenshot("tool timeline", "coding", "stable-tool-timeline");
+    await expect(page.getByTestId("session-screen")).toBeVisible();
+    await captureReviewScreenshot("new session", "default", "stable-new-session");
 
     await gotoHarness(page);
     await openConfig(page);
-    await expect(page.locator(".config-workspace")).toBeVisible();
+    await expect(page.getByTestId("agent-screen")).toBeVisible();
     await captureReviewScreenshot(
-      "config workspace",
+      "agent configuration",
       "default",
-      "stable-config-workspace",
+      "stable-agent-config",
     );
 
     await gotoHarness(page, "empty-fleet");
-    await expect(page.getByTestId("fleet-empty")).toBeVisible();
-    await captureReviewScreenshot("empty fleet", "empty-fleet", "stable-empty-fleet");
+    await expect(page.getByTestId("setup-screen")).toBeVisible();
+    await captureReviewScreenshot("first-run setup", "empty-fleet", "stable-setup");
 
-    await gotoHarness(page, "bridge-unavailable");
-    await expect(page.getByTestId("startup-screen")).toContainText(
-      "Desktop native bridge is unavailable",
+    const path = testInfo.outputPath("desktop-screenshot-review.md");
+    await writeFile(
+      path,
+      screenshots
+        .map((entry) => `- ${entry.state} (${entry.scenario}): ${entry.attachmentName}`)
+        .join("\n") + "\n",
     );
-    await captureReviewScreenshot(
-      "bridge error",
-      "bridge-unavailable",
-      "stable-bridge-error",
-    );
+    await testInfo.attach("desktop-screenshot-review.md", {
+      path,
+      contentType: "text/markdown",
+    });
+  });
 
-    await attachScreenshotReviewManifest(page, testInfo, screenshots);
+  test("captures reconciliation states", async ({ page }, testInfo) => {
+    await gotoHarness(page);
+    await openConfig(page);
+    await openConfigSection(page, /^Contexts\b/);
+    await page.getByRole("link", { name: /Default context/ }).click();
+    await page.getByRole("button", { name: "Delete context" }).click();
+    await expect(
+      page.getByRole("textbox", { name: "Type Default context to confirm" }),
+    ).toBeFocused();
+    await captureStableScreenshot(page, testInfo, "reconciliation-delete-confirmation");
+    await expect(page.getByRole("alertdialog")).toHaveCSS("opacity", "1");
+
+    await gotoHarness(page, "mailbox-overflow");
+    const mailbox = page.getByRole("link", { name: "Mailbox" });
+    if (!(await mailbox.first().isVisible())) {
+      await page.getByRole("button", { name: "Menu" }).click();
+    }
+    await page.getByRole("link", { name: "Mailbox" }).last().click();
+    await expect(page.getByTestId("mailbox-screen")).toBeVisible();
+    const mobileNavigation = page.getByRole("dialog", { name: "Navigation" });
+    await expect(mobileNavigation).not.toBeVisible();
+    await captureStableScreenshot(page, testInfo, "reconciliation-mailbox-overflow");
+
+    await gotoHarness(page, "coding");
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    await expect(page.getByTestId("session-screen")).toBeVisible();
+    await captureStableScreenshot(page, testInfo, "reconciliation-code-output");
   });
 });
-
-async function attachScreenshotReviewManifest(
-  page: Parameters<typeof captureStableScreenshot>[0],
-  testInfo: Parameters<typeof captureStableScreenshot>[1],
-  screenshots: ScreenshotReviewEntry[],
-) {
-  const viewport = page.viewportSize();
-  const rows = screenshots
-    .map(
-      (screenshot) =>
-        `| ${screenshot.state} | \`${screenshot.scenario}\` | \`${screenshot.attachmentName}\` | \`./${screenshot.attachmentName}\` |`,
-    )
-    .join("\n");
-  const body = [
-    "# Desktop Screenshot Review",
-    "",
-    `Project: \`${testInfo.project.name}\``,
-    `Viewport: \`${viewport?.width ?? "unknown"}x${viewport?.height ?? "unknown"}\``,
-    "Command: `npm run test:ui:screenshots`",
-    "",
-    "Use this manifest when reviewing downloaded workflow artifacts or filing UI bugs.",
-    "",
-    "| State | Harness scenario | Attachment | Artifact path |",
-    "| --- | --- | --- | --- |",
-    rows,
-    "",
-    "When filing a confirmed defect, include:",
-    "",
-    "- expected vs actual",
-    "- command and viewport/project from this manifest",
-    "- screenshot attachment or artifact path",
-    "- labels `bug` and `ui`",
-    "",
-  ].join("\n");
-  const path = testInfo.outputPath("desktop-screenshot-review.md");
-  await writeFile(path, body);
-
-  await testInfo.attach("desktop-screenshot-review.md", {
-    path,
-    contentType: "text/markdown",
-  });
-}

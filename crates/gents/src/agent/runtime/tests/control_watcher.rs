@@ -162,6 +162,32 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     assert_eq!(retried.reconcile_phase, "idle");
     assert_eq!(retried.updated_at, settled.updated_at);
 
+    // A new metadata-only write resolves to the same runtime fingerprint but
+    // still needs a proposal so the reconciler can publish its normal no-op
+    // completion. An unchanged settle retry above must remain suppressed.
+    let context_id =
+        crate::graphql::escape_graphql_string(&format!("{}:context", agent.default_behavior_id()));
+    let mutation = format!(
+        r#"mutation {{ update_AgentContext(
+        filter: {{context_id: {{_eq: "{context_id}"}}}},
+        input: {{display_name: "Retagged context"}}) {{context_id}} }}"#
+    );
+    crate::config_client::ConfigAccess::write_local(
+        node.as_ref(),
+        "test.context.metadata",
+        &mutation,
+    )
+    .await
+    .unwrap();
+    let repeated = tokio::time::timeout(Duration::from_secs(5), proposal_rx.recv())
+        .await
+        .expect("metadata write must reach reconcile owner")
+        .expect("proposal channel");
+    assert_eq!(
+        repeated.configuration_fingerprint(),
+        snapshot.configuration_fingerprint()
+    );
+
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
 }

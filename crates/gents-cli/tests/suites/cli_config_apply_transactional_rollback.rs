@@ -1,17 +1,29 @@
 use crate::support::*;
 
 use std::fs;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
+use axum::body::Bytes;
+use axum::extract::{OriginalUri, State};
+use axum::http::{HeaderMap, Method, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::any;
+use axum::Router;
 use serde_json::Value;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-const KILL_DELAY: Duration = Duration::from_millis(400);
+const TRANSACTION_STAGE_DEADLINE: Duration = Duration::from_secs(10);
 const TX_RECLAIM_DEADLINE: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-const PER_COLLECTION_SLEEP_MS: &str = "200";
+
+#[derive(Clone)]
+struct StallingProxyState {
+    target_origin: String,
+    client: reqwest::Client,
+    mutation_staged: std::sync::Arc<Semaphore>,
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
@@ -84,18 +96,33 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         .to_str()
         .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
 
+    // Hold the first successfully staged transactional mutation at the HTTP
+    // boundary. This makes the SIGKILL point deterministic without a timing
+    // sleep or a production-only test hook in config apply.
+    let (proxy_graphql, mutation_staged, proxy) =
+        start_stalling_transaction_proxy(&graphql).await?;
     let mut cli = std::process::Command::new(crate::support::cli_bin())
         .env("HOME", &home_dir)
         .env("RUST_LOG", "error")
-        .env("GENTS_CONFIG_APPLY_SLEEP_MS", PER_COLLECTION_SLEEP_MS)
         .current_dir(&home_dir)
-        .args(["config", "apply", "--root", root_str, "--graphql", &graphql])
+        .args([
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--graphql",
+            &proxy_graphql,
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .context("spawning gents config apply with apply-sleep env")?;
+        .context("spawning gents config apply through transaction proxy")?;
 
-    thread::sleep(KILL_DELAY);
+    let staged_permit = tokio::time::timeout(TRANSACTION_STAGE_DEADLINE, mutation_staged.acquire())
+        .await
+        .context("config apply did not stage a transactional mutation")?
+        .context("transaction proxy closed before staging a mutation")?;
+    staged_permit.forget();
     if let Some(status) = cli
         .try_wait()
         .context("checking config apply before SIGKILL")?
@@ -111,6 +138,7 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     }
     cli.kill().context("SIGKILL CLI")?;
     cli.wait().context("reap CLI")?;
+    proxy.abort();
 
     let deadline = Instant::now() + TX_RECLAIM_DEADLINE;
     loop {
@@ -138,6 +166,93 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+async fn start_stalling_transaction_proxy(
+    graphql: &str,
+) -> Result<(
+    String,
+    std::sync::Arc<Semaphore>,
+    tokio::task::JoinHandle<()>,
+)> {
+    let mut origin = url::Url::parse(graphql).context("parsing GraphQL endpoint")?;
+    origin.set_path("");
+    origin.set_query(None);
+    origin.set_fragment(None);
+    let mutation_staged = std::sync::Arc::new(Semaphore::new(0));
+    let state = StallingProxyState {
+        target_origin: origin.as_str().trim_end_matches('/').to_owned(),
+        client: reqwest::Client::new(),
+        mutation_staged: mutation_staged.clone(),
+    };
+    let app = Router::new()
+        .fallback(any(forward_and_stall_transactional_mutation))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("binding transaction proxy")?;
+    let address = listener.local_addr().context("transaction proxy address")?;
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let path = url::Url::parse(graphql)
+        .context("parsing GraphQL endpoint path")?
+        .path()
+        .to_owned();
+    Ok((format!("http://{address}{path}"), mutation_staged, server))
+}
+
+async fn forward_and_stall_transactional_mutation(
+    State(state): State<StallingProxyState>,
+    OriginalUri(uri): OriginalUri,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let is_transactional_mutation = headers.contains_key("x-defradb-tx")
+        && serde_json::from_slice::<Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .is_some_and(|query| query.trim_start().starts_with("mutation"));
+    let target = format!("{}{}", state.target_origin, uri);
+    let upstream = match state
+        .client
+        .request(method, target)
+        .headers(headers)
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("transaction proxy: {error}"),
+            )
+                .into_response();
+        }
+    };
+    let status = upstream.status();
+    let bytes = match upstream.bytes().await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("transaction proxy: {error}"),
+            )
+                .into_response();
+        }
+    };
+    if is_transactional_mutation && status.is_success() {
+        state.mutation_staged.add_permits(1);
+        std::future::pending::<()>().await;
+    }
+    (status, bytes).into_response()
 }
 
 async fn count_collection_rows(graphql: &str, collection: &str) -> Result<usize> {

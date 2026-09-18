@@ -51,6 +51,7 @@ export async function waitForBehaviorConfig(
   behaviorId: string,
   expectedDisplayName: string,
   expectedSystemPrompt: string,
+  previousGeneration: number,
 ) {
   await waitFor(
     async () => {
@@ -64,8 +65,16 @@ export async function waitForBehaviorConfig(
         (candidate) => candidate.context_id === behavior?.contextId,
       );
       expect(context?.system_prompt).toBe(expectedSystemPrompt);
+      // Saving acknowledges durable configuration, not activation. The runtime
+      // deliberately debounces updates and keeps the previous generation usable.
+      // Observe the existing publication/router owners before testing new input.
+      const readiness = deployment?.behaviorReadiness;
+      expect(deployment?.runtime?.lastReconcileError).toBeFalsy();
+      expect(deployment?.runtime?.reconcilePhase).toBe("idle");
+      expect(readiness?.activeGeneration).toBeGreaterThan(previousGeneration);
+      expect(readiness?.routerGeneration).toBe(readiness?.activeGeneration);
     },
-    { timeout: 30_000 },
+    { timeout: 60_000 },
   );
 }
 

@@ -41,4 +41,22 @@ theorem environment_reference_patch_allowed (old : BackendAuth) (name : String) 
 theorem oauth_reference_patch_allowed (old : BackendAuth) :
     authPatchAllowed old .principalOAuth = true := rfl
 
+/-- Schema publication is additive, separate from document transactions. The
+shared schema owner supplies compatibility and exact-artifact validation;
+document ACP is unchanged by publishing a schema. -/
+def schemaPublicationAllowed (automationGranted artifactMatches compatible : Bool) : Bool :=
+  automationGranted && artifactMatches && compatible
+
+theorem schema_publication_requires_grant (digest compatible : Bool) :
+    schemaPublicationAllowed false digest compatible = false := by
+  simp [schemaPublicationAllowed]
+
+theorem schema_publication_requires_previewed_artifact (grant compatible : Bool) :
+    schemaPublicationAllowed grant false compatible = false := by
+  simp [schemaPublicationAllowed]
+
+theorem schema_publication_rejects_incompatible_contract (grant digest : Bool) :
+    schemaPublicationAllowed grant digest false = false := by
+  simp [schemaPublicationAllowed]
+
 end SelfConfig

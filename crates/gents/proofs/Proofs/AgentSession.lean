@@ -59,6 +59,27 @@ structure RequestFact where
   createdAt : Time
   observed : RequestObservation
   deriving DecidableEq, Repr
+/-- Runtime local-control signatures retain the runtime requester. An exact,
+authenticated physical ancestry may attach their execution to an existing
+client-owned session, without changing that document or its user observation.
+Cryptographic verification, cycle rejection and transactional reads are adapter
+obligations represented by `authenticatedAncestry`. -/
+def preserveControlSession (doc : Document) (incoming : RequestFact)
+    (ancestorScope : Scope) (authenticatedAncestry : Bool) : Option Document :=
+  if authenticatedAncestry && incoming.scope.agent == doc.scope.agent &&
+      incoming.scope.session == doc.scope.session && incoming.behavior == doc.behavior &&
+      ancestorScope == doc.scope then some doc else none
+
+theorem control_preserves_document (doc : Document) (incoming : RequestFact)
+    (ancestorScope : Scope) (authenticatedAncestry : Bool) (result : Document)
+    (h : preserveControlSession doc incoming ancestorScope authenticatedAncestry = some result) :
+    result = doc := by
+  unfold preserveControlSession at h
+  split at h <;> simp_all
+
+theorem unauthenticated_control_denied (doc : Document) (incoming : RequestFact)
+    (ancestorScope : Scope) : preserveControlSession doc incoming ancestorScope false = none := by
+  simp [preserveControlSession]
 /-- Logical request ID breaks timestamp ties. -/
 def newer (a b : RequestFact) : Bool :=
   a.createdAt > b.createdAt ||

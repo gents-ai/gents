@@ -12,7 +12,13 @@ fn task_templates_and_goal_settings_keep_existing_authoring_guards() {
     goal["goal_token_budget"] = json!(1000);
     decode(goal.clone()).validate().unwrap();
     for field in ["prompt_template", "goal_objective_template"] {
-        for text in ["{{ ctx.not_available }}", "{{ node.api_key }}"] {
+        for text in [
+            "{{ ctx.not_available }}",
+            "{{ node.api_key }}",
+            "{{.message}}",
+            "{{ doc.message",
+            "{% if doc.message %}missing endif",
+        ] {
             let mut invalid = goal.clone();
             invalid[field] = json!(text);
             assert!(

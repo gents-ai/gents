@@ -151,11 +151,13 @@ struct DeliveryBuild {
 }
 
 pub struct EventSource {
+    runtime_observer: Option<Arc<dyn crate::agent::RuntimeSnapshotObserver>>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::Subscription>,
     desired_collections: HashSet<String>,
+    subscription_seed_failures: BTreeMap<String, String>,
     reconciled_generation: u64,
     #[allow(dead_code)]
     reconcile_debounce: Duration,
@@ -285,11 +287,13 @@ impl EventSource {
         cancel: CancellationToken,
     ) -> Self {
         Self {
+            runtime_observer: None,
             snapshot_rx,
             node,
             subscription_source: subs,
             subscription: None,
             desired_collections: HashSet::new(),
+            subscription_seed_failures: BTreeMap::new(),
             reconciled_generation: 0,
             reconcile_debounce: Duration::from_millis(250),
             cancel,
@@ -309,6 +313,14 @@ impl EventSource {
             group_membership_queries: AtomicUsize::new(0),
             rescan_tick: event_source_rescan_tick(EVENT_SOURCE_RESCAN_INTERVAL),
         }
+    }
+
+    pub(crate) fn with_runtime_observer(
+        mut self,
+        observer: Option<Arc<dyn crate::agent::RuntimeSnapshotObserver>>,
+    ) -> Self {
+        self.runtime_observer = observer;
+        self
     }
 
     #[doc(hidden)]
@@ -392,6 +404,8 @@ impl EventSource {
         }
 
         self.desired_collections = desired;
+        self.subscription_seed_failures
+            .retain(|collection, _| self.desired_collections.contains(collection));
 
         let mut group_triggers = snapshot
             .active_event_triggers()
@@ -441,6 +455,8 @@ impl EventSource {
                 .seed_seen_docs_for_collection(added_collection, snapshot)
                 .await
             {
+                self.subscription_seed_failures
+                    .insert(added_collection.clone(), format!("{err:#}"));
                 tracing::warn!(
                     source_collection = %added_collection,
                     %err,
@@ -487,6 +503,19 @@ impl EventSource {
         }
 
         self.reconciled_generation = snapshot.generation;
+        if let Some(observer) = &self.runtime_observer {
+            let error = (!self.subscription_seed_failures.is_empty()).then(|| {
+                format!(
+                    "subscription seeding failed: {:?}",
+                    self.subscription_seed_failures
+                )
+            });
+            observer.on_event_sources_reconciled(
+                snapshot.generation,
+                &snapshot.configuration_fingerprint(),
+                error.as_deref().map_or(Ok(()), Err),
+            );
+        }
     }
 
     async fn seed_seen_docs_for_collection(
@@ -531,13 +560,10 @@ impl EventSource {
         );
         let response = self.node.execute(&query).await;
         if response.has_errors() {
-            tracing::warn!(
-                source_collection = %collection,
-                errors = ?response.errors,
-                "event source could not seed seen_docs (introspection errors); \
-                 forward-only semantics may be weaker for pre-existing docs",
+            anyhow::bail!(
+                "seen-doc seed query for {collection} failed: {:?}",
+                response.errors
             );
-            return Ok(());
         }
         let rows = response
             .data
@@ -545,7 +571,7 @@ impl EventSource {
             .and_then(|d| d.get(collection))
             .and_then(serde_json::Value::as_array);
         let Some(rows) = rows else {
-            return Ok(());
+            anyhow::bail!("seen-doc seed query for {collection} returned no rows field");
         };
         let mut doc_ids: HashSet<String> = rows
             .iter()

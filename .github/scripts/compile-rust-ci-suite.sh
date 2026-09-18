@@ -35,10 +35,10 @@ case "${suite}" in
     separate_package="gents-desktop-tauri"
     ;;
   support)
-    # gents-chatgpt-login, gents-claude-login and gents-codex-protocol live here (not in `cli`)
-    # because the support shard is where their tests RUN on every event; the
-    # compile fence must cover what the test step executes. They are still
-    # built on the cli shard as ordinary gents-cli dependencies.
+    # The provider login crates, their shared UI, and gents-codex-protocol live
+    # here (not in `cli`) because the support shard is where their tests RUN on
+    # every event; the compile fence must cover what the test step executes.
+    # They are still built on the cli shard as ordinary gents-cli dependencies.
     packages=(
       gents-lean-contract
       gents-migration
@@ -49,6 +49,7 @@ case "${suite}" in
       gents-schemas
       gents-chatgpt-login
       gents-claude-login
+      gents-login-ui
       gents-codex-protocol
     )
     ;;

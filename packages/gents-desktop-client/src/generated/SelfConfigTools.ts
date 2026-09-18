@@ -19,9 +19,14 @@ self_config_categories?: Array<string> | null,
  */
 self_config_no_lockout?: boolean | null,
 /**
- * Opt-in guardrail: `get_my_config` accepts a patch preview.
+ * Opt-in guardrail: `config` accepts document patch previews.
  */
 self_config_dry_run?: boolean | null,
+/**
+ * Opt-in authority to install and activate bundled graph packs for this
+ * principal. Disabled by absence and never implied by general self-config.
+ */
+enable_pack_install?: boolean | null,
 /**
  * Optional execution cap per tool call. Unset retains the existing enclosing
  * tool-call/request deadline without introducing an independent timer.

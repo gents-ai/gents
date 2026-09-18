@@ -58,7 +58,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 })
                 .map(MailboxItemView::from)
                 .collect::<Vec<_>>();
-            let mut agent_principal = principal
+            let agent_principal = principal
                 .map(|row| AgentPrincipalView {
                     agent_did: row.agent_did.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
@@ -75,7 +75,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     created_at: None,
                     created_by: None,
                 });
-            let mut principal_config = principal.cloned();
+            let principal_config = principal.cloned();
             let mut behavior_configs = store
                 .behaviors
                 .iter()
@@ -83,10 +83,10 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .cloned()
                 .collect::<Vec<_>>();
             behavior_configs.sort_by(|left, right| left.behavior_id.cmp(&right.behavior_id));
-            let mut default_behavior_id = store
+            let default_behavior_id = store
                 .default_behavior_id_for_agent(&peer.agent_did)
                 .map(str::to_owned);
-            let mut runtime = store
+            let runtime = store
                 .latest_runtime(&peer.agent_did)
                 .map(|row| RuntimeView {
                     reconcile_phase: normalize_optional(row.reconcile_phase.as_deref()),
@@ -247,10 +247,13 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     name: normalize_optional(row.name.as_deref()),
                     description: normalize_optional(row.description.as_deref()),
                     instructions: normalize_optional(row.instructions.as_deref()),
+                    source_directory: row.source_directory.clone(),
                     tool_refs: row.tool_refs.clone(),
                     display_name: normalize_optional(row.display_name.as_deref()),
+                    interface_json: normalize_optional(row.interface_json.as_deref()),
                     enabled: Some(row.enabled),
                     created_at: normalize_optional(row.created_at.as_deref()),
+                    tags: row.tags.clone(),
                 })
                 .collect::<Vec<_>>();
             skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
@@ -342,7 +345,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .collect::<Vec<_>>();
             tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
 
-            let mut sessions = session_summaries(
+            let sessions = session_summaries(
                 &store.sessions,
                 &store.requests,
                 &store.responses,
@@ -351,7 +354,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 &triggers,
             );
 
-            let mut behavior_environments = resolve_behavior_environments(
+            let behavior_environments = resolve_behavior_environments(
                 &behaviors,
                 &inference_profiles,
                 &contexts,
@@ -361,43 +364,18 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             );
 
             let chat_safe = peer.is_chat_ready_at(Utc::now());
-            let behavior_readiness = redact_unpaired_behavior_readiness(
-                project_behavior_readiness(
-                    store.behavior_readiness(&peer.agent_did),
-                    &peer.agent_did,
-                    behaviors
-                        .iter()
-                        .map(|behavior| behavior.behavior_id.as_str()),
-                    default_behavior_id.as_deref(),
-                ),
-                chat_safe,
+            // Pairing readiness controls admission of new remote work. It does
+            // not control visibility of rows already authorized and present in
+            // the local database. Keeping this projection stable is what lets
+            // the mobile UI remain useful while the transport reconnects.
+            let behavior_readiness = project_behavior_readiness(
+                store.behavior_readiness(&peer.agent_did),
+                &peer.agent_did,
+                behaviors
+                    .iter()
+                    .map(|behavior| behavior.behavior_id.as_str()),
+                default_behavior_id.as_deref(),
             );
-            if !chat_safe {
-                default_behavior_id = None;
-                agent_principal.default_behavior_id = None;
-                runtime = None;
-                behaviors.clear();
-                behavior_environments.clear();
-                inference_backends.clear();
-                inference_profiles.clear();
-                tools.clear();
-                contexts.clear();
-                compactions.clear();
-                inference_sampling.clear();
-                inference_execution.clear();
-                tool_service_registries.clear();
-                skills.clear();
-                tasks.clear();
-                schedules.clear();
-                event_sources.clear();
-                triggers.clear();
-                principal_config = None;
-                behavior_configs.clear();
-                subagent_targets.clear();
-                datastore_tool_surfaces.clear();
-                chain_key_bindings.clear();
-                sessions.clear();
-            }
 
             DeploymentView {
                 peer_id: peer.peer_id,
@@ -624,13 +602,6 @@ pub(crate) fn project_behavior_readiness<'a>(
     }
 }
 
-fn redact_unpaired_behavior_readiness(
-    readiness: BehaviorReadinessView,
-    pairing_ready: bool,
-) -> BehaviorReadinessView {
-    pairing_ready.then_some(readiness).unwrap_or_default()
-}
-
 impl From<gents_protocol::row::BehaviorReadinessUnavailableReason>
     for BehaviorUnavailableReasonView
 {
@@ -701,7 +672,7 @@ fn backend_config_view(
             ("principal_oauth", false, None, Some(row.agent_did.as_str()))
         }
     };
-    let models = observation
+    let advertised_models = observation
         .and_then(|observation| match observation.catalog_for(catalog_scope) {
             Ok(catalog) => catalog,
             Err(error) => {
@@ -710,14 +681,12 @@ fn backend_config_view(
                 None
             }
         })
-        .map(|catalog| {
-            catalog
-                .models
-                .iter()
-                .map(|model| model.model_name.clone())
-                .collect()
-        })
+        .map(|catalog| catalog.models.clone())
         .unwrap_or_default();
+    let models = advertised_models
+        .iter()
+        .map(|model| model.model_name.clone())
+        .collect();
     InferenceBackendView {
         backend_id: row.backend_id.clone(),
         name: Some(row.name.clone()),
@@ -732,7 +701,9 @@ fn backend_config_view(
         max_concurrent: row.max_concurrent,
         max_queue_depth: row.max_queue_depth,
         enabled: Some(row.enabled),
+        tags: row.tags.clone(),
         models,
+        advertised_models,
         probe_status: observation.and_then(|observation| observation.probe_status.clone()),
     }
 }
@@ -894,23 +865,6 @@ mod behavior_readiness_conformance_tests {
             }
         ));
     }
-
-    #[test]
-    fn unpaired_deployment_redacts_a_retained_current_readiness_snapshot() {
-        let retained = BehaviorReadinessView {
-            source: BehaviorReadinessSourceView::Current,
-            active_generation: Some(7),
-            router_generation: Some(7),
-            updated_at: Some("2026-08-29T00:00:00Z".to_string()),
-            behaviors: vec![BehaviorReadinessStatusView::Ready {
-                behavior_id: "private-default".to_string(),
-            }],
-        };
-
-        let redacted = redact_unpaired_behavior_readiness(retained, false);
-
-        assert_eq!(redacted, BehaviorReadinessView::default());
-    }
 }
 
 #[cfg(test)]
@@ -950,8 +904,11 @@ mod behavior_environment_tests {
             instructions: None,
             tool_refs: vec![],
             display_name: Some("Host diagnostics".to_string()),
+            interface_json: None,
+            source_directory: None,
             enabled: Some(true),
             created_at: None,
+            tags: vec![],
         }
     }
 
@@ -1074,12 +1031,16 @@ mod backend_config_view_tests {
         let observation = serde_json::from_value(serde_json::json!({
             "backend_id":"backend","catalogs":[
                 {"agent_did":"foreign","observed_at":"now","models":[{"model_name":"foreign-model"}]},
-                {"agent_did":"owner","observed_at":"now","models":[{"model_name":"own-model"}]}
+                {"agent_did":"owner","observed_at":"now","models":[{
+                    "model_name":"own-model",
+                    "context_window":272000,
+                    "max_context_window":872000
+                }]}
             ]
         })).unwrap();
-        assert_eq!(
-            backend_config_view(&backend, Some(&observation)).models,
-            ["own-model"]
-        );
+        let view = backend_config_view(&backend, Some(&observation));
+        assert_eq!(view.models, ["own-model"]);
+        assert_eq!(view.advertised_models[0].context_window, Some(272_000));
+        assert_eq!(view.advertised_models[0].max_context_window, Some(872_000));
     }
 }

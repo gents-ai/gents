@@ -67,6 +67,54 @@ function renderProjection(
 }
 
 describe("useDesktopSessionProjection", () => {
+  it("rejects an old snapshot after navigating away and back to the same session", async () => {
+    const page = {
+      totalItems: 1,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    };
+    const old = session(["k1"], page);
+    const terminal = { ...session(["k2"], page), turnState: "interrupted" };
+    const other = { ...session(["k3"], page), sessionId: "session-2" };
+    let release!: (snapshot: DesktopSessionSnapshot) => void;
+    const pending = new Promise<DesktopSessionSnapshot>((resolve) => {
+      release = resolve;
+    });
+    const fetchSessionSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(pending)
+      .mockResolvedValueOnce(other)
+      .mockResolvedValueOnce(terminal);
+    const selected = { current: "session-1" };
+    const { result } = renderProjection(
+      { fetchSessionSnapshot } as unknown as DesktopApiAdapter,
+      selected,
+    );
+    let first!: Promise<DesktopSessionSnapshot | null>;
+    act(() => {
+      first = result.current.refreshSession("session-1");
+    });
+    selected.current = "session-2";
+    await act(async () => {
+      await result.current.refreshSession("session-2");
+    });
+    selected.current = "session-1";
+    await act(async () => {
+      await result.current.refreshSession("session-1");
+    });
+    expect(result.current.session?.turnState).toBe("interrupted");
+    await act(async () => {
+      release(old);
+      await first;
+    });
+    expect(result.current.session?.turnState).toBe("interrupted");
+    expect(result.current.session?.timelineItems[0]?.itemKey).toBe("k2");
+    expect(result.current.sessionLoad.phase).toBe("loaded");
+  });
+
   it("crosses a hidden-only durable page to the next visible rows", async () => {
     const tip = session(["k8", "k9"], {
       totalItems: -1,

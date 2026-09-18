@@ -1,5 +1,5 @@
 //! Run the built e2e_live executable directly, with no parent Cargo process.
-use crate::steward_loop_live::wait_for_request_terminal;
+use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::{
     interrupt::{wait_for_runtime_ready, BootedAgent},
     test_db,

@@ -1,6 +1,6 @@
 //! DID-parameterized self-configuration core (#654).
 //!
-//! Transport-agnostic operations behind the `get_my_config` / `configure_*`
+//! Transport-agnostic operations behind the model-facing `config` command
 //! tools: every write is a transactional read-modify-write on one owned
 //! document, merged through the Lean-fenced patch layer
 //! (`config_client::patch`), validated wholesale, and executed under the
@@ -23,6 +23,8 @@ use crate::config_client::{
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::document_config::Tools;
+use crate::tool_surface::SelfConfigProcessCeiling;
+use crate::toolset::CommandNetworkMode;
 
 /// How a self-config write lands: config documents are watched by the control
 /// reconciler; a committed patch applies at the next generation swap, not to
@@ -38,7 +40,9 @@ pub struct SelfConfigCore {
     node: Arc<EmbeddedNode>,
     agent_did: String,
     behavior_id: String,
+    lockout_behavior_id: String,
     no_lockout: bool,
+    process_ceiling: SelfConfigProcessCeiling,
 }
 
 /// Outcome of an applied (or previewed) patch.
@@ -52,7 +56,7 @@ pub struct PatchOutcome {
     pub effect: &'static str,
 }
 
-/// Behavior anchor loaded fresh per call, so a prior `configure_behavior`
+/// Behavior anchor loaded fresh per call, so a prior `config behavior` edit
 /// re-pointing `context_id`/`inference_profile_id` is
 /// honored by the next call.
 pub(crate) struct BehaviorAnchor {
@@ -86,14 +90,37 @@ impl SelfConfigCore {
         Ok(Self {
             node,
             agent_did,
+            lockout_behavior_id: behavior_id.clone(),
             behavior_id,
             no_lockout: false,
+            process_ceiling: SelfConfigProcessCeiling::default(),
         })
     }
 
     pub fn with_no_lockout(mut self, no_lockout: bool) -> Self {
         self.no_lockout = no_lockout;
         self
+    }
+
+    /// Preserve the invoking behavior as the recoverability anchor while a
+    /// catalog-authorized command targets a sibling behavior. Candidate reads
+    /// still incorporate a shared document being patched, so edits to shared
+    /// inference configuration cannot indirectly lock out the invoker.
+    pub(crate) fn with_lockout_behavior_id(mut self, behavior_id: String) -> Self {
+        self.lockout_behavior_id = behavior_id;
+        self
+    }
+
+    pub(crate) fn with_process_ceiling(
+        mut self,
+        process_ceiling: SelfConfigProcessCeiling,
+    ) -> Self {
+        self.process_ceiling = process_ceiling;
+        self
+    }
+
+    pub(crate) fn process_ceiling(&self) -> &SelfConfigProcessCeiling {
+        &self.process_ceiling
     }
 
     pub fn agent_did(&self) -> &str {
@@ -228,6 +255,10 @@ impl SelfConfigCore {
 
         let stored = read_owned_doc(txn, request.target, &self.agent_did, &unique_value).await?;
         let (_doc_id, stored_doc, creating) = match stored {
+            Some(_) if request.require_create => bail!(
+                "{} {unique_value:?} already exists; use edit with its exact ID",
+                request.target.collection_name()
+            ),
             Some((doc_id, doc)) => (Some(doc_id), doc, false),
             None if request.allow_create => (None, Map::new(), true),
             None => bail!(
@@ -243,8 +274,10 @@ impl SelfConfigCore {
 
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
 
-        if self.no_lockout {
-            (request.guard)(&anchor, &merged)?;
+        if self.no_lockout && request.guard_selected_chain {
+            if self.lockout_behavior_id == self.behavior_id {
+                (request.guard)(&anchor, &merged)?;
+            }
             self.guard_candidate_chain(txn, request.target, &merged)
                 .await?;
         }
@@ -277,7 +310,7 @@ impl SelfConfigCore {
             txn,
             self.agent_did(),
             SelfConfigTarget::AgentBehavior,
-            self.behavior_id(),
+            &self.lockout_behavior_id,
             target,
             merged,
         )
@@ -371,6 +404,10 @@ impl SelfConfigCore {
         let unique_value = (request.resolve_unique)(&anchor)?;
         let stored = read_owned_doc(txn, request.target, &self.agent_did, &unique_value).await?;
         let (stored_doc, creating) = match stored {
+            Some(_) if request.require_create => bail!(
+                "{} {unique_value:?} already exists; use edit with its exact ID",
+                request.target.collection_name()
+            ),
             Some((_, doc)) => (doc, false),
             None if request.allow_create => (Map::new(), true),
             None => bail!(
@@ -383,8 +420,10 @@ impl SelfConfigCore {
             (request.on_create)(&unique_value, &mut merged)?;
         }
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
-        if self.no_lockout {
-            (request.guard)(&anchor, &merged)?;
+        if self.no_lockout && request.guard_selected_chain {
+            if self.lockout_behavior_id == self.behavior_id {
+                (request.guard)(&anchor, &merged)?;
+            }
             self.guard_candidate_chain(txn, request.target, &merged)
                 .await?;
         }
@@ -400,6 +439,47 @@ impl SelfConfigCore {
     }
 }
 
+/// Focused convenience over canonical Tools groups, not a separate config type.
+pub fn apply_tool_grant_selection(
+    tools: &mut Tools,
+    enable_lsp: Option<bool>,
+    enable_graph_tools: Option<bool>,
+    network_mode: Option<CommandNetworkMode>,
+) {
+    if let Some(enabled) = enable_lsp {
+        let integrations = tools.integrations.get_or_insert_with(Default::default);
+        if enabled {
+            integrations.lsp.get_or_insert_with(Default::default);
+        } else {
+            integrations.lsp = None;
+        }
+    }
+    if let Some(enabled) = enable_graph_tools {
+        tools
+            .built_ins
+            .get_or_insert_with(Default::default)
+            .enable_graph_tools = Some(enabled);
+    }
+    if let Some(network_mode) = network_mode {
+        tools
+            .host
+            .get_or_insert_with(Default::default)
+            .bash
+            .get_or_insert_with(Default::default)
+            .network_mode = Some(network_mode);
+    }
+}
+
+/// Pure admission fence for the focused sibling network selection. The
+/// canonical Tools writer remains [`apply_tool_grant_selection`].
+pub fn validate_tool_network_selection(network_mode: Option<CommandNetworkMode>) -> Result<()> {
+    anyhow::ensure!(
+        network_mode.is_none_or(|mode| mode == CommandNetworkMode::Disabled),
+        "config behavior tools may only narrow network_mode to disabled"
+    );
+    Ok(())
+}
+
 /// Per-call plumbing for one category patch. Boxed closures keep the core's
 /// write operation single-sourced while each tool supplies target resolution,
 /// validation, creation defaults, and its slice of the no-lockout guard.
@@ -407,6 +487,8 @@ pub(crate) struct ApplyRequest<'a> {
     pub(crate) target: SelfConfigTarget,
     pub(crate) patch: SelfConfigPatch,
     pub(crate) allow_create: bool,
+    pub(crate) require_create: bool,
+    pub(crate) guard_selected_chain: bool,
     pub(crate) resolve_unique: Box<dyn Fn(&BehaviorAnchor) -> Result<String> + Send + Sync + 'a>,
     pub(crate) on_create:
         Box<dyn Fn(&str, &mut Map<String, Value>) -> Result<()> + Send + Sync + 'a>,
@@ -433,6 +515,8 @@ impl<'a> ApplyRequest<'a> {
             target,
             patch,
             allow_create: false,
+            require_create: false,
+            guard_selected_chain: true,
             resolve_unique: Box::new(|_| bail!("resolve_unique not set (internal bug)")),
             on_create: Box::new(|_, _| Ok(())),
             validate: Box::new(|_, _, _, _| Box::pin(async { Ok(()) })),

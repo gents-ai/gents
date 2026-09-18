@@ -212,8 +212,11 @@ fn project_behavior_for_chat(mut behavior: BehaviorView) -> BehaviorView {
 
 fn project_skill_for_chat(mut skill: SkillView) -> SkillView {
     skill.instructions = None;
+    skill.source_directory = None;
     skill.description = None;
     skill.tool_refs.clear();
+    skill.interface_json = None;
+    skill.tags.clear();
     skill
 }
 
@@ -224,6 +227,7 @@ fn project_backend_for_fleet(mut backend: InferenceBackendView) -> InferenceBack
     backend.auth_kind = None;
     backend.connect_timeout_secs = None;
     backend.discovery_timeout_secs = None;
+    backend.tags.clear();
     backend
 }
 
@@ -401,8 +405,11 @@ mod tests {
                         instructions: Some("DO SECRET THINGS".into()),
                         tool_refs: vec![],
                         display_name: Some("Skill A".into()),
+                        interface_json: Some("{\"secret\":true}".into()),
+                        source_directory: Some("/private/skills".into()),
                         enabled: Some(true),
                         created_at: None,
+                        tags: vec!["private-skill".into()],
                     }],
                     tasks: vec![],
                     schedules: vec![],
@@ -517,6 +524,7 @@ mod tests {
         );
         assert!(dep.skills[0].instructions.is_none());
         assert_eq!(dep.skills[0].skill_id, "skill_a");
+        assert!(dep.skills[0].source_directory.is_none());
         assert_eq!(
             projected.bootstrap.init_agent_did.as_deref(),
             Some("did:test:local")

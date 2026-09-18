@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphql::escape_graphql_string;
 
 mod compaction_entries;
+mod control;
 mod fork;
 mod history;
 mod observations;
@@ -23,6 +24,7 @@ pub(crate) use compaction_entries::{
     save_compaction_entry, save_compaction_entry_with_requester_did,
 };
 pub(crate) use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
+pub(crate) use control::preserve_control_session_in_txn;
 pub use fork::{fork, fork_via_http, is_user_turn, ForkError, ForkOutcome, ForkParams};
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;

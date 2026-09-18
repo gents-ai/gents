@@ -13,8 +13,12 @@ import type {
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
 import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
-import type { DesktopStartupPhase } from "../lib/loadingStatus";
+import {
+  projectStartupPhaseAfterSnapshot,
+  type DesktopStartupPhase,
+} from "../lib/loadingStatus";
 import { restoreManagedServer } from "./managedServerLifecycle";
+import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
 
@@ -41,7 +45,6 @@ export function useDesktopClientLifecycle({
   const autoRestartInFlight = useRef(false);
   const lastP2PAutoRestartAt = useRef<number | null>(null);
   const lastObservedP2PHealth = useRef<P2PHealth | null>(null);
-  const snapshotRefreshSeq = useRef(0);
   const initialStartupPhase: DesktopStartupPhase = supportsManagedServer
     ? "checking-managed-server"
     : "loading-configuration";
@@ -51,6 +54,14 @@ export function useDesktopClientLifecycle({
   );
   const initializationInFlight = useRef<Promise<void> | null>(null);
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
+  const snapshotPublicationRef = useRef<
+    ReturnType<typeof createSnapshotPublicationOwner> | undefined
+  >(undefined);
+  snapshotPublicationRef.current ??= createSnapshotPublicationOwner((next) => {
+    setSnapshot(next);
+    setLoading(false);
+    resolveStartupPhase(next);
+  });
   const [startupPhase, setStartupPhaseState] =
     useState<DesktopStartupPhase>(initialStartupPhase);
   const [loading, setLoading] = useState(true);
@@ -62,34 +73,44 @@ export function useDesktopClientLifecycle({
     setStartupPhaseState(next);
   }
 
+  function resolveStartupPhase(next: DesktopClientSnapshot) {
+    const phase = projectStartupPhaseAfterSnapshot(
+      startupPhaseRef.current,
+      Boolean(next.client),
+      !next.bootstrap.clientStateExists && next.bootstrap.savedPeers.length === 0,
+    );
+    if (phase !== startupPhaseRef.current) setStartupPhase(phase);
+  }
+
   async function refreshSnapshot() {
-    const refreshSeq = snapshotRefreshSeq.current + 1;
-    snapshotRefreshSeq.current = refreshSeq;
-    const resolvingConfiguration = startupPhaseRef.current === "loading-configuration";
+    const publish = snapshotPublicationRef.current!.begin();
     setLoading(true);
     try {
       const next = await api.fetchDesktopSnapshot();
-      if (snapshotRefreshSeq.current === refreshSeq) {
-        setSnapshot(next);
+      if (publish.publish(next)) {
         setError(null);
-        if (resolvingConfiguration) {
-          setStartupPhase(
-            next.client ||
-              (!next.bootstrap.clientStateExists &&
-                next.bootstrap.savedPeers.length === 0)
-              ? "ready"
-              : "starting-client",
-          );
-        }
       }
     } catch (error) {
-      if (snapshotRefreshSeq.current === refreshSeq) {
-        setError(String(error));
-        if (resolvingConfiguration) setStartupPhase("configuration-error");
+      if (!publish.isCurrent()) {
+        return;
+      }
+      setError(String(error));
+      if (startupPhaseRef.current === "loading-configuration") {
+        setStartupPhase("configuration-error");
+      } else if (startupPhaseRef.current === "starting-client") {
+        setStartupPhase("client-error");
       }
     } finally {
-      if (snapshotRefreshSeq.current === refreshSeq) setLoading(false);
+      if (publish.isCurrent()) setLoading(false);
     }
+  }
+
+  async function mutateSnapshot<T>(operation: () => Promise<T>): Promise<T> {
+    const accepted = await operation();
+    // Mutation payloads can predate reads issued while they were pending.
+    // Observe committed state after acceptance; failed writes don't revoke reads.
+    await refreshSnapshot();
+    return accepted;
   }
 
   async function ensureDesktopClientStarted(): Promise<DesktopClientSnapshot | null> {
@@ -97,19 +118,18 @@ export function useDesktopClientLifecycle({
     setStarting(true);
     setError(null);
     const pending = (async () => {
-      let started = false;
+      const isCurrent = snapshotPublicationRef.current!.checkpoint();
       try {
-        const next = await api.startDesktopClient();
-        setSnapshot(next);
-        started = true;
-        return next;
+        return await mutateSnapshot(() => api.startDesktopClient());
       } catch (error) {
-        setError(String(error));
+        if (isCurrent() || !snapshotPublicationRef.current!.snapshot?.client) {
+          setError(String(error));
+          if (startupPhaseRef.current === "starting-client") {
+            setStartupPhase("client-error");
+          }
+        }
         return null;
       } finally {
-        if (startupPhaseRef.current === "starting-client") {
-          setStartupPhase(started ? "ready" : "client-error");
-        }
         startClientInFlight.current = null;
         setStarting(false);
       }
@@ -131,9 +151,10 @@ export function useDesktopClientLifecycle({
         try {
           localServerAvailable.current = await restoreManagedServer(api);
         } catch (error) {
+          // A legacy or broken ~/.gents must not block first-run setup or
+          // already-saved remote peers. Surface the error after the shell is up.
+          localServerAvailable.current = false;
           setError(String(error));
-          setStartupPhase("managed-server-error");
-          return;
         }
       }
       setStartupPhase("loading-configuration");
@@ -163,6 +184,7 @@ export function useDesktopClientLifecycle({
     setStopping(true);
     setStarting(true);
     setError(null);
+    const isCurrent = snapshotPublicationRef.current!.checkpoint();
     try {
       let next: DesktopClientSnapshot | null = null;
       for (
@@ -183,13 +205,17 @@ export function useDesktopClientLifecycle({
         }
       }
       if (!next) throw new Error("desktop restart returned no snapshot");
-      setSnapshot(next);
-      if (sessionId) await refreshSession(sessionId);
-      else setSession(null);
+      await refreshSnapshot();
+      if (selectedSessionIdRef.current === sessionId) {
+        if (sessionId) await refreshSession(sessionId);
+        else setSession(null);
+      }
       logShellEvent(`restart complete reason="${reason}"`);
     } catch (error) {
       logShellEvent(`restart failed reason="${reason}" error=${String(error)}`);
-      setError(`desktop client restart failed after ${reason}: ${String(error)}`);
+      if (isCurrent() || !snapshotPublicationRef.current!.snapshot?.client) {
+        setError(`desktop client restart failed after ${reason}: ${String(error)}`);
+      }
     } finally {
       setStopping(false);
       setStarting(false);
@@ -204,7 +230,7 @@ export function useDesktopClientLifecycle({
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
     snapshot,
-    setSnapshot,
+    mutateSnapshot,
     startupPhase,
     loading,
     starting,

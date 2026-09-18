@@ -8,6 +8,8 @@ use rig::completion::{CompletionRequest, ToolDefinition};
 use serde_json::{json, Value};
 
 const DEFAULT_MAX_TOKENS: u64 = 4096;
+#[doc(hidden)]
+pub const ADVERTISED_REASONING_EFFORTS_PARAM: &str = "_gents_advertised_reasoning_efforts";
 
 /// First `system` block. The subscription token was minted for Claude Code;
 /// without this identity the same token 429s on every model (write request #7).
@@ -23,13 +25,37 @@ pub fn build_messages_body(model: &str, request: &CompletionRequest) -> Value {
         .iter()
         .map(crate::rig_compat::from_rig_message)
         .collect();
-    build_messages_body_native(
+    let mut body = build_messages_body_native(
         model,
         request.preamble.as_deref(),
         request.max_tokens,
         &history,
         &request.tools,
-    )
+    );
+    if let Some(params) = &request.additional_params {
+        apply_reasoning_parameters(model, params, &mut body);
+    }
+    body
+}
+
+/// Lean `ClaudeMap.selectedEffort`: permit one supported effort field, not a
+/// wholesale merge of additional_params. Sampling and arbitrary keys stay out.
+pub fn apply_reasoning_parameters(_model: &str, params: &Value, body: &mut Value) {
+    let Some(supported) = params
+        .get(ADVERTISED_REASONING_EFFORTS_PARAM)
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    let Some(effort) = params["output_config"]["effort"].as_str() else {
+        return;
+    };
+    if supported.iter().any(|value| value.as_str() == Some(effort))
+        && matches!(effort, "low" | "medium" | "high" | "xhigh" | "max")
+    {
+        body["output_config"] = json!({ "effort": effort });
+        body["thinking"] = json!({ "type": "adaptive" });
+    }
 }
 
 /// Body assembly over the native message family (no rig vocabulary).
