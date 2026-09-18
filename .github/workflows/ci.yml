@@ -176,6 +176,17 @@ jobs:
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
 
+      - name: Install Go for Afterburner compiler tests
+        if: matrix.suite == 'cli' && github.event_name != 'pull_request'
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.1"
+          cache: false
+
+      - name: Install Afterburner compiler test prerequisites
+        if: matrix.suite == 'cli' && github.event_name != 'pull_request'
+        run: .github/scripts/setup-afterburner-toolchains.sh
+
       # Runtime, desktop-bridge, and support migration tests load the generated
       # Lean contract. Mathlib publishes matching precompiled artifacts; without
       # this cache Lake recompiles the dependency graph in every clean checkout.
@@ -342,7 +353,12 @@ jobs:
         # --no-fail-fast: cli binaries run alphabetically; without this the
         # first red binary hides every later one (how a broken cli_subagent
         # masked cli_trace_export for days — see #1139).
-        run: cargo test --no-fail-fast -p gents-cli -- --nocapture --test-threads=1
+        # Compiler tests spawn Cargo in temporary plugin source directories.
+        # Do not leak the outer job's shared target directory into those child
+        # builds: Afterburner reads their standard, source-local target output.
+        run: |
+          env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
+            --no-fail-fast -p gents-cli -- --nocapture --test-threads=1
 
       - name: Show Rust build cache stats
         # The three heavy suites use runner-local incremental state. Keep one
