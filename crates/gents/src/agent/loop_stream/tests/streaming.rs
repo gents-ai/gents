@@ -52,8 +52,8 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
         ],
     ]);
     let mut loop_config = config(2);
-    loop_config.output_obligation_gate =
-        Some(crate::agent::output_obligation::OutputObligationGate::new(
+    loop_config.output_obligation_gate = Some(Arc::new(
+        crate::agent::output_obligation::OutputObligationGate::new(
             node.clone(),
             "request-doc-unmet",
             vec![crate::agent::output_obligation::ActiveOutputObligation {
@@ -64,10 +64,11 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
                     expected_count_field: None,
                 },
             }],
-        ));
+        ),
+    ) as Arc<dyn gents_loop::output_obligation::OutputObligationCheck>);
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("do the work"),
         Vec::new(),
         Arc::new(Vec::new()),

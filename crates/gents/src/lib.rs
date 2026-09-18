@@ -42,6 +42,7 @@ pub mod graph_package;
 pub mod graph_pipeline;
 pub mod graphql;
 pub mod health_checker;
+pub mod home;
 pub mod hook;
 pub mod identity;
 pub mod inference_http;

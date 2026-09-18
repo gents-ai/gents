@@ -6,7 +6,14 @@ license.workspace = true
 repository.workspace = true
 description = "Shared schemas, client turn-observation protocol, and collection row mirrors for Gents"
 
+# `native` gates the reqwest-based GraphQL transport (`graphql::execute_graphql_async`,
+# `execute_graphql_blocking`, `graphql_endpoint_available`): reqwest has no
+# wasm32-wasip1 support, so a guest-compilable dependent (gents-loop) pulls
+# this crate with `default-features = false` and never links it. Every other
+# module (message, row, canonical, ...) is native/guest agnostic and always on.
 [features]
+default = ["native"]
+native = ["dep:reqwest"]
 typescript = ["dep:ts-rs"]
 
 [dependencies]
@@ -17,11 +24,15 @@ chrono = { workspace = true }
 ciborium = "0.2"
 graphql-parser = "0.4"
 gents-schemas = { workspace = true }
-reqwest = { workspace = true, features = ["blocking"] }
+reqwest = { workspace = true, features = ["blocking"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.10"
-tokio = { workspace = true, features = ["time"] }
+# Not `workspace = true`: the workspace's tokio pins `features = ["full"]`,
+# which is unsupported on wasm32-wasip1 (only sync, macros, io-util, rt, time
+# exist there) and workspace-inherited features only ever union, never
+# subtract. An explicit, minimal feature list keeps this crate guest-buildable.
+tokio = { version = "1", default-features = false, features = ["time"] }
 tracing = { workspace = true }
 
 # rig-core is dev-only: the golden byte-compat tests in src/message.rs compare

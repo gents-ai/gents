@@ -38,6 +38,23 @@ pub fn render(status: u16, message: &str) -> String {
         )
 }
 
+pub fn response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut response =
+        Response::from_string(render(status, &body)).with_status_code(TinyStatusCode(status));
+    for (name, value) in [
+        ("Content-Type", "text/html; charset=utf-8"),
+        ("Cache-Control", "no-store"),
+        ("Referrer-Policy", "no-referrer"),
+        ("X-Content-Type-Options", "nosniff"),
+        ("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
+    ] {
+        if let Ok(header) = Header::from_bytes(name, value) {
+            response.add_header(header);
+        }
+    }
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,21 +93,4 @@ mod tests {
             .unwrap()
             .contains("default-src 'none'"));
     }
-}
-
-pub fn response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
-    let mut response =
-        Response::from_string(render(status, &body)).with_status_code(TinyStatusCode(status));
-    for (name, value) in [
-        ("Content-Type", "text/html; charset=utf-8"),
-        ("Cache-Control", "no-store"),
-        ("Referrer-Policy", "no-referrer"),
-        ("X-Content-Type-Options", "nosniff"),
-        ("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
-    ] {
-        if let Ok(header) = Header::from_bytes(name, value) {
-            response.add_header(header);
-        }
-    }
-    response
 }
