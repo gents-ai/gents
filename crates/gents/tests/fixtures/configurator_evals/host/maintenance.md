@@ -1,4 +1,4 @@
-Create one maintenance behavior for this host, with a useful system prompt and the tools needed to inspect services, perform requested host repairs, and report unresolved problems through the real Gents mailbox. Use /host as its working root. Reuse the existing inference profile. Keep The Engineer and the read-only monitor unchanged.
+Create one maintenance behavior for this host, with a useful system prompt and read/write Bash to inspect services, perform requested host repairs, and report unresolved problems through the real Gents mailbox. Use /host as its working root. Reuse the existing inference profile. Keep The Engineer and the monitor unchanged.
 
 Apply this configuration now and verify it. Do not repair the host yet: I will open a fresh session with the new behavior and give it the first task. Keep the configuration minimal; no approval workflow, decision collection, schedule, or trigger is needed for these interactive tasks. Do not leave discarded configuration behind.
 

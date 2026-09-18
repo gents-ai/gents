@@ -283,9 +283,9 @@ impl Host {
         .await
     }
 
-    pub async fn configure_sampling(&self) -> Result<()> {
+    pub async fn configure_trial(&self) -> Result<()> {
         use gents::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        use gents::document_config::{InferenceProfile, InferenceSampling};
+        use gents::document_config::{InferenceProfile, InferenceSampling, Tools};
         let snapshot = configuration_snapshot(&self.access).await?;
         let owner = snapshot["AgentPrincipal"][0]["agent_did"]
             .as_str()
@@ -301,6 +301,19 @@ impl Host {
             Collection::InferenceSampling,
             serde_json::to_value(sampling)?,
         )];
+        for row in snapshot["Tools"].as_array().context("tools missing")? {
+            let mut tools: Tools =
+                super::host_scenarios::decode_configuration(Collection::Tools, row)?;
+            let bash = tools
+                .host
+                .get_or_insert_with(Default::default)
+                .bash
+                .get_or_insert_with(Default::default);
+            bash.mode = gents::tool_surface::BashMode::Unrestricted;
+            bash.execution_mode = Some(gents::toolset::CommandExecutionMode::Unrestricted);
+            bash.read_only_commands = None;
+            documents.push((Collection::Tools, serde_json::to_value(tools)?));
+        }
         for row in snapshot["InferenceProfile"]
             .as_array()
             .context("profiles missing")?
@@ -331,7 +344,7 @@ impl Host {
                 .collect(),
         )?;
         self.access
-            .transact("eval.host.sampling", |txn| {
+            .transact("eval.host.configuration", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     gents::config_client::apply_desired_state_plan(txn, plan)
@@ -460,13 +473,20 @@ fn input_receipt_uses_the_canonical_add_response() {
 }
 
 pub(super) async fn configuration_snapshot(access: &ConfigAccess) -> Result<Value> {
-    let mut snapshot = serde_json::Map::new();
+    let mut query = String::from("{");
     for collection in Collection::ALL {
         let (fields, _) = gents::config_client::config_projection(collection, None)?;
+        query.push_str(&format!(
+            " {} {{ _docID {} }}",
+            collection.graphql_type(),
+            fields.join(" ")
+        ));
+    }
+    query.push('}');
+    let response = access.execute(&query).await?;
+    let mut snapshot = serde_json::Map::new();
+    for collection in Collection::ALL {
         let name = collection.graphql_type();
-        let response = access
-            .execute(&format!("{{ {name} {{ _docID {} }} }}", fields.join(" ")))
-            .await?;
         let mut rows = response["data"][name]
             .as_array()
             .context("configuration rows missing")?
@@ -478,12 +498,34 @@ pub(super) async fn configuration_snapshot(access: &ConfigAccess) -> Result<Valu
 }
 
 #[tokio::test]
+async fn batched_configuration_snapshot_matches_individual_reads() -> Result<()> {
+    let db = crate::support::test_db("batched-config-snapshot").await;
+    let access = ConfigAccess::Local(db.node.clone());
+    let snapshot = configuration_snapshot(&access).await?;
+    for collection in Collection::ALL {
+        let (fields, _) = gents::config_client::config_projection(collection, None)?;
+        let name = collection.graphql_type();
+        let response = access
+            .execute(&format!("{{ {name} {{ _docID {} }} }}", fields.join(" ")))
+            .await?;
+        let mut rows = response["data"][name]
+            .as_array()
+            .context("missing rows")?
+            .clone();
+        rows.sort_by(|a, b| a["_docID"].as_str().cmp(&b["_docID"].as_str()));
+        assert_eq!(snapshot[name], Value::Array(rows));
+    }
+    db.node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "container: requires source-built gents-eval-runtime image and explicit inference settings"]
 async fn isolated_host_runtime_survives_restart_without_changing_configuration() -> Result<()> {
     let root = tempfile::tempdir()?;
     let mut host = Host::start(root.path()).await?;
     let result: Result<()> = async {
-        host.configure_sampling().await?;
+        host.configure_trial().await?;
         let before = configuration_snapshot(&host.access).await?;
         ensure!(before["AgentPrincipal"]
             .as_array()

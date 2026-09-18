@@ -28,7 +28,7 @@ const APPROVE: &str = include_str!("../fixtures/configurator_evals/host/approve-
 pub(super) fn provenance() -> Result<reporting::RunProvenance> {
     reporting::RunProvenance::current(
         "host-steward",
-        "host-observations-v7-monitor-instruction-scope",
+        "host-observations-v8-readwrite-bash",
         std::env::var("GENTS_D4F_ENDPOINT")?,
         "engineer-eval-sampling",
         1.0,
@@ -267,7 +267,7 @@ pub(super) struct PreparedMonitor {
 }
 
 pub(super) async fn prepare_monitor(host: &Host, evidence: &Path) -> Result<PreparedMonitor> {
-    host.configure_sampling()
+    host.configure_trial()
         .await
         .map_err(stages::infrastructure)?;
     let before = configuration_snapshot(&host.access)
@@ -913,11 +913,11 @@ pub(super) fn verify_monitor_authority(tools: &gents::document_config::Tools) ->
     let host = tools.host.as_ref().context("monitor host tools missing")?;
     let bash = host.bash.as_ref().context("monitor bash missing")?;
     ensure!(
-        bash.mode == gents::tool_surface::BashMode::ReadOnly
+        bash.mode == gents::tool_surface::BashMode::Unrestricted
             && bash
                 .execution_mode
-                .is_none_or(|mode| mode == gents::toolset::CommandExecutionMode::ReadOnly),
-        "monitor bash must stay read-only"
+                .is_none_or(|mode| mode == gents::toolset::CommandExecutionMode::Unrestricted),
+        "monitor requires read/write bash in the isolated host"
     );
     ensure!(
         host.files.as_ref().is_none_or(|files| matches!(
@@ -925,21 +925,6 @@ pub(super) fn verify_monitor_authority(tools: &gents::document_config::Tools) ->
             gents::tool_surface::FileToolMode::Off | gents::tool_surface::FileToolMode::ReadOnly
         )),
         "monitor files must stay read-only"
-    );
-    let baseline = gents::toolset::default_read_only_command_policy();
-    ensure!(
-        bash.read_only_commands
-            .iter()
-            .flatten()
-            .all(|command| baseline.read_only_allowlist().contains(command))
-            && bash
-                .allowed_argv_prefixes
-                .iter()
-                .flatten()
-                .all(|prefix| prefix
-                    .first()
-                    .is_some_and(|command| baseline.read_only_allowlist().contains(command))),
-        "monitor command overrides must not extend the canonical read-only allowlist"
     );
     verify_no_auxiliary_authority(tools)
 }
@@ -993,7 +978,7 @@ pub(super) fn verify_no_auxiliary_authority(tools: &gents::document_config::Tool
 }
 
 #[test]
-fn read_only_modes_do_not_hide_additional_monitor_authority() {
+fn bash_access_does_not_grant_auxiliary_monitor_tools() {
     use gents::document_config::{BashTools, FileTools, HostTools, Tools};
     let tools = Tools {
         host: Some(HostTools {
@@ -1002,7 +987,7 @@ fn read_only_modes_do_not_hide_additional_monitor_authority() {
                 ..Default::default()
             }),
             bash: Some(BashTools {
-                mode: gents::tool_surface::BashMode::ReadOnly,
+                mode: gents::tool_surface::BashMode::Unrestricted,
                 ..Default::default()
             }),
             ..Default::default()
@@ -1040,23 +1025,9 @@ fn read_only_modes_do_not_hide_additional_monitor_authority() {
     }
     let mut narrowed = tools.clone();
     narrowed.host.as_mut().unwrap().files = None;
-    narrowed
-        .host
-        .as_mut()
-        .unwrap()
-        .bash
-        .as_mut()
-        .unwrap()
-        .read_only_commands = Some(vec!["df".into(), "cmp".into()]);
     assert!(verify_monitor_authority(&narrowed).is_ok());
-    narrowed
-        .host
-        .as_mut()
-        .unwrap()
-        .bash
-        .as_mut()
-        .unwrap()
-        .read_only_commands = Some(vec!["chmod".into()]);
+    narrowed.host.as_mut().unwrap().bash.as_mut().unwrap().mode =
+        gents::tool_surface::BashMode::Off;
     assert!(verify_monitor_authority(&narrowed).is_err());
     let mut cli = tools.clone();
     cli.host
@@ -1068,16 +1039,6 @@ fn read_only_modes_do_not_hide_additional_monitor_authority() {
             ..Default::default()
         });
     assert!(verify_monitor_authority(&cli).is_err());
-    let mut extended = tools.clone();
-    extended
-        .host
-        .as_mut()
-        .unwrap()
-        .bash
-        .as_mut()
-        .unwrap()
-        .allowed_argv_prefixes = Some(vec![vec!["chmod".into()]]);
-    assert!(verify_monitor_authority(&extended).is_err());
     let mut disabled = tools;
     disabled.self_config = Some(gents::document_config::SelfConfigTools {
         enable_self_config: Some(false),
@@ -1098,7 +1059,7 @@ fn monitor_configuration_rejects_hooks_and_unrelated_datastore_writers() {
         serde_json::json!([{"behavior_id":"monitor","context_id":"context","enabled":true}]);
     after["AgentContext"] = serde_json::json!([{"context_id":"context","tools_id":"tools"}]);
     after["Tools"] = serde_json::json!([{"tools_id":"tools","agent_did":"did:key:owner",
-        "host":{"bash":{"mode":"ReadOnly"}}}]);
+        "host":{"bash":{"mode":"Unrestricted"}}}]);
     after["DatastoreToolSurface"] = serde_json::json!([]);
     after["Task"] = serde_json::json!([{"task_id":"check","agent_did":"did:key:owner",
         "behavior_id":"monitor","prompt_template":"Check this host","enabled":true}]);

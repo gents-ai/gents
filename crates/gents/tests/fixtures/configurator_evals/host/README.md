@@ -39,11 +39,11 @@ the coordinator's container control socket.
    and host manifests before/after. Inspect execution receipts for attempted
    mutations as in the existing mailbox preview grader.
 2. Configure: send `approve-steward.md`. Verify preserved Engineer identity and
-   inference documents, a read-only working behavior, enabled schedule and
+   inference documents, a working behavior with read/write Bash, enabled schedule and
    document trigger sharing a task, and canonical mailbox grants. Follow actual
    references; do not require model-selected names to match fixture strings.
    Check all selected tool groups and datastore surfaces, not just file/bash
-   modes: no extra executors, configuration writers, command-allowlist expansion,
+   modes: no extra executors or configuration writers,
    delegated execution, host hooks, or writes outside observations and mailbox.
 3. Healthy: submit the model-declared input document. Await the source-linked
    request's completed state. Verify real checks and no open attention items.
@@ -93,7 +93,7 @@ The baseline is a sequence of user requests and independent checks, not an
 approval-router implementation exercise. It does not test document-driven repair
 approval or forced event replay.
 
-1. Start from the verified read-only monitor. Ask the Engineer to create one
+1. Start from the verified monitor (read/write Bash; observation-only task). Ask the Engineer to create one
    maintenance behavior for interactive work, preserving existing configuration
    and inference. No prescribed tool spelling, task graph, or decision schema.
 2. Request repair of the injected API permission fault in a fresh session.
