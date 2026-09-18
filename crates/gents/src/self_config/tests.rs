@@ -62,6 +62,8 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         "automation",
         "datastore",
         "skill",
+        "subagent-target",
+        "eth-tool",
     ]
     .into_iter()
     .flat_map(|resource| {
@@ -3340,4 +3342,136 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
         .unwrap();
         assert_eq!(after["documents"]["Tools"], baseline["documents"]["Tools"]);
     }
+}
+
+#[test]
+fn expanded_targets_route_through_automation_and_cleanup() {
+    for (kind, target) in [
+        ("callback", SelfConfigTarget::Callback),
+        ("callback_binding", SelfConfigTarget::CallbackBinding),
+        ("callback_module", SelfConfigTarget::CallbackModule),
+    ] {
+        assert_eq!(automation_target(kind).unwrap(), target);
+    }
+    for (resource, target) in [
+        ("subagent-target", SelfConfigTarget::SubagentTarget),
+        ("eth-tool", SelfConfigTarget::EthTool),
+        ("callback", SelfConfigTarget::Callback),
+        ("callback-binding", SelfConfigTarget::CallbackBinding),
+        ("callback-module", SelfConfigTarget::CallbackModule),
+    ] {
+        assert_eq!(command::cleanup_target(resource).unwrap(), target);
+    }
+}
+
+#[test]
+fn callback_module_material_stays_protected() {
+    use crate::config_client::patch::{ensure_admissible, SelfConfigTarget};
+    for field in ["wasm_bytes", "canonical_args", "signer_did", "provenance"] {
+        let error = ensure_admissible(
+            SelfConfigTarget::CallbackModule,
+            &vec![(field.to_string(), Some(serde_json::json!("x")))],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("protected"), "{field}: {error}");
+    }
+    ensure_admissible(
+        SelfConfigTarget::CallbackModule,
+        &vec![("fuel_limit".to_string(), Some(serde_json::json!(1000)))],
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn subagent_target_resource_upserts_reads_and_protects_owner() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("subagent-target-config");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let mut preview_grants = config(&["tools"]);
+    preview_grants.dry_run = true;
+    let preview_tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity.clone()),
+        &preview_grants,
+    );
+    let tools =
+        build_self_config_tools(node.clone(), owner.clone(), Some(identity), &config(&["tools"]));
+    let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
+
+    // Preview creates a missing ID without committing.
+    let preview = call_config_tool(
+        &preview_tools,
+        command(&[
+            "subagent-target",
+            "preview",
+            "tier-builder",
+            "--set",
+            "name=\"Tier Builder\"",
+            "--set",
+            "behavior_id=\"beh-test\"",
+            "--set",
+            &format!("target_agent_did={:?}", owner),
+        ]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&preview).unwrap()["committed"],
+        false
+    );
+
+    // Edit commits, get reads it back.
+    call_config_tool(
+        &tools,
+        command(&[
+            "subagent-target",
+            "edit",
+            "tier-builder",
+            "--set",
+            "name=\"Tier Builder\"",
+            "--set",
+            "behavior_id=\"beh-test\"",
+            "--set",
+            &format!("target_agent_did={:?}", owner),
+        ]),
+    )
+    .await
+    .unwrap();
+    let read = call_config_tool(&tools, command(&["subagent-target", "get", "tier-builder"]))
+        .await
+        .unwrap();
+    let doc: Value = serde_json::from_str(&read).unwrap();
+    assert_eq!(doc["document"]["name"], "Tier Builder");
+
+    // Owner identity is protected.
+    let error = call_config_tool(
+        &tools,
+        command(&[
+            "subagent-target",
+            "edit",
+            "tier-builder",
+            "--set",
+            "agent_did=\"did:key:other\"",
+        ]),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("protected"), "{error}");
+
+    // The resource is gated on the tools category.
+    let automation_only = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        None,
+        &config(&["automation"]),
+    );
+    let denied = call_config_tool(
+        &automation_only,
+        command(&["subagent-target", "get", "tier-builder"]),
+    )
+    .await
+    .unwrap_err();
+    assert!(denied.contains("not granted"), "{denied}");
 }

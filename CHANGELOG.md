@@ -6,6 +6,17 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+### Added
+
+- Self-config targets for SubagentTarget, EthTool, and the callback automation
+  family (Callback, CallbackBinding, CallbackModule): the in-session config
+  tool gains `subagent-target` and `eth-tool` resources and callback kinds
+  under `automation`, with cleanup support. Module material (`wasm_bytes`,
+  args, signer, provenance) stays operator-managed; keys, graph definitions,
+  and placements remain excluded pending the workspace-integration design.
+  The Lean SelfConfig model and generated conformance contract cover the
+  expanded inventory.
+
 ## 0.17.0 - 2026-09-11
 
 ### Changed

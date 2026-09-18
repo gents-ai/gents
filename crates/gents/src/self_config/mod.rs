@@ -415,8 +415,14 @@ fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
         "schedule" => Ok(SelfConfigTarget::Schedule),
         "trigger" => Ok(SelfConfigTarget::Trigger),
         "event_source" => Ok(SelfConfigTarget::EventSource),
+        "callback" => Ok(SelfConfigTarget::Callback),
+        "callback_binding" => Ok(SelfConfigTarget::CallbackBinding),
+        "callback_module" => Ok(SelfConfigTarget::CallbackModule),
         _ => {
-            bail!("unknown automation kind {kind:?}; use task, schedule, trigger, or event_source")
+            bail!(
+                "unknown automation kind {kind:?}; use task, schedule, trigger, event_source, \
+                 callback, callback_binding, or callback_module"
+            )
         }
     }
 }

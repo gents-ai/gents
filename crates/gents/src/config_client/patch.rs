@@ -38,6 +38,11 @@ pub enum SelfConfigTarget {
     EventSource,
     DatastoreToolSurface,
     Skill,
+    SubagentTarget,
+    EthTool,
+    Callback,
+    CallbackBinding,
+    CallbackModule,
 }
 pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
     "behavior",
@@ -49,7 +54,7 @@ pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
     "persona",
 ];
 pub const DEFAULT_SELF_CONFIG_CATEGORIES: [&str; 3] = ["behavior", "tools", "profile"];
-pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 16] = [
+pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 21] = [
     SelfConfigTarget::AgentBehavior,
     SelfConfigTarget::AgentContext,
     SelfConfigTarget::Compaction,
@@ -66,6 +71,11 @@ pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 16] = [
     SelfConfigTarget::EventSource,
     SelfConfigTarget::DatastoreToolSurface,
     SelfConfigTarget::Skill,
+    SelfConfigTarget::SubagentTarget,
+    SelfConfigTarget::EthTool,
+    SelfConfigTarget::Callback,
+    SelfConfigTarget::CallbackBinding,
+    SelfConfigTarget::CallbackModule,
 ];
 impl SelfConfigTarget {
     pub fn collection(self) -> crate::Collection {
@@ -86,6 +96,11 @@ impl SelfConfigTarget {
             Self::EventSource => crate::Collection::EventSource,
             Self::DatastoreToolSurface => crate::Collection::DatastoreToolSurface,
             Self::Skill => crate::Collection::Skill,
+            Self::SubagentTarget => crate::Collection::SubagentTarget,
+            Self::EthTool => crate::Collection::EthTool,
+            Self::Callback => crate::Collection::Callback,
+            Self::CallbackBinding => crate::Collection::CallbackBinding,
+            Self::CallbackModule => crate::Collection::CallbackModule,
         }
     }
     pub fn collection_name(self) -> &'static str {
@@ -102,7 +117,8 @@ impl SelfConfigTarget {
     pub fn category(self) -> &'static str {
         match self {
             Self::AgentBehavior | Self::AgentContext => "behavior",
-            Self::Tools | Self::DatastoreToolSurface | Self::Skill => "tools",
+            Self::Tools | Self::DatastoreToolSurface | Self::Skill | Self::SubagentTarget
+            | Self::EthTool => "tools",
             Self::Compaction
             | Self::InferenceProfile
             | Self::InferenceSampling
@@ -110,7 +126,8 @@ impl SelfConfigTarget {
             | Self::InferenceRetryPolicy => "profile",
             Self::InferenceBackend => "backend",
             Self::ToolServiceRegistry => "mcp_service",
-            Self::Task | Self::Schedule | Self::Trigger | Self::EventSource => "automation",
+            Self::Task | Self::Schedule | Self::Trigger | Self::EventSource | Self::Callback
+            | Self::CallbackBinding | Self::CallbackModule => "automation",
         }
     }
     pub fn all_fields(self) -> &'static [&'static str] {
