@@ -7,9 +7,11 @@ import {
   isMacTauriShell,
   isMobileTauriShell,
   isWindowsTauriShell,
+  ownsAutomaticRecovery,
 } from "../src/lib/shellPlatform";
 
 const windowMocks = vi.hoisted(() => ({
+  label: "main",
   isFullscreen: vi.fn().mockResolvedValue(false),
   onResized: vi.fn().mockResolvedValue(vi.fn()),
 }));
@@ -53,6 +55,7 @@ describe("native shell classifier", () => {
       value: originalMaxTouchPoints,
     });
     vi.clearAllMocks();
+    windowMocks.label = "main";
   });
 
   it("does not stamp a browser shell", () => {
@@ -62,19 +65,26 @@ describe("native shell classifier", () => {
     expect(headerIsWindowBar()).toBe(false);
   });
 
-  it("classifies macOS and tracks its fullscreen state", async () => {
+  it("keeps automatic shared-client recovery in the original native view", () => {
+    expect(ownsAutomaticRecovery()).toBe(true);
     enterTauri("MacIntel");
-    windowMocks.isFullscreen.mockResolvedValueOnce(true);
+    expect(ownsAutomaticRecovery()).toBe(true);
+    windowMocks.label = "gents-view-1";
+    expect(ownsAutomaticRecovery()).toBe(false);
+    enterTauri("iPhone", "iPhone", 5);
+    expect(ownsAutomaticRecovery()).toBe(true);
+  });
+
+  it("lets macOS own title and tab chrome outside the web viewport", () => {
+    enterTauri("MacIntel");
 
     applyShellPlatform();
 
     expect(isMacTauriShell()).toBe(true);
-    expect(headerIsWindowBar()).toBe(true);
+    expect(headerIsWindowBar()).toBe(false);
     expect(document.documentElement.dataset.shell).toBe("mac");
-    await vi.waitFor(() => {
-      expect(document.documentElement.dataset.windowFullscreen).toBe("true");
-    });
-    expect(windowMocks.onResized).toHaveBeenCalledOnce();
+    expect(windowMocks.onResized).not.toHaveBeenCalled();
+    expect(windowMocks.isFullscreen).not.toHaveBeenCalled();
   });
 
   it("classifies Windows as a custom window bar", () => {

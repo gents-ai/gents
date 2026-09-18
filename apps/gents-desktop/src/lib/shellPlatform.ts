@@ -1,4 +1,12 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
 const inTauri = () => "__TAURI_INTERNALS__" in window;
+
+// On macOS main stays alive while a runtime or sibling view still needs it.
+// It is the sole automatic startup/recovery owner for the shared backend.
+export function ownsAutomaticRecovery(): boolean {
+  return !isMacTauriShell() || getCurrentWindow().label === "main";
+}
 
 /// iPadOS also reports MacIntel, so a touch screen rules macOS out.
 export function isMacTauriShell(): boolean {
@@ -25,35 +33,18 @@ export function isMobileTauriShell(): boolean {
   return inTauri() && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
-/// The header is the window bar where the app draws the top of the window:
-/// macOS (overlay titlebar) and Windows (no native title bar).
+/// Only Windows uses a web-rendered window bar. macOS reserves native title
+/// and tab chrome outside the webview; Linux keeps its window-manager chrome.
 export function headerIsWindowBar(): boolean {
-  return isMacTauriShell() || isWindowsTauriShell();
+  return isWindowsTauriShell();
 }
 
 export function applyShellPlatform(root: HTMLElement = document.documentElement) {
   if (isMacTauriShell()) {
     root.dataset.shell = "mac";
-    void trackFullscreen(root);
   } else if (isWindowsTauriShell()) {
     root.dataset.shell = "windows";
   } else if (isLinuxTauriShell()) {
     root.dataset.shell = "linux";
-  }
-}
-
-/// In fullscreen macOS hides the traffic lights, so the header drops the
-/// inset that clears them.
-async function trackFullscreen(root: HTMLElement) {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    const appWindow = getCurrentWindow();
-    const sync = async () => {
-      root.dataset.windowFullscreen = String(await appWindow.isFullscreen());
-    };
-    await sync();
-    await appWindow.onResized(() => void sync());
-  } catch {
-    // Not a Tauri window (browser harness): keep the inset.
   }
 }

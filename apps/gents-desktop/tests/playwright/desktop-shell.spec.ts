@@ -64,7 +64,97 @@ async function finishDialogObservation(page: Page) {
   });
 }
 
+async function expectAppShellAtViewport(
+  page: Page,
+  viewport: { width: number; height: number },
+) {
+  await expect
+    .poll(() =>
+      page.getByTestId("app-shell").evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return {
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          left: bounds.left,
+          top: bounds.top,
+          right: bounds.right,
+          bottom: bounds.bottom,
+        };
+      }),
+    )
+    .toEqual({
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      left: 0,
+      top: 0,
+      right: viewport.width,
+      bottom: viewport.height,
+    });
+}
+
 test.describe("kit shell", () => {
+  test("keyboard focus opens the rail flyout", async ({ page }) => {
+    test.skip(test.info().project.name === "chromium-narrow", "No desktop rail");
+    await gotoHarness(page);
+    await page.getByRole("link", { name: /configuration/i }).focus();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("link", { name: /Configure/ })).toBeVisible();
+  });
+  test("rail pointer focus does not cover a link before mouseup", async ({ page }) => {
+    test.skip(test.info().project.name === "chromium-narrow", "No desktop rail");
+    await gotoHarness(page);
+    const link = page.getByRole("link", { name: /configuration/i });
+    const bounds = await link.boundingBox();
+    expect(bounds).not.toBeNull();
+    await page.mouse.move(
+      bounds!.x + bounds!.width / 2,
+      bounds!.y + bounds!.height / 2,
+    );
+    await page.mouse.down();
+    // Let pointer-induced focus settle before releasing, as under browser load.
+    await page.waitForTimeout(350);
+    await page.mouse.up();
+    await expect(page.getByTestId("agent-screen")).toBeVisible();
+  });
+  test("mac content viewport has no overlay chrome inset and stays bounded on resize", async ({
+    page,
+  }) => {
+    await gotoHarness(page);
+    await openChat(page);
+    await page.evaluate(() => {
+      document.documentElement.dataset.shell = "mac";
+    });
+    for (const viewport of [
+      { width: 1180, height: 720 },
+      { width: 1480, height: 868 },
+      { width: 1180, height: 696 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await expectAppShellAtViewport(page, viewport);
+      await expectNoPageHorizontalOverflow(page);
+      await expect(composer(page)).toBeVisible();
+      const bounds = await page.evaluate(() => {
+        const frame = document
+          .querySelector('[data-testid="app-shell"]')!
+          .getBoundingClientRect();
+        const header = document.querySelector(".app-titlebar")!;
+        const editor = document.querySelector("textarea")!.getBoundingClientRect();
+        return {
+          top: frame.top,
+          bottom: frame.bottom,
+          headerTop: header.getBoundingClientRect().top,
+          headerInset: getComputedStyle(header).paddingLeft,
+          editorBottom: editor.bottom,
+          height: window.innerHeight,
+        };
+      });
+      expect(bounds.top).toBe(0);
+      expect(bounds.headerTop).toBe(0);
+      expect(bounds.headerInset).toBe("16px");
+      expect(bounds.bottom).toBeLessThanOrEqual(bounds.height);
+      expect(bounds.editorBottom).toBeLessThanOrEqual(bounds.height);
+    }
+  });
   test("default harness lands on sessions with one primary surface", async ({
     page,
   }) => {

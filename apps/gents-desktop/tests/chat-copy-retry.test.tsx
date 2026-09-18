@@ -369,7 +369,9 @@ describe("error card retry", () => {
 
     actions.onRetryMessage("req-failed");
 
-    await waitFor(() => expect(retryRequest).toHaveBeenCalledWith("req-failed"));
+    await waitFor(() =>
+      expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.agentDid),
+    );
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 
@@ -448,7 +450,7 @@ describe("error card retry", () => {
       retryShellProjection: composerProjection,
     });
     await readyRetry.onRetryMessage("req-failed");
-    expect(retryRequest).toHaveBeenCalledWith("req-failed");
+    expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.agentDid);
     expect(setError).not.toHaveBeenCalledWith(
       blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
         ? blockedRetryProjection.nonEmptyContentSendStatus.hint

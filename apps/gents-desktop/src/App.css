@@ -12,13 +12,13 @@ body,
   overflow: hidden;
 }
 
-/* The window bar. The app header owns the title bar on macOS and Windows;
-   Linux keeps the desktop environment's title bar. */
+/* Windows uses a web window bar. macOS and Linux reserve native chrome
+   outside the webview, so viewport units describe usable content only. */
 .titlebar-drag-region {
   display: none;
 }
 
-:root:is([data-shell="mac"], [data-shell="windows"]) .titlebar-drag-region {
+:root[data-shell="windows"] .titlebar-drag-region {
   display: flex;
   justify-content: flex-end;
   position: fixed;
@@ -26,41 +26,18 @@ body,
   right: 0;
   left: 0;
   z-index: 40;
-  height: 40px;
-}
-
-:root[data-shell="windows"] .titlebar-drag-region {
   height: 48px;
-}
-
-:root[data-shell="mac"] {
-  --titlebar-inset: 95px;
-}
-
-:root[data-shell="mac"] .viewport-frame {
-  padding-top: var(--safe-area-top, 0px);
-}
-
-:root[data-shell="mac"] .app-titlebar {
-  height: auto;
-  align-items: center;
-  padding-top: 10px;
-  padding-bottom: 12px;
-}
-
-:root[data-shell="mac"]:not([data-window-fullscreen="true"]) .app-titlebar {
-  padding-left: var(--titlebar-inset);
 }
 
 :root[data-shell="windows"] .app-titlebar {
   padding-right: 0;
 }
 
-:root:is([data-shell="mac"], [data-shell="windows"]) .app-titlebar * {
+:root[data-shell="windows"] .app-titlebar * {
   pointer-events: none;
 }
 
-:root:is([data-shell="mac"], [data-shell="windows"])
+:root[data-shell="windows"]
   .app-titlebar
   :is(
     a,

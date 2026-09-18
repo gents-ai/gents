@@ -1,0 +1,7 @@
+{
+  "identifier": "native-windows",
+  "description": "The original macOS view owns onboarding completion.",
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "permissions": ["native-window-setup"]
+}

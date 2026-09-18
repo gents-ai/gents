@@ -1,7 +1,15 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useDesktopClientLifecycle } from "../src/hooks/useDesktopClientLifecycle";
+
+const ownership = vi.hoisted(() => ({ main: true }));
+vi.mock("../src/lib/shellPlatform", () => ({
+  ownsAutomaticRecovery: () => ownership.main,
+}));
+beforeEach(() => {
+  ownership.main = true;
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -14,6 +22,37 @@ function deferred<T>() {
 }
 
 describe("desktop client restart selection ordering", () => {
+  it.each([true, false])(
+    "only the original view restores the managed runtime (owner=%s)",
+    async (main) => {
+      ownership.main = main;
+      const snapshot = {
+        bootstrap: { clientStateExists: true, savedPeers: [] },
+        client: {},
+      };
+      const api = {
+        managedServerStatus: vi
+          .fn()
+          .mockResolvedValue({ state: "stopped", autoStart: true, agentName: "local" }),
+        startManagedServer: vi.fn().mockResolvedValue({ state: "running" }),
+        fetchDesktopSnapshot: vi.fn().mockResolvedValue(snapshot),
+      };
+      const { result } = renderHook(() =>
+        useDesktopClientLifecycle({
+          api,
+          supportsManagedServer: true,
+          refreshSession: vi.fn(async () => null),
+          selectedSessionIdRef: { current: null },
+          setError: vi.fn(),
+          setSession: vi.fn(),
+        } as unknown as Parameters<typeof useDesktopClientLifecycle>[0]),
+      );
+      await waitFor(() => expect(result.current.startupPhase).toBe("ready"));
+      expect(api.startManagedServer).toHaveBeenCalledTimes(main ? 1 : 0);
+      expect(api.managedServerStatus).toHaveBeenCalledTimes(main ? 1 : 0);
+      expect(api.fetchDesktopSnapshot).toHaveBeenCalledOnce();
+    },
+  );
   it("does not let an older startup refresh replace a newer client-start snapshot", async () => {
     const refresh = deferred<Record<string, unknown>>();
     const start = deferred<Record<string, unknown>>();

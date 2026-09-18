@@ -1,4 +1,9 @@
 #[cfg(desktop)]
+mod window_close;
+#[cfg(target_os = "macos")]
+mod windows;
+
+#[cfg(desktop)]
 use gents_desktop_bridge::contract::{
     MANAGED_SERVER_TRAY_STOP_EVENT, MANAGED_SERVER_UPDATED_EVENT,
 };
@@ -40,22 +45,101 @@ pub fn run() {
         .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
+    #[cfg(target_os = "macos")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        windows::desktop_window_setup_complete
+    ]);
     #[cfg(desktop)]
-    let builder = builder.setup(setup_tray).on_window_event(|window, event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            let active = window
-                .app_handle()
-                .try_state::<TrayRuntimeState>()
-                .is_some_and(|state| state.active.load(Ordering::SeqCst));
-            if active {
-                api.prevent_close();
-                let _ = window.hide();
+    let builder = builder
+        .setup(|app| {
+            setup_tray(app)?;
+            #[cfg(target_os = "macos")]
+            windows::setup(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(true))
+                && window.label() == "main"
+                && matches!(window.is_visible(), Ok(true))
+            {
+                if let Some(state) = window.app_handle().try_state::<TrayRuntimeState>() {
+                    state.main_hidden_by_close.store(false, Ordering::SeqCst);
+                }
             }
-        }
-    });
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let active = window
+                    .app_handle()
+                    .try_state::<TrayRuntimeState>()
+                    .is_some_and(|state| state.active.load(Ordering::SeqCst));
+                let app = window.app_handle();
+                let main = app.get_webview_window("main");
+                let other_views = app
+                    .webview_windows()
+                    .keys()
+                    .any(|label| label != "main" && label != window.label());
+                let main_hidden = main
+                    .as_ref()
+                    .is_some_and(|view| matches!(view.is_visible(), Ok(false)))
+                    && app
+                        .try_state::<TrayRuntimeState>()
+                        .is_some_and(|state| state.main_hidden_by_close.load(Ordering::SeqCst));
+                let action = window_close::close_action(
+                    cfg!(target_os = "macos"),
+                    window.label() == "main",
+                    active,
+                    other_views,
+                    main_hidden,
+                );
+                tracing::debug!(
+                    label = window.label(),
+                    active,
+                    other_views,
+                    main_hidden,
+                    ?action,
+                    "desktop window close requested"
+                );
+                match action {
+                    window_close::CloseAction::Hide => {
+                        api.prevent_close();
+                        #[cfg(target_os = "macos")]
+                        if let Some(view) = window.app_handle().get_webview_window(window.label()) {
+                            let _ = windows::detach(&view);
+                        }
+                        if window.hide().is_ok() && window.label() == "main" {
+                            if let Some(state) = app.try_state::<TrayRuntimeState>() {
+                                state.main_hidden_by_close.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                    window_close::CloseAction::CloseWithHiddenMain => {
+                        // The last visible view is closing and no runtime needs
+                        // the hidden coordinator. Destroy it so last-window exit
+                        // works exactly as it did before native tabs.
+                        if let Some(main) = main {
+                            if let Err(error) = main.destroy() {
+                                tracing::warn!(%error, "could not close hidden main view");
+                            }
+                        }
+                    }
+                    window_close::CloseAction::Close => {}
+                }
+            }
+        });
     builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                show_main_window(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 fn platform_bridge_config() -> BridgeConfig {
@@ -98,6 +182,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_tabs_reserve_chrome_outside_the_webview() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let main = &config["app"]["windows"][0];
+        // In Tauri, Transparent disables FullSizeContentView, unlike Overlay
+        // (and even Visible). AppKit then owns the content viewport on resize,
+        // tab attach/detach, and fullscreen transitions.
+        assert_eq!(main["titleBarStyle"], "Transparent");
+        assert!(main.get("trafficLightPosition").is_none());
+    }
+
+    #[test]
     fn desktop_build_explicitly_owns_local_runtime_authority() {
         let config = platform_bridge_config();
         assert!(matches!(
@@ -111,6 +207,9 @@ mod tests {
 #[cfg(desktop)]
 struct TrayRuntimeState {
     active: Arc<AtomicBool>,
+    // Native non-selected tabs can also report invisible. Only a deliberate
+    // close makes the original view eligible for last-sibling cleanup.
+    main_hidden_by_close: AtomicBool,
 }
 
 #[cfg(desktop)]
@@ -136,6 +235,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let active = Arc::new(AtomicBool::new(false));
     app.manage(TrayRuntimeState {
         active: Arc::clone(&active),
+        main_hidden_by_close: AtomicBool::new(false),
     });
     let tray = TrayIconBuilder::with_id("gents-managed-server")
         .menu(&menu)
@@ -145,7 +245,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
             "stop" => {
-                let _ = app.emit(MANAGED_SERVER_TRAY_STOP_EVENT, ());
+                let _ = app.emit_to("main", MANAGED_SERVER_TRAY_STOP_EVENT, ());
                 show_main_window(app);
             }
             "quit" => shutdown_and_quit(app),
@@ -177,7 +277,11 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(desktop)]
 fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
+        if window.show().is_ok() {
+            if let Some(state) = app.try_state::<TrayRuntimeState>() {
+                state.main_hidden_by_close.store(false, Ordering::SeqCst);
+            }
+        }
         let _ = window.set_focus();
     }
 }

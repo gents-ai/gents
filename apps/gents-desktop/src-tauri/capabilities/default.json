@@ -1,14 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window — full Gents Desktop production surface",
-  "windows": ["main"],
+  "description": "Capability for Gents views — full desktop production surface",
+  "windows": ["main", "gents-view-*"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
+    "core:window:allow-set-title",
+    "core:window:allow-set-theme",
     "opener:default",
     "dialog:allow-open",
     "gents-desktop-bridge:default",

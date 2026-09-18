@@ -29,6 +29,43 @@ function contract(
 }
 
 describe("desktop bridge contract", () => {
+  it("carries each view's explicit agent through task, schedule and retry actions", async () => {
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_task_run: () => ({}),
+        desktop_schedule_run: () => ({}),
+        desktop_request_retry: () => ({}),
+        desktop_request_resend: () => ({}),
+      },
+    });
+    const { api } = createDesktopClient(transport);
+    for (const agentDid of ["did:alpha", "did:beta"]) {
+      await api.runTask({ taskId: "daily", agentDid });
+      await api.runSchedule({ scheduleId: "daily", agentDid });
+      await api.retryRequest("same-request-id", agentDid);
+      await api.resendRequest("same-request-id", agentDid);
+    }
+    expect(transport.calls).toEqual(
+      ["did:alpha", "did:beta"].flatMap((agentDid) => [
+        {
+          command: "desktop_task_run",
+          args: { request: { taskId: "daily", agentDid } },
+        },
+        {
+          command: "desktop_schedule_run",
+          args: { request: { scheduleId: "daily", agentDid } },
+        },
+        {
+          command: "desktop_request_retry",
+          args: { requestId: "same-request-id", agentDid },
+        },
+        {
+          command: "desktop_request_resend",
+          args: { requestId: "same-request-id", agentDid },
+        },
+      ]),
+    );
+  });
   it("requires the exact contract version", () => {
     expect(() =>
       assertExactBridgeContract(contract(BRIDGE_CONTRACT_VERSION)),
@@ -157,10 +194,13 @@ describe("desktop bridge contract", () => {
     });
 
     await expect(
-      createDesktopClient(transport).api.restartManagedServer("Workshop Agent", {
-        toolCeiling: "meta-only",
-        toolRoot: null,
-      }),
+      createDesktopClient(transport).api.restartManagedServer(
+        "Workshop Agent",
+        {
+          toolCeiling: "meta-only",
+          toolRoot: null,
+        },
+      ),
     ).resolves.toEqual(restarted);
     expect(transport.calls.map(({ command }) => command)).toEqual([
       "desktop_managed_server_restart",

@@ -13,18 +13,18 @@
     "windows": [
       {
         "title": "Gents",
+        "tabbingIdentifier": "com.source-inc.gents.views",
         "width": 1480,
         "height": 920,
         "minWidth": 1180,
         "minHeight": 720,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "trafficLightPosition": { "x": 15, "y": 25 }
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true
       }
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default", "desktop-runtime-admin"]
+      "capabilities": ["default", "desktop-runtime-admin", "native-windows"]
     }
   },
   "bundle": {

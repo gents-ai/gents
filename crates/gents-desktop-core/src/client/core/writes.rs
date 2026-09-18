@@ -34,6 +34,25 @@ use super::ClientPeerStatus;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
+fn request_in_scope(
+    rows: &[AgentRequestRow],
+    request_id: &str,
+    agent_did: Option<&str>,
+) -> Result<AgentRequestRow> {
+    let mut matches = rows.iter().filter(|row| {
+        row.request_id == request_id
+            && agent_did.is_none_or(|did| row.agent_did.as_deref() == Some(did))
+    });
+    let row = matches
+        .next()
+        .with_context(|| format!("request {request_id} not found"))?;
+    anyhow::ensure!(
+        matches.next().is_none(),
+        "request {request_id} is ambiguous across agent scopes"
+    );
+    Ok(row.clone())
+}
+
 fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
     value
         .map(str::trim)
@@ -858,23 +877,27 @@ impl ClientCore {
     }
 
     pub async fn resend_request(&self, stale_request_id: &str) -> Result<SubmittedRequest> {
-        let snapshot = self.store.snapshot();
         let selected_agent_did = self.selected_agent_did();
-        let mut candidates = snapshot
-            .requests
-            .iter()
-            .filter(|row| row.request_id == stale_request_id)
-            .filter(|row| {
-                selected_agent_did
-                    .as_deref()
-                    .is_none_or(|did| row.agent_did.as_deref() == Some(did))
-            });
-        let stale = candidates
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("request {stale_request_id} not found"))?;
-        if candidates.next().is_some() {
-            bail!("request {stale_request_id} is ambiguous across the selected agent scope");
-        }
+        self.resend_request_in_scope(stale_request_id, selected_agent_did.as_deref())
+            .await
+    }
+
+    /// Resolve an action's target independently of the observation filter.
+    pub fn request_in_scope(
+        &self,
+        request_id: &str,
+        agent_did: Option<&str>,
+    ) -> Result<AgentRequestRow> {
+        request_in_scope(&self.store.snapshot().requests, request_id, agent_did)
+    }
+
+    pub async fn resend_request_in_scope(
+        &self,
+        stale_request_id: &str,
+        agent_did: Option<&str>,
+    ) -> Result<SubmittedRequest> {
+        let snapshot = self.store.snapshot();
+        let stale = request_in_scope(&snapshot.requests, stale_request_id, agent_did)?;
         let agent_did = stale
             .agent_did
             .as_deref()
@@ -1975,6 +1998,32 @@ mod delete_source_tests {
     use super::*;
     use anyhow::anyhow;
     use serde_json::json;
+
+    #[test]
+    fn request_actions_resolve_explicit_agent_in_a_shared_snapshot() {
+        let rows: Vec<_> = ["did:alpha", "did:beta"]
+            .into_iter()
+            .map(|did| AgentRequestRow {
+                request_id: "same-id".into(),
+                agent_did: Some(did.into()),
+                ..Default::default()
+            })
+            .collect();
+        for did in ["did:alpha", "did:beta"] {
+            assert_eq!(
+                request_in_scope(&rows, "same-id", Some(did))
+                    .unwrap()
+                    .agent_did
+                    .as_deref(),
+                Some(did)
+            );
+        }
+        assert!(request_in_scope(&rows, "same-id", None)
+            .unwrap_err()
+            .to_string()
+            .contains("ambiguous"));
+        assert!(request_in_scope(&rows, "same-id", Some("did:missing")).is_err());
+    }
 
     #[test]
     fn hydration_count_matches_all_client_routable_server_collections() {

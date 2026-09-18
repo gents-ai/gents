@@ -151,8 +151,14 @@ export type DesktopApiAdapter = {
   startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
   dismissMailboxItem: (itemId: string) => Promise<void>;
   renameSession: (request: SessionRenameRequest) => Promise<void>;
-  resendRequest: (requestId: string) => Promise<RequestResendResult>;
-  retryRequest: (requestId: string) => Promise<ChatSendResult>;
+  resendRequest: (
+    requestId: string,
+    agentDid?: string,
+  ) => Promise<RequestResendResult>;
+  retryRequest: (
+    requestId: string,
+    agentDid?: string,
+  ) => Promise<ChatSendResult>;
   applyConfigComponents: (
     request: ConfigComponentsApplyRequest,
   ) => Promise<DesktopClientSnapshot>;
