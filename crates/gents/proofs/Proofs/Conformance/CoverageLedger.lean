@@ -494,6 +494,12 @@ def stateMachineCoverage : List CoverageEntry :=
 
 def caseCoverage : List CoverageEntry :=
   [ tagged (consumerWithFollowUp
+      "root_admission_cases"
+      "RootAdmissionCases"
+      "conformance::persona_request::generated_root_admission_case_inventory_is_complete"
+      "The generated-contract slice inventories every typed operation and filesystem observation. The stacked Rust implementation must strengthen this consumer through the canonical WorkspaceRoot projector and persona admission owner before landing.")
+      "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "pairing_reconcile_cases"
       "PairingReconcileCases"
       "conformance::pairing_reconcile::generated_pairing_reconcile_cases_drive_production_projector"

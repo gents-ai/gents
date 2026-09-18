@@ -122,6 +122,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
+    assert_eq!(lean_contract_snapshot().root_admission_cases.len(), 27);
     assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 100);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
@@ -469,6 +470,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "pairing_reconcile_cases".into(),
             "PairingReconcileCases".into(),
         ));
+    }
+    if !snapshot.root_admission_cases.is_empty() {
+        emitted.insert(("root_admission_cases".into(), "RootAdmissionCases".into()));
     }
     if !snapshot.child_failure_projections.is_empty() {
         emitted.insert((
