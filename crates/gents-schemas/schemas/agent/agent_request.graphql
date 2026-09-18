@@ -66,12 +66,13 @@ type AgentRequest @branchable {
     created_at: String @index @immutable
     claimed_at: String
     # Runtime-owned execution lease (#1571). Claim installs a fresh generation,
-    # the lease length and the claim's own deadline. Streaming does not rewrite
-    # this row: the lease is live until the later of execution_lease_expires_at
-    # and created_at + execution_lease_secs of the newest AgentOutputSegment,
-    # AgentOutputSeal or AgentMessage written by the current generation. The
-    # existing owner writes execution_lease_expires_at again only for semantic
-    # progress that produces no output fact. Retired: execution_progress_seq.
+    # the lease length and the claim's own deadline. Streaming flushes do not
+    # rewrite this row. The owning runtime alone decides expiry, inside its
+    # execution write gate: live while the current generation has an output
+    # fact or explicit renewal newer than execution_lease_secs. Decisions
+    # (close/retract, accept+publish, dispatch, terminalize, recover) keep the
+    # matching-generation CAS here and renew execution_lease_expires_at; so does
+    # progress with no output fact. Retired: execution_progress_seq.
     execution_generation: String @index
     execution_lease_secs: Int
     execution_lease_expires_at: String @index

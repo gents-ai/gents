@@ -59,27 +59,56 @@ messages cannot change that selection.
 
 A segment is the progress fact. Streaming no longer rewrites `AgentRequest`: the
 per-flush `(generation, expiry, progress_seq)` CAS — 42k versions of one field over
-85 requests in #1543 — is retired along with `execution_progress_seq`.
+85 requests in #1543 — is retired along with `execution_progress_seq`. This is a
+specification hypothesis until Lean proves the ordering below; it is not yet a
+claim that the amplifier is safely gone.
 
-- Claim installs `execution_generation`, `execution_lease_secs` and the claim's own
-  `execution_lease_expires_at`.
-- The lease is live until the later of that deadline and `created_at +
-  execution_lease_secs` of the newest segment, seal or header written by the
-  current generation. Readers and the recovery sweep derive it from one
-  `request_doc_id` scan; nothing restates it.
-- The existing owner writes `execution_lease_expires_at` again only for semantic
-  progress that produces no output fact (a long silent tool, a wait).
-- Fencing becomes inertness. A write validates its generation in-transaction, but
-  correctness does not rest on that read: a stale generation's segment names a
-  stale writer, never counts as progress, and lies outside any extent recovery
-  sealed. Terminalization and recovery keep their matching-generation CAS on the
-  request; they no longer race progress writes for the row.
+What the old write bought was an ordering: a progress CAS and recovery's CAS
+conflicted, so exactly one won. Removing the write must not remove the ordering.
 
-Lean must prove the remodel before anything relies on it: derived liveness equals
-the old renewed deadline on every trace that writes output; stale segments cannot
-extend a lease, enter a sealed extent or reach a message; exact replay does not
-renew. If a required property fails, the fallback is an explicit renewal at a
-slow fixed cadence, never a return to per-flush rewrites.
+- **Raw payload is the only unfenced write.** A flush commits inside the owning
+  runtime's existing execution write gate without touching the request. If it
+  loses a race with recovery's generation swap it is inert: it names a superseded
+  writer, renews nothing, and lies beyond the extent recovery closed.
+- **Everything that decides keeps the matching-generation CAS on the request:**
+  closing or retracting a source, accepting and publishing a turn (seal, header,
+  pending tool rows), dispatch, terminalization, recovery. These happen once per
+  turn, not once per flush, and each doubles as that turn's explicit renewal. A
+  superseded writer therefore cannot close a source recovery also closes, publish
+  executable tool intent, or dispatch; it learns it lost at its next decision.
+- **The liveness decision is authoritative in one place.** Only the request's
+  owning runtime decides expiry, reading its own store, inside the same write gate
+  that orders flush commits, and swaps the generation under that gate. A flush is
+  either visible to the decision or ordered after the swap; recovery never
+  terminalizes on a snapshot a concurrent flush invalidated. A lagging replica
+  never expires work because fresh segments have not arrived; it only observes.
+  This relies on the one-active-runtime-per-principal convention exactly as far
+  as the existing gate already does; it adds no host identity or second lease.
+- **`created_at` carries authority, so it is defined.** The gate stamps it from
+  the owning runtime's clock at commit — the clock that stamps claim deadlines and
+  that the decision compares against. It is non-decreasing within a source, and a
+  replay reuses the stored value rather than minting a new one.
+- **Claim** installs `execution_generation`, `execution_lease_secs` and the claim's
+  own `execution_lease_expires_at`. The existing owner writes that field again only
+  at the per-turn decisions above and for progress that produces no output fact (a
+  long silent tool, a wait).
+
+The contract Lean states is safety and liveness, not deadline equality. Today's
+renewal is `max(now + duration, previous_deadline + 1ms)`; a maximum over output
+timestamps is not numerically identical even without concurrency, and the model
+must expose that difference rather than assume it away.
+
+- *Safety:* recovery never supersedes a generation that, in the gate's order,
+  committed an output fact or explicit renewal within `execution_lease_secs`
+  before the decision. At most one of {producer, recovery} closes a source; a
+  superseded generation never publishes, dispatches or terminalizes; exact replay
+  renews nothing.
+- *Liveness:* a generation with no such fact for `execution_lease_secs` becomes
+  recoverable, and recovery closes exactly the committed extent.
+
+Fallback if a property fails: explicit renewal at a slow fixed cadence. That is
+not a timer alone — it needs the same two pieces, a bounded expiry policy and the
+gate-plus-CAS recovery ordering above — and it never returns to per-flush rewrites.
 
 ## Commit budget
 
@@ -145,7 +174,9 @@ dispatch; background output after request termination; recovery publication;
 empty streams and sources; a complete message over partial dependencies;
 gaps and twins; headers arriving before seals or segments; multi-stream
 flushes and run/payload accounting; superseded unsealed writers; derived lease
-liveness, byte-less renewal and stale-write inertness; exact terminal selection before header
+liveness decided only in the owner's write gate; recovery racing a flush, a
+closure, an acceptance and a dispatch; inert late flushes; lagging replicas;
+unheaded authored sources; exact terminal selection before header
 arrival, explicit NoMessage and late background delivery; native block order and
 signed reasoning; line-normalized presentation; fork authorization/retention and
 reference closure. Dispatch cases include the boundaries above and replace the old

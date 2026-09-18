@@ -76,9 +76,10 @@ pub enum OutputSource {
 /// the run that opens the stream, so live views render unsealed output in
 /// native structure without any control document.
 ///
-/// It names no role: provider output is assistant content, tool output is a
-/// tool result, and authored content arrives whole and is published with its
-/// seal and header in one transaction, so it is never live without its header.
+/// It names no role: provider output is assistant content and tool output is
+/// a tool result. Authored content is committed with its header in one
+/// transaction, but a replica may receive the parts in any order, so the live
+/// projection never shows an Authored source until its header is visible.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamDeclaration {
@@ -129,15 +130,24 @@ pub enum StreamPayload {
 /// only after verifying the stored fact.
 ///
 /// **A segment is the progress fact; progress is not recorded anywhere else.**
-/// Request-owned output does not rewrite the request: the execution lease is
-/// live until `created_at + execution_lease_secs` of the newest segment, seal
-/// or header written by the request's current generation (or the claim's own
-/// deadline if later). The write validates, in its transaction, that its
-/// generation is current and unexpired, but fencing does not depend on that
-/// read: a stale generation's segment names a stale writer, never counts as
-/// progress, and lies outside any extent recovery already sealed, so it is
-/// inert. Tool-owned output follows the tool lifecycle and never revives a
-/// terminal request. There is no heartbeat and no progress counter.
+/// A request-owned flush does not rewrite the request. It commits inside the
+/// owning runtime's existing execution write gate, which stamps `created_at`
+/// from that runtime's clock at commit (non-decreasing within a source; a
+/// replay reuses the stored value). Only that runtime, reading its own store
+/// inside the same gate, may decide a lease expired: the request is live while
+/// its current generation has an output fact or explicit renewal newer than
+/// `execution_lease_secs`. A replica that has not yet received fresh segments
+/// observes; it never expires work.
+///
+/// Only raw payload is unfenced. A flush that loses a race with recovery's
+/// generation swap is inert: it names a superseded writer, renews nothing and
+/// lies beyond the extent recovery closed. Everything that *decides* —
+/// closing or retracting a source, accepting and publishing a turn, dispatch,
+/// terminalization, recovery — still commits under the matching-generation
+/// CAS on the request, so it is definitively ordered against cancellation and
+/// recovery and a loser writes none of them. Tool-owned output follows the
+/// tool lifecycle and never revives a terminal request. There is no heartbeat
+/// and no progress counter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSegment {
@@ -174,7 +184,8 @@ pub struct SegmentRun {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputWriter {
-    /// The request lifecycle CAS. Stale generations cannot append or seal.
+    /// A request execution generation. A superseded generation can still land
+    /// an inert flush, but cannot close, publish, dispatch or terminalize.
     RequestExecution { execution_generation: String },
     /// The tool lifecycle admits output until terminalization, and its
     /// delivery owner admits authored completion notifications afterward.
@@ -198,6 +209,8 @@ pub enum OutputOutcome {
 ///
 /// Normal closure commits with the final flush. Retraction, recovery or
 /// closure after a flush seals the committed bytes without appending.
+/// Closing a request-owned source commits under the matching-generation CAS on
+/// the request, so the producer and recovery can never both close it.
 /// At most one seal per `(request_doc_id, source)`; visible twins are
 /// an integrity conflict. A sealed source accepts no further segments, and a
 /// seal stays valid after its producer's generation is no longer active.
@@ -558,7 +571,9 @@ pub enum ReconstructionError {
 /// Unsealed request-owned output is eligible only for the current generation
 /// of a nonterminal request; tool-owned output follows the tool lifecycle.
 /// Each segment names its writer; a missing request/tool owner observation
-/// cannot establish live eligibility.
+/// cannot establish live eligibility. Authored sources are never shown live:
+/// they appear only with their header. This projection is an observation for
+/// display. It never decides that work expired; only the owning runtime does.
 /// Superseded sources remain retained history, not current output. Even an
 /// eligible unsealed source is only an observation: its seal may be in transit.
 /// Closed historical output never depends on today's active generation.
