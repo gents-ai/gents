@@ -1,6 +1,7 @@
 import Proofs.Configuration
 import Proofs.Basic
 import Proofs.ToolPolicy.Meet
+import Proofs.PeerRegistryDiscovery.RootAdmission
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Prod
 
@@ -78,7 +79,13 @@ inference-profile catalogs for the selected scope, plus its known (enabled)
 principal DIDs — a request naming a phantom or foreign `agent_did` must be
 rejected, never mint orphan config. -/
 structure Catalog where
-  roots : Finset String
+  /-- Canonical roots published for this authorized principal. The Rust
+  adapter owns conversion from authored strings to these observations. -/
+  roots : Finset RootAdmission.CanonicalPath
+  /-- True when at least one operator-local `WorkspaceRoot` document exists,
+  including when every document is disabled.  This is publication-policy
+  state, not principal identity: WorkspaceRoot is global operator policy. -/
+  rootPolicyConfigured : Bool
   profiles : Finset String
   agents : Finset String
   authorization : Option EnrollmentAuthorization
@@ -104,12 +111,27 @@ structure Request where
   description : String
   systemPrompt : String
   root : String
+  /-- Canonical observation for `root`; `none` means resolution failed. -/
+  resolvedRoot : Option RootAdmission.CanonicalPath
   preset : String
   profile : String
   nameEdit : FieldUpdate
   descriptionEdit : FieldUpdate
   systemPromptEdit : FieldUpdate
   rootEdit : FieldUpdate
+  /-- Canonical observation for a `.set` root edit. -/
+  resolvedRootEdit : Option RootAdmission.CanonicalPath
+  /-- Currently stored Tools root observed in the same configuration snapshot
+  used to decide an edit. Omitted root edits preserve this value, but preserving
+  data is not permission to bypass current publication policy. -/
+  storedRoot : String
+  /-- Canonical observation for `storedRoot`; `none` records a blank or
+  unresolvable legacy value and therefore fails under explicit policy. -/
+  resolvedStoredRoot : Option RootAdmission.CanonicalPath
+  /-- Whether the stored Tools surface contains host tools that consume the
+  root. Rootless metadata-only Tools do not gain filesystem authority and do
+  not make an unrelated edit fail. -/
+  storedRootRequired : Bool
   presetEdit : FieldUpdate
   profileEdit : FieldUpdate
   makeDefault : Bool
@@ -208,10 +230,45 @@ is empty. -/
 abbrev createPromptOk (r : Request) : Prop :=
   r.cloneFrom ≠ "" ∨ r.systemPrompt.trim ≠ ""
 
-/-- An empty root selects the runtime cwd; a non-empty composer root must
-be published. Existence and authority are checked by the host execution owner. -/
+/-- Shared create/edit root-selection contract. A blank root may inherit the
+runtime default only when the operator has not authored explicit workspace-root
+policy. If there is neither policy nor a process ceiling (an empty publication),
+a successfully resolved authored root is its own narrowing. Under explicit
+policy, a request must select an admitted root so omission cannot widen to the
+process ceiling. The host execution owner resolves again before use; this
+admission contract does not claim TOCTOU safety. -/
+abbrev rootSelectionOk
+    (policyConfigured : Bool)
+    (published : Finset RootAdmission.CanonicalPath)
+    (blank : Bool)
+    (resolved : Option RootAdmission.CanonicalPath) : Prop :=
+  (blank = true ∧ policyConfigured = false) ∨
+    (blank = false ∧ policyConfigured = false ∧ published = ∅ ∧ resolved.isSome) ∨
+    RootAdmission.admitted published resolved
+
 abbrev rootOk (cat : Catalog) (r : Request) : Prop :=
-  r.root = "" ∨ r.root ∈ cat.roots
+  rootSelectionOk cat.rootPolicyConfigured cat.roots (r.root.trim == "") r.resolvedRoot
+
+/-- Root-patch contract shared by the edit gate and generated refinement
+cases. Omission preserves the stored value but must re-admit that value against
+current policy; a stale, blank, or revoked stored root cannot bypass the gate.
+Clear is allowed only without explicit policy, and set follows the same
+blank/admission rule as create. -/
+abbrev rootEditSelectionOk
+    (policyConfigured : Bool)
+    (published : Finset RootAdmission.CanonicalPath)
+    (storedRoot : String)
+    (resolvedStored : Option RootAdmission.CanonicalPath)
+    (storedRootRequired : Bool)
+    (update : FieldUpdate)
+    (resolved : Option RootAdmission.CanonicalPath) : Prop :=
+  match update with
+  | .omitted =>
+      storedRootRequired = false ∨
+        rootSelectionOk policyConfigured published (storedRoot.trim == "") resolvedStored
+  | .clear => policyConfigured = false
+  | .set root =>
+      rootSelectionOk policyConfigured published (root.trim == "") resolved
 
 /-- `profile` is required for create, edit, and clone: no implicit model or
 profile fallback exists in the request shape, so an empty/blank profile fails
@@ -253,9 +310,8 @@ abbrev editNameOk (r : Request) : Prop :=
   | .set name => name ≠ ""
 
 abbrev editRootOk (cat : Catalog) (r : Request) : Prop :=
-  match r.rootEdit with
-  | .omitted | .clear => True
-  | .set root => root ∈ cat.roots
+  rootEditSelectionOk cat.rootPolicyConfigured cat.roots r.storedRoot r.resolvedStoredRoot
+    r.storedRootRequired r.rootEdit r.resolvedRootEdit
 
 abbrev editProfileOk (cat : Catalog) (r : Request) : Prop :=
   match r.profileEdit with
@@ -472,11 +528,14 @@ def asProfileOnlyEdit (r : Request) (profile : String) : Request :=
 
 theorem name_only_edit_does_not_require_profile (cat : Catalog) (st : BehaviorCatalog)
     (r : Request) (name : String) (htarget : behaviorPresent st r.target)
-    (hmutable : behaviorMutable st r.target) (hname : name ≠ "") :
+    (hmutable : behaviorMutable st r.target) (hname : name ≠ "")
+    (hstored : r.storedRootRequired = false ∨
+      rootSelectionOk cat.rootPolicyConfigured cat.roots
+        (r.storedRoot.trim == "") r.resolvedStoredRoot) :
     opOk cat st (asNameOnlyEdit r name) := by
   simp [opOk, editNameOk, editRootOk, editProfileOk, editPromptOk,
     editPresetOk, asNameOnlyEdit, htarget, hmutable, hname]
-  exact hmutable
+  exact ⟨hmutable, hstored⟩
 
 theorem profile_only_edit_preserves_other_fields (profile : String)
     (r : Request) (storedName storedDescription storedPrompt storedRoot : Option String) :
