@@ -41,6 +41,9 @@ pub struct PublishedGraph {
 /// item as proof that the document is absent or that publication is allowed.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct PlannedGraphDocument {
+    /// Principal that owns the prospective document identity. A logical ID is
+    /// never sufficient publication authority without this owner binding.
+    pub owner_did: String,
     pub collection: String,
     pub logical_id: String,
 }
@@ -543,17 +546,24 @@ fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
 }
 
 /// Return the deterministic document identity set owned by graph publication
-/// without reading or writing the database.
-pub fn graph_plan_creation_set(plan: &GraphPlan) -> Result<Vec<PlannedGraphDocument>> {
+/// without reading or writing the database. `GraphPlan` is intentionally
+/// principal-neutral; `owner_did` is the same separate binding accepted by the
+/// materializer.
+pub fn graph_plan_creation_set(
+    owner_did: &str,
+    plan: &GraphPlan,
+) -> Result<Vec<PlannedGraphDocument>> {
     if !verify_graph_plan_digest(plan) {
         anyhow::bail!("refusing to preview a GraphPlan with an invalid digest");
     }
     let mut documents = vec![
         PlannedGraphDocument {
+            owner_did: owner_did.to_owned(),
             collection: "GraphDefinition".to_owned(),
             logical_id: plan.graph_id.clone(),
         },
         PlannedGraphDocument {
+            owner_did: owner_did.to_owned(),
             collection: "GraphRevision".to_owned(),
             logical_id: revision_id(plan),
         },
@@ -566,10 +576,12 @@ pub fn graph_plan_creation_set(plan: &GraphPlan) -> Result<Vec<PlannedGraphDocum
         let id = graph_trigger_id(&plan.digest, &route)?;
         documents.extend([
             PlannedGraphDocument {
+                owner_did: owner_did.to_owned(),
                 collection: "EventSource".to_owned(),
                 logical_id: id.clone(),
             },
             PlannedGraphDocument {
+                owner_did: owner_did.to_owned(),
                 collection: "Trigger".to_owned(),
                 logical_id: id,
             },
@@ -583,10 +595,12 @@ pub fn graph_plan_creation_set(plan: &GraphPlan) -> Result<Vec<PlannedGraphDocum
         let id = graph_trigger_id(&plan.digest, &route)?;
         documents.extend([
             PlannedGraphDocument {
+                owner_did: owner_did.to_owned(),
                 collection: "EventSource".to_owned(),
                 logical_id: id.clone(),
             },
             PlannedGraphDocument {
+                owner_did: owner_did.to_owned(),
                 collection: "Trigger".to_owned(),
                 logical_id: id,
             },
@@ -1450,9 +1464,10 @@ async fn start_run_in_txn(
 }
 
 #[cfg(test)]
+pub(crate) use tests::install_graph_test_tasks;
+#[cfg(test)]
 pub(super) use tests::{
-    attribution_test_fixture, graph_test_identity, graph_test_owner, install_graph_test_tasks,
-    seed_signed_graph_request,
+    attribution_test_fixture, graph_test_identity, graph_test_owner, seed_signed_graph_request,
 };
 
 #[cfg(test)]
@@ -1883,7 +1898,7 @@ mod tests {
         .await;
     }
 
-    pub(in crate::graph_pipeline) async fn install_graph_test_tasks(
+    pub(crate) async fn install_graph_test_tasks(
         node: &EmbeddedNode,
         owner: &str,
         behavior: &str,

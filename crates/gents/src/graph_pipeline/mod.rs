@@ -25,6 +25,8 @@ pub use run::{
     request_graph_run_cancellation, request_graph_run_cancellation_with_access, GraphResultRef,
     GraphRunGroupView, GraphRunRequestView, GraphRunResultView, GraphRunStageView, GraphRunView,
 };
+#[cfg(test)]
+pub(crate) use runtime::install_graph_test_tasks;
 pub use runtime::{
     activate_graph_revision, activate_graph_revision_with_access, graph_plan_creation_set,
     graph_run_terminal_decision, load_active_graph_plan_with_access, materialize_graph_revision,

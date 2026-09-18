@@ -107,7 +107,7 @@ impl Tool for PreviewGraphTool {
             &CompilerPolicy::default(),
         ) {
             Ok(plan) => {
-                let creation_set = graph_plan_creation_set(&plan)?;
+                let creation_set = graph_plan_creation_set(caller_did, &plan)?;
                 let digest = plan.digest.clone();
                 Ok(PreviewGraphResponse {
                     committed: false,
@@ -152,9 +152,9 @@ mod tests {
 
     const OWNER: &str = "did:key:preview-owner";
 
-    fn capability() -> StageCapability {
+    fn capability_for(owner: &str) -> StageCapability {
         StageCapability {
-            agent_did: OWNER.to_owned(),
+            agent_did: owner.to_owned(),
             capability_id: "score".to_owned(),
             revision: "v1".to_owned(),
             task_id: "existing-score-task".to_owned(),
@@ -174,15 +174,19 @@ mod tests {
                 cardinality: PortCardinality::One,
                 required: false,
             }],
-            allowed_callers: vec![OWNER.to_owned()],
+            allowed_callers: vec![owner.to_owned()],
             workspace_authority: None,
             tags: vec![],
         }
     }
 
-    fn intent(capability_id: &str) -> GraphIntent {
+    fn capability() -> StageCapability {
+        capability_for(OWNER)
+    }
+
+    fn intent_for(owner: &str, capability_id: &str) -> GraphIntent {
         GraphIntent {
-            agent_did: OWNER.to_owned(),
+            agent_did: owner.to_owned(),
             graph_id: "session-evaluation".to_owned(),
             nodes: vec![GraphNode {
                 node_id: "score".to_owned(),
@@ -221,16 +225,24 @@ mod tests {
         }
     }
 
+    fn intent(capability_id: &str) -> GraphIntent {
+        intent_for(OWNER, capability_id)
+    }
+
     async fn node() -> Arc<defra_node::EmbeddedNode> {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         node
     }
 
-    fn tool(node: Arc<defra_node::EmbeddedNode>) -> PreviewGraphTool {
+    fn tool_for(node: Arc<defra_node::EmbeddedNode>, owner: &str) -> PreviewGraphTool {
         PreviewGraphTool {
-            core: SelfConfigCore::new(node, OWNER.to_owned(), "working".to_owned()).unwrap(),
+            core: SelfConfigCore::new(node, owner.to_owned(), "working".to_owned()).unwrap(),
         }
+    }
+
+    fn tool(node: Arc<defra_node::EmbeddedNode>) -> PreviewGraphTool {
+        tool_for(node, OWNER)
     }
 
     async fn persisted_graph_documents(node: &defra_node::EmbeddedNode) -> Value {
@@ -269,6 +281,10 @@ mod tests {
             .as_deref()
             .is_some_and(|digest| digest.starts_with("sha256:")));
         assert_eq!(first.creation_set.len(), 4);
+        assert!(first
+            .creation_set
+            .iter()
+            .all(|document| document.owner_did == OWNER));
         assert_eq!(
             first
                 .creation_set
@@ -278,6 +294,180 @@ mod tests {
             ["EventSource", "GraphDefinition", "GraphRevision", "Trigger"]
         );
         assert_eq!(before, persisted_graph_documents(&node).await);
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn same_logical_graph_is_bound_to_each_preview_principal() {
+        let node = node().await;
+        let other = "did:key:preview-other";
+        let before = persisted_graph_documents(&node).await;
+        let first = Tool::call(
+            &tool_for(node.clone(), OWNER),
+            PreviewGraphParams {
+                intent: intent_for(OWNER, "score"),
+                proposed_capabilities: vec![capability_for(OWNER)],
+            },
+        )
+        .await
+        .unwrap();
+        let second = Tool::call(
+            &tool_for(node.clone(), other),
+            PreviewGraphParams {
+                intent: intent_for(other, "score"),
+                proposed_capabilities: vec![capability_for(other)],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.digest, second.digest);
+        assert_eq!(
+            first
+                .creation_set
+                .iter()
+                .map(|document| (&document.collection, &document.logical_id))
+                .collect::<Vec<_>>(),
+            second
+                .creation_set
+                .iter()
+                .map(|document| (&document.collection, &document.logical_id))
+                .collect::<Vec<_>>()
+        );
+        assert!(first
+            .creation_set
+            .iter()
+            .all(|document| document.owner_did == OWNER));
+        assert!(second
+            .creation_set
+            .iter()
+            .all(|document| document.owner_did == other));
+        assert_eq!(before, persisted_graph_documents(&node).await);
+        node.shutdown().await;
+    }
+
+    fn assert_denied(response: &PreviewGraphResponse) {
+        assert!(!response.syntax_and_topology_valid);
+        assert!(!response.committed);
+        assert!(!response.publishable);
+        assert!(response.digest.is_none());
+        assert!(response.plan.is_none());
+        assert!(response.creation_set.is_empty());
+        assert!(response.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == crate::graph_pipeline::DiagnosticCode::UnauthorizedCapability
+        }));
+    }
+
+    #[tokio::test]
+    async fn foreign_intent_owner_is_denied_without_writes() {
+        let node = node().await;
+        let before = persisted_graph_documents(&node).await;
+        let response = Tool::call(
+            &tool(node.clone()),
+            PreviewGraphParams {
+                intent: intent_for("did:key:foreign", "score"),
+                proposed_capabilities: vec![capability()],
+            },
+        )
+        .await
+        .unwrap();
+        assert_denied(&response);
+        assert_eq!(before, persisted_graph_documents(&node).await);
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn proposed_capability_caller_denial_returns_no_plan_or_writes() {
+        let node = node().await;
+        let before = persisted_graph_documents(&node).await;
+        let mut denied = capability();
+        denied.allowed_callers = vec!["did:key:foreign".to_owned()];
+        let response = Tool::call(
+            &tool(node.clone()),
+            PreviewGraphParams {
+                intent: intent("score"),
+                proposed_capabilities: vec![denied],
+            },
+        )
+        .await
+        .unwrap();
+        assert_denied(&response);
+        assert_eq!(before, persisted_graph_documents(&node).await);
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn preview_creation_set_matches_materialization_owned_identities() {
+        let node = node().await;
+        let before = persisted_graph_documents(&node).await;
+        let response = Tool::call(
+            &tool(node.clone()),
+            PreviewGraphParams {
+                intent: intent("score"),
+                proposed_capabilities: vec![capability()],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(before, persisted_graph_documents(&node).await);
+
+        node.add_schema(
+            "type SessionInput { run_id: String @index(unique: true) payload: String }",
+        )
+        .await
+        .unwrap();
+        node.add_schema("type SessionScore { run_id: String @index score: Int }")
+            .await
+            .unwrap();
+        crate::graph_pipeline::install_graph_test_tasks(
+            &node,
+            OWNER,
+            "working",
+            &["existing-score-task"],
+        )
+        .await;
+        let plan = response.plan.as_ref().unwrap();
+        let materialized =
+            crate::graph_pipeline::materialize_graph_revision(&node, None, OWNER, plan)
+                .await
+                .unwrap();
+        let expected_trigger_ids = response
+            .creation_set
+            .iter()
+            .filter(|document| document.collection == "Trigger")
+            .map(|document| document.logical_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(materialized.trigger_ids, expected_trigger_ids);
+
+        let escaped_owner = crate::graphql::escape_graphql_string(OWNER);
+        let escaped_digest = crate::graphql::escape_graphql_string(&plan.digest);
+        let stored = node
+            .execute(&format!(
+                r#"{{
+                    GraphDefinition(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{graph_id agent_did}}
+                    GraphRevision(filter: {{digest: {{_eq: "{escaped_digest}"}}}}) {{revision_id owner_did}}
+                    EventSource(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{event_source_id agent_did}}
+                    Trigger(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{trigger_id agent_did}}
+                }}"#
+            ))
+            .await;
+        assert!(!stored.has_errors(), "{:?}", stored.errors);
+        let stored = stored.data.unwrap();
+        for document in &response.creation_set {
+            let (field, owner_field) = match document.collection.as_str() {
+                "GraphDefinition" => ("graph_id", "agent_did"),
+                "GraphRevision" => ("revision_id", "owner_did"),
+                "EventSource" => ("event_source_id", "agent_did"),
+                "Trigger" => ("trigger_id", "agent_did"),
+                other => panic!("unexpected preview collection {other}"),
+            };
+            assert!(stored[&document.collection]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| {
+                    row[field] == document.logical_id && row[owner_field] == document.owner_did
+                }));
+        }
         node.shutdown().await;
     }
 
