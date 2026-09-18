@@ -409,8 +409,14 @@ fn resolve_bound_cwd(root: &Path, cwd: Option<&Path>) -> Result<PathBuf> {
     let canonical = std::fs::canonicalize(cwd)
         .with_context(|| format!("canonicalizing request cwd {}", cwd.display()))?;
     anyhow::ensure!(
-        canonical.is_dir() && canonical.starts_with(root),
-        "request cwd {} is not a directory under workspace root {}",
+        canonical.is_dir(),
+        "request cwd {} is not a directory",
+        canonical.display()
+    );
+    let admission = crate::tool_surface::resolve_admitted_tool_root(&canonical, [root])?;
+    anyhow::ensure!(
+        admission.admitted().is_some(),
+        "request cwd {} is not under workspace root {}",
         canonical.display(),
         root.display()
     );
@@ -437,7 +443,8 @@ pub(crate) fn require_under_ceiling(path: &Path, operator_tool_root: Option<&Pat
         .map(resolve_configured_tool_root)
         .transpose()?;
     if let Some(ceiling) = operator.as_deref() {
-        if !path.starts_with(ceiling) {
+        let admission = crate::tool_surface::resolve_admitted_tool_root(path, [ceiling])?;
+        if admission.admitted().is_none() {
             bail!(
                 "workspace placement {} escapes operator tool root {}",
                 path.display(),

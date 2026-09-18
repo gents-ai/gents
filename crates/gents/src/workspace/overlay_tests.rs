@@ -498,9 +498,7 @@ fn persisted_cwd_must_stay_under_placement() {
     )
     .unwrap_err();
     assert!(
-        error
-            .to_string()
-            .contains("not a directory under workspace root"),
+        error.to_string().contains("not under workspace root"),
         "{error:#}"
     );
 }

@@ -483,7 +483,8 @@ mod tests {
                 .expect("embedded node boots"),
         );
         ensure_runtime_schemas(&node).await?;
-        let owner = "did:key:persona-owner";
+        let owner = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let actor = identity::Did::new(owner.to_string()).expect("valid test ACP actor");
         gents::ensure_agent_principal(&node, owner).await?;
         use gents::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -493,12 +494,11 @@ mod tests {
             (Collection::InferenceProfile,json!({"agent_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
         ].into_iter().map(|(collection,value)| DesiredStateApplyDocument{collection,add:value.clone(),update:value}).collect();
         let plan = DesiredStateApplyPlan::new(documents)?;
-        ConfigAccess::Local(node.clone())
-            .transact("test.persona.profile", |txn| {
-                let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-            })
-            .await?;
+        ConfigAccess::transact_local(&node, Some(actor.clone()), "test.persona.profile", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await?;
 
         let doc = PersonaRequestDoc {
             request_key: "canonical-create-1".to_string(),
@@ -513,7 +513,9 @@ mod tests {
             profile_id: Some("profile-1".to_string()),
             ..Default::default()
         };
-        let outcome = apply_persona_request(&node, &doc, &PersonaCatalogView::default()).await?;
+        let outcome =
+            apply_persona_request(&node, actor.clone(), &doc, &PersonaCatalogView::default())
+                .await?;
         assert!(!outcome.repaired);
 
         let behavior = gents::load_agent_behavior(&node, &outcome.behavior_id)
@@ -564,7 +566,7 @@ mod tests {
             ..Default::default()
         };
         let clone_outcome =
-            apply_persona_request(&node, &clone_doc, &PersonaCatalogView::default()).await?;
+            apply_persona_request(&node, actor, &clone_doc, &PersonaCatalogView::default()).await?;
         assert!(!clone_outcome.repaired);
         assert_ne!(clone_outcome.behavior_id, outcome.behavior_id);
         let cloned = gents::load_agent_behavior(&node, &clone_outcome.behavior_id)

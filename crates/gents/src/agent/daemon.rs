@@ -138,6 +138,7 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     slot_generation: u64,
     operator_tool_root: Option<PathBuf>,
     request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
+    root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
 }
 
 enum HandleRequestOutcome {
@@ -204,6 +205,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             slot_generation,
             operator_tool_root: None,
             request_admission,
+            root_execution_guard: None,
         })
     }
 
@@ -215,6 +217,14 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn with_operator_tool_root(mut self, root: Option<PathBuf>) -> Self {
         crate::workspace::install_process_operator_tool_root(root.clone());
         self.operator_tool_root = root;
+        self
+    }
+
+    pub(super) fn with_root_execution_guard(
+        mut self,
+        guard: Option<crate::tool_surface::RootExecutionGuard>,
+    ) -> Self {
+        self.root_execution_guard = guard;
         self
     }
 

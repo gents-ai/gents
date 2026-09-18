@@ -3238,6 +3238,98 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
 }
 
 #[tokio::test]
+async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_root() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("tools-root-policy");
+    let owner = identity.did().to_string();
+    let behavior_id = "root-policy";
+    crate::test_support::install_test_behavior(&node, &owner, behavior_id).await;
+    let ceiling = tempfile::tempdir().unwrap();
+    let selected = ceiling.path().join("selected");
+    let sibling = ceiling.path().join("sibling");
+    std::fs::create_dir_all(&selected).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    let selected_text = selected.to_string_lossy();
+    let escaped = crate::graphql::escape_graphql_string(&selected_text);
+    crate::config_client::ConfigAccess::write_local(
+        &node,
+        "test.self_config.workspace_root",
+        &format!(
+            r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped}", enabled:true}}) {{_docID}} }}"#
+        ),
+    )
+    .await
+    .unwrap();
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), behavior_id.into())
+        .unwrap()
+        .with_process_ceiling(crate::tool_surface::SelfConfigProcessCeiling {
+            file_mode: crate::tool_surface::FileToolMode::ReadOnly,
+            bash_mode: crate::tool_surface::BashMode::Off,
+            root: Some(ceiling.path().to_path_buf()),
+        });
+    let patch = |root: &std::path::Path| {
+        vec![(
+            "host".into(),
+            Some(json!({
+                "root": root.to_string_lossy(),
+                "files": {"mode": "ReadOnly"}
+            })),
+        )]
+    };
+
+    let authored_inside = selected.join("detour").join("..");
+    let preview = core
+        .preview(tools_request(&core, patch(&authored_inside), false))
+        .await
+        .expect("preview admits a descendant and does not persist it");
+    assert!(!preview.committed);
+    assert!(core
+        .preview(tools_request(&core, patch(&sibling), false))
+        .await
+        .is_err());
+    assert!(core
+        .apply(tools_request(&core, patch(&sibling), false))
+        .await
+        .is_err());
+
+    core.apply(tools_request(&core, patch(&authored_inside), false))
+        .await
+        .expect("apply admits the selected root");
+    let tools_id = format!("{behavior_id}:tools");
+    let persisted: crate::document_config::Tools =
+        crate::config_client::ConfigAccess::Local(node.clone())
+            .transact("test.self_config.read_tools", |txn| {
+                let owner = owner.clone();
+                let tools_id = tools_id.clone();
+                Box::pin(async move {
+                    let value = crate::config_client::read_desired_state_document_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        &owner,
+                        &tools_id,
+                    )
+                    .await?
+                    .context("persisted Tools")?;
+                    Ok(serde_json::from_value(value)?)
+                })
+            })
+            .await
+            .unwrap();
+    assert_eq!(
+        persisted
+            .host
+            .as_ref()
+            .and_then(|host| host.root.as_deref()),
+        Some(
+            std::fs::canonicalize(&selected)
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+}
+
+#[tokio::test]
 async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     let node = build_persona_node().await;
     let identity = persona_identity("self-config-secret");

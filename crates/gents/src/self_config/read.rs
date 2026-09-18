@@ -63,7 +63,7 @@ impl SelfConfigCore {
             }
         }
         let tools = documents.get(SelfConfigTarget::Tools.collection_name());
-        let canonical_tools = tools
+        let mut canonical_tools = tools
             .cloned()
             .map(serde_json::from_value::<crate::document_config::Tools>)
             .transpose()?;
@@ -101,16 +101,25 @@ impl SelfConfigCore {
             .map(crate::tool_surface::BashMode::parse)
             .transpose()?
             .unwrap_or_default();
-        let configured_root = tools
-            .and_then(|tools| tools.pointer("/host/root"))
-            .and_then(Value::as_str)
-            .filter(|root| !root.trim().is_empty());
         let process_ceiling = self.process_ceiling();
         let effective_file_mode = requested_file_mode.meet(process_ceiling.file_mode);
         let effective_bash_mode = requested_bash_mode.meet(process_ceiling.bash_mode);
         let effective_root = if effective_file_mode != crate::tool_surface::FileToolMode::Off
             || effective_bash_mode != crate::tool_surface::BashMode::Off
         {
+            let policy = crate::tool_surface::load_workspace_root_policy_in_txn(
+                txn,
+                process_ceiling.root.as_deref(),
+            )
+            .await?;
+            if let Some(tools) = canonical_tools.as_mut() {
+                crate::tool_surface::canonicalize_tools_root(tools, &policy)?;
+            }
+            let configured_root = canonical_tools
+                .as_ref()
+                .and_then(|tools| tools.host.as_ref())
+                .and_then(|host| host.root.as_deref())
+                .filter(|root| !root.trim().is_empty());
             crate::tool_surface::resolve_effective_tool_root(
                 self.behavior_id(),
                 configured_root.map(Path::new),
@@ -119,6 +128,11 @@ impl SelfConfigCore {
         } else {
             None
         };
+        let configured_root = canonical_tools
+            .as_ref()
+            .and_then(|tools| tools.host.as_ref())
+            .and_then(|host| host.root.as_deref())
+            .filter(|root| !root.trim().is_empty());
         let mut skills = Vec::new();
         if let Some(ids) = anchor.context.get("skill_ids").and_then(Value::as_array) {
             for id in ids {
