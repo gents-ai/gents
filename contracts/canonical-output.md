@@ -167,9 +167,51 @@ where possible. Dispatch and tool terminalization retain their guards. Only plai
 streaming flushes promise zero request rewrites. The extra closure document disappears
 when final bytes and closure commit together, not for every possible source ending.
 
+Measure read work as well as writes: records examined and bytes read per flush,
+reconstruction and recovery; buffered bytes; and mutation-gate hold time as output
+grows. A full-prefix rescan on every flush or preview must not turn append-only
+writes into quadratic read work. Rebuildable local indexes/caches may accelerate
+reads, but cannot replace authoritative recovery checks under the gate or introduce
+a second durable progress record. Benchmark these costs in the implementation layer.
+
 Still open, for the first measurement on real DefraDB: whether the segment
 collection needs its `agent_did` / `requester_did` indexes or only the fields (reads
 are `request_doc_id` scans), and the default batch interval and size threshold.
+
+## Client execution and output visibility
+
+The shared client projection takes request facts only; there is no response
+lifecycle. Preserve the existing supersession override and unique retry-tip
+selection, rather than choosing whichever attempt has visible output. The target
+`ClientHeadProjection` mapping, after the supersession override, is:
+
+| Request lifecycle | Client turn state |
+| --- | --- |
+| WorkspaceBindingPending, Pending | WaitingForClaim |
+| Claimed, Processing, InputRequired | Running |
+| Completed | Completed |
+| Failed, Dead | Failed |
+| Superseded | Superseded |
+| Interrupted | Interrupted |
+
+`request_state` retains the precise lifecycle for workspace/input-wait indicators.
+`Running` replaces the misleading execution label `Streaming`; silent work is still
+running. Shared reconstruction supplies live previews, missing-dependency loading,
+integrity errors and published message completeness separately. Missing output
+cannot demote completed execution; a Complete message cannot terminalize an active
+request; a Partial message is not another failure status. A terminal NoMessage
+selection does not wait for a nonexistent answer. Keep one shared projection, not
+consumer-local status reconciliation. This is a target contract: update
+`Proofs/Client.lean`, then conformance, then implement the replacement projection.
+
+Complete reconstruction still requires every dependency of the requested message
+to be present and valid, including the full referenced closed stream, even for a
+head/tail presentation. Existing live previews may display while reconstruction is
+incomplete; they do not certify hydration. Reconstructing one message does not
+require unrelated session history. Full-session hydration retains its exact manifest
+and authorized reference-closure requirements. No range-fetch protocol, second
+hydration-completeness definition or selective-hydration optimization is added here;
+measure large-output transfer costs before proposing one.
 
 ## Deletion and ownership
 
@@ -185,6 +227,8 @@ are `request_doc_id` scans), and the default batch interval and size threshold.
 | `session/fork.rs` payload/tool/spill copies and spill remapping | Fork owner copies headers only, with `MessagePublication::Fork`, child-scoped message keys/sequences and no live request membership. Blocks keep the origin's closure references unchanged. Origin tool IDs remain provenance, not child executable rows. Compaction cursors still target retained child headers. | Lean → conformance → runtime |
 | Session-only hydration completeness | Existing owner serves authorized header closure: every referenced closing record, fork origins and the segments within their extents. Terminal selections resolve exact headers. Immutable IDs bind output content; mutable request/tool observations retain their owner checks. Receipt format stays unchanged; missing dependencies remain incomplete, denied dependencies reject. | Spec → Lean → conformance → runtime |
 | Response/spill desktop stores, queries, merge heuristics and CLI projections | Shared output reconstruction supplies native messages and live streams; request lifecycle supplies status. No consumer-local text repair or short-message fallback. Parent session removal cannot cascade into retained origin dependencies; no output GC is introduced here. | Consumers |
+| `client_protocol::{ResponseStatus, InvalidResponseStatus, ResponseSnapshot}`, `AttemptView.response`, response-aware projection functions (deleted); client execution variant `Streaming` (renamed `Running`) | `client_protocol` retains request-only input/output types. `Proofs/Client.lean` and client conformance must adopt the mapping above before the shared projection is reimplemented. Desktop `store/turns.rs` and response indexes; CLI `codex_shim/{turn,subagent_projection,history_projection,thread_projection,progress}` consume it with no response fallback. Existing protocol tests are handoff evidence, not the new contract. Preserve retry-tip ambiguity rejection and supersession selection. | Spec → Lean → conformance → consumers |
+| `streaming.rs::StreamBufferSnapshot` current/persisted cumulative copies; `agent/stream_processor.rs` intermediate accumulated-message persistence snapshots | Segment writer retains the uncommitted batch and stream/header bookkeeping, not cumulative copies for comparison and rewrite. Shared reconstruction owns persisted-output assembly. Native messages assembled for provider input remain legitimate; do not delete required provider context or structural metadata. Remove the snapshot/upsert machinery in the implementation layer. | Runtime |
 | Mailbox (retained, not an AgentResponse consumer) | `mailbox/reply.rs` consumes authenticated start-request replies at claim and records the request document. `mailbox.rs` resolves write-document items through correlated domain documents; ack remains explicit. None is redirected to final assistant messages. | No semantic change |
 
 Open question for the consumer layer: `CLIENT_TO_RUNTIME_COLLECTIONS` carries
@@ -209,7 +253,7 @@ or drop those collections from the client-to-runtime direction.
 ## Next layer's model surfaces
 
 `Transcript`, `CompletionRetry`, `RequestExecutionLease`, `SessionFork`,
-`SessionHydration`, tool/background delivery and provider-input narrowing must
+`SessionHydration`, `Client`, tool/background delivery and provider-input narrowing must
 cover: retraction without replacement bytes; stale/replayed writes; at most one
 closure per source; late raw flushes beyond its extent are inert; header publication before tool
 dispatch; background output after request termination; recovery publication;
@@ -223,6 +267,13 @@ arrival, explicit NoMessage and late background delivery; native block order and
 signed reasoning; line-normalized presentation; fork authorization/retention and
 reference closure. Dispatch cases include the boundaries above and replace the old
 `mid_stream_failure_after_tool_ran_closes_turn_and_continues` expectation.
+
+Client cases cover every lifecycle mapping above, silent running work, input wait,
+terminal execution before output arrival, Complete/Partial messages during active
+execution, explicit NoMessage, supersession and ambiguous retry tips. Output arrival
+or absence alone never changes execution status. Preserve integrity errors as errors,
+not a perpetual loading indicator. Regenerate the old response-aware client cases
+after the model changes; do not claim the previous projection proof covers this one.
 
 Closure representation cases must include a combined final flush, closure after
 an earlier flush, zero-byte streams, a zero-stream source, retraction, recovery
