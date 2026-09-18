@@ -204,12 +204,8 @@ pub enum ToolServiceAuth {
     Bearer,
     /// MCP OAuth (this issue). All fields are references/metadata, never secrets.
     OAuth {
-        /// `mcp:<service_id>` provider key binding the credential row to this service.
-        provider: String,
         /// Requested scopes (advisory; server may grant fewer — record granted set).
         scopes: Vec<String>,
-        /// RFC 8707 resource parameter value; persisted for token-audience binding.
-        resource: Option<String>,
     },
 }
 ```
@@ -219,8 +215,11 @@ Lean's ConfigDocuments vocabulary prefers flat fields — resolve against #1430'
 canonical field lists before implementation; the Lean catalog currently enumerates 13
 fields and would gain the auth selection in the same change).
 
-`ToolServiceRegistry::validate()` gains: `OAuth.provider` must match
-`mcp:<service_id>`. A static Bearer selection carries no arbitrary credential id: the
+`ToolServiceRegistry::validate()` treats both auth variants as markers/references, not
+authority to choose arbitrary credential or audience values. For OAuth, the credential
+provider is derived as `mcp:<service_id>` and the RFC 8707 resource is the canonical
+selected service URI; protected-resource metadata must report that same resource. A
+static Bearer selection likewise carries no arbitrary credential id: the
 credential owner derives `mcp-bearer:<service_id>` from the validated service id and
 the current principal, then verifies that the configured service endpoint still matches
 the credential's approved destination before releasing a token. This prevents a caller
@@ -237,7 +236,7 @@ credential row per principal per service. `OAuthCredential` gains optional colum
 | `issuer` | Discovered AS issuer; refresh binds to it (re-verified at refresh time). |
 | `resource` | RFC 8707 resource value used at authorization; recorded for audience audit. |
 | `granted_scopes` | Scopes the AS actually granted (space-joined string like Claude's). |
-| `client_registration` | Persisted DCR result (client_id, optional secret ref) or `none` for pre-registered client_id. |
+| `client_registration` | Public `client_id` metadata only in the first slice; confidential-client secrets/DCR results are deferred until their credential storage, ACP, redaction, and rotation owner is specified. |
 
 (Refresh-rotation-safety note: new columns must be additive/optional so old rows still
 decode — `OAuthCredentialRow` derives all-Option fields, and
@@ -260,7 +259,9 @@ pub enum OAuthRefreshKind {
 `DbCredentialBearer::refresh_tokens` routes `Mcp` through a new
 `mcp_oauth_refresh::refresh_mcp_token` that (a) re-validates the token endpoint URL
 against the persisted `issuer` (HTTPS, exact host — see §2.5), (b) posts the standard
-refresh grant, (c) verifies the new access token's `aud`/`iss` claims when present, and
+refresh grant with the same canonical `resource`, (c) cryptographically verifies signed
+JWT access-token `iss`/`aud` claims against the pinned issuer/JWKS, while treating opaque
+tokens as opaque and relying on the resource-bound grant plus resource-server rejection, and
 (d) fails classified (`OAuthAuthProblem::{Missing, WrongMode, Expired, NotEntitled,
 Other}` extended with `Revoked` mapping `invalid_grant`).
 
@@ -306,64 +307,72 @@ Single owner for the RFC 9728 + MCP authorization dance, test-first per §4.3:
 pub struct ProtectedResourceMetadata { authorization_server: Option<String>, /* … */ }
 
 /// Fail-closed with an operator-facing diagnosis string.
-pub fn validate_metadata_urls(issuer: &str, meta: &AuthorizationMetadata, resource_origin: &str)
+pub fn validate_metadata_urls(issuer: &str, meta: &AuthorizationMetadata, resource_uri: &str)
     -> Result<(), MetadataDiagnosis>;
 ```
 
 Non-negotiable checks (each maps to a named test in §4.3):
-1. Service endpoint and all metadata URLs are HTTPS (loopback `http://127.0.0.1` /
-   `http://localhost` allowed only for explicitly-flagged dev fixtures — mirroring
+1. Service endpoint and all metadata URLs are HTTPS (loopback `http://127.0.0.1` or
+   `http://[::1]` allowed only for explicitly-flagged dev fixtures — mirroring
    mcp.rs's current `http`-only register path, which must migrate to
    `https`-default-with-loopback-exception).
 2. Metadata URLs resolve to the issuer origin: exact scheme+host match on
    authorization/token/registration/jwks endpoints; no IP-literal, non-default-port, or
    userinfo trickery (`Url::host_str()` comparisons, case-normalized).
-3. Issuer from metadata equals the issuer in the protected-resource metadata
-   (`authorization_server`), which equals the service-declared issuer when present —
-   exact string equality after trailing-slash normalization.
+3. Issuer from authorization-server metadata equals the selected authorization-server
+   identifier with exact code-point equality, including any trailing slash, as required
+   by RFC 8414. Do not normalize before comparison. Protected-resource metadata's
+   `resource` must likewise equal the canonical selected MCP service URI exactly, and
+   every authorization/token request carries that same RFC 8707 `resource` value.
 4. No redirects followed for token/metadata requests: `reqwest::Client` with
    `redirect(Policy::none())` (this is the SSRF/secret-leak boundary; the login crates
    already build their HTTP clients explicitly, this one must be documented).
-5. PKCE S256 mandatory; `state` 128-bit random; `resource` parameter present when
-   configured.
-6. Discovery order pinned to the spec: 401 `WWW-Authenticate` `resource_metadata` URL →
-   `/.well-known/oauth-protected-resource` on the service origin →
-   `/.well-known/openid-configuration` / `oauth-authorization-server` on the AS origin.
-   Never guess endpoints from paths.
+5. PKCE S256 mandatory; `state` 128-bit random; the canonical `resource` parameter is
+   always present.
+6. Discovery order is pinned to RFC 9728/RFC 8414 path-aware well-known derivation: use
+   the challenged `resource_metadata` URL when supplied; otherwise derive the protected
+   resource well-known URI from the full resource path, and derive authorization-server
+   metadata from the full issuer path using the RFC-defined insertion rules. Never
+   collapse either identifier to the origin root or guess endpoints by string joining.
 
 The rmcp `auth` feature (`rmcp::transport::auth::{AuthorizationManager, OAuthState,
 AuthorizationSession, CredentialStore, StateStore}`) already implements discovery,
 DCR, PKCE, token exchange, and refresh against `oauth2`; however it is feature-gated
-(`features = ["auth"]` adds `dep:oauth2`), its `CredentialStore`/`StateStore` traits
-expect in-process storage, and Gents cannot enable new optional deps casually. The
+(`features = ["auth"]` adds `dep:oauth2`); its default stores are in memory, while its
+`CredentialStore`/`StateStore` traits can be backed by Gents documents/adapters. Gents
+cannot enable new optional deps casually. The
 recommendation is: **evaluate adopting `rmcp/auth` with a Gents `CredentialStore` backed
 by the OAuthCredential document before hand-rolling exchange code**; the design above
-(needs: issuer/host validation, `resource` param, desktop-managed redirect) mostly fits
+(needs: issuer/host validation, mandatory `resource`, SSH-forwarded loopback redirect) mostly fits
 its `AuthorizationManager::discover_metadata` + `start_authorization` +
 `AuthorizationSession::handle_callback` shape. The decision (adopt vs. reuse
 `gents-chatgpt-login`-style minimal flow) belongs to the implementation phase with the
 parent; the metadata-validation owner (§2.5) and consent orchestration (§3) are needed
 either way.
 
-### 2.6 Consent orchestration — operator-owned, agent-observed (owner: new module + CLI/desktop surfaces)
+### 2.6 Consent orchestration — operator-owned, agent-observed (owner: new module + CLI first)
 
 ```rust
 pub struct McpConsentRequest {
     pub service_id: String,
     pub agent_did: String,
     pub scopes: Vec<String>,
-    pub resource: Option<String>,
+    pub resource: String,
     /// Host where the callback server must run and be reachable from the browser.
     pub callback: McpCallbackTransport,
 }
 
 pub enum McpCallbackTransport {
-    /// Runtime binds 127.0.0.1:<ephemeral>; operator forwards it (SSH -L or desktop).
+    /// Runtime binds 127.0.0.1:<ephemeral>; operator forwards it with SSH when remote.
     LoopbackForward,
-    /// Desktop runs the callback server locally and relays the redirect to the runtime.
-    DesktopRelay,
 }
 ```
+
+Desktop relay is explicitly deferred. Process-local pending authorization cannot be
+confirmed or consumed by another host, and no authenticated relay/binding protocol
+exists today. A future desktop flow must first specify runtime enrollment, authenticated
+message binding, replay protection, and which host owns token exchange and persistence;
+it must not directly write credentials while claiming to consume runtime-local state.
 
 State machine (persisted — no new collection; extends existing observation surfaces):
 
@@ -378,8 +387,9 @@ NoConfig → Configured → ConsentRequired ──(consent granted)──→ Cre
   existing observation owner, consumed by desktop + CLI unchanged.
 - The credential row is created **only** after a successful exchange (never a
   placeholder with secrets).
-- **Operator ownership rule:** only operator surfaces (CLI login command run by the
-  operator, desktop bridge commands) may *start* consent and *complete* it. Agents may
+- **Operator ownership rule:** only the operator CLI may *start* consent and *complete*
+  it in the initial slice. A future desktop flow requires the authenticated relay
+  design above. Agents may
   request setup via the existing self-config surface (writes the `ToolServiceAuth::OAuth`
   selection, which references — never contains — credentials) and may inspect redacted
   status; agents must not be able to mint a consent URL callback receiver, read token
@@ -405,13 +415,15 @@ host. On a cloud runtime the browser is on the operator's laptop.
    ```
 
 2. The operator opens the URL locally; the AS redirects to
-   `http://localhost:<p>/mcp/auth/callback`, which the SSH tunnel carries back to the
+   `http://127.0.0.1:<p>/mcp/auth/callback`, which the SSH tunnel carries back to the
    runtime's loopback listener. The redirect URI registered with the AS must be
-   `http://localhost:<p>/mcp/auth/callback` — matching how both existing login crates
-   build `redirect_uri` (`format!("http://localhost:{actual_port}/…")`), and matching
-   what OAuth ASes commonly allow as a loopback redirect.
-3. Binding stays loopback-only (reuse the `bind_server` discipline from
-   `gents-chatgpt-login` — never `0.0.0.0`; the cloud API is never exposed).
+   `http://127.0.0.1:<p>/mcp/auth/callback`; use the loopback IP literal required by
+   this contract rather than `localhost`. Existing login crates are prior art for the
+   server lifecycle, not for this redirect identifier.
+3. Binding stays loopback-only on both ends: reuse the callback `bind_server` discipline
+   and require the operator's forward to bind local `127.0.0.1` (for example
+   `ssh -N -L 127.0.0.1:<p>:127.0.0.1:<p> <cloud-host>`). Never bind `0.0.0.0`; the cloud
+   API is never exposed.
 4. Security properties: the tunnel is operator-authenticated SSH; the callback server
    validates `state` before touching the code (existing pattern); the page response is
    the existing CSP'd `gents-login-ui` render; the code is exchanged server-side by the
@@ -424,20 +436,8 @@ host. On a cloud runtime the browser is on the operator's laptop.
 not assume device-code support" — xAI's flow exists as precedent for providers that
 have it, but MCP fixtures must not require it); a runtime-hosted public redirect page
 exposes the cloud API and violates acceptance item 5; an enrolled-client desktop relay
-is viable but couples consent to pairing state — it is the right *desktop* path
-(§2.6 `DesktopRelay`) and should reuse the existing desktop login-server pattern
-(`inference_setup.rs:391-440`) plus an authenticated relay, but it is not the headless
-primary.
-
-**Desktop (`DesktopRelay`) sketch:** desktop bridge command
-`desktop_mcp_oauth_login(request)` mirrors `inference_setup.rs`: starts the local
-callback server, resolves the target runtime's operator access
-(`core.operator_access(agent_did)`), emits the auth URL to the UI, awaits callback or
-cancel with timeout, then writes the credential via
-`upsert_oauth_credential_on`. Difference vs. Codex/Claude flows: the issuer/registration
-are discovered from the service (§2.5), and the desktop must confirm the requested
-service/principal exactly matches the runtime's pending consent record (§2.8) before
-exchanging — the desktop may authorize only the explicitly-selected principal/service.
+is viable but couples consent to pairing state. It remains an open future protocol, not
+part of this implementation proposal.
 
 ### 2.8 Pending-authorization binding (replay/CSRF/pinning)
 
@@ -452,7 +452,7 @@ pub struct PendingAuthorization {
     pub pkce_verifier: String,      // secret; never serialized
     pub issuer: String,             // pinned AS
     pub redirect_uri: String,       // pinned callback
-    pub resource: Option<String>,   // RFC 8707 audience
+    pub resource: String,           // canonical selected service URI / RFC 8707 audience
     pub requested_scopes: Vec<String>,
     pub created_at: Instant,        // enforce ~10-min max lifetime
 }
@@ -460,8 +460,10 @@ pub struct PendingAuthorization {
 
 Validation at callback (all-or-nothing; any failure → redacted 4xx page, no exchange):
 `state` exact-match → `issuer` still equals the re-discovered AS → `redirect_uri`/
-`resource`/`agent_did`/`service_id` unchanged → exchange with PKCE verifier → verify
-token response `iss`/`aud` claims when present → upsert credential row bound to
+`resource`/`agent_did`/`service_id` unchanged → exchange with PKCE verifier → for a JWT
+access token, verify signature and `iss`/`aud` against pinned metadata/JWKS; for an
+opaque token, do not parse claims and rely on the resource-bound grant plus MCP resource
+server rejection → upsert credential row bound to
 `(agent_did, "mcp:<service_id>")`.
 
 ### 2.9 Refresh concurrency (inherited, but must be tested)
@@ -484,11 +486,13 @@ failure cooldown, force-refresh on 401 (`invalidate`), and persists rotated toke
 
 **Local flow (operator on runtime host):**
 1. `gents mcp register --endpoint https://svc.example/mcp` (or desktop save) writes the
-   registry row; operator later sets auth via self-config/CLI (`auth.kind = oauth`).
+   registry row; operator later sets auth via self-config/CLI (`auth.kind = oauth`). The
+   canonical service URI becomes the required RFC 8707 `resource`; it is not authored
+   independently.
 2. Health checker probes → 401 with `WWW-Authenticate` → `ConsentRequired` observation
    recorded (classified, redacted).
 3. Operator runs `gents mcp oauth login --service web`: metadata discovery (§2.5) →
-   (DCR if `registration_endpoint` exists, else configured/static client id) → loopback
+   configured public client id (DCR remains deferred unless separately approved) → loopback
    callback server → browser opens authorize URL → callback validated (§2.8) → token
    exchange with `resource` + PKCE → credential row upserted
    `(agent_did, "mcp:web")` → `ConsentRequired` clears on next probe.
@@ -525,7 +529,7 @@ test runs in this worktree with `cargo test -p gents` /
   exercises the identical code path with a different redirect host).
 
 ### 4.2 Headless callback routing (acceptance 5)
-- Unit: authorize-URL builder emits exact `redirect_uri=http://localhost:<p>/mcp/auth/callback`
+- Unit: authorize-URL builder emits exact `redirect_uri=http://127.0.0.1:<p>/mcp/auth/callback`
   and printed SSH command matches the pinned port.
 - Integration: forward loopback→callback server; complete flow; assert runtime obtained
   credential, cloud API not exposed (bind listener asserts `127.0.0.1` only).
@@ -543,7 +547,10 @@ test runs in this worktree with `cargo test -p gents` /
 - issuer mismatch: AS metadata issuer ≠ `authorization_server` in PR metadata →
   fail-closed with operator diagnosis, **no token request** (assert no outbound token
   POST recorded).
-- audience mismatch: token `aud` ≠ configured `resource` → reject before use.
+- audience mismatch: a signed JWT token whose verified `aud` differs from the canonical
+  service resource → reject before use. An opaque token is never decoded for claims;
+  the fixture instead proves the exact `resource` went to authorization/token requests
+  and the resource server rejects a token issued for another resource.
 - insecure metadata: `http://` AS endpoints on non-loopback → fail-closed; also the
   issue's v0.17.0 real-world case: HTTPS service advertising HTTP issuer/authorization/
   token URLs → precise diagnosis, no downgrade, no secret-bearing request.
@@ -637,10 +644,11 @@ decisions. Recommended defaults are listed first:
    it; alternatively require DCR in the first slice.
 3. **Headless consent:** document SSH loopback forwarding as the first supported remote
    topology; defer a desktop relay/enrolled-client protocol.
-4. **Audience policy:** require an explicit resource value bound to the selected MCP
-   service, exact issuer matching, and `iss`/`aud` validation when the access-token
-   format exposes verifiable claims; reject inconsistent opaque-token metadata rather
-   than inferring an audience.
+4. **Audience policy:** derive the resource from the canonical selected MCP service URI,
+   require protected-resource metadata to match it exactly, and require exact issuer
+   matching. For JWT access tokens, validate signature/JWKS plus `iss`/`aud`; for opaque
+   tokens, never infer claims—use the resource-bound grant and fail closed on resource
+   server rejection.
 5. **Delivery boundary:** land discovery/validation + pending consent first, then token
    exchange/persistence, then refresh/revocation. Static Bearer rotation/reconnect stays
    a separate #1532 follow-up and is not a prerequisite for starting OAuth design work.
