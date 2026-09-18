@@ -124,7 +124,10 @@ mod tests {
             "unexpected content type {content_type}"
         );
         let body = response.text().await?;
-        assert!(body.contains("id=\"root\""), "not the explorer shell: {body}");
+        assert!(
+            body.contains("id=\"root\""),
+            "not the explorer shell: {body}"
+        );
         Ok(())
     }
 
