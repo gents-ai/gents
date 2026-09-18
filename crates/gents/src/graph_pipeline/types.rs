@@ -33,7 +33,7 @@ pub struct PortSpec {
 ///
 /// The model can select a capability revision, but cannot author the Task's
 /// behavior, prompt, tools, model, or output permissions.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct StageCapability {

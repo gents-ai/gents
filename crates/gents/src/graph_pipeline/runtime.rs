@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -32,6 +32,32 @@ pub struct PublishedGraph {
     pub graph_id: String,
     pub digest: String,
     pub trigger_ids: Vec<String>,
+}
+
+/// Storage identity scope for one artifact proposed by a compiled plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphArtifactIdentityScope {
+    Global,
+    Principal,
+}
+
+/// Stable prospective identity of an artifact an approved publication would
+/// inspect. This does not predict whether publication will create, reuse, or
+/// reject the stored document.
+///
+/// This is a pure preview of the revision materializer's owned ID scheme. It
+/// deliberately does not inspect storage.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub struct ProspectiveGraphArtifactIdentity {
+    pub collection: String,
+    pub identity_scope: GraphArtifactIdentityScope,
+    /// Present only for principal-scoped identities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_did: Option<String>,
+    /// Unique-key fields used by the existing materializer. GraphRevision has
+    /// both globally unique digest and revision_id keys.
+    pub identity_keys: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -529,6 +555,81 @@ fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
         task_ids,
         trigger_ids,
     })
+}
+
+/// Return prospective artifact identities without reading or writing storage.
+/// `GraphPlan` is intentionally principal-neutral; `owner_did` scopes only
+/// the artifacts whose canonical keys are principal-scoped. Approved
+/// publication owns lookup and the resulting create/reuse/conflict decision.
+pub fn prospective_graph_artifact_identities(
+    owner_did: &str,
+    plan: &GraphPlan,
+) -> Result<Vec<ProspectiveGraphArtifactIdentity>> {
+    if !verify_graph_plan_digest(plan) {
+        anyhow::bail!("refusing to preview a GraphPlan with an invalid digest");
+    }
+    let mut documents = vec![
+        ProspectiveGraphArtifactIdentity {
+            collection: "GraphDefinition".to_owned(),
+            identity_scope: GraphArtifactIdentityScope::Principal,
+            principal_did: Some(owner_did.to_owned()),
+            identity_keys: BTreeMap::from([("graph_id".to_owned(), plan.graph_id.clone())]),
+        },
+        ProspectiveGraphArtifactIdentity {
+            collection: "GraphRevision".to_owned(),
+            identity_scope: GraphArtifactIdentityScope::Global,
+            principal_did: None,
+            identity_keys: BTreeMap::from([
+                ("digest".to_owned(), plan.digest.clone()),
+                ("revision_id".to_owned(), revision_id(plan)),
+            ]),
+        },
+    ];
+    for entry in &plan.entries {
+        let route = format!(
+            "entry:{}:{}:{}",
+            entry.name, entry.to.node_id, entry.to.port
+        );
+        let id = graph_trigger_id(&plan.digest, &route)?;
+        documents.extend([
+            ProspectiveGraphArtifactIdentity {
+                collection: "EventSource".to_owned(),
+                identity_scope: GraphArtifactIdentityScope::Principal,
+                principal_did: Some(owner_did.to_owned()),
+                identity_keys: BTreeMap::from([("event_source_id".to_owned(), id.clone())]),
+            },
+            ProspectiveGraphArtifactIdentity {
+                collection: "Trigger".to_owned(),
+                identity_scope: GraphArtifactIdentityScope::Principal,
+                principal_did: Some(owner_did.to_owned()),
+                identity_keys: BTreeMap::from([("trigger_id".to_owned(), id)]),
+            },
+        ]);
+    }
+    for (index, edge) in plan.edges.iter().enumerate() {
+        let route = format!(
+            "edge:{index}:{}:{}:{}:{}",
+            edge.from.node_id, edge.from.port, edge.to.node_id, edge.to.port,
+        );
+        let id = graph_trigger_id(&plan.digest, &route)?;
+        documents.extend([
+            ProspectiveGraphArtifactIdentity {
+                collection: "EventSource".to_owned(),
+                identity_scope: GraphArtifactIdentityScope::Principal,
+                principal_did: Some(owner_did.to_owned()),
+                identity_keys: BTreeMap::from([("event_source_id".to_owned(), id.clone())]),
+            },
+            ProspectiveGraphArtifactIdentity {
+                collection: "Trigger".to_owned(),
+                identity_scope: GraphArtifactIdentityScope::Principal,
+                principal_did: Some(owner_did.to_owned()),
+                identity_keys: BTreeMap::from([("trigger_id".to_owned(), id)]),
+            },
+        ]);
+    }
+    documents.sort();
+    documents.dedup();
+    Ok(documents)
 }
 
 fn rows<'a>(response: &'a Value, collection: &str) -> &'a [Value] {
@@ -1384,9 +1485,10 @@ async fn start_run_in_txn(
 }
 
 #[cfg(test)]
+pub(crate) use tests::install_graph_test_tasks;
+#[cfg(test)]
 pub(super) use tests::{
-    attribution_test_fixture, graph_test_identity, graph_test_owner, install_graph_test_tasks,
-    seed_signed_graph_request,
+    attribution_test_fixture, graph_test_identity, graph_test_owner, seed_signed_graph_request,
 };
 
 #[cfg(test)]
@@ -1817,7 +1919,7 @@ mod tests {
         .await;
     }
 
-    pub(in crate::graph_pipeline) async fn install_graph_test_tasks(
+    pub(crate) async fn install_graph_test_tasks(
         node: &EmbeddedNode,
         owner: &str,
         behavior: &str,

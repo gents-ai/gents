@@ -301,6 +301,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered");
     for name in [
+        PREVIEW_GRAPH_TOOL_NAME,
         LIST_GRAPHS_TOOL_NAME,
         RUN_GRAPH_TOOL_NAME,
         GET_GRAPH_RUN_TOOL_NAME,
