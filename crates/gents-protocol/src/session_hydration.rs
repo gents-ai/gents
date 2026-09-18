@@ -4,20 +4,27 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::enrollment::canonical_domain_payload;
-use crate::output::PayloadRef;
 
-pub const SESSION_HYDRATION_RECEIPT_VERSION: u8 = 2;
-const RECEIPT_SIGNATURE_DOMAIN: &str = "gents-session-hydration-receipt-v2";
+pub const SESSION_HYDRATION_RECEIPT_VERSION: u8 = 1;
+const RECEIPT_SIGNATURE_DOMAIN: &str = "gents-session-hydration-receipt-v1";
 
 /// Closed collection vocabulary: retired response/spill documents cannot be
 /// claimed as transcript hydration. Origin dependencies retain their ACP;
 /// following a reference never grants access to the whole origin session.
+///
+/// Headers, seals and segments are immutable, so the manifest's exact document
+/// identities already bind the served content; the receipt does not restate
+/// payload extents. The manifest is the authorized reference closure of the
+/// served headers: every seal a block or presentation references (including
+/// fork origins outside the requested session) and every segment within those
+/// seals' extents. Client completion requires each served header to
+/// reconstruct, not only the listed documents to arrive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SessionHydrationCollection {
     AgentRequest,
     AgentMessage,
     AgentToolCall,
-    AgentOutputSource,
+    AgentOutputSeal,
     AgentOutputSegment,
     CompactionEntry,
 }
@@ -40,13 +47,6 @@ pub struct SessionHydrationReceipt {
     pub status: String,
     pub status_detail: String,
     pub served_manifest: Vec<SessionHydrationDocumentKey>,
-    /// Exact sealed references reachable from the served headers, including
-    /// presentation fragments and fork origins outside the requested session.
-    /// Server delivery includes every authorized source/segment dependency;
-    /// client completion requires reconstruction of each seal, not only doc IDs.
-    /// Rejected receipts have no payloads. Live sources carry only the manifest's
-    /// observed prefix; a receipt does not promise future streamed output.
-    pub payloads: Vec<PayloadRef>,
     pub processed_at: String,
     pub signer_did: String,
     pub signature: Vec<u8>,
@@ -56,8 +56,6 @@ impl SessionHydrationReceipt {
     pub fn signing_payload(&self) -> Result<Vec<u8>> {
         let version = self.version.to_string();
         let manifest = canonical_manifest_json(&self.served_manifest)?;
-        let payloads = serde_json::to_string(&self.payloads)
-            .context("serialize session hydration payload seals")?;
         Ok(canonical_domain_payload(
             RECEIPT_SIGNATURE_DOMAIN,
             [
@@ -69,7 +67,6 @@ impl SessionHydrationReceipt {
                 &self.status,
                 &self.status_detail,
                 &manifest,
-                &payloads,
                 &self.processed_at,
                 &self.signer_did,
             ],

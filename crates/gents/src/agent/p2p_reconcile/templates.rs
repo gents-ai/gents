@@ -229,7 +229,7 @@ pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
 /// the paired agent without a second transport.
 const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
-    "AgentOutputSource",
+    "AgentOutputSeal",
     "AgentMessage",
     "AgentToolCall",
     "AgentOutputSegment",
@@ -253,7 +253,7 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
 
 const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
     "AgentRequest",
-    "AgentOutputSource",
+    "AgentOutputSeal",
     "AgentMessage",
     "AgentToolCall",
     "AgentOutputSegment",
@@ -270,7 +270,7 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
 /// backend credentials remain on their existing operator/runtime route.
 pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentRequest",
-    "AgentOutputSource",
+    "AgentOutputSeal",
     "AgentMessage",
     "AgentToolCall",
     "AgentOutputSegment",
@@ -309,7 +309,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
 /// cannot ask the runtime to replay one owned session.
 pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentRequest",
-    "AgentOutputSource",
+    "AgentOutputSeal",
     "AgentMessage",
     "AgentToolCall",
     "AgentOutputSegment",
@@ -328,7 +328,7 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
         source: DidSource::PeerDid,
     },
     CollectionRule {
-        collection: "AgentOutputSource",
+        collection: "AgentOutputSeal",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
@@ -385,7 +385,7 @@ pub const AGENT_DIRECTORY_COLLECTION: &str = "AgentDirectoryEntry";
 /// hydration and directory observations. Credentials remain operator-only.
 const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentRequest",
-    "AgentOutputSource",
+    "AgentOutputSeal",
     "AgentMessage",
     "AgentToolCall",
     "AgentOutputSegment",
@@ -417,7 +417,7 @@ const MACHINE_RULES: &[CollectionRule] = &[
         source: DidSource::PeerDid,
     },
     CollectionRule {
-        collection: "AgentOutputSource",
+        collection: "AgentOutputSeal",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
@@ -499,7 +499,7 @@ const SUBAGENT_COORDINATOR_RULES: &[CollectionRule] = &[CollectionRule {
 /// returns without replaying unrelated host-owned conversation history.
 const SUBAGENT_HOST_COLLECTIONS: &[&str] = &[
     "AgentRequest",
-    "AgentOutputSource",
+    "AgentOutputSeal",
     "AgentOutputSegment",
     "AgentMessage",
     "AgentToolCall",
@@ -517,7 +517,7 @@ const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
         source: DidSource::PeerDid,
     },
     CollectionRule {
-        collection: "AgentOutputSource",
+        collection: "AgentOutputSeal",
         field: "requester_did",
         source: DidSource::PeerDid,
     },

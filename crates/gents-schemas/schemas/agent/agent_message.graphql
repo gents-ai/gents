@@ -19,9 +19,8 @@ type AgentMessage @branchable {
     sequence: Int @index @immutable
     role: String @immutable
     native_id: String @immutable
-    # [MessageBlock] as strict JSON, in native content order.
+    # [MessageBlock] as strict JSON, in native content order. Payloads are
+    # {seal_doc_id, stream} references; the outcome is the referenced seals'.
     blocks: JSON @immutable
-    # complete / interrupted / failed
-    outcome: String @immutable
     created_at: String @index @immutable
 }

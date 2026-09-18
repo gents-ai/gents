@@ -603,7 +603,7 @@ pub fn fixture_lens_wasm() -> &'static [u8] {
 /// `fresh_apply_parity` and the baseline step guard enforce both constraints.
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,
-    gents_protocol::schemas::AGENT_OUTPUT_SOURCE_NAME,
+    gents_protocol::schemas::AGENT_OUTPUT_SEAL_NAME,
     gents_protocol::schemas::AGENT_MESSAGE_NAME,
     gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
     gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,

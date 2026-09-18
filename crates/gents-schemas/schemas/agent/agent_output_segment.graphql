@@ -4,7 +4,7 @@
 #
 # Coordinate: (request_doc_id, source, stream, ordinal). Enumerate all twins
 # through the ordinary request index; identical replay is idempotent, differing
-# payload/writer/kind is a conflict. No separately stored synthetic key.
+# payload or declaration is a conflict. No separately stored synthetic key.
 #
 # Indexes are deliberately few: every index adds per-commit keys, and segments
 # are the highest-volume collection. Live and sealed reads are both
@@ -14,13 +14,12 @@ type AgentOutputSegment @branchable {
     requester_did: String @index @immutable
     session_id: String @index @immutable
     request_doc_id: String @index @immutable
-    # OutputWriter: request_execution or tool_execution.
-    writer: JSON @immutable
     # OutputSource as strict JSON: provider_turn / tool_call / authored.
     source: JSON @immutable
     stream: Int @immutable
     ordinal: Int @immutable
-    kind: String @immutable
+    # StreamDeclaration; present exactly on ordinal 0, null elsewhere.
+    declaration: JSON @immutable
     payload: String @immutable
     created_at: String @immutable
 }

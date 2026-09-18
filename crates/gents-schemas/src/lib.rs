@@ -24,8 +24,8 @@ pub const AGENT_MEMORY_NAME: &str = "AgentMemory";
 pub const AGENT_MEMORY: &str = include_str!("../schemas/agent/agent_memory.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
-pub const AGENT_OUTPUT_SOURCE_NAME: &str = "AgentOutputSource";
-pub const AGENT_OUTPUT_SOURCE: &str = include_str!("../schemas/agent/agent_output_source.graphql");
+pub const AGENT_OUTPUT_SEAL_NAME: &str = "AgentOutputSeal";
+pub const AGENT_OUTPUT_SEAL: &str = include_str!("../schemas/agent/agent_output_seal.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
@@ -175,7 +175,7 @@ pub const ALL: &[&str] = &[
     CALLBACK_INVOCATION,
     CALLBACK_RESULT,
     AGENT_REQUEST,
-    AGENT_OUTPUT_SOURCE,
+    AGENT_OUTPUT_SEAL,
     AGENT_OUTPUT_SEGMENT,
     AGENT_SESSION,
     GOAL,
@@ -240,7 +240,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_INVOCATION_NAME,
     CALLBACK_RESULT_NAME,
     AGENT_REQUEST_NAME,
-    AGENT_OUTPUT_SOURCE_NAME,
+    AGENT_OUTPUT_SEAL_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
@@ -285,7 +285,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_DIRECTORY_ENTRY_NAME,
     AGENT_MEMORY_NAME,
     AGENT_REQUEST_NAME,
-    AGENT_OUTPUT_SOURCE_NAME,
+    AGENT_OUTPUT_SEAL_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
