@@ -38,8 +38,9 @@ pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
 pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
-pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
-pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
+pub const AGENT_OUTPUT_SEGMENT_NAME: &str = "AgentOutputSegment";
+pub const AGENT_OUTPUT_SEGMENT: &str =
+    include_str!("../schemas/agent/agent_output_segment.graphql");
 pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
 pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
 pub const RENDERED_REQUEST_NAME: &str = "RenderedRequest";

@@ -1,3 +1,9 @@
+# Tool-call lifecycle document (#1571). Carries execution state only. The
+# model's arguments are output of the provider turn and the tool's output is
+# its own stream, both stored once as AgentOutputSegment and referenced from
+# AgentMessage blocks by this document's _docID. Retired: args, result,
+# partial_output_tail, partial_output_seq, and the AgentToolResult spill
+# collection (full output is the stream; narrowing is a PresentedWindow).
 type AgentToolCall @branchable {
     tool_call_key: String @index(unique: true)
     request_id: String @index @immutable
@@ -8,8 +14,6 @@ type AgentToolCall @branchable {
     message_sequence: Int
     tool_name: String @index
     tool_call_id: String @index @immutable
-    args: String
-    result: String
     # Persistence/delivery state. A terminal failed tool may still use
     # "completed" here once its result or background notification is durable.
     status: String
@@ -40,7 +44,5 @@ type AgentToolCall @branchable {
     cancel_cascade_intent_at: DateTime
     cancel_pending_remote_ack: Boolean
     stuck_since: DateTime
-    partial_output_tail: String
-    partial_output_seq: Int
     completion_notification_delivered_at: DateTime
 }

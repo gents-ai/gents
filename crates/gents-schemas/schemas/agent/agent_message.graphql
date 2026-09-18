@@ -1,13 +1,24 @@
+# The single durable transcript message (#1571). Create-only header written
+# when every stream it references is complete; never updated, and carries no
+# content text. Decode through gents_protocol::output::TranscriptMessage and
+# read content only through the shared reconstruction over AgentOutputSegment.
+#
+# Retired: content (serialized native message), reasoning (extracted copy),
+# in-flight upserts of this row, and the logical request_id paired with
+# request_doc_id. message_key is an ordinary index: twins sharing a key or a
+# (session_id, sequence) are integrity conflicts readers must surface.
 type AgentMessage @branchable {
-    message_key: String @index(unique: true)
-    session_id: String @index
+    message_key: String @index @immutable
+    session_id: String @index @immutable
     agent_did: String @index @immutable
     requester_did: String @index @immutable
-    request_id: String @index
     request_doc_id: String @index @immutable
-    sequence: Int @index
-    role: String
-    content: String
-    reasoning: String
-    timestamp: DateTime
+    sequence: Int @index @immutable
+    role: String @immutable
+    native_id: String @immutable
+    # [MessageBlock] as strict JSON, in native content order.
+    blocks: JSON @immutable
+    # complete / interrupted / failed
+    outcome: String @immutable
+    created_at: String @index @immutable
 }

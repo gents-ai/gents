@@ -251,19 +251,9 @@ pub struct AgentResponseRow {
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
-    pub content: Option<String>,
-    #[serde(default)]
-    pub reasoning: Option<String>,
-    #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
     pub error_message: Option<String>,
-    #[serde(default)]
-    pub token_count: Option<i64>,
-    #[serde(default)]
-    pub progress_seq: Option<i64>,
-    #[serde(default)]
-    pub reasoning_progress_seq: Option<i64>,
     #[serde(default)]
     pub materialized_message_sequence: Option<i64>,
     #[serde(default)]
@@ -276,26 +266,8 @@ pub struct AgentResponseRow {
     pub interrupted_at: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentMessageRow {
-    pub message_key: String,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub sequence: Option<i64>,
-    #[serde(default)]
-    pub role: Option<String>,
-    #[serde(default)]
-    pub content: Option<String>,
-    #[serde(default)]
-    pub reasoning: Option<String>,
-    #[serde(default)]
-    pub timestamp: Option<String>,
-}
+// AgentMessage has no row type: `output::TranscriptMessage` is the single
+// canonical shape, and content is read only through its reconstruction (#1571).
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GoalRow {
@@ -365,10 +337,6 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub tool_call_id: Option<String>,
     #[serde(default)]
-    pub args: Option<String>,
-    #[serde(default)]
-    pub result: Option<String>,
-    #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
@@ -410,39 +378,6 @@ pub struct AgentToolCallRow {
     pub cancel_cause: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<i64>,
-    #[serde(default)]
-    pub partial_output_tail: Option<String>,
-    #[serde(default)]
-    pub partial_output_seq: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentToolResultRow {
-    /// Exact spill document identity for observation/merge; not a content heuristic.
-    #[serde(default, rename = "_docID", skip_serializing)]
-    pub doc_id: Option<String>,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub tool_name: Option<String>,
-    #[serde(default)]
-    pub tool_input: Option<String>,
-    #[serde(default)]
-    pub output_text: Option<String>,
-    #[serde(default)]
-    pub truncated: Option<bool>,
-    #[serde(default)]
-    pub truncation_metadata: Option<String>,
-    #[serde(default)]
-    pub tool_call_doc_id: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub discarded_because_interrupted: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
