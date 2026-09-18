@@ -5,9 +5,11 @@
 # partial_output_tail, partial_output_seq, and the AgentToolResult spill
 # collection (full output is the stream; narrowing is a PayloadPresentation).
 #
-# Created pending in the transaction that publishes the assistant AgentMessage
-# naming it, before dispatch. Dispatch and recovery read arguments through that
-# message's tool-call block; there is no argument copy or reference here.
+# Accepted provider turns create pending rows atomically with their Complete
+# seal and assistant header before dispatch. Partial diagnostic headers may
+# name only terminal, nondispatchable rows. Dispatch/recovery read arguments
+# through the message block and recheck existing lifecycle authorization;
+# there is no argument copy or reference here.
 type AgentToolCall @branchable {
     tool_call_key: String @index(unique: true)
     request_id: String @index @immutable

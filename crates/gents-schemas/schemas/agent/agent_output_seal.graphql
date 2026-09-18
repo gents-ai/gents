@@ -1,10 +1,10 @@
 # The one terminal fact about an output source (#1571). Immutable, create-only,
 # payload-free. Decode as gents_protocol::output::OutputSeal.
 #
-# Written once by the source's existing request/tool owner, in the transaction
-# that writes the source's last segment: either closed with the exact extent of
-# every stream, or retracted. A source with no visible seal is still open (or
-# its seal has not replicated yet). At most one seal per
+# Closure commits with any remaining buffered segments. Already flushed output
+# may seal without appending; zero-stream sources have no segments.
+# No visible seal means closure is unknown, not proof of an active producer.
+# At most one seal per
 # (request_doc_id, source); enumerate twins, never last-write-wins.
 #
 # AgentMessage blocks reference a seal by its _docID plus a stream number, so a
@@ -16,7 +16,8 @@ type AgentOutputSeal @branchable {
     request_doc_id: String @index @immutable
     # OutputSource as strict JSON: provider_turn / tool_call / authored.
     source: JSON @immutable
-    # OutputWriter: request_execution or tool_execution.
+    # Original OutputWriter, matching every ordinal-zero declaration.
+    # Recovery authorization comes from its terminal CAS, not a changed writer.
     writer: JSON @immutable
     # SealDisposition: closed { outcome, streams: [{segments, bytes}] } / retracted.
     disposition: JSON @immutable

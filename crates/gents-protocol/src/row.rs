@@ -137,6 +137,9 @@ pub struct AgentRequestRow {
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub terminalized_at: Option<String>,
+    /// Exact terminal answer selection; absence on a terminal row is incomplete.
+    #[serde(default)]
+    pub terminal_output: Option<crate::output::TerminalOutput>,
     #[serde(default)]
     pub terminal_redrive_attempts: Option<i64>,
     #[serde(default)]
@@ -292,8 +295,6 @@ pub struct GoalRow {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentToolCallRow {
-    /// Sealed provider argument reference, shared with the transcript block.
-    pub arguments: crate::output::PayloadRef,
     pub tool_call_key: String,
     #[serde(default)]
     pub session_id: Option<String>,

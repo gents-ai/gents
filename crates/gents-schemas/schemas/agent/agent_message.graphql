@@ -16,11 +16,14 @@ type AgentMessage @branchable {
     # MessagePublication: request_execution / request_recovery / tool_delivery / fork.
     # Fork requires absent request_doc_id; other variants require exact membership.
     publication: JSON @immutable
+    # Exact Closed seal governing this message's outcome, including empty or
+    # URL-only messages. Dependency seals do not override it. Forks retain it.
+    outcome_seal_doc_id: String @immutable
     sequence: Int @index @immutable
     role: String @immutable
     native_id: String @immutable
     # [MessageBlock] as strict JSON, in native content order. Payloads are
-    # {seal_doc_id, stream} references; the outcome is the referenced seals'.
+    # {seal_doc_id, stream} references.
     blocks: JSON @immutable
     created_at: String @index @immutable
 }

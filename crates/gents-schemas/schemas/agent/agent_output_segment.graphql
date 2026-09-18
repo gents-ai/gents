@@ -18,7 +18,8 @@ type AgentOutputSegment @branchable {
     source: JSON @immutable
     stream: Int @immutable
     ordinal: Int @immutable
-    # StreamDeclaration; present exactly on ordinal 0, null elsewhere.
+    # StreamDeclaration (original writer, role, position, payload kind);
+    # present exactly on ordinal 0, null elsewhere. All source writers agree.
     declaration: JSON @immutable
     payload: String @immutable
     created_at: String @immutable

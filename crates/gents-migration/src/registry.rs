@@ -412,8 +412,8 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::AGENT_REQUEST,
         "bafyreieyeycrjfo5xsumx6ddnwqwtlvt4ufjjb4ayole7dgnrsp3wplhqq"
     ),
-    // #1571 implementation layer must author fresh OutputSource/OutputSegment
-    // pins and refresh Message/ToolCall/SessionHydrationRequest pins together.
+    // #1571 implementation layer must author fresh OutputSeal/OutputSegment
+    // pins and refresh Request/Message/ToolCall pins together.
     // No fabricated CIDs or
     // old response/spill baseline entries. Catalog coverage remains a hard gate.
     baseline_entry!(

@@ -57,6 +57,11 @@ type AgentRequest @branchable {
     caused_by_source_doc_id: String @index @immutable
     failure_reason: String
     terminalized_at: String @index
+    # Runtime-owned TerminalOutput: message {message_doc_id} or no_message.
+    # Written with terminal lifecycle/final header publication, then never changed.
+    # Missing on a terminal replica means incomplete, never implicit no_message.
+    # Excluded from requester signatures, like other execution-owned fields.
+    terminal_output: JSON
     terminal_redrive_attempts: Int @index
     created_at: String @index @immutable
     claimed_at: String

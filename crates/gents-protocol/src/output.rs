@@ -11,9 +11,10 @@
 //!   by a [`PayloadRef`] to a sealed stream.
 //!
 //! The collections only grow, so replication is set union and every reader
-//! question is "which facts are visible": no seal means the source is still
-//! open, a seal with missing segments means the replica is incomplete. Live
-//! previews, answer streaming, completed transcripts, provider input, forks and
+//! question is "which facts are visible": no visible seal means closure is
+//! unknown, not proof that a producer is still running. A seal with missing
+//! segments means the replica is incomplete. Live previews, answer streaming,
+//! completed transcripts, provider input, forks and
 //! exports are projections of these same facts through one shared
 //! reconstruction; no consumer reads a second durable text copy, because none
 //! exists.
@@ -75,6 +76,13 @@ pub enum OutputSource {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamDeclaration {
+    /// All declarations of a source agree on its original producer. The seal
+    /// must agree too, including when recovery closes the source. A reader
+    /// can classify unsealed output without waiting for its terminal seal.
+    pub writer: OutputWriter,
+    /// Authored sources may supply system, user or assistant content; a key
+    /// or text payload alone does not determine its presentation role.
+    pub role: MessageRole,
     pub block_index: u32,
     pub part_index: u32,
     pub payload: StreamPayload,
@@ -118,6 +126,9 @@ pub enum StreamPayload {
 /// declaration are an integrity conflict every reader must surface; the
 /// storage index is ordinary, not unique, because a unique index can hide the
 /// losing twin of a remote conflict (#1073).
+/// A replay reuses the persisted document, including its creation timestamp;
+/// recreating the same payload with fresh metadata is not identical genesis.
+/// An already-existing create is accepted only after verifying the stored fact.
 ///
 /// Writing a segment is semantic progress. The source's existing owner admits
 /// it: request-owned progress commits through the execution-lease CAS and
@@ -144,7 +155,9 @@ pub struct OutputSegment {
 }
 
 /// The existing authority that produced a source; never a new lease or host
-/// identity. Recorded once, on the seal.
+/// identity. Recorded on ordinal-zero declarations and the seal, never on
+/// subsequent payload segments. This identifies the producer, not today's
+/// authority to recover that producer's output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputWriter {
@@ -157,8 +170,8 @@ pub enum OutputWriter {
 
 /// Why a source's content ends where it does. Partial output kept after
 /// interruption or failure is an explicit outcome, never a complete source
-/// with silently shorter text. A message's outcome is that of the seals it
-/// references; it is not stored again on the header.
+/// with silently shorter text. A message's outcome comes from its explicit
+/// governing seal, not a reduction over the payload dependencies it references.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputOutcome {
@@ -169,12 +182,17 @@ pub enum OutputOutcome {
 
 /// The one terminal fact about a source. Stored as `AgentOutputSeal`.
 ///
-/// Written once by the source's owner in the transaction that writes its last
-/// segment. At most one seal per `(request_doc_id, source)`; visible twins are
+/// Normal closure commits with any remaining buffered segments. Retraction,
+/// recovery or closure after a flush can seal committed bytes without appending.
+/// A zero-stream source may
+/// seal without any segments (for example, a URL-only message).
+/// At most one seal per `(request_doc_id, source)`; visible twins are
 /// an integrity conflict. A sealed source accepts no further segments, and a
 /// seal stays valid after its producer's generation is no longer active.
 /// Recovery seals only the bytes already committed, under the winning request
 /// terminalization CAS; it never appends on behalf of a stale writer.
+/// Its `writer` remains the original producer from the declarations; the
+/// recovery CAS supplies authorization, not a replacement producer identity.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSeal {
@@ -255,6 +273,27 @@ pub enum MessagePublication {
     },
 }
 
+/// Runtime-owned `AgentRequest.terminal_output`, selected by the existing
+/// terminalization owner in the same transaction as terminal lifecycle state
+/// and any final header publication. It is absent before terminalization and
+/// never changed afterward, including by late background delivery.
+///
+/// A terminal row missing this field is incomplete/invalid, not `NoMessage`.
+/// Readers resolve the exact assistant header and all its dependencies in the
+/// physical request's agent/session/requester scope. Missing data never falls
+/// back to the latest locally visible message. Lifecycle/failure_reason still
+/// determine request success or failure; message presence alone does not.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TerminalOutput {
+    Message {
+        message_doc_id: String,
+    },
+    /// Explicit absence of an answer, including admission/pre-output failure.
+    /// A deliberately published empty assistant message uses Message instead.
+    NoMessage,
+}
+
 /// The single durable transcript message. Stored as `AgentMessage`.
 ///
 /// Create-only: written once, after every seal it references, and never
@@ -264,12 +303,18 @@ pub enum MessagePublication {
 /// or `(session_id, sequence)` with different content are an integrity
 /// conflict, surfaced the same way as segment twins.
 ///
-/// An assistant message is published when its provider turn seals, in one
-/// transaction with the pending `AgentToolCall` rows for its tool-call blocks,
-/// and **before any of those tools is dispatched**. The assistant turn is
-/// therefore durable, with its sequence allocated, before a tool can run or a
+/// A successfully accepted provider turn atomically publishes its Complete
+/// seal, assistant header and pending `AgentToolCall` rows before any tool is
+/// dispatched. The assistant turn is durable, with its sequence allocated,
+/// before a tool can run or a
 /// background completion can append (#945) — the guarantee in-flight upserts
 /// used to provide. Dispatch and recovery read arguments through the block.
+/// Interrupted/failed partial turns may publish diagnostic headers, but any
+/// retained tool-call blocks name terminal, nondispatchable lifecycle rows.
+/// Pending intent is not execution permission: the existing tool owner checks
+/// current request ownership, cancellation/deadline and policy at dispatch.
+/// Once published, an accepted turn cannot be retracted/resampled because a
+/// later dispatch fails. Recovery resumes its existing rows, never new calls.
 ///
 /// `blocks` is in native content order, so reconstruction yields the exact
 /// native `Message` (including `Message::Assistant.id` via `native_id`).
@@ -289,6 +334,13 @@ pub struct TranscriptMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_doc_id: Option<String>,
     pub publication: MessagePublication,
+    /// The source responsible for this message's outcome. Must be a Closed
+    /// seal, even if blocks contain no payload references (URL media/empty
+    /// content). Provider messages use their provider seal; authored wrappers
+    /// use their authored seal; tool-result messages use their tool seal.
+    /// Other referenced seals are dependencies, not competing message outcomes.
+    /// Forks retain the origin's governing seal without live request membership.
+    pub outcome_seal_doc_id: String,
     pub sequence: u32,
     pub role: MessageRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -473,6 +525,13 @@ pub enum ReconstructionError {
         session_id: String,
         message_key: String,
     },
+    /// Source declarations or the seal disagree about the original producer.
+    InvalidWriter {
+        request_doc_id: String,
+        source: OutputSource,
+    },
+    /// Terminal lifecycle was observed without its output selection/dependencies.
+    UnresolvedTerminalOutput { request_doc_id: String },
     /// Illegal role/block combination or non-native block order.
     InvalidStructure { detail: String },
     /// A presentation range is out of bounds or splits a UTF-8 sequence.
@@ -492,6 +551,12 @@ pub enum ReconstructionError {
 /// Headers, seals and segments may replicate in any order and are projected
 /// together: a header whose segments have not arrived is incomplete, never a
 /// second live copy.
+/// Unsealed request-owned output is eligible only for the current generation
+/// of a nonterminal request; tool-owned output follows the tool lifecycle.
+/// Missing owner/declaration observations cannot establish live eligibility.
+/// Superseded sources remain retained history, not current output. Even an
+/// eligible unsealed source is only an observation: its seal may be in transit.
+/// Closed historical output never depends on today's active generation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveOutput {
     pub request_doc_id: String,
@@ -503,9 +568,17 @@ pub struct LiveStream {
     pub source: OutputSource,
     pub stream: u32,
     pub declaration: StreamDeclaration,
-    /// `None` while no seal is visible.
-    pub sealed: Option<OutputOutcome>,
+    pub state: LiveStreamState,
     /// Contiguous payload from ordinal zero; stops at the first gap.
     pub text: String,
     pub next_ordinal: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveStreamState {
+    /// No terminal fact is locally visible; this does not prove remote liveness.
+    Unsealed,
+    PendingPublication {
+        outcome: OutputOutcome,
+    },
 }

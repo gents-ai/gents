@@ -17,8 +17,9 @@ type SessionHydrationRequest @branchable {
     status_detail: String
     served_doc_count: Int
     # Canonical sorted JSON array of exact {collection, doc_id} identities: the
-    # authorized reference closure of the served headers (#1571). Those
-    # documents are immutable, so their identities bind the served content.
+    # authorized closure including governing seals and terminally selected
+    # headers (#1571). Header/seal/segment IDs bind immutable output; request
+    # and tool lifecycle revisions still require existing owner checks.
     served_manifest_json: String
     processed_at: DateTime
     outcome_signer_did: String
