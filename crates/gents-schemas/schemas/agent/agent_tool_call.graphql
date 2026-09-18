@@ -3,7 +3,7 @@
 # its own stream, both stored once as AgentOutputSegment and referenced from
 # AgentMessage blocks by this document's _docID. Retired: args, result,
 # partial_output_tail, partial_output_seq, and the AgentToolResult spill
-# collection (full output is the stream; narrowing is a PresentedWindow).
+# collection (full output is the stream; narrowing is a PayloadPresentation).
 type AgentToolCall @branchable {
     tool_call_key: String @index(unique: true)
     request_id: String @index @immutable
@@ -14,6 +14,9 @@ type AgentToolCall @branchable {
     message_sequence: Int
     tool_name: String @index
     tool_call_id: String @index @immutable
+    # Sealed PayloadRef to provider argument bytes. Needed for dispatch/recovery
+    # before the whole provider message is published; carries no argument copy.
+    arguments: JSON @immutable
     # Persistence/delivery state. A terminal failed tool may still use
     # "completed" here once its result or background notification is durable.
     status: String

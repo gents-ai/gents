@@ -412,16 +412,10 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::AGENT_REQUEST,
         "bafyreieyeycrjfo5xsumx6ddnwqwtlvt4ufjjb4ayole7dgnrsp3wplhqq"
     ),
-    baseline_entry!(
-        gents_protocol::schemas::AGENT_RESPONSE_NAME,
-        gents_protocol::schemas::AGENT_RESPONSE,
-        "bafyreigr4eflydkzsigq7m2dzpdd7yy3ny5zwdwicefyzntjrsfiptua2u"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
-        gents_protocol::schemas::AGENT_TOOL_RESULT,
-        "bafyreievrced2cec6gsu4bg4htj2i4dq2sofvnyysmekokbue5rrbmi65e"
-    ),
+    // #1571 implementation layer must author fresh OutputSource/OutputSegment
+    // pins and refresh Message/ToolCall/SessionHydrationRequest pins together.
+    // No fabricated CIDs or
+    // old response/spill baseline entries. Catalog coverage remains a hard gate.
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
         gents_protocol::schemas::AGENT_SESSION,
@@ -609,10 +603,10 @@ pub fn fixture_lens_wasm() -> &'static [u8] {
 /// `fresh_apply_parity` and the baseline step guard enforce both constraints.
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,
-    gents_protocol::schemas::AGENT_RESPONSE_NAME,
+    gents_protocol::schemas::AGENT_OUTPUT_SOURCE_NAME,
     gents_protocol::schemas::AGENT_MESSAGE_NAME,
     gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
-    gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
+    gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
     gents_protocol::schemas::AGENT_SESSION_NAME,
     gents_protocol::schemas::COMPACTION_ENTRY_NAME,
     gents_protocol::schemas::PEER_ENDPOINT_NAME,

@@ -1,0 +1,15 @@
+# Payload-free output control. Decode as output::OutputSourceRecord.
+# Coordinate: (request_doc_id, source); enumerate twins, never last-write-wins.
+# Existing request/tool owners transact declarations, closure and retraction.
+# Declarations append once per stream; terminal state never reopens.
+type AgentOutputSource @branchable {
+    agent_did: String @index @immutable
+    requester_did: String @index @immutable
+    session_id: String @index @immutable
+    request_doc_id: String @index @immutable
+    source: JSON @immutable
+    writer: JSON @immutable
+    streams: JSON
+    state: JSON
+    created_at: String @immutable
+}

@@ -235,37 +235,6 @@ pub struct MailboxItemRow {
     pub resolved_doc_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentResponseRow {
-    pub response_key: String,
-    #[serde(default)]
-    pub request_doc_id: Option<String>,
-    #[serde(default)]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub error_message: Option<String>,
-    #[serde(default)]
-    pub materialized_message_sequence: Option<i64>,
-    #[serde(default)]
-    pub materialized_at: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub completed_at: Option<String>,
-    #[serde(default)]
-    pub interrupted_at: Option<String>,
-}
-
 // AgentMessage has no row type: `output::TranscriptMessage` is the single
 // canonical shape, and content is read only through its reconstruction (#1571).
 
@@ -323,6 +292,8 @@ pub struct GoalRow {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentToolCallRow {
+    /// Sealed provider argument reference, shared with the transcript block.
+    pub arguments: crate::output::PayloadRef,
     pub tool_call_key: String,
     #[serde(default)]
     pub session_id: Option<String>,

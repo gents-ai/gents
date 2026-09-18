@@ -102,8 +102,8 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentRuntime",
     "AgentBehaviorReadiness",
     "AgentRequest",
-    "AgentResponse",
-    "AgentToolResult",
+    "AgentOutputSource",
+    "AgentOutputSegment",
     "AgentSession",
     "AgentMessage",
     "AgentToolCall",
@@ -160,8 +160,8 @@ const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
 
 const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
     "AgentRequest",
-    "AgentResponse",
-    "AgentToolResult",
+    "AgentOutputSource",
+    "AgentOutputSegment",
     "AgentSession",
     "AgentMessage",
     "AgentToolCall",
@@ -204,7 +204,7 @@ mod tests {
         .unwrap();
 
         assert!(collections.contains("AgentRequest"));
-        assert!(collections.contains("AgentResponse"));
+        assert!(collections.contains("AgentOutputSource"));
         assert!(collections.contains("ToolServiceRegistry"));
         assert_eq!(
             collections

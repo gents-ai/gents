@@ -18,6 +18,10 @@ type SessionHydrationRequest @branchable {
     served_doc_count: Int
     # Canonical sorted JSON array of exact {collection, doc_id} identities.
     served_manifest_json: String
+    # Receipt v2 binds the exact sealed PayloadRefs reachable from served headers,
+    # including authorized fork-origin and presentation dependencies.
+    receipt_version: Int
+    payloads_json: String
     processed_at: DateTime
     outcome_signer_did: String
     outcome_signature: String

@@ -13,6 +13,9 @@ type AgentMessage @branchable {
     agent_did: String @index @immutable
     requester_did: String @index @immutable
     request_doc_id: String @index @immutable
+    # MessagePublication: request_execution / request_recovery / tool_delivery / fork.
+    # Fork requires absent request_doc_id; other variants require exact membership.
+    publication: JSON @immutable
     sequence: Int @index @immutable
     role: String @immutable
     native_id: String @immutable

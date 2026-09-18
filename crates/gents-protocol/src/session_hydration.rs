@@ -4,14 +4,28 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::enrollment::canonical_domain_payload;
+use crate::output::PayloadRef;
 
-pub const SESSION_HYDRATION_RECEIPT_VERSION: u8 = 1;
-const RECEIPT_SIGNATURE_DOMAIN: &str = "gents-session-hydration-receipt-v1";
+pub const SESSION_HYDRATION_RECEIPT_VERSION: u8 = 2;
+const RECEIPT_SIGNATURE_DOMAIN: &str = "gents-session-hydration-receipt-v2";
+
+/// Closed collection vocabulary: retired response/spill documents cannot be
+/// claimed as transcript hydration. Origin dependencies retain their ACP;
+/// following a reference never grants access to the whole origin session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SessionHydrationCollection {
+    AgentRequest,
+    AgentMessage,
+    AgentToolCall,
+    AgentOutputSource,
+    AgentOutputSegment,
+    CompactionEntry,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionHydrationDocumentKey {
-    pub collection: String,
+    pub collection: SessionHydrationCollection,
     pub doc_id: String,
 }
 
@@ -26,6 +40,13 @@ pub struct SessionHydrationReceipt {
     pub status: String,
     pub status_detail: String,
     pub served_manifest: Vec<SessionHydrationDocumentKey>,
+    /// Exact sealed references reachable from the served headers, including
+    /// presentation fragments and fork origins outside the requested session.
+    /// Server delivery includes every authorized source/segment dependency;
+    /// client completion requires reconstruction of each seal, not only doc IDs.
+    /// Rejected receipts have no payloads. Live sources carry only the manifest's
+    /// observed prefix; a receipt does not promise future streamed output.
+    pub payloads: Vec<PayloadRef>,
     pub processed_at: String,
     pub signer_did: String,
     pub signature: Vec<u8>,
@@ -35,6 +56,8 @@ impl SessionHydrationReceipt {
     pub fn signing_payload(&self) -> Result<Vec<u8>> {
         let version = self.version.to_string();
         let manifest = canonical_manifest_json(&self.served_manifest)?;
+        let payloads = serde_json::to_string(&self.payloads)
+            .context("serialize session hydration payload seals")?;
         Ok(canonical_domain_payload(
             RECEIPT_SIGNATURE_DOMAIN,
             [
@@ -46,6 +69,7 @@ impl SessionHydrationReceipt {
                 &self.status,
                 &self.status_detail,
                 &manifest,
+                &payloads,
                 &self.processed_at,
                 &self.signer_did,
             ],
@@ -77,7 +101,7 @@ impl SessionHydrationReceipt {
         );
         for entry in &self.served_manifest {
             anyhow::ensure!(
-                !entry.collection.is_empty() && !entry.doc_id.is_empty(),
+                !entry.doc_id.is_empty(),
                 "session hydration manifest contains an empty document identity"
             );
         }
@@ -106,7 +130,7 @@ mod tests {
     #[test]
     fn duplicate_or_reordered_manifest_is_rejected() {
         let entry = SessionHydrationDocumentKey {
-            collection: "AgentMessage".into(),
+            collection: SessionHydrationCollection::AgentMessage,
             doc_id: "doc-1".into(),
         };
         let raw = serde_json::to_string(&vec![entry.clone(), entry]).unwrap();

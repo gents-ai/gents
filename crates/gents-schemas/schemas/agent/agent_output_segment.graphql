@@ -2,21 +2,20 @@
 # the only place model, tool, or authored content bytes are stored. Decode
 # through gents_protocol::output::OutputSegment.
 #
-# Coordinate: (request_doc_id, source, stream, ordinal). segment_key is its
-# canonical encoding. The index is ordinary, not unique: a unique index can
-# hide the losing twin of a remote conflict, so readers enumerate a coordinate
-# and surface more than one visible segment as an integrity conflict.
+# Coordinate: (request_doc_id, source, stream, ordinal). Enumerate all twins
+# through the ordinary request index; identical replay is idempotent, differing
+# payload/writer/kind is a conflict. No separately stored synthetic key.
 #
 # Indexes are deliberately few: every index adds per-commit keys, and segments
 # are the highest-volume collection. Live and sealed reads are both
 # request_doc_id scans; session_id serves replication routing and hydration.
 type AgentOutputSegment @branchable {
-    segment_key: String @index @immutable
     agent_did: String @index @immutable
     requester_did: String @index @immutable
     session_id: String @index @immutable
     request_doc_id: String @index @immutable
-    execution_generation: String @immutable
+    # OutputWriter: request_execution or tool_execution.
+    writer: JSON @immutable
     # OutputSource as strict JSON: provider_turn / tool_call / authored.
     source: JSON @immutable
     stream: Int @immutable

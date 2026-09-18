@@ -214,10 +214,10 @@ fn client_route_filters(
     let mut filters = PairingFilters::new();
     for collection in [
         "AgentRequest",
-        "AgentResponse",
+        "AgentOutputSource",
         "AgentMessage",
         "AgentToolCall",
-        "AgentToolResult",
+        "AgentOutputSegment",
         "AgentSession",
         "CompactionEntry",
         "MailboxItem",
