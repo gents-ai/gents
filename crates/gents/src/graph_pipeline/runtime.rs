@@ -34,6 +34,17 @@ pub struct PublishedGraph {
     pub trigger_ids: Vec<String>,
 }
 
+/// Stable logical identities a publication of this exact plan may create.
+///
+/// This is a pure preview of the revision materializer's owned ID scheme. It
+/// deliberately does not inspect storage, so callers must not interpret an
+/// item as proof that the document is absent or that publication is allowed.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub struct PlannedGraphDocument {
+    pub collection: String,
+    pub logical_id: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ActivationReceipt {
     pub graph_id: String,
@@ -529,6 +540,61 @@ fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
         task_ids,
         trigger_ids,
     })
+}
+
+/// Return the deterministic document identity set owned by graph publication
+/// without reading or writing the database.
+pub fn graph_plan_creation_set(plan: &GraphPlan) -> Result<Vec<PlannedGraphDocument>> {
+    if !verify_graph_plan_digest(plan) {
+        anyhow::bail!("refusing to preview a GraphPlan with an invalid digest");
+    }
+    let mut documents = vec![
+        PlannedGraphDocument {
+            collection: "GraphDefinition".to_owned(),
+            logical_id: plan.graph_id.clone(),
+        },
+        PlannedGraphDocument {
+            collection: "GraphRevision".to_owned(),
+            logical_id: revision_id(plan),
+        },
+    ];
+    for entry in &plan.entries {
+        let route = format!(
+            "entry:{}:{}:{}",
+            entry.name, entry.to.node_id, entry.to.port
+        );
+        let id = graph_trigger_id(&plan.digest, &route)?;
+        documents.extend([
+            PlannedGraphDocument {
+                collection: "EventSource".to_owned(),
+                logical_id: id.clone(),
+            },
+            PlannedGraphDocument {
+                collection: "Trigger".to_owned(),
+                logical_id: id,
+            },
+        ]);
+    }
+    for (index, edge) in plan.edges.iter().enumerate() {
+        let route = format!(
+            "edge:{index}:{}:{}:{}:{}",
+            edge.from.node_id, edge.from.port, edge.to.node_id, edge.to.port,
+        );
+        let id = graph_trigger_id(&plan.digest, &route)?;
+        documents.extend([
+            PlannedGraphDocument {
+                collection: "EventSource".to_owned(),
+                logical_id: id.clone(),
+            },
+            PlannedGraphDocument {
+                collection: "Trigger".to_owned(),
+                logical_id: id,
+            },
+        ]);
+    }
+    documents.sort();
+    documents.dedup();
+    Ok(documents)
 }
 
 fn rows<'a>(response: &'a Value, collection: &str) -> &'a [Value] {

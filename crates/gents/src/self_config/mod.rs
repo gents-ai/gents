@@ -8,6 +8,7 @@
 mod command;
 mod execution;
 pub use execution::ConfigExecutionReceipt;
+mod graph_preview;
 mod ops;
 mod read;
 #[cfg(test)]
@@ -40,6 +41,7 @@ use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL
 use ops::{decode_merged, guard_selection_keeps_gate, validate_merged_selection, ApplyRequest};
 
 pub const CONFIG_TOOL_NAME: &str = "config";
+pub const PREVIEW_GRAPH_TOOL_NAME: &str = "preview_graph";
 pub const LIST_GRAPHS_TOOL_NAME: &str = "list_graphs";
 pub const RUN_GRAPH_TOOL_NAME: &str = "run_graph";
 pub const GET_GRAPH_RUN_TOOL_NAME: &str = "get_graph_run";
@@ -48,8 +50,9 @@ pub const CANCEL_GRAPH_RUN_TOOL_NAME: &str = "cancel_graph_run";
 
 /// Model-facing names reserved by the runtime. Configuration is one coherent
 /// argv-style surface; graph execution remains a separate operational surface.
-pub const SELF_CONFIG_TOOL_NAMES: [&str; 6] = [
+pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
     CONFIG_TOOL_NAME,
+    PREVIEW_GRAPH_TOOL_NAME,
     LIST_GRAPHS_TOOL_NAME,
     RUN_GRAPH_TOOL_NAME,
     GET_GRAPH_RUN_TOOL_NAME,
@@ -2071,6 +2074,9 @@ pub fn build_self_config_tools(
 
     let mut tools: Vec<Box<dyn ToolDyn>> = Vec::new();
     if config.enable_graph_tools {
+        tools.push(Box::new(graph_preview::PreviewGraphTool {
+            core: core.clone(),
+        }));
         tools.push(Box::new(ListGraphsTool {
             core: core.clone(),
             node: node.clone(),
@@ -2115,6 +2121,7 @@ pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     let mut names = Vec::new();
     if config.enable_graph_tools {
         names.extend([
+            PREVIEW_GRAPH_TOOL_NAME.to_string(),
             LIST_GRAPHS_TOOL_NAME.to_string(),
             RUN_GRAPH_TOOL_NAME.to_string(),
             GET_GRAPH_RUN_TOOL_NAME.to_string(),
