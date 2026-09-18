@@ -63,6 +63,7 @@ const result = spawnSync(`${root}/Gents.app/Contents/MacOS/gents-desktop-tauri`,
 const log = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
 writeFileSync(`${root}/startup.log`, log);
 assert.equal(result.error?.code, 'ETIMEDOUT', `Desktop exited before smoke deadline: ${log}`);
+assert.equal(result.signal, 'SIGKILL', `Desktop exited before smoke termination: ${log}`);
 assert.doesNotMatch(log, /panicked at|failed to (initialize|create).*webview/i);
 console.log(`Installed desktop stayed running for 20 seconds; diagnostics: ${root}/startup.log`);
 NODE
