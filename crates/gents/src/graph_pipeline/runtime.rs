@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -34,18 +34,30 @@ pub struct PublishedGraph {
     pub trigger_ids: Vec<String>,
 }
 
-/// Stable logical identities a publication of this exact plan may create.
+/// Storage identity scope for one artifact proposed by a compiled plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphArtifactIdentityScope {
+    Global,
+    Principal,
+}
+
+/// Stable prospective identity of an artifact an approved publication would
+/// inspect. This does not predict whether publication will create, reuse, or
+/// reject the stored document.
 ///
 /// This is a pure preview of the revision materializer's owned ID scheme. It
-/// deliberately does not inspect storage, so callers must not interpret an
-/// item as proof that the document is absent or that publication is allowed.
+/// deliberately does not inspect storage.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
-pub struct PlannedGraphDocument {
-    /// Principal that owns the prospective document identity. A logical ID is
-    /// never sufficient publication authority without this owner binding.
-    pub owner_did: String,
+pub struct ProspectiveGraphArtifactIdentity {
     pub collection: String,
-    pub logical_id: String,
+    pub identity_scope: GraphArtifactIdentityScope,
+    /// Present only for principal-scoped identities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_did: Option<String>,
+    /// Unique-key fields used by the existing materializer. GraphRevision has
+    /// both globally unique digest and revision_id keys.
+    pub identity_keys: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -545,27 +557,32 @@ fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
     })
 }
 
-/// Return the deterministic document identity set owned by graph publication
-/// without reading or writing the database. `GraphPlan` is intentionally
-/// principal-neutral; `owner_did` is the same separate binding accepted by the
-/// materializer.
-pub fn graph_plan_creation_set(
+/// Return prospective artifact identities without reading or writing storage.
+/// `GraphPlan` is intentionally principal-neutral; `owner_did` scopes only
+/// the artifacts whose canonical keys are principal-scoped. Approved
+/// publication owns lookup and the resulting create/reuse/conflict decision.
+pub fn prospective_graph_artifact_identities(
     owner_did: &str,
     plan: &GraphPlan,
-) -> Result<Vec<PlannedGraphDocument>> {
+) -> Result<Vec<ProspectiveGraphArtifactIdentity>> {
     if !verify_graph_plan_digest(plan) {
         anyhow::bail!("refusing to preview a GraphPlan with an invalid digest");
     }
     let mut documents = vec![
-        PlannedGraphDocument {
-            owner_did: owner_did.to_owned(),
+        ProspectiveGraphArtifactIdentity {
             collection: "GraphDefinition".to_owned(),
-            logical_id: plan.graph_id.clone(),
+            identity_scope: GraphArtifactIdentityScope::Principal,
+            principal_did: Some(owner_did.to_owned()),
+            identity_keys: BTreeMap::from([("graph_id".to_owned(), plan.graph_id.clone())]),
         },
-        PlannedGraphDocument {
-            owner_did: owner_did.to_owned(),
+        ProspectiveGraphArtifactIdentity {
             collection: "GraphRevision".to_owned(),
-            logical_id: revision_id(plan),
+            identity_scope: GraphArtifactIdentityScope::Global,
+            principal_did: None,
+            identity_keys: BTreeMap::from([
+                ("digest".to_owned(), plan.digest.clone()),
+                ("revision_id".to_owned(), revision_id(plan)),
+            ]),
         },
     ];
     for entry in &plan.entries {
@@ -575,15 +592,17 @@ pub fn graph_plan_creation_set(
         );
         let id = graph_trigger_id(&plan.digest, &route)?;
         documents.extend([
-            PlannedGraphDocument {
-                owner_did: owner_did.to_owned(),
+            ProspectiveGraphArtifactIdentity {
                 collection: "EventSource".to_owned(),
-                logical_id: id.clone(),
+                identity_scope: GraphArtifactIdentityScope::Principal,
+                principal_did: Some(owner_did.to_owned()),
+                identity_keys: BTreeMap::from([("event_source_id".to_owned(), id.clone())]),
             },
-            PlannedGraphDocument {
-                owner_did: owner_did.to_owned(),
+            ProspectiveGraphArtifactIdentity {
                 collection: "Trigger".to_owned(),
-                logical_id: id,
+                identity_scope: GraphArtifactIdentityScope::Principal,
+                principal_did: Some(owner_did.to_owned()),
+                identity_keys: BTreeMap::from([("trigger_id".to_owned(), id)]),
             },
         ]);
     }
@@ -594,15 +613,17 @@ pub fn graph_plan_creation_set(
         );
         let id = graph_trigger_id(&plan.digest, &route)?;
         documents.extend([
-            PlannedGraphDocument {
-                owner_did: owner_did.to_owned(),
+            ProspectiveGraphArtifactIdentity {
                 collection: "EventSource".to_owned(),
-                logical_id: id.clone(),
+                identity_scope: GraphArtifactIdentityScope::Principal,
+                principal_did: Some(owner_did.to_owned()),
+                identity_keys: BTreeMap::from([("event_source_id".to_owned(), id.clone())]),
             },
-            PlannedGraphDocument {
-                owner_did: owner_did.to_owned(),
+            ProspectiveGraphArtifactIdentity {
                 collection: "Trigger".to_owned(),
-                logical_id: id,
+                identity_scope: GraphArtifactIdentityScope::Principal,
+                principal_did: Some(owner_did.to_owned()),
+                identity_keys: BTreeMap::from([("trigger_id".to_owned(), id)]),
             },
         ]);
     }

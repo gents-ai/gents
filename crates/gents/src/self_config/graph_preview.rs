@@ -8,8 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::graph_pipeline::{
-    compile_graph, graph_plan_creation_set, CompilerPolicy, Diagnostic, GraphIntent, GraphPlan,
-    PlannedGraphDocument, StageCapability,
+    compile_graph, prospective_graph_artifact_identities, CompilerPolicy, Diagnostic, GraphIntent,
+    GraphPlan, ProspectiveGraphArtifactIdentity, StageCapability,
 };
 use crate::llm::tool::{Tool, ToolDefinition};
 
@@ -45,9 +45,10 @@ pub struct PreviewGraphResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<GraphPlan>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub creation_set: Vec<PlannedGraphDocument>,
+    pub prospective_artifact_identities: Vec<ProspectiveGraphArtifactIdentity>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
+    pub storage_disposition: &'static str,
     pub limitation: &'static str,
 }
 
@@ -64,7 +65,7 @@ impl Tool for PreviewGraphTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Validate a native-JSON graph intent against proposal-only capability shapes and return a stable compiler digest and prospective publication document identities. This read-only preview never reads or writes configuration, publishes or activates a revision, starts execution, or verifies authoritative pack capabilities, Tasks, ACP, tools, or output authority.".to_owned(),
+            description: "Validate a native-JSON graph intent against proposal-only capability shapes and return a stable compiler digest and prospective artifact identities. Identity scope is explicit, but storage is not inspected: only approved publication can decide create, reuse, or conflict. This read-only preview never writes configuration, publishes or activates a revision, starts execution, or verifies authoritative pack capabilities, Tasks, ACP, tools, or output authority.".to_owned(),
             parameters: schemars::schema_for!(PreviewGraphParams).to_value(),
         }
     }
@@ -79,7 +80,8 @@ impl Tool for PreviewGraphTool {
             tasks_verified: false,
             tools_and_outputs_verified: false,
         };
-        let limitation = "Syntax/topology and proposed caller admission only. Authoritative StageCapability values remain pack-owned; publication must separately resolve principal-owned Tasks, ACP, tools, outputs, and the matching digest through the transaction owner.";
+        let storage_disposition = "unknown_until_approved_publication";
+        let limitation = "Syntax/topology and proposed caller admission only. Artifact identities are prospective, not an exact creation set: GraphRevision digest/revision_id are global and can conflict across principals, while GraphDefinition/EventSource/Trigger identities are principal-scoped. Authoritative StageCapability values remain pack-owned; publication must inspect storage and separately resolve Tasks, ACP, tools, outputs, and the matching digest through the transaction owner.";
         if args.intent.agent_did != caller_did {
             return Ok(PreviewGraphResponse {
                 committed: false,
@@ -88,7 +90,7 @@ impl Tool for PreviewGraphTool {
                 authority,
                 digest: None,
                 plan: None,
-                creation_set: Vec::new(),
+                prospective_artifact_identities: Vec::new(),
                 diagnostics: vec![Diagnostic {
                     code: crate::graph_pipeline::DiagnosticCode::UnauthorizedCapability,
                     path: "/agent_did".to_owned(),
@@ -97,6 +99,7 @@ impl Tool for PreviewGraphTool {
                         args.intent.agent_did, caller_did
                     ),
                 }],
+                storage_disposition,
                 limitation,
             });
         }
@@ -107,7 +110,8 @@ impl Tool for PreviewGraphTool {
             &CompilerPolicy::default(),
         ) {
             Ok(plan) => {
-                let creation_set = graph_plan_creation_set(caller_did, &plan)?;
+                let prospective_artifact_identities =
+                    prospective_graph_artifact_identities(caller_did, &plan)?;
                 let digest = plan.digest.clone();
                 Ok(PreviewGraphResponse {
                     committed: false,
@@ -116,8 +120,9 @@ impl Tool for PreviewGraphTool {
                     authority,
                     digest: Some(digest),
                     plan: Some(plan),
-                    creation_set,
+                    prospective_artifact_identities,
                     diagnostics: Vec::new(),
+                    storage_disposition,
                     limitation,
                 })
             }
@@ -128,8 +133,9 @@ impl Tool for PreviewGraphTool {
                 authority,
                 digest: None,
                 plan: None,
-                creation_set: Vec::new(),
+                prospective_artifact_identities: Vec::new(),
                 diagnostics: error.diagnostics,
+                storage_disposition,
                 limitation,
             }),
         }
@@ -254,6 +260,17 @@ mod tests {
         .unwrap()
     }
 
+    async fn install_materialization_schemas(node: &defra_node::EmbeddedNode) {
+        node.add_schema(
+            "type SessionInput { run_id: String @index(unique: true) payload: String }",
+        )
+        .await
+        .unwrap();
+        node.add_schema("type SessionScore { run_id: String @index score: Int }")
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn valid_preview_is_stable_and_writes_nothing() {
         let node = node().await;
@@ -280,14 +297,14 @@ mod tests {
             .digest
             .as_deref()
             .is_some_and(|digest| digest.starts_with("sha256:")));
-        assert_eq!(first.creation_set.len(), 4);
-        assert!(first
-            .creation_set
-            .iter()
-            .all(|document| document.owner_did == OWNER));
+        assert_eq!(first.prospective_artifact_identities.len(), 4);
+        assert_eq!(
+            first.storage_disposition,
+            "unknown_until_approved_publication"
+        );
         assert_eq!(
             first
-                .creation_set
+                .prospective_artifact_identities
                 .iter()
                 .map(|document| document.collection.as_str())
                 .collect::<Vec<_>>(),
@@ -298,7 +315,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_logical_graph_is_bound_to_each_preview_principal() {
+    async fn foreign_owner_materialization_conflicts_on_global_revision_identity() {
+        let node = node().await;
+        let other = "did:key:preview-other";
+        let before = persisted_graph_documents(&node).await;
+        let first = Tool::call(
+            &tool_for(node.clone(), OWNER),
+            PreviewGraphParams {
+                intent: intent_for(OWNER, "score"),
+                proposed_capabilities: vec![capability_for(OWNER)],
+            },
+        )
+        .await
+        .unwrap();
+        let second = Tool::call(
+            &tool_for(node.clone(), other),
+            PreviewGraphParams {
+                intent: intent_for(other, "score"),
+                proposed_capabilities: vec![capability_for(other)],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(before, persisted_graph_documents(&node).await);
+        assert_eq!(first.digest, second.digest);
+        assert!(!first.publishable && !second.publishable);
+        assert_eq!(
+            first.storage_disposition,
+            "unknown_until_approved_publication"
+        );
+        assert_eq!(
+            second.storage_disposition,
+            "unknown_until_approved_publication"
+        );
+
+        install_materialization_schemas(&node).await;
+        for owner in [OWNER, other] {
+            crate::graph_pipeline::install_graph_test_tasks(
+                &node,
+                owner,
+                "working",
+                &["existing-score-task"],
+            )
+            .await;
+        }
+        crate::graph_pipeline::materialize_graph_revision(
+            &node,
+            None,
+            OWNER,
+            first.plan.as_ref().unwrap(),
+        )
+        .await
+        .unwrap();
+        let conflict = crate::graph_pipeline::materialize_graph_revision(
+            &node,
+            None,
+            other,
+            second.plan.as_ref().unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{conflict:#}")
+                .contains("stored graph revision does not match compiled plan identity"),
+            "unexpected foreign-owner conflict: {conflict:#}"
+        );
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn same_graph_shares_global_revision_but_scopes_principal_artifacts() {
         let node = node().await;
         let other = "did:key:preview-other";
         let before = persisted_graph_documents(&node).await;
@@ -321,26 +407,66 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(first.digest, second.digest);
+        let first_global = first
+            .prospective_artifact_identities
+            .iter()
+            .filter(|document| {
+                document.identity_scope == crate::graph_pipeline::GraphArtifactIdentityScope::Global
+            })
+            .collect::<Vec<_>>();
+        let second_global = second
+            .prospective_artifact_identities
+            .iter()
+            .filter(|document| {
+                document.identity_scope == crate::graph_pipeline::GraphArtifactIdentityScope::Global
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(first_global, second_global);
+        assert_eq!(first_global.len(), 1);
+        assert_eq!(first_global[0].collection, "GraphRevision");
+        assert!(first_global[0].principal_did.is_none());
         assert_eq!(
+            first_global[0]
+                .identity_keys
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["digest", "revision_id"]
+        );
+        assert_ne!(
             first
-                .creation_set
+                .prospective_artifact_identities
                 .iter()
-                .map(|document| (&document.collection, &document.logical_id))
+                .filter(|document| {
+                    document.identity_scope
+                        == crate::graph_pipeline::GraphArtifactIdentityScope::Principal
+                })
                 .collect::<Vec<_>>(),
             second
-                .creation_set
+                .prospective_artifact_identities
                 .iter()
-                .map(|document| (&document.collection, &document.logical_id))
+                .filter(|document| {
+                    document.identity_scope
+                        == crate::graph_pipeline::GraphArtifactIdentityScope::Principal
+                })
                 .collect::<Vec<_>>()
         );
         assert!(first
-            .creation_set
+            .prospective_artifact_identities
             .iter()
-            .all(|document| document.owner_did == OWNER));
+            .filter(|document| {
+                document.identity_scope
+                    == crate::graph_pipeline::GraphArtifactIdentityScope::Principal
+            })
+            .all(|document| document.principal_did.as_deref() == Some(OWNER)));
         assert!(second
-            .creation_set
+            .prospective_artifact_identities
             .iter()
-            .all(|document| document.owner_did == other));
+            .filter(|document| {
+                document.identity_scope
+                    == crate::graph_pipeline::GraphArtifactIdentityScope::Principal
+            })
+            .all(|document| document.principal_did.as_deref() == Some(other)));
         assert_eq!(before, persisted_graph_documents(&node).await);
         node.shutdown().await;
     }
@@ -351,7 +477,7 @@ mod tests {
         assert!(!response.publishable);
         assert!(response.digest.is_none());
         assert!(response.plan.is_none());
-        assert!(response.creation_set.is_empty());
+        assert!(response.prospective_artifact_identities.is_empty());
         assert!(response.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == crate::graph_pipeline::DiagnosticCode::UnauthorizedCapability
         }));
@@ -396,7 +522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preview_creation_set_matches_materialization_owned_identities() {
+    async fn prospective_identities_match_materialization_for_one_owner() {
         let node = node().await;
         let before = persisted_graph_documents(&node).await;
         let response = Tool::call(
@@ -410,14 +536,7 @@ mod tests {
         .unwrap();
         assert_eq!(before, persisted_graph_documents(&node).await);
 
-        node.add_schema(
-            "type SessionInput { run_id: String @index(unique: true) payload: String }",
-        )
-        .await
-        .unwrap();
-        node.add_schema("type SessionScore { run_id: String @index score: Int }")
-            .await
-            .unwrap();
+        install_materialization_schemas(&node).await;
         crate::graph_pipeline::install_graph_test_tasks(
             &node,
             OWNER,
@@ -431,10 +550,10 @@ mod tests {
                 .await
                 .unwrap();
         let expected_trigger_ids = response
-            .creation_set
+            .prospective_artifact_identities
             .iter()
             .filter(|document| document.collection == "Trigger")
-            .map(|document| document.logical_id.clone())
+            .map(|document| document.identity_keys["trigger_id"].clone())
             .collect::<Vec<_>>();
         assert_eq!(materialized.trigger_ids, expected_trigger_ids);
 
@@ -444,7 +563,7 @@ mod tests {
             .execute(&format!(
                 r#"{{
                     GraphDefinition(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{graph_id agent_did}}
-                    GraphRevision(filter: {{digest: {{_eq: "{escaped_digest}"}}}}) {{revision_id owner_did}}
+                    GraphRevision(filter: {{digest: {{_eq: "{escaped_digest}"}}}}) {{revision_id digest owner_did}}
                     EventSource(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{event_source_id agent_did}}
                     Trigger(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{trigger_id agent_did}}
                 }}"#
@@ -452,20 +571,24 @@ mod tests {
             .await;
         assert!(!stored.has_errors(), "{:?}", stored.errors);
         let stored = stored.data.unwrap();
-        for document in &response.creation_set {
-            let (field, owner_field) = match document.collection.as_str() {
-                "GraphDefinition" => ("graph_id", "agent_did"),
-                "GraphRevision" => ("revision_id", "owner_did"),
-                "EventSource" => ("event_source_id", "agent_did"),
-                "Trigger" => ("trigger_id", "agent_did"),
+        for artifact in &response.prospective_artifact_identities {
+            let owner_field = match artifact.collection.as_str() {
+                "GraphDefinition" | "EventSource" | "Trigger" => Some("agent_did"),
+                "GraphRevision" => None,
                 other => panic!("unexpected preview collection {other}"),
             };
-            assert!(stored[&document.collection]
+            assert!(stored[&artifact.collection]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|row| {
-                    row[field] == document.logical_id && row[owner_field] == document.owner_did
+                    artifact
+                        .identity_keys
+                        .iter()
+                        .all(|(field, value)| row[field] == *value)
+                        && owner_field.is_none_or(|field| {
+                            row[field] == artifact.principal_did.as_deref().unwrap()
+                        })
                 }));
         }
         node.shutdown().await;
@@ -508,7 +631,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compiler_diagnostics_are_returned_without_a_digest_or_creation_set() {
+    async fn compiler_diagnostics_return_no_digest_or_artifact_identities() {
         let node = node().await;
         let response = Tool::call(
             &tool(node.clone()),
@@ -522,7 +645,7 @@ mod tests {
         assert!(!response.syntax_and_topology_valid);
         assert!(response.digest.is_none());
         assert!(response.plan.is_none());
-        assert!(response.creation_set.is_empty());
+        assert!(response.prospective_artifact_identities.is_empty());
         assert!(response.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == crate::graph_pipeline::DiagnosticCode::UnknownCapability
         }));

@@ -28,11 +28,12 @@ pub use run::{
 #[cfg(test)]
 pub(crate) use runtime::install_graph_test_tasks;
 pub use runtime::{
-    activate_graph_revision, activate_graph_revision_with_access, graph_plan_creation_set,
-    graph_run_terminal_decision, load_active_graph_plan_with_access, materialize_graph_revision,
-    publish_graph_plan, revision_gate_decision, set_graph_enabled_with_access, start_graph_run,
-    start_graph_run_with_access, ActivationReceipt, GraphRunReceipt, GraphRunTerminalDecision,
-    MaterializedRevision, PlannedGraphDocument, PublishedGraph, RevisionGateDecision,
+    activate_graph_revision, activate_graph_revision_with_access, graph_run_terminal_decision,
+    load_active_graph_plan_with_access, materialize_graph_revision,
+    prospective_graph_artifact_identities, publish_graph_plan, revision_gate_decision,
+    set_graph_enabled_with_access, start_graph_run, start_graph_run_with_access, ActivationReceipt,
+    GraphArtifactIdentityScope, GraphRunReceipt, GraphRunTerminalDecision, MaterializedRevision,
+    ProspectiveGraphArtifactIdentity, PublishedGraph, RevisionGateDecision,
 };
 pub(crate) use runtime::{
     fence_graph_publication_in_txn, fence_graph_root_request_in_txn, graph_artifact_is_reserved,
