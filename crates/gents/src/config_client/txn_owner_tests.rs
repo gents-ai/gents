@@ -975,6 +975,11 @@ async fn observing_transaction_reports_conflict_without_replay() {
 
 #[tokio::test]
 async fn cancelling_callback_schedules_http_transaction_discard() {
+    // This exercises real loopback HTTP scheduling on shared CI hosts. Keep
+    // the deadline bounded without making ordinary compiler contention a
+    // transaction-semantics failure; the state assertions below remain exact.
+    const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(10);
+
     let (endpoint, state, server) = fake_transaction_server(FirstCommit::Succeed).await;
     let stage_observed = Arc::clone(&state.stage_observed);
     let access = ConfigAccess::Graphql(endpoint);
@@ -988,7 +993,7 @@ async fn cancelling_callback_schedules_http_transaction_discard() {
         })
     }));
 
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         tokio::select! {
             _ = stage_observed.notified() => {}
             result = &mut transaction => panic!("transaction finished before cancellation: {result:?}"),
@@ -997,7 +1002,7 @@ async fn cancelling_callback_schedules_http_transaction_discard() {
         .await
         .expect("callback should stage its mutation");
     drop(transaction);
-    tokio::time::timeout(Duration::from_secs(2), state.discard_observed.notified())
+    tokio::time::timeout(OBSERVATION_TIMEOUT, state.discard_observed.notified())
         .await
         .expect("cancellation should discard the open transaction");
 
