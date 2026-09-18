@@ -1593,7 +1593,7 @@ pub(crate) struct TraceCaptureArgs {
     pub(crate) list: bool,
     #[arg(
         long = "include-body",
-        help = "Include request_json and the raw provenance manifest — the captured provider request body — in the output"
+        help = "Include the recovered provider request_json, raw provenance manifest, and decoded provenance payload in the output"
     )]
     pub(crate) include_body: bool,
     #[arg(long = "output-file", help = "Write JSON to a file instead of stdout")]

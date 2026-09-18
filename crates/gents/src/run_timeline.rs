@@ -2080,7 +2080,10 @@ mod tests {
         assert_eq!(captures[0].call_id.as_deref(), Some("call-1"));
         assert_eq!(captures[0].call_seq, Some(1));
         assert_eq!(captures[0].provenance_status, "captured_only");
-        assert_eq!(captures[0].manifest_version, Some(3));
+        assert_eq!(
+            captures[0].manifest_version,
+            Some(gents_protocol::rendered_request::PROVENANCE_MANIFEST_VERSION as i64)
+        );
         assert_eq!(captures[0].scope_kind.as_deref(), Some("inference"));
         assert_eq!(captures[0].scope_seq, Some(1));
 

@@ -2,6 +2,7 @@
 """Compare live ACP context metadata with persisted inference accounting."""
 import argparse
 import json
+import subprocess
 import urllib.request
 from datetime import datetime
 
@@ -15,6 +16,8 @@ def main():
     parser.add_argument("--cwd", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--context-window", type=int, default=524288)
+    parser.add_argument("--gents-cli", default="gents",
+                        help="gents CLI used for witnessed capture decoding")
     args = parser.parse_args()
 
     def query(source):
@@ -58,13 +61,18 @@ def main():
             details = info["result"]["result"]
             assert details["context"]["used"] == expected, details
             assert details["context"]["total"] == accounting["context_window"], details
-            captures = query("{ RenderedRequest(filter: {request_doc_id: {_eq: "
-                + json.dumps(requests[0]["_docID"])
-                + '}, capture_scope: {_like: "inference.%"}, turn_index: {_eq: '
-                + str(accounting["turn_index"]) + '}, attempt: {_eq: '
-                + str(accounting["attempt"]) + '}}) {request_json} }')["RenderedRequest"]
+            decoded = json.loads(subprocess.check_output([
+                args.gents_cli, "trace", "capture", "--graphql", args.graphql,
+                "--request-id", requests[0]["request_id"], "--turn",
+                str(accounting["turn_index"]), "--attempt", str(accounting["attempt"]),
+                "--include-body", "--list",
+            ], text=True))
+            captures = [capture for capture in decoded["captures"]
+                if capture.get("capture_scope", "").startswith("inference.")
+                and capture.get("request_doc_id") == requests[0]["_docID"]]
             assert len(captures) == 1, "missing or ambiguous provider capture"
-            body = json.loads(captures[0]["request_json"])
+            capture = captures[0]
+            body = json.loads(capture["request_json"])
             assert details["_meta"]["gents/partialContext"] is False, details
             assert details["context"]["toolDefinitionsCount"] == len(body.get("tools") or []), details
             assert details["context"]["messageCount"] == sum(

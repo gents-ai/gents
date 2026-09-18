@@ -189,6 +189,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
     pub(crate) prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
+    pub(crate) rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
     pub(crate) rolling_compaction_cases: Vec<LeanRollingCompactionCase>,
     pub(crate) reduction_engine_cases: Vec<LeanReductionEngineCase>,
@@ -1379,6 +1380,10 @@ pub(crate) fn lean_prompt_assembly_claude_stream_cases(
 
 pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
     &lean_contract_snapshot().rendered_capture_cases
+}
+
+pub(crate) fn lean_rendered_capture_storage_cases() -> &'static [LeanRenderedCaptureStorageCase] {
+    &lean_contract_snapshot().rendered_capture_storage_cases
 }
 
 pub(crate) fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {

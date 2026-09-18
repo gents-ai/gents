@@ -270,7 +270,10 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     poll_config.on_rendered_request = Some(Arc::new(move |turn, attempt, _, trace| {
         let captures = poll_captures_for_sink.clone();
         Box::pin(async move {
-            captures.lock().await.push((turn, attempt, trace.build_path));
+            captures
+                .lock()
+                .await
+                .push((turn, attempt, trace.build_path));
             Ok(())
         })
     }));
@@ -284,7 +287,10 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     ))
     .await;
     assert_eq!(poll_result.error, None);
-    assert_eq!(poll_result.final_text.as_deref(), Some("poll branch repaired"));
+    assert_eq!(
+        poll_result.final_text.as_deref(),
+        Some("poll branch repaired")
+    );
     assert_eq!(
         poll_captures.lock().await.as_slice(),
         &[
@@ -523,7 +529,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         capture_key: &str,
     ) -> Vec<serde_json::Value> {
         let query = format!(
-            r#"{{ RenderedRequest(filter: {{ capture_key: {{ _eq: "{}" }} }}) {{ capture_key request_json }} }}"#,
+            r#"{{ RenderedRequest(filter: {{ capture_key: {{ _eq: "{}" }} }}) {{ capture_key capture_version request_json }} }}"#,
             escape_graphql_string(capture_key),
         );
         let response = node.execute(&query).await;
@@ -588,6 +594,8 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                         assembly_trace.clone(),
                     ))
                     .expect("provenance manifest"),
+                    provenance_payload_json: serde_json::to_value(&assembly_trace)
+                        .expect("provenance payload"),
                     assembly_trace,
                 }
             };
@@ -622,12 +630,24 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
             "{}",
             case.name
         );
-        let stored = rows.first().map(|row| {
-            serde_json::from_str::<serde_json::Value>(
-                row["request_json"].as_str().expect("request_json string"),
+        let stored = if let Some(row) = rows.first() {
+            let version = row["capture_version"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .expect("numeric capture version");
+            Some(
+                crate::rendered_request::decode_capture_json_embedded(
+                    node.as_ref(),
+                    version,
+                    row["request_json"].as_str().expect("request_json string"),
+                    crate::rendered_request::CapturePayloadKind::RequestBody,
+                )
+                .await
+                .expect("stored request_json decodes"),
             )
-            .expect("stored request_json decodes")
-        });
+        } else {
+            None
+        };
         assert_eq!(
             stored,
             case.durable_after

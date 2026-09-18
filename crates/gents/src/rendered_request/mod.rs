@@ -38,9 +38,13 @@
 //! There is no `request_hash`. A stored digest is self-attested: the same code
 //! that chooses the bytes also chooses the digest, so the two always agree and
 //! an auditor learns nothing. DefraDB instead writes a per-field commit block
-//! for `request_json` whose CID is computed over the value actually stored.
-//! That CID is the content address, it replicates with the document, and it is
-//! what a future Merkle-DAG proof can attest over.
+//! for `request_json` whose CID is computed over the value actually stored. In
+//! capture v2 that value is a container with independently decodable
+//! request-body and provenance full/delta records. Its field CID witnesses the
+//! container and each logical delta pins an exact base document and that same
+//! physical field CID. The recursively decoded request JSON is the
+//! provider-body oracle; no CID is mislabeled as a direct hash of bytes the
+//! container only references.
 //!
 //! Per-field and composite commit blocks are written for **every** collection;
 //! `@branchable` gates only the additional collection-level block. So the field
@@ -59,10 +63,12 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 pub mod commits;
+pub(crate) mod encoding;
 pub(crate) mod scope;
 pub mod sink;
 pub(crate) mod transport;
 
+pub use encoding::CapturePayloadKind;
 pub use gents_protocol::rendered_request::{
     AdmissionJoin, AssemblyBuildPath, AssemblyTrace, AssistantMessageId, CaptureOrderKey,
     CaptureScope, CaptureScopeKind, CaptureSeam, ContextAccounting, ContextCompactionReason,
@@ -73,6 +79,250 @@ pub use gents_protocol::rendered_request::{
 pub(crate) use sink::defra_rendered_request_capture_factory;
 pub use sink::DefraRenderedRequestSink;
 pub use transport::RenderedRequestCapturingHttpClient;
+
+pub fn decode_inline_capture_json(capture_version: u32, stored: &str) -> Result<Value> {
+    encoding::resolve_capture_with(
+        capture_version,
+        stored,
+        CapturePayloadKind::RequestBody,
+        |_| anyhow::bail!("capture delta requires base resolution"),
+    )
+}
+
+#[async_trait::async_trait]
+trait CaptureBaseReader {
+    async fn execute_capture_query(&self, query: &str) -> Result<Value>;
+    async fn capture_field_commit(
+        &self,
+        doc_id: &str,
+        field: &str,
+    ) -> Result<Option<commits::RequestJsonCommit>>;
+}
+
+#[async_trait::async_trait]
+impl CaptureBaseReader for crate::config_client::ConfigAccess {
+    async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+        self.execute(query).await
+    }
+
+    async fn capture_field_commit(
+        &self,
+        doc_id: &str,
+        field: &str,
+    ) -> Result<Option<commits::RequestJsonCommit>> {
+        commits::field_commit(self, doc_id, field).await
+    }
+}
+
+#[async_trait::async_trait]
+impl CaptureBaseReader for defra_node::EmbeddedNode {
+    async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+        let response = self.execute(query).await;
+        crate::graphql::ensure_no_errors(&response, "reading rendered-request delta base")?;
+        Ok(serde_json::json!({"data": response.data}))
+    }
+
+    async fn capture_field_commit(
+        &self,
+        doc_id: &str,
+        field: &str,
+    ) -> Result<Option<commits::RequestJsonCommit>> {
+        commits::field_commit_embedded(self, doc_id, field).await
+    }
+}
+
+type CaptureBaseCache = std::collections::BTreeMap<String, (Value, String)>;
+
+async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    capture_version: u32,
+    stored: &str,
+    kind: CapturePayloadKind,
+    cache: &mut CaptureBaseCache,
+) -> Result<Value> {
+    let mut next_version = capture_version;
+    let mut next_stored = stored.to_owned();
+    let mut bases = std::collections::BTreeMap::new();
+    for _ in 0..=encoding::MAX_DELTA_DEPTH {
+        match encoding::decode_capture_record(next_version, &next_stored, kind)? {
+            encoding::DecodedRecord::Legacy(_) | encoding::DecodedRecord::Full(_) => break,
+            encoding::DecodedRecord::Delta { base, .. } => {
+                if !cache.contains_key(&base.doc_id) {
+                    let query = format!(
+                        r#"{{ RenderedRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 2) {{
+                            capture_version agent_did requester_did session_id source capture_scope request_json
+                        }} }}"#,
+                        doc_id = crate::graphql::escape_graphql_string(&base.doc_id),
+                    );
+                    let response = reader.execute_capture_query(&query).await?;
+                    let rows = response
+                        .get("data")
+                        .and_then(|data| data.get("RenderedRequest"))
+                        .and_then(Value::as_array)
+                        .context(
+                            "reading witnessed rendered-request base returned an unexpected shape",
+                        )?;
+                    let [row] = rows.as_slice() else {
+                        anyhow::bail!("rendered-request delta base did not resolve uniquely");
+                    };
+                    let actual = reader
+                        .capture_field_commit(&base.doc_id, "request_json")
+                        .await?
+                        .context("rendered-request delta base lacks field commit")?
+                        .cid;
+                    cache.insert(base.doc_id.clone(), (row.clone(), actual));
+                }
+                let (row, actual) = cache
+                    .get(&base.doc_id)
+                    .context("rendered-request delta base cache was not populated")?;
+                for (name, expected) in [
+                    ("agent_did", base.agent_did.as_str()),
+                    ("requester_did", base.requester_did.as_str()),
+                    ("session_id", base.session_id.as_str()),
+                    ("source", base.source.as_str()),
+                    ("capture_scope", base.capture_scope.as_str()),
+                ] {
+                    anyhow::ensure!(
+                        row.get(name).and_then(Value::as_str) == Some(expected),
+                        "rendered-request delta base changed {name} scope"
+                    );
+                }
+                let version = row
+                    .get("capture_version")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .context("rendered-request delta base lacks capture_version")?;
+                let encoded = row
+                    .get("request_json")
+                    .and_then(Value::as_str)
+                    .context("rendered-request delta base lacks encoded field")?
+                    .to_owned();
+                anyhow::ensure!(
+                    encoding::capture_record_depth(version, &encoded, kind)? == base.depth,
+                    "rendered-request delta base depth witness is inconsistent"
+                );
+                bases.insert(
+                    (base.doc_id.clone(), base.field_commit_cid.clone()),
+                    (version, encoded.clone(), actual.clone()),
+                );
+                next_version = version;
+                next_stored = encoded;
+            }
+        }
+    }
+    encoding::resolve_capture_with(capture_version, stored, kind, |base| {
+        bases
+            .remove(&(base.doc_id.clone(), base.field_commit_cid.clone()))
+            .context("capture delta chain exceeds maximum depth or contains a cycle")
+    })
+}
+
+async fn decode_capture_json_from<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    capture_version: u32,
+    stored: &str,
+    kind: CapturePayloadKind,
+) -> Result<Value> {
+    decode_capture_json_from_cached(
+        reader,
+        capture_version,
+        stored,
+        kind,
+        &mut CaptureBaseCache::new(),
+    )
+    .await
+}
+
+async fn decode_capture_pair_selected_from<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    capture_version: u32,
+    stored: &str,
+    want_request: bool,
+    want_provenance: bool,
+) -> Result<(Option<Value>, Option<Value>)> {
+    let mut cache = CaptureBaseCache::new();
+    let request = if want_request {
+        Some(
+            decode_capture_json_from_cached(
+                reader,
+                capture_version,
+                stored,
+                CapturePayloadKind::RequestBody,
+                &mut cache,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let provenance = if want_provenance {
+        Some(
+            decode_capture_json_from_cached(
+                reader,
+                capture_version,
+                stored,
+                CapturePayloadKind::ProvenancePayload,
+                &mut cache,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    Ok((request, provenance))
+}
+
+async fn decode_capture_pair_from<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    capture_version: u32,
+    stored: &str,
+) -> Result<(Value, Value)> {
+    let (request, provenance) =
+        decode_capture_pair_selected_from(reader, capture_version, stored, true, true).await?;
+    Ok((
+        request.context("capture pair omitted request body")?,
+        provenance.context("capture pair omitted provenance payload")?,
+    ))
+}
+
+pub(crate) async fn decode_capture_pair_selected(
+    access: &crate::config_client::ConfigAccess,
+    capture_version: u32,
+    stored: &str,
+    request: bool,
+    provenance: bool,
+) -> Result<(Option<Value>, Option<Value>)> {
+    decode_capture_pair_selected_from(access, capture_version, stored, request, provenance).await
+}
+
+/// Decode both payloads from one capture while reusing each witnessed base.
+pub async fn decode_capture_pair(
+    access: &crate::config_client::ConfigAccess,
+    capture_version: u32,
+    stored: &str,
+) -> Result<(Value, Value)> {
+    decode_capture_pair_from(access, capture_version, stored).await
+}
+
+pub async fn decode_capture_json(
+    access: &crate::config_client::ConfigAccess,
+    capture_version: u32,
+    stored: &str,
+    kind: CapturePayloadKind,
+) -> Result<Value> {
+    decode_capture_json_from(access, capture_version, stored, kind).await
+}
+
+/// Decode one capture payload through the same witnessed resolver used by the
+/// sink, for callers that already own the embedded DefraDB node.
+pub async fn decode_capture_json_embedded(
+    node: &defra_node::EmbeddedNode,
+    capture_version: u32,
+    stored: &str,
+    kind: CapturePayloadKind,
+) -> Result<Value> {
+    decode_capture_json_from(node, capture_version, stored, kind).await
+}
 
 /// Prefix on every capture key. Bound to the *key derivation*, not to
 /// `CAPTURE_VERSION`: adding a column must not silently re-key existing facts.
@@ -233,6 +483,9 @@ pub struct RenderedCompletionRequest {
     /// Derived by the builder so the column and the typed value cannot
     /// disagree; a reader may deserialize it back into `ProvenanceManifest`.
     pub provenance_json: Value,
+    /// Lossless heavy provenance payload, encoded independently from the
+    /// compact searchable manifest.
+    pub provenance_payload_json: Value,
 }
 
 pub(crate) fn build_rendered_completion_request(
@@ -270,6 +523,10 @@ pub(crate) fn build_rendered_completion_request(
     let provenance_json = canonical_json(
         &serde_json::to_value(&manifest).context("encoding rendered-request provenance")?,
     );
+    let provenance_payload_json = canonical_json(
+        &serde_json::to_value(&assembly_trace)
+            .context("encoding rendered-request provenance payload")?,
+    );
     let model_name = request_json
         .get("model")
         .and_then(Value::as_str)
@@ -298,6 +555,7 @@ pub(crate) fn build_rendered_completion_request(
         sampling_json,
         assembly_trace,
         provenance_json,
+        provenance_payload_json,
     })
 }
 
@@ -407,7 +665,7 @@ pub(crate) fn canonical_json(value: &Value) -> Value {
 
 /// The exact UTF-8 bytes to persist for a canonical JSON column, and the exact
 /// bytes `sha256_canonical_json` digests.
-pub(crate) fn canonical_json_string(value: &Value) -> Result<String> {
+pub fn canonical_json_string(value: &Value) -> Result<String> {
     serde_json::to_string(&canonical_json(value)).context("encoding canonical JSON")
 }
 
@@ -419,12 +677,244 @@ pub(crate) fn sha256_canonical_json(value: &Value) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use anyhow::{bail, Result};
     use gents_protocol::message::{
         AssistantContent, Message, ToolCall, ToolFunction, ToolResultContent, UserContent,
     };
     use serde_json::json;
 
     use super::*;
+
+    struct MockCaptureReader {
+        row: Option<Value>,
+        commit: Option<String>,
+        fail_query: bool,
+        queries: Mutex<usize>,
+        commit_reads: Mutex<usize>,
+    }
+
+    #[async_trait::async_trait]
+    impl CaptureBaseReader for MockCaptureReader {
+        async fn execute_capture_query(&self, _: &str) -> Result<Value> {
+            *self.queries.lock().expect("query count lock") += 1;
+            if self.fail_query {
+                bail!("injected base query failure");
+            }
+            Ok(
+                json!({"data": {"RenderedRequest": self.row.clone().into_iter().collect::<Vec<_>>()}}),
+            )
+        }
+
+        async fn capture_field_commit(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<commits::RequestJsonCommit>> {
+            *self.commit_reads.lock().expect("commit count lock") += 1;
+            Ok(self
+                .commit
+                .clone()
+                .map(|cid| commits::RequestJsonCommit { cid, height: 1 }))
+        }
+    }
+
+    fn capture_base_witness(cid: &str) -> encoding::BaseWitness {
+        encoding::BaseWitness {
+            doc_id: "base-doc".to_string(),
+            field_commit_cid: cid.to_string(),
+            depth: 0,
+            agent_did: "did:key:agent".to_string(),
+            requester_did: "did:key:requester".to_string(),
+            session_id: "session".to_string(),
+            source: "openai_chat_completions".to_string(),
+            capture_scope: "inference.1".to_string(),
+        }
+    }
+
+    fn capture_base_container() -> (Value, Value, String) {
+        let request = json!({"stable":"request", "payload":"x".repeat(4096)});
+        let provenance = json!({"stable":"provenance", "payload":"y".repeat(4096)});
+        let container = encoding::encode_container(
+            &encoding::encode_full(&request).expect("full request"),
+            &encoding::encode_full(&provenance).expect("full provenance"),
+        )
+        .expect("base capture container");
+        (request, provenance, container)
+    }
+
+    fn delta_capture_container(
+        base_request: &Value,
+        base_provenance: &Value,
+        cid: &str,
+    ) -> (Value, Value, String) {
+        let request = json!({"stable":"request", "payload": format!("{} tail", "x".repeat(4096))});
+        let provenance =
+            json!({"stable":"provenance", "payload": format!("{} tail", "y".repeat(4096))});
+        let request_delta =
+            encoding::encode_against(&request, base_request, capture_base_witness(cid))
+                .expect("request delta");
+        let provenance_delta =
+            encoding::encode_against(&provenance, base_provenance, capture_base_witness(cid))
+                .expect("provenance delta");
+        let container = encoding::encode_container(&request_delta, &provenance_delta)
+            .expect("delta capture container");
+        (request, provenance, container)
+    }
+
+    fn capture_base_row(container: &str) -> Value {
+        json!({
+            "_docID": "base-doc",
+            "capture_version": 2,
+            "agent_did": "did:key:agent",
+            "requester_did": "did:key:requester",
+            "session_id": "session",
+            "source": "openai_chat_completions",
+            "capture_scope": "inference.1",
+            "request_json": container,
+        })
+    }
+
+    #[tokio::test]
+    async fn paired_delta_decode_reads_a_shared_base_once() {
+        let (base_request, base_provenance, base_container) = capture_base_container();
+        let (request, provenance, delta_container) =
+            delta_capture_container(&base_request, &base_provenance, "base-cid");
+        let reader = MockCaptureReader {
+            row: Some(capture_base_row(&base_container)),
+            commit: Some("base-cid".to_string()),
+            fail_query: false,
+            queries: Mutex::new(0),
+            commit_reads: Mutex::new(0),
+        };
+
+        assert_eq!(
+            decode_capture_pair_from(&reader, 2, &delta_container)
+                .await
+                .expect("decode paired delta"),
+            (request, provenance)
+        );
+        assert_eq!(*reader.queries.lock().unwrap(), 1);
+        assert_eq!(*reader.commit_reads.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn paired_full_checkpoint_does_not_read_a_base() {
+        let (request, provenance, checkpoint) = capture_base_container();
+        let reader = MockCaptureReader {
+            row: None,
+            commit: None,
+            fail_query: true,
+            queries: Mutex::new(0),
+            commit_reads: Mutex::new(0),
+        };
+
+        assert_eq!(
+            decode_capture_pair_from(&reader, 2, &checkpoint)
+                .await
+                .expect("decode full checkpoint"),
+            (request, provenance)
+        );
+        assert_eq!(*reader.queries.lock().unwrap(), 0);
+        assert_eq!(*reader.commit_reads.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn selective_pair_skips_only_the_saturated_payload() {
+        let (base_request, base_provenance, base_container) = capture_base_container();
+        let (_, provenance, delta_container) =
+            delta_capture_container(&base_request, &base_provenance, "base-cid");
+        let mut mixed: Value = serde_json::from_str(&delta_container).unwrap();
+        mixed["request_body"]["base"]["depth"] = json!(encoding::MAX_DELTA_DEPTH);
+        mixed["request_body"]["base"]["doc_id"] = json!("missing-saturated-base");
+        let mixed = canonical_json_string(&mixed).unwrap();
+        let reader = MockCaptureReader {
+            row: Some(capture_base_row(&base_container)),
+            commit: Some("base-cid".to_string()),
+            fail_query: false,
+            queries: Mutex::new(0),
+            commit_reads: Mutex::new(0),
+        };
+
+        let (request, decoded_provenance) =
+            decode_capture_pair_selected_from(&reader, 2, &mixed, false, true)
+                .await
+                .expect("decode only unsaturated provenance payload");
+        assert!(request.is_none());
+        assert_eq!(decoded_provenance, Some(provenance));
+        assert_eq!(*reader.queries.lock().unwrap(), 1);
+        assert_eq!(*reader.commit_reads.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn delta_decode_rejects_missing_base_and_scope_or_commit_corruption() {
+        let (base_request, base_provenance, base_container) = capture_base_container();
+        let (_, _, delta_container) =
+            delta_capture_container(&base_request, &base_provenance, "base-cid");
+
+        let missing = MockCaptureReader {
+            row: None,
+            commit: None,
+            fail_query: false,
+            queries: Mutex::new(0),
+            commit_reads: Mutex::new(0),
+        };
+        let error = decode_capture_pair_from(&missing, 2, &delta_container)
+            .await
+            .expect_err("missing base must fail closed");
+        assert!(
+            error.to_string().contains("did not resolve uniquely"),
+            "{error:#}"
+        );
+
+        let unavailable = MockCaptureReader {
+            row: Some(capture_base_row(&base_container)),
+            commit: Some("base-cid".to_string()),
+            fail_query: true,
+            queries: Mutex::new(0),
+            commit_reads: Mutex::new(0),
+        };
+        let error = decode_capture_pair_from(&unavailable, 2, &delta_container)
+            .await
+            .expect_err("base query failure must not decode a delta as full");
+        assert!(
+            error.to_string().contains("injected base query failure"),
+            "{error:#}"
+        );
+
+        let mut cross_scope = capture_base_row(&base_container);
+        cross_scope["session_id"] = json!("other-session");
+        let cross_scope = MockCaptureReader {
+            row: Some(cross_scope),
+            commit: Some("base-cid".to_string()),
+            fail_query: false,
+            queries: Mutex::new(0),
+            commit_reads: Mutex::new(0),
+        };
+        let error = decode_capture_pair_from(&cross_scope, 2, &delta_container)
+            .await
+            .expect_err("cross-request base must fail closed");
+        assert!(
+            error.to_string().contains("changed session_id scope"),
+            "{error:#}"
+        );
+
+        let corrupt = MockCaptureReader {
+            row: Some(capture_base_row(&base_container)),
+            commit: Some("different-cid".to_string()),
+            fail_query: false,
+            queries: Mutex::new(0),
+            commit_reads: Mutex::new(0),
+        };
+        let error = decode_capture_pair_from(&corrupt, 2, &delta_container)
+            .await
+            .expect_err("commit corruption must fail closed");
+        assert!(
+            error.to_string().contains("field commit changed"),
+            "{error:#}"
+        );
+    }
 
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
@@ -780,7 +1270,15 @@ mod tests {
         assert!(!manifest.status_reason.is_empty());
         assert_eq!(manifest.capture_seam, CaptureSeam::TransportBody);
         assert_eq!(manifest.capture_scope, "inference.1");
-        assert_eq!(manifest.assembly_trace, trace);
+        assert_eq!(
+            manifest.assembly_trace,
+            gents_protocol::rendered_request::AssemblyTraceMetadata::from(&trace)
+        );
+        assert_eq!(
+            serde_json::from_value::<AssemblyTrace>(rendered.provenance_payload_json.clone())
+                .expect("payload round-trip"),
+            trace
+        );
         assert_eq!(rendered.assembly_trace, trace);
     }
 

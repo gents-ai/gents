@@ -34,6 +34,19 @@ pub(crate) struct LeanRenderedCaptureCase {
     pub(crate) final_stage: String,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanRenderedCaptureStorageCase {
+    pub(crate) name: String,
+    pub(crate) encoding: String,
+    pub(crate) request: u64,
+    pub(crate) base_witness: Option<u64>,
+    pub(crate) base_depth: usize,
+    pub(crate) max_depth: usize,
+    pub(crate) base_verified: bool,
+    pub(crate) decoded_request: Option<u64>,
+    pub(crate) send_permitted: bool,
+}
+
 /// Two capture keys and whether the model calls them the same fact.
 ///
 /// `same_fact` is `decide (left = right)` over the five-component

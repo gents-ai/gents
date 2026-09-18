@@ -352,6 +352,8 @@ def snapshotJson : String :=
       ++ promptAssemblyClaudeStreamCasesJson ++ ","
     ++ "\"rendered_capture_cases\":"
       ++ renderedCaptureCasesJson ++ ","
+    ++ "\"rendered_capture_storage_cases\":"
+      ++ renderedCaptureStorageCasesJson ++ ","
     ++ "\"durable_reduction_cases\":"
       ++ durableReductionCasesJson ++ ","
     ++ "\"rolling_compaction_cases\":"

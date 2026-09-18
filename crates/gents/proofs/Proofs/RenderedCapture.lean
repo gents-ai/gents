@@ -105,6 +105,96 @@ structure CanonicalRequest where
   value : Nat
   deriving DecidableEq, Repr
 
+/-! ## Lossless bounded storage encoding
+
+The database may store the canonical request directly or as a delta against an
+immutable earlier field commit. The model treats equality of commit witnesses
+as an input supplied by DefraDB; proving CID computation and collision
+resistance remains an external database boundary. `CanonicalRequest` remains
+the model's opaque `Nat`; its singleton-list encoding represents lossless bytes
+abstractly. Production's UTF-8, per-top-level-field splice encoder must refine
+`splice` with bounds, Unicode-boundary, field-removal, and round-trip tests; the
+conditional `splice_roundtrip` theorem does not prove that concrete encoder.
+The physical encoding is not the fact: a
+capture is durable only when bounded decoding, including every pinned base
+witness, recovers the exact canonical request. -/
+
+abbrev FieldCommitWitness := Nat
+abbrev ArtifactRef := Nat
+abbrev CanonicalBytes := List Nat
+
+def canonicalBytes (request : CanonicalRequest) : CanonicalBytes := [request.value]
+
+def decodeCanonical : CanonicalBytes → Option CanonicalRequest
+  | [value] => some { value }
+  | _ => none
+
+@[simp] theorem canonical_bytes_roundtrip (request : CanonicalRequest) :
+    decodeCanonical (canonicalBytes request) = some request := by
+  cases request <;> rfl
+
+/-- Replace the middle of `base`, retaining exact prefix and suffix lengths. -/
+def splice (base : CanonicalBytes) (prefixLen suffixLen : Nat)
+    (middle : CanonicalBytes) : Option CanonicalBytes :=
+  if prefixLen + suffixLen ≤ base.length then
+    some (base.take prefixLen ++ middle ++ base.drop (base.length - suffixLen))
+  else none
+
+theorem splice_roundtrip (base target middle : CanonicalBytes) (prefixLen suffixLen : Nat)
+    (hBounds : prefixLen + suffixLen ≤ base.length)
+    (hTarget : target = base.take prefixLen ++ middle ++ base.drop (base.length - suffixLen)) :
+    splice base prefixLen suffixLen middle = some target := by
+  simp [splice, hBounds, hTarget]
+
+inductive StoredRequest where
+  | legacyFull (bytes : CanonicalBytes)
+  | full (bytes : CanonicalBytes)
+  | delta (baseRef : ArtifactRef) (baseWitness : FieldCommitWitness)
+      (prefixLen suffixLen : Nat) (middle : CanonicalBytes)
+  deriving DecidableEq, Repr
+
+structure StoredVersion where
+  commit : FieldCommitWitness
+  encoded : StoredRequest
+
+abbrev ArtifactStore := ArtifactRef → Option StoredVersion
+
+/-- Bounded recursive decode. Looking up by document reference is insufficient:
+the immutable base field commit must still equal the witness pinned by the
+delta. Fuel bounds work and makes cycles fail closed. -/
+def resolveBytes (store : ArtifactStore) : Nat → ArtifactRef →
+    FieldCommitWitness → Option CanonicalBytes
+  | 0, _, _ => none
+  | fuel + 1, ref, expected => do
+      let version ← store ref
+      if version.commit != expected then none else
+        match version.encoded with
+        | .legacyFull bytes | .full bytes => some bytes
+        | .delta baseRef baseWitness prefixLen suffixLen middle => do
+            let base ← resolveBytes store fuel baseRef baseWitness
+            splice base prefixLen suffixLen middle
+
+def resolveRequest (store : ArtifactStore) (fuel : Nat) (ref : ArtifactRef)
+    (expected : FieldCommitWitness) : Option CanonicalRequest := do
+  let bytes ← resolveBytes store fuel ref expected
+  decodeCanonical bytes
+
+theorem full_resolves_exactly (store : ArtifactStore) (ref witness : Nat)
+    (request : CanonicalRequest)
+    (h : store ref = some { commit := witness, encoded := .full (canonicalBytes request) }) :
+    resolveRequest store 1 ref witness = some request := by
+  simp [resolveRequest, resolveBytes, h]
+
+theorem witness_mismatch_fails_closed (store : ArtifactStore) (ref expected actual : Nat)
+    (encoded : StoredRequest) (hNe : actual ≠ expected)
+    (h : store ref = some { commit := actual, encoded }) :
+    resolveRequest store 1 ref expected = none := by
+  simp [resolveRequest, resolveBytes, h, hNe]
+
+theorem no_fuel_fails_closed (store : ArtifactStore) (ref witness : Nat) :
+    resolveRequest store 0 ref witness = none := by
+  rfl
+
 /-! ## Durable capture table -/
 
 /-- The durable `RenderedRequest` collection, viewed as a partial map from
@@ -168,6 +258,19 @@ def capture (s : Store) (k : CaptureKey) (r : CanonicalRequest) :
   | none => (.fresh, Store.bind s k r)
   | some stored => if stored = r then (.idempotent, s) else (.rejected, s)
 
+/-- The physical reader is part of the persist-before-send boundary. Failure to
+resolve an exact semantic request yields no capture transition at all. -/
+def captureEncoded (artifacts : ArtifactStore) (fuel ref witness : Nat)
+    (s : Store) (k : CaptureKey) : Option (CaptureOutcome × Store) := do
+  let request ← resolveRequest artifacts fuel ref witness
+  some (capture s k request)
+
+theorem encoded_decode_failure_blocks_capture (artifacts : ArtifactStore)
+    (fuel ref witness : Nat) (s : Store) (k : CaptureKey)
+    (h : resolveRequest artifacts fuel ref witness = none) :
+    captureEncoded artifacts fuel ref witness s k = none := by
+  simp [captureEncoded, h]
+
 theorem capture_fresh (s : Store) (k : CaptureKey) (r : CanonicalRequest)
     (h : s k = none) :
     capture s k r = (.fresh, Store.bind s k r) := by
@@ -209,6 +312,19 @@ theorem capture_durable_iff (s : Store) (k : CaptureKey) (r : CanonicalRequest) 
       by_cases h_eq : stored = r
       · subst h_eq; simp [capture, h, CaptureOutcome.durable]
       · simp [capture, h, h_eq, CaptureOutcome.durable]
+
+/-- Physical encoding choice is outside capture identity. Once bounded decode
+recovers the exact request, the existing capture transition binds that semantic
+fact and its ordinary durability theorem applies. A decode failure supplies no
+legal capture step and therefore cannot authorize send. -/
+theorem resolved_capture_durable_iff (artifacts : ArtifactStore) (fuel ref witness : Nat)
+    (request : CanonicalRequest)
+    (hDecode : resolveRequest artifacts fuel ref witness = some request)
+    (s : Store) (k : CaptureKey) :
+    ∃ result, captureEncoded artifacts fuel ref witness s k = some result ∧
+      (result.1.durable = true ↔ result.2 k = some request) := by
+  refine ⟨capture s k request, ?_, capture_durable_iff s k request⟩
+  simp [captureEncoded, hDecode]
 
 /-- Capture never disturbs a binding it did not create. -/
 theorem capture_preserves_bindings (s : Store) (k : CaptureKey) (r : CanonicalRequest)

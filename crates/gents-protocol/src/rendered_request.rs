@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::message::{Message, ToolResultContent, UserContent};
 
-/// Capture format version stamped onto every row. Bump when the *set of
-/// columns* a reader must understand changes.
-pub const CAPTURE_VERSION: u32 = 1;
+/// Capture format version stamped onto every row. Bump when the columns or the
+/// storage encoding a reader must understand changes.
+pub const CAPTURE_VERSION: u32 = 2;
 
 /// Provenance manifest version. Bump when `ProvenanceManifest`'s serialized
 /// shape changes. A reader that does not know this number must report
@@ -26,7 +26,9 @@ pub const CAPTURE_VERSION: u32 = 1;
 ///
 /// v2 (#1059): status, seam, scope, endpoint, assembly trace.
 /// v3 (#1066): optional `admission` join to the persisted `InferenceCall`.
-pub const PROVENANCE_MANIFEST_VERSION: u32 = 3;
+/// v4 (#1544): compact searchable trace metadata; the lossless heavy trace
+/// payload moves into its independently decodable v2 `request_json` record.
+pub const PROVENANCE_MANIFEST_VERSION: u32 = 4;
 
 /// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
 /// changes. Versioned independently of the manifest so a manifest that later
@@ -323,6 +325,11 @@ impl std::error::Error for ProvenanceParseError {}
 impl ProvenanceManifest {
     /// Read a `provenance_json` column, gating on `manifest_version` before
     /// committing to a shape.
+    /// Parse the compact metadata view used by current readers.
+    ///
+    /// A v3 manifest is projected to a v4 metadata value; this does not claim
+    /// to reproduce the original durable v3 JSON. Callers that export evidence
+    /// must retain the raw column alongside this normalized view.
     pub fn parse(provenance_json: &str) -> Result<ParsedProvenance, ProvenanceParseError> {
         if provenance_json.trim().is_empty() {
             return Err(ProvenanceParseError::Empty);
@@ -334,6 +341,11 @@ impl ProvenanceManifest {
             .and_then(serde_json::Value::as_u64)
             .and_then(|version| u32::try_from(version).ok())
             .ok_or(ProvenanceParseError::MissingVersion)?;
+        if manifest_version == 3 {
+            let legacy: LegacyProvenanceManifest =
+                serde_json::from_value(value).map_err(ProvenanceParseError::InvalidManifest)?;
+            return Ok(ParsedProvenance::Manifest(Box::new(legacy.into_current())));
+        }
         if manifest_version != PROVENANCE_MANIFEST_VERSION {
             return Ok(ParsedProvenance::Unsupported { manifest_version });
         }
@@ -540,6 +552,27 @@ pub struct AssemblyTrace {
     pub context_accounting: Option<ContextAccounting>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AssemblyTraceMetadata {
+    pub trace_version: u32,
+    pub build_path: AssemblyBuildPath,
+    pub effective_message_count: usize,
+    pub reduction_keys: Vec<String>,
+    pub context_accounting: Option<ContextAccounting>,
+}
+
+impl From<&AssemblyTrace> for AssemblyTraceMetadata {
+    fn from(trace: &AssemblyTrace) -> Self {
+        Self {
+            trace_version: trace.trace_version,
+            build_path: trace.build_path,
+            effective_message_count: trace.effective_message_count,
+            reduction_keys: trace.reduction_keys.clone(),
+            context_accounting: trace.context_accounting.clone(),
+        }
+    }
+}
+
 impl AssemblyTrace {
     /// The only constructor that keeps the overlays consistent with
     /// `effective_messages`. Build traces with this, never with a struct
@@ -689,7 +722,36 @@ pub struct ProvenanceManifest {
     /// carries none, and its absence there is a documented fact, not an error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission: Option<AdmissionJoin>,
-    pub assembly_trace: AssemblyTrace,
+    pub assembly_trace: AssemblyTraceMetadata,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct LegacyProvenanceManifest {
+    manifest_version: u32,
+    status: ProvenanceStatus,
+    status_reason: String,
+    capture_seam: CaptureSeam,
+    capture_scope: String,
+    #[serde(default)]
+    provider_endpoint: Option<String>,
+    #[serde(default)]
+    admission: Option<AdmissionJoin>,
+    assembly_trace: AssemblyTrace,
+}
+
+impl LegacyProvenanceManifest {
+    fn into_current(self) -> ProvenanceManifest {
+        ProvenanceManifest {
+            manifest_version: PROVENANCE_MANIFEST_VERSION,
+            status: self.status,
+            status_reason: self.status_reason,
+            capture_seam: self.capture_seam,
+            capture_scope: self.capture_scope,
+            provider_endpoint: self.provider_endpoint,
+            admission: self.admission,
+            assembly_trace: (&self.assembly_trace).into(),
+        }
+    }
 }
 
 impl ProvenanceManifest {
@@ -711,7 +773,7 @@ impl ProvenanceManifest {
             capture_scope,
             provider_endpoint,
             admission,
-            assembly_trace,
+            assembly_trace: (&assembly_trace).into(),
         }
     }
 }
@@ -992,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_reader_accepts_only_the_current_version() {
+    fn manifest_reader_accepts_current_and_projects_v3_metadata() {
         let current = json!({
             "manifest_version": PROVENANCE_MANIFEST_VERSION,
             "status": "captured_only",
@@ -1003,9 +1065,6 @@ mod tests {
                 "trace_version": 4,
                 "build_path": "budgeted",
                 "effective_message_count": 0,
-                "effective_messages": null,
-                "assistant_message_ids": [],
-                "threaded_tool_results": [],
                 "reduction_keys": [],
                 "context_accounting": null
             }
@@ -1019,6 +1078,22 @@ mod tests {
             }
             other => panic!("expected manifest, got {other:?}"),
         }
+
+        let mut legacy = current.clone();
+        legacy["manifest_version"] = json!(3);
+        legacy["assembly_trace"]["effective_messages"] =
+            serde_json::to_value(vec![crate::message::Message::user("large")]).unwrap();
+        legacy["assembly_trace"]["assistant_message_ids"] = json!([]);
+        legacy["assembly_trace"]["threaded_tool_results"] = json!([]);
+        legacy["assembly_trace"]["reduction_keys"] = json!(["reduction-1"]);
+        let ParsedProvenance::Manifest(projected) =
+            ProvenanceManifest::parse(&legacy.to_string()).expect("v3 parses")
+        else {
+            panic!("v3 must project to metadata")
+        };
+        assert_eq!(projected.manifest_version, PROVENANCE_MANIFEST_VERSION);
+        assert_eq!(projected.assembly_trace.effective_message_count, 0);
+        assert_eq!(projected.assembly_trace.reduction_keys, ["reduction-1"]);
 
         for version in [2, 99] {
             let unsupported = json!({ "manifest_version": version, "anything": true });

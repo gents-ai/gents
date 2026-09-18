@@ -111,9 +111,10 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     assert_eq!(provenance["capture_seam"], "transport_body");
     assert_eq!(provenance["status"], "captured_only");
     assert_eq!(provenance["capture_scope"], "inference.1");
+    let provenance_payload = parse_json(&row["provenance_payload_json"]);
     assert!(
-        provenance["assembly_trace"]["effective_messages"].is_null(),
-        "a reconstructible turn must not duplicate its full transcript: {provenance}"
+        provenance_payload["effective_messages"].is_null(),
+        "a reconstructible turn must not duplicate its full transcript: {provenance_payload}"
     );
     assert_eq!(
         provenance["assembly_trace"]["effective_message_count"], 1,
@@ -327,6 +328,221 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
         commit_set(db.node.as_ref(), &first.capture_key).await,
         anchor,
         "a rejected rebinding must leave no trace in the commit history either"
+    );
+}
+
+#[tokio::test]
+async fn v2_capture_containers_delta_chain_round_trip_and_bound_logical_bytes() {
+    let db = test_db("rendered-request-v2-delta-chain").await;
+    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let mut rows = Vec::new();
+    let mut old_bytes = 0usize;
+    let mut new_bytes = 0usize;
+    for turn in 0..10usize {
+        let body = serde_json::json!({
+            "model":"m", "messages": [{"role":"user","content": "x".repeat(32 * 1024 + turn * 1024)}]
+        });
+        let mut rendered = rendered_fixture(body.clone());
+        // Compression is session/scoping based, not request based. Exercise
+        // the ordinary case where successive turns are distinct requests in
+        // the same session and must still share an immutable delta chain.
+        rendered.request_id = format!("req-delta-{turn}");
+        rendered.assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
+            gents::rendered_request::AssemblyBuildPath::Budgeted,
+            vec![Message::user("λ".repeat(16 * 1024 + turn * 512))],
+        );
+        rendered.provenance_payload_json = serde_json::to_value(&rendered.assembly_trace).unwrap();
+        rendered.provenance_json =
+            serde_json::to_value(gents::rendered_request::ProvenanceManifest::captured_only(
+                rendered.capture_scope.clone(),
+                None,
+                None,
+                rendered.assembly_trace.clone(),
+            ))
+            .unwrap();
+        rendered.turn_index = turn;
+        rendered.capture_key = gents::rendered_request::capture_key(
+            &rendered.agent_did,
+            &rendered.session_id,
+            &rendered.request_doc_id,
+            &rendered.capture_scope,
+            turn,
+            rendered.attempt,
+        )
+        .unwrap();
+        sink.capture(rendered.clone()).await.unwrap();
+        let query = format!(
+            r#"{{ RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}},limit:1){{request_json provenance_json capture_version}} }}"#,
+            escape_graphql_string(&rendered.capture_key)
+        );
+        let response = db.node.execute(&query).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let row = response.data.unwrap()["RenderedRequest"][0].clone();
+        let stored = row["request_json"].as_str().unwrap();
+        let decoded = gents::rendered_request::decode_capture_json_embedded(
+            db.node.as_ref(),
+            2,
+            stored,
+            gents::rendered_request::CapturePayloadKind::RequestBody,
+        )
+        .await
+        .unwrap();
+        assert_eq!(decoded, canonical(&body));
+        let decoded_payload = gents::rendered_request::decode_capture_json_embedded(
+            db.node.as_ref(),
+            2,
+            stored,
+            gents::rendered_request::CapturePayloadKind::ProvenancePayload,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            decoded_payload,
+            canonical(&rendered.provenance_payload_json)
+        );
+        let mut legacy_manifest = rendered.provenance_json.clone();
+        legacy_manifest["manifest_version"] = serde_json::json!(3);
+        legacy_manifest["assembly_trace"] = rendered.provenance_payload_json.clone();
+        old_bytes += gents::rendered_request::canonical_json_string(&body)
+            .unwrap()
+            .len()
+            + gents::rendered_request::canonical_json_string(&legacy_manifest)
+                .unwrap()
+                .len();
+        new_bytes += stored.len() + row["provenance_json"].as_str().unwrap().len();
+        rows.push((rendered, stored.to_owned()));
+    }
+    for (turn, (_, stored)) in rows.iter().enumerate() {
+        let container: Value = serde_json::from_str(stored).unwrap();
+        for payload in ["request_body", "provenance_payload"] {
+            assert_eq!(
+                container[payload]["kind"],
+                if turn == 0 || turn == 9 {
+                    "full"
+                } else {
+                    "object_delta"
+                },
+                "turn {turn}, payload {payload}"
+            );
+        }
+    }
+    assert_eq!(
+        rows.iter()
+            .map(|(rendered, _)| rendered.request_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        10,
+        "the delta chain must span distinct requests in one session"
+    );
+    tracing::info!(old_bytes, new_bytes, "capture logical payload replay");
+    assert!(
+        old_bytes > new_bytes * 2,
+        "old={old_bytes}, new={new_bytes}"
+    );
+    let (last, _) = rows.last().unwrap();
+    let commits = commit_set(db.node.as_ref(), &last.capture_key).await;
+    sink.capture(last.clone()).await.unwrap();
+    assert_eq!(
+        commit_set(db.node.as_ref(), &last.capture_key).await,
+        commits
+    );
+}
+
+#[tokio::test]
+async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
+    let db = test_db("rendered-request-legacy-format").await;
+    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
+    let rendered = rendered_fixture(serde_json::json!({
+        "model": "m", "messages": [{"role": "user", "content": "legacy λ"}]
+    }));
+    let mut legacy_manifest = rendered.provenance_json.clone();
+    legacy_manifest["manifest_version"] = serde_json::json!(3);
+    legacy_manifest["assembly_trace"] = rendered.provenance_payload_json.clone();
+    let body = gents::rendered_request::canonical_json_string(&rendered.request_json).unwrap();
+    let provenance = gents::rendered_request::canonical_json_string(&legacy_manifest).unwrap();
+    let source = serde_json::to_value(rendered.source).unwrap();
+    let fields = [
+        ("capture_key", rendered.capture_key.as_str()),
+        ("request_doc_id", rendered.request_doc_id.as_str()),
+        ("request_commit_cid", rendered.request_commit_cid.as_str()),
+        ("request_id", rendered.request_id.as_str()),
+        ("session_id", rendered.session_id.as_str()),
+        ("agent_did", rendered.agent_did.as_str()),
+        ("requester_did", rendered.requester_did.as_str()),
+        ("behavior_id", rendered.behavior_id.as_str()),
+        ("capture_scope", rendered.capture_scope.as_str()),
+        ("model_name", rendered.model_name.as_str()),
+        ("source", source.as_str().unwrap()),
+        ("request_json", body.as_str()),
+        ("provenance_json", provenance.as_str()),
+        ("created_at", "2026-09-18T00:00:00Z"),
+    ]
+    .into_iter()
+    .map(|(name, value)| format!("{name}:\"{}\"", escape_graphql_string(value)))
+    .collect::<Vec<_>>()
+    .join(",");
+    let mutation = format!(
+        "mutation {{ create_RenderedRequest(input: {{{fields}, capture_version:1, turn_index:0, attempt:0}}) {{ _docID }} }}"
+    );
+    let response = db.node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let before = commit_set(db.node.as_ref(), &rendered.capture_key).await;
+    assert!(!before.is_empty());
+    let rows = rendered_requests(db.node.as_ref(), &rendered.request_id).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(parse_json(&rows[0]["request_json"]), rendered.request_json);
+    assert_eq!(
+        parse_json(&rows[0]["provenance_payload_json"]),
+        rendered.provenance_payload_json
+    );
+    sink.capture(rendered.clone())
+        .await
+        .expect("format upgrade must not rebind an identical fact");
+    assert_eq!(
+        commit_set(db.node.as_ref(), &rendered.capture_key).await,
+        before
+    );
+    let mut changed = rendered.clone();
+    changed.request_json["model"] = serde_json::json!("different");
+    assert!(sink.capture(changed).await.is_err());
+    assert_eq!(
+        commit_set(db.node.as_ref(), &rendered.capture_key).await,
+        before
+    );
+    let mut unsupported = rendered.clone();
+    unsupported.capture_version = 1;
+    assert!(
+        sink.capture(unsupported).await.is_err(),
+        "writer cannot stamp v2 bytes as v1"
+    );
+    assert_eq!(
+        commit_set(db.node.as_ref(), &rendered.capture_key).await,
+        before
+    );
+    // A missing format discriminator is not legacy v1. Such a row cannot be
+    // decoded by readers and must not authorize a new send on redelivery.
+    let mut missing_version = rendered.clone();
+    missing_version.capture_key.push_str("-missing-version");
+    let malformed = mutation
+        .replace(
+            &escape_graphql_string(&rendered.capture_key),
+            &escape_graphql_string(&missing_version.capture_key),
+        )
+        .replace("capture_version:1,", "");
+    let response = db.node.execute(&malformed).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let malformed_commits = commit_set(db.node.as_ref(), &missing_version.capture_key).await;
+    let error = sink
+        .capture(missing_version.clone())
+        .await
+        .expect_err("missing version must fail closed");
+    assert!(
+        format!("{error:#}").contains("capture_version"),
+        "{error:#}"
+    );
+    assert_eq!(
+        commit_set(db.node.as_ref(), &missing_version.capture_key).await,
+        malformed_commits
     );
 }
 
@@ -590,7 +806,7 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
     // The trace records the same exchange in native form, keyed by call id: this
     // is the leak set a reconstructor overlays onto rebuilt `AgentMessage` rows.
     let threaded = serde_json::to_string(
-        &parse_json(&rows[1]["provenance_json"])["assembly_trace"]["threaded_tool_results"],
+        &parse_json(&rows[1]["provenance_payload_json"])["threaded_tool_results"],
     )
     .expect("threaded tool results");
     assert!(
@@ -613,7 +829,11 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
     let mut seen_call_ids = std::collections::BTreeSet::new();
     for row in &rows {
         let manifest = parse_json(&row["provenance_json"]);
-        assert_eq!(manifest["manifest_version"], 3, "manifest version");
+        assert_eq!(
+            manifest["manifest_version"],
+            gents::rendered_request::PROVENANCE_MANIFEST_VERSION,
+            "manifest version"
+        );
         let admission = manifest
             .get("admission")
             .unwrap_or_else(|| panic!("daemon capture must carry an admission join: {manifest}"));
@@ -933,7 +1153,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     );
 
     // ...and the trace records that same narrowed list, in native form.
-    let trace = parse_json(&rows[1]["provenance_json"])["assembly_trace"].clone();
+    let trace = parse_json(&rows[1]["provenance_payload_json"]);
     let effective = serde_json::to_string(&trace["effective_messages"]).expect("trace messages");
     assert!(
         !effective.contains(BIG_MARKER)
@@ -1598,6 +1818,7 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
             ),
         )
         .expect("provenance"),
+        provenance_payload_json: serde_json::to_value(&assembly_trace).expect("provenance payload"),
         assembly_trace,
     }
 }
@@ -1668,6 +1889,40 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
         .and_then(|data| data.get("RenderedRequest").cloned())
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
+    for row in &mut rows {
+        let version = row["capture_version"]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .expect("numeric capture version");
+        let stored = row["request_json"]
+            .as_str()
+            .expect("stored request_json must be a string")
+            .to_owned();
+        for (field, kind) in [
+            (
+                "request_json",
+                gents::rendered_request::CapturePayloadKind::RequestBody,
+            ),
+            (
+                "provenance_payload_json",
+                gents::rendered_request::CapturePayloadKind::ProvenancePayload,
+            ),
+        ] {
+            let decoded = if version == 1
+                && kind == gents::rendered_request::CapturePayloadKind::ProvenancePayload
+            {
+                parse_json(&row["provenance_json"])["assembly_trace"].clone()
+            } else {
+                gents::rendered_request::decode_capture_json_embedded(node, version, &stored, kind)
+                    .await
+                    .unwrap_or_else(|error| panic!("decode {field}: {error:#}"))
+            };
+            row[field] = Value::String(
+                gents::rendered_request::canonical_json_string(&decoded)
+                    .expect("canonical decoded capture JSON"),
+            );
+        }
+    }
     rows.sort_by_key(|row| {
         (
             row["capture_scope"]

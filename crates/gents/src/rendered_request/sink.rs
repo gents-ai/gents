@@ -52,6 +52,157 @@ impl DefraRenderedRequestSink {
         Self { node }
     }
 
+    async fn latest_compatible_base(
+        &self,
+        rendered: &RenderedCompletionRequest,
+    ) -> Result<Option<Value>> {
+        let source = serde_json::to_value(rendered.source)?
+            .as_str()
+            .context("rendered source is not a string")?
+            .to_owned();
+        let query = format!(
+            r#"{{ RenderedRequest(filter: {{
+                agent_did: {{_eq: "{agent_did}"}}, requester_did: {{_eq: "{requester_did}"}},
+                session_id: {{_eq: "{session_id}"}}, source: {{_eq: "{source}"}},
+                capture_scope: {{_eq: "{capture_scope}"}}
+            }}, order: {{created_at: DESC}}, limit: 1) {{
+                _docID capture_version agent_did requester_did session_id source capture_scope
+                request_json
+            }} }}"#,
+            agent_did = escape_graphql_string(&rendered.agent_did),
+            requester_did = escape_graphql_string(&rendered.requester_did),
+            session_id = escape_graphql_string(&rendered.session_id),
+            source = escape_graphql_string(&source),
+            capture_scope = escape_graphql_string(&rendered.capture_scope),
+        );
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "rendered_request::latest_encoding_base",
+        )
+        .await?;
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get(RENDERED_REQUEST_COLLECTION))
+            .and_then(Value::as_array)
+            .context("reading rendered-request encoding base returned an unexpected shape")?;
+        Ok(rows.first().cloned())
+    }
+
+    async fn encode_from_base(
+        &self,
+        rendered: &RenderedCompletionRequest,
+        value: &Value,
+        kind: super::CapturePayloadKind,
+        base_row: Option<&Value>,
+        prepared: Option<(&Value, &super::commits::RequestJsonCommit)>,
+    ) -> Result<super::encoding::EncodedJson> {
+        let (Some(base_row), Some((base_value, commit))) = (base_row, prepared) else {
+            return super::encoding::encode_full(value);
+        };
+        let Some(doc_id) = base_row.get("_docID").and_then(Value::as_str) else {
+            return super::encoding::encode_full(value);
+        };
+        let Some(stored) = base_row.get("request_json").and_then(Value::as_str) else {
+            return super::encoding::encode_full(value);
+        };
+        let base_version = base_row
+            .get("capture_version")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(1);
+        if base_version != 2 {
+            return super::encoding::encode_full(value);
+        }
+        let Ok(depth) = super::encoding::capture_record_depth(base_version, stored, kind) else {
+            return super::encoding::encode_full(value);
+        };
+        // A depth-limit checkpoint cannot refer to this base. Avoid resolving
+        // its chain (and reading its commit witnesses) merely to discard it.
+        if depth >= super::encoding::MAX_DELTA_DEPTH {
+            return super::encoding::encode_full(value);
+        }
+        let source = serde_json::to_value(rendered.source)?
+            .as_str()
+            .context("rendered source is not a string")?
+            .to_owned();
+        let encoded = super::encoding::encode_against(
+            value,
+            &base_value,
+            super::encoding::BaseWitness {
+                doc_id: doc_id.to_owned(),
+                field_commit_cid: commit.cid.clone(),
+                depth,
+                agent_did: rendered.agent_did.clone(),
+                requester_did: rendered.requester_did.clone(),
+                session_id: rendered.session_id.clone(),
+                source,
+                capture_scope: rendered.capture_scope.clone(),
+            },
+        )?;
+        let reconstructed = match super::encoding::decode_versioned_record(2, &encoded.stored)? {
+            super::encoding::DecodedRecord::Full(value) => value,
+            super::encoding::DecodedRecord::Delta {
+                changed, removed, ..
+            } => super::encoding::apply_delta(base_value.clone(), changed, removed)?,
+            super::encoding::DecodedRecord::Legacy(_) => {
+                anyhow::bail!("new capture encoding unexpectedly used legacy storage")
+            }
+        };
+        anyhow::ensure!(
+            canonical_json(&reconstructed) == canonical_json(value),
+            "lossless capture encoding did not reconstruct the incoming value"
+        );
+        Ok(encoded)
+    }
+
+    async fn prepare_base(
+        &self,
+        base_row: Option<&Value>,
+    ) -> Option<(
+        Option<Value>,
+        Option<Value>,
+        super::commits::RequestJsonCommit,
+    )> {
+        let row = base_row?;
+        let version = row
+            .get("capture_version")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())?;
+        let stored = row.get("request_json").and_then(Value::as_str)?;
+        let doc_id = row.get("_docID").and_then(Value::as_str)?;
+        if version != 2 {
+            return None;
+        }
+        let request = super::encoding::capture_record_depth(
+            version,
+            stored,
+            super::CapturePayloadKind::RequestBody,
+        )
+        .ok()
+        .is_some_and(|depth| depth < super::encoding::MAX_DELTA_DEPTH);
+        let provenance = super::encoding::capture_record_depth(
+            version,
+            stored,
+            super::CapturePayloadKind::ProvenancePayload,
+        )
+        .ok()
+        .is_some_and(|depth| depth < super::encoding::MAX_DELTA_DEPTH);
+        if !request && !provenance {
+            return None;
+        }
+        let access = crate::config_client::ConfigAccess::Local(Arc::clone(&self.node));
+        let (request, provenance) =
+            super::decode_capture_pair_selected(&access, version, stored, request, provenance)
+                .await
+                .ok()?;
+        let commit = super::commits::field_commit(&access, doc_id, "request_json")
+            .await
+            .ok()??;
+        Some((request, provenance, commit))
+    }
+
     /// The immutable capture fact already stored under `capture_key`, if any.
     ///
     /// A GraphQL error is an error, never "no rows": treating a failed read as
@@ -286,18 +437,70 @@ impl DefraRenderedRequestSink {
 
     /// Persist one capture. See the outcome table at the top of this module.
     pub async fn capture(&self, rendered: RenderedCompletionRequest) -> Result<()> {
+        anyhow::ensure!(
+            rendered.capture_version == gents_protocol::rendered_request::CAPTURE_VERSION,
+            "cannot write rendered-request capture version {}; writer supports version {}",
+            rendered.capture_version,
+            gents_protocol::rendered_request::CAPTURE_VERSION
+        );
+        let base = self.latest_compatible_base(&rendered).await;
+        self.capture_with_base_result(rendered, base).await
+    }
+
+    async fn capture_with_base_result(
+        &self,
+        rendered: RenderedCompletionRequest,
+        base_result: Result<Option<Value>>,
+    ) -> Result<()> {
         // Canonicalize once. The stored bytes and the complete-fact comparison
         // have to use the same representation or "identical" means nothing.
-        let request_json = canonical_json_string(&rendered.request_json)
+        let base = match base_result {
+            Ok(base) => base,
+            Err(error) => {
+                tracing::warn!(
+                    capture_key = %rendered.capture_key,
+                    request_id = %rendered.request_id,
+                    error = %error,
+                    "optional rendered-request compression base was unavailable; storing a full capture"
+                );
+                None
+            }
+        };
+        let prepared = self.prepare_base(base.as_ref()).await;
+        let request_encoding = self
+            .encode_from_base(
+                &rendered,
+                &rendered.request_json,
+                super::CapturePayloadKind::RequestBody,
+                base.as_ref(),
+                prepared
+                    .as_ref()
+                    .and_then(|(request, _, commit)| request.as_ref().map(|value| (value, commit))),
+            )
+            .await
             .context("encoding rendered-request request_json")?;
         let provenance_json = canonical_json_string(&rendered.provenance_json)
             .context("encoding rendered-request provenance_json")?;
+        let provenance_encoding = self
+            .encode_from_base(
+                &rendered,
+                &rendered.provenance_payload_json,
+                super::CapturePayloadKind::ProvenancePayload,
+                base.as_ref(),
+                prepared.as_ref().and_then(|(_, provenance, commit)| {
+                    provenance.as_ref().map(|value| (value, commit))
+                }),
+            )
+            .await
+            .context("encoding rendered-request provenance payload")?;
 
-        // Create first. Fresh captures are overwhelmingly the common path, and
-        // now cost one durable statement rather than a lookup plus a mutation.
-        // Only re-delivery and races pay for the conflict read.
+        // The preceding read selects an optional immutable compression base;
+        // this create remains the only write on the fresh path. Re-delivery and
+        // races additionally pay for the conflict read and semantic decode.
+        let capture_container =
+            super::encoding::encode_container(&request_encoding, &provenance_encoding)?;
         let capture_result = match self
-            .create(&rendered, &request_json, &provenance_json)
+            .create(&rendered, &capture_container, &provenance_json)
             .await
         {
             Ok(()) => {
@@ -320,6 +523,7 @@ impl DefraRenderedRequestSink {
                 match self.stored_fact(&rendered.capture_key).await {
                     Ok(Some(stored)) => {
                         self.reconcile_existing(&rendered, stored, "create_conflict")
+                            .await
                     }
                     _ => Err(create_error),
                 }
@@ -330,14 +534,14 @@ impl DefraRenderedRequestSink {
             .await
     }
 
-    fn reconcile_existing(
+    async fn reconcile_existing(
         &self,
         rendered: &RenderedCompletionRequest,
         stored: Value,
         via: &str,
     ) -> Result<()> {
         let incoming = canonical_capture_fact(rendered)?;
-        let stored = canonical_stored_fact(stored)?;
+        let stored = self.canonical_stored_fact(stored).await?;
         if stored == incoming {
             tracing::debug!(
                 capture_key = %rendered.capture_key,
@@ -371,6 +575,67 @@ impl DefraRenderedRequestSink {
             rendered.capture_key,
         ))
     }
+
+    async fn canonical_stored_fact(&self, mut stored: Value) -> Result<Value> {
+        let version = stored
+            .get("capture_version")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .context("stored RenderedRequest lacks a numeric capture_version")?;
+        let provenance_raw = stored
+            .get("provenance_json")
+            .and_then(Value::as_str)
+            .context("stored RenderedRequest provenance_json was not a string")?
+            .to_owned();
+        let provenance_value: Value = serde_json::from_str(&provenance_raw)?;
+        let encoded = stored
+            .get("request_json")
+            .and_then(Value::as_str)
+            .context("stored RenderedRequest request_json was not a string")?
+            .to_owned();
+        let access = crate::config_client::ConfigAccess::Local(Arc::clone(&self.node));
+        let decoded_pair = if version == 1 {
+            None
+        } else {
+            Some(super::decode_capture_pair(&access, version, &encoded).await?)
+        };
+        stored["request_json"] = canonical_json(&match decoded_pair.as_ref() {
+            Some((request, _)) => request.clone(),
+            None => {
+                super::decode_capture_json(
+                    &access,
+                    version,
+                    &encoded,
+                    super::CapturePayloadKind::RequestBody,
+                )
+                .await?
+            }
+        });
+        stored["provenance_payload_json"] = if version == 1 {
+            canonical_json(
+                provenance_value
+                    .get("assembly_trace")
+                    .context("legacy provenance lacks assembly_trace")?,
+            )
+        } else {
+            canonical_json(&decoded_pair.context("missing decoded capture pair")?.1)
+        };
+        let parsed = gents_protocol::rendered_request::ProvenanceManifest::parse(&provenance_raw)
+            .map_err(|error| anyhow!("decoding stored provenance manifest: {error}"))?;
+        stored["provenance_json"] = match parsed {
+            gents_protocol::rendered_request::ParsedProvenance::Manifest(manifest) => {
+                canonical_json(&serde_json::to_value(manifest)?)
+            }
+            gents_protocol::rendered_request::ParsedProvenance::Unsupported {
+                manifest_version,
+            } => anyhow::bail!("unsupported provenance manifest version {manifest_version}"),
+        };
+        stored
+            .as_object_mut()
+            .context("stored RenderedRequest fact was not an object")?
+            .remove("capture_version");
+        Ok(canonical_json(&stored))
+    }
 }
 
 /// Canonical equality surface for idempotency. `created_at` is intentionally
@@ -391,28 +656,12 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
         "capture_scope": rendered.capture_scope,
         "turn_index": rendered.turn_index,
         "attempt": rendered.attempt,
-        "capture_version": rendered.capture_version,
         "model_name": rendered.model_name,
         "source": source,
         "request_json": canonical_json(&rendered.request_json),
         "provenance_json": canonical_json(&rendered.provenance_json),
+        "provenance_payload_json": canonical_json(&rendered.provenance_payload_json),
     })))
-}
-
-fn canonical_stored_fact(mut stored: Value) -> Result<Value> {
-    let object = stored
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("stored RenderedRequest fact was not an object"))?;
-    for field in ["request_json", "provenance_json"] {
-        let encoded = object
-            .get(field)
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("stored RenderedRequest {field} was not a string"))?;
-        let decoded: Value = serde_json::from_str(encoded)
-            .with_context(|| format!("decoding stored RenderedRequest {field}"))?;
-        object.insert(field.to_string(), canonical_json(&decoded));
-    }
-    Ok(canonical_json(&stored))
 }
 
 const RENDERED_REQUEST_COLLECTION: &str = gents_protocol::schemas::RENDERED_REQUEST_NAME;
@@ -447,6 +696,53 @@ pub(crate) fn defra_rendered_request_capture_factory(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
+
+    fn rendered_fixture() -> RenderedCompletionRequest {
+        let capture_scope = "inference.1".to_string();
+        let assembly_trace = super::super::AssemblyTrace::from_effective_messages(
+            super::super::AssemblyBuildPath::Budgeted,
+            Vec::new(),
+        );
+        RenderedCompletionRequest {
+            capture_key: super::super::capture_key(
+                "did:key:test",
+                "session",
+                "",
+                &capture_scope,
+                0,
+                0,
+            )
+            .unwrap(),
+            capture_version: gents_protocol::rendered_request::CAPTURE_VERSION,
+            request_doc_id: String::new(),
+            request_commit_cid: String::new(),
+            request_id: "request".into(),
+            capture_scope: capture_scope.clone(),
+            turn_index: 0,
+            attempt: 0,
+            agent_did: "did:key:test".into(),
+            requester_did: String::new(),
+            behavior_id: "behavior".into(),
+            session_id: "session".into(),
+            model_name: "model".into(),
+            source: super::super::RenderedRequestSource::OpenAiChatCompletions,
+            request_json: json!({"messages":[{"role":"user","content":"body"}]}),
+            messages_json: json!([]),
+            tools_json: json!([]),
+            tool_choice_json: Value::Null,
+            sampling_json: Value::Null,
+            provenance_json: serde_json::to_value(super::super::ProvenanceManifest::captured_only(
+                capture_scope,
+                None,
+                None,
+                assembly_trace.clone(),
+            ))
+            .unwrap(),
+            provenance_payload_json: serde_json::to_value(&assembly_trace).unwrap(),
+            assembly_trace,
+        }
+    }
 
     /// The collection name is interpolated as a bare GraphQL identifier, where
     /// escaping cannot defend. It is a compile-time constant from the protocol
@@ -482,5 +778,44 @@ mod tests {
         assert!(single_mutation_result(&json!({ "a": [], "b": [] })).is_none());
         assert!(single_mutation_result(&json!([])).is_none());
         assert!(single_mutation_result(&json!({})).is_none());
+    }
+
+    #[tokio::test]
+    async fn optional_base_lookup_failure_still_creates_a_full_capture() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let rendered = rendered_fixture();
+
+        sink.capture_with_base_result(
+            rendered.clone(),
+            Err(anyhow!("injected latest-base read failure")),
+        )
+        .await
+        .expect("optional lookup failure must not block a new full capture");
+
+        let response = node
+            .execute(&format!(
+                r#"{{RenderedRequest(filter:{{capture_key:{{_eq:"{}"}}}}){{capture_version request_json}}}}"#,
+                escape_graphql_string(&rendered.capture_key)
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let row = &response.data.unwrap()["RenderedRequest"][0];
+        let stored = row["request_json"].as_str().unwrap();
+        let container: Value = serde_json::from_str(stored).unwrap();
+        assert_eq!(container["request_body"]["kind"], "full");
+        assert_eq!(container["provenance_payload"]["kind"], "full");
+        assert_eq!(
+            super::super::decode_capture_json_embedded(
+                node.as_ref(),
+                2,
+                stored,
+                super::super::CapturePayloadKind::RequestBody,
+            )
+            .await
+            .unwrap(),
+            super::super::canonical_json(&rendered.request_json)
+        );
     }
 }

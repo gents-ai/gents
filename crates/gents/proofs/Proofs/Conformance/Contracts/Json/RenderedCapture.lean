@@ -28,6 +28,22 @@ def renderedCaptureCaseJson (witness : RenderedCaptureCase) : String :=
 def renderedCaptureCasesJson : String :=
   jsonArray (renderedCaptureCases.map renderedCaptureCaseJson)
 
+def renderedCaptureStorageCaseJson (witness : RenderedCaptureStorageCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"encoding\":" ++ jsonString witness.encoding ++ ","
+    ++ "\"request\":" ++ toString witness.request ++ ","
+    ++ "\"base_witness\":" ++ jsonOptionalNat witness.baseWitness ++ ","
+    ++ "\"base_depth\":" ++ toString witness.baseDepth ++ ","
+    ++ "\"max_depth\":" ++ toString witness.maxDepth ++ ","
+    ++ "\"base_verified\":" ++ boolString witness.baseVerified ++ ","
+    ++ "\"decoded_request\":" ++ jsonOptionalNat witness.decodedRequest ++ ","
+    ++ "\"send_permitted\":" ++ boolString witness.sendPermitted
+    ++ "}"
+
+def renderedCaptureStorageCasesJson : String :=
+  jsonArray (renderedCaptureStorageCases.map renderedCaptureStorageCaseJson)
+
 def renderedCaptureKeyCaseJson (witness : RenderedCaptureKeyCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

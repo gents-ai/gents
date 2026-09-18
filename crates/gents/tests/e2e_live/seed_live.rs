@@ -9,7 +9,7 @@
 //! continuation.
 //!
 //! ```bash
-//! GENTS_D4F_LIVE=1 cargo test -p gents --test e2e_live \
+//! GENTS_D4F_LIVE=1 cargo test -p gents --features live-e2e --test e2e_live \
 //!   d4f_live_seeds_reach_the_provider \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
@@ -37,6 +37,7 @@ const PROFILE_SEED: i64 = 424_242;
 #[derive(Debug, Deserialize)]
 struct RenderedRequestRow {
     capture_scope: String,
+    capture_version: u32,
     source: String,
     request_json: String,
 }
@@ -138,8 +139,14 @@ async fn d4f_live_seeds_reach_the_provider() {
         );
         for row in inference_rows.into_iter().chain(compaction_rows) {
             assert_eq!(row.source, "openai_chat_completions");
-            let body: serde_json::Value =
-                serde_json::from_str(&row.request_json).expect("captured request is JSON");
+            let body = gents::rendered_request::decode_capture_json_embedded(
+                db.node.as_ref(),
+                row.capture_version,
+                &row.request_json,
+                gents::rendered_request::CapturePayloadKind::RequestBody,
+            )
+            .await
+            .expect("decode captured provider request");
             assert_eq!(
                 body.get("seed").and_then(serde_json::Value::as_i64),
                 Some(expected_seed),
@@ -276,6 +283,7 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Rendere
         r#"{{
             RenderedRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
                 capture_scope
+                capture_version
                 source
                 request_json
             }}

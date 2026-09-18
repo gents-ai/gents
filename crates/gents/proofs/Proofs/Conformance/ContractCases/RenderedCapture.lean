@@ -69,6 +69,59 @@ structure RenderedCaptureKeyCase where
   sameFact : Bool
   deriving Repr
 
+structure RenderedCaptureStorageCase where
+  name : String
+  encoding : String
+  request : Nat
+  baseWitness : Option Nat
+  baseDepth : Nat
+  maxDepth : Nat
+  baseVerified : Bool
+  decodedRequest : Option Nat
+  sendPermitted : Bool
+  deriving Repr
+
+private def storageCase (name encoding : String) (store : ArtifactStore)
+    (request : Nat) (baseWitness : Option Nat) (baseDepth maxDepth : Nat)
+    (baseVerified : Bool) : RenderedCaptureStorageCase :=
+  let decoded := resolveRequest store (maxDepth + 1) 1 10
+  { name, encoding, request, baseWitness, baseDepth, maxDepth, baseVerified
+  , decodedRequest := decoded.map CanonicalRequest.value
+  , sendPermitted := decoded == some { value := request }
+  }
+
+def renderedCaptureStorageCases : List RenderedCaptureStorageCase :=
+  [ storageCase "legacy_full_remains_readable" "legacy_full"
+      (fun ref => if ref = 1 then some ⟨10, .legacyFull [100]⟩ else none)
+      100 none 0 8 false
+  , storageCase "versioned_full_is_lossless" "full"
+      (fun ref => if ref = 1 then some ⟨10, .full [101]⟩ else none)
+      101 none 0 8 false
+  , storageCase "verified_delta_is_lossless" "delta"
+      (fun ref => if ref = 1 then some ⟨10, .delta 2 41 0 0 [102]⟩
+        else if ref = 2 then some ⟨41, .full [99]⟩ else none)
+      102 (some 41) 0 8 true
+  , storageCase "missing_or_changed_base_blocks_send" "delta"
+      (fun ref => if ref = 1 then some ⟨10, .delta 2 42 0 0 [103]⟩
+        else if ref = 2 then some ⟨999, .full [99]⟩ else none)
+      103 (some 42) 0 8 false
+  , storageCase "over_depth_delta_blocks_send" "delta"
+      (fun ref => if ref = 1 then some ⟨10, .delta 2 43 0 0 [104]⟩
+        else if ref = 2 then some ⟨43, .full [99]⟩ else none)
+      104 (some 43) 0 0 true
+  ]
+
+theorem renderedCaptureStorageCases_pinned :
+    renderedCaptureStorageCases.map
+      (fun row => (row.name, row.decodedRequest, row.sendPermitted)) =
+      [ ("legacy_full_remains_readable", some 100, true)
+      , ("versioned_full_is_lossless", some 101, true)
+      , ("verified_delta_is_lossless", some 102, true)
+      , ("missing_or_changed_base_blocks_send", none, false)
+      , ("over_depth_delta_blocks_send", none, false)
+      ] := by
+  rfl
+
 /-! ## Building the rows -/
 
 private def contractAgentDid : Nat := 7
