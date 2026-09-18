@@ -1,17 +1,20 @@
 # #1533 design note — MCP OAuth discovery + headless consent (analysis and test plan)
 
-Status: **analysis only** — no production source was modified. This note lives in the
-assigned worktree `feat/1533-mcp-oauth` (baseline `23434bfffc47`, current `origin/main`).
+Status: **analysis only** — no production source was modified. This note was authored
+against `23434bfffc47`, then reviewed and rebased onto `047a4ab9918c` (`origin/main` on
+2026-09-18). The rebase did not turn any proposed interface below into implemented
+behavior.
 Companion work: #1532 (`feat/1532-mcp-bearer-auth` worktree) is concurrently building the
 operator-managed Bearer credential foundation; this note identifies the shared seams so
 neither issue builds a competing credential system.
 
-Turn 2 (§7–§8): full prior-art reuse audit of `oauth_http.rs`, `xai_oauth_login.rs`,
+Turn 2 (§8–§9): full prior-art reuse audit of `oauth_http.rs`, `xai_oauth_login.rs`,
 `chatgpt_oauth_refresh.rs`, `claude_oauth_refresh.rs`, both login crates, CLI/desktop
 login paths, DID/ACP/P2P filtering, with a generalizable-vs-provider-specific split and
 the exact shared-interface recommendation for #1532. Still design-only until coordinated.
 
-Evidence base: repo checkout at `23434bffc` (this worktree); rmcp 1.3.0 source under
+Evidence base: repo checkout at `23434bffc`, rechecked after rebasing to `047a4ab99`;
+rmcp 1.3.0 source under
 `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-1.3.0/` (cited inline as
 `rmcp:…`); issue bodies #1532 and #1533 read via `gh issue view`.
 
@@ -198,10 +201,7 @@ pub enum ToolServiceAuth {
     /// Default today; preserves backward compatibility (absent field == no auth).
     None,
     /// Operator-managed static token — #1532's Bearer foundation lands here.
-    Bearer {
-        /// Reference to an operator-provisioned credential document; never inline.
-        credential_ref: String,
-    },
+    Bearer,
     /// MCP OAuth (this issue). All fields are references/metadata, never secrets.
     OAuth {
         /// `mcp:<service_id>` provider key binding the credential row to this service.
@@ -220,9 +220,11 @@ canonical field lists before implementation; the Lean catalog currently enumerat
 fields and would gain the auth selection in the same change).
 
 `ToolServiceRegistry::validate()` gains: `OAuth.provider` must match
-`mcp:<service_id>`; `Bearer.credential_ref` must be a plausible credential id (the
-existence check stays with the runtime bridge, mirroring how ACP policy references are
-validated by their owner).
+`mcp:<service_id>`. A static Bearer selection carries no arbitrary credential id: the
+credential owner derives `mcp-bearer:<service_id>` from the validated service id and
+the current principal, then verifies that the configured service endpoint still matches
+the credential's approved destination before releasing a token. This prevents a caller
+from selecting another principal's or service's credential by reference.
 
 ### 2.2 Credential provider key convention (owner: oauth_credential)
 
@@ -262,11 +264,12 @@ refresh grant, (c) verifies the new access token's `aud`/`iss` claims when prese
 (d) fails classified (`OAuthAuthProblem::{Missing, WrongMode, Expired, NotEntitled,
 Other}` extended with `Revoked` mapping `invalid_grant`).
 
-`shared_bearer`/`DbCredentialBearer` need zero changes — cooldown, single-flight,
-force-refresh, persist-retry all carry over. **This is the exact seam #1532 should also
-reuse** for Bearer rotation semantics (its tokens are static, so it can instantiate
-`DbCredentialBearer` with a no-op refresh or extend `OAuthRefreshKind` only if it needs
-DB-side rotation — coordinate before either lands).
+`shared_bearer`/`DbCredentialBearer` remain the OAuth refresh owner, but their dynamic
+refresh inputs need an explicit design review. Static Bearer credentials must not use a
+fake no-op refresh variant: the current cache returns a far-future token without
+re-reading the row, and `invalidate()` enters the refresh path rather than reloading a
+replacement row. #1532 therefore needs a separate execution-time row-load/generation
+contract (and pool eviction) if rotation is added later.
 
 ### 2.4 Challenge classification + pool integration (owner: mcp_pool)
 
@@ -274,8 +277,9 @@ Extend `streamable_http_transport_config` to take the resolved bearer
 (`auth_header(config.auth_header)`) — i.e. the pool's connect path resolves a
 `BearerSource` first (see §3 flow), then configures the transport.
 
-Classify connect failures: map `StreamableHttpError::AuthRequired(e)` and
-`InsufficientScope(e)` out of `connect_mcp_service` into a new typed connect outcome so
+Classify connect failures at the rmcp boundary: map
+`StreamableHttpError::AuthRequired(e)` and `InsufficientScope(e)` before conversion to
+`anyhow::Error` into a new typed connect outcome so
 the pool does **not** park them as generic strikes forever (a parked consent-required
 service would hide the operator's to-do):
 
@@ -288,7 +292,9 @@ pub enum McpConnectAuthOutcome {
 }
 ```
 
-`record_strike` gains an auth-cause branch: `ConsentRequired` parks with a short,
+Do not recover these fields by parsing `Display`: rmcp 1.3 renders only `Auth required`
+or `Insufficient scope`, so a string classifier loses the header and scope and is not a
+sound contract. `record_strike` gains an auth-cause branch: `ConsentRequired` parks with a short,
 explicitly-labeled backoff (same mechanics, new `reason`) and the health probe records
 the auth cause rather than a generic transport failure.
 
@@ -493,7 +499,7 @@ failure cooldown, force-refresh on 401 (`invalidate`), and persists rotated toke
 (§2.7) before opening the URL; everything else byte-identical, which is exactly what
 makes it testable (§4.2).
 
-**Unauthorized→authorized transition on 401 mid-session:** tool call gets auth error →
+**Unauthorized→authorized transition on 401 mid-session (OAuth only):** tool call gets auth error →
 `bearer.invalidate()` → next `current_bearer` force-refreshes → if refresh fails with
 `invalid_grant` → classified `Expired/Revoked` error → health probe marks
 `auth_reauth_required` → desktop shows "reauthorize" affordance → operator re-runs login.
@@ -593,16 +599,17 @@ test runs in this worktree with `cargo test -p gents` /
 | --- | --- | --- |
 | Service auth selection | `ToolServiceRegistry` + `installation_validation.rs` | **shared** — Bearer needs the same `auth` selection; #1533 adds the `OAuth` variant only |
 | Credential doc + CRUD + redaction | `oauth_credential.rs` / `gents-protocol` row+schema | **shared** — #1532 provisions Bearer rows; both need the additive columns to be coordinated in one schema change |
-| Secret resolution at execution | `DbCredentialBearer` + `BearerSource` | **shared** — #1532 can reuse as-is (static token via a passthrough bearer or no-op refresh) |
-| Refresh dispatch | `OAuthRefreshKind` | #1532 likely no-op; #1533 adds `Mcp { token_endpoint, client_auth }` |
+| Secret resolution at execution | `DbCredentialBearer` + `BearerSource` for OAuth; credential CRUD/ConfigAccess for static rows | **shared owner, different cache semantics** — #1532 must load at dial and add an explicit generation/eviction contract before claiming rotation |
+| Refresh dispatch | `OAuthRefreshKind` | #1532 does not use it; #1533 adds `Mcp { token_endpoint, client_auth }` after design approval |
 | Transport header injection | `mcp_pool::streamable_http_transport_config` | **shared** — Bearer also needs `auth_header`; land the parameterized resolver once |
 | 401/403 challenge classification | `mcp_pool` connect outcome + `health_checker` | **shared** — same classification enum serves Bearer-missing |
 | Metadata validation / consent / pending state / headless callback | new `mcp_oauth` module + CLI/desktop surfaces | #1532-independent |
 | Health/auth state vocabulary | `ToolServiceHealthState.last_error_class` + `ToolServiceHealthState::project` | **shared** — Bearer-missing needs the same class |
 
 **Minimal coordination boundary for the parent to hand to #1532:**
-1. The `ToolServiceAuth` selection shape (variant names, `credential_ref` field) —
-   freeze in #1532's PR; #1533 adds only `OAuth { provider, scopes, resource }`.
+1. The `ToolServiceAuth` selection shape — freeze `Bearer` as a reference-only marker
+   whose credential id is derived from principal + service, not caller-supplied;
+   #1533 later adds only `OAuth { provider, scopes, resource }`.
 2. The `OAuthCredential` additive columns (`issuer`, `resource`, `granted_scopes`,
    `client_registration`) — one schema change covering both issues' needs, additive and
    optional, so #1532's rows remain decodable.
@@ -616,9 +623,31 @@ only; static-token provisioning CLI is #1532 only.
 
 ---
 
-## 6. Explicit non-goals (this phase)
+## 6. Direction required before implementation
 
-- No production source modified; no implementation, no PR, no push (none made).
+The OAuth lane must not start until the operator selects these product/security
+decisions. Recommended defaults are listed first:
+
+1. **Protocol engine:** adapt rmcp's `auth` state machine behind Gents-owned
+   `CredentialStore`/`StateStore` adapters, while keeping Gents validation stricter at
+   the metadata and destination boundaries; alternatively implement a smaller Gents
+   flow directly.
+2. **Client registration:** support operator-configured public clients first and add
+   dynamic client registration only for issuers whose metadata explicitly advertises
+   it; alternatively require DCR in the first slice.
+3. **Headless consent:** document SSH loopback forwarding as the first supported remote
+   topology; defer a desktop relay/enrolled-client protocol.
+4. **Audience policy:** require an explicit resource value bound to the selected MCP
+   service, exact issuer matching, and `iss`/`aud` validation when the access-token
+   format exposes verifiable claims; reject inconsistent opaque-token metadata rather
+   than inferring an audience.
+5. **Delivery boundary:** land discovery/validation + pending consent first, then token
+   exchange/persistence, then refresh/revocation. Static Bearer rotation/reconnect stays
+   a separate #1532 follow-up and is not a prerequisite for starting OAuth design work.
+
+## 7. Explicit non-goals (this phase)
+
+- No production source modified and no OAuth implementation is claimed by this design PR.
 - No alternate secret storage (no keyring/kv divergence — credentials stay in
   DefraDB `OAuthCredential` documents under ACP, per AGENTS.md).
 - No browser automation, no authenticated production calls, no real secrets, no
@@ -629,7 +658,7 @@ only; static-token provisioning CLI is #1532 only.
 
 ---
 
-## 7. Prior-art reuse audit (turn 2 — every listed surface read in full)
+## 8. Prior-art reuse audit (turn 2 — every listed surface read in full)
 
 Scope of this pass: `oauth_credential.rs` (already audited turn 1), `oauth_http.rs`
 (526 lines, full), `xai_oauth_login.rs` (304, full), `chatgpt_oauth_refresh.rs` (229,
@@ -640,7 +669,7 @@ full), `claude_oauth_refresh.rs` (243, full), `gents-chatgpt-login` (710, full),
 `desktop_grok_login` L597–645), `config_client` write plumbing, DID identity,
 ACP projection bindings, P2P/hostname filtering.
 
-### 7.1 The shell vs. the mechanisms — what #1532 actually gets for free
+### 8.1 The shell vs. the mechanisms — what #1532 actually gets for free
 
 Turn 1's "oauth_credential.rs owner-only credential/cache/refresh-lock shell" decomposes
 into exactly four reusable mechanisms, all **already provider-parameterized**:
@@ -662,7 +691,10 @@ Additive columns (`issuer`, `resource`, `granted_scopes`, `client_registration` 
 §2.2) must be `Option` with decode defaults to preserve the pinned decode behavior.
 
 **M2 — Cache/refresh single-flight** (`DbCredentialBearer` L596-826).
-Exactly one mechanism covers every concern #1532's Bearer path has:
+This mechanism is reusable for #1533's refreshable OAuth tokens, but not as-is for
+#1532's static Bearer rotation. In particular, a fresh far-future cache hit precedes the
+DB reload, and `invalidate()` forces refresh rather than row replacement. Its actual
+behavior is:
 - freshness check with skew (`REFRESH_SKEW = 5 min`, L41; `token_is_fresh` L540-543,
   tested L904-918),
 - cache → DB reload → newer-row adoption loop (`current_bearer` L741-821: cache hit →
@@ -709,9 +741,11 @@ DbCredentialBearer>`) and `claude_messages.rs:612-675` (`stream_messages<S:
 BearerSource>` injects `authorization` with `set_sensitive(true)` at L653-659 and
 invalidates-once-on-transport-401 at L626).
 
-M1–M4 are the prior art. #1532 should **instantiate** them, not fork them.
+M1–M4 are the prior art. #1532 should reuse M1 and the shared ownership/error
+patterns, but must not force static credentials through M2's refresh semantics or M4's
+provider-specific retry assumptions.
 
-### 7.2 Generalizable state / PKCE / browser-callback / refresh mechanisms (reusable for MCP)
+### 8.2 Generalizable state / PKCE / browser-callback / refresh mechanisms (reusable for MCP)
 
 | Mechanism | Current owner | Evidence | Generalizable? |
 | --- | --- | --- | --- |
@@ -729,7 +763,7 @@ M1–M4 are the prior art. #1532 should **instantiate** them, not fork them.
 | Device-code state machine | `xai_oauth_login.rs:76-246` — `DeviceCodeChallenge{device_code,user_code,verification_uri,verification_uri_complete,expires_in,interval}`, poll loop with cancel + deadline (L126-137), `authorization_pending`/`slow_down`(+5s cap 30)/`access_denied`/`expired_token` classification (L183-203), URL-callback variant for UI (`run_device_code_login_with_url_callback` L231-246) | the SSH-safe precedent — explicitly out of scope for MCP per issue, but its **poll/cancel/url-callback** shape is the template if a fixture ever needs it | ✅ shape, ❌ not an MCP dependency |
 | Test kit | `one_shot_token_server` (`oauth_credential.rs:1134+`, claude-login's twin L608-652), `seed_credential`/`test_node` (cooldown tests L1050+), `StatusInjectingClient`, `force_state` hook, header-capture MCP servers (`mcp_pool/tests.rs:432-520`) | the mock-AS fixture (§4.1) is one-shot-server + header-capture composed | ✅ |
 
-### 7.3 Provider-specific assumptions that must NOT be generalized
+### 8.3 Provider-specific assumptions that must NOT be generalized
 
 1. **Fixed first-party issuer/client constants.** `CLIENT_ID`/`DEFAULT_ISSUER`/
    `token_endpoint(issuer)` in `gents-protocol/src/chatgpt_oauth.rs:8-28` (single owner
@@ -767,7 +801,7 @@ M1–M4 are the prior art. #1532 should **instantiate** them, not fork them.
    the two must not be conflated in the design (the DID header identifies; the bearer
    authenticates).
 
-### 7.4 DID/ACP/P2P filtering audit (binding + admission surfaces)
+### 8.4 DID/ACP/P2P filtering audit (binding + admission surfaces)
 
 - **DID identity**: `AgentIdentity` trait (`identity.rs:43-50`: `did()`, `sign`,
   `verify`, `service_account`), `KeyIdentity` (L128+, `did:key` parsing via
@@ -777,11 +811,11 @@ M1–M4 are the prior art. #1532 should **instantiate** them, not fork them.
   exact string; no new principal type is introduced.
 - **ACP**: `ProjectionAcpBinding::validate` (`projection_acp.rs:8-40`) validates
   policy references (non-empty `policy_id`, staged≠active) — the canonical "reference,
-  don't inline" pattern §2.1's `credential_ref` mirrors. Secrets stay in DefraDB
+  don't inline" pattern §2.1's derived credential key mirrors. Secrets stay in DefraDB
   documents gated by ACP; no alternate storage (per AGENTS.md and operating limits).
 - **P2P/host filtering**: `resolve_mcp_url` hostname==local→127.0.0.1, LAN-CIDR
   gating via `local_subnet_cidr` (`MetaToolContext.local_subnet`), tailscale fallback
-  (§7.3 item 6); `mcp_service_allowed` (`meta_tools/shared.rs:97-101`) + `service_selection`
+  (§8.3 item 6); `mcp_service_allowed` (`meta_tools/shared.rs:97-101`) + `service_selection`
   (L31-44) enforce the configured allow-list per principal; `lookup_service`
   (L318-330) fail-closes on missing/disabled/duplicate services.
 - **Config write routing**: `ConfigAccess::{Embedded,Graphql}` (`config_client/mod.rs:170-196`),
@@ -793,50 +827,37 @@ M1–M4 are the prior art. #1532 should **instantiate** them, not fork them.
 
 ---
 
-## 8. Exact shared-interface recommendation for #1532 (freeze candidate)
+## 9. Exact shared-interface recommendation for #1532 (freeze candidate)
 
-**Principle: #1532 instantiates M1–M4; #1533 extends M2's dispatch and adds MCP-only
-orchestration. No second OAuth framework, no forked bearer/cache/refresh code.**
+**Principle: #1532 and #1533 share credential, binding, transport, and redaction owners;
+#1533 extends refresh dispatch and adds MCP-only orchestration. Static credentials do
+not masquerade as refreshable OAuth, and neither lane creates a second secret store.**
 
-### 8.1 #1532 consumes (no changes needed — the recommendation)
+### 9.1 #1532 consumes (reviewed recommendation)
 
-```rust
-// Bearer credential, operator-provisioned (CLI writes it; runtime reads it):
-//   - provider key convention: "mcp:<service_id>" is RESERVED for #1533;
-//     #1532 should use a provider key of its own choosing (e.g. "mcp-bearer:<service_id>")
-//     so the two credential families never collide in oauth_credential_id(agent_did, provider).
-//   - row fields: access_token (= the Bearer token), refresh_token/None,
-//     access_token_expires_at = far-future or None-handling per decode defaults, enabled.
-let bearer = shared_bearer(&credential_id, || {
-    DbCredentialBearer::with_cache(node, agent_did, provider, credential_id,
-        /*is_owner=*/true, Some(credential),
-        OAuthRefreshKind::???, /* product for error copy */)
-});
-// Transport injection: parameterize streamable_http_transport_config with the bearer.
-```
+Static Bearer credentials use the provider-key namespace
+`mcp-bearer:<service_id>`, distinct from #1533's `mcp:<service_id>`. At each new dial,
+#1532 derives that key from the current principal and validated service id, loads the row
+through `ConfigAccess`, verifies its approved destination against the registry endpoint,
+and only then supplies the token to the transport.
 
-**Decision needed from #1532/parent:** `OAuthRefreshKind` has exactly three static
-variants today. For a static Bearer token there are two clean options —
-(a) add `OAuthRefreshKind::None` (refresh call returns `Err(WrongMode{found_mode:
-"static"})` and is unreachable because `access_token_expires_at` is far-future), or
-(b) keep tokens fresh-only and skip `DbCredentialBearer` for static tokens (resolve
-the row, serve the token, rely on `is_bearer_rejection` → health class instead).
-Recommendation: **(a)** — one variant, reuses cache/single-flight/cooldown for free,
-and `invalidate()` on 401 gives #1532 the correct "reload the row" behavior (an operator
-can rotate the token by re-provisioning the row; the next call picks up the new row via
-the newer-row adoption at L781-788). #1533 then adds only:
+Do not add `OAuthRefreshKind::None`: with a far-future cached token,
+`current_bearer()` returns before re-reading the row, while `invalidate()` forces the
+refresh branch and a no-op refresh fails instead of loading the rotated row. The first
+#1532 slice therefore defers rotation/reconnect. A later rotation slice must add a
+credential generation (or updated-at fingerprint), evict pooled connections when it
+changes, and prove that the next dial loads the replacement row. #1533 adds the dynamic
+OAuth variant only after its representation is approved:
 
 ```rust
 pub enum OAuthRefreshKind {
     ChatGpt, Claude, Xai,
-    /// #1532 freeze candidate (a). Static credentials never refresh.
-    None,
     /// #1533: discovered AS; token endpoint + client auth ride on the credential row.
     Mcp { token_endpoint: String, client_auth: McpClientAuth },
 }
 ```
 
-### 8.2 Frozen seams (the four-line contract between the two issues)
+### 9.2 Proposed seams (the four-line contract between the two issues)
 
 1. **Provider-key namespaces** (this is the only truly shared convention):
    `"mcp-bearer:<service_id>"` = #1532; `"mcp:<service_id>"` = #1533. Both flow through
@@ -846,7 +867,7 @@ pub enum OAuthRefreshKind {
    (M1 decode discipline), landed by #1533 (it is the sole consumer) but **documented
    for #1532** so its rows (which leave them `None`) remain decodable across the
    upgrade.
-3. **`McpConnectAuthOutcome`** (§2.4) + auth health classes on
+3. **Typed `McpConnectAuthOutcome`** (§2.4), captured before `anyhow` conversion, plus auth health classes on
    `ToolServiceHealthState.last_error_class` (`auth_consent_required`,
    `auth_reauth_required`, `auth_scope_insufficient`) — owned by #1533; #1532 consumes
    the same classes for "bearer missing/disabled".
@@ -854,18 +875,19 @@ pub enum OAuthRefreshKind {
    Option<String>)` — parameterized once; #1532 passes the static bearer, #1533 passes
    the `DbCredentialBearer`-resolved one. Whoever lands first owns the signature.
 
-### 8.3 What stays strictly #1533 (no overlap with #1532)
+### 9.3 What stays strictly #1533 (no overlap with #1532)
 
 Metadata discovery/validation (§2.5), DCR, consent orchestration + pending
 authorization state (§2.6/§2.8), SSH-forwarded callback (§2.7), `resource`/audience
 binding, mock-AS fixture + SSH-forward tests (§4.1–4.3). #1532's static-token path
 touches none of these.
 
-### 8.4 Anti-duplication guarantees (how this stays one framework)
+### 9.4 Anti-duplication guarantees (how this stays one framework)
 
-- Bearer resolution: **one** `BearerSource` impl family (`DbCredentialBearer`) — MCP
-  connections and #1532's static tokens both resolve through `shared_bearer`, never a
-  bespoke "static token" type.
+- Bearer resolution: **one credential/config owner**, with `DbCredentialBearer`
+  retained for refreshable OAuth and execution-time row lookup for #1532 static tokens.
+  Both enforce principal/service/destination binding without pretending static reload
+  has OAuth refresh semantics.
 - Rejection handling: **one** `is_bearer_rejection` (mcp_pool maps rmcp's typed 401/403
   errors into the same health classes; it does not re-detect statuses at the transport
   layer).
