@@ -25,8 +25,16 @@ exactly the selected extent, ignoring raw flushes beyond it before data-twin
 checks. This prevents a late ordinal-N flush from colliding with recovery's
 terminal-only closure of ordinals 0..N. A reference to a plain flush is invalid.
 
+Fresh Complete acceptance is stricter than replica reconstruction: under the
+owner gate, its extent must include every committed data flush for that source,
+including any final flush. Validate the dense prefix, writer binding and
+nondecreasing timestamps, with no data timestamp after closure. This fresh-write
+check must not be reapplied to reject exact replay or later out-of-extent facts.
+
 Provider/tool payloads and whole authored content live in segments. Small runtime
 presentation literals live inline in headers; they do not duplicate payload bytes.
+The sole scoped payload-copy exception is remote delegated argument admission
+(below); it never changes the canonical transcript or adds streaming rewrites.
 The collections only grow, so replication is set union and a reader only asks
 which facts are visible: no visible closure means closure is unknown, a closure with
 missing segments means an incomplete replica, twins mean a conflict. Unsealed
@@ -57,6 +65,31 @@ retry boundary. Preserve call order and the cumulative invalid-tool budget: stop
 dispatch must account for every published undispatched call through the existing
 terminal owner, not silently drop it.
 
+### Remote argument disclosure
+
+Remote subagent hosts retain argument-only disclosure. A multi-stream segment
+can also contain parent text, reasoning or other calls; neither a PayloadRef nor
+a filtered query creates field-level ACP. Do not grant parent output/header
+access merely to deliver one call's arguments.
+
+For remotely addressed calls only, the existing AgentToolCall carries immutable
+`delegated_input: DelegatedToolInput { source, arguments }`. At accepted
+publication the coordinator reconstructs and validates that call's exact argument
+stream, checks call identity/scope and native JSON validity, and copies only those
+argument bytes into the addressed row. Closure, header, pending call and delegated
+input commit atomically. Local calls omit this field and resolve canonical refs;
+Partial/retracted/unaccepted calls cannot create dispatchable delegated input.
+The source reference is provenance, not authority or a host hydration dependency.
+Hosts authenticate the existing coordinator/target route and retain existing
+lifecycle, policy and cancellation guards; they do not fetch parent history or
+need authority to verify its bytes. Replay reuses the same immutable input.
+
+This deliberate one-time boundary copy costs bytes, not another document or a
+per-flush write. It is not a general args/result cache. The coordinator-to-host
+pairing remains addressed AgentToolCall only; no new collection, route or ACL
+mechanism is introduced. Canonical provider input/forks/exports continue to use
+the original segment bytes, never the delegated projection.
+
 `OutputOutcome` is completeness only: `Complete` or `Partial`. Why output was cut
 short, and whether the request or tool succeeded, stay with the request and tool
 lifecycles and are not classified a second time. The publisher sets a header's
@@ -71,7 +104,7 @@ messages cannot change that selection.
 Closing retained bytes does not make them a valid native message. Recovery of an
 unheaded provider source closes exactly the committed extent as Partial (reusing
 an existing Partial closure rather than appending another), but
-publishes only ordinary Text streams, using Full presentation references in their
+publishes only ordinary Text streams at native part zero, using Full presentation references in their
 original block order. The recovery header is Partial with no native message ID.
 It omits tool arguments, reasoning (including summaries and opaque forms), and
 media, even if some bytes appear decodable: their final structure or metadata may
@@ -80,7 +113,9 @@ streams as ordinary text. This conservative rule needs no new metadata journal.
 Declarations keep their original positions; omitted blocks leave gaps, so recovered
 headers validate survivor order rather than equality with compacted block indexes.
 
-If no Text stream exists, publish no assistant header for that source. An explicitly
+Text at another part is retained diagnostically, not relabeled or allowed to
+prevent closure and generation recovery. If no eligible Text stream exists,
+publish no assistant header for that source. An explicitly
 declared empty Text stream remains representable as an empty Partial message.
 Terminal selection uses an eligible published assistant header under its existing
 scope rules, or NoMessage if there is none; retained bytes alone are not an answer.
@@ -98,13 +133,24 @@ not indefinitely PendingPublication. Opaque reasoning remains non-renderable.
 Tool-owned recovery continues through the tool lifecycle; this provider-source
 rule does not discard tool results or rewrite accepted turns.
 
+Recovery replay confirms the exact committed closure, optional header and
+publication row under their original writer and recovered generation. It does
+not rerun new-recovery source selection: a published Partial source is no longer
+eligible for new recovery. Exact replay neither republishes facts nor renews the
+lease; changed identities or conflicting artifacts fail confirmation.
+
 ## Progress is stored once
 
 A segment is the progress fact. Streaming no longer rewrites `AgentRequest`: the
 per-flush `(generation, expiry, progress_seq)` CAS — 42k versions of one field over
 85 requests in #1543 — is retired along with `execution_progress_seq`. This is a
-specification hypothesis until Lean proves the ordering below; it is not yet a
-claim that the amplifier is safely gone.
+contract proved in the local authoritative-gate Lean model. Native conformance
+must still establish that the runtime realizes this ordering; this is not yet a
+claim that the runtime's amplifier is safely gone.
+
+A flush must contain a run. Each run ends on a UTF-8 boundary and either opens
+a stream (including a genuinely empty payload) or contributes nonempty bytes.
+Empty continuations are not progress heartbeats; silent work uses explicit renewal.
 
 What the old write bought was an ordering: a progress CAS and recovery's CAS
 conflicted, so exactly one won. Removing the write must not remove the ordering.
@@ -163,8 +209,8 @@ Effective expiry is `max(execution_lease_expires_at, newest eligible committed
 fact.created_at + execution_lease_secs)`. Eligibility requires the exact physical
 request/current generation and valid owner scope; exclude replay, forks, tool-owned
 facts, beyond-extent late flushes and malformed/conflicting records. An authoritative
-conflict is an integrity failure, not evidence of inactivity. Monotonic elapsed-time
-and wall-clock discontinuity assumptions must be explicit in the later model;
+conflict is an integrity failure, not evidence of inactivity. The Lean model uses
+a nondecreasing owner clock; native conformance must cover clock discontinuities;
 created_at is an admission timestamp, not a database-assigned commit timestamp.
 
 The contract Lean states is safety and liveness, not deadline equality. Today's
@@ -258,6 +304,13 @@ and authorized reference-closure requirements. No range-fetch protocol, second
 hydration-completeness definition or selective-hydration optimization is added here;
 measure large-output transfer costs before proposing one.
 
+Hydration selection must consume the canonical manifest builder for the exact
+admitted peer/requester/agent/session request, not a caller-supplied document set.
+Every selected document, including headers and output segments, requires native
+ACP authorization for that scope. Selected roots belong to the requested session;
+authorized fork dependencies may cross session boundaries. Missing, denied or
+conflicting observations cannot become a successfully served empty manifest.
+
 ## Deletion and ownership
 
 | Deleted contract / implementation handoff | Surviving owner and obligation | Layer |
@@ -266,7 +319,7 @@ measure large-output transfer costs before proposing one.
 | Response progress counters, cumulative text/reasoning writes, per-flush lease CAS, `execution_progress_seq` | `lifecycle/execution_lease.rs` keeps claim, explicit byte-less renewal, and the matching-generation terminal/recovery CAS. Liveness is derived from the current generation's newest output fact (see *Progress is stored once*); exact replay creates nothing and so renews nothing. `watcher`, `lifecycle/recovery.rs`, `runtime_trace.rs` read derived liveness instead of the counter. Tool-owned output uses the existing tool lifecycle and never revives a terminal request. | Lean → conformance → runtime |
 | Response `materialized_*`, response/request dual terminalization | `lifecycle/materialize.rs` and terminal owner: final header publication, terminal lifecycle and `TerminalOutput` selection commit atomically. `background_tools.rs::load_child_final_response` and bridge recovery resolve that exact scoped message. Missing selection/header/closure/segments is incomplete, never latest-message fallback. Explicit NoMessage handles pre-output failure. Recovery closes committed bytes with the original producer binding. | Lean → conformance → runtime |
 | Stream-processor cumulative previews, in-flight message upserts, retraction resets | `agent/stream_processor.rs`: one immutable segment per flush, naming its writer and slicing its payload by stream; a Retracted closure commits before retry backoff. `agent/loop_stream.rs`: dispatch follows accepted closure/header publication with the boundaries above. `rendered_request/scope.rs` must allocate non-reused scopes across reclaim/restart. | Lean → conformance → runtime |
-| Tool `args`, `result`, `partial_output_*`; `AgentToolResult` SDL/row (deleted) | `AgentToolCall` owns execution/delivery only and is created pending with the assistant header. The provider turn owns argument bytes; the tool source owns output; tool terminalization closes empty and nonempty output before delivery. Existing completion notification owner composes authored wrappers by reference. | Spec → runtime |
+| Tool `args`, `result`, `partial_output_*`; `AgentToolResult` SDL/row (deleted) | `AgentToolCall` owns execution/delivery and remote-only immutable `delegated_input`, created pending with the assistant header. The provider turn owns canonical argument bytes; the tool source owns output; tool terminalization closes empty and nonempty output before delivery. Existing completion notification owner composes authored wrappers by reference. | Spec → runtime |
 | `truncation/spill.rs`, spill links and discarded-spill flags | Owned provider-input boundary writes `PresentedPayload`: exact UTF-8 output ranges plus inline literal markers/separators. Preserve head/tail behavior and line normalization; retrieval hints name the tool call. Unreferenced retained output is not proof of delivery. `read_tool_output` reads the original stream. | Lean → conformance → runtime |
 | Legacy `decode_persisted_message` / `present_persisted_message` and fallback tests (deleted) | Shared strict reconstruction produces native `Message`; existing `present_message` remains a rendering function. Missing closing records, conflicts, malformed JSON/media and illegal role/block combinations fail explicitly. | Spec → runtime |
 | `session/fork.rs` payload/tool/spill copies and spill remapping | Fork owner copies headers only, with `MessagePublication::Fork`, child-scoped message keys/sequences and no live request membership. Blocks keep the origin's closure references unchanged. Origin tool IDs remain provenance, not child executable rows. Compaction cursors still target retained child headers. | Lean → conformance → runtime |
@@ -289,18 +342,20 @@ or drop those collections from the client-to-runtime direction.
 | `gents-schemas/src/lib.rs`, `gents-protocol/src/schemas.rs`, runtime schema exports | Register segment only; remove separate seal, response and spill collections | Verify fresh schema registration and strict JSON/SDL decoding |
 | `gents-migration/src/registry.rs` | Remove obsolete response/spill baselines; update client-authored catalog | Add the fresh segment root pin and regenerate changed request/message/tool pins with DefraDB; catalog coverage/parity remains required. No fabricated pins or relaxed checks |
 | `agent/p2p_reconcile/{templates,profiles,policy}.rs` | Replace response/spill routes with segment, preserving requester/agent filters and route directions | Conformance for conversation, client (both directions), machine and operator routes; collection presence is not ACP authorization |
-| Subagent pairing templates | Host return leg includes segment with requester filters | Bridge delivery of a delegated call's arguments requires exact authorized dependency delivery to the host; do not broaden the bridge-only route to all parent requests or history |
+| Subagent pairing templates | Host return leg includes segment with requester filters; coordinator leg remains addressed AgentToolCall only | Deliver immutable argument-only `delegated_input` on that row. Its source reference is provenance, not a hydration root; do not grant parent output/header access or broaden the route to parent requests/history |
 | `agent/p2p_reconcile/session_hydration.rs` | New collection inventory | Replace session-only selection with authorized reference closure; preserve membership, route admission and bounded exact push |
 | `session_hydration_reconcile.rs` | Inventory only; old queries intentionally remain | Resolve closure references, enumerate twins and include origin dependencies in the signed exact manifest |
 | `gents-protocol/src/session_hydration.rs` | Closed collection enum; receipt format unchanged | Server validates closure; desktop verifies signature, exact document delivery and header reconstruction before completion |
 | Desktop `client/core/writes.rs`, `query/{session_transcript,document_patches}.rs`, `store/*`, observers | Inventory only; deleted row types break old readers | Follow origin references without subscribing to an entire parent session; project reordered header/segment arrival |
 | `session/fork.rs` and session retention owners | Typed publication provenance and retained-reference contract | Preserve parent dependencies after parent close/removal, detach live membership, check ACP without copying payloads |
 
-## Next layer's model surfaces
+## Cross-layer validation surfaces
 
 `Transcript`, `CompletionRetry`, `RequestExecutionLease`, `SessionFork`,
-`SessionHydration`, `Client`, tool/background delivery and provider-input narrowing must
-cover: retraction without replacement bytes; stale/replayed writes; at most one
+`SessionHydration`, `Client`, tool/background delivery and provider-input narrowing
+define the coverage required across Lean, generated conformance and implementation.
+The Lean proof map records the modeled contracts and remaining native premises.
+Preserve coverage for: retraction without replacement bytes; stale/replayed writes; at most one
 closure per source; late raw flushes beyond its extent are inert; header publication before tool
 dispatch; background output after request termination; recovery publication;
 empty streams and sources; a complete message over partial dependencies;

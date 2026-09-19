@@ -213,6 +213,8 @@ pub struct OutputSegment {
 /// The next `bytes` of `payload` belong to `stream`. Runs split only at UTF-8
 /// boundaries. The run that opens a stream carries its declaration; an empty
 /// native string is an opening run of zero bytes.
+/// A zero-byte continuation is not a flush: it carries no new output fact and
+/// cannot be used as a streaming heartbeat. Silent work uses explicit renewal.
 /// Runs cover the payload exactly; streams open densely from zero and declare
 /// exactly once. Missing earlier flushes never permit inventing a declaration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +273,9 @@ pub enum SourceClose {
     /// has an opening run, including empty strings; a source with no streams
     /// has segments = 0 and no stream_bytes. Beyond-extent flushes are inert:
     /// they are excluded before data-twin checks, but never hide another close.
+    /// Fresh Complete acceptance under the owner gate must include all committed
+    /// data flushes, with nondecreasing timestamps no later than closure. This
+    /// writer check is distinct from replica reconstruction and exact replay.
     Closed {
         outcome: OutputOutcome,
         segments: u32,
@@ -298,6 +303,22 @@ pub enum SourceClose {
 pub struct PayloadRef {
     pub close_doc_id: String,
     pub stream: u32,
+}
+
+/// Argument-only admission input for a remotely delegated tool call. Stored
+/// immutably on the existing addressed AgentToolCall, never on local calls.
+/// The accepting coordinator verifies exact bytes against `source` and commits
+/// this value with the accepted header and pending call row. The host trusts
+/// the existing authenticated coordinator/ACP route; it does not fetch parent
+/// output to verify this projection. `source` is provenance, not read authority.
+/// This one-time copy preserves document-level disclosure boundaries when a
+/// source segment also contains other calls, text, or private reasoning.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegatedToolInput {
+    pub source: PayloadRef,
+    /// Exact emitted JSON argument text; no normalization or reconstructed JSON.
+    pub arguments: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -365,7 +386,8 @@ pub enum TerminalOutput {
 /// dispatched. The assistant turn is durable, with its sequence allocated,
 /// before a tool can run or a
 /// background completion can append (#945) — the guarantee in-flight upserts
-/// used to provide. Dispatch and recovery read arguments through the block.
+/// used to provide. Local dispatch and recovery read arguments through the block;
+/// a remote host consumes the addressed call's immutable [`DelegatedToolInput`].
 /// Partial turns may publish diagnostic headers, but any
 /// retained tool-call blocks name terminal, nondispatchable lifecycle rows.
 /// Pending intent is not execution permission: the existing tool owner checks
@@ -378,12 +400,12 @@ pub enum TerminalOutput {
 ///
 /// Recovery of an unheaded provider source is deliberately narrower: close its
 /// committed extent Partial (or reuse its existing Partial closure), then publish
-/// only ordinary Text streams as Full
+/// only ordinary Text streams at native part zero as Full
 /// PresentedPayload references, in original block order, with outcome Partial
 /// and native_id None. Do not turn argument/reasoning/media bytes into text or
 /// fabricate their missing metadata. Omitted blocks leave gaps in original
 /// declaration positions; validate survivor order, not compacted index equality.
-/// If no text stream exists, publish no assistant header for that source. Retain
+/// If no eligible text stream exists, publish no assistant header for that source. Retain
 /// every omitted stream as diagnostic data, never executable tool intent or
 /// provider input. An existing published header is resolved unchanged, not
 /// replaced by this recovery policy. Provider-input narrowing still applies.

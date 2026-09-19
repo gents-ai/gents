@@ -298,6 +298,10 @@ pub struct GoalRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentToolCallRow {
     pub tool_call_key: String,
+    /// Present only for remotely addressed calls; immutable admission input,
+    /// not the transcript payload or a general-purpose args fallback.
+    #[serde(default)]
+    pub delegated_input: Option<crate::output::DelegatedToolInput>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
