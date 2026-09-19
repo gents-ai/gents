@@ -2,6 +2,57 @@
 
 This directory contains the Lean 4 model for `gents`.
 
+## Canonical output stack (#1571): in progress
+
+Branch `feat/1571-canonical-transcript-lean` starts at data-contract commit
+`3eaff8f16` on `feat/1571-canonical-transcript`. Only Lean models and their
+documentation change here; Rust conformance/implementation remain later layers.
+
+`Proofs/CanonicalOutput` supplies the immutable fact vocabulary, closure lookup,
+executable dense-extent/run reconstruction, conservative recovery text selection,
+structural fork-reference preservation, and exact terminal-header selection.
+`Transcript` replaces in-flight upserts with immutable publication and ordered
+dispatch; `Client` replaces response precedence with request-only presentation
+and scoped, unambiguous retry-tip resolution. `RequestExecutionLease` replaces
+progress counters with derived deadlines over immutable progress observations.
+Executable Lean witnesses exercise missing/twin records, incomplete arguments,
+late raw flushes, expiry rejection, stale generations and replay. This is a partial
+model, not a claim that the stack is ready for Rust implementation.
+
+Assumptions: authorized observations and DefraDB genesis identity come from the
+native bridge; UTF-8/native JSON/media decoding is not proved by a byte-list model.
+Lease steps are serialized authoritative owner reads/commits under one shared gate
+and a nondecreasing clock. Lease facts are an already-validated eligibility
+projection; its connection to source validation still needs modeling. Recovery
+fairness is distinct from an expiry making recovery enabled. A Complete outcome
+does not itself prove closure validity. Transcript publication and lease admission
+must still compose with closure validation in one authoritative transaction.
+The fork-reference theorem does not establish ACP access or dependency retention.
+
+Remaining work: compose the output, lease, transcript and terminal owners;
+prove exact-extent recovery and single-winner source closure across generations;
+replace `StreamingResponse`, adapt completion retry/acceptance, replace
+`SessionFork` copies, model hydration reference closure, and prove compaction
+prefix safety. Native block/header reconstruction, presentation ranges, and live
+diagnostic classification also need their executable composition. Existing
+proofs of those unmigrated surfaces remain historical
+handoff evidence, not proofs of the new contract. Lean conformance-source adapters
+for migrated owners change here; external fixture regeneration and native bridges
+belong to the next PR. Do not preserve old abstractions merely to keep adapters
+compiling.
+
+Open data-contract decision: subagent argument delegation currently routes only
+the addressed tool-call document. A new argument reference requires output/header
+dependencies; a multi-stream segment may also contain parent text or reasoning.
+Document-level ACP cannot disclose only the argument's slice. The witness
+`CanonicalOutput.Examples.argument_document_also_contains_other_content` makes
+that boundary explicit. Decide the delegation disclosure boundary before proving
+the new hydration/bridge policy; do not silently broaden authorization.
+
+Checkpoint validation: full `lake build` passes on pinned Lean 4.18.0; changed
+models contain no `sorry` or added axioms. Rust builds and external fixture
+regeneration are intentionally not run in this layer.
+
 ## Configuration and session refactor contract layer
 
 This branch is layer 2 above spec PR [#1430](https://github.com/gents-ai/gents/pull/1430),
@@ -66,8 +117,8 @@ state machines explicit enough that:
 The proofs are strongest where the runtime is a state machine:
 
 - request, process, and persistence lifecycle transitions
-- request execution leases with opaque generations, semantic-progress renewal,
-  atomic request/response terminalization, and recovery race exclusion (#1341)
+- request execution leases with opaque generations, derived progress deadlines,
+  generation-fenced terminalization, and atomic expiry recovery (#1341, #1571)
 - daemon-visible storage observation assumptions at the persistence boundary
 - inference-call lifecycle, cancellation transitions, and slot reconstruction
 - scheduler and fleet slot accounting from persisted call rows
@@ -162,7 +213,7 @@ The current proof suite covers twenty practical areas:
 6. Runtime reconcile generation publication and visibility
 7. Atomic configuration publication, reference closure, and config/runtime field separation
 8. Trigger dispatch for manual, schedule, and event-driven tasks
-9. Client turn-state derivation from replicated request/response documents
+9. Client turn-state derivation from replicated request documents
 10. Client-shell workflow rules for selection, submission, and transport decoupling
 11. Command/tool execution policy: argv prefixes, read-only allowlists,
     disabled-network fail-closed behavior, sandbox selection, and filtered env
@@ -200,11 +251,11 @@ The current proof suite covers twenty practical areas:
     event identity; open condition content can update without changing the
     envelope or mutating a terminal row (`Mailbox/Notification`). Generated
     cases exercise the database write owner and its typed receipts.
-20. Request execution leases (#1341): opaque fresh ownership generations,
-    claim deadlines, renewal only from persisted semantic response/tool/
-    transcript progress, expiry/drop recovery, matching-generation terminal
-    CAS, atomic request/response agreement, and at-most-one winner-owned goal
-    continuation/token-charge effect
+20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
+    derived deadlines over eligible immutable output, explicit renewal,
+    atomic expiry recovery, drop recovery, matching-generation terminal CAS,
+    and bounded winner-owned continuation/token-charge effects. The new canonical
+    output classifier and publication transaction composition remain obligations.
 
 Separately, **obligation models** (no Rust refinement tests yet):
 
@@ -365,14 +416,12 @@ predicates, executable `step?` functions, and finite witness contexts. It
 currently covers:
 
 - `Request`
-- `RequestExecutionLease` one-step and recovery/race traces: 34 one-step cases
-  cover live authorization and exact-observation Dead/Superseded revocation.
-  `generated_request_execution_lease_cases_fence_production_policy` exercises
-  the production authorization seam for begin, progress, finalize, and revocation.
-  Two generated provider-EOF cases also fence the production requirement for an
-  explicit provider final event before successful turn completion.
-  Abstract claim/recovery and database race traces retain explicit coverage
-  follow-ups; no standalone Rust reference machine is counted as a consumer.
+- `RequestExecutionLease` one-step and recovery/race traces now describe the
+  #1571 target owner: derived progress, replay, expiry admission, atomic recovery,
+  explicit renewal and policy revocation. The old generated Rust fixtures and
+  production seam do not yet conform to these cases. Provider-EOF cases retain
+  the explicit-final-event requirement. Native database ordering and projection
+  classification still require refinement tests in the later layer.
 - `Process`
 - `Persistence.failClosed`
 - `Persistence.failOpen`
@@ -966,30 +1015,35 @@ accepted failure mode.
 
 ### Durable transcript operations
 
-`Transcript` models permissive durable writes, sequence allocation, tool/result
-reservation and duplicate-result observation. Ordering is proved from the append
-operation and its pre-state sequence bound. Duplicate result observation executes
-the same completion function and preserves all state. Fixture counts, pair closure,
-ordering, and drain observations are computed from actual operations with legal
-transition traces. Durable orphan result rows are representable and are not falsely
-labeled pair-closed. Provider-input sanitation owns the stricter boundary.
+`Transcript` models immutable assistant publication, sequence allocation,
+tool/result reservation and duplicate-result observation. Accepted publication
+appends the header and ordered pending tool rows atomically; separate dispatch
+requires a published reservation and the first pending call. Partial publication
+is nondispatchable. `transition_retains_messages` and `trace_retains_messages`
+retain prior rows, including after tool failure; physical identity validation is
+a native bridge premise. Closure validity and lifecycle authorization still need
+composition with the output and lease owners. Durable orphan results remain
+representable; provider-input sanitation owns the stricter boundary.
 
 ### Client Turn Projection
 
 `Proofs/Client.lean` models how clients derive a turn state from replicated
-`AgentRequest` and `AgentResponse` snapshots:
+`AgentRequest` snapshots only:
 
 - derivation is total for every non-empty attempt chain
-- server lifecycle and response advances do not decrease client rank
-- terminal client states line up with effectively terminal server observations
+- legal server lifecycle advances do not decrease client rank
+- terminal client states line up with terminal request observations
 - retry replacement derives from the new tip, with retry restart as the one
   allowed rank decrease
+- unordered scoped observations resolve only a unique retry tip; output readiness
+  cannot alter execution status
 
-The implementation-facing version is `client-state-machine.md`.
+`client-state-machine.md` and external fixtures still need migration to this
+target contract.
 
 The Codex shim reuses this projection directly. Its adapter only maps the
 generic `ClientTurnState` into Codex wire phases and applies the acknowledged
-local-interrupt override; request/response precedence, lifecycle monotonicity,
+local-interrupt override; request-only projection, lifecycle monotonicity,
 and terminal coherence stay owned by `Proofs/Client.lean`. Generated Codex
 conformance rows are evaluated from that composition rather than restating a
 parallel Codex-specific state machine.

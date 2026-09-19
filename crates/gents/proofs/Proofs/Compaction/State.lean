@@ -29,8 +29,8 @@ def PairsClosedInMessages (msgs : List MessageRow) : Prop :=
 
 /-- Every row announcing tool calls carries the assistant role.
 
-A structural fact the transcript writer maintains — `persistAssistantMessage`
-sets `role := .assistant` alongside `kind := .assistantToolCalls`. Pair closure
+A structural fact the transcript writer maintains — immutable assistant
+publication sets `role := .assistant` alongside `kind := .assistantToolCalls`. Pair closure
 needs it: `ActiveBlockValid` locates the *announcement* for a retained result,
 and this is what makes that announcement an acceptable *caller*. -/
 def AnnouncementsAreAssistant (msgs : List MessageRow) : Prop :=

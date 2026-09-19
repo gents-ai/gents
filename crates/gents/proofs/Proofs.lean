@@ -15,6 +15,7 @@ import Proofs.SessionRecovery
 import Proofs.SessionHydration
 import Proofs.Session.Properties
 import Proofs.Transcript
+import Proofs.CanonicalOutput
 import Proofs.Compaction
 import Proofs.PromptAssembly
 import Proofs.RenderedCapture

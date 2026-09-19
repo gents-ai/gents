@@ -5,8 +5,7 @@ namespace Conformance.ContractCases
 
 structure LiveOverlayCase where
   name                : String
-  responseStatus      : String
-  materialized        : Bool
+  liveOutputAvailable : Bool
   hasDurableOwner     : Bool
   precedingToolCalls  : Nat
   turnTerminal        : Bool
@@ -68,59 +67,59 @@ def requestProgressCases : List RequestProgressCase :=
 
 def liveOverlayCases : List LiveOverlayCase :=
   [ { name := "pre_first_tool"
-    , responseStatus := "streaming", materialized := false
+    , liveOutputAvailable := true
     , hasDurableOwner := false
     , precedingToolCalls := 0
-    , turnTerminal := false, turnLabel := "streaming"
+    , turnTerminal := false, turnLabel := "running"
     , hasContent := true, hasReasoning := false
     , expectOverlay := true }
   , { name := "post_tool_resumed"
-    , responseStatus := "streaming", materialized := false
+    , liveOutputAvailable := true
     , hasDurableOwner := false
     , precedingToolCalls := 1
-    , turnTerminal := false, turnLabel := "streaming"
+    , turnTerminal := false, turnLabel := "running"
     , hasContent := true, hasReasoning := false
     , expectOverlay := true }
   , { name := "interleaved_two_tools"
-    , responseStatus := "streaming", materialized := false
+    , liveOutputAvailable := true
     , hasDurableOwner := false
     , precedingToolCalls := 2
-    , turnTerminal := false, turnLabel := "streaming"
+    , turnTerminal := false, turnLabel := "running"
     , hasContent := true, hasReasoning := false
     , expectOverlay := true }
   , { name := "tool_first_no_pre_text"
-    , responseStatus := "streaming", materialized := false
+    , liveOutputAvailable := true
     , hasDurableOwner := false
     , precedingToolCalls := 1
-    , turnTerminal := false, turnLabel := "streaming"
+    , turnTerminal := false, turnLabel := "running"
     , hasContent := false, hasReasoning := false
     , expectOverlay := false }
   , { name := "interrupted_mid_stream"
-    , responseStatus := "streaming", materialized := false
+    , liveOutputAvailable := true
     , hasDurableOwner := false
     , precedingToolCalls := 0
     , turnTerminal := true, turnLabel := "interrupted"
     , hasContent := true, hasReasoning := false
     , expectOverlay := false }
-  , { name := "error_mid_stream"
-    , responseStatus := "error", materialized := false
+  , { name := "silent_running"
+    , liveOutputAvailable := false
     , hasDurableOwner := false
     , precedingToolCalls := 0
-    , turnTerminal := false, turnLabel := "streaming"
+    , turnTerminal := false, turnLabel := "running"
     , hasContent := false, hasReasoning := false
     , expectOverlay := false }
-  , { name := "materialized_final"
-    , responseStatus := "complete", materialized := true
+  , { name := "completed_before_output_arrival"
+    , liveOutputAvailable := false
     , hasDurableOwner := true
     , precedingToolCalls := 0
     , turnTerminal := true, turnLabel := "completed"
     , hasContent := false, hasReasoning := false
     , expectOverlay := false }
   , { name := "replicated_stale_tail_has_durable_owner"
-    , responseStatus := "streaming", materialized := false
+    , liveOutputAvailable := true
     , hasDurableOwner := true
     , precedingToolCalls := 2
-    , turnTerminal := false, turnLabel := "streaming"
+    , turnTerminal := false, turnLabel := "running"
     , hasContent := true, hasReasoning := false
     , expectOverlay := false }
   ]

@@ -4,285 +4,286 @@ namespace RequestExecutionLease
 
 variable {Generation : Type} [DecidableEq Generation]
 
-theorem claim_installs_generation_and_deadline
-    (pre post : World Generation) (generation : Generation) (deadline : Time)
-    (h : step? pre (.claim generation deadline) = some post) :
-    post.request = .claimed ∧
-      post.lease = .active generation deadline ∧
+theorem progress_bounds_eligible_fact
+    (facts : List (OutputFact Generation)) (fact : OutputFact Generation)
+    (duration : Time) (hmem : fact ∈ facts)
+    (heligible : fact.eligibility = .currentRequest) :
+    fact.createdAt + duration ≤ progressDeadline fact.generation duration facts := by
+  induction facts with
+  | nil => simp at hmem
+  | cons first rest ih =>
+      simp only [List.mem_cons] at hmem
+      rcases hmem with rfl | hmem
+      · simpa [progressDeadline, heligible] using
+          (Nat.le_max_left (fact.createdAt + duration)
+            (progressDeadline fact.generation duration rest))
+      · exact Nat.le_trans (ih hmem) (Nat.le_max_right _ _)
+
+theorem recent_eligible_progress_prevents_expiry
+    (world : World Generation) (fact : OutputFact Generation)
+    (owner : Generation) (duration explicitDeadline : Time)
+    (hlease : world.lease = .active owner duration explicitDeadline)
+    (hmem : fact ∈ world.output) (hgen : fact.generation = owner)
+    (heligible : fact.eligibility = .currentRequest)
+    (hrecent : world.now < fact.createdAt + duration) :
+    ¬ effectiveExpiry world ≤ world.now := by
+  have hbound := progress_bounds_eligible_fact world.output fact duration hmem heligible
+  rw [hgen] at hbound
+  have hmax : progressDeadline owner duration world.output ≤ effectiveExpiry world := by
+    simpa [effectiveExpiry, hlease] using
+      (Nat.le_max_right explicitDeadline (progressDeadline owner duration world.output))
+  exact Nat.not_le_of_gt (Nat.lt_of_lt_of_le hrecent (Nat.le_trans hbound hmax))
+
+theorem claim_installs_generation_duration_and_deadline
+    (pre post : World Generation) (generation : Generation)
+    (duration deadline : Time)
+    (h : step? pre (.claim .mutationWriteGate generation duration deadline) = some post) :
+    post.request = .claimed ∧ post.lease = .active generation duration deadline ∧
       generation ∈ post.usedGenerations := by
   cases hlease : pre.lease with
   | vacant =>
-      simp [step?, hlease] at h
-      rcases h with ⟨_, rfl⟩
-      simp
-  | active owner oldDeadline => simp [step?, hlease] at h
-  | recoverable owner => simp [step?, hlease] at h
+      simp only [step?, hlease] at h
+      split at h
+      · cases h; simp
+      · contradiction
+  | active owner oldDuration oldDeadline => simp [step?, hlease] at h
+  | recoverable owner oldDuration oldDeadline => simp [step?, hlease] at h
   | terminal owner outcome => simp [step?, hlease] at h
 
 theorem claim_generation_was_fresh
-    (pre post : World Generation) (generation : Generation) (deadline : Time)
-    (h : step? pre (.claim generation deadline) = some post) :
+    (pre post : World Generation) (generation : Generation)
+    (duration deadline : Time)
+    (h : step? pre (.claim .mutationWriteGate generation duration deadline) = some post) :
     fresh pre generation := by
   cases hlease : pre.lease with
   | vacant =>
-      simp [step?, hlease] at h
-      exact h.1.2.2.1
-  | active owner oldDeadline => simp [step?, hlease] at h
-  | recoverable owner => simp [step?, hlease] at h
+      simp only [step?, hlease] at h
+      split at h
+      · rename_i hguard
+        exact hguard.2.2.2.1
+      · contradiction
+  | active owner oldDuration oldDeadline => simp [step?, hlease] at h
+  | recoverable owner oldDuration oldDeadline => simp [step?, hlease] at h
   | terminal owner outcome => simp [step?, hlease] at h
 
-theorem claim_deadline_is_open
-    (pre post : World Generation) (generation : Generation) (deadline : Time)
-    (h : step? pre (.claim generation deadline) = some post) :
-    pre.now < deadline := by
-  cases hlease : pre.lease with
-  | vacant =>
-      simp [step?, hlease] at h
-      exact h.1.2.2.2
-  | active owner oldDeadline => simp [step?, hlease] at h
-  | recoverable owner => simp [step?, hlease] at h
-  | terminal owner outcome => simp [step?, hlease] at h
-
-theorem persisted_progress_renews_and_advances
+theorem append_output_stamps_once_without_explicit_renewal
     (pre post : World Generation) (generation : Generation)
-    (kind : ProgressKind) (newDeadline : Time)
-    (h : step? pre (.persistProgress generation kind newDeadline) = some post) :
-    ∃ oldDeadline,
-      pre.lease = .active generation oldDeadline ∧
-      oldDeadline < newDeadline ∧
-      post.lease = .active generation newDeadline ∧
-      post.progressSeq = pre.progressSeq + 1 := by
-  cases hlease : pre.lease with
-  | vacant => simp [step?, hlease] at h
-  | active owner oldDeadline =>
-      simp [step?, hlease] at h
-      rcases h with ⟨hguard, rfl⟩
-      rcases hguard with ⟨rfl, _, hdeadline, _, _⟩
-      exact ⟨oldDeadline, rfl, hdeadline, rfl, rfl⟩
-  | recoverable owner => simp [step?, hlease] at h
-  | terminal owner outcome => simp [step?, hlease] at h
+    (id : CanonicalOutput.DocId)
+    (h : step? pre (.appendOutput .mutationWriteGate generation id .currentRequest) =
+      some post) :
+    post = { pre with output :=
+      ⟨id, generation, pre.now, .currentRequest⟩ :: pre.output } := by
+  simp only [step?] at h
+  split at h
+  · contradiction
+  · split at h
+    · exact (Option.some.inj h).symm
+    · contradiction
 
-theorem socket_traffic_does_not_renew_or_advance
+theorem replay_is_identity_and_never_renews
+    (pre post : World Generation) (fact : OutputFact Generation)
+    (h : step? pre (.replayOutput fact) = some post) :
+    post = pre ∧ effectiveExpiry post = effectiveExpiry pre := by
+  simp only [step?] at h
+  split at h
+  · cases h; exact ⟨rfl, rfl⟩
+  · contradiction
+
+theorem socket_traffic_does_not_renew
     (pre post : World Generation) (generation : Generation)
-    (h : step? pre (.socketTraffic generation) = some post) :
-    post = pre := by
+    (h : step? pre (.socketTraffic generation) = some post) : post = pre := by
   cases hlease : pre.lease <;> simp [step?, hlease] at h
   exact h.2.symm
 
-theorem no_op_does_not_renew_or_advance
+theorem no_op_does_not_renew
     (pre post : World Generation) (generation : Generation)
-    (h : step? pre (.noOp generation) = some post) :
-    post = pre := by
+    (h : step? pre (.noOp generation) = some post) : post = pre := by
   cases hlease : pre.lease <;> simp [step?, hlease] at h
   exact h.2.symm
+
+theorem stale_generation_cannot_append
+    (pre : World Generation) (owner stale : Generation)
+    (duration deadline : Time) (id : CanonicalOutput.DocId)
+    (hlease : pre.lease = .active owner duration deadline)
+    (hstale : stale ≠ owner) :
+    step? pre (.appendOutput .mutationWriteGate stale id .currentRequest) = none := by
+  simp [step?, admitted, hlease, Ne.symm hstale]
 
 theorem stale_generation_cannot_renew
-    (pre : World Generation) (owner stale : Generation) (deadline newDeadline : Time)
-    (kind : ProgressKind)
-    (hlease : pre.lease = .active owner deadline)
+    (pre : World Generation) (owner stale : Generation)
+    (duration deadline : Time)
+    (hlease : pre.lease = .active owner duration deadline)
     (hstale : stale ≠ owner) :
-    step? pre (.persistProgress stale kind newDeadline) = none := by
-  simp [step?, hlease, Ne.symm hstale]
+    step? pre (.renew .mutationWriteGate stale) = none := by
+  simp [step?, admitted, hlease, Ne.symm hstale]
 
 theorem stale_generation_cannot_finalize
-    (pre : World Generation) (owner stale : Generation) (deadline : Time)
-    (outcome : Outcome)
-    (hlease : pre.lease = .active owner deadline)
+    (pre : World Generation) (owner stale : Generation)
+    (duration deadline : Time) (outcome : Outcome)
+    (hlease : pre.lease = .active owner duration deadline)
     (hstale : stale ≠ owner) :
-    step? pre (.finalize stale outcome) = none := by
-  simp [step?, hlease, Ne.symm hstale]
+    step? pre (.finalize .mutationWriteGate stale outcome) = none := by
+  simp [step?, admitted, hlease, Ne.symm hstale]
+
+theorem expired_rejects_all_producer_actions
+    (pre : World Generation) (owner : Generation)
+    (duration deadline : Time) (id : CanonicalOutput.DocId)
+    (decision : ProducerDecision) (outcome : Outcome)
+    (hlease : pre.lease = .active owner duration deadline)
+    (hexpired : effectiveExpiry pre ≤ pre.now) :
+    step? pre (.begin .mutationWriteGate owner) = none ∧
+      step? pre (.appendOutput .mutationWriteGate owner id .currentRequest) = none ∧
+      step? pre (.renew .mutationWriteGate owner) = none ∧
+      step? pre (.authorizeProducerDecision .mutationWriteGate owner decision) = none ∧
+      step? pre (.finalize .mutationWriteGate owner outcome) = none := by
+  have hnot : ¬ admitted pre .mutationWriteGate owner := by
+    intro hadmitted
+    unfold admitted at hadmitted
+    rw [hlease] at hadmitted
+    exact Nat.not_lt_of_ge hexpired hadmitted.2.2.2.2
+  simp [step?, hlease, hnot]
+
+theorem renewal_advances_prior_deadline
+    (pre post : World Generation) (generation : Generation)
+    (duration deadline : Time)
+    (hlease : pre.lease = .active generation duration deadline)
+    (h : step? pre (.renew .mutationWriteGate generation) = some post) :
+    post.lease = .active generation duration (renewDeadline pre duration deadline) ∧
+      deadline < renewDeadline pre duration deadline := by
+  simp [step?, hlease] at h
+  rcases h with ⟨_, rfl⟩
+  exact ⟨rfl, Nat.lt_of_lt_of_le (Nat.lt_succ_self deadline) (Nat.le_max_right _ _)⟩
+
+theorem expired_recovery_is_atomic_generation_swap
+    (pre post : World Generation) (expected generation : Generation)
+    (oldDuration oldDeadline duration deadline : Time)
+    (hlease : pre.lease = .active expected oldDuration oldDeadline)
+    (h : step? pre
+      (.recoverExpired .mutationWriteGate expected generation duration deadline) = some post) :
+    effectiveExpiry pre ≤ pre.now ∧ fresh pre generation ∧
+      post.lease = .active generation duration deadline ∧
+      generation ∈ post.usedGenerations := by
+  simp [step?, hlease] at h
+  rcases h with ⟨hguard, rfl⟩
+  exact ⟨hguard.2.2.1, hguard.2.2.2.2.1, rfl, by simp [installFresh]⟩
+
+theorem expired_recovery_enabled
+    (pre : World Generation) (expected generation : Generation)
+    (oldDuration oldDeadline duration deadline : Time)
+    (hlease : pre.lease = .active expected oldDuration oldDeadline)
+    (hintegrity : integrityHealthy pre) (hclock : clockCoherent pre expected)
+    (hexpired : effectiveExpiry pre ≤ pre.now) (hduration : duration > 0)
+    (hfresh : fresh pre generation) (hdeadline : pre.now < deadline) :
+    ∃ post,
+      step? pre (.recoverExpired .mutationWriteGate expected generation duration deadline) =
+        some post := by
+  refine ⟨installFresh pre generation duration deadline, ?_⟩
+  simp [step?, hlease, hintegrity, hclock, hexpired, hduration, hfresh, hdeadline]
+
+theorem observer_cannot_recover_expired
+    (pre : World Generation) (expected generation : Generation)
+    (duration deadline : Time) :
+    step? pre (.recoverExpired .observingReplica expected generation duration deadline) = none := by
+  cases hlease : pre.lease <;> simp [step?, hlease]
 
 theorem terminalization_agrees_atomically
     (pre post : World Generation) (generation : Generation) (outcome : Outcome)
-    (h : step? pre (.finalize generation outcome) = some post) :
-    post.lease = .terminal generation outcome ∧
-      post.request = outcome.requestState ∧
-      post.response = outcome.responseStatus := by
+    (h : step? pre (.finalize .mutationWriteGate generation outcome) = some post) :
+    post.lease = .terminal generation outcome ∧ post.request = outcome.requestState := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
-  | active owner deadline =>
+  | active owner duration deadline =>
       simp [step?, hlease] at h
       rcases h with ⟨hguard, rfl⟩
-      rcases hguard with ⟨rfl, _, _, _, _⟩
+      unfold admitted at hguard
+      rw [hlease] at hguard
+      have howner := hguard.1.2.2.1
+      subst owner
       simp [terminalize, commitTerminalEffects]
-  | recoverable owner => simp [step?, hlease] at h
-  | terminal owner oldOutcome => simp [step?, hlease] at h
-
-theorem terminalization_records_matching_generation
-    (pre post : World Generation) (generation : Generation) (outcome : Outcome)
-    (h : step? pre (.finalize generation outcome) = some post) :
-    ∃ deadline, pre.lease = .active generation deadline := by
-  cases hlease : pre.lease with
-  | vacant => simp [step?, hlease] at h
-  | active owner deadline =>
-      simp [step?, hlease] at h
-      rcases h.1 with ⟨rfl, _, _, _, _⟩
-      exact ⟨deadline, rfl⟩
-  | recoverable owner => simp [step?, hlease] at h
+  | recoverable owner duration deadline => simp [step?, hlease] at h
   | terminal owner oldOutcome => simp [step?, hlease] at h
 
 theorem terminal_state_rejects_second_finalize
     (pre post : World Generation) (generation other : Generation)
     (outcome otherOutcome : Outcome)
-    (h : step? pre (.finalize generation outcome) = some post) :
-    step? post (.finalize other otherOutcome) = none := by
+    (h : step? pre (.finalize .mutationWriteGate generation outcome) = some post) :
+    step? post (.finalize .mutationWriteGate other otherOutcome) = none := by
   have hagreement := terminalization_agrees_atomically pre post generation outcome h
   simp [step?, hagreement.1]
 
 theorem terminal_effects_at_most_once
     (pre post : World Generation) (generation : Generation) (outcome : Outcome)
-    (h : step? pre (.finalize generation outcome) = some post) :
+    (h : step? pre (.finalize .mutationWriteGate generation outcome) = some post) :
     terminalEffectsBounded post := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
-  | active owner deadline =>
+  | active owner duration deadline =>
       simp [step?, hlease] at h
       rcases h with ⟨_, rfl⟩
       simp [terminalEffectsBounded, terminalize, commitTerminalEffects]
       cases pre.continuationRequired <;> cases pre.tokenChargeRequired <;> simp_all
-  | recoverable owner => simp [step?, hlease] at h
-  | terminal owner oldOutcome => simp [step?, hlease] at h
-
-theorem terminal_effects_belong_to_matching_winner
-    (pre post : World Generation) (generation : Generation) (outcome : Outcome)
-    (h : step? pre (.finalize generation outcome) = some post) :
-    post.lease = .terminal generation outcome ∧
-      post.continuationCount = (if pre.continuationRequired then 1 else 0) ∧
-      post.tokenChargeCount = (if pre.tokenChargeRequired then 1 else 0) := by
-  have hagreement := terminalization_agrees_atomically pre post generation outcome h
-  refine ⟨hagreement.1, ?_⟩
-  cases hlease : pre.lease with
-  | vacant => simp [step?, hlease] at h
-  | active owner deadline =>
-      simp [step?, hlease] at h
-      rcases h with ⟨_, rfl⟩
-      simp_all [terminalize, commitTerminalEffects]
-  | recoverable owner => simp [step?, hlease] at h
+  | recoverable owner duration deadline => simp [step?, hlease] at h
   | terminal owner oldOutcome => simp [step?, hlease] at h
 
 theorem drop_relinquishes_matching_owner
     (pre post : World Generation) (generation : Generation)
-    (h : step? pre (.drop generation) = some post) :
-    post.lease = .recoverable generation := by
+    (h : step? pre (.drop .mutationWriteGate generation) = some post) :
+    ∃ duration deadline, post.lease = .recoverable generation duration deadline := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
-  | active owner deadline =>
+  | active owner duration deadline =>
       simp [step?, hlease] at h
-      rcases h with ⟨howner, rfl⟩
-      subst owner
-      rfl
-  | recoverable owner => simp [step?, hlease] at h
+      rcases h with ⟨rfl, rfl⟩
+      exact ⟨duration, deadline, rfl⟩
+  | recoverable owner duration deadline => simp [step?, hlease] at h
   | terminal owner outcome => simp [step?, hlease] at h
 
-theorem expiry_relinquishes_matching_owner
-    (pre post : World Generation) (generation : Generation)
-    (h : step? pre (.expire generation) = some post) :
-    post.lease = .recoverable generation := by
-  cases hlease : pre.lease with
-  | vacant => simp [step?, hlease] at h
-  | active owner deadline =>
-      simp [step?, hlease] at h
-      rcases h with ⟨hguard, rfl⟩
-      rcases hguard with ⟨rfl, _⟩
-      rfl
-  | recoverable owner => simp [step?, hlease] at h
-  | terminal owner outcome => simp [step?, hlease] at h
-
-theorem recovery_installs_fresh_generation
+theorem dropped_recovery_installs_fresh_generation
     (pre post : World Generation) (expected generation : Generation)
-    (deadline : Time)
-    (h : step? pre (.recover expected generation deadline) = some post) :
-    fresh pre generation ∧
-      post.lease = .active generation deadline ∧
+    (duration deadline : Time)
+    (h : step? pre
+      (.recoverDropped .mutationWriteGate expected generation duration deadline) = some post) :
+    fresh pre generation ∧ post.lease = .active generation duration deadline ∧
       generation ∈ post.usedGenerations := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
-  | active owner oldDeadline => simp [step?, hlease] at h
-  | recoverable owner =>
+  | active owner oldDuration oldDeadline => simp [step?, hlease] at h
+  | recoverable owner oldDuration oldDeadline =>
       simp [step?, hlease] at h
       rcases h with ⟨hguard, rfl⟩
-      rcases hguard with ⟨_, hfresh, _⟩
-      exact ⟨hfresh, rfl, by simp⟩
+      exact ⟨hguard.2.2.2.2.1, rfl, by simp [installFresh]⟩
   | terminal owner outcome => simp [step?, hlease] at h
 
-theorem recovery_failure_is_fresh_atomic_and_bounded
+theorem expired_recovery_failure_is_fresh_atomic_and_bounded
     (pre post : World Generation) (expected generation : Generation)
-    (h : step? pre (.recoverAndFail expected generation) = some post) :
-    fresh pre generation ∧
-      post.lease = .terminal generation .failed ∧
-      post.request = .failed ∧
-      post.response = some .error ∧
-      terminalEffectsBounded post := by
+    (h : step? pre
+      (.recoverExpiredAndFail .mutationWriteGate expected generation) = some post) :
+    fresh pre generation ∧ post.lease = .terminal generation .failed ∧
+      post.request = .failed ∧ terminalEffectsBounded post := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
-  | active owner deadline => simp [step?, hlease] at h
-  | recoverable owner =>
+  | active owner duration deadline =>
       simp [step?, hlease] at h
       rcases h with ⟨hguard, rfl⟩
-      rcases hguard with ⟨_, hfresh, _, _, _⟩
-      refine ⟨hfresh, rfl, rfl, rfl, ?_⟩
-      simp [terminalEffectsBounded, terminalize, commitTerminalEffects]
+      refine ⟨hguard.2.2.2.2.1, rfl, rfl, ?_⟩
+      simp [recoveryTerminal, terminalEffectsBounded, terminalize, commitTerminalEffects]
       cases pre.continuationRequired <;> cases pre.tokenChargeRequired <;> simp_all
+  | recoverable owner duration deadline => simp [step?, hlease] at h
   | terminal owner outcome => simp [step?, hlease] at h
 
-theorem recovery_failure_rejects_second_winner
-    (pre post : World Generation) (expected winner loser : Generation)
-    (h : step? pre (.recoverAndFail expected winner) = some post) :
-    step? post (.recoverAndFail expected loser) = none := by
-  have hterminal := (recovery_failure_is_fresh_atomic_and_bounded
-    pre post expected winner h).2.1
-  simp [step?, hterminal]
-
-/-- External policy revocation may revoke a live lease, but only the exact
-observed tuple. It replaces the generation and commits the terminal pair. -/
-theorem revocation_is_fresh_atomic_and_observed
-    (pre post : World Generation) (expected generation : Generation)
-    (deadline progress : Nat) (outcome : Outcome)
-    (h : step? pre (.revoke expected deadline progress generation outcome) = some post) :
-    pre.lease = .active expected deadline ∧ pre.progressSeq = progress ∧
-      fresh pre generation ∧ post.lease = .terminal generation outcome ∧
-      post.request = outcome.requestState ∧ post.response = outcome.responseStatus := by
+theorem policy_revocation_is_fresh_atomic
+    (pre post : World Generation) (expected generation : Generation) (outcome : Outcome)
+    (h : step? pre
+      (.policyRevoke .mutationWriteGate expected generation outcome) = some post) :
+    fresh pre generation ∧ post.lease = .terminal generation outcome ∧
+      post.request = outcome.requestState := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
-  | active owner oldDeadline =>
+  | active owner duration deadline =>
       simp [step?, hlease] at h
       rcases h with ⟨hguard, rfl⟩
-      rcases hguard with ⟨rfl, rfl, hprogress, hfresh, _, _, _, _⟩
-      exact ⟨rfl, hprogress, hfresh, rfl, rfl, rfl⟩
-  | recoverable owner => simp [step?, hlease] at h
-  | terminal owner oldOutcome => simp [step?, hlease] at h
-
-theorem revocation_rejects_stale_progress
-    (pre : World Generation) (owner generation : Generation)
-    (deadline progress : Nat) (outcome : Outcome)
-    (hlease : pre.lease = .active owner deadline)
-    (hstale : pre.progressSeq ≠ progress) :
-    step? pre (.revoke owner deadline progress generation outcome) = none := by
-  simp [step?, hlease, hstale]
-
-theorem revocation_rejects_second_terminal_winner
-    (pre post : World Generation) (expected winner loser : Generation)
-    (deadline progress : Nat) (outcome otherOutcome : Outcome)
-    (h : step? pre (.revoke expected deadline progress winner outcome) = some post) :
-    step? post (.finalize loser otherOutcome) = none ∧
-      step? post (.revoke expected deadline progress loser otherOutcome) = none := by
-  have hterminal := (revocation_is_fresh_atomic_and_observed
-    pre post expected winner deadline progress outcome h).2.2.2.1
-  simp [step?, hterminal]
-
-theorem revocation_effects_are_bounded
-    (pre post : World Generation) (expected generation : Generation)
-    (deadline progress : Nat) (outcome : Outcome)
-    (h : step? pre (.revoke expected deadline progress generation outcome) = some post) :
-    terminalEffectsBounded post := by
-  cases hlease : pre.lease with
-  | vacant => simp [step?, hlease] at h
-  | active owner oldDeadline =>
-      simp [step?, hlease] at h
-      rcases h with ⟨_, rfl⟩
-      simp [terminalEffectsBounded, terminalize, commitTerminalEffects]
-      cases pre.continuationRequired <;> cases pre.tokenChargeRequired <;> simp_all
-  | recoverable owner => simp [step?, hlease] at h
+      exact ⟨hguard.2.1, rfl, rfl⟩
+  | recoverable owner duration deadline => simp [step?, hlease] at h
   | terminal owner oldOutcome => simp [step?, hlease] at h
 
 theorem provider_eof_requires_explicit_final (sawExplicitFinal : Bool) :

@@ -12,7 +12,7 @@ The bridge and tool-call models terminalize work, the transcript model appends
 messages, and the session model coalesces and claims wake requests. This module
 composes those seams into the model-facing background-completion contract:
 
-1. an in-flight assistant wait call is durably reserved before it can block;
+1. an assistant wait header and pending call are durably published before dispatch;
 2. only a terminal parent-visible tool may produce a completion notification;
 3. the notification is appended after the reserved assistant row;
 4. without a canonical Goal, a coalesced wake is enqueued only after that append exists; and
@@ -234,7 +234,6 @@ def canonicalTranscript : Transcript.TranscriptState :=
   , messages := []
   , toolCalls := []
   , inFlight := ∅
-  , assistantTurn := none
   }
 
 /-- The model-visible wait call is persisted before execution blocks. This is
@@ -244,12 +243,12 @@ assistant row's sequence 3. -/
 def canonicalWaitTurn : Transcript.AssistantTurn :=
   { sessionId := canonicalTranscript.sessionId
   , sequence := canonicalTranscript.nextSeq
-  , callIds := {51}
+  , callIds := [51]
   }
 
 def canonicalWaitReservedTranscript : Transcript.TranscriptState :=
-  let started := canonicalTranscript.beginAssistantToolCall 51
-  started.persistAssistantMessage 40 canonicalWaitTurn
+  let published := canonicalTranscript.publishAcceptedAssistant 40 canonicalWaitTurn
+  published.dispatchToolCall 51
 
 def canonicalWake : SessionQueue.QueueEntry :=
   { requestId := 901

@@ -11,8 +11,7 @@ open Conformance.ContractCases
 def liveOverlayCaseJson (witness : LiveOverlayCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"responseStatus\":" ++ jsonString witness.responseStatus ++ ","
-    ++ "\"materialized\":" ++ boolString witness.materialized ++ ","
+    ++ "\"liveOutputAvailable\":" ++ boolString witness.liveOutputAvailable ++ ","
     ++ "\"hasDurableOwner\":" ++ boolString witness.hasDurableOwner ++ ","
     ++ "\"precedingToolCalls\":" ++ toString witness.precedingToolCalls ++ ","
     ++ "\"turnTerminal\":" ++ boolString witness.turnTerminal ++ ","
