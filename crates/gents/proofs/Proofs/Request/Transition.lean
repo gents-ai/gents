@@ -29,10 +29,13 @@ inductive Transition : RequestContext → RequestContext → Prop where
       pre.admission = .acquired →
       post = { pre with state := .processing, admission := .executing } →
       Transition pre post
-  | advance {pre post : RequestContext} :
+  /-- Permission for the owned loop to continue processing after its foreground
+  dependencies are clear. This is a lifecycle stutter, not evidence of work,
+  output progress, scheduling fairness, or a request-row write. -/
+  | continue_processing {pre post : RequestContext} :
       pre.state = .processing →
       pre.admission = .executing →
-      post = { pre with progressSeq := pre.progressSeq + 1 } →
+      post = pre →
       Transition pre post
   | finish {pre post : RequestContext} :
       pre.state = .processing →

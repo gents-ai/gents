@@ -329,12 +329,9 @@ def snapshotJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
-    ++ "\"streaming_response_cases\":"
+    ++ "\"canonical_output_projection_cases\":"
       ++ jsonArray
-        (StreamingResponse.responseTransitionCases.map responseTransitionCaseJson) ++ ","
-    ++ "\"streaming_response_interrupt_flow_cases\":"
-      ++ jsonArray
-        (StreamingResponse.responseInterruptFlowCases.map responseInterruptFlowCaseJson) ++ ","
+        (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
     ++ "\"prompt_assembly_layer_cases\":"

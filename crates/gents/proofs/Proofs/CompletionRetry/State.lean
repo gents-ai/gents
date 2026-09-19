@@ -1,4 +1,4 @@
-import Proofs.Basic
+import Proofs.CanonicalOutput.State
 
 namespace CompletionRetry
 
@@ -14,24 +14,25 @@ structure Budget where
   allowRepair : Bool
   deriving DecidableEq, Repr
 
+/-- Retry policy begins before publication. Accepted phases are absorbing
+publication-side observations, not provider-attempt phases. -/
 inductive Phase
   | issuing
   | streaming
+  | retractRequired (failure : FailureClass) (error : String) (wake : Time)
+  | retracted (failure : FailureClass) (error : String) (wake : Time)
   | backingOff (wake : Time)
   | repairing
-  | turnClosed
-  | turnDone
+  | accepted (header : Nat)
+  | acceptedToolFailed (header : Nat)
   | exhausted
   | failedPermanent
   deriving DecidableEq, Repr
 
-structure TurnCtx where
-  turnIndex : Nat
-  effects : Nat
-  rendered : Nat
-  deriving DecidableEq, Repr
-
 structure State where
+  request : CanonicalOutput.DocId
+  scope : Nat
+  turn : Nat
   phase : Phase
   budget : Budget
   transportUsed : Nat
@@ -40,7 +41,11 @@ structure State where
   lastParseError : Option String
   now : Time
   deadline : Option Time
-  turn : TurnCtx
+  attempt : Nat
+  /-- Monotone projection of usage already accounted by the InferenceCall owner.
+  This retry policy preserves it across retraction and acceptance; it is not a
+  second usage ledger and does not prove charge completeness or idempotency. -/
+  usageCharged : Nat
   deriving DecidableEq, Repr
 
 def fitsDeadline (wake : Time) (deadline : Option Time) : Prop :=
@@ -48,7 +53,15 @@ def fitsDeadline (wake : Time) (deadline : Option Time) : Prop :=
   | none => True
   | some d => wake ≤ d
 
+instance (wake : Time) (deadline : Option Time) : Decidable (fitsDeadline wake deadline) := by
+  unfold fitsDeadline
+  cases deadline <;> infer_instance
+
+def State.accepted (s : State) : Prop :=
+  (∃ header, s.phase = .accepted header) ∨
+    (∃ header, s.phase = .acceptedToolFailed header)
+
 def State.terminal (s : State) : Prop :=
-  s.phase = Phase.turnDone ∨ s.phase = Phase.exhausted ∨ s.phase = Phase.failedPermanent
+  s.accepted ∨ s.phase = .exhausted ∨ s.phase = .failedPermanent
 
 end CompletionRetry

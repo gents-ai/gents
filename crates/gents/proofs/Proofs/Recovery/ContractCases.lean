@@ -98,12 +98,6 @@ def recoverySweepCases : List RecoverySweepCase :=
       "interrupted"
       "gents-664-durable-terminal-repair"
   , recoveryCase
-      responseRecoverySweep
-      "response_streaming_recovery_to_error"
-      "streaming"
-      "error"
-      "deadline-plumbing-audit-2026-05-12-streaming-response-lifetime"
-  , recoveryCase
       toolCallRecoverySweep
       "tool_running_deadline_exceeded_to_timed_out"
       "running"

@@ -134,10 +134,9 @@ def clientTranscriptMatches (requesterDid ownerDid : Did)
 theorem conversation_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection conversationRules) [] peerDid localDid
       = [ { collection := "AgentRequest",    field := "requester_did", value := peerDid }
-        , { collection := "AgentResponse",   field := "requester_did", value := peerDid }
         , { collection := "AgentMessage",    field := "requester_did", value := peerDid }
         , { collection := "AgentToolCall",   field := "requester_did", value := peerDid }
-        , { collection := "AgentToolResult", field := "requester_did", value := peerDid }
+        , { collection := "AgentOutputSegment", field := "requester_did", value := peerDid }
         , { collection := "AgentSession",    field := "requester_did", value := peerDid }
         , { collection := "CompactionEntry", field := "requester_did", value := peerDid } ] := by
   simp [scopeFilter, conversationRules]
@@ -344,7 +343,7 @@ theorem subagentCoordinator_filter_eq (peerDid localDid : Did) :
 theorem subagentHost_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection subagentHostRules) [] peerDid localDid
       = [ { collection := "AgentRequest",    field := "requester_did", value := peerDid }
-        , { collection := "AgentResponse",   field := "requester_did", value := peerDid }
+        , { collection := "AgentOutputSegment", field := "requester_did", value := peerDid }
         , { collection := "AgentMessage",    field := "requester_did", value := peerDid }
         , { collection := "AgentToolCall",   field := "requester_did", value := peerDid } ] := by
   simp [scopeFilter, subagentHostRules, subagentHostCollections]

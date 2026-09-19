@@ -1,14 +1,17 @@
-import Proofs.Basic
+import Proofs.CanonicalOutput.Hydration
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 
 /-!
 # Session hydration state
 
-The model separates admission from document selection. Pairing, membership,
-and session ownership admit a request; requester/session/agent predicates then
-select the exact transcript documents eligible for replay. Pairing observations
-are read-only admission inputs; hydration owns deliveries and terminal outcomes.
+The model separates admission from reference closure. Pairing, membership, and
+session ownership admit a request; `Catalog.documents` is then the exact closure
+already produced by `CanonicalOutput.Hydration.buildManifest` and authorized by
+the relevant document owners. It is not a broad session inventory. In particular,
+a retained fork dependency may belong to an origin session without granting that
+session. Pairing observations are read-only admission inputs; hydration owns
+deliveries and terminal outcomes.
 -/
 
 namespace SessionHydration
@@ -44,11 +47,8 @@ structure VerifiedActiveMembership where
   deriving DecidableEq, Repr
 
 structure Document where
-  collection : String
-  id : String
-  requester : String
-  agent : String
-  session : String
+  collection : CanonicalOutput.Hydration.Collection
+  id : Nat
   deriving DecidableEq, Repr
 
 structure Catalog where
@@ -92,9 +92,14 @@ structure State where
   terminals : Finset Terminal
   deriving DecidableEq
 
-def transcriptCollections : Finset String :=
-  ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
-   "AgentToolResult", "CompactionEntry"].toFinset
+def transcriptCollections : Finset CanonicalOutput.Hydration.Collection :=
+  [.agentRequest, .agentMessage, .agentToolCall,
+   .agentOutputSegment, .compactionEntry].toFinset
+
+theorem collection_is_transcript
+    (collection : CanonicalOutput.Hydration.Collection) :
+    collection ∈ transcriptCollections := by
+  cases collection <;> simp [transcriptCollections]
 
 def ownedSession (r : Request) : SessionOwner :=
   { session := r.session, requester := r.requester, agent := r.agent }
@@ -114,9 +119,8 @@ instance (cat : Catalog) (r : Request) : Decidable (admits cat r) := by
   unfold admits
   infer_instance
 
-def eligible (r : Request) (doc : Document) : Prop :=
-  doc.collection ∈ transcriptCollections ∧
-  doc.requester = r.requester ∧ doc.agent = r.agent ∧ doc.session = r.session
+def eligible (_r : Request) (doc : Document) : Prop :=
+  doc.collection ∈ transcriptCollections
 
 instance (r : Request) (doc : Document) : Decidable (eligible r doc) := by
   unfold eligible
@@ -124,6 +128,13 @@ instance (r : Request) (doc : Document) : Decidable (eligible r doc) := by
 
 def selectedDocuments (cat : Catalog) (r : Request) : Finset Document :=
   cat.documents.filter (eligible r)
+
+/-- The collection type is closed, so selection is exactly the owner-built
+authorized closure; it does not silently rescan or narrow by session labels. -/
+theorem selectedDocuments_eq_authorizedClosure (cat : Catalog) (r : Request) :
+    selectedDocuments cat r = cat.documents := by
+  ext document
+  simp [selectedDocuments, eligible, collection_is_transcript]
 
 def terminalFor (st : State) (key : String) : Prop :=
   ∃ terminal ∈ st.terminals, terminal.key = key

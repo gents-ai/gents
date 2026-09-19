@@ -143,19 +143,23 @@ def sameDeclarationPosition (left right : Declaration) : Bool :=
 def declarationPositionFresh (streams : Streams) (declaration : Declaration) : Bool :=
   streams.all fun existing => !sameDeclarationPosition existing.1 declaration
 
-/-- Runs partition the payload, declare streams densely once, and never silently
-truncate an oversized run. UTF-8 boundary validity remains a native bridge check. -/
+/-- Runs partition the payload at UTF-8 boundaries, declare streams densely once,
+and never silently truncate an oversized run. Empty continuation writes are not
+progress; only an opening declaration represents a meaningful empty string. -/
 def consumeRuns : List Run → List UInt8 → Streams → Except ExtentError Streams
   | [], [], streams => .ok streams
   | [], _ :: _, _ => .error .malformedRuns
   | run :: rest, bytes, streams => do
-      if run.bytes > bytes.length then .error .malformedRuns
+      if run.bytes > bytes.length ∨ (run.bytes = 0 ∧ run.declaration.isNone) then
+        .error .malformedRuns
       else
         let part := bytes.take run.bytes
         let remaining := bytes.drop run.bytes
-        match run.declaration with
+        if (String.fromUTF8? (ByteArray.mk part.toArray)).isNone then .error .malformedRuns
+        else match run.declaration with
         | some declaration =>
-            if run.stream = streams.length ∧ declarationPositionFresh streams declaration then
+            if run.stream = streams.length ∧ declarationPositionFresh streams declaration ∧
+                declarationWellFormed declaration then
               consumeRuns rest remaining (streams ++ [(declaration, part)])
             else .error .malformedRuns
         | none =>
@@ -232,8 +236,12 @@ theorem no_declaration_is_not_an_empty_stream (bytes : List UInt8) :
     consumeRuns [⟨0, bytes.length, none⟩] bytes [] = .error .malformedRuns := by
   simp [consumeRuns]
 
-theorem explicit_empty_stream_is_preserved (declaration : Declaration) :
-    consumeRuns [⟨0, 0, some declaration⟩] [] [] = .ok [(declaration, [])] := rfl
+theorem explicit_empty_stream_is_preserved (declaration : Declaration)
+    (h : declarationWellFormed declaration = true) :
+    consumeRuns [⟨0, 0, some declaration⟩] [] [] = .ok [(declaration, [])] := by
+  have hempty : String.fromUTF8? (ByteArray.mk (#[] : Array UInt8)) = some "" := by
+    native_decide
+  simp [consumeRuns, declarationPositionFresh, h, hempty]
 
 inductive ReconstructionError where
   | lookup (error : LookupError)

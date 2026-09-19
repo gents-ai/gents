@@ -1,6 +1,5 @@
 import Proofs.Recovery.Contract
 import Proofs.Properties.Liveness
-import Proofs.StreamingResponse.State
 
 namespace Recovery
 
@@ -91,63 +90,6 @@ def requestRecoverySweep : RecoverySweep :=
   , h_stale_positive := requestRecovery_stale_positive
   , h_recover_terminal := requestRecover_terminal
   , h_recover_zero := requestRecover_zero
-  }
-
-abbrev ResponseRecoveryStatus := StreamingResponse.Status
-
-namespace ResponseRecoveryStatus
-  def toContract : StreamingResponse.Status → String
-    | .streaming => "streaming"
-    | .completed => "completed"
-    | .error => "error"
-end ResponseRecoveryStatus
-
-structure ResponseRecoveryRow where
-  status : ResponseRecoveryStatus
-  deriving Repr
-
-def responseRecoveryStale (row : ResponseRecoveryRow) : Prop :=
-  row.status = .streaming
-
-instance (row : ResponseRecoveryRow) : Decidable (responseRecoveryStale row) := by
-  unfold responseRecoveryStale
-  infer_instance
-
-def responseRecover (row : ResponseRecoveryRow) : ResponseRecoveryRow :=
-  { row with status := .error }
-
-def responseRecoveryMeasure (row : ResponseRecoveryRow) : Nat :=
-  if responseRecoveryStale row then 1 else 0
-
-theorem responseRecovery_stale_positive :
-    ∀ row, responseRecoveryStale row → responseRecoveryMeasure row > 0 := by
-  intro row h_stale
-  simp [responseRecoveryMeasure, h_stale]
-
-theorem responseRecover_terminal :
-    ∀ row, responseRecoveryStale row → isTerminal (responseRecover row).status := by
-  intro row _h_stale
-  simp [responseRecover, HasTerminal.isTerminal, StreamingResponse.Status.instHasTerminal]
-
-theorem responseRecover_zero :
-    ∀ row, responseRecoveryStale row → responseRecoveryMeasure (responseRecover row) = 0 := by
-  intro row _h_stale
-  simp [responseRecover, responseRecoveryMeasure, responseRecoveryStale]
-
-def responseRecoverySweep : RecoverySweep :=
-  { Row := ResponseRecoveryRow
-  , collection := .agentResponse
-  , sweepId := "request_lifecycle_recover_all_streaming_responses"
-  , rustFunction := "RequestLifecycle::recover_all"
-  , cadence := .startup
-  , implementationStatus := .implemented
-  , stale := responseRecoveryStale
-  , recover := responseRecover
-  , terminal := fun row => isTerminal row.status
-  , measure := responseRecoveryMeasure
-  , h_stale_positive := responseRecovery_stale_positive
-  , h_recover_terminal := responseRecover_terminal
-  , h_recover_zero := responseRecover_zero
   }
 
 end Recovery

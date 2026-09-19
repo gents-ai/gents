@@ -102,9 +102,9 @@ theorem cascade_cancels_child
           exfalso
           rcases h_advance with h_progress | ⟨h_claimed, _⟩
           ·
-            have h_eq_seq : postChildReq.progressSeq = midChildReq.progressSeq := rfl
-            rw [h_eq_seq] at h_progress
-            exact Nat.lt_irrefl _ h_progress
+            have h_terminal : postChildReq.state = .interrupted := rfl
+            rw [h_terminal] at h_progress
+            cases h_progress.2
           ·
             have h_eq_state : midChildReq.state = pre.child.request.state := rfl
             rw [h_eq_state, h_child_proc] at h_claimed
@@ -151,7 +151,7 @@ theorem detach_does_not_cancel_child
         rw [h_post]
       | begin_inference _ _ h_post =>
         rw [h_post]
-      | advance _ _ h_post =>
+      | continue_processing _ _ h_post =>
         rw [h_post]
       | finish _ _ h_post =>
         rw [h_post]

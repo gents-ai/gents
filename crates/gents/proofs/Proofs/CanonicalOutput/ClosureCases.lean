@@ -2,6 +2,15 @@ import Proofs.CanonicalOutput.Reconstruction
 
 namespace CanonicalOutput.ClosureCases
 
+local instance {ε α : Type} [DecidableEq ε] [DecidableEq α] :
+    DecidableEq (Except ε α)
+  | .error a, .error b =>
+    if h : a = b then .isTrue (h ▸ rfl) else .isFalse (fun e => h (Except.error.inj e))
+  | .error _, .ok _ => .isFalse nofun
+  | .ok _, .error _ => .isFalse nofun
+  | .ok a, .ok b =>
+    if h : a = b then .isTrue (h ▸ rfl) else .isFalse (fun e => h (Except.ok.inj e))
+
 def emptySource : Segment :=
   { id := 1
     coordinate := ⟨10, .provider 0 0 0⟩
@@ -16,18 +25,19 @@ theorem zero_stream_source_has_no_payload_reference :
 
 def emptyText : Segment :=
   { emptySource with
-    flush := some ⟨0, [⟨0, 0, some ⟨0, 0, .text⟩⟩], []⟩
+    flush := some ⟨0, [⟨0, 0, some { block := 0, part := 0, kind := .text }⟩], []⟩
     close := some (.closed .«partial» 1 [0]) }
 
 theorem declared_empty_text_is_a_real_payload :
-    reconstructPayload [emptyText] [] ⟨1, 0⟩ = .ok (⟨0, 0, .text⟩, []) := rfl
+    reconstructPayload [emptyText] [] ⟨1, 0⟩ =
+      .ok ({ block := 0, part := 0, kind := .text }, []) := by native_decide
 
 def raw : Segment := { emptyText with close := none }
 def terminalOnly : Segment := { emptyText with id := 2, flush := none }
 
 theorem terminal_only_closure_counts_only_prior_flushes :
     reconstructPayload [raw, terminalOnly] [] ⟨2, 0⟩ =
-      .ok (⟨0, 0, .text⟩, []) := rfl
+      .ok ({ block := 0, part := 0, kind := .text }, []) := by native_decide
 
 theorem reference_to_plain_flush_is_invalid :
     resolveClose [raw, terminalOnly] [] ⟨1, 0⟩ = .error .invalidReference := rfl

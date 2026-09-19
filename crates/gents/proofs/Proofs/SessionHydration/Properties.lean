@@ -25,24 +25,19 @@ theorem rejected_hydration_attempts_nothing (cat : Catalog) (st : State) (r : Re
   · simp [applyStep, hterminal]
   · cases terminalWrite <;> simp [applyStep, hterminal, hnot]
 
-/-- Every selected document is scoped to the requester's lineage. -/
-theorem selected_tenancy_sound (cat : Catalog) (r : Request) (doc : Document)
-    (hdoc : doc ∈ selectedDocuments cat r) : doc.requester = r.requester := by
-  simp [selectedDocuments, eligible] at hdoc
-  exact hdoc.2.2.1
-
-/-- Selection also preserves the exact agent/session ownership tuple. -/
-theorem selected_session_sound (cat : Catalog) (r : Request) (doc : Document)
-    (hdoc : doc ∈ selectedDocuments cat r) :
-    doc.agent = r.agent ∧ doc.session = r.session := by
-  simp [selectedDocuments, eligible] at hdoc
-  exact ⟨hdoc.2.2.2.1, hdoc.2.2.2.2⟩
-
-/-- Hydration can only select the client-routable transcript collections named by #1142. -/
+/-- Selection never re-derives tenancy from dependency labels. The catalog is an
+exact authorized reference closure, while this final gate enforces the closed
+wire collection vocabulary. This permits an authorized fork origin without
+granting unrelated rows from the origin session. -/
 theorem selected_collection_sound (cat : Catalog) (r : Request) (doc : Document)
     (hdoc : doc ∈ selectedDocuments cat r) : doc.collection ∈ transcriptCollections := by
   simp [selectedDocuments, eligible] at hdoc
-  exact hdoc.2.1
+  exact hdoc.2
+
+theorem selected_is_member_of_authorized_closure (cat : Catalog) (r : Request)
+    (doc : Document) (hdoc : doc ∈ selectedDocuments cat r) : doc ∈ cat.documents := by
+  simp [selectedDocuments] at hdoc
+  exact hdoc.1
 
 /-- An unknown or mismatched session owner cannot cause delivery. -/
 theorem session_ownership_required (cat : Catalog) (st : State) (r : Request)

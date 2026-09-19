@@ -23,22 +23,12 @@ def hydrationRequest : SessionHydration.Request :=
   , session := "session-1" }
 
 def hydrationOwnedDocument : SessionHydration.Document :=
-  { collection := "AgentMessage", id := "owned"
-  , requester := hydrationRequest.requester
-  , agent := hydrationRequest.agent
-  , session := hydrationRequest.session }
+  { collection := .agentMessage, id := 1 }
 
-def hydrationForeignDocument : SessionHydration.Document :=
-  { collection := "AgentMessage", id := "foreign"
-  , requester := "did:key:requester-2"
-  , agent := hydrationRequest.agent
-  , session := hydrationRequest.session }
-
-def hydrationWrongCollectionDocument : SessionHydration.Document :=
-  { collection := "AgentSession", id := "wrong-collection"
-  , requester := hydrationRequest.requester
-  , agent := hydrationRequest.agent
-  , session := hydrationRequest.session }
+/-- A separately authorized origin dependency is selected exactly even though
+its ownership is not re-derived from the target session. -/
+def hydrationOriginDependency : SessionHydration.Document :=
+  { collection := .agentOutputSegment, id := 2 }
 
 def hydrationCatalog (w : SessionHydrationDecisionCase) : SessionHydration.Catalog :=
   { appliedPairingRoutes := if w.paired then
@@ -51,8 +41,7 @@ def hydrationCatalog (w : SessionHydrationDecisionCase) : SessionHydration.Catal
       [{ network := if w.membershipNetworkMatches then "network-1" else "network-2"
        , member := hydrationRequest.requester }].toFinset else ∅
   , sessions := if w.ownsSession then [SessionHydration.ownedSession hydrationRequest].toFinset else ∅
-  , documents := [hydrationOwnedDocument, hydrationForeignDocument,
-      hydrationWrongCollectionDocument].toFinset }
+  , documents := [hydrationOwnedDocument, hydrationOriginDependency].toFinset }
 
 def sessionHydrationDecisionCases : List SessionHydrationDecisionCase :=
   [ { name := "admitted", paired := true,
@@ -166,10 +155,14 @@ structure SessionHydrationProgressCase where
   failed : Bool
   beginRequest : Bool
 
-def hydrationDocumentKeys (stem : String) (count : Nat) : Finset String :=
-  ((List.range count).map fun index => stem ++ toString index).toFinset
+def hydrationDocumentKeys (stem : String) (count : Nat) :
+    Finset SessionHydration.DocumentKey :=
+  ((List.range count).map fun index =>
+    { collection := CanonicalOutput.Hydration.Collection.agentMessage
+    , id := if stem = "doc-" then index else index + 1000 }).toFinset
 
-def hydrationManifest (count : Option Nat) (isExact : Bool) : Option (Finset String) :=
+def hydrationManifest (count : Option Nat) (isExact : Bool) :
+    Option (Finset SessionHydration.DocumentKey) :=
   count.map fun value => hydrationDocumentKeys (if isExact then "doc-" else "foreign-") value
 
 def parsePhase (name : String) : SessionHydration.ClientPhase :=
@@ -190,7 +183,9 @@ def progressPrev (w : SessionHydrationProgressCase) : SessionHydration.ClientPro
 def progressObserved (w : SessionHydrationProgressCase) : SessionHydration.ClientProgress :=
   SessionHydration.observe (progressPrev w)
     (hydrationDocumentKeys "doc-" w.merged)
-    (hydrationManifest w.served w.servedMatches) w.failed w.session w.agent
+    (hydrationManifest w.served w.servedMatches)
+    (if w.served.isSome || w.prevServed.isSome then .valid else .loading)
+    w.failed w.session w.agent
 
 def sessionHydrationProgressCases : List SessionHydrationProgressCase :=
   [ { name := "open_requests"
@@ -281,7 +276,9 @@ def sessionHydrationProgressCaseJson (w : SessionHydrationProgressCase) : String
   let next := if w.beginRequest then SessionHydration.beginRequest w.session w.agent
     else SessionHydration.observe (progressPrev w)
       (hydrationDocumentKeys "doc-" w.merged)
-      (hydrationManifest w.served w.servedMatches) w.failed w.session w.agent
+      (hydrationManifest w.served w.servedMatches)
+      (if w.served.isSome || w.prevServed.isSome then .valid else .loading)
+      w.failed w.session w.agent
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
     ++ "\"prev_session\":" ++ jsonString w.prevSession ++ ","
@@ -346,6 +343,7 @@ def sessionHydrationDurableCases : List SessionHydrationDurableCase :=
 def sessionHydrationDurableCaseJson (w : SessionHydrationDurableCase) : String :=
   let next := SessionHydration.projectDurable
     (durableRequest w) (hydrationDocumentKeys "doc-" w.merged)
+      (if w.status = "served" then .valid else .loading)
       "session-exact" "agent-exact"
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","

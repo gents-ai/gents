@@ -45,11 +45,29 @@ inductive PayloadKind where
   | media
   deriving DecidableEq, Repr
 
+structure ToolIdentity where
+  id : String
+  callId : Option String
+  name : String
+  deriving DecidableEq, Repr
+
+inductive MediaKind where
+  | image | audio | video | document
+  deriving DecidableEq, Repr
+
 structure Declaration where
   block : Nat
   part : Nat
   kind : PayloadKind
+  tool : Option ToolIdentity := none
+  mediaKind : Option MediaKind := none
   deriving DecidableEq, Repr
+
+def declarationWellFormed (declaration : Declaration) : Bool :=
+  match declaration.kind with
+  | .arguments => declaration.tool.isSome && declaration.mediaKind.isNone
+  | .media => declaration.tool.isNone && declaration.mediaKind.isSome
+  | _ => declaration.tool.isNone && declaration.mediaKind.isNone
 
 structure Run where
   stream : Nat

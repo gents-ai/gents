@@ -2,56 +2,69 @@
 
 This directory contains the Lean 4 model for `gents`.
 
-## Canonical output stack (#1571): in progress
+## Canonical output stack (#1571): Lean contract layer
 
 Branch `feat/1571-canonical-transcript-lean` starts at data-contract commit
-`3eaff8f16` on `feat/1571-canonical-transcript`. Only Lean models and their
-documentation change here; Rust conformance/implementation remain later layers.
+`3eaff8f16` on `feat/1571-canonical-transcript`. This layer changes Lean models,
+their documentation, and the approved remote-argument disclosure correction to
+the data contract. Rust conformance/implementation remain later layers.
 
-`Proofs/CanonicalOutput` supplies the immutable fact vocabulary, closure lookup,
-executable dense-extent/run reconstruction, conservative recovery text selection,
-structural fork-reference preservation, and exact terminal-header selection.
-`Transcript` replaces in-flight upserts with immutable publication and ordered
-dispatch; `Client` replaces response precedence with request-only presentation
-and scoped, unambiguous retry-tip resolution. `RequestExecutionLease` replaces
-progress counters with derived deadlines over immutable progress observations.
-Executable Lean witnesses exercise missing/twin records, incomplete arguments,
-late raw flushes, expiry rejection, stale generations and replay. This is a partial
-model, not a claim that the stack is ready for Rust implementation.
+`Proofs/CanonicalOutput` supplies immutable facts, conflict-aware closure lookup,
+dense extent reconstruction, UTF-8 run validation, native block reconstruction,
+presentation windows, conservative recovery text, and exact terminal selection.
+`Execution` composes these facts with the lease and transcript owners; producer
+acceptance publishes closure, header and pending tool intent atomically before
+dispatch. Recovery covers all unresolved provider sources before swapping the
+generation. `ToolDelivery` uses the existing tool lifecycle independently of the
+parent request, including partial results wrapped in complete notifications.
 
-Assumptions: authorized observations and DefraDB genesis identity come from the
-native bridge; UTF-8/native JSON/media decoding is not proved by a byte-list model.
-Lease steps are serialized authoritative owner reads/commits under one shared gate
-and a nondecreasing clock. Lease facts are an already-validated eligibility
-projection; its connection to source validation still needs modeling. Recovery
-fairness is distinct from an expiry making recovery enabled. A Complete outcome
-does not itself prove closure validity. Transcript publication and lease admission
-must still compose with closure validation in one authoritative transaction.
-The fork-reference theorem does not establish ACP access or dependency retention.
+`StreamingResponse` is now a pure immutable-output projection, not a mutable
+response lifecycle. Request-only status remains in `Client`; missing output does
+not turn a terminal request into a running one. `CompletionRetry/CanonicalExecution`
+couples retry eligibility to actual canonical retraction/acceptance.
+`SessionFork` copies native headers without payload duplication, and
+`CanonicalOutput/Hydration` computes the authorized transitive dependency manifest.
+Receiver completion requires reconstruction as well as signed identity coverage.
+`Compaction.safe_prefix_stable_under_arbitrary_suffix` uses a checked, already
+published ordinary boundary; it does not assume future provider call IDs are fresh.
+Its row projection uses collision-free symbols for native provider call keys,
+separately from physical tool-document identity. Headers that the single-result
+row model cannot represent are rejected; full native content-normalization
+refinement remains a provider-input bridge obligation.
 
-Remaining work: compose the output, lease, transcript and terminal owners;
-prove exact-extent recovery and single-winner source closure across generations;
-replace `StreamingResponse`, adapt completion retry/acceptance, replace
-`SessionFork` copies, model hydration reference closure, and prove compaction
-prefix safety. Native block/header reconstruction, presentation ranges, and live
-diagnostic classification also need their executable composition. Existing
-proofs of those unmigrated surfaces remain historical
-handoff evidence, not proofs of the new contract. Lean conformance-source adapters
-for migrated owners change here; external fixture regeneration and native bridges
-belong to the next PR. Do not preserve old abstractions merely to keep adapters
-compiling.
+Assumptions: authorized observations, exact physical owner membership, DefraDB
+genesis identity and signed manifests come from the native bridge. The model
+checks UTF-8 boundaries and parses argument JSON, but does not prove equivalence
+of Lean/Rust codecs, media decoding, provider adapters, or signature verification.
+Lease decisions are authoritative owner reads/commits serialized under the existing
+mutation gate and a nondecreasing clock. This is not cross-replica consensus or
+enforcement of the one-runtime-per-principal convention. Finite-silence recovery
+eligibility does not establish scheduler fairness or database termination.
+Configured remote routes and cancellation/tool-policy admission are supplied by
+their existing authenticated owners, not inferred from published tool intent.
+Hydration roots are owner-authorized; recursive fork ancestry is checked by
+hydration, not by decoding one isolated message. Global identity allocation and
+immutable signed hydration-receipt identity remain native obligations.
+Atomic Lean post-states do not prove DefraDB transaction/rollback behavior or
+native generation-token allocation and nonreuse.
+Usage belongs to `InferenceCall` and the existing aggregate-budget owner:
+retry proofs preserve accounted usage but do not prove provider reporting or
+exactly-once ingestion of those reports.
 
-Open data-contract decision: subagent argument delegation currently routes only
-the addressed tool-call document. A new argument reference requires output/header
-dependencies; a multi-stream segment may also contain parent text or reasoning.
-Document-level ACP cannot disclose only the argument's slice. The witness
-`CanonicalOutput.Examples.argument_document_also_contains_other_content` makes
-that boundary explicit. Decide the delegation disclosure boundary before proving
-the new hydration/bridge policy; do not silently broaden authorization.
+Remote subagents retain argument-only disclosure: the existing addressed tool-call
+document carries one immutable validated argument copy. Its source reference is
+provenance, not permission to hydrate a multi-stream parent document. Local calls
+use canonical arguments without that copy. `Delegation` models this boundary.
 
-Checkpoint validation: full `lake build` passes on pinned Lean 4.18.0; changed
-models contain no `sorry` or added axioms. Rust builds and external fixture
-regeneration are intentionally not run in this layer.
+Lean conformance-source adapters change with their owners; external fixture
+regeneration and native bridge implementation belong to the next PR. Historical
+Rust bridge coverage is not evidence that these new contracts are implemented.
+Validate this layer with `lake build` on pinned Lean 4.18.0. Rust builds and external
+fixture regeneration are intentionally not run in this layer.
+
+Layer validation: full `lake build` passes (1,126 targets), `git diff --check`
+passes, and the proof tree contains no `sorry` or added axioms. Independent
+cross-reviews and executable counterexamples cover the composition boundaries.
 
 ## Configuration and session refactor contract layer
 
@@ -74,7 +87,7 @@ Historical bridge references below are not evidence that this target already run
 | Execution | Tool execution removes per-call approval states/transitions. Request terminalization, managed execution, foreground progress, and enrollment authorization retain their owners. `TaskHooks` command results are external observations; the hook contract covers sequencing and failure handling, not exactly-once host effects. |
 | Identity | `Identity` resolves behavior labels with an explicit principal; shared labels never determine permissions or imply a global ID-to-principal mapping. Structural fixture results evaluate the actual well-formedness predicate. |
 | Durable sessions | `AgentSession` owns identity, provenance, title, and request observation. Session observation updates use exact requester scope; same-request refresh consumes a transactional reread of the current request, not an out-of-order notification payload. Head selection queries authoritative request rows; cached observations do not authorize retries or background wakes. Retry selection uses exact requester scope; background wake selection spans requester scopes. |
-| Forks | `SessionFork` copies a transcript prefix, remaps collection-qualified physical references, detaches live request links, and requires compaction cursors to name retained messages. The adapter must supply an authorized, coherent snapshot and translate user cuts and cursor encodings. |
+| Forks | `SessionFork` copies native message headers for a transcript prefix, preserves origin payload references, detaches live request links, and requires compaction cursors to name retained messages. The adapter must supply an authorized, coherent snapshot and translate user cuts and cursor encodings; hydration retains authorized origin dependencies. |
 | Request inputs | `Enrollment/RequestInput` reuses title and queue types and admits selected skills within context authority. Goal continuations carry original sequence/wrapup facts verified by the existing receipt owner. Sampling and aggregate limits come from inference configuration. |
 | Locality | Workspace/callback ownership uses the principal DID. Filesystem availability remains an execution boundary; no host fingerprint or single-runtime enforcement is introduced. |
 
@@ -254,8 +267,9 @@ The current proof suite covers twenty practical areas:
 20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
     derived deadlines over eligible immutable output, explicit renewal,
     atomic expiry recovery, drop recovery, matching-generation terminal CAS,
-    and bounded winner-owned continuation/token-charge effects. The new canonical
-    output classifier and publication transaction composition remain obligations.
+    and bounded winner-owned continuation/token-charge effects. Canonical
+    classification and publication composition are modeled in `CanonicalOutput`;
+    their native transaction realization and conformance remain obligations.
 
 Separately, **obligation models** (no Rust refinement tests yet):
 
@@ -622,7 +636,7 @@ request by `request_id` and bound to a backend by `backend_id`.
 | ID | Property | Why it matters | Theorem |
 |----|----------|----------------|---------|
 | S1 | Terminal requests stay terminal | A completed, failed, superseded, dead, or interrupted request cannot silently re-enter processing | `terminal_irreversibility` |
-| S3 | `progressSeq` never decreases | Clients can treat progress as monotonic and avoid rewind bugs | `progress_monotonic` |
+| S3 | Processing continuation does not rewrite request state | The owned loop's continuation admission is a lifecycle stutter; immutable output separately owns progress | `continue_processing_is_lifecycle_stutter` |
 | S4 | Completion cannot be a hidden deadline violation | A request that reaches `completed` did not get there through deadline expiry | `completed_not_deadline_expired`, `deadline_structural_bound` |
 | S5 | Recovery blocks claims | New work is not accepted while recovery is still repairing stuck state | `recovery_blocks_claims` |
 | S6 | Completion implies persistence | The model does not allow `completed` without a committed durable state | `persistence_before_completion` |

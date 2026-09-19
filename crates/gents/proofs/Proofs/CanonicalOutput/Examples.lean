@@ -4,10 +4,20 @@ import Proofs.RequestExecutionLease.Transition
 /-! Executable witnesses for the new model, not regenerated Rust fixtures. -/
 namespace CanonicalOutput.Examples
 
+local instance {ε α : Type} [DecidableEq ε] [DecidableEq α] :
+    DecidableEq (Except ε α)
+  | .error a, .error b =>
+    if h : a = b then .isTrue (h ▸ rfl) else .isFalse (fun e => h (Except.error.inj e))
+  | .error _, .ok _ => .isFalse nofun
+  | .ok _, .error _ => .isFalse nofun
+  | .ok a, .ok b =>
+    if h : a = b then .isTrue (h ▸ rfl) else .isFalse (fun e => h (Except.ok.inj e))
+
 def coordinate : Coordinate := ⟨10, .provider 0 0 0⟩
-def textDeclaration : Declaration := ⟨0, 0, .text⟩
-def argumentDeclaration : Declaration := ⟨1, 0, .arguments⟩
-def laterTextDeclaration : Declaration := ⟨2, 0, .text⟩
+def textDeclaration : Declaration := { block := 0, part := 0, kind := .text }
+def argumentDeclaration : Declaration :=
+  { block := 1, part := 0, kind := .arguments, tool := some ⟨"call", none, "child"⟩ }
+def laterTextDeclaration : Declaration := { block := 2, part := 0, kind := .text }
 
 /-- Text followed by deliberately incomplete argument JSON (`{`). -/
 def finalFlush : Segment :=
@@ -21,7 +31,7 @@ def finalFlush : Segment :=
 
 theorem incomplete_arguments_do_not_erase_text :
     reconstructExtent [finalFlush] finalFlush =
-      .ok [(textDeclaration, [65]), (argumentDeclaration, [123])] := rfl
+      .ok [(textDeclaration, [65]), (argumentDeclaration, [123])] := by native_decide
 
 theorem recovery_omits_arguments_without_rewriting_bytes :
     recoveryText [(0, textDeclaration), (1, argumentDeclaration)] =
@@ -38,7 +48,7 @@ def outOfOrderOpeningFlush : Segment :=
 
 theorem stream_openings_may_arrive_out_of_native_order :
     reconstructExtent [outOfOrderOpeningFlush] outOfOrderOpeningFlush =
-      .ok [(argumentDeclaration, [123]), (textDeclaration, [65])] := rfl
+      .ok [(argumentDeclaration, [123]), (textDeclaration, [65])] := by native_decide
 
 theorem missing_prefix_is_not_short_output :
     reconstructExtent [] finalFlush = .error (.missingOrdinal 0) := rfl
@@ -54,7 +64,7 @@ theorem closure_twin_is_not_hidden_by_exact_reference :
 theorem exact_duplicate_segment_delivery_is_idempotent :
     resolveClose [finalFlush, finalFlush] [] ⟨100, 0⟩ = .ok finalFlush ∧
       reconstructExtent [finalFlush, finalFlush] finalFlush =
-        .ok [(textDeclaration, [65]), (argumentDeclaration, [123])] := ⟨rfl, rfl⟩
+        .ok [(textDeclaration, [65]), (argumentDeclaration, [123])] := by native_decide
 
 theorem owner_verified_absent_dependency_denial_is_not_loading :
     reconstructPayload [] [] ⟨100, 0⟩ [⟨100, 101⟩] =
@@ -79,7 +89,7 @@ def toolFlush : Segment :=
 
 theorem tool_source_accepts_its_exact_writer :
     reconstructExtent [toolFlush] toolFlush =
-      .ok [(textDeclaration, [65]), (argumentDeclaration, [123])] := rfl
+      .ok [(textDeclaration, [65]), (argumentDeclaration, [123])] := by native_decide
 
 theorem tool_source_rejects_a_different_tool_writer :
     let wrong := { toolFlush with writer := .tool 43 }
@@ -96,7 +106,19 @@ inside the same document. A PayloadRef is not a smaller authorization unit. -/
 theorem argument_document_also_contains_other_content :
     reconstructPayload [delegatedFlush] [] ⟨100, 1⟩ =
       .ok (argumentDeclaration, [123, 125]) ∧
-      delegatedFlush.flush.map (·.payload) = some [65, 123, 125] := ⟨rfl, rfl⟩
+      delegatedFlush.flush.map (·.payload) = some [65, 123, 125] := by native_decide
+
+theorem utf8_cannot_be_split_between_runs :
+    consumeRuns [⟨0, 1, some textDeclaration⟩, ⟨0, 1, none⟩] [195, 169] [] =
+      .error .malformedRuns := by native_decide
+
+theorem complete_utf8_run_is_preserved :
+    consumeRuns [⟨0, 2, some textDeclaration⟩] [195, 169] [] =
+      .ok [(textDeclaration, [195, 169])] := by native_decide
+
+theorem empty_continuation_is_not_progress :
+    consumeRuns [⟨0, 0, none⟩] [] [(textDeclaration, [65])] =
+      .error .malformedRuns := by native_decide
 
 def assistantHeader : Header :=
   { id := 200

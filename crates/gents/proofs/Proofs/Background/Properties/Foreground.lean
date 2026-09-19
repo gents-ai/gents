@@ -3,18 +3,15 @@ import Proofs.Background.Properties.Structure
 namespace Subagent
 namespace BridgedState
 
-theorem foreground_blocks_parent_advance
+theorem parent_transition_preserves_request_origin_and_message_sequence
     (pre post : BridgedState)
-    (h_fg     : ∃ t ∈ pre.parent.tools,
-                  t.awaitMode = .foreground ∧
-                  ¬ isTerminal t.state)
     (h_step   : Transition pre post) :
-    pre.parent.request.progressSeq = post.parent.request.progressSeq ∧
+    pre.parent.request.origin = post.parent.request.origin ∧
     pre.parent.request.messageSeq  = post.parent.request.messageSeq := by
   cases h_step with
   | parent_step h_inner h_child_eq h_bridge_eq _ _ =>
     cases h_inner with
-    | request_step h_req _ _ h_tools _ _ h_no_block =>
+    | request_step h_req _ _ _ _ _ _ =>
       cases h_req with
       | bind_workspace _ _ h_post =>
         constructor <;> rw [h_post]
@@ -25,19 +22,9 @@ theorem foreground_blocks_parent_advance
       | admission_reject _ _ h_post =>
         constructor <;> rw [h_post]
       | begin_inference h_pre_claimed _ h_post =>
-        exfalso
-        apply h_no_block
-        · refine Or.inr ⟨h_pre_claimed, ?_⟩
-          rw [h_post]
-        ·
-          exact h_fg
-      | advance _ _ h_post =>
-        exfalso
-        apply h_no_block
-        · refine Or.inl ?_
-          rw [h_post]
-          exact Nat.lt_succ_self _
-        · exact h_fg
+        constructor <;> rw [h_post]
+      | continue_processing _ _ h_post =>
+        constructor <;> rw [h_post]
       | finish _ _ h_post =>
         constructor <;> rw [h_post]
       | fail _ _ h_post =>
@@ -78,6 +65,25 @@ theorem foreground_blocks_parent_advance
     constructor <;> rw [h_request_eq]
   | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ _ _ =>
     constructor <;> rw [h_parent_eq]
+
+/-- The composed request-step guard rejects the owned loop's continuation
+admission while a foreground tool is live. This is separate from generic
+request identity preservation and does not claim that an admitted continuation
+will be scheduled or produce output. -/
+theorem foreground_blocks_processing_continuation_admission
+    (pre post : ComposedState)
+    (h_fg : ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧ ¬ isTerminal t.state)
+    (h_continue : RequestContext.step? pre.request .continueProcessing = some post.request)
+    (h_no_block :
+      ((pre.request.state = .processing ∧ post.request.state = .processing) ∨
+        (pre.request.state = .claimed ∧ post.request.state = .processing) →
+        ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧ ¬ isTerminal t.state)) :
+    False := by
+  simp [RequestContext.step?] at h_continue
+  rcases h_continue with ⟨⟨h_processing, _⟩, h_post⟩
+  apply h_no_block
+  · exact Or.inl ⟨h_processing, by simpa [← h_post] using h_processing⟩
+  · exact h_fg
 
 theorem steer_subagent_interrupt_preserves_link_symmetry
     {pre post : BridgedState}

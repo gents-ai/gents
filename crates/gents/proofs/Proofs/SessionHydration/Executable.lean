@@ -13,8 +13,7 @@ def decideSelected (r : Request) (doc : Document) : Bool := decide (eligible r d
 
 theorem decideSelected_agrees (r : Request) (doc : Document) :
     decideSelected r doc = true ↔
-      doc.collection ∈ transcriptCollections ∧ doc.requester = r.requester ∧
-        doc.agent = r.agent ∧ doc.session = r.session := by
+      doc.collection ∈ transcriptCollections := by
   simp [decideSelected, eligible]
 
 end SessionHydration

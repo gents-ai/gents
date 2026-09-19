@@ -2,143 +2,31 @@ import Proofs.StreamingResponse.State
 
 namespace StreamingResponse
 
-inductive Transition : ResponseContext → ResponseContext → Prop where
-  | begin
-      {pre post : ResponseContext} :
-      pre.status = .streaming →
-      pre.liveTail = .empty →
-      pre.tokenCount = 0 →
-      pre.materializedMessageSequence = none →
-      post = pre →
-      Transition pre post
-  | writeTokens
-      {pre post : ResponseContext} {delta : Nat} :
-      pre.status = .streaming →
-      delta > 0 →
-      post = { pre with
-        liveTail := .nonEmpty
-      , tokenCount := pre.tokenCount + delta
-      , lastProgressAt := pre.now } →
-      Transition pre post
-  | writeReasoning
-      {pre post : ResponseContext} :
-      pre.status = .streaming →
-      post = { pre with
-        liveTail := .nonEmpty
-      , tailReasoning := .nonEmpty
-      , lastProgressAt := pre.now } →
-      Transition pre post
-  | flushPending
-      {pre post : ResponseContext} :
-      pre.status = .streaming →
-      post = pre →
-      Transition pre post
-  | resetTail
-      {pre post : ResponseContext} :
-      pre.status = .streaming →
-      post = { pre with liveTail := .empty, tailReasoning := .empty } →
-      Transition pre post
-  | setInterruptedAt
-      {pre post : ResponseContext} {t : Time} :
-      pre.status = .streaming →
-      pre.interruptedAt = none →
-      post = { pre with interruptedAt := some t } →
-      Transition pre post
-  | finalizeComplete
-      {pre post : ResponseContext} {seq : Transcript.Sequence} :
-      pre.status = .streaming →
-      post = { pre with
-        status := .completed
-      , liveTail := .empty
-      , durableReasoning := pre.tailReasoning
-      , materializedMessageSequence := some seq } →
-      Transition pre post
-  | finalizeError
-      {pre post : ResponseContext} {reason : ErrorReason} :
-      pre.status = .streaming →
-      (reason = .inferenceFailed ∨ reason = .finalizeRequestedError ∨
-       reason = .streamIdleTimeout ∨ reason = .interrupted) →
-      (reason = .streamIdleTimeout → pre.now > pre.streamIdleDeadline) →
-      post = { pre with
-        status := .error
-      , liveTail := .empty
-      , errorReason := some reason } →
-      Transition pre post
-  | recoverInterrupted
-      {pre post : ResponseContext} :
-      pre.status = .streaming →
-      post = { pre with
-        status := .error
-      , errorReason := some .daemonRestartRecovery } →
-      Transition pre post
-  | observeIdempotentFinalize
-      {pre post : ResponseContext} :
-      (pre.status = .completed ∨ pre.status = .error) →
-      post = pre →
-      Transition pre post
+open CanonicalOutput
 
-inductive Trace : ResponseContext → ResponseContext → Prop where
-  | refl {s : ResponseContext} : Trace s s
-  | step {s₁ s₂ s₃ : ResponseContext} :
-      Transition s₁ s₂ → Trace s₂ s₃ → Trace s₁ s₃
+/-- Observation changes only by immutable fact delivery or by an owner fact
+changing. Canonical execution, not this projection, authorizes those facts. -/
+inductive Transition : Observation → Observation → Prop
+  | deliverSegment (observation : Observation) (record : Segment) :
+      Transition observation
+        { observation with records := CanonicalOutput.deliver observation.records record }
+  | deliverMessage (observation : Observation) (message : MessageEnvelope) :
+      Transition observation
+        { observation with
+            messages := if message ∈ observation.messages then observation.messages
+              else observation.messages ++ [message] }
+  | observeOwner (observation : Observation) (owner : OwnerLiveness) :
+      Transition observation { observation with owner := owner }
+  | selectMessage (observation : Observation) (id : DocId) :
+      Transition observation
+        { observation with target := { observation.target with messageId := some id } }
+  | observeTerminal (observation : Observation) (selection : TerminalSelection) :
+      Transition observation
+        { observation with requestTerminal := true, terminalSelection := some selection }
 
-inductive BridgeTransition : ResponseRequestBridge → ResponseRequestBridge → Prop where
-  | finalizeComplete
-      {pre post : ResponseRequestBridge} {seq : Transcript.Sequence} :
-      pre.response.status = .streaming →
-      post.response = { pre.response with
-        status := .completed
-      , liveTail := .empty
-      , durableReasoning := pre.response.tailReasoning
-      , materializedMessageSequence := some seq } →
-      pre.requestState = .processing →
-      post.requestState = .completed →
-      post.requestPersistence = .committed →
-      BridgeTransition pre post
-  | finalizeError
-      {pre post : ResponseRequestBridge} {reason : ErrorReason} :
-      pre.response.status = .streaming →
-      (reason = .inferenceFailed ∨ reason = .finalizeRequestedError ∨
-       reason = .streamIdleTimeout ∨ reason = .interrupted) →
-      (reason = .streamIdleTimeout →
-         pre.response.now > pre.response.streamIdleDeadline) →
-      post.response = { pre.response with
-        status := .error
-      , liveTail := .empty
-      , errorReason := some reason } →
-      pre.requestState = .processing →
-      post.requestState = (if reason = .interrupted then .interrupted else .failed) →
-      post.requestPersistence = .committed →
-      BridgeTransition pre post
-  | recoverPaired
-      {pre post : ResponseRequestBridge} :
-      pre.response.status = .streaming →
-      post.response = { pre.response with
-        status := .error
-      , errorReason := some .daemonRestartRecovery } →
-      pre.requestState = .processing →
-      post.requestState = .failed →
-      post.requestPersistence = .committed →
-      BridgeTransition pre post
-
-end StreamingResponse
-
-namespace StreamingResponse
-
-/-- Cancellation retains the request owner's interrupted outcome while the response
-uses its existing error projection. Ordinary provider failures remain failed. -/
-theorem interrupted_bridge_preserves_request_cancellation
-    {pre post : ResponseRequestBridge}
-    (h : BridgeTransition pre post)
-    (hInterrupted : post.response.errorReason = some .interrupted)
-    (hNoPreviousError : pre.response.errorReason = none) :
-    post.requestState = .interrupted := by
-  cases h with
-  | finalizeComplete _ hp _ _ _ => simp [hp, hNoPreviousError] at hInterrupted
-  | finalizeError _ _ _ hp _ hr _ =>
-      simp only [hp, Option.some.injEq] at hInterrupted
-      simp [hInterrupted] at hr
-      exact hr
-  | recoverPaired _ hp _ _ _ => simp [hp] at hInterrupted
+inductive Trace : Observation → Observation → Prop
+  | refl (observation) : Trace observation observation
+  | step {before middle after} : Transition before middle → Trace middle after →
+      Trace before after
 
 end StreamingResponse

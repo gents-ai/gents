@@ -29,6 +29,7 @@ namespace Compaction
 
 open Transcript (MessageRow MessageKind ToolResultKey)
 open PromptAssembly (sanitizeGlobal dropOrphanedFrom filterCallsBy resolvedIn callsIn
+                     sanitizeTurn filterCallsByTurn resolvedInTurn
                      UniqueCallIds ProviderValid ActiveBlockValid ActiveBlockValidFrom)
 
 /-- The pending-call set `dropOrphanedFrom` threads: an assistant announcement
@@ -165,6 +166,109 @@ theorem filterCallsBy_append (a : List MessageRow) :
             PromptAssembly.filterCallsBy_cons_ordinary row rest resolved hk,
             List.cons_append, ih b resolved]
 
+/-! ## Stable per-turn projection under legal later publication
+
+Every later request/background turn begins with an ordinary durable row. This
+structural rule, rather than globally fresh abstract call symbols, isolates the
+preceding per-turn sanitizer decision. The suffix may reuse row symbols and may
+later append tool results; neither can reach backward across its leading
+ordinary row. Relating those row symbols to provider-native call IDs is a
+separate codec/refinement obligation; Transcript rows use physical tool docs.
+-/
+
+theorem resolvedInTurn_append_before_ordinary (a b : List MessageRow)
+    (boundary : MessageRow) (hboundary : boundary.kind = .ordinary) :
+    PromptAssembly.resolvedInTurn (a ++ boundary :: b) =
+      PromptAssembly.resolvedInTurn a := by
+  induction a with
+  | nil => simp [PromptAssembly.resolvedInTurn, hboundary]
+  | cons row rest ih =>
+      cases hk : row.kind with
+      | toolResult callId key =>
+          rw [List.cons_append,
+            PromptAssembly.resolvedInTurn_cons_result row _ callId key hk,
+            PromptAssembly.resolvedInTurn_cons_result row rest callId key hk, ih]
+      | assistantToolCalls callIds =>
+          rw [List.cons_append,
+            PromptAssembly.resolvedInTurn_cons_assistant row _ callIds hk,
+            PromptAssembly.resolvedInTurn_cons_assistant row rest callIds hk]
+      | ordinary =>
+          rw [List.cons_append,
+            PromptAssembly.resolvedInTurn_cons_ordinary row _ hk,
+            PromptAssembly.resolvedInTurn_cons_ordinary row rest hk]
+
+theorem filterCallsByTurn_append_before_ordinary (a b : List MessageRow)
+    (boundary : MessageRow) (hboundary : boundary.kind = .ordinary) :
+    PromptAssembly.filterCallsByTurn (a ++ boundary :: b) =
+      PromptAssembly.filterCallsByTurn a ++
+        boundary :: PromptAssembly.filterCallsByTurn b := by
+  induction a with
+  | nil =>
+      simp [PromptAssembly.filterCallsByTurn, hboundary]
+  | cons row rest ih =>
+      cases hk : row.kind with
+      | toolResult callId key =>
+          rw [List.cons_append,
+            PromptAssembly.filterCallsByTurn_cons_result row _ callId key hk,
+            PromptAssembly.filterCallsByTurn_cons_result row rest callId key hk,
+            ih, List.cons_append]
+      | assistantToolCalls callIds =>
+          rw [List.cons_append,
+            PromptAssembly.filterCallsByTurn_cons_assistant row _ callIds hk,
+            PromptAssembly.filterCallsByTurn_cons_assistant row rest callIds hk,
+            resolvedInTurn_append_before_ordinary rest b boundary hboundary]
+          split <;> simp [ih]
+      | ordinary =>
+          rw [List.cons_append,
+            PromptAssembly.filterCallsByTurn_cons_ordinary row _ hk,
+            PromptAssembly.filterCallsByTurn_cons_ordinary row rest hk,
+            ih, List.cons_append]
+
+/-- Row-level append rule: a subsequent turn starts with an ordinary row. This
+allows arbitrary later results, background rows, and abstract call-symbol reuse
+in the remainder. Native provider-input transfer needs a verified codec. -/
+theorem sanitizeTurn_append_new_turn (history suffix : List MessageRow)
+    (boundary : MessageRow) (hboundary : boundary.kind = .ordinary) :
+    PromptAssembly.sanitizeTurn (history ++ boundary :: suffix) =
+      PromptAssembly.sanitizeTurn history ++
+        boundary :: PromptAssembly.sanitizeTurn suffix := by
+  unfold PromptAssembly.sanitizeTurn PromptAssembly.dropUnpairedCallsTurn
+    PromptAssembly.dropOrphanedResults
+  rw [dropOrphanedFrom_append history (boundary :: suffix) ∅,
+    PromptAssembly.dropOrphanedFrom_cons_ordinary boundary suffix
+      (pendingAfter ∅ history) hboundary,
+    filterCallsByTurn_append_before_ordinary
+      (dropOrphanedFrom ∅ history) (dropOrphanedFrom ∅ suffix) boundary hboundary]
+
+theorem safe_prefix_stable_under_arbitrary_suffix {view : PromptView}
+    (hsafe : PromptView.safeToReduce view) (suffix : List MessageRow) :
+    (PromptAssembly.sanitizeTurn (view.messages ++ suffix)).take
+        view.messages.length = view.messages := by
+  rcases hsafe with ⟨hend, hfixed, _⟩
+  unfold PromptView.endsAtTurnBoundary at hend
+  cases hlast : view.messages.getLast? with
+  | none => simp [hlast] at hend
+  | some boundary =>
+      have hkind : boundary.kind = .ordinary := by
+        simpa [hlast] using hend
+      obtain ⟨history, hdecomp⟩ := List.getLast?_eq_some_iff.mp hlast
+      rw [hdecomp] at hfixed ⊢
+      simp only [List.append_assoc, List.singleton_append]
+      rw [sanitizeTurn_append_new_turn history suffix boundary hkind]
+      rw [sanitizeTurn_append_new_turn history [] boundary hkind] at hfixed
+      simp only [PromptAssembly.sanitizeTurn, PromptAssembly.dropUnpairedCallsTurn,
+        PromptAssembly.dropOrphanedResults, PromptAssembly.dropOrphanedFrom_nil,
+        PromptAssembly.filterCallsByTurn_nil, List.append_nil] at hfixed
+      have hhistory : PromptAssembly.sanitizeTurn history = history := by
+        change PromptAssembly.sanitizeTurn history ++ [boundary] = history ++ [boundary] at hfixed
+        exact List.append_cancel_right hfixed
+      rw [hhistory]
+      have hregroup :
+          history ++ boundary :: PromptAssembly.sanitizeTurn suffix =
+            (history ++ [boundary]) ++ PromptAssembly.sanitizeTurn suffix := by simp
+      rw [hregroup]
+      exact List.take_left _ _
+
 theorem uniqueCallIds_append_disjoint :
     ∀ {a b : List MessageRow}, UniqueCallIds (a ++ b) → Disjoint (callsIn a) (callsIn b) := by
   intro a
@@ -295,7 +399,7 @@ theorem nonemptyAnnouncements_drop (n : Nat) :
   | succ m ih =>
       intro l h
       cases l with
-      | nil => simpa using h
+      | nil => simp
       | cons row rest =>
           rw [List.drop_succ_cons]
           refine ih rest ?_
@@ -334,15 +438,14 @@ later turn that reuses an id resurrects an earlier announcement that the shorter
 view had dropped as unpaired. The prefix changes under append and a stored count
 no longer names the rows it was measured against.
 
-`UniqueCallIds` rules this out, and it is a real hypothesis rather than a
-structural fact: production call ids come from the provider.
+`UniqueCallIds` rules this out inside the row abstraction. Whether these symbols
+correspond to provider-native IDs is deliberately not established here.
 
-**This is a property of the coarser `providerViewGlobal`, not of the runtime.**
-Production scopes resolution to the active turn, and
+**This is a property of the coarser row-level `providerViewGlobal`, not a native
+provider-input theorem.** Per-turn row resolution and
 `reused_call_id_is_prefix_stable_per_turn` below shows the same witness is
-stable there. `compaction::has_unique_call_ids` is retained as defence in depth
-rather than as the only thing standing between the runtime and this hazard. See
-`boundary.compaction.unique-call-ids-checked`. -/
+stable there. A native-to-row refinement remains required before transferring
+that result to a content-bearing provider serializer. -/
 theorem reused_call_id_breaks_prefix_stability :
     ∃ a b : List MessageRow,
       pendingAfter ∅ a = ∅ ∧
@@ -356,9 +459,9 @@ theorem reused_call_id_breaks_prefix_stability :
 /-- The same witness, under the per-turn resolution production implements: the
 earlier announcement is *not* resurrected, so the prefix is stable.
 
-This is why the runtime no longer exhibits the hazard above. The reused id is
-credited only inside its own turn, so appending the later turn cannot change
-what the shorter view already decided. -/
+The reused abstract symbol is credited only inside its own turn, so appending
+the later turn cannot change what the shorter row view already decided. This
+does not identify it with either provider metadata or a physical tool document. -/
 theorem reused_call_id_is_prefix_stable_per_turn :
     ∃ a b : List MessageRow,
       pendingAfter ∅ a = ∅ ∧

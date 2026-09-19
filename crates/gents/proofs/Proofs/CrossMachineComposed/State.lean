@@ -82,7 +82,7 @@ inductive Transition : ComposedState → ComposedState → Prop where
       post.tools = pre.tools →
       post.requestId = pre.requestId →
       (pre.request.state = .pending → pre.process.acceptsWork) →
-      (post.request.progressSeq > pre.request.progressSeq ∨
+      ((pre.request.state = .processing ∧ post.request.state = .processing) ∨
         (pre.request.state = .claimed ∧ post.request.state = .processing) →
         ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧
                             ¬ isTerminal t.state) →
@@ -178,7 +178,6 @@ def initial : ComposedState :=
     , currentTime := 0
     , retryCount := 0
     , maxRetries := 3
-    , progressSeq := 0
     , messageSeq := 0
     , persistence := .uncommitted
     }

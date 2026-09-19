@@ -2,6 +2,7 @@ import Proofs.CompletionRetry.State
 import Proofs.CompletionRetry.Transition
 import Proofs.CompletionRetry.Executable
 import Proofs.CompletionRetry.Properties
+import Proofs.CompletionRetry.CanonicalExecution
 import Proofs.CompletionRetry.Contracts
 import Proofs.CompletionRetry.OutputObligation
 import Proofs.CompletionRetry.InvalidToolProgress

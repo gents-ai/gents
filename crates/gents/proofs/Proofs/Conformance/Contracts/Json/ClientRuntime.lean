@@ -38,71 +38,20 @@ def pendingUserTurnCaseJson (witness : PendingUserTurnCase) : String :=
     ++ "\"expectPendingTurn\":" ++ boolString witness.expectPendingTurn
     ++ "}"
 
-def responseTransitionCaseJson
-    (witness : StreamingResponse.ResponseTransitionCase) : String :=
+def outputProjectionCaseJson
+    (witness : StreamingResponse.OutputProjectionCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"group\":" ++ jsonString witness.group ++ ","
-    ++ "\"action\":" ++ jsonString witness.action ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal ++ ","
-    ++ "\"token_delta\":" ++ jsonOptionalNat witness.tokenDelta ++ ","
-    ++ "\"input_error_reason\":" ++ jsonOptionalString witness.inputErrorReason ++ ","
-    ++ "\"materialize_sequence\":" ++ jsonOptionalNat witness.materializeSequence ++ ","
-    ++ "\"pre_status\":" ++ jsonString witness.preStatus ++ ","
-    ++ "\"post_status\":" ++ jsonString witness.postStatus ++ ","
-    ++ "\"pre_live_tail\":" ++ jsonString witness.preLiveTail ++ ","
-    ++ "\"post_live_tail\":" ++ jsonString witness.postLiveTail ++ ","
-    ++ "\"pre_tail_reasoning\":" ++ jsonString witness.preTailReasoning ++ ","
-    ++ "\"post_tail_reasoning\":" ++ jsonString witness.postTailReasoning ++ ","
-    ++ "\"pre_durable_reasoning\":" ++ jsonString witness.preDurableReasoning ++ ","
-    ++ "\"post_durable_reasoning\":" ++ jsonString witness.postDurableReasoning ++ ","
-    ++ "\"pre_token_count\":" ++ toString witness.preTokenCount ++ ","
-    ++ "\"post_token_count\":" ++ toString witness.postTokenCount ++ ","
-    ++ "\"error_reason\":" ++ jsonOptionalString witness.errorReason ++ ","
-    ++ "\"pre_materialized_seq\":"
-      ++ jsonOptionalNat witness.preMaterializedSeq ++ ","
-    ++ "\"post_materialized_seq\":"
-      ++ jsonOptionalNat witness.postMaterializedSeq ++ ","
-    ++ "\"expected_request_state\":"
-      ++ jsonOptionalString witness.expectedRequestState ++ ","
-    ++ "\"expected_request_persistence\":"
-      ++ jsonOptionalString witness.expectedRequestPersistence
-    ++ "}"
-
-def responseInterruptFlowCaseJson
-    (witness : StreamingResponse.ResponseInterruptFlowCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"group\":" ++ jsonString witness.group ++ ","
-    ++ "\"action\":" ++ jsonString witness.action ++ ","
-    ++ "\"pre_request_state\":"
-      ++ jsonString witness.preRequestState ++ ","
-    ++ "\"post_request_state\":"
-      ++ jsonString witness.postRequestState ++ ","
-    ++ "\"pre_response_status\":"
-      ++ jsonString witness.preResponseStatus ++ ","
-    ++ "\"post_response_status\":"
-      ++ jsonString witness.postResponseStatus ++ ","
-    ++ "\"pre_inference_call_state\":"
-      ++ jsonString witness.preInferenceCallState ++ ","
-    ++ "\"post_inference_call_state\":"
-      ++ jsonString witness.postInferenceCallState ++ ","
-    ++ "\"response_error_reason\":"
-      ++ jsonString witness.responseErrorReason ++ ","
-    ++ "\"interrupted_at_required\":"
-      ++ boolString witness.interruptedAtRequired ++ ","
-    ++ "\"completed_at_required\":"
-      ++ boolString witness.completedAtRequired ++ ","
-    ++ "\"live_tail_cleared\":"
-      ++ boolString witness.liveTailCleared ++ ","
-    ++ "\"partial_turn_materialized\":"
-      ++ boolString witness.partialTurnMaterialized ++ ","
-    ++ "\"request_terminal\":"
-      ++ boolString witness.requestTerminal ++ ","
-    ++ "\"response_terminal\":"
-      ++ boolString witness.responseTerminal ++ ","
-    ++ "\"inference_call_terminal\":"
-      ++ boolString witness.inferenceCallTerminal
+    ++ "\"projection\":" ++
+      jsonString (StreamingResponse.viewName witness.expected) ++ ","
+    ++ "\"message_selected\":" ++
+      boolString witness.input.target.messageId.isSome ++ ","
+    ++ "\"owner_live\":" ++
+      boolString (StreamingResponse.ownerLive witness.input) ++ ","
+    ++ "\"record_count\":" ++ toString witness.input.records.length ++ ","
+    ++ "\"message_count\":" ++ toString witness.input.messages.length ++ ","
+    ++ "\"rendered_kinds\":" ++
+      jsonStringArray (StreamingResponse.renderedKinds witness.expected)
     ++ "}"
 
 def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : String :=
@@ -116,7 +65,9 @@ def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : Str
     ++ "\"preserves_pairs\":" ++ boolString witness.preservesPairs ++ ","
     ++ "\"preserves_order\":" ++ boolString witness.preservesOrder ++ ","
     ++ "\"gate_open\":" ++ jsonOptionalBool witness.gateOpen ++ ","
-    ++ "\"response_status\":" ++ jsonString witness.responseStatus.toDefraDB ++ ","
+    ++ "\"publication_ready\":" ++ boolString witness.publicationReady ++ ","
+    ++ "\"provider_fixpoint\":" ++ boolString witness.providerFixpoint ++ ","
+    ++ "\"turn_boundary\":" ++ boolString witness.turnBoundary ++ ","
     ++ "\"safe_to_reduce\":" ++ boolString witness.safeToReduce ++ ","
     ++ "\"reducer_is_identity\":"
       ++ boolString witness.reducerIsIdentity ++ ","

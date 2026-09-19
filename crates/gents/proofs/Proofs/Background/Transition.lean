@@ -163,7 +163,7 @@ structure ChildInterruptStep
   h_pending_accepts :
     pre.child.request.state = .pending → pre.child.process.acceptsWork
   h_no_foreground_block :
-    post.child.request.progressSeq > pre.child.request.progressSeq ∨
+    (pre.child.request.state = .processing ∧ post.child.request.state = .processing) ∨
       (pre.child.request.state = .claimed ∧
        post.child.request.state = .processing) →
       ¬ ∃ t ∈ pre.child.tools, t.awaitMode = .foreground ∧

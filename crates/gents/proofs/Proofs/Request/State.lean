@@ -116,7 +116,6 @@ structure RequestContext where
   currentTime  : Time
   retryCount   : Nat
   maxRetries   : Nat
-  progressSeq  : Nat
   messageSeq   : Nat
   persistence  : PersistenceState
   interruptRequestedAt : Option Time := none
