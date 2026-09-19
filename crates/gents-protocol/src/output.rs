@@ -144,16 +144,15 @@ pub enum StreamPayload {
 /// timestamp; an already-existing create is accepted only after verifying the
 /// stored fact.
 ///
-/// A flush is its own streaming progress fact; it needs no duplicate renewal.
+/// A flush records output, not lease liveness. It never renews the request lease.
 /// A request-owned flush does not rewrite the request. It commits inside the
 /// existing `config_client::txn::MutationWriteGate`. The owner stamps
 /// `created_at` inside that gate when admitting the write; only a committed
 /// fact counts (non-decreasing within a source; replay reuses the timestamp).
-/// Only that runtime, reading its own store
-/// inside the same gate, may decide a lease expired: the request is live while
-/// its current generation has an output fact or explicit renewal newer than
-/// `execution_lease_secs`. A replica that has not yet received fresh records
-/// observes; it never expires work.
+/// Only that runtime, reading its own store inside the same gate, may decide a
+/// lease expired. Its deadline is exactly `execution_lease_expires_at`, maintained
+/// by bounded explicit owner renewal, independently of output and foreground tool
+/// reads. A lagging replica observes; it never expires work.
 /// Admission rereads generation, lifecycle and effective expiry under the gate.
 /// An expired generation cannot revive itself by timestamping a fresh flush;
 /// it is rejected even if recovery has not installed a replacement yet.
@@ -170,7 +169,8 @@ pub enum StreamPayload {
 /// CAS on the request, so it is definitively ordered against cancellation and
 /// recovery and a loser writes none of them. Tool-owned output follows the
 /// tool lifecycle and never revives a terminal request. There is no per-flush heartbeat
-/// or progress counter; bounded explicit renewal remains for byte-less progress.
+/// or progress counter; due-only explicit renewal covers both streaming and
+/// silent work. Publication and dispatch do not implicitly extend the deadline.
 /// Tool-owned closure uses the tool lifecycle's terminal/delivery guard, not a
 /// request CAS that could revive the already-terminal originating request.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

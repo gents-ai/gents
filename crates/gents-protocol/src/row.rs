@@ -148,10 +148,12 @@ pub struct AgentRequestRow {
     pub claimed_at: Option<String>,
     #[serde(default)]
     pub execution_generation: Option<String>,
-    /// Lease length installed at claim. Liveness is derived from the current
-    /// generation's newest output fact; streaming does not rewrite this row.
+    /// Lease length installed at claim. The request owner explicitly renews at
+    /// bounded cadence; output never extends expiry or rewrites this row.
     #[serde(default)]
     pub execution_lease_secs: Option<i64>,
+    /// Sole lease deadline. Renewal compares the current generation and observed
+    /// deadline; expired owners cannot revive themselves with output or renewal.
     #[serde(default)]
     pub execution_lease_expires_at: Option<String>,
     #[serde(default)]

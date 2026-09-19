@@ -139,96 +139,93 @@ not rerun new-recovery source selection: a published Partial source is no longer
 eligible for new recovery. Exact replay neither republishes facts nor renews the
 lease; changed identities or conflicting artifacts fail confirmation.
 
-## Progress is stored once
+## Output and lease renewal have separate owners
 
-A segment is the progress fact. Streaming no longer rewrites `AgentRequest`: the
-per-flush `(generation, expiry, progress_seq)` CAS — 42k versions of one field over
-85 requests in #1543 — is retired along with `execution_progress_seq`. This is a
-contract proved in the local authoritative-gate Lean model. Native conformance
-must still establish that the runtime realizes this ordering; this is not yet a
-claim that the runtime's amplifier is safely gone.
+Segments record output, not request liveness. Streaming never rewrites
+`AgentRequest`; the per-flush request CAS and `execution_progress_seq` remain
+retired. Only claim/reclaim and bounded explicit renewal establish the lease
+deadline. Output, publication, dispatch, socket activity and replay do not extend it.
 
-A flush must contain a run. Each run ends on a UTF-8 boundary and either opens
-a stream (including a genuinely empty payload) or contributes nonempty bytes.
-Empty continuations are not progress heartbeats; silent work uses explicit renewal.
+The existing request execution owner renews while it owns active work, including
+silent inference, foreground tool waits and an owned `inputRequired` wait.
+Renewal must be independently polled from provider/tool reads; a blocking read
+is not permission to miss the deadline.
+Its lifetime is tied to the owned completion loop and stops when that ownership
+ends. A daemon-wide timer must not renew arbitrary active rows after their loop
+has exited; cancellation or a lost ownership check stops renewal.
+Tool activity itself is not proof the request owner remains alive. Detached
+background tools retain their own lifecycle after the parent stops renewing.
+Owner renewal is not a progress watchdog: it must not disable provider idle
+timeouts, request deadlines, cancellation, tool timeouts or existing failure
+policy. Those owners still stop work that has stalled or exhausted its budget;
+a scheduled renewal alone cannot certify useful progress.
 
-What the old write bought was an ordering: a progress CAS and recovery's CAS
-conflicted, so exactly one won. Removing the write must not remove the ordering.
+- **One explicit deadline.** Claim installs `execution_generation`,
+  `execution_lease_secs` and `execution_lease_expires_at`. Effective expiry is
+  exactly that stored deadline. It requires no output scan or reconstruction.
+- **Bounded renewal.** Renew near the midpoint of the lease, not per flush or UI
+  update. The Lean policy uses a half-duration window in discrete time; successful
+  renewal must strictly advance the deadline to `now + duration`. Early attempts,
+  stale generation/deadline observations and expired owners cannot renew.
+  The native duration/cadence must leave scheduling and commit-latency margin;
+  the discrete model does not choose a production seconds value. A renewable
+  duration needs at least two model ticks: a one-tick lease cannot both advance
+  its deadline and renew strictly before expiry, and is not a usable native
+  renewal configuration.
+- **Compare and swap.** Renewal rereads the active lifecycle, generation and
+  observed deadline under the existing mutation gate and conditionally updates
+  that exact lease. Retrying the same expected deadline cannot extend it again.
+  After a lost acknowledgement, reread the authoritative lease and schedule from
+  its current deadline; do not manufacture progress by replaying output.
+  An early timer poll is a skipped write, not a failed request. A deadline-CAS
+  mismatch requires a reread; only the resulting ownership/lifecycle/expiry
+  decision determines whether the owner must stop.
+- **Expiry is not inactivity of output.** At or after the deadline the old owner
+  cannot append, publish, dispatch, normally finalize or renew, even if its
+  generation still matches. Recovery/policy revocation retain their separate
+  authority. A healthy scheduled owner can keep a silent request live; a sleeping
+  or stopped owner cannot be assumed to renew. Wake after expiry follows recovery,
+  not retroactive renewal or blind redispatch of uncertain effects.
+- **One local ordering boundary.** Use
+  `config_client::txn::MutationWriteGate` for authoritative reads through commit
+  or rollback. Raw payload appends check the live lease but do not update it.
+  Producer decisions retain their matching-generation request CAS without
+  implicitly extending expiry. Recovery rereads the lease and swaps generation
+  under this gate. A due renewal that wins before expiry prevents recovery;
+  output alone does not. Lagging replicas observe, never decide owner expiry.
+  Native conformance must establish the decision fence even when no deadline is
+  changed: an ordinary snapshot read is not a substitute for the required
+  conditional transaction ordering against a generation swap. The identity
+  lease transition in Lean proves authorization, not DefraDB no-op-CAS behavior.
+- **No new process authority.** The existing one-active-runtime-per-principal
+  convention remains a boundary, not an enforcement theorem. Another process or
+  remote merge may bypass the local gate. Conflicts remain visible; never pick a
+  winning twin or silently discard evidence.
+- **Integrity is separate from liveness.** Source append/publication/reconstruction
+  still validate their own output. Invalid output does not corrupt the lease
+  deadline or prevent its independent renewal. A composed integrity-revocation
+  path is still required to terminate conflicted work without reconstructing it;
+  this lease change alone does not establish that escape or settle tool effects.
+- **Timestamps describe output, not renewal authority.** The owner stamps
+  `created_at` at admission, keeps source timestamps nondecreasing, and reuses
+  them on replay. They never extend the request lease. The model's clock remains
+  nondecreasing; wall-clock discontinuities and suspend/resume are native
+  refinement obligations, not assumptions that a timer ran during sleep.
 
-- **Raw payload is the only unfenced write.** A flush commits inside the owning
-  runtime's existing mutation write gate without touching the request. Admission
-  rereads the generation, lifecycle and effective expiry there: a writer already
-  expired cannot revive itself with a fresh timestamp before recovery swaps it.
-  This is a guarded insert, not a request-row progress CAS. If a late raw write
-  loses a race with recovery's generation swap it is inert: it names a superseded
-  writer, renews nothing, and lies beyond the extent recovery closed.
-- **Everything that decides keeps the matching-generation CAS on the request:**
-  closing or retracting a source, accepting and publishing a turn (closure, header,
-  pending tool rows), dispatch, terminalization, recovery. These happen once per
-  lifecycle decision, not once per flush. Fresh nonterminal decisions can renew;
-  terminalization and exact replay cannot. A
-  superseded writer therefore cannot close a source recovery also closes, publish
-  executable tool intent, or dispatch; it learns it lost at its next decision.
-- **Expiry applies to producer decisions too.** Under the same gate, producer
-  closure/retraction, acceptance/publication, dispatch, terminalization and explicit
-  renewal validate current ownership, lifecycle and effective expiry before their
-  CAS. At the deadline the producer is expired even if its generation still matches;
-  a decision or renewal cannot revive it. Recovery uses its existing recovery
-  authority to close/terminalize expired work, not a producer renewal. Tool-owned
-  operations retain their own lifecycle guards rather than a parent-request lease.
-- **The liveness decision is authoritative in one place.** Only the request's
-  owning runtime decides expiry, reading its own store, inside the same write gate
-  that orders flush commits, and swaps the generation under that gate. A flush is
-  either visible to the decision or ordered after the swap; recovery never
-  terminalizes on a snapshot a concurrent flush invalidated. A lagging replica
-  never expires work because fresh segments have not arrived; it only observes.
-  This relies on the one-active-runtime-per-principal convention exactly as far
-  as the existing gate already does; it adds no host identity or second lease.
-- **Name and scope of the gate:** `config_client::txn::MutationWriteGate`, held
-  from before the authoritative transaction/read through commit or rollback.
-  `streaming.rs::response_write_gate` currently orders response operations only;
-  it is not an existing shared recovery fence. Route the new output/recovery
-  owners through the canonical transaction gate, not a copied mutex. Expiry
-  candidates found outside the gate are hints and must be reread inside it.
-  A second process/native handle or remote merge bypassing this gate has no
-  serialization guarantee from the mutex; Lean and native conformance must state
-  this boundary. Do not claim cross-replica consensus or predicate locking.
-  Tool-owned closure uses existing tool terminal/delivery guards; it cannot
-  require or renew an already-terminal originating request.
-- **`created_at` carries authority, so it is defined.** The gate stamps it from
-  the owning runtime's clock when admitting a fresh write under the gate; only
-  successful commits count. It uses the same clock as claim deadlines and the
-  expiry decision. It is non-decreasing within a source, and a
-  replay reuses the stored value rather than minting a new one.
-- **Claim** installs `execution_generation`, `execution_lease_secs` and the claim's
-  own `execution_lease_expires_at`. The existing owner writes that field again only
-  at the per-turn decisions above and for progress that produces no output fact (a
-  long silent tool, a wait).
+A flush must contain a run ending on a UTF-8 boundary: it either opens a stream
+(including a genuinely empty payload) or contributes nonempty bytes. Empty
+continuations are not heartbeats. Output batching controls document counts;
+renewal cadence controls request-row writes, independently.
 
-Effective expiry is `max(execution_lease_expires_at, newest eligible committed
-fact.created_at + execution_lease_secs)`. Eligibility requires the exact physical
-request/current generation and valid owner scope; exclude replay, forks, tool-owned
-facts, beyond-extent late flushes and malformed/conflicting records. An authoritative
-conflict is an integrity failure, not evidence of inactivity. The Lean model uses
-a nondecreasing owner clock; native conformance must cover clock discontinuities;
-created_at is an admission timestamp, not a database-assigned commit timestamp.
+The proof obligations are explicit-deadline admission, no renewal by output or
+replay, bounded due-only deadline advancement, stale/expired renewal rejection,
+and ordering renewal against recovery. Continued ownership during silent work is
+conditional on the owner actually committing renewals before expiry; no
+unconditional scheduler/fairness or host-process survival claim is made.
 
-The contract Lean states is safety and liveness, not deadline equality. Today's
-renewal is `max(now + duration, previous_deadline + 1ms)`; a maximum over output
-timestamps is not numerically identical even without concurrency, and the model
-must expose that difference rather than assume it away.
-
-- *Safety:* recovery never supersedes a generation that, in the gate's order,
-  committed an output fact or explicit renewal within `execution_lease_secs`
-  before the decision. At most one of {producer, recovery} closes a source; a
-  superseded generation never publishes, dispatches or terminalizes; exact replay
-  renews nothing.
-- *Liveness:* a generation with no such fact for `execution_lease_secs` becomes
-  recoverable, and recovery closes exactly the committed extent.
-
-Fallback if a property fails: explicit renewal at a slow fixed cadence. That is
-not a timer alone — it needs the same two pieces, a bounded expiry policy and the
-gate-plus-CAS recovery ordering above — and it never returns to per-flush rewrites.
+This deliberately replaces output-derived liveness. It retains the main storage
+win without making every flush revalidate the request's entire output history.
+Native implementation must still measure total reads, writes and gate hold time.
 
 ## Commit budget
 
@@ -239,6 +236,7 @@ benchmark holds it to:
 | Work | Documents |
 | --- | --- |
 | Streaming flush | 1 segment, whatever number of streams advanced; 0 request rewrites |
+| Due owner renewal | 0 output documents; 1 request lease CAS, independent of flush count |
 | Provider turn that fits one batch interval | 1 final-flush record + 1 header (+ pending tool rows), one transaction |
 | Whole authored or user message | 1 final-flush record + 1 header, one transaction |
 | Tool result | output flushes (closure on the last) + 1 header at delivery; +1 terminal-only record if already flushed |
@@ -316,7 +314,7 @@ conflicting observations cannot become a successfully served empty manifest.
 | Deleted contract / implementation handoff | Surviving owner and obligation | Layer |
 | --- | --- | --- |
 | `AgentResponse` SDL, row and catalog entries (deleted) | `AgentRequest.lifecycle_state`, `failure_reason`, `terminalized_at` own terminal status/error/time; `InferenceCall` owns usage. `terminal_output` replaces final-message selection for subagent delivery. `interrupt_requested_at` remains intent; a `Partial` outcome describes kept output, not a second request status. | Spec |
-| Response progress counters, cumulative text/reasoning writes, per-flush lease CAS, `execution_progress_seq` | `lifecycle/execution_lease.rs` keeps claim, explicit byte-less renewal, and the matching-generation terminal/recovery CAS. Liveness is derived from the current generation's newest output fact (see *Progress is stored once*); exact replay creates nothing and so renews nothing. `watcher`, `lifecycle/recovery.rs`, `runtime_trace.rs` read derived liveness instead of the counter. Tool-owned output uses the existing tool lifecycle and never revives a terminal request. | Lean → conformance → runtime |
+| Response progress counters, cumulative text/reasoning writes, per-flush lease CAS, `execution_progress_seq` | `lifecycle/execution_lease.rs` keeps claim, bounded explicit owner renewal, and the matching-generation terminal/recovery CAS. `execution_lease_expires_at` alone determines liveness; output, publication and replay never renew. `watcher`, `lifecycle/recovery.rs`, `runtime_trace.rs` read that deadline, not payload history. Tool-owned output uses the existing tool lifecycle and never revives a terminal request. | Lean → conformance → runtime |
 | Response `materialized_*`, response/request dual terminalization | `lifecycle/materialize.rs` and terminal owner: final header publication, terminal lifecycle and `TerminalOutput` selection commit atomically. `background_tools.rs::load_child_final_response` and bridge recovery resolve that exact scoped message. Missing selection/header/closure/segments is incomplete, never latest-message fallback. Explicit NoMessage handles pre-output failure. Recovery closes committed bytes with the original producer binding. | Lean → conformance → runtime |
 | Stream-processor cumulative previews, in-flight message upserts, retraction resets | `agent/stream_processor.rs`: one immutable segment per flush, naming its writer and slicing its payload by stream; a Retracted closure commits before retry backoff. `agent/loop_stream.rs`: dispatch follows accepted closure/header publication with the boundaries above. `rendered_request/scope.rs` must allocate non-reused scopes across reclaim/restart. | Lean → conformance → runtime |
 | Tool `args`, `result`, `partial_output_*`; `AgentToolResult` SDL/row (deleted) | `AgentToolCall` owns execution/delivery and remote-only immutable `delegated_input`, created pending with the assistant header. The provider turn owns canonical argument bytes; the tool source owns output; tool terminalization closes empty and nonempty output before delivery. Existing completion notification owner composes authored wrappers by reference. | Spec → runtime |
@@ -360,8 +358,8 @@ closure per source; late raw flushes beyond its extent are inert; header publica
 dispatch; background output after request termination; recovery publication;
 empty streams and sources; a complete message over partial dependencies;
 gaps and twins; headers arriving before closing records or segments; multi-stream
-flushes and run/payload accounting; superseded unclosed writers; derived lease
-liveness decided only in the owner's write gate; recovery racing a flush, a
+flushes and run/payload accounting; superseded unclosed writers; explicit lease
+liveness decided only in the owner's write gate; recovery racing a due renewal, a flush, a
 closure, an acceptance and a dispatch; inert late flushes; lagging replicas;
 unheaded authored sources; exact terminal selection before header
 arrival, explicit NoMessage and late background delivery; native block order and
@@ -382,6 +380,9 @@ text-free and explicitly empty-text sources, existing accepted headers and repla
 Distinguish retained diagnostics from native messages without changing saved bytes.
 Producer decision/renewal cases include expiry before recovery has replaced the
 generation and exact-deadline admission; recovery retains authority to finalize.
+Renewal cases include silent foreground waits, too-early ticks, stale expected
+deadlines, lost acknowledgement replay, and wake after missed expiry. Output,
+including conflicted or future-timestamp output, cannot alter the lease deadline.
 Authorization cases distinguish explicit denial for each dependency kind from
 unavailable data, including a missing query result with no denial evidence.
 Compaction cases cover later tool-result publication, background delivery and
