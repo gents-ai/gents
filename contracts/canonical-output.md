@@ -66,6 +66,38 @@ payloads needs no closure. `AgentRequest.terminal_output` separately selects the
 final assistant header (or explicit `NoMessage`) with terminalization. Late background
 messages cannot change that selection.
 
+## Recovery publication
+
+Closing retained bytes does not make them a valid native message. Recovery of an
+unheaded provider source closes exactly the committed extent as Partial (reusing
+an existing Partial closure rather than appending another), but
+publishes only ordinary Text streams, using Full presentation references in their
+original block order. The recovery header is Partial with no native message ID.
+It omits tool arguments, reasoning (including summaries and opaque forms), and
+media, even if some bytes appear decodable: their final structure or metadata may
+never have committed. Never repair JSON, invent signatures/IDs, or relabel these
+streams as ordinary text. This conservative rule needs no new metadata journal.
+Declarations keep their original positions; omitted blocks leave gaps, so recovered
+headers validate survivor order rather than equality with compacted block indexes.
+
+If no Text stream exists, publish no assistant header for that source. An explicitly
+declared empty Text stream remains representable as an empty Partial message.
+Terminal selection uses an eligible published assistant header under its existing
+scope rules, or NoMessage if there is none; retained bytes alone are not an answer.
+Already-published headers are resolved unchanged, never replaced with recovered
+text-only versions. Complete dependency validation and provider-input narrowing
+still apply to every published message.
+Validate extent and run accounting across the entire source; native payload decoding
+applies to referenced blocks only. Incomplete JSON in an omitted stream does not
+invalidate a text-only header, and remains unchanged in diagnostic storage.
+
+Omitted streams remain diagnostic data in the original segments, not tool intent
+or provider input. Once terminal selection and any selected header are resolved,
+unreferenced streams of closed Partial provider sources are RetainedPartial,
+not indefinitely PendingPublication. Opaque reasoning remains non-renderable.
+Tool-owned recovery continues through the tool lifecycle; this provider-source
+rule does not discard tool results or rewrite accepted turns.
+
 ## Progress is stored once
 
 A segment is the progress fact. Streaming no longer rewrites `AgentRequest`: the
@@ -91,6 +123,13 @@ conflicted, so exactly one won. Removing the write must not remove the ordering.
   terminalization and exact replay cannot. A
   superseded writer therefore cannot close a source recovery also closes, publish
   executable tool intent, or dispatch; it learns it lost at its next decision.
+- **Expiry applies to producer decisions too.** Under the same gate, producer
+  closure/retraction, acceptance/publication, dispatch, terminalization and explicit
+  renewal validate current ownership, lifecycle and effective expiry before their
+  CAS. At the deadline the producer is expired even if its generation still matches;
+  a decision or renewal cannot revive it. Recovery uses its existing recovery
+  authority to close/terminalize expired work, not a producer renewal. Tool-owned
+  operations retain their own lifecycle guards rather than a parent-request lease.
 - **The liveness decision is authoritative in one place.** Only the request's
   owning runtime decides expiry, reading its own store, inside the same write gate
   that orders flush commits, and swaps the generation under that gate. A flush is
@@ -204,6 +243,12 @@ selection does not wait for a nonexistent answer. Keep one shared projection, no
 consumer-local status reconciliation. This is a target contract: update
 `Proofs/Client.lean`, then conformance, then implement the replacement projection.
 
+Known authorization denial of any required dependency is AccessDenied, not loading.
+An absent query result alone establishes neither denial nor replication lag; keep it
+unresolved unless the authorization owner reports denial. Hydration must propagate
+known denial as rejection rather than retrying it as missing data. No parallel ACP
+decision logic is introduced in reconstruction or the UI.
+
 Complete reconstruction still requires every dependency of the requested message
 to be present and valid, including the full referenced closed stream, even for a
 head/tail presentation. Existing live previews may display while reconstruction is
@@ -229,6 +274,7 @@ measure large-output transfer costs before proposing one.
 | Response/spill desktop stores, queries, merge heuristics and CLI projections | Shared output reconstruction supplies native messages and live streams; request lifecycle supplies status. No consumer-local text repair or short-message fallback. Parent session removal cannot cascade into retained origin dependencies; no output GC is introduced here. | Consumers |
 | `client_protocol::{ResponseStatus, InvalidResponseStatus, ResponseSnapshot}`, `AttemptView.response`, response-aware projection functions (deleted); client execution variant `Streaming` (renamed `Running`) | `client_protocol` retains request-only input/output types. `Proofs/Client.lean` and client conformance must adopt the mapping above before the shared projection is reimplemented. Desktop `store/turns.rs` and response indexes; CLI `codex_shim/{turn,subagent_projection,history_projection,thread_projection,progress}` consume it with no response fallback. Existing protocol tests are handoff evidence, not the new contract. Preserve retry-tip ambiguity rejection and supersession selection. | Spec → Lean → conformance → consumers |
 | `streaming.rs::StreamBufferSnapshot` current/persisted cumulative copies; `agent/stream_processor.rs` intermediate accumulated-message persistence snapshots | Segment writer retains the uncommitted batch and stream/header bookkeeping, not cumulative copies for comparison and rewrite. Shared reconstruction owns persisted-output assembly. Native messages assembled for provider input remain legitimate; do not delete required provider context or structural metadata. Remove the snapshot/upsert machinery in the implementation layer. | Runtime |
+| Compaction's separate `ResponseStatus`, `ResponseStatusIndex`, `AllTerminal`/`NoneKnown`, `session_has_live_response` gate (handoff, not yet deleted) | `compaction.rs`, `agent/daemon/request.rs` and the PromptView/PromptAssembly proofs must establish that the selected published-message prefix remains stable under later publication and provider-input sanitization. Immutable headers remove in-place mutation, not tool-pairing or reused-call-ID effects. Replace the response-status gate only after modeling its surviving guarantee; do not substitute request terminality or assume all headers are safe to compact. | Lean → conformance → runtime |
 | Mailbox (retained, not an AgentResponse consumer) | `mailbox/reply.rs` consumes authenticated start-request replies at claim and records the request document. `mailbox.rs` resolves write-document items through correlated domain documents; ack remains explicit. None is redirected to final assistant messages. | No semantic change |
 
 Open question for the consumer layer: `CLIENT_TO_RUNTIME_COLLECTIONS` carries
@@ -274,6 +320,17 @@ execution, explicit NoMessage, supersession and ambiguous retry tips. Output arr
 or absence alone never changes execution status. Preserve integrity errors as errors,
 not a perpetual loading indicator. Regenerate the old response-aware client cases
 after the model changes; do not claim the previous projection proof covers this one.
+
+Recovery cases include text followed by incomplete argument JSON, missing reasoning
+signatures/IDs, opaque reasoning, incomplete media, omitted-block position gaps,
+text-free and explicitly empty-text sources, existing accepted headers and replay.
+Distinguish retained diagnostics from native messages without changing saved bytes.
+Producer decision/renewal cases include expiry before recovery has replaced the
+generation and exact-deadline admission; recovery retains authority to finalize.
+Authorization cases distinguish explicit denial for each dependency kind from
+unavailable data, including a missing query result with no denial evidence.
+Compaction cases cover later tool-result publication, background delivery and
+reused provider call IDs changing sanitization of an otherwise immutable prefix.
 
 Closure representation cases must include a combined final flush, closure after
 an earlier flush, zero-byte streams, a zero-stream source, retraction, recovery

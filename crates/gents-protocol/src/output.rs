@@ -81,6 +81,8 @@ pub enum OutputSource {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamDeclaration {
+    /// Original native position, not a recovered header's compacted index.
+    /// Recovery may omit unpublishable blocks but preserves survivor order.
     pub block_index: u32,
     pub part_index: u32,
     pub payload: StreamPayload,
@@ -155,6 +157,10 @@ pub enum StreamPayload {
 /// Admission rereads generation, lifecycle and effective expiry under the gate.
 /// An expired generation cannot revive itself by timestamping a fresh flush;
 /// it is rejected even if recovery has not installed a replacement yet.
+/// The same effective-expiry check applies to producer closure/retraction,
+/// publication, dispatch, terminalization and explicit renewal before their CAS. Matching
+/// generation alone is insufficient. Recovery instead uses the existing recovery
+/// authority and may close the expired producer's committed extent.
 ///
 /// Only a plain flush is unfenced. One that loses a race with recovery's
 /// generation swap is inert: it names a superseded writer, renews nothing and
@@ -310,6 +316,8 @@ pub enum MessagePublication {
         execution_generation: String,
     },
     RequestRecovery {
+        /// Recovery publishes only retained text from an unheaded provider source;
+        /// see TranscriptMessage. This is not permission to invent native metadata.
         execution_generation: String,
     },
     ToolDelivery {
@@ -367,6 +375,21 @@ pub enum TerminalOutput {
 ///
 /// `blocks` is in native content order, so reconstruction yields the exact
 /// native `Message` (including `Message::Assistant.id` via `native_id`).
+///
+/// Recovery of an unheaded provider source is deliberately narrower: close its
+/// committed extent Partial (or reuse its existing Partial closure), then publish
+/// only ordinary Text streams as Full
+/// PresentedPayload references, in original block order, with outcome Partial
+/// and native_id None. Do not turn argument/reasoning/media bytes into text or
+/// fabricate their missing metadata. Omitted blocks leave gaps in original
+/// declaration positions; validate survivor order, not compacted index equality.
+/// If no text stream exists, publish no assistant header for that source. Retain
+/// every omitted stream as diagnostic data, never executable tool intent or
+/// provider input. An existing published header is resolved unchanged, not
+/// replaced by this recovery policy. Provider-input narrowing still applies.
+/// Validate source extent/run accounting for all streams, but decode native
+/// payloads only for referenced blocks: omitted incomplete JSON must not invalidate
+/// an otherwise reconstructable text-only recovery header.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TranscriptMessage {
@@ -547,9 +570,13 @@ pub enum MediaType {
 /// fail; none of them degrades to shorter text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReconstructionError {
-    /// The closing record is not visible or not authorized. While replication is behind
-    /// this is expected; the message is incomplete, not empty.
+    /// The closing record is unavailable, with no known authorization denial.
+    /// This may be replication lag; absence alone proves neither lag nor denial.
     UnresolvedClose { close_doc_id: String },
+    /// The authorization owner explicitly denied a required dependency. Applies
+    /// to headers, closing records, segments and provenance, not just PayloadRef.
+    /// This is an access error, never a loading state. Do not infer it from absence.
+    AccessDenied { doc_id: String },
     /// A reference names a plain flush, retracted source or absent stream.
     InvalidReference { reference: PayloadRef },
     /// An ordinal inside the sealed extent is not visible. Expected while
@@ -590,7 +617,8 @@ pub enum ReconstructionError {
 /// Output for a request that no message references yet, grouped by declared
 /// native position: sources with no visible closing record, and closed sources awaiting
 /// publication (tool output before delivery, interrupted output before
-/// recovery publishes it). Retracted sources are excluded. This is the live
+/// recovery publishes it), and retained partial diagnostics. Retracted sources
+/// are excluded. This is the live
 /// preview and streaming view, built from the same segments the transcript
 /// will reference, so there is no rollover, overlap, or repair step.
 ///
@@ -606,6 +634,10 @@ pub enum ReconstructionError {
 /// Superseded sources remain retained history, not current output. Even an
 /// eligible unclosed source is only an observation: its closing record may be in transit.
 /// Closed historical output never depends on today's active generation.
+/// After terminal selection is visible, unreferenced streams from a closed
+/// Partial provider source are RetainedPartial, not pending publication. Resolve
+/// a selected header before classifying its streams; missing dependencies stay
+/// unresolved. Opaque reasoning is never rendered, including in diagnostics.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveOutput {
     pub request_doc_id: String,
@@ -630,4 +662,8 @@ pub enum LiveStreamState {
     PendingPublication {
         outcome: OutputOutcome,
     },
+    /// These closed Partial provider bytes remain outside published native messages
+    /// after request terminalization, including fragments omitted by recovery.
+    /// Diagnostic-only: not current activity, pending delivery or provider input.
+    RetainedPartial,
 }
