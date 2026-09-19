@@ -17,46 +17,57 @@ theorem checked_success (predicate : World → Bool)
         exact hpredicate
       · contradiction
 
-theorem deriveProgress_scopes_every_fact
-    (world : World) (generation : Generation)
-    (facts : List (OutputFact Generation))
-    (h : deriveProgress world generation = .ok facts) :
-    ∀ fact, fact ∈ facts →
-      fact.generation = generation ∧ fact.eligibility = .currentRequest ∧
-        factBackedByCanonicalRecord world generation fact = true := by
-  unfold deriveProgress at h
+theorem renew_success_is_exact_lease_cas
+    (world post : World) (generation : Generation) (expectedDeadline : Time)
+    (h : renew world generation expectedDeadline = .ok post) :
+    ∃ lease, RequestExecutionLease.step? world.lease
+        (.renew .mutationWriteGate generation expectedDeadline) = some lease ∧
+      post = { world with lease := lease } := by
+  unfold renew renewCore at h
   split at h
   · contradiction
-  · split at h
-    · contradiction
-    · cases hcollect : collectProgress world generation (requestCoordinates world) with
-      | error error => simp [hcollect] at h
-      | ok collected =>
-          simp only [hcollect] at h
-          split at h
-          · rename_i hbacked
-            cases h
-            intro fact hmem
-            simp only [List.mem_map] at hmem
-            rcases hmem with ⟨original, horiginal, rfl⟩
-            refine ⟨rfl, rfl, ?_⟩
-            exact List.all_eq_true.mp hbacked _
-              (List.mem_map.mpr ⟨original, horiginal, rfl⟩)
-          · contradiction
+  · rename_i lease hlease
+    cases h
+    exact ⟨lease, hlease, rfl⟩
 
-theorem authoritativeLease_uses_only_derived_progress
-    (world : World) (lease : RequestExecutionLease.World Generation)
-    (generation : Generation) (duration deadline : Time)
-    (hactive : world.lease.lease = .active generation duration deadline)
-    (h : authoritativeLease world = .ok lease) :
-    deriveProgress world generation = .ok lease.output := by
-  unfold authoritativeLease at h
-  rw [hactive] at h
-  cases hprogress : deriveProgress world generation with
-  | error error =>
-      simp only [hprogress, Bind.bind, Except.bind] at h
-      contradiction
-  | ok output => simp [hprogress] at h; cases h; rfl
+theorem renew_preserves_canonical_output
+    (world post : World) (generation : Generation) (expectedDeadline : Time)
+    (h : renew world generation expectedDeadline = .ok post) :
+    post.segments = world.segments ∧ post.messages = world.messages ∧
+      post.transcript = world.transcript ∧ post.delegatedCalls = world.delegatedCalls := by
+  obtain ⟨lease, _, rfl⟩ := renew_success_is_exact_lease_cas world post generation
+    expectedDeadline h
+  exact ⟨rfl, rfl, rfl, rfl⟩
+
+/-- Renewal admission and its resulting lease depend only on the lease owner
+state. Arbitrary canonical records—including conflicting or future-dated
+ones—cannot veto the explicit heartbeat CAS. -/
+theorem renew_lease_result_independent_of_output
+    (left right : World) (generation : Generation) (expectedDeadline : Time)
+    (hlease : left.lease = right.lease) :
+    (renew left generation expectedDeadline).map (fun post => post.lease) =
+      (renew right generation expectedDeadline).map (fun post => post.lease) := by
+  simp only [renew, renewCore, hlease]
+  cases RequestExecutionLease.step? right.lease
+      (.renew .mutationWriteGate generation expectedDeadline) <;> rfl
+
+theorem renewal_due_is_admitted
+    (world : World) (generation : Generation) (expectedDeadline : Time)
+    (h : renewalEligibility world generation expectedDeadline = .due) :
+    ∃ post, renew world generation expectedDeadline = .ok post := by
+  cases hlease : world.lease.lease with
+  | active owner duration deadline =>
+      simp only [renewalEligibility, hlease] at h
+      split at h <;> try contradiction
+      split at h <;> try contradiction
+      split at h <;> try contradiction
+      split at h <;> try contradiction
+      split at h <;> try contradiction
+      cases hrequest : world.lease.request <;>
+        simp_all [renew, renewCore, RequestExecutionLease.step?,
+          RequestExecutionLease.admitted, RequestExecutionLease.renewDeadline,
+          RequestExecutionLease.renewableLifecycle]
+  | vacant | recoverable | terminal => simp [renewalEligibility, hlease] at h
 
 theorem appendRaw_preserves_request_control
     (pre post : World) (generation : Generation) (record : Segment)
@@ -76,14 +87,9 @@ theorem exact_raw_replay_core_is_identity
     (h : appendRawCore world generation record = .ok post) :
     post.segments = world.segments ∧ post.messages = world.messages ∧
       post.transcript = world.transcript ∧ post.delegatedCalls = world.delegatedCalls := by
-  simp only [appendRawCore, hcollision, Bool.false_eq_true, ↓reduceIte, hmem, hshape,
-    synchronize] at h
-  cases hauthoritative : authoritativeLease world with
-  | error error => simp [hauthoritative] at h
-  | ok lease =>
-      simp [hauthoritative] at h
-      cases h
-      exact ⟨rfl, rfl, rfl, rfl⟩
+  simp only [appendRawCore, hcollision, Bool.false_eq_true, ↓reduceIte, hmem, hshape] at h
+  cases h
+  exact ⟨rfl, rfl, rfl, rfl⟩
 
 theorem retraction_precedes_retry
     (pre post : World) (generation : Generation) (record : Segment)
@@ -212,41 +218,9 @@ theorem exact_recovery_replay_core_does_not_renew_or_republish
     (h : recoverExpiredBatchCore world expected fresh duration deadline items = .ok post) :
     post.lease.lease = world.lease.lease ∧ post.segments = world.segments ∧
       post.messages = world.messages ∧ post.transcript = world.transcript := by
-  simp only [recoverExpiredBatchCore, hreplay, ↓reduceIte, synchronize] at h
-  cases hauthoritative : authoritativeLease world with
-  | error error => simp [hauthoritative] at h
-  | ok lease =>
-      simp [hauthoritative] at h
-      cases h
-      have hcontrol : lease.lease = world.lease.lease := by
-        unfold authoritativeLease at hauthoritative
-        cases hworld : world.lease.lease with
-        | vacant => simp [hworld] at hauthoritative; cases hauthoritative; rfl
-        | active generation duration deadline =>
-            rw [hworld] at hauthoritative
-            cases hprogress : deriveProgress world generation with
-            | error error =>
-                simp only [hprogress, Bind.bind, Except.bind] at hauthoritative
-                contradiction
-            | ok output =>
-                simp only [hprogress, Bind.bind, Except.bind, Except.ok.injEq] at hauthoritative
-                cases hauthoritative
-                exact hworld
-        | recoverable generation duration deadline =>
-            rw [hworld] at hauthoritative
-            cases hprogress : deriveProgress world generation with
-            | error error =>
-                simp only [hprogress, Bind.bind, Except.bind] at hauthoritative
-                contradiction
-            | ok output =>
-                simp only [hprogress, Bind.bind, Except.bind, Except.ok.injEq] at hauthoritative
-                cases hauthoritative
-                exact hworld
-        | terminal generation outcome =>
-            simp [hworld] at hauthoritative
-            cases hauthoritative
-            rfl
-      exact ⟨hcontrol, rfl, rfl, rfl⟩
+  simp only [recoverExpiredBatchCore, hreplay, ↓reduceIte] at h
+  cases h
+  exact ⟨rfl, rfl, rfl, rfl⟩
 
 theorem terminal_selection_commits_with_lifecycle
     (pre post : World) (generation : Generation)
@@ -260,22 +234,21 @@ theorem terminal_selection_commits_with_lifecycle
   exact ⟨hp.1.1, hp.1.2, hp.2⟩
 
 theorem admitted_terminal_core_commits_lifecycle_and_pending_cancellation
-    (world authoritative : World)
+    (world : World)
     (lease : RequestExecutionLease.World Generation)
     (generation : Generation) (outcome : RequestExecutionLease.Outcome)
     (selection : TerminalSelection)
     (hvalid : terminalSelectionValid world selection = true)
     (hnotReplay : terminalReplayPresent world generation outcome selection = false)
     (hempty : world.terminalSelection.isSome = false)
-    (hauthoritative : synchronize world = .ok authoritative)
-    (hlease : RequestExecutionLease.step? authoritative.lease
+    (hlease : RequestExecutionLease.step? world.lease
       (.finalize .mutationWriteGate generation outcome) = some lease) :
     terminalizeCore world generation outcome selection = .ok
-      { authoritative with
+      { world with
         lease := lease
-        transcript := terminalizeOwnedPending authoritative
+        transcript := terminalizeOwnedPending world
         terminalSelection := some selection } := by
-  simp [terminalizeCore, hvalid, hnotReplay, hempty, hauthoritative, hlease]
+  simp [terminalizeCore, hvalid, hnotReplay, hempty, hlease]
 
 theorem no_message_requires_no_eligible_owned_assistant
     (world : World)
@@ -283,106 +256,24 @@ theorem no_message_requires_no_eligible_owned_assistant
     eligibleOwnedAssistantExists world = false := by
   simpa [terminalSelectionValid] using h
 
-def newestCreated : List (OutputFact Generation) → Time
-  | [] => 0
-  | fact :: rest => max fact.createdAt (newestCreated rest)
-
-theorem createdAt_le_newest (facts : List (OutputFact Generation))
-    (fact : OutputFact Generation) (h : fact ∈ facts) :
-    fact.createdAt ≤ newestCreated facts := by
-  induction facts with
-  | nil => simp at h
-  | cons first rest ih =>
-      simp only [List.mem_cons] at h
-      rcases h with rfl | h
-      · exact Nat.le_max_left _ _
-      · exact Nat.le_trans (ih h) (Nat.le_max_right _ _)
-
-def silentRecoveryTime (lease : RequestExecutionLease.World Generation) : Time :=
-  max (effectiveExpiry lease) (newestCreated lease.output)
-
-theorem finite_silence_enables_atomic_recovery
-    (lease : RequestExecutionLease.World Generation)
-    (expected next : Generation) (oldDuration oldDeadline duration deadline : Time)
-    (hlease : lease.lease = .active expected oldDuration oldDeadline)
-    (hscoped : ∀ fact, fact ∈ lease.output →
-      fact.generation = expected ∧ fact.eligibility = .currentRequest)
-    (hfresh : RequestExecutionLease.fresh lease next) (hduration : duration > 0)
-    (hdeadline : silentRecoveryTime lease < deadline) :
-    ∃ post, RequestExecutionLease.step?
-      { lease with now := silentRecoveryTime lease }
-      (.recoverExpired .mutationWriteGate expected next duration deadline) = some post := by
-  let quiet := { lease with now := silentRecoveryTime lease }
-  have hintegrity : integrityHealthy quiet := by
-    unfold integrityHealthy quiet
-    apply List.all_eq_true.mpr
-    intro fact hfact
-    have hscopeFact := hscoped fact hfact
-    simp [hscopeFact.2, OutputEligibility.isConflict]
-  have hclock : clockCoherent quiet expected := by
-    unfold clockCoherent quiet
-    apply List.all_eq_true.mpr
-    intro fact hfact
-    have hbound := createdAt_le_newest lease.output fact hfact
-    have hmax : newestCreated lease.output ≤ silentRecoveryTime lease :=
-      Nat.le_max_right _ _
-    simp only [eligibleFor]
-    split
-    · exact decide_eq_true (Nat.le_trans hbound hmax)
-    · trivial
-  have hexpired : effectiveExpiry quiet ≤ quiet.now := by
-    rw [show effectiveExpiry quiet = effectiveExpiry lease by simp [quiet, effectiveExpiry, hlease]]
-    exact Nat.le_max_left _ _
-  have hquietLease : quiet.lease = .active expected oldDuration oldDeadline := by
-    simpa [quiet] using hlease
-  exact expired_recovery_enabled quiet expected next oldDuration oldDeadline duration deadline
-    hquietLease hintegrity hclock hexpired hduration
-    (by simpa [quiet, RequestExecutionLease.fresh] using hfresh)
-    (by simpa [quiet] using hdeadline)
-
-theorem derived_finite_silence_enables_lease_generation_swap
-    (world : World) (lease : RequestExecutionLease.World Generation)
-    (expected next : Generation) (oldDuration oldDeadline duration deadline : Time)
-    (hworld : world.lease.lease = .active expected oldDuration oldDeadline)
-    (hauthoritative : authoritativeLease world = .ok lease)
-    (hfresh : RequestExecutionLease.fresh lease next) (hduration : duration > 0)
-    (hdeadline : silentRecoveryTime lease < deadline) :
-    ∃ post, RequestExecutionLease.step?
-      { lease with now := silentRecoveryTime lease }
-      (.recoverExpired .mutationWriteGate expected next duration deadline) = some post := by
-  have hprogress := authoritativeLease_uses_only_derived_progress world lease expected
-    oldDuration oldDeadline hworld hauthoritative
-  have hscope := deriveProgress_scopes_every_fact world expected lease.output hprogress
-  have hlease : lease.lease = .active expected oldDuration oldDeadline := by
-    simp [authoritativeLease, hworld, hprogress] at hauthoritative
-    simp only [Bind.bind, Except.bind, Except.ok.injEq] at hauthoritative
-    have hcontrol := congrArg RequestExecutionLease.World.lease hauthoritative
-    simpa using hcontrol.symm
-  exact finite_silence_enables_atomic_recovery lease expected next oldDuration oldDeadline
-    duration deadline hlease (fun fact hfact =>
-      ⟨(hscope fact hfact).1, (hscope fact hfact).2.1⟩)
-    hfresh hduration hdeadline
-
-/-- Once the executable all-source batch has prepared and the authoritative
-lease gate admits the swap, the composed core reaches the exact post-build
-synchronization. This is a reachability equation, not a scheduler-fairness or
-cross-process transaction premise. -/
+/-- Once the executable all-source batch has prepared and the lease gate admits
+the swap, the composed core reaches the exact atomic post-state. This is a
+reachability equation, not a scheduler-fairness or cross-process transaction
+premise. -/
 theorem prepared_batch_enables_composed_recovery
-    (world authoritative : World) (prepared : RecoveryPrepared)
+    (world : World) (prepared : RecoveryPrepared)
     (lease : RequestExecutionLease.World Generation)
     (expected next : Generation) (duration deadline : Time) (items : List RecoveryItem)
     (hnotReplay : recoveryReplayValid world expected next items = false)
     (hprepare : prepareRecoveryBatch world expected next items = .ok prepared)
-    (hauthoritative : synchronize world = .ok authoritative)
-    (hlease : RequestExecutionLease.step? authoritative.lease
+    (hlease : RequestExecutionLease.step? world.lease
       (.recoverExpired .mutationWriteGate expected next duration deadline) = some lease) :
     recoverExpiredBatchCore world expected next duration deadline items =
-      synchronizePost
-        { authoritative with
-          lease := lease
-          segments := prepared.segments
-          messages := prepared.messages
-          transcript := prepared.transcript } := by
-  simp [recoverExpiredBatchCore, hnotReplay, hprepare, hauthoritative, hlease]
+      .ok { world with
+        lease := lease
+        segments := prepared.segments
+        messages := prepared.messages
+        transcript := prepared.transcript } := by
+  simp [recoverExpiredBatchCore, hnotReplay, hprepare, hlease]
 
 end CanonicalOutput.Execution

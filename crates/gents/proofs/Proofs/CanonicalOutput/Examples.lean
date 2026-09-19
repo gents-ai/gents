@@ -161,34 +161,49 @@ def live : World Nat :=
     request := .processing
     lease := .active 7 10 10
     usedGenerations := [7]
-    now := 9 }
+    now := 5 }
 
-def progressed : World Nat :=
-  { live with output := [⟨100, 7, 9, .currentRequest⟩] }
+theorem output_append_is_admission_not_renewal :
+    step? live (.appendOutput .mutationWriteGate 7) = some live ∧
+      effectiveExpiry live = 10 := by native_decide
 
-theorem last_moment_flush_does_not_rewrite_deadline :
-    step? live (.appendOutput .mutationWriteGate 7 100 .currentRequest) = some progressed ∧
-      progressed.lease = .active 7 10 10 ∧ effectiveExpiry progressed = 19 := by
-  simp [step?, admitted, integrityHealthy, initial, live, progressed,
-    effectiveExpiry, progressDeadline, OutputEligibility.renewsLease, clockCoherent]
+def renewed : World Nat := { live with lease := .active 7 10 15 }
 
-theorem committed_progress_wins_before_recovery :
-    step? { progressed with now := 10 }
-      (.recoverExpired .mutationWriteGate 7 8 10 30) = none := by decide
+theorem due_silent_owner_renews_with_exact_deadline_cas :
+    step? live (.renew .mutationWriteGate 7 10) = some renewed := by native_decide
+
+theorem owned_input_wait_remains_explicitly_renewable :
+    step? { live with request := .inputRequired }
+      (.renew .mutationWriteGate 7 10) =
+        some { renewed with request := .inputRequired } := by
+  native_decide
+
+theorem early_renewal_is_rejected :
+    step? { live with now := 4 } (.renew .mutationWriteGate 7 10) = none := by
+  native_decide
+
+theorem acknowledged_renewal_replay_with_stale_deadline_is_rejected :
+    step? renewed (.renew .mutationWriteGate 7 10) = none := by native_decide
+
+def renewedAgain : World Nat := { renewed with now := 10, lease := .active 7 10 20 }
+
+theorem finite_silent_owner_trace_can_renew_repeatedly :
+    step? live (.renew .mutationWriteGate 7 10) = some renewed ∧
+      step? { renewed with now := 10 } (.renew .mutationWriteGate 7 15) =
+        some renewedAgain := by native_decide
 
 theorem exact_deadline_is_expired_without_generation_swap :
-    step? { live with now := 10 } (.appendOutput .mutationWriteGate 7 100 .currentRequest) = none ∧
-      step? { live with now := 10 } (.renew .mutationWriteGate 7) = none ∧
+    step? { live with now := 10 } (.appendOutput .mutationWriteGate 7) = none ∧
+      step? { live with now := 10 } (.renew .mutationWriteGate 7 10) = none ∧
       step? { live with now := 10 }
         (.authorizeProducerDecision .mutationWriteGate 7 .dispatch) = none := by
-  simp [step?, admitted, integrityHealthy, initial, live, effectiveExpiry, progressDeadline]
+  native_decide
 
-theorem replay_does_not_use_current_time :
-    step? { progressed with now := 18 } (.replayOutput ⟨100, 7, 9, .currentRequest⟩) =
-      some { progressed with now := 18 } ∧
-      effectiveExpiry { progressed with now := 18 } = 19 := by decide
+theorem stale_generation_cannot_explicitly_renew :
+    step? live (.renew .mutationWriteGate 6 10) = none := by native_decide
 
-theorem stale_generation_fact_does_not_renew :
-    effectiveExpiry { live with output := [⟨100, 6, 1000, .currentRequest⟩] } = 10 := by decide
+theorem producer_decision_does_not_rewrite_deadline :
+    step? live (.authorizeProducerDecision .mutationWriteGate 7 .dispatch) = some live := by
+  native_decide
 
 end CanonicalOutput.Examples

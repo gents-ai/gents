@@ -16,6 +16,7 @@ namespace CanonicalOutput.Execution.Gate
 abbrev Actor := Nat
 
 inductive Operation where
+  | renew (generation : Generation) (expectedDeadline : Time)
   | append (generation : Generation) (record : Segment)
   | retract (generation : Generation) (record : Segment)
   | accept (generation : Generation) (closing : Segment)
@@ -30,6 +31,7 @@ inductive Operation where
 
 def evaluate (operation : Operation) (world : World) : Except Error World :=
   match operation with
+  | .renew generation expectedDeadline => Execution.renew world generation expectedDeadline
   | .append generation record => appendRaw world generation record
   | .retract generation record => retractBeforeRetry world generation record
   | .accept generation closing message targets =>

@@ -4,6 +4,13 @@ This directory contains the Lean 4 model for `gents`.
 
 ## Canonical output stack (#1571): Lean contract layer
 
+Status: not ready for the conformance handoff. The explicit-renewal revision
+separates liveness from output, but request/tool completion and recovery still
+need shared lifecycle/sequence ownership; reordered delivery still needs a
+non-rewinding partial preview; integrity revocation, retention and existing-install
+upgrade behavior remain open. A green Lean build is not evidence those seams are
+closed.
+
 Branch `feat/1571-canonical-transcript-lean` targets
 `feat/1571-canonical-transcript` (original baseline `3eaff8f16`). Foundational
 protocol/SDL corrections belong on that spec parent; this layer changes Lean
@@ -36,8 +43,11 @@ Assumptions: authorized observations, exact physical owner membership, DefraDB
 genesis identity and signed manifests come from the native bridge. The model
 checks UTF-8 boundaries and parses argument JSON, but does not prove equivalence
 of Lean/Rust codecs, media decoding, provider adapters, or signature verification.
-Lease decisions are authoritative owner reads/commits serialized under the existing
-mutation gate and a nondecreasing clock. This is not cross-replica consensus or
+Lease decisions read only the explicit deadline, with due-only owner renewal
+serialized under the existing mutation gate and a nondecreasing clock. Output
+and publication never renew. Independent owner scheduling while waiting is a
+native obligation; sleep may expire ownership and cannot be repaired by a late
+renewal. This is not cross-replica consensus or
 enforcement of the one-runtime-per-principal convention. Finite-silence recovery
 eligibility does not establish scheduler fairness or database termination.
 Configured remote routes and cancellation/tool-policy admission are supplied by
@@ -106,11 +116,22 @@ response-row fixtures are not evidence for the new `canonical_output_projection_
 Bindings marked follow-up in the coverage ledger remain implementation debt, not
 completed native coverage. Do not restore deleted generators as compatibility code.
 
-Repair validation: pinned Lean 4.18.0 `lake build` passes (1,129 targets),
+Previous repair validation: pinned Lean 4.18.0 `lake build` passed (1,129 targets),
 `git diff --check` passes, and the proof tree has no `sorry` or added axioms.
 Sol implementation agents cross-reviewed the execution, hydration and gate
 boundaries; the root review added the admitted two-flush truncation regression.
 No Rust build/tests or external fixture regeneration were run in this layer.
+
+Explicit-renewal revision: full pinned `lake build` passes (1,129 targets).
+Removed lease `OutputFact`/eligibility and global derived-progress scans. Renewal
+uses a due-only generation/observed-deadline CAS; output and producer decisions
+are lease stutters. The cadence bound, silent/input-wait cases, stale/expired
+rejection, arbitrary-output independence and renewal/recovery ordering are checked.
+Native decision fencing without an implicit deadline write remains a refinement
+obligation; a read-only snapshot check must not be mistaken for a serializing CAS.
+Affected-source validation still traverses its prefix, so this is not a proof of
+linear total streaming cost. The tool-composition and product gaps listed above
+remain open.
 
 ## Configuration and session refactor contract layer
 
@@ -176,7 +197,7 @@ state machines explicit enough that:
 The proofs are strongest where the runtime is a state machine:
 
 - request, process, and persistence lifecycle transitions
-- request execution leases with opaque generations, derived progress deadlines,
+- request execution leases with opaque generations, explicit owner-renewed deadlines,
   generation-fenced terminalization, and atomic expiry recovery (#1341, #1571)
 - daemon-visible storage observation assumptions at the persistence boundary
 - inference-call lifecycle, cancellation transitions, and slot reconstruction
@@ -311,7 +332,7 @@ The current proof suite covers twenty practical areas:
     envelope or mutating a terminal row (`Mailbox/Notification`). Generated
     cases exercise the database write owner and its typed receipts.
 20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
-    derived deadlines over eligible immutable output, explicit renewal,
+    explicit deadlines independent of output, bounded owner renewal,
     atomic expiry recovery, drop recovery, matching-generation terminal CAS,
     and bounded winner-owned continuation/token-charge effects. Canonical
     classification and publication composition are modeled in `CanonicalOutput`;
@@ -477,7 +498,7 @@ currently covers:
 
 - `Request`
 - `RequestExecutionLease` one-step and recovery/race traces now describe the
-  #1571 target owner: derived progress, replay, expiry admission, atomic recovery,
+  #1571 target owner: explicit lease deadlines, replay, expiry admission, atomic recovery,
   explicit renewal and policy revocation. The old generated Rust fixtures and
   production seam do not yet conform to these cases. Provider-EOF cases retain
   the explicit-final-event requirement. Native database ordering and projection

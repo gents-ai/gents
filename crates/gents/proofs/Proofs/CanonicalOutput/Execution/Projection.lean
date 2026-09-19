@@ -4,6 +4,30 @@ namespace CanonicalOutput.Execution
 
 open RequestExecutionLease
 
+/-- Read-only guidance for a scheduled renewal attempt. `notDue` is an early
+poll, `rereadDeadline` means this generation is still live but the caller's CAS
+value is stale, and `lost` means the caller must stop acting as owner. The
+transition remains the authoritative decision. -/
+inductive RenewalEligibility where
+  | due
+  | notDue (dueAt : Time)
+  | rereadDeadline (actual : Time)
+  | lost
+  deriving DecidableEq, Repr
+
+def renewalEligibility (world : World) (generation : Generation)
+    (expectedDeadline : Time) : RenewalEligibility :=
+  match world.lease.lease with
+  | .active owner duration deadline =>
+      if owner != generation || world.lease.now ≥ deadline then .lost
+      else if ¬ RequestExecutionLease.renewableLifecycle world.lease.request then .lost
+      else if deadline != expectedDeadline then .rereadDeadline deadline
+      else if RequestExecutionLease.renewalDue duration deadline > world.lease.now then
+        .notDue (RequestExecutionLease.renewalDue duration deadline)
+      else if deadline < world.lease.now + duration then .due
+      else .notDue deadline
+  | _ => .lost
+
 def requestRecords (world : World) : List Segment :=
   world.segments.filter (fun record => record.coordinate.request == world.requestId)
 
@@ -20,12 +44,8 @@ def writtenBy (generation : Generation) (record : Segment) : Bool :=
 def exactIdentityAt (records : List Segment) (record : Segment) : Bool :=
   (records.filter (fun other => other.id == record.id)).all (fun other => other == record)
 
-/-- Identity collisions matter to this lease only when one side claims the
-current request generation. Foreign/tool/old-generation identities do not become
-request-liveness evidence through this function. -/
-def currentIdentitiesValid (world : World) (generation : Generation) : Bool :=
-  (requestRecords world).all fun record =>
-    if writtenBy generation record then exactIdentityAt world.segments record else true
+def sourceIdentitiesValid (records : List Segment) (coordinate : Coordinate) : Bool :=
+  (sourceRecords records coordinate).all (exactIdentityAt records)
 
 def sourceData (records : List Segment) (coordinate : Coordinate) : List Segment :=
   (sourceRecords records coordinate).filter (fun record => record.flush.isSome) |>.dedup
@@ -39,7 +59,9 @@ def timestampsNondecreasing (records : List Segment) : Bool :=
 def validateOpenPrefix (records : List Segment) (coordinate : Coordinate)
     (writer : Writer) : Except IntegrityError Unit := do
   let data := sourceData records coordinate
-  if data.all (fun record => record.writer == writer) = false then
+  if sourceIdentitiesValid records coordinate = false then
+    .error .identityConflict
+  else if data.all (fun record => record.writer == writer) = false then
     .error (.invalidWriter coordinate)
   else if timestampsNondecreasing data = false then
     .error (.malformedSource coordinate)
@@ -52,122 +74,11 @@ def validateOpenPrefix (records : List Segment) (coordinate : Coordinate)
     | .ok _ => .ok ()
     | .error _ => .error (.malformedSource coordinate)
 
-def factsFromSegments (generation : Generation) (records : List Segment) :
-    List (OutputFact Generation) :=
-  records.filterMap fun record =>
-    if writtenBy generation record ∧ (record.flush.isSome ∨ record.close.isSome) then
-      some ⟨record.id, generation, record.createdAt, .currentRequest⟩
-    else none
-
-def headerGeneration? (world : World) (message : MessageEnvelope) : Option Generation :=
-  if message.header.request != some world.requestId ||
-      message.header.session != world.sessionId then none
-  else match message.header.publication with
-    | .requestExecution generation | .requestRecovery generation => some generation
-    | .toolDelivery _ | .fork _ => none
-
 def headerCoordinateConflict (world : World) (message : MessageEnvelope) : Bool :=
   world.messages.any fun other => other != message &&
     (other.header.id == message.header.id ||
       (other.header.session == message.header.session && other.key == message.key) ||
       (other.header.session == message.header.session && other.sequence == message.sequence))
-
-def currentHeadersValid (world : World) (generation : Generation) : Bool :=
-  world.messages.all fun message =>
-    if headerGeneration? world message == some generation then
-      !headerCoordinateConflict world message &&
-        match reconstructMessage world.segments noDeniedDocuments message with
-        | .ok _ => true
-        | .error _ => false
-    else true
-
-def factsFromHeaders (world : World) (generation : Generation) :
-    List (OutputFact Generation) :=
-  world.messages.filterMap fun message =>
-    if headerGeneration? world message == some generation then
-      some ⟨message.header.id, generation, message.createdAt, .currentRequest⟩
-    else none
-
-/-- Progress for one keyed source. A visible closure fixes the selected extent
-before ordinal-twin validation, so late records beyond recovery's extent are
-inert. A retracted or superseded-generation source contributes no liveness. -/
-def sourceProgress (world : World) (generation : Generation)
-    (coordinate : Coordinate) : Except IntegrityError (List (OutputFact Generation)) := do
-  let records := sourceRecords world.segments coordinate
-  let closeRecords := (records.filter (fun record => record.close.isSome)).dedup
-  if !records.any (writtenBy generation) then .ok []
-  else match closeRecords with
-  | [] =>
-      let writer := Writer.request generation
-      if !writerMatchesSource coordinate writer then .error (.invalidWriter coordinate)
-      else match validateOpenPrefix world.segments coordinate writer with
-        | .ok _ => .ok (factsFromSegments generation (sourceData world.segments coordinate))
-        | .error error => .error error
-  | [closing] =>
-      match closing.close with
-      | some .retracted =>
-          if writtenBy generation closing then .ok (factsFromSegments generation [closing])
-          else .ok []
-      | some (.closed _ count _) =>
-          if !writtenBy generation closing then .error (.invalidWriter coordinate)
-          else match reconstructExtent world.segments closing with
-          | .error _ => .error (.malformedSource coordinate)
-          | .ok _ =>
-              let selected := (extent world.segments coordinate count ++ [closing]).dedup
-              if timestampsNondecreasing (extent world.segments coordinate count) &&
-                  (extent world.segments coordinate count).all
-                    (fun record => record.createdAt ≤ closing.createdAt) then
-                .ok (factsFromSegments generation selected)
-              else .error (.malformedSource coordinate)
-      | none => .error (.malformedSource coordinate)
-  | _ => .error (.closureConflict coordinate)
-
-def collectProgress (world : World) (generation : Generation) :
-    List Coordinate → Except IntegrityError (List (OutputFact Generation))
-  | [] => .ok []
-  | coordinate :: rest => do
-      let here ← sourceProgress world generation coordinate
-      let later ← collectProgress world generation rest
-      .ok (here ++ later)
-
-def factBackedByCanonicalRecord (world : World) (generation : Generation)
-    (fact : OutputFact Generation) : Bool :=
-  (world.segments.any fun record =>
-    record.id == fact.id && record.coordinate.request == world.requestId &&
-      record.writer == .request generation && record.createdAt == fact.createdAt &&
-      (record.flush.isSome || record.close.isSome)) ||
-  (world.messages.any fun message =>
-    message.header.id == fact.id && message.createdAt == fact.createdAt &&
-      headerGeneration? world message == some generation)
-
-/-- The only constructor of lease progress in the composed owner. Eligibility is
-derived from actual scoped canonical records rather than accepted as a durable tag. -/
-def deriveProgress (world : World) (generation : Generation) :
-    Except IntegrityError (List (OutputFact Generation)) :=
-  if currentIdentitiesValid world generation = false then .error .identityConflict
-  else if currentHeadersValid world generation = false then .error .headerConflict
-  else match collectProgress world generation (requestCoordinates world) with
-  | .error error => .error error
-  | .ok facts =>
-      let projected := (facts ++ factsFromHeaders world generation).dedup |>.map fun fact =>
-        { fact with generation := generation, eligibility := .currentRequest }
-      if projected.all (factBackedByCanonicalRecord world generation) then .ok projected
-      else .error .identityConflict
-
-def authoritativeLease (world : World) : Except IntegrityError
-    (RequestExecutionLease.World Generation) :=
-  match world.lease.lease with
-  | .active generation _ _ => do
-      let output ← deriveProgress world generation
-      .ok { world.lease with output := output }
-  | .recoverable generation _ _ => do
-      let output ← deriveProgress world generation
-      .ok { world.lease with output := output }
-  | _ => .ok { world.lease with output := [] }
-
-def withAuthoritativeLease (world : World)
-    (lease : RequestExecutionLease.World Generation) : World :=
-  { world with lease := lease }
 
 def segmentIdentityCollision (world : World) (record : Segment) : Bool :=
   world.segments.any (fun old => old.id == record.id && old != record)

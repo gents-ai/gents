@@ -4,17 +4,25 @@ namespace CanonicalOutput.Execution
 
 open RequestExecutionLease
 
-def synchronize (world : World) : Except Error World :=
-  match authoritativeLease world with
-  | .error error => .error (.integrity error)
-  | .ok lease => .ok { world with lease := lease }
-
-def synchronizePost (world : World) : Except Error World := synchronize world
-
 def activeGeneration? (world : World) : Option Generation :=
   match world.lease.lease with
   | .active generation _ _ => some generation
   | _ => none
+
+/-- Explicit owner heartbeat. Due time, generation fencing, stale-deadline
+rejection, and the new deadline are all decided by the lease state machine.
+Unlike output operations, renewal does not inspect or reconstruct canonical
+output. -/
+def renewCore (world : World) (generation : Generation)
+    (expectedDeadline : Time) : Except Error World :=
+  match RequestExecutionLease.step? world.lease
+      (.renew .mutationWriteGate generation expectedDeadline) with
+  | none => .error .leaseRejected
+  | some lease => .ok { world with lease := lease }
+
+def renew (world : World) (generation : Generation)
+    (expectedDeadline : Time) : Except Error World :=
+  renewCore world generation expectedDeadline
 
 def requestSegmentShape (world : World) (generation : Generation)
     (record : Segment) : Bool :=
@@ -51,22 +59,20 @@ def appendRawCore (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=
   if segmentIdentityCollision world record then .error .identityCollision
   else if record ∈ world.segments then
-    if rawReplayShape world generation record then synchronize world else .error .invalidSegment
+    if rawReplayShape world generation record then .ok world else .error .invalidSegment
   else if requestSegmentShape world generation record = false ∨
       providerSource record.coordinate.source = false ∨
       record.flush.isNone ∨ record.close.isSome ∨
       sourceOpen world record.coordinate = false then .error .invalidSegment
-  else match synchronize world with
-  | .error error => .error error
-  | .ok authoritative =>
-      match RequestExecutionLease.step? authoritative.lease
-          (.appendOutput .mutationWriteGate generation record.id .currentRequest) with
-      | none => .error .leaseRejected
-      | some lease =>
-          synchronizePost
-            { authoritative with
-              lease := lease
-              segments := authoritative.segments ++ [record] }
+  else match RequestExecutionLease.step? world.lease
+      (.appendOutput .mutationWriteGate generation) with
+  | none => .error .leaseRejected
+  | some lease =>
+      let candidate :=
+        { world with lease := lease, segments := world.segments ++ [record] }
+      match validateOpenPrefix candidate.segments record.coordinate record.writer with
+      | .error error => .error (.integrity error)
+      | .ok _ => .ok candidate
 
 def retractionShape (world : World) (generation : Generation)
     (record : Segment) : Bool :=
@@ -84,22 +90,17 @@ return to retry policy. It does not itself choose a new provider attempt. -/
 def retractBeforeRetryCore (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=
   if segmentIdentityCollision world record then .error .identityCollision
+  else if sourceIdentitiesValid world.segments record.coordinate = false then
+    .error (.integrity .identityConflict)
   else if record ∈ world.segments then
-    if retractionReplayShape world generation record then synchronize world
+    if retractionReplayShape world generation record then .ok world
     else .error .invalidSegment
   else if retractionShape world generation record = false then .error .invalidSegment
   else if sourceOpen world record.coordinate = false then .error .sourceAlreadyClosed
-  else match synchronize world with
-  | .error error => .error error
-  | .ok authoritative =>
-      match RequestExecutionLease.step? authoritative.lease
-          (.authorizeProducerDecision .mutationWriteGate generation .closeOrRetract) with
-      | none => .error .leaseRejected
-      | some lease =>
-          synchronizePost
-            { authoritative with
-              lease := lease
-              segments := authoritative.segments ++ [record] }
+  else match RequestExecutionLease.step? world.lease
+      (.authorizeProducerDecision .mutationWriteGate generation .closeOrRetract) with
+  | none => .error .leaseRejected
+  | some lease => .ok { world with lease := lease, segments := world.segments ++ [record] }
 
 def closedComplete (record : Segment) : Bool :=
   match record.close with
@@ -115,6 +116,9 @@ def validateClosingRecord (segments : List Segment) (closing : Segment) : Bool :
   match uniqueRecord LookupError.unavailable .conflictingClosures
       (closures segments closing.coordinate) with
   | .ok only => only == closing &&
+      (match validateOpenPrefix segments closing.coordinate closing.writer with
+      | .ok _ => true
+      | .error _ => false) &&
       match reconstructExtent segments closing with
       | .ok _ => true
       | .error _ => false
@@ -179,9 +183,10 @@ def acceptAndPublishCore (world : World) (generation : Generation)
   else if remoteTargetsMatchConfiguredRoutes world message targets = false then
     .error .invalidDelegation
   else if acceptedPublicationPresent world closing message targets then
-    if closedComplete closing && validateClosingRecord world.segments closing &&
+    if !messageIdentityCollision world message && closedComplete closing &&
+        validateClosingRecord world.segments closing &&
         acceptedMessageValid world generation world.segments message &&
-        acceptedSourceBound world generation closing message then synchronize world
+        acceptedSourceBound world generation closing message then .ok world
     else .error .publicationIncomplete
   else if freshSegmentIdentity world closing = false ∨
       freshMessageIdentity world message = false then .error .identityCollision
@@ -203,20 +208,17 @@ def acceptAndPublishCore (world : World) (generation : Generation)
     else if ¬ world.transcript.PublishableTurn turn then .error .transcriptRejected
     else match prepareDelegatedCalls world segments message targets with
     | .error error => .error error
-    | .ok delegated => match synchronize world with
-      | .error error => .error error
-      | .ok authoritative =>
-          match RequestExecutionLease.step? authoritative.lease
-              (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
-          | none => .error .leaseRejected
-          | some lease =>
-              synchronizePost
-                { authoritative with
-                  lease := lease
-                  segments := segments
-                  messages := authoritative.messages ++ [message]
-                  transcript := authoritative.transcript.publishAcceptedAssistant header.id turn
-                  delegatedCalls := authoritative.delegatedCalls ++ delegated }
+    | .ok delegated =>
+        match RequestExecutionLease.step? world.lease
+            (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
+        | none => .error .leaseRejected
+        | some lease => .ok
+            { world with
+              lease := lease
+              segments := segments
+              messages := world.messages ++ [message]
+              transcript := world.transcript.publishAcceptedAssistant header.id turn
+              delegatedCalls := world.delegatedCalls ++ delegated }
 
 def authoredRowPresent (world : World) (message : MessageEnvelope) : Bool :=
   match message.header.role with
@@ -246,8 +248,9 @@ def publishAuthoredCore (world : World) (generation : Generation)
   if segmentIdentityCollision world closing || messageIdentityCollision world message then
     .error .identityCollision
   else if authoredPublicationPresent world closing message then
-    if closedComplete closing && validateClosingRecord world.segments closing &&
-        authoredMessageValid world generation world.segments closing message then synchronize world
+    if !messageIdentityCollision world message && closedComplete closing &&
+        validateClosingRecord world.segments closing &&
+        authoredMessageValid world generation world.segments closing message then .ok world
     else .error .publicationIncomplete
   else if freshSegmentIdentity world closing = false ||
       freshMessageIdentity world message = false then .error .identityCollision
@@ -263,18 +266,15 @@ def publishAuthoredCore (world : World) (generation : Generation)
         freshCompleteExtentExact segments closing = false ||
         authoredMessageValid world generation segments closing message = false then
       .error .invalidHeader
-    else match synchronize world with
-    | .error error => .error error
-    | .ok authoritative =>
-        match RequestExecutionLease.step? authoritative.lease
-            (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
-        | none => .error .leaseRejected
-        | some lease => synchronizePost
-            { authoritative with
-              lease := lease
-              segments := segments
-              messages := authoritative.messages ++ [message]
-              transcript := appendAuthoredRow authoritative.transcript message }
+    else match RequestExecutionLease.step? world.lease
+        (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
+    | none => .error .leaseRejected
+    | some lease => .ok
+        { world with
+          lease := lease
+          segments := segments
+          messages := world.messages ++ [message]
+          transcript := appendAuthoredRow world.transcript message }
 
 def headerOnlyPublicationPresent (world : World) (message : MessageEnvelope) : Bool :=
   message ∈ world.messages && match message.header.role with
@@ -295,7 +295,8 @@ def publishHeaderOnlyCore (world : World) (generation : Generation)
     (message : MessageEnvelope) : Except Error World :=
   if messageIdentityCollision world message then .error .identityCollision
   else if headerOnlyPublicationPresent world message then
-    if headerOnlyMessageValid world generation message then synchronize world
+    if !messageIdentityCollision world message &&
+        headerOnlyMessageValid world generation message then .ok world
     else .error .publicationIncomplete
   else if freshMessageIdentity world message = false then .error .identityCollision
   else if message.createdAt != world.lease.now ||
@@ -304,17 +305,14 @@ def publishHeaderOnlyCore (world : World) (generation : Generation)
       message.sequence != world.transcript.nextSeq then .error .transcriptRejected
   else if message.header.role == .assistant &&
       ¬ world.transcript.PublishableTurn (messageTurn message) then .error .transcriptRejected
-  else match synchronize world with
-  | .error error => .error error
-  | .ok authoritative =>
-      match RequestExecutionLease.step? authoritative.lease
-          (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
-      | none => .error .leaseRejected
-      | some lease => synchronizePost
-          { authoritative with
-            lease := lease
-            messages := authoritative.messages ++ [message]
-            transcript := appendHeaderOnlyRow authoritative.transcript message }
+  else match RequestExecutionLease.step? world.lease
+      (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
+  | none => .error .leaseRejected
+  | some lease => .ok
+      { world with
+        lease := lease
+        messages := world.messages ++ [message]
+        transcript := appendHeaderOnlyRow world.transcript message }
 
 def dispatchPublicationValid (world : World) (generation : Generation)
     (callId : ToolExecution.ToolCallId) : Bool :=
@@ -323,7 +321,8 @@ def dispatchPublicationValid (world : World) (generation : Generation)
       (toolIntents message).any (fun intent => intent.call == callId)).dedup
   match candidates with
   | [message] =>
-      acceptedMessageValid world generation world.segments message &&
+      !messageIdentityCollision world message &&
+        acceptedMessageValid world generation world.segments message &&
         publicationRowPresent world message.header (messageTurn message) &&
         toolIntentPresent world (messageTurn message) callId &&
         match targetIntent message callId with
@@ -346,19 +345,14 @@ def dispatchCore (world : World) (generation : Generation)
     (permit : DispatchPermit) : Except Error World :=
   let callId := permit.call
   if dispatchPublicationValid world generation callId = false then .error .publicationIncomplete
-  else if world.transcript.RunningPublishedCall callId then synchronize world
+  else if world.transcript.RunningPublishedCall callId then .ok world
   else if !permit.cancellationAllows || !permit.toolPolicyAllows then .error .transcriptRejected
   else if ¬ world.transcript.ReadyToDispatch callId then .error .transcriptRejected
-  else match synchronize world with
-  | .error error => .error error
-  | .ok authoritative =>
-      match RequestExecutionLease.step? authoritative.lease
-          (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
-      | none => .error .leaseRejected
-      | some lease => .ok
-          { authoritative with
-            lease := lease
-            transcript := authoritative.transcript.dispatchToolCall callId }
+  else match RequestExecutionLease.step? world.lease
+      (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+  | none => .error .leaseRejected
+  | some lease => .ok
+      { world with lease := lease, transcript := world.transcript.dispatchToolCall callId }
 
 def recoveryExtentExact (world : World) (expected : Generation)
     (closing : Segment) : Bool :=
@@ -498,6 +492,7 @@ def recoveryReplayValid (world : World) (expected fresh : Generation)
               match item.message with
               | none => true
               | some message => message ∈ world.messages &&
+                  !messageIdentityCollision world message &&
                   publicationRowPresent world message.header (messageTurn message)
 
 /-- One gate transaction closes every unresolved keyed provider source before
@@ -507,21 +502,19 @@ generation swap commit atomically. -/
 def recoverExpiredBatchCore (world : World) (expected fresh : Generation)
     (duration deadline : Time) (items : List RecoveryItem) : Except Error World :=
   if recoveryReplayValid world expected fresh items then
-    synchronize world
+    .ok world
   else match prepareRecoveryBatch world expected fresh items with
   | .error error => .error error
-  | .ok prepared => match synchronize world with
-    | .error error => .error error
-    | .ok authoritative =>
-        match RequestExecutionLease.step? authoritative.lease
-            (.recoverExpired .mutationWriteGate expected fresh duration deadline) with
-        | none => .error .leaseRejected
-        | some lease => synchronizePost
-            { authoritative with
-              lease := lease
-              segments := prepared.segments
-              messages := prepared.messages
-              transcript := prepared.transcript }
+  | .ok prepared =>
+      match RequestExecutionLease.step? world.lease
+          (.recoverExpired .mutationWriteGate expected fresh duration deadline) with
+      | none => .error .leaseRejected
+      | some lease => .ok
+          { world with
+            lease := lease
+            segments := prepared.segments
+            messages := prepared.messages
+            transcript := prepared.transcript }
 
 def terminalReplayPresent (world : World) (generation : Generation)
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection) : Bool :=
@@ -555,19 +548,16 @@ def terminalizeCore (world : World) (generation : Generation)
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection) :
     Except Error World :=
   if terminalSelectionValid world selection = false then .error .terminalRejected
-  else if terminalReplayPresent world generation outcome selection then synchronize world
+  else if terminalReplayPresent world generation outcome selection then .ok world
   else if world.terminalSelection.isSome then .error .terminalRejected
-  else match synchronize world with
-  | .error error => .error error
-  | .ok authoritative =>
-      match RequestExecutionLease.step? authoritative.lease
-          (.finalize .mutationWriteGate generation outcome) with
-      | none => .error .leaseRejected
-      | some lease => .ok
-          { authoritative with
-            lease := lease
-            transcript := terminalizeOwnedPending authoritative
-            terminalSelection := some selection }
+  else match RequestExecutionLease.step? world.lease
+      (.finalize .mutationWriteGate generation outcome) with
+  | none => .error .leaseRejected
+  | some lease => .ok
+      { world with
+        lease := lease
+        transcript := terminalizeOwnedPending world
+        terminalSelection := some selection }
 
 def appendRaw (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=

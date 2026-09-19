@@ -1,5 +1,4 @@
 import Proofs.Request.State
-import Proofs.CanonicalOutput.State
 
 /-!
 # Request execution lease state
@@ -8,12 +7,8 @@ The generation parameter is deliberately abstract. The owner may compare
 generations for equality and remember used values, but cannot derive a successor.
 Claims, recovery, and revocation therefore require a fresh opaque value.
 
-`OutputFact` is a lease-facing observation of immutable canonical output. Its
-eligibility is an input from the canonical projection at the authoritative read,
-not durable metadata and not a theorem of this machine. Only a validated fact
-for this physical request can renew the request lease. Reclassification after
-closure or conflict discovery and the composed cross-replica argument remain
-outside this owner.
+Output never changes lease expiry or recovery authority. Only the owner's
+explicit, cadence-bounded deadline CAS may renew a live lease.
 -/
 
 namespace RequestExecutionLease
@@ -33,34 +28,6 @@ inductive Boundary where
   | observingReplica
   deriving DecidableEq, Repr
 
-/-- Why a visible immutable output record is or is not lease progress. -/
-inductive OutputEligibility where
-  | currentRequest
-  | foreignRequest
-  | fork
-  | toolOwned
-  | beyondExtent
-  | malformed
-  /-- An authoritative conflict in the current request projection. Conflicts
-  outside the request must not be classified with this constructor. -/
-  | currentRequestConflict
-  deriving DecidableEq, Repr
-
-def OutputEligibility.renewsLease : OutputEligibility → Bool
-  | .currentRequest => true
-  | _ => false
-
-def OutputEligibility.isConflict : OutputEligibility → Bool
-  | .currentRequestConflict => true
-  | _ => false
-
-structure OutputFact (Generation : Type) where
-  id : CanonicalOutput.DocId
-  generation : Generation
-  createdAt : Time
-  eligibility : OutputEligibility
-  deriving DecidableEq, Repr
-
 inductive Lease (Generation : Type) where
   | vacant
   | active (generation : Generation) (duration explicitDeadline : Time)
@@ -75,9 +42,6 @@ structure World (Generation : Type) where
   request : RequestState
   lease : Lease Generation
   usedGenerations : List Generation
-  /-- A recomputed authoritative projection snapshot. The lease model does not
-  prove the canonical source/extent classifier that supplies this list. -/
-  output : List (OutputFact Generation)
   now : Time
   continuationRequired : Bool
   tokenChargeRequired : Bool
@@ -89,7 +53,6 @@ def initial (Generation : Type) : World Generation :=
   { request := .pending
   , lease := .vacant
   , usedGenerations := []
-  , output := []
   , now := 0
   , continuationRequired := false
   , tokenChargeRequired := false
@@ -122,57 +85,18 @@ instance {Generation : Type} [DecidableEq Generation]
   unfold fresh
   infer_instance
 
-def progressDeadline {Generation : Type} [DecidableEq Generation]
-    (generation : Generation) (duration : Time) : List (OutputFact Generation) → Time
-  | [] => 0
-  | fact :: rest =>
-      max
-        (if fact.generation = generation ∧ fact.eligibility.renewsLease then
-          fact.createdAt + duration
-        else 0)
-        (progressDeadline generation duration rest)
-
-def eligibleFor {Generation : Type} [DecidableEq Generation]
-    (generation : Generation) (fact : OutputFact Generation) : Bool :=
-  fact.generation == generation && fact.eligibility.renewsLease
-
-def effectiveExpiry {Generation : Type} [DecidableEq Generation]
+def effectiveExpiry {Generation : Type}
     (world : World Generation) : Time :=
   match world.lease with
-  | .active generation duration explicitDeadline
-  | .recoverable generation duration explicitDeadline =>
-      max explicitDeadline (progressDeadline generation duration world.output)
+  | .active _ _ explicitDeadline
+  | .recoverable _ _ explicitDeadline => explicitDeadline
   | .vacant | .terminal _ _ => 0
-
-/-- An authoritative conflict is an integrity failure, not evidence of inactivity. -/
-def integrityHealthy {Generation : Type} (world : World Generation) : Prop :=
-  world.output.all (fun fact => !fact.eligibility.isConflict) = true
-
-instance {Generation : Type} (world : World Generation) :
-    Decidable (integrityHealthy world) := by
-  unfold integrityHealthy
-  infer_instance
-
-/-- `now` is the owning runtime's monotonic clock. Admitted facts cannot appear
-to come from its future; a wall-clock discontinuity therefore blocks decisions
-instead of manufacturing or discarding lease time. -/
-def clockCoherent {Generation : Type} [DecidableEq Generation]
-    (world : World Generation) (generation : Generation) : Prop :=
-  world.output.all (fun fact =>
-    if eligibleFor generation fact then fact.createdAt ≤ world.now else true) = true
-
-instance {Generation : Type} [DecidableEq Generation]
-    (world : World Generation) (generation : Generation) :
-    Decidable (clockCoherent world generation) := by
-  unfold clockCoherent
-  infer_instance
 
 def admitted {Generation : Type} [DecidableEq Generation]
     (world : World Generation) (boundary : Boundary) (generation : Generation) : Prop :=
-  boundary = .mutationWriteGate ∧ integrityHealthy world ∧
+  boundary = .mutationWriteGate ∧
     match world.lease with
-    | .active owner _ _ => owner = generation ∧ clockCoherent world owner ∧
-        world.now < effectiveExpiry world
+    | .active owner _ deadline => owner = generation ∧ world.now < deadline
     | _ => False
 
 instance {Generation : Type} [DecidableEq Generation]
@@ -180,6 +104,16 @@ instance {Generation : Type} [DecidableEq Generation]
     Decidable (admitted world boundary generation) := by
   unfold admitted
   cases boundary <;> cases hlease : world.lease <;> simp <;> infer_instance
+
+/-- Lifecycle states in which the owned completion loop may keep its explicit
+lease alive. `inputRequired` remains owned while waiting for user input; it is
+not an implicit relinquishment or an output-derived timeout policy. -/
+def renewableLifecycle : RequestState → Prop
+  | .claimed | .processing | .inputRequired => True
+  | _ => False
+
+instance (request : RequestState) : Decidable (renewableLifecycle request) := by
+  cases request <;> unfold renewableLifecycle <;> infer_instance
 
 def canFinalize {Generation : Type} (world : World Generation)
     (outcome : Outcome) : Prop :=

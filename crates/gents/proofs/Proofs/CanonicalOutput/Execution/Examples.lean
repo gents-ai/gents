@@ -6,7 +6,7 @@ open CanonicalOutput RequestExecutionLease
 
 def lease (now : Time := 5) : RequestExecutionLease.World Generation :=
   { request := .processing, lease := .active 7 5 10, usedGenerations := [7]
-    output := [], now := now, continuationRequired := false,
+    now := now, continuationRequired := false,
     tokenChargeRequired := false, continuationCount := 0, tokenChargeCount := 0 }
 
 def transcript : Transcript.TranscriptState :=
@@ -42,6 +42,26 @@ def succeeds {error value : Type} : Except error value → Bool
 theorem guarded_raw_append_is_reachable :
     succeeds (appendRaw (world 5) 7 (raw 100 0 0 5)) = true := by
   native_decide
+
+def conflictedFutureOutput : World :=
+  { world 8 with segments :=
+      [raw 100 0 0 5,
+       { raw 100 0 0 99 with flush := some ⟨0,
+          [⟨0, 1, some { block := 0, part := 0, kind := .text }⟩], [66]⟩ }] }
+
+/-- Canonical conflicts and future-dated records require their own integrity
+handling, but cannot prevent the current owner from winning a due renewal CAS. -/
+theorem explicit_renewal_ignores_conflicted_future_output :
+    succeeds (renew conflictedFutureOutput 7 10) = true := by
+  native_decide
+
+def rawAppendKeepsDeadline : Bool :=
+  match appendRaw (world 5) 7 (raw 100 0 0 5) with
+  | .error _ => false
+  | .ok post => post.lease.lease == .active 7 5 10
+
+theorem producer_output_does_not_renew_deadline :
+    rawAppendKeepsDeadline = true := by native_decide
 
 theorem payload_free_assistant_can_commit_zero_stream_source :
     succeeds (acceptAndPublish (world 5) 7 (emptyClose 100 0 .complete 5)

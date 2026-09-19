@@ -25,9 +25,7 @@ inductive Action (Generation : Type) where
       (duration explicitDeadline : Time)
   | begin (boundary : Boundary) (generation : Generation)
   | appendOutput (boundary : Boundary) (generation : Generation)
-      (id : CanonicalOutput.DocId) (eligibility : OutputEligibility)
-  | replayOutput (fact : OutputFact Generation)
-  | renew (boundary : Boundary) (generation : Generation)
+  | renew (boundary : Boundary) (generation : Generation) (expectedDeadline : Time)
   /-- Authorizes the request-side CAS for a producer transaction. The canonical
   output/publication effects are deliberately absent from this world. -/
   | authorizeProducerDecision (boundary : Boundary) (generation : Generation)
@@ -56,9 +54,13 @@ inductive Action (Generation : Type) where
 
 /-- The production renewal policy is intentionally not deadline equality:
 every explicit renewal advances the prior deadline by at least one tick. -/
+def renewalInterval (duration : Time) : Time := max 1 (duration / 2)
+
+def renewalDue (duration deadline : Time) : Time :=
+  deadline - renewalInterval duration
+
 def renewDeadline {Generation : Type}
-    (pre : World Generation) (duration explicitDeadline : Time) : Time :=
-  max (pre.now + duration) (explicitDeadline + 1)
+    (pre : World Generation) (duration : Time) : Time := pre.now + duration
 
 def installFresh {Generation : Type}
     (pre : World Generation) (generation : Generation)
@@ -91,28 +93,24 @@ def step? {Generation : Type} [DecidableEq Generation]
       if admitted pre boundary generation ∧ pre.request = .claimed then
         some { pre with request := .processing }
       else none
-  | .appendOutput boundary generation id eligibility =>
-      if pre.output.any (fun fact => fact.id == id) then none
-      else if admitted pre boundary generation ∧ eligibility = .currentRequest ∧
-          pre.request = .processing then
-        some { pre with output := ⟨id, generation, pre.now, eligibility⟩ :: pre.output }
-      else none
-  | .replayOutput fact =>
-      if fact ∈ pre.output then some pre else none
-  | .renew boundary generation =>
+  | .appendOutput boundary generation =>
+      if admitted pre boundary generation ∧ pre.request = .processing then some pre else none
+  | .renew boundary generation expectedDeadline =>
       match pre.lease with
       | .active owner duration explicitDeadline =>
-          if admitted pre boundary generation then
+          if admitted pre boundary generation ∧ explicitDeadline = expectedDeadline ∧
+              renewalDue duration explicitDeadline ≤ pre.now ∧
+              explicitDeadline < renewDeadline pre duration ∧
+              renewableLifecycle pre.request then
             some { pre with lease :=
-              (.active owner duration (renewDeadline pre duration explicitDeadline)) }
+              (.active owner duration (renewDeadline pre duration)) }
           else none
       | _ => none
   | .authorizeProducerDecision boundary generation _ =>
       match pre.lease with
-      | .active owner duration explicitDeadline =>
+      | .active _ _ _ =>
           if admitted pre boundary generation ∧ pre.request = .processing then
-            some { pre with lease :=
-              (.active owner duration (renewDeadline pre duration explicitDeadline)) }
+            some pre
           else none
       | _ => none
   | .socketTraffic generation =>
@@ -135,8 +133,7 @@ def step? {Generation : Type} [DecidableEq Generation]
   | .recoverExpired boundary expected generation duration explicitDeadline =>
       match pre.lease with
       | .active owner _ _ =>
-          if boundary = .mutationWriteGate ∧ integrityHealthy pre ∧
-              clockCoherent pre owner ∧ owner = expected ∧
+          if boundary = .mutationWriteGate ∧ owner = expected ∧
               effectiveExpiry pre ≤ pre.now ∧ duration > 0 ∧
               fresh pre generation ∧ pre.now < explicitDeadline then
             some (installFresh pre generation duration explicitDeadline)
@@ -145,8 +142,7 @@ def step? {Generation : Type} [DecidableEq Generation]
   | .recoverDropped boundary expected generation duration explicitDeadline =>
       match pre.lease with
       | .recoverable owner _ _ =>
-          if boundary = .mutationWriteGate ∧ integrityHealthy pre ∧
-              clockCoherent pre owner ∧ owner = expected ∧ duration > 0 ∧
+          if boundary = .mutationWriteGate ∧ owner = expected ∧ duration > 0 ∧
               fresh pre generation ∧ pre.now < explicitDeadline then
             some (installFresh pre generation duration explicitDeadline)
           else none
@@ -173,8 +169,7 @@ def step? {Generation : Type} [DecidableEq Generation]
   | .recoverExpiredAndFail boundary expected generation =>
       match pre.lease with
       | .active owner _ _ =>
-          if boundary = .mutationWriteGate ∧ integrityHealthy pre ∧
-              clockCoherent pre owner ∧ owner = expected ∧
+          if boundary = .mutationWriteGate ∧ owner = expected ∧
               effectiveExpiry pre ≤ pre.now ∧ fresh pre generation ∧
               canFinalize pre .failed ∧ pre.continuationCount = 0 ∧
               pre.tokenChargeCount = 0 then
@@ -184,8 +179,7 @@ def step? {Generation : Type} [DecidableEq Generation]
   | .recoverDroppedAndFail boundary expected generation =>
       match pre.lease with
       | .recoverable owner _ _ =>
-          if boundary = .mutationWriteGate ∧ integrityHealthy pre ∧
-              clockCoherent pre owner ∧ owner = expected ∧ fresh pre generation ∧
+          if boundary = .mutationWriteGate ∧ owner = expected ∧ fresh pre generation ∧
               canFinalize pre .failed ∧ pre.continuationCount = 0 ∧
               pre.tokenChargeCount = 0 then
             some (recoveryTerminal pre generation)
