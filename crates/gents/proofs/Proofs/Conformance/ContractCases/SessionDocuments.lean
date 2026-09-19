@@ -109,9 +109,13 @@ def history : History :=
 def child : Scope := { scope with session := 20 }
 def remap (id : Nat) := id + 1000
 def childKey (key : String) := "child:" ++ key
+def sourceAuthorization : SessionFork.SourceAuthorization :=
+  ⟨scope, history.messages.map (·.header.id), history.compactions.map (·.id)⟩
+def wrongAgentAuthorization : SessionFork.SourceAuthorization :=
+  ⟨{ scope with agent := 99 }, history.messages.map (·.header.id), history.compactions.map (·.id)⟩
 
 def copied := copyPrefix history child remap childKey 1
-example : publish history scope child remap childKey 1 true true true = some copied := by decide
+example : publish history scope child remap childKey 1 sourceAuthorization true true = some copied := by decide
 example : copied.messages.map (·.header.refs) = [[⟨101, 0⟩]] := by decide
 example : copied.messages.map (·.header.origin) = [some 1] := by decide
 example : copied.messages.map (·.header.request) = [none] := by decide
@@ -121,19 +125,24 @@ example : copied.messages.map (·.key) = ["child:origin-1"] := by decide
 example : copied.compactions = [⟨1004, child.session, 1, 0⟩] := by decide
 example : (retentionDependencies copied).originMessages = [1] := by decide
 example : (retentionDependencies copied).closingRecords = [101] := by decide
-example : publish history scope { child with requester := none } remap childKey 1 true true true = none := by decide
-example : publish history scope child remap childKey 1 true false true = none := by decide
-example : publish history scope child remap childKey 1 true true false = none := by decide
-example : publish history scope child remap childKey 1 false true true = none := by decide
+example : publish history scope { child with requester := none } remap childKey 1 sourceAuthorization true true = none := by decide
+example : publish history scope child remap childKey 1 sourceAuthorization false true = none := by decide
+example : publish history scope child remap childKey 1 sourceAuthorization true false = none := by decide
+example : publish history scope child remap childKey 1 wrongAgentAuthorization true true = none := by decide
+example : publish history scope { child with agent := 99 } remap childKey 1 sourceAuthorization true true = none := by decide
 example : (copyPrefix history child remap childKey 0) = ⟨[], []⟩ := by decide
 example : publish { history with compactions := [⟨4, scope.session, 2, 0⟩] }
-    scope child remap childKey 1 true true true = none := by decide
+    scope child remap childKey 1 sourceAuthorization true true = none := by decide
 example : publish { history with compactions := [⟨4, scope.session, 1, 99⟩] }
-    scope child remap childKey 100 true true true = none := by decide
+    scope child remap childKey 100 sourceAuthorization true true = none := by decide
 
 def duplicateSequenceHistory : History :=
   { messages := [sourceMessage 1 0, sourceMessage 2 0], compactions := [] }
-example : publish duplicateSequenceHistory scope child remap childKey 1 true true true = none := by decide
-example : publish history scope child (fun _ => 1000) childKey 1 true true true = none := by decide
+example : publish duplicateSequenceHistory scope child remap childKey 1
+    (SessionFork.SourceAuthorization.mk scope
+      (duplicateSequenceHistory.messages.map (·.header.id))
+      (duplicateSequenceHistory.compactions.map (·.id)))
+    true true = none := by decide
+example : publish history scope child (fun _ => 1000) childKey 1 sourceAuthorization true true = none := by decide
 
 end Conformance.SessionDocuments

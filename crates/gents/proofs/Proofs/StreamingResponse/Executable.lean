@@ -21,6 +21,28 @@ def sampleOpen : Segment := { sampleComplete with id := 102, close := none }
 def sampleRetracted : Segment :=
   { sampleComplete with id := 103, flush := none, close := some .retracted }
 
+/-- A benign late raw flush is outside the already committed one-segment
+extent, carries no competing closure, and has a distinct immutable identity. -/
+def sampleLateBeyondExtent : Segment :=
+  { sampleComplete with
+    id := 104
+    flush := some ⟨1, [⟨0, 1, none⟩], [90]⟩
+    close := none
+    createdAt := 6 }
+
+def sampleLateInExtentTwin : Segment :=
+  { sampleComplete with
+    id := 105
+    flush := some ⟨0, [⟨0, 1, some sampleText⟩], [90]⟩
+    close := none
+    createdAt := 6 }
+
+def sampleOpenContinuation : Segment :=
+  { sampleOpen with
+    id := 106
+    flush := some ⟨1, [⟨0, 1, none⟩, ⟨1, 1, none⟩], [67, 68]⟩
+    createdAt := 6 }
+
 def textSpec : PayloadSpec := ⟨⟨100, 0⟩, .full⟩
 def opaqueSpec : PayloadSpec := ⟨⟨100, 1⟩, .full⟩
 
@@ -133,19 +155,71 @@ def outputProjectionCases : List OutputProjectionCase :=
         (messages := []) (messageId := none) (coordinate := ⟨10, .tool 42⟩)
         (writer := .tool 42) (requestTerminal := true)
         (terminalSelection := some .noMessage))
+  , case "header_before_payload_dependencies_is_loading"
+      (baseObservation (records := []))
+  , case "closed_source_is_never_a_live_preview"
+      (baseObservation (messages := []) (messageId := none))
+  , case "benign_late_record_beyond_extent_preserves_publication"
+      (baseObservation
+        (records := CanonicalOutput.deliver [sampleComplete] sampleLateBeyondExtent))
+  , case "late_in_extent_twin_is_a_conflict"
+      (baseObservation
+        (records := CanonicalOutput.deliver [sampleComplete] sampleLateInExtentTwin))
+  , case "valid_open_append_extends_live_preview"
+      (baseObservation
+        (records := CanonicalOutput.deliver [sampleOpen] sampleOpenContinuation)
+        (messages := []) (messageId := none))
   ]
 
-theorem outputProjectionCases_count : outputProjectionCases.length = 14 := by decide
+theorem outputProjectionCases_count : outputProjectionCases.length = 19 := by decide
 
 theorem projection_cases_pin_boundaries :
     outputProjectionCases.map (fun witness => viewName witness.expected) =
-      ["published", "published", "loading", "conflicted", "loading", "denied",
+       ["published", "published", "loading", "conflicted", "loading", "denied",
        "live", "absent", "loading", "retained_partial", "loading",
-       "retracted", "absent", "loading"] := by
+       "retracted", "absent", "loading", "loading", "loading", "published", "conflicted",
+       "live"] := by
   native_decide
 
 theorem published_presentation_excludes_opaque :
     (outputProjectionCases.map (fun witness => renderedKinds witness.expected)).head? =
       some ["text"] := by native_decide
+
+theorem header_before_payload_dependencies_is_loading :
+    project (baseObservation (records := [])) = .loading := by
+  native_decide
+
+theorem closed_complete_source_is_not_live :
+    project (baseObservation (messages := []) (messageId := none)) = .loading := by
+  native_decide
+
+/-- This deliberately does not claim arbitrary late records are harmless:
+same-ID or in-extent twins remain conflicts. The witness is distinct, closureless
+and outside the selected closure's committed extent. -/
+theorem benign_late_record_beyond_extent_preserves_publication :
+    project (baseObservation
+      (records := CanonicalOutput.deliver [sampleComplete] sampleLateBeyondExtent)) =
+      project baseObservation := by
+  native_decide
+
+theorem late_in_extent_twin_is_not_benign :
+    project (baseObservation
+      (records := CanonicalOutput.deliver [sampleComplete] sampleLateInExtentTwin)) =
+      .conflicted := by
+  native_decide
+
+/-- Executable non-rewind regression for a valid contiguous append. This pins
+the actual projected bytes, rather than inferring prefix safety merely from
+record retention. -/
+theorem valid_open_append_extends_live_preview :
+    project (baseObservation (records := [sampleOpen])
+      (messages := []) (messageId := none)) =
+        .live [(sampleText, [65])] ∧
+    project (baseObservation
+      (records := CanonicalOutput.deliver [sampleOpen] sampleOpenContinuation)
+      (messages := []) (messageId := none)) =
+        .live [(sampleText, [65, 67])] ∧
+    ([65] : List UInt8).IsPrefix [65, 67] := by
+  native_decide
 
 end StreamingResponse

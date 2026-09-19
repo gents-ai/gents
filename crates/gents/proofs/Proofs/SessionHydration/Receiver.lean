@@ -68,7 +68,9 @@ def canonicalKey (key : CanonicalOutput.Hydration.DocumentKey) : DocumentKey :=
 
 /-- The signed receipt remains the ACP/transport premise. Local closure
 recomputation is an independent exact-content check before completion. -/
-def validateSnapshot (signed : Finset DocumentKey)
+def validateSnapshot (scope : CanonicalOutput.Hydration.AuthorizationScope)
+    (rootSession : SessionId)
+    (signed : Finset DocumentKey)
     (bases : List CanonicalOutput.Hydration.AuthorizedBase)
     (roots : List CanonicalOutput.DocId)
     (requirements : List CanonicalOutput.Hydration.TerminalRequirement)
@@ -77,7 +79,7 @@ def validateSnapshot (signed : Finset DocumentKey)
     (provenance : List CanonicalOutput.Hydration.ProvenanceAccess)
     (deniedHeaders deniedSegments : List CanonicalOutput.DocId)
     (dependencyDenials : List CanonicalOutput.DependencyDenial := []) : ValidationResult :=
-  match CanonicalOutput.Hydration.buildManifest bases roots requirements messages segments
+  match CanonicalOutput.Hydration.buildManifest scope rootSession bases roots requirements messages segments
       provenance deniedHeaders deniedSegments dependencyDenials with
   | .ok manifest =>
       if (manifest.map canonicalKey).toFinset = signed then .valid else .invalid
@@ -91,23 +93,26 @@ def signedClosure : Finset DocumentKey :=
   [⟨.agentRequest, 10⟩, ⟨.agentMessage, 200⟩, ⟨.agentMessage, 201⟩,
     ⟨.agentOutputSegment, 100⟩].toFinset
 
-example : validateSnapshot signedClosure [] [201] []
+example : validateSnapshot Examples.scope 2 signedClosure [] [201] []
     [Examples.originMessage, Examples.childMessage] [Examples.closing]
     Examples.access [] [] = .valid := by native_decide
 
 /-- All IDs may be present while the signed manifest still disagrees with the
 typed reference closure. Identity coverage alone cannot complete. -/
-example : validateSnapshot (signedClosure.erase ⟨.agentRequest, 10⟩) [] [201] []
+example : validateSnapshot Examples.scope 2 (signedClosure.erase ⟨.agentRequest, 10⟩) [] [201] []
     [Examples.originMessage, Examples.childMessage] [Examples.closing]
     Examples.access [] [] = .invalid := by native_decide
 
-example : validateSnapshot signedClosure [] [201] []
+example : validateSnapshot Examples.scope 2 signedClosure [] [201] []
     [Examples.childMessage] [Examples.closing] Examples.access [] [] = .loading := by
   native_decide
 
-example : validateSnapshot signedClosure [] [201] []
+example : validateSnapshot Examples.scope 2 signedClosure [] [201] []
     [Examples.originMessage, Examples.childMessage] [Examples.closing]
-    [⟨⟨.agentRequest, 10⟩, .denied⟩] [] [] = .invalid := by native_decide
+    [⟨Examples.scope, ⟨.agentMessage, 200⟩, .authorized⟩,
+     ⟨Examples.scope, ⟨.agentMessage, 201⟩, .authorized⟩,
+     ⟨Examples.scope, ⟨.agentOutputSegment, 100⟩, .authorized⟩,
+     ⟨Examples.scope, ⟨.agentRequest, 10⟩, .denied⟩] [] [] = .invalid := by native_decide
 
 end ValidationExamples
 
@@ -202,6 +207,8 @@ enum. The projection recomputes canonical closure and native reconstruction from
 the local snapshot, then applies the lower state projection. -/
 def projectCanonicalSnapshot (request : DurableRequest)
     (mergedDocuments : Finset DocumentKey)
+    (scope : CanonicalOutput.Hydration.AuthorizationScope)
+    (rootSession : SessionId)
     (bases : List CanonicalOutput.Hydration.AuthorizedBase)
     (roots : List CanonicalOutput.DocId)
     (requirements : List CanonicalOutput.Hydration.TerminalRequirement)
@@ -212,13 +219,15 @@ def projectCanonicalSnapshot (request : DurableRequest)
     (session agent : String)
     (dependencyDenials : List CanonicalOutput.DependencyDenial := []) : ClientProgress :=
   let validation := match request with
-    | .served signed => validateSnapshot signed bases roots requirements messages segments
+    | .served signed => validateSnapshot scope rootSession signed bases roots requirements messages segments
         provenance deniedHeaders deniedSegments dependencyDenials
     | _ => .loading
   projectDurable request mergedDocuments validation session agent
 
 theorem canonical_completion_requires_valid_reconstruction
     (signed merged : Finset DocumentKey)
+    (scope : CanonicalOutput.Hydration.AuthorizationScope)
+    (rootSession : SessionId)
     (bases : List CanonicalOutput.Hydration.AuthorizedBase)
     (roots : List CanonicalOutput.DocId)
     (requirements : List CanonicalOutput.Hydration.TerminalRequirement)
@@ -227,12 +236,12 @@ theorem canonical_completion_requires_valid_reconstruction
     (provenance : List CanonicalOutput.Hydration.ProvenanceAccess)
     (deniedHeaders deniedSegments : List CanonicalOutput.DocId)
     (session agent : String) (dependencyDenials : List CanonicalOutput.DependencyDenial)
-    (hcomplete : (projectCanonicalSnapshot (.served signed) merged bases roots requirements
+    (hcomplete : (projectCanonicalSnapshot (.served signed) merged scope rootSession bases roots requirements
       messages segments provenance deniedHeaders deniedSegments session agent
       dependencyDenials).phase = .complete) :
-    validateSnapshot signed bases roots requirements messages segments provenance
+    validateSnapshot scope rootSession signed bases roots requirements messages segments provenance
       deniedHeaders deniedSegments dependencyDenials = .valid := by
-  cases hvalidation : validateSnapshot signed bases roots requirements messages segments
+  cases hvalidation : validateSnapshot scope rootSession signed bases roots requirements messages segments
       provenance deniedHeaders deniedSegments dependencyDenials with
   | loading =>
       simp [projectCanonicalSnapshot, projectDurable, hvalidation, observe, observeCore,

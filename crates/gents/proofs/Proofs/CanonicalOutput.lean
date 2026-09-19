@@ -10,3 +10,4 @@ import Proofs.CanonicalOutput.TerminalPayload
 import Proofs.CanonicalOutput.ToolDelivery
 import Proofs.CanonicalOutput.Hydration
 import Proofs.CanonicalOutput.Execution
+import Proofs.CanonicalOutput.Execution.GateCases

@@ -336,13 +336,14 @@ while retaining their source stream IDs. -/
 def recoveryText (streams : List (Nat × Declaration)) :
     Except ExtentError (List (Nat × Declaration)) :=
   if recoveryDeclarationsValid streams then
-    .ok (sortRecoveryByPosition (streams.filter (fun entry => entry.2.kind == .text)))
+    .ok (sortRecoveryByPosition (streams.filter (fun entry =>
+      entry.2.kind == .text && entry.2.part == 0)))
   else .error .malformedRuns
 
 theorem recovery_only_text (streams recovered : List (Nat × Declaration))
     (entry : Nat × Declaration) (hresult : recoveryText streams = .ok recovered)
     (h : entry ∈ recovered) :
-    entry ∈ streams ∧ entry.2.kind = .text := by
+    entry ∈ streams ∧ entry.2.kind = .text ∧ entry.2.part = 0 := by
   unfold recoveryText at hresult
   split at hresult
   · simp only [Except.ok.injEq] at hresult
@@ -356,10 +357,11 @@ theorem recovery_no_text_no_header (streams : List (Nat × Declaration))
     (h : ∀ entry ∈ streams, entry.2.kind ≠ .text) :
     recoveryText streams = .ok [] := by
   simp only [recoveryText, hvalid, if_true, Except.ok.injEq, List.filter_eq_nil_iff]
-  rw [show streams.filter (fun entry => entry.2.kind == .text) = [] by
+  rw [show streams.filter (fun entry =>
+      entry.2.kind == .text && entry.2.part == 0) = [] by
     apply List.filter_eq_nil_iff.mpr
     intro entry hentry
-    simpa using h entry hentry]
+    simp [h entry hentry]]
   rfl
 
 theorem recovery_rejects_duplicate_position

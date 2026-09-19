@@ -76,6 +76,37 @@ theorem authored_payload_closure_and_header_commit_together :
     succeeds (publishAuthored (world 5) 7 authored authoredMessage) = true := by
   native_decide
 
+def extraAuthoredFlush : Segment :=
+  { id := 302, coordinate := ⟨10, .authored 0⟩, writer := .request 7
+    flush := some ⟨1,
+      [⟨0, 1, none⟩], [66]⟩
+    close := none, createdAt := 5 }
+
+def firstAuthoredFlush : Segment := { authored with close := none }
+
+def shortAuthoredClose : Segment :=
+  { authored with id := 303, flush := none, close := some (.closed .complete 1 [1]) }
+
+def shortAuthoredMessage : MessageEnvelope :=
+  { header := { authoredMessage.header with refs := [⟨303, 0⟩] }
+    key := authoredMessage.key, sequence := authoredMessage.sequence
+    nativeId := authoredMessage.nativeId
+    blocks := [.text ⟨⟨303, 0⟩, .full⟩], createdAt := authoredMessage.createdAt }
+
+theorem fresh_authored_close_must_cover_every_committed_flush :
+    succeeds (publishAuthored (world 5 [firstAuthoredFlush, extraAuthoredFlush]) 7
+      shortAuthoredClose shortAuthoredMessage) = false := by
+  native_decide
+
+theorem short_close_was_reconstructable_but_not_authoritative :
+    validateClosingRecord
+        [firstAuthoredFlush, extraAuthoredFlush, shortAuthoredClose]
+        shortAuthoredClose = true ∧
+      freshCompleteExtentExact
+        [firstAuthoredFlush, extraAuthoredFlush, shortAuthoredClose]
+        shortAuthoredClose = false := by
+  native_decide
+
 def systemAuthored : Segment :=
   { authored with id := 310, coordinate := ⟨10, .authored 1⟩ }
 
@@ -136,6 +167,91 @@ theorem exact_existing_partial_closure_is_reused :
       [⟨partialClose 101 0 1 20, some (recoveryMessage 201 101 0 30)⟩]) = true := by
   native_decide
 
+def recoveredHeaderfulWorld : World :=
+  match recoverExpiredBatch reusedWorld 7 8 5 40
+      [⟨partialClose 101 0 1 20, some (recoveryMessage 201 101 0 30)⟩] with
+  | .ok recovered => recovered
+  | .error _ => reusedWorld
+
+def headerfulRecoveryReplayIsIdentity : Bool :=
+  match recoverExpiredBatch recoveredHeaderfulWorld 7 8 5 40
+      [⟨partialClose 101 0 1 20, some (recoveryMessage 201 101 0 30)⟩] with
+  | .error _ => false
+  | .ok post => post == recoveredHeaderfulWorld
+
+theorem headerful_recovery_exact_replay_is_identity :
+    headerfulRecoveryReplayIsIdentity = true := by
+  native_decide
+
+def wrongFreshRecoveryMessage : MessageEnvelope :=
+  { recoveryMessage 201 101 0 30 with header :=
+      { (recoveryMessage 201 101 0 30).header with publication := .requestRecovery 9 } }
+
+theorem recovery_replay_rejects_mutated_fresh_generation_binding :
+    succeeds (recoverExpiredBatch recoveredHeaderfulWorld 7 8 5 40
+      [⟨partialClose 101 0 1 20, some wrongFreshRecoveryMessage⟩]) = false := by
+  native_decide
+
+theorem recovery_replay_rejects_mutated_closure_coordinate :
+    succeeds (recoverExpiredBatch recoveredHeaderfulWorld 7 8 5 40
+      [⟨{ partialClose 101 0 1 20 with coordinate := ⟨10, .provider 0 0 9⟩ },
+        some (recoveryMessage 201 101 0 30)⟩]) = false := by
+  native_decide
+
+def foreignHeaderlessPartial : Segment :=
+  { id := 190, coordinate := ⟨999, .authored 0⟩, writer := .request 7
+    flush := none, close := some (.closed .«partial» 0 []), createdAt := 20 }
+
+def recoveredWithForeignPartial : World :=
+  { recoveredHeaderfulWorld with
+    segments := recoveredHeaderfulWorld.segments ++ [foreignHeaderlessPartial] }
+
+theorem recovery_replay_rejects_foreign_headerless_partial_artifact :
+    succeeds (recoverExpiredBatch recoveredWithForeignPartial 7 8 5 40
+      [⟨foreignHeaderlessPartial, none⟩]) = false := by
+  native_decide
+
+def nonzeroTextRaw : Segment :=
+  { raw 120 2 0 3 with flush := some ⟨0,
+      [⟨0, 1, some { block := 0, part := 1, kind := .text }⟩], [65]⟩ }
+
+def nonzeroTextWorld : World := world 20 [nonzeroTextRaw]
+
+theorem nonzero_text_part_recovers_without_a_header :
+    succeeds (recoverExpiredBatch nonzeroTextWorld 7 8 5 30
+      [⟨partialClose 121 2 1 20, none⟩]) = true := by
+  native_decide
+
+def incompleteMediaDeclaration : Declaration :=
+  { block := 1, part := 0, kind := .media, mediaKind := some .image }
+
+def incompleteNonTextRaw : Segment :=
+  { id := 130, coordinate := ⟨10, .provider 0 0 3⟩, writer := .request 7
+    flush := some ⟨0,
+      [⟨0, 1, some { block := 0, part := 0, kind := .reasoning }⟩,
+       ⟨1, 1, some incompleteMediaDeclaration⟩], [65, 66]⟩
+    close := none, createdAt := 3 }
+
+def incompleteNonTextClose : Segment :=
+  { id := 131, coordinate := ⟨10, .provider 0 0 3⟩, writer := .request 7
+    flush := none, close := some (.closed .«partial» 1 [1, 1]), createdAt := 20 }
+
+theorem incomplete_reasoning_and_media_recover_without_relabeling :
+    succeeds (recoverExpiredBatch (world 20 [incompleteNonTextRaw]) 7 8 5 30
+      [⟨incompleteNonTextClose, none⟩]) = true := by
+  native_decide
+
+def duplicateUnsupportedPositionIsMalformed : Bool :=
+  match recoveryText
+      [(0, { block := 0, part := 1, kind := .text }),
+       (1, { block := 0, part := 1, kind := .reasoning })] with
+  | .error .malformedRuns => true
+  | _ => false
+
+theorem duplicate_native_position_stays_malformed_even_when_text_part_is_unsupported :
+    duplicateUnsupportedPositionIsMalformed = true := by
+  native_decide
+
 def providerTurn : Segment :=
   { id := 500, coordinate := ⟨10, .provider 0 1 0⟩, writer := .request 7
     flush := some ⟨0,
@@ -143,6 +259,16 @@ def providerTurn : Segment :=
        ⟨1, 2, some { block := 1, part := 0, kind := .arguments, tool := some ⟨"native-call", none, "child"⟩ }⟩],
       [65, 123, 125]⟩
     close := some (.closed .complete 1 [1, 2]), createdAt := 5 }
+
+def providerFirstFlush : Segment := { providerTurn with close := none }
+
+def providerSecondFlush : Segment :=
+  { id := 502, coordinate := providerTurn.coordinate, writer := providerTurn.writer
+    flush := some ⟨1, [⟨0, 1, none⟩, ⟨1, 1, none⟩], [66, 32]⟩
+    close := none, createdAt := 5 }
+
+def shortProviderClose : Segment :=
+  { providerTurn with id := 503, flush := none }
 
 def providerMessage : MessageEnvelope :=
   { header :=
@@ -153,6 +279,19 @@ def providerMessage : MessageEnvelope :=
     blocks := [.text ⟨⟨500, 0⟩, .full⟩,
       .toolCall 600 "native-call" none "child" ⟨⟨500, 1⟩, .full⟩ none none]
     createdAt := 5 }
+
+def shortProviderMessage : MessageEnvelope :=
+  { header := { providerMessage.header with refs := [⟨503, 0⟩, ⟨503, 1⟩] }
+    key := providerMessage.key, sequence := providerMessage.sequence, nativeId := providerMessage.nativeId
+    blocks := [.text ⟨⟨503, 0⟩, .full⟩,
+      .toolCall 600 "native-call" none "child" ⟨⟨503, 1⟩, .full⟩ none none]
+    createdAt := 5 }
+
+theorem fresh_provider_close_must_cover_every_committed_flush :
+    succeeds (acceptAndPublish
+      { world 5 with segments := [providerFirstFlush, providerSecondFlush] }
+      7 shortProviderClose shortProviderMessage []) = false := by
+  native_decide
 
 def remote : RemoteTarget := ⟨600, 1, 2⟩
 def permit : DispatchPermit := ⟨600, true, true⟩
@@ -184,6 +323,29 @@ def acceptedToolWorld : World :=
   match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote] with
   | .ok accepted => accepted
   | .error _ => world 5
+
+def acceptedThenTerminalized : Bool :=
+  match terminalize acceptedToolWorld 7 .completed (.message 501) with
+  | .error _ => false
+  | .ok terminal =>
+      terminal.transcript.toolCalls.any (fun row =>
+        row.callId == 600 && row.state == .cancelled) &&
+      providerMessage ∈ terminal.messages
+
+theorem terminalization_fails_owned_pending_call_and_keeps_header :
+    acceptedThenTerminalized = true := by
+  native_decide
+
+def acceptedToTerminalTrace : Bool :=
+  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote] with
+  | .error _ => false
+  | .ok accepted => match terminalize accepted 7 .completed (.message 501) with
+    | .error _ => false
+    | .ok terminal => terminal.transcript.toolCalls.any (fun row =>
+        row.callId == 600 && row.state == .cancelled)
+
+theorem accepted_to_terminal_trace_exists : acceptedToTerminalTrace = true := by
+  native_decide
 
 def expiredToolWorld : World :=
   { acceptedToolWorld with lease :=

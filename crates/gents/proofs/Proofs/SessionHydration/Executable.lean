@@ -9,11 +9,15 @@ theorem decideAdmits_agrees (cat : Catalog) (r : Request) :
   unfold decideAdmits
   exact decide_eq_true_iff
 
-def decideSelected (r : Request) (doc : Document) : Bool := decide (eligible r doc)
+def decideSelected (cat : Catalog) (r : Request) (doc : Document) : Bool :=
+  match selectedDocuments cat r with
+  | some documents => decide (doc ∈ documents)
+  | none => false
 
-theorem decideSelected_agrees (r : Request) (doc : Document) :
-    decideSelected r doc = true ↔
-      doc.collection ∈ transcriptCollections := by
-  simp [decideSelected, eligible]
+theorem decideSelected_agrees (cat : Catalog) (r : Request) (doc : Document) :
+    decideSelected cat r doc = true ↔
+      ∃ documents, selectedDocuments cat r = some documents ∧ doc ∈ documents := by
+  unfold decideSelected
+  cases selectedDocuments cat r <;> simp
 
 end SessionHydration

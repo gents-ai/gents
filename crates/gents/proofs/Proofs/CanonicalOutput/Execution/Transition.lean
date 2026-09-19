@@ -120,6 +120,21 @@ def validateClosingRecord (segments : List Segment) (closing : Segment) : Bool :
       | .error _ => false
   | .error _ => false
 
+/-- Fresh publication closes the entire authoritative data extent visible at
+its gate. Reconstruction remains deliberately tolerant of later facts beyond a
+previously committed extent. -/
+def freshCompleteExtentExact (segments : List Segment) (closing : Segment) : Bool :=
+  match closing.close with
+  | some (.closed .complete count _) =>
+      let data := sourceData segments closing.coordinate
+      count == data.length &&
+        (match validateOpenPrefix segments closing.coordinate closing.writer with
+        | .ok _ => true
+        | .error _ => false) &&
+        timestampsNondecreasing data &&
+        data.all (fun record => record.createdAt ≤ closing.createdAt)
+  | _ => false
+
 def transcriptPublicationRowPresent (transcript : Transcript.TranscriptState) (header : Header)
     (turn : Transcript.AssistantTurn) : Bool :=
   transcript.messages.any fun row =>
@@ -181,6 +196,7 @@ def acceptAndPublishCore (world : World) (generation : Generation)
   else
     let segments := world.segments ++ [closing]
     if validateClosingRecord segments closing = false ∨
+        freshCompleteExtentExact segments closing = false ∨
         acceptedMessageValid world generation segments message = false ∨
         acceptedSourceBound world generation closing message = false then
       .error .invalidHeader
@@ -244,6 +260,7 @@ def publishAuthoredCore (world : World) (generation : Generation)
   else
     let segments := world.segments ++ [closing]
     if validateClosingRecord segments closing = false ||
+        freshCompleteExtentExact segments closing = false ||
         authoredMessageValid world generation segments closing message = false then
       .error .invalidHeader
     else match synchronize world with
@@ -462,13 +479,34 @@ def recoveryBatchPresent (world : World) (fresh : Generation)
     (items : List RecoveryItem) : Bool :=
   world.currentGeneration? == some fresh && items.all (recoveryItemPresent world)
 
+/-- Exact lost-acknowledgement validation is independent of whether these
+coordinates remain eligible for a new recovery. It binds the old writer and
+fresh recovery header, but does not compare a replayed header timestamp with
+the current clock or reject later facts outside the committed closure extent. -/
+def recoveryReplayValid (world : World) (expected fresh : Generation)
+    (items : List RecoveryItem) : Bool :=
+  (recoveryCoordinates items).Nodup && world.currentGeneration? == some fresh &&
+    items.all fun item =>
+      item.closing.coordinate.request == world.requestId &&
+        providerCoordinate item.closing.coordinate &&
+        (closures world.segments item.closing.coordinate).dedup == [item.closing] &&
+        item.closing ∈ world.segments && partialClosureBy expected item.closing &&
+        match reconstructExtent world.segments item.closing with
+        | .error _ => false
+        | .ok streams =>
+            recoveryMessageValid world fresh world.segments item.closing streams item.message &&
+              match item.message with
+              | none => true
+              | some message => message ∈ world.messages &&
+                  publicationRowPresent world message.header (messageTurn message)
+
 /-- One gate transaction closes every unresolved keyed provider source before
 the old generation becomes inaccessible, reusing exact Partial closures when
 already present. Optional conservative recovery headers/rows and the fresh
 generation swap commit atomically. -/
 def recoverExpiredBatchCore (world : World) (expected fresh : Generation)
     (duration deadline : Time) (items : List RecoveryItem) : Except Error World :=
-  if recoveryBatchPresent world fresh items && recoveryBatchValid world expected fresh items then
+  if recoveryReplayValid world expected fresh items then
     synchronize world
   else match prepareRecoveryBatch world expected fresh items with
   | .error error => .error error
@@ -490,6 +528,27 @@ def terminalReplayPresent (world : World) (generation : Generation)
   world.lease.lease == .terminal generation outcome &&
     world.terminalSelection == some selection
 
+def acceptedOwnedCalls (world : World) :
+    List (SessionId × Transcript.Sequence × ToolExecution.ToolCallId) :=
+  world.messages.flatMap fun message =>
+    match message.header.publication with
+    | .requestExecution generation =>
+        if acceptedMessageValid world generation world.segments message &&
+            publicationRowPresent world message.header (messageTurn message) then
+          (toolIntents message).map (fun intent =>
+            (message.header.session, message.sequence, intent.call))
+        else []
+    | _ => []
+
+def terminalizeOwnedPending (world : World) : Transcript.TranscriptState :=
+  world.transcript.cancelPendingOwnedCalls (acceptedOwnedCalls world)
+
+def ownedPendingSettled (world : World) : Bool :=
+  world.transcript.toolCalls.all fun row =>
+    if (row.sessionId, row.messageSequence, row.callId) ∈ acceptedOwnedCalls world then
+      row.state != .pending
+    else true
+
 /-- Final request lifecycle and exact terminal-output selection commit together.
 No latest-message fallback is available. -/
 def terminalizeCore (world : World) (generation : Generation)
@@ -507,6 +566,7 @@ def terminalizeCore (world : World) (generation : Generation)
       | some lease => .ok
           { authoritative with
             lease := lease
+            transcript := terminalizeOwnedPending authoritative
             terminalSelection := some selection }
 
 def appendRaw (world : World) (generation : Generation)
@@ -560,11 +620,13 @@ def recoverExpiredBatch (world : World) (expected fresh : Generation)
     Except Error World :=
   checked (fun post =>
     recoveryBatchPresent post fresh items &&
-      recoveryCoversAllSources world expected items &&
+      (recoveryReplayValid world expected fresh items ||
+        recoveryCoversAllSources world expected items) &&
       items.all (fun item =>
         (closures post.segments item.closing.coordinate).dedup == [item.closing] &&
           item.closing.writer == .request expected &&
-          recoveryExtentExact world expected item.closing))
+          (recoveryReplayValid world expected fresh items ||
+            recoveryExtentExact world expected item.closing)))
     (recoverExpiredBatchCore world expected fresh duration deadline items)
 
 def terminalize (world : World) (generation : Generation)
@@ -572,7 +634,7 @@ def terminalize (world : World) (generation : Generation)
     Except Error World :=
   checked (fun post =>
     terminalReplayPresent post generation outcome selection &&
-      terminalSelectionValid post selection)
+      terminalSelectionValid post selection && ownedPendingSettled post)
     (terminalizeCore world generation outcome selection)
 
 end CanonicalOutput.Execution

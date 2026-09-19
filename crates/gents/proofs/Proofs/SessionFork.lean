@@ -66,14 +66,30 @@ def structurallyValid (history : History) : Bool :=
     decide (history.messages.map (·.key)).Nodup &&
     decide (documentIds history).Nodup && cursorPrefixesExist history
 
+/-- Exact source snapshot grant returned by the existing document owner.  The
+complete parent scope is part of the grant and every copied header/compaction
+must be named; a session-only or boolean grant is not accepted. -/
+structure SourceAuthorization where
+  owner : AgentSession.Scope
+  messageDocuments : List DocId
+  compactionDocuments : List DocId
+  deriving DecidableEq, Repr
+
+def authorizes (authorization : SourceAuthorization) (parent : AgentSession.Scope)
+    (source : History) : Bool :=
+  authorization.owner == parent &&
+    source.messages.all (fun message => authorization.messageDocuments.contains message.header.id) &&
+    source.compactions.all (fun compaction => authorization.compactionDocuments.contains compaction.id)
+
 /-- Revision, authorization and source idleness remain inputs from existing
 owners. Allocators apply only to child messages/compactions and message keys;
 payload, segment and tool identities are never remapped. -/
 def publish (source : History) (parent child : AgentSession.Scope)
     (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
-    (authorized idle coherent : Bool) : Option History :=
+    (authorization : SourceAuthorization) (idle coherent : Bool) : Option History :=
   let copied := copyPrefix source child childDocumentId childKey cut
-  if authorized && idle && coherent && allInSession source parent.session &&
+  if authorizes authorization parent source && idle && coherent &&
+      allInSession source parent.session &&
       decide (parent.agent = child.agent ∧ parent.requester = child.requester ∧
         parent.session ≠ child.session) &&
       validChain parent.session 1 none source.compactions &&
@@ -122,9 +138,9 @@ theorem copied_message_carries_exact_origin
 theorem published_cursor_names_child_message
     (source : History) (parent child : AgentSession.Scope)
     (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
-    (authorized idle coherent : Bool) (copied : History)
+    (authorization : SourceAuthorization) (idle coherent : Bool) (copied : History)
     (hpub : publish source parent child childDocumentId childKey cut
-      authorized idle coherent = some copied)
+      authorization idle coherent = some copied)
     (cursor : Compaction) (hcursor : cursor ∈ copied.compactions) :
     ∃ message ∈ copied.messages, message.sequence = cursor.throughSequence := by
   have hvalid : cursorPrefixesExist copied = true := by
@@ -137,6 +153,37 @@ theorem published_cursor_names_child_message
     · contradiction
   simp only [cursorPrefixesExist, List.all_eq_true] at hvalid
   simpa only [List.any_eq_true, beq_iff_eq] using hvalid cursor hcursor
+
+/-- Successful publication restores the durable postconditions: every output
+row is in the child session, has a fresh identity, and retains its exact source
+origin. -/
+theorem publish_postconditions
+    (source : History) (parent child : AgentSession.Scope)
+    (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
+    (authorization : SourceAuthorization) (idle coherent : Bool) (copied : History)
+    (hpub : publish source parent child childDocumentId childKey cut
+      authorization idle coherent = some copied) :
+    allInSession copied child.session = true ∧
+    (documentIds copied).all (fun id => !(documentIds source).contains id) = true ∧
+    ∀ message ∈ copied.messages, ∃ origin ∈ source.messages,
+      message.header.origin = some origin.header.id := by
+  unfold publish at hpub
+  dsimp only at hpub
+  split at hpub
+  · simp only [Option.some.injEq] at hpub
+    subst copied
+    rename_i hguard
+    simp only [Bool.and_eq_true] at hguard
+    have hfresh : (documentIds (copyPrefix source child childDocumentId childKey cut)).all
+        (fun id => !(documentIds source).contains id) = true := by
+      aesop
+    refine ⟨?_, hfresh, ?_⟩
+    · simp [allInSession, copyPrefix, copyMessage, forkHeader]
+    intro message hmessage
+    obtain ⟨origin, horigin, _, hcopy, _, _, _⟩ :=
+      copied_message_carries_exact_origin source child childDocumentId childKey cut message hmessage
+    exact ⟨origin, horigin, hcopy⟩
+  · contradiction
 
 /-- Origin messages and closing records are retention dependencies, not copied
 child payload. Exact extents and derived request/tool owners are added by

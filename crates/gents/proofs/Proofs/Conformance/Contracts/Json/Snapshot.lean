@@ -121,6 +121,8 @@ def snapshotJson : String :=
       ++ goalContinuationMaterializationCasesJson ++ ","
     ++ "\"session_hydration_decision_cases\":"
       ++ sessionHydrationDecisionCasesJson ++ ","
+    ++ "\"session_hydration_closure_cases\":"
+      ++ sessionHydrationClosureCasesJson ++ ","
     ++ "\"session_hydration_apply_cases\":"
       ++ sessionHydrationApplyCasesJson ++ ","
     ++ "\"session_hydration_progress_cases\":"

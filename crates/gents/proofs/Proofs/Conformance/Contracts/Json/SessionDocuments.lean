@@ -102,12 +102,18 @@ private def selectionJson (name : String) (rows : List AgentSession.RequestFact)
    ("requester", toJson (requester.getD none)),
    ("selected", (AgentSession.latest rows agent session requester).map requestJson |>.getD Json.null)]
 private def forkJson (name : String) (source : SessionFork.History)
-    (target : AgentSession.Scope) (cut : Nat) (authorized idle coherent : Bool) : Json := Json.mkObj
-  [("name", toJson name), ("source", historyJson source), ("parent", scopeJson scope),
+    (target : AgentSession.Scope) (cut : Nat) (authorized idle coherent : Bool) : Json :=
+  let authorization : SessionFork.SourceAuthorization :=
+    if authorized then
+      ⟨scope, source.messages.map (·.header.id), source.compactions.map (·.id)⟩
+    else
+      ⟨{ scope with agent := scope.agent + 1 }, source.messages.map (·.header.id),
+        source.compactions.map (·.id)⟩
+  Json.mkObj [("name", toJson name), ("source", historyJson source), ("parent", scopeJson scope),
    ("child", scopeJson target), ("exclusive_sequence_cut", toJson cut),
    ("document_id_offset", toJson (1000 : Nat)), ("authorized", toJson authorized),
    ("idle", toJson idle), ("coherent", toJson coherent),
-   ("published", (SessionFork.publish source scope target remap childKey cut authorized idle coherent).map
+   ("published", (SessionFork.publish source scope target remap childKey cut authorization idle coherent).map
       historyJson |>.getD Json.null)]
 
 /-- Header-only fork inputs and computed durable outputs. Payload/tool/segment

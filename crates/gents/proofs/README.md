@@ -4,10 +4,10 @@ This directory contains the Lean 4 model for `gents`.
 
 ## Canonical output stack (#1571): Lean contract layer
 
-Branch `feat/1571-canonical-transcript-lean` starts at data-contract commit
-`3eaff8f16` on `feat/1571-canonical-transcript`. This layer changes Lean models,
-their documentation, and the approved remote-argument disclosure correction to
-the data contract. Rust conformance/implementation remain later layers.
+Branch `feat/1571-canonical-transcript-lean` targets
+`feat/1571-canonical-transcript` (original baseline `3eaff8f16`). Foundational
+protocol/SDL corrections belong on that spec parent; this layer changes Lean
+models and their documentation. Rust conformance/implementation remain later layers.
 
 `Proofs/CanonicalOutput` supplies immutable facts, conflict-aware closure lookup,
 dense extent reconstruction, UTF-8 run validation, native block reconstruction,
@@ -62,9 +62,55 @@ Rust bridge coverage is not evidence that these new contracts are implemented.
 Validate this layer with `lake build` on pinned Lean 4.18.0. Rust builds and external
 fixture regeneration are intentionally not run in this layer.
 
-Layer validation: full `lake build` passes (1,126 targets), `git diff --check`
-passes, and the proof tree contains no `sorry` or added axioms. Independent
-cross-reviews and executable counterexamples cover the composition boundaries.
+### Review repairs and proof boundaries
+
+Fresh Complete publication checks the entire authoritative data extent and
+timestamp order. Reconstruction and exact replay still ignore late facts outside
+the committed extent. Recovery replay validates committed artifacts independently
+of new-recovery eligibility; ordinary Text at part zero is the only recovery
+survivor. Terminalization settles exact request-owned pending tool rows without
+cancelling running/background or foreign rows.
+
+Hydration selection runs the canonical builder for the exact admitted request,
+with scoped native ACP observations for every document. A missing/ambiguous input
+is failure, not a successfully served empty manifest. Fork dependencies may cross
+sessions; selected roots may not. Native authorization observations remain inputs,
+not a second authorization implementation.
+
+Execution wrapper theorems using `checked_success` prove checked postconditions;
+they are not inductive invariants over all execution traces. Separate core lemmas
+cover exact replay, fresh extent validation and terminal commits, while executable
+multi-step regressions establish non-vacuity. `Execution/Gate` composes actual
+operations with the existing gate schedule: another holder cannot commit, and the
+next holder reads the preceding durable world. Its producer-first/recovery-first
+cases do not prove a native mutex, database atomicity, scheduler fairness or a
+global reachability invariant for every owner.
+
+Retry cap, deadline-fit and one-repair guarantees are retained as transition
+proofs. Segment retention is proved across observation traces; projected prefix
+growth and benign late-delivery stability have executable regressions, not a
+general projected-prefix theorem. Reconstruction is proved inert beyond the
+committed extent, but twins or conflicting closures must still invalidate a
+previously readable projection.
+Request interrupt intent remains modeled; writing the native `terminalized_at`
+timestamp is an explicit request-row adapter obligation, not a proved Lean field.
+
+### Next-layer conformance handoff
+
+The new canonical output layer has no native conformance consumer yet. Regenerate
+fixtures and replace the retired response cases in `tests/conformance/coverage.rs`,
+`tests/conformance/structure.rs`, `tests/conformance/streaming_compaction.rs`,
+`tests/conformance/completion_retry.rs` and `src/lean_vocab_test/support.rs`, then
+update the consumer registry. In particular, old `streaming_response_cases` and
+response-row fixtures are not evidence for the new `canonical_output_projection_cases`.
+Bindings marked follow-up in the coverage ledger remain implementation debt, not
+completed native coverage. Do not restore deleted generators as compatibility code.
+
+Repair validation: pinned Lean 4.18.0 `lake build` passes (1,129 targets),
+`git diff --check` passes, and the proof tree has no `sorry` or added axioms.
+Sol implementation agents cross-reviewed the execution, hydration and gate
+boundaries; the root review added the admitted two-flush truncation regression.
+No Rust build/tests or external fixture regeneration were run in this layer.
 
 ## Configuration and session refactor contract layer
 
@@ -394,7 +440,7 @@ Semantic submodules:
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
-| `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement` |
+| `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement`, `Output` |
 | `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |

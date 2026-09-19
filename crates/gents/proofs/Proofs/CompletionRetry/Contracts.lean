@@ -57,6 +57,8 @@ def RetryCase.toJson (c : RetryCase) : String :=
       (c.post.map (fun state => toString state.resampleUsed)).getD "null" ++ ","
     ++ "\"expected_attempt\":" ++
       (c.post.map (fun state => toString state.attempt)).getD "null" ++ ","
+    ++ "\"expected_repair_used\":" ++
+      (c.post.map (fun state => boolJson state.repairUsed)).getD "null" ++ ","
     ++ "\"expected_usage_charged\":" ++
       (c.post.map (fun state => toString state.usageCharged)).getD "null"
     ++ "}"

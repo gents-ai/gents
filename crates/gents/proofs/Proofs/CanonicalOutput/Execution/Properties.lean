@@ -108,6 +108,26 @@ theorem accepted_publication_is_composed_atomically
   simp only [Bool.and_eq_true] at hp
   exact ⟨hp.1.1.1.1, hp.1.1.1.2, hp.1.1.2, hp.1.2, hp.2⟩
 
+theorem fresh_accept_core_success_requires_exact_extent
+    (world post : World) (generation : Generation) (closing : Segment)
+    (message : MessageEnvelope) (targets : List RemoteTarget)
+    (hnotReplay : acceptedPublicationPresent world closing message targets = false)
+    (h : acceptAndPublishCore world generation closing message targets = .ok post) :
+    freshCompleteExtentExact (world.segments ++ [closing]) closing = true := by
+  by_contra hnotExact
+  have hexact : freshCompleteExtentExact (world.segments ++ [closing]) closing = false :=
+    Bool.eq_false_of_not_eq_true hnotExact
+  simp (config := { maxSteps := 1000000 })
+    [acceptAndPublishCore, hnotReplay, hexact] at h
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> contradiction
+
 theorem dispatch_requires_committed_intent_and_marks_running
     (pre post : World) (generation : Generation)
     (permit : DispatchPermit)
@@ -130,6 +150,36 @@ theorem authored_publication_is_atomic_and_headed
   simp only [Bool.and_eq_true] at hp
   exact ⟨hp.1.1, hp.1.2, hp.2⟩
 
+theorem fresh_authored_core_success_requires_exact_extent
+    (world post : World) (generation : Generation) (closing : Segment)
+    (message : MessageEnvelope)
+    (hnotReplay : authoredPublicationPresent world closing message = false)
+    (h : publishAuthoredCore world generation closing message = .ok post) :
+    freshCompleteExtentExact (world.segments ++ [closing]) closing = true := by
+  by_contra hnotExact
+  have hexact : freshCompleteExtentExact (world.segments ++ [closing]) closing = false :=
+    Bool.eq_false_of_not_eq_true hnotExact
+  simp (config := { maxSteps := 1000000 })
+    [publishAuthoredCore, hnotReplay, hexact] at h
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> contradiction
+
+theorem fresh_complete_extent_accounts_for_all_data
+    (segments : List Segment) (closing : Segment)
+    (count : Nat) (bytes : List Nat)
+    (hclose : closing.close = some (.closed .complete count bytes))
+    (hexact : freshCompleteExtentExact segments closing = true) :
+    count = (sourceData segments closing.coordinate).length ∧
+      timestampsNondecreasing (sourceData segments closing.coordinate) = true ∧
+      (sourceData segments closing.coordinate).all
+        (fun record => record.createdAt ≤ closing.createdAt) = true := by
+  simp [freshCompleteExtentExact, hclose] at hexact
+  exact ⟨hexact.1.1.1, hexact.1.2, List.all_eq_true.mpr (fun record hrecord =>
+    decide_eq_true (hexact.2 record hrecord))⟩
+
 theorem header_only_publication_is_atomic
     (pre post : World) (generation : Generation) (message : MessageEnvelope)
     (h : publishHeaderOnly pre generation message = .ok post) :
@@ -143,24 +193,89 @@ theorem recovery_is_all_sources_single_winner_and_exact
     (duration deadline : Time) (items : List RecoveryItem)
     (h : recoverExpiredBatch pre expected next duration deadline items = .ok post) :
     recoveryBatchPresent post next items = true ∧
-      recoveryCoversAllSources pre expected items = true ∧
+      (recoveryReplayValid pre expected next items ||
+        recoveryCoversAllSources pre expected items) = true ∧
       items.all (fun item =>
         (closures post.segments item.closing.coordinate).dedup == [item.closing] &&
           item.closing.writer == .request expected &&
-          recoveryExtentExact pre expected item.closing) = true := by
+          (recoveryReplayValid pre expected next items ||
+            recoveryExtentExact pre expected item.closing)) = true := by
   unfold recoverExpiredBatch at h
   have hp := checked_success _ _ _ h
   simp only [Bool.and_eq_true] at hp
   exact ⟨hp.1.1, hp.1.2, hp.2⟩
+
+theorem exact_recovery_replay_core_does_not_renew_or_republish
+    (world post : World) (expected fresh : Generation)
+    (duration deadline : Time) (items : List RecoveryItem)
+    (hreplay : recoveryReplayValid world expected fresh items = true)
+    (h : recoverExpiredBatchCore world expected fresh duration deadline items = .ok post) :
+    post.lease.lease = world.lease.lease ∧ post.segments = world.segments ∧
+      post.messages = world.messages ∧ post.transcript = world.transcript := by
+  simp only [recoverExpiredBatchCore, hreplay, ↓reduceIte, synchronize] at h
+  cases hauthoritative : authoritativeLease world with
+  | error error => simp [hauthoritative] at h
+  | ok lease =>
+      simp [hauthoritative] at h
+      cases h
+      have hcontrol : lease.lease = world.lease.lease := by
+        unfold authoritativeLease at hauthoritative
+        cases hworld : world.lease.lease with
+        | vacant => simp [hworld] at hauthoritative; cases hauthoritative; rfl
+        | active generation duration deadline =>
+            rw [hworld] at hauthoritative
+            cases hprogress : deriveProgress world generation with
+            | error error =>
+                simp only [hprogress, Bind.bind, Except.bind] at hauthoritative
+                contradiction
+            | ok output =>
+                simp only [hprogress, Bind.bind, Except.bind, Except.ok.injEq] at hauthoritative
+                cases hauthoritative
+                exact hworld
+        | recoverable generation duration deadline =>
+            rw [hworld] at hauthoritative
+            cases hprogress : deriveProgress world generation with
+            | error error =>
+                simp only [hprogress, Bind.bind, Except.bind] at hauthoritative
+                contradiction
+            | ok output =>
+                simp only [hprogress, Bind.bind, Except.bind, Except.ok.injEq] at hauthoritative
+                cases hauthoritative
+                exact hworld
+        | terminal generation outcome =>
+            simp [hworld] at hauthoritative
+            cases hauthoritative
+            rfl
+      exact ⟨hcontrol, rfl, rfl, rfl⟩
 
 theorem terminal_selection_commits_with_lifecycle
     (pre post : World) (generation : Generation)
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
     (h : terminalize pre generation outcome selection = .ok post) :
     terminalReplayPresent post generation outcome selection = true ∧
-      terminalSelectionValid post selection = true := by
+      terminalSelectionValid post selection = true ∧ ownedPendingSettled post = true := by
   unfold terminalize at h
-  simpa only [Bool.and_eq_true] using (checked_success _ _ _ h)
+  have hp := checked_success _ _ _ h
+  simp only [Bool.and_eq_true] at hp
+  exact ⟨hp.1.1, hp.1.2, hp.2⟩
+
+theorem admitted_terminal_core_commits_lifecycle_and_pending_cancellation
+    (world authoritative : World)
+    (lease : RequestExecutionLease.World Generation)
+    (generation : Generation) (outcome : RequestExecutionLease.Outcome)
+    (selection : TerminalSelection)
+    (hvalid : terminalSelectionValid world selection = true)
+    (hnotReplay : terminalReplayPresent world generation outcome selection = false)
+    (hempty : world.terminalSelection.isSome = false)
+    (hauthoritative : synchronize world = .ok authoritative)
+    (hlease : RequestExecutionLease.step? authoritative.lease
+      (.finalize .mutationWriteGate generation outcome) = some lease) :
+    terminalizeCore world generation outcome selection = .ok
+      { authoritative with
+        lease := lease
+        transcript := terminalizeOwnedPending authoritative
+        terminalSelection := some selection } := by
+  simp [terminalizeCore, hvalid, hnotReplay, hempty, hauthoritative, hlease]
 
 theorem no_message_requires_no_eligible_owned_assistant
     (world : World)
@@ -256,7 +371,7 @@ theorem prepared_batch_enables_composed_recovery
     (world authoritative : World) (prepared : RecoveryPrepared)
     (lease : RequestExecutionLease.World Generation)
     (expected next : Generation) (duration deadline : Time) (items : List RecoveryItem)
-    (hnotReplay : recoveryBatchPresent world next items = false)
+    (hnotReplay : recoveryReplayValid world expected next items = false)
     (hprepare : prepareRecoveryBatch world expected next items = .ok prepared)
     (hauthoritative : synchronize world = .ok authoritative)
     (hlease : RequestExecutionLease.step? authoritative.lease

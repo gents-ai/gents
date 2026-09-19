@@ -83,13 +83,26 @@ inductive AccessState where
   | authorized | missing | denied
   deriving DecidableEq, Repr
 
+structure AuthorizationScope where
+  peer : String
+  requester : String
+  agent : String
+  session : String
+  nativeSession : SessionId
+  deriving DecidableEq, Repr
+
+/-- One observation returned by the existing document ACP owner.  Scope is
+part of the observation: evidence obtained for one hydration request cannot be
+replayed for another request, even when both requests name the same session. -/
 structure ProvenanceAccess where
+  scope : AuthorizationScope
   key : DocumentKey
   state : AccessState
   deriving DecidableEq, Repr
 
 inductive Error where
   | headerUnavailable | headerDenied | conflictingMessages | invalidOrigin | originMismatch
+  | rootSessionMismatch
   | provenanceMissing (key : DocumentKey)
   | provenanceDenied (key : DocumentKey)
   | provenanceConflict (key : DocumentKey)
@@ -136,17 +149,19 @@ def headerProvenance (header : Header) : List DocumentKey :=
   | .toolDelivery call => request ++ [⟨.agentToolCall, call⟩]
   | _ => request
 
-def validateProvenance (observations : List ProvenanceAccess) (key : DocumentKey) :
+def validateProvenance (scope : AuthorizationScope)
+    (observations : List ProvenanceAccess) (key : DocumentKey) :
     Except Error DocumentKey :=
   match uniqueRecord (Error.provenanceMissing key) (Error.provenanceConflict key)
-      (observations.filter (fun observation => observation.key == key)) with
+      (observations.filter (fun observation => observation.scope == scope &&
+        observation.key == key)) with
   | .error error => .error error
   | .ok observation => match observation.state with
       | .authorized => .ok key
       | .missing => .error (.provenanceMissing key)
       | .denied => .error (.provenanceDenied key)
 
-def referenceDocuments (segments : List Segment) (deniedSegments : List DocId)
+def referenceDocuments (scope : AuthorizationScope) (segments : List Segment) (deniedSegments : List DocId)
     (dependencyDenials : List DependencyDenial) (provenance : List ProvenanceAccess)
     (ref : PayloadRef) : Except Error (List DocumentKey) := do
   let _ ← match reconstructPayload segments deniedSegments ref dependencyDenials with
@@ -155,32 +170,37 @@ def referenceDocuments (segments : List Segment) (deniedSegments : List DocId)
   let closing ← match resolveClose segments deniedSegments ref with
     | .ok record => .ok record
     | .error error => .error (.reference (.lookup error))
-  let owners ← (requiredProvenance closing).mapM (validateProvenance provenance)
+  let owners ← (requiredProvenance closing).mapM (validateProvenance scope provenance)
+  let closingKey ← validateProvenance scope provenance
+    ⟨Collection.agentOutputSegment, closing.id⟩
   match closing.close with
   | some (.closed _ count _) =>
-      .ok (owners ++ ⟨Collection.agentOutputSegment, closing.id⟩ ::
-        (extent segments closing.coordinate count).map
-          (fun segment => ⟨Collection.agentOutputSegment, segment.id⟩))
+      let extentKeys := (extent segments closing.coordinate count).map
+        (fun segment => ⟨Collection.agentOutputSegment, segment.id⟩)
+      let authorizedExtent ← extentKeys.mapM (validateProvenance scope provenance)
+      .ok (owners ++ closingKey :: authorizedExtent)
   | _ => .error (.reference (.lookup .invalidReference))
 
-def referenceListDocuments (segments : List Segment) (deniedSegments : List DocId)
+def referenceListDocuments (scope : AuthorizationScope) (segments : List Segment) (deniedSegments : List DocId)
     (dependencyDenials : List DependencyDenial) (provenance : List ProvenanceAccess) :
     List PayloadRef → Except Error (List DocumentKey)
   | [] => .ok []
   | ref :: rest => do
-      let here ← referenceDocuments segments deniedSegments dependencyDenials provenance ref
-      let later ← referenceListDocuments segments deniedSegments dependencyDenials provenance rest
+      let here ← referenceDocuments scope segments deniedSegments dependencyDenials provenance ref
+      let later ← referenceListDocuments scope segments deniedSegments dependencyDenials provenance rest
       .ok (here ++ later)
 
-def terminalRoots (messages : List MessageEnvelope) (deniedHeaders : List DocId) :
+def terminalRoots (targetSession : SessionId) (messages : List MessageEnvelope)
+    (deniedHeaders : List DocId) :
     List TerminalRequirement → Except Error (List DocId)
   | [] => .ok []
   | requirement :: rest => do
+      if requirement.session != targetSession then .error .rootSessionMismatch else pure ()
       let selected ← match resolveTerminal (messages.map (·.header)) deniedHeaders
           requirement.request requirement.session requirement.selection with
         | .ok selected => .ok selected
         | .error error => .error (.terminal error)
-      let later ← terminalRoots messages deniedHeaders rest
+      let later ← terminalRoots targetSession messages deniedHeaders rest
       match selected with
       | none => .ok later
       | some header => .ok (header.id :: later)
@@ -188,7 +208,7 @@ def terminalRoots (messages : List MessageEnvelope) (deniedHeaders : List DocId)
 /-- Depth-first origin traversal rejects an ID already on the active path. An
 ID visited through a completed sibling/root is shared DAG data and is skipped.
 Native immutable identity is the premise behind document IDs as vertices. -/
-def collectOne (messages : List MessageEnvelope) (segments : List Segment)
+def collectOne (scope : AuthorizationScope) (messages : List MessageEnvelope) (segments : List Segment)
     (provenance : List ProvenanceAccess) (deniedHeaders deniedSegments : List DocId)
     (dependencyDenials : List DependencyDenial) : Nat → DocId → List DocId →
     List DocId → List DocumentKey → Except Error (List DocId × List DocumentKey)
@@ -198,6 +218,7 @@ def collectOne (messages : List MessageEnvelope) (segments : List Segment)
       else if id ∈ visited then .ok (visited, manifest)
       else do
         let message ← lookupMessage messages deniedHeaders id
+        let messageKey ← validateProvenance scope provenance ⟨Collection.agentMessage, id⟩
         let origin ← checkedOrigin message.header
         match origin with
         | some originId =>
@@ -206,42 +227,52 @@ def collectOne (messages : List MessageEnvelope) (segments : List Segment)
             else pure ()
         | none => pure ()
         let headerOwners ← (headerProvenance message.header).mapM
-          (validateProvenance provenance)
-        let payload ← referenceListDocuments segments deniedSegments dependencyDenials
+          (validateProvenance scope provenance)
+        let payload ← referenceListDocuments scope segments deniedSegments dependencyDenials
           provenance message.header.refs
         let _ ← (reconstructMessage segments deniedSegments message).mapError Error.message
         let visited := id :: visited
-        let manifest := ⟨Collection.agentMessage, id⟩ :: headerOwners ++ payload ++ manifest
+        let manifest := messageKey :: headerOwners ++ payload ++ manifest
         match origin with
         | none => .ok (visited, manifest)
         | some originId =>
-            collectOne messages segments provenance deniedHeaders deniedSegments dependencyDenials
+            collectOne scope messages segments provenance deniedHeaders deniedSegments dependencyDenials
               fuel originId (id :: active) visited manifest
 
-def collectRoots (messages : List MessageEnvelope) (segments : List Segment)
+def collectRoots (scope : AuthorizationScope) (messages : List MessageEnvelope) (segments : List Segment)
     (provenance : List ProvenanceAccess) (deniedHeaders deniedSegments : List DocId)
     (dependencyDenials : List DependencyDenial) (fuel : Nat) :
     List DocId → List DocId → List DocumentKey → Except Error (List DocumentKey)
   | [], _, manifest => .ok manifest
   | root :: rest, visited, manifest => do
-      let (visited, manifest) ← collectOne messages segments provenance deniedHeaders
+      let (visited, manifest) ← collectOne scope messages segments provenance deniedHeaders
         deniedSegments dependencyDenials fuel root [] visited manifest
-      collectRoots messages segments provenance deniedHeaders deniedSegments
+      collectRoots scope messages segments provenance deniedHeaders deniedSegments
         dependencyDenials fuel rest visited manifest
 
-def buildManifest (bases : List AuthorizedBase) (authorizedRootMessages : List DocId)
+def validateRootSession (targetSession : SessionId) (messages : List MessageEnvelope)
+    (deniedHeaders : List DocId) (id : DocId) : Except Error DocId := do
+  let message ← lookupMessage messages deniedHeaders id
+  if message.header.session = targetSession then pure id else .error .rootSessionMismatch
+
+def buildManifest (scope : AuthorizationScope) (targetSession : SessionId)
+    (bases : List AuthorizedBase) (authorizedRootMessages : List DocId)
     (requirements : List TerminalRequirement) (messages : List MessageEnvelope)
     (segments : List Segment) (provenance : List ProvenanceAccess)
     (deniedHeaders deniedSegments : List DocId)
     (dependencyDenials : List DependencyDenial := []) : Except Error (List DocumentKey) := do
-  let selectedRoots ← terminalRoots messages deniedHeaders requirements
+  if scope.nativeSession != targetSession then .error .rootSessionMismatch else pure ()
+  let explicitRoots ← authorizedRootMessages.mapM
+    (validateRootSession targetSession messages deniedHeaders)
+  let selectedRoots ← terminalRoots targetSession messages deniedHeaders requirements
+  let baseKeys ← (bases.map AuthorizedBase.key).mapM (validateProvenance scope provenance)
   let terminalOwners ← (requirements.map fun requirement =>
     ⟨Collection.agentRequest, requirement.request⟩).mapM
-      (validateProvenance provenance)
-  let roots := (authorizedRootMessages ++ selectedRoots).dedup
-  let closure ← collectRoots messages segments provenance deniedHeaders deniedSegments
+      (validateProvenance scope provenance)
+  let roots := (explicitRoots ++ selectedRoots).dedup
+  let closure ← collectRoots scope messages segments provenance deniedHeaders deniedSegments
     dependencyDenials (messages.length + 1) roots [] []
-  .ok (canonicalManifest ((bases.map AuthorizedBase.key) ++ terminalOwners ++ closure))
+  .ok (canonicalManifest (baseKeys ++ terminalOwners ++ closure))
 
 def canDelete (manifest : List DocumentKey) (key : DocumentKey) : Bool :=
   !manifest.contains key
@@ -292,15 +323,29 @@ def originMessage : MessageEnvelope :=
 def childMessage : MessageEnvelope :=
   { originMessage with header := forkHeader originMessage.header 201 2, key := "child" }
 
-def access : List ProvenanceAccess := [⟨⟨.agentRequest, 10⟩, .authorized⟩]
+def scope : AuthorizationScope := ⟨"peer-a", "requester-a", "agent-a", "session-a", 2⟩
+
+def access : List ProvenanceAccess :=
+  [ ⟨scope, ⟨.agentRequest, 10⟩, .authorized⟩
+  , ⟨scope, ⟨.agentMessage, 200⟩, .authorized⟩
+  , ⟨scope, ⟨.agentMessage, 201⟩, .authorized⟩
+  , ⟨scope, ⟨.agentOutputSegment, 100⟩, .authorized⟩ ]
+
+def originScope : AuthorizationScope := { scope with nativeSession := 1 }
+def originAccess : List ProvenanceAccess :=
+  access.map fun observation => { observation with scope := originScope }
 
 example : resultMatches
-    (buildManifest [] [201] [] [originMessage, childMessage] [closing] access [] [])
+    (buildManifest scope 2 [] [201] [] [originMessage, childMessage] [closing] access [] [])
     (.ok [⟨.agentRequest, 10⟩, ⟨.agentMessage, 200⟩, ⟨.agentMessage, 201⟩,
       ⟨.agentOutputSegment, 100⟩]) = true := by native_decide
 
+example : resultMatches
+    (buildManifest scope 1 [] [201] [] [originMessage, childMessage] [closing] access [] [])
+    (.error .rootSessionMismatch) = true := by native_decide
+
 def originDependenciesProtected : Bool :=
-  match buildManifest [] [201] [] [originMessage, childMessage] [closing] access [] [] with
+  match buildManifest scope 2 [] [201] [] [originMessage, childMessage] [closing] access [] [] with
   | .ok manifest => !canDelete manifest ⟨.agentMessage, 200⟩ &&
       !canDelete manifest ⟨.agentOutputSegment, 100⟩ &&
       !canDelete manifest ⟨.agentRequest, 10⟩
@@ -309,53 +354,73 @@ def originDependenciesProtected : Bool :=
 example : originDependenciesProtected = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [201] [] [childMessage] [closing] access [] [])
+    (buildManifest scope 2 [] [201] [] [childMessage] [closing] access [] [])
     (.error .headerUnavailable) = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [201] [] [originMessage, childMessage] [closing] access [200] [])
+    (buildManifest scope 2 [] [201] [] [originMessage, childMessage] [closing] access [200] [])
     (.error .headerDenied) = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [200] [] [originMessage] [closing] [] [] [])
-    (.error (.provenanceMissing ⟨.agentRequest, 10⟩)) = true := by native_decide
+    (buildManifest originScope 1 [] [200] [] [originMessage] [closing]
+      (originAccess.map fun observation => if observation.key = ⟨.agentMessage, 200⟩
+        then { observation with state := .denied } else observation) [] [])
+    (.error (.provenanceDenied ⟨.agentMessage, 200⟩)) = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [200] [] [originMessage] [closing]
-      [⟨⟨.agentRequest, 10⟩, .denied⟩] [] [])
+    (buildManifest originScope 1 [] [200] [] [originMessage] [closing]
+      (originAccess.map fun observation => if observation.key = ⟨.agentOutputSegment, 100⟩
+        then { observation with state := .denied } else observation) [] [])
+    (.error (.provenanceDenied ⟨.agentOutputSegment, 100⟩)) = true := by native_decide
+
+/-- Evidence for a hydration twin is not evidence for this request. -/
+example : resultMatches
+    (buildManifest originScope 1 [] [200] [] [originMessage] [closing]
+      (originAccess.map fun observation =>
+        { observation with scope := { originScope with peer := "peer-b" } }) [] [])
+    (.error (.provenanceMissing ⟨.agentMessage, 200⟩)) = true := by native_decide
+
+example : resultMatches
+    (buildManifest originScope 1 [] [200] [] [originMessage] [closing] [] [] [])
+    (.error (.provenanceMissing ⟨.agentMessage, 200⟩)) = true := by native_decide
+
+example : resultMatches
+    (buildManifest originScope 1 [] [200] [] [originMessage] [closing]
+      [⟨originScope, ⟨.agentMessage, 200⟩, .authorized⟩,
+       ⟨originScope, ⟨.agentRequest, 10⟩, .denied⟩] [] [])
     (.error (.provenanceDenied ⟨.agentRequest, 10⟩)) = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [200] [] [originMessage] [] access [] [])
+    (buildManifest originScope 1 [] [200] [] [originMessage] [] originAccess [] [])
     (.error (.reference (.lookup .unavailable))) = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [200] [] [originMessage] [closing] access [] [100])
+    (buildManifest originScope 1 [] [200] [] [originMessage] [closing] originAccess [] [100])
     (.error (.reference (.lookup .denied))) = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [200] [] [originMessage] [closing] access [] [] [⟨100, 999⟩])
+    (buildManifest originScope 1 [] [200] [] [originMessage] [closing] originAccess [] [] [⟨100, 999⟩])
     (.error (.reference (.lookup .denied))) = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [] [⟨10, 1, some (.message 999)⟩]
-      [originMessage] [closing] access [] [])
+    (buildManifest originScope 1 [] [] [⟨10, 1, some (.message 999)⟩]
+      [originMessage] [closing] originAccess [] [])
     (.error (.terminal .missingHeader)) = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [] [⟨10, 1, some (.message 200)⟩]
-      [originMessage] [closing] access [] [])
+    (buildManifest originScope 1 [] [] [⟨10, 1, some (.message 200)⟩]
+      [originMessage] [closing] originAccess [] [])
     (.ok [⟨.agentRequest, 10⟩, ⟨.agentMessage, 200⟩,
       ⟨.agentOutputSegment, 100⟩]) = true := by native_decide
 
 /-- Explicit `NoMessage` still retains and authorizes the physical terminal
 request; it is not an empty, ownerless manifest. -/
 example : resultMatches
-    (buildManifest [] [] [⟨10, 1, some .noMessage⟩] [] [] access [] [])
+    (buildManifest originScope 1 [] [] [⟨10, 1, some .noMessage⟩] [] [] originAccess [] [])
     (.ok [⟨.agentRequest, 10⟩]) = true := by native_decide
 
 example : resultMatches
-    (buildManifest [] [] [⟨10, 1, some .noMessage⟩] [] [] [] [] [])
+    (buildManifest originScope 1 [] [] [⟨10, 1, some .noMessage⟩] [] [] [] [] [])
     (.error (.provenanceMissing ⟨.agentRequest, 10⟩)) = true := by native_decide
 
 def cycleLeft : MessageEnvelope :=
@@ -366,7 +431,9 @@ def cycleRight : MessageEnvelope :=
       { childMessage.header with id := 211, origin := some 210, publication := .fork 210 } }
 
 example : resultMatches
-    (buildManifest [] [210] [] [cycleLeft, cycleRight] [closing] access [] [])
+    (buildManifest scope 2 [] [210] [] [cycleLeft, cycleRight] [closing]
+      (access ++ [⟨scope, ⟨.agentMessage, 210⟩, .authorized⟩,
+        ⟨scope, ⟨.agentMessage, 211⟩, .authorized⟩]) [] [])
     (.error .invalidOrigin) = true := by native_decide
 
 end Examples

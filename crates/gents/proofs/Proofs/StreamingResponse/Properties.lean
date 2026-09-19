@@ -72,6 +72,121 @@ theorem terminal_selection_missing_is_loading {observation : Observation}
     resolveTerminalPayload, resolveTerminal, classifyTerminalError, Except.mapError,
     Bind.bind, Except.bind]
 
+private theorem classifyMessageError_ne_live (error : MessageError) (streams : Streams) :
+    classifyMessageError error ≠ .live streams := by
+  cases error with
+  | reconstruction error =>
+      cases error with
+      | lookup error => cases error <;> simp [classifyMessageError]
+      | extent error => cases error <;> simp [classifyMessageError]
+      | missingStream => simp [classifyMessageError]
+  | _ => simp [classifyMessageError]
+
+private theorem classifyTerminalError_ne_live (error : TerminalPayloadError)
+    (streams : Streams) : classifyTerminalError error ≠ .live streams := by
+  cases error with
+  | selection error => cases error <;> simp [classifyTerminalError]
+  | conflictingMessage => simp [classifyTerminalError]
+  | reconstruction error =>
+      simpa [classifyTerminalError] using classifyMessageError_ne_live error streams
+
+private def resolveReferencingCandidate (observation : Observation)
+    (candidate : MessageEnvelope) : Except View Header :=
+  match messageAt observation.messages candidate.header.id with
+  | .error _ => .error .conflicted
+  | .ok message =>
+      if observation.dependencyDenials.any fun denial =>
+          message.header.refs.any fun ref => ref.closeId == denial.rootCloseId then
+        .error .denied
+      else match reconstructMessage observation.records observation.deniedSegments message with
+        | .ok _ => .ok message.header
+        | .error error => .error (classifyMessageError error)
+
+private theorem resolveReferencingCandidate_error_ne_live
+    (observation : Observation) (candidate : MessageEnvelope)
+    (view : View) (streams : Streams)
+    (h : resolveReferencingCandidate observation candidate = .error view) :
+    view ≠ .live streams := by
+  unfold resolveReferencingCandidate at h
+  split at h
+  · cases h
+    simp
+  · split at h
+    · cases h
+      simp
+    · split at h
+      · contradiction
+      · cases h
+        exact classifyMessageError_ne_live _ streams
+
+private theorem resolveReferencingCandidates_error_ne_live
+    (observation : Observation) (candidates : List MessageEnvelope)
+    (view : View) (streams : Streams)
+    (h : candidates.mapM (resolveReferencingCandidate observation) = .error view) :
+    view ≠ .live streams := by
+  induction candidates with
+  | nil =>
+      change Except.ok [] = Except.error view at h
+      contradiction
+  | cons candidate rest ih =>
+      cases hcandidate : resolveReferencingCandidate observation candidate with
+      | error error =>
+          rw [List.mapM_cons] at h
+          simp [hcandidate] at h
+          cases h
+          exact resolveReferencingCandidate_error_ne_live observation candidate view streams
+            hcandidate
+      | ok header =>
+          rw [List.mapM_cons] at h
+          cases hrest : rest.mapM (resolveReferencingCandidate observation) with
+          | error error =>
+              simp [hcandidate, hrest] at h
+              cases h
+              exact ih hrest
+          | ok headers =>
+              simp [hcandidate, hrest] at h
+              change Except.ok (header :: headers) = Except.error view at h
+              contradiction
+
+private theorem resolvedReferencingHeaders_error_ne_live
+    (observation : Observation) (closing : Segment) (view : View) (streams : Streams)
+    (h : resolvedReferencingHeaders observation closing = .error view) :
+    view ≠ .live streams := by
+  unfold resolvedReferencingHeaders at h
+  change ((observation.messages.filter fun message =>
+      referencesClose message closing &&
+      message.header.request == some observation.request &&
+      message.header.session == observation.session).dedup.mapM
+        (resolveReferencingCandidate observation)) = .error view at h
+  exact resolveReferencingCandidates_error_ne_live observation _ view streams h
+
+/-- Once the exact source has a unique closing record, the live-preview branch
+is unreachable. Closed output may still be loading while terminal selection or
+dependencies arrive, but it is never represented as a live writer. -/
+theorem projectUnheadedClosed_ne_live (observation : Observation)
+    (closing : Segment) (outcome : Outcome) (streams : Streams) :
+    projectUnheadedClosed observation closing outcome ≠ .live streams := by
+  unfold projectUnheadedClosed
+  split <;> try simp
+  split <;> try simp
+  split <;> try simp
+  split
+  · exact classifyTerminalError_ne_live _ streams
+  · split <;> try simp
+    split <;> try simp
+    · exact resolvedReferencingHeaders_error_ne_live observation closing _ streams (by assumption)
+    · split <;> simp
+
+theorem closed_source_is_never_live {observation : Observation}
+    {closing : Segment} {outcome : Outcome} {streams : Streams}
+    (hmessage : observation.target.messageId = none)
+    (hscope : targetScoped observation = true)
+    (hclosed : observeClose observation.records observation.target.coordinate =
+      .closed closing outcome) :
+    project observation ≠ .live streams := by
+  simp [project, hmessage, hscope, hclosed]
+  exact projectUnheadedClosed_ne_live observation closing outcome streams
+
 theorem retained_stream_is_not_opaque {headers : List Header} {closing : Segment}
     {streams : Streams} {stream : Declaration × List UInt8}
     (h : stream ∈ retainedStreams headers closing streams) :
@@ -90,5 +205,20 @@ theorem segment_delivery_retains_old (observation : Observation)
     (record old : Segment) (hold : old ∈ observation.records) :
     old ∈ CanonicalOutput.deliver observation.records record :=
   CanonicalOutput.delivery_retains _ _ _ hold
+
+/-- Every modeled observation transition is append-only with respect to segment
+facts. Owner changes, selection and terminal observation also leave them intact. -/
+theorem transition_never_removes_segments {before after : Observation}
+    (htransition : Transition before after) (old : Segment)
+    (hold : old ∈ before.records) : old ∈ after.records := by
+  cases htransition <;> simp_all [CanonicalOutput.delivery_retains]
+
+theorem trace_never_removes_segments {before after : Observation}
+    (htrace : Trace before after) (old : Segment)
+    (hold : old ∈ before.records) : old ∈ after.records := by
+  induction htrace with
+  | refl => exact hold
+  | step transition rest ih =>
+      exact ih (transition_never_removes_segments transition old hold)
 
 end StreamingResponse

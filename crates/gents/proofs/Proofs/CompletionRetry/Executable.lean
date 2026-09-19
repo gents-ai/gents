@@ -37,6 +37,7 @@ def retryCases : List RetryCase :=
   let transportRetracted := transportRequired.bind fun state =>
     step? state (.confirmRetraction true)
   let accepted := step? baseState (.accept 200)
+  let repairIssued := step? { baseState with phase := .repairing } .repairIssue
   [ witness "transport_failure_requires_retraction" baseState
       (.observeFailure .transport "io" 12)
   , witness "cannot_schedule_before_retraction"
@@ -67,13 +68,38 @@ def retryCases : List RetryCase :=
         usageCharged := 21 } (.confirmRetraction true)
   , witness "late_usage_is_still_charged"
       (accepted.getD baseState) (.recordUsage 9)
+  , witness "transport_budget_exhaustion_is_terminal_for_policy"
+      { baseState with
+          phase := .retracted .transport "io" 12
+          transportUsed := defaultBudget.transportRetries } .schedule
+  , witness "parse_budget_without_repair_is_exhausted"
+      { baseState with
+          phase := .retracted .parseBadRequest "json" 12
+          budget := { defaultBudget with allowRepair := false }
+          resampleUsed := defaultBudget.resampleRetries } .schedule
+  , witness "retry_wake_past_deadline_is_exhausted"
+      { baseState with
+          phase := .retracted .transport "io" 12
+          deadline := some 11 } .schedule
+  , witness "repair_issue_consumes_its_only_capability"
+      { baseState with phase := .repairing } .repairIssue
+  , witness "second_repair_issue_is_rejected"
+      (repairIssued.getD baseState) .repairIssue
   ]
 
-theorem retryCases_count : retryCases.length = 13 := by decide
+theorem retryCases_count : retryCases.length = 18 := by decide
 
 theorem retry_cases_pin_publication_boundary :
     retryCases.map (fun c => c.post.isSome) =
-      [true, false, false, true, true, true, true, true, false, true, false, true, true] := by
+      [true, false, false, true, true, true, true, true, false, true, false, true, true,
+       true, true, true, true, false] := by
+  native_decide
+
+theorem retry_cases_pin_exhaustion_and_single_repair :
+    (retryCases.drop 13).map (fun c => c.post.map (fun state => state.phase)) =
+      [some .exhausted, some .exhausted, some .exhausted, some .issuing, none] ∧
+    (retryCases.drop 13).map (fun c => c.post.map (fun state => state.repairUsed)) =
+      [some false, some false, some false, some true, none] := by
   native_decide
 
 end CompletionRetry

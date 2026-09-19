@@ -20,7 +20,8 @@ def hydrationRequest : SessionHydration.Request :=
   , peer := "peer-1"
   , requester := "did:key:requester-1"
   , agent := "did:key:agent-1"
-  , session := "session-1" }
+  , session := "session-1"
+  , nativeSession := 2 }
 
 def hydrationOwnedDocument : SessionHydration.Document :=
   { collection := .agentMessage, id := 1 }
@@ -29,6 +30,19 @@ def hydrationOwnedDocument : SessionHydration.Document :=
 its ownership is not re-derived from the target session. -/
 def hydrationOriginDependency : SessionHydration.Document :=
   { collection := .agentOutputSegment, id := 2 }
+
+def hydrationClosureInput : SessionHydration.ClosureInput :=
+  { request := hydrationRequest
+  , bases := []
+  , roots := [201]
+  , requirements := []
+  , messages := [CanonicalOutput.Hydration.Examples.originMessage,
+      CanonicalOutput.Hydration.Examples.childMessage]
+  , segments := [CanonicalOutput.Hydration.Examples.closing]
+  , access := CanonicalOutput.Hydration.Examples.access.map fun observation =>
+      { observation with scope := hydrationRequest.authorizationScope }
+  , deniedHeaders := []
+  , deniedSegments := [] }
 
 def hydrationCatalog (w : SessionHydrationDecisionCase) : SessionHydration.Catalog :=
   { appliedPairingRoutes := if w.paired then
@@ -41,7 +55,11 @@ def hydrationCatalog (w : SessionHydrationDecisionCase) : SessionHydration.Catal
       [{ network := if w.membershipNetworkMatches then "network-1" else "network-2"
        , member := hydrationRequest.requester }].toFinset else ∅
   , sessions := if w.ownsSession then [SessionHydration.ownedSession hydrationRequest].toFinset else ∅
-  , documents := [hydrationOwnedDocument, hydrationOriginDependency].toFinset }
+  , closureInputs := [hydrationClosureInput] }
+
+def hydrationTwin : SessionHydration.Request :=
+  { hydrationRequest with key := "peer-2:session-1", peer := "peer-2" }
+
 
 def sessionHydrationDecisionCases : List SessionHydrationDecisionCase :=
   [ { name := "admitted", paired := true,
@@ -66,6 +84,16 @@ def sessionHydrationDecisionCases : List SessionHydrationDecisionCase :=
       pairingRequesterMatches := true, pairingAgentMatches := true, activeMember := true,
       membershipNetworkMatches := true, ownsSession := false } ]
 
+/-- Same logical session, but a different peer/request key cannot reuse the
+closure admitted for the original hydration request. -/
+def hydrationTwinCase : SessionHydrationDecisionCase :=
+  { name := "twin", paired := true
+  , pairingRequesterMatches := true, pairingAgentMatches := true
+  , activeMember := true, membershipNetworkMatches := true, ownsSession := true }
+
+example : SessionHydration.selectedDocuments
+    (hydrationCatalog hydrationTwinCase) hydrationTwin = none := by decide
+
 def sessionHydrationDecisionCaseJson (w : SessionHydrationDecisionCase) : String :=
   let cat := hydrationCatalog w
   "{"
@@ -78,11 +106,36 @@ def sessionHydrationDecisionCaseJson (w : SessionHydrationDecisionCase) : String
     ++ "\"owns_session\":" ++ boolString w.ownsSession ++ ","
     ++ "\"expected_admit\":" ++ boolString (SessionHydration.decideAdmits cat hydrationRequest) ++ ","
     ++ "\"expected_selected_count\":" ++
-      toString (SessionHydration.selectedDocuments cat hydrationRequest).card
+      toString ((SessionHydration.selectedDocuments cat hydrationRequest).getD ∅).card
     ++ "}"
 
 def sessionHydrationDecisionCasesJson : String :=
   jsonArray (sessionHydrationDecisionCases.map sessionHydrationDecisionCaseJson)
+
+def closureCaseJson (name : String) (input : SessionHydration.ClosureInput)
+    (request : SessionHydration.Request := hydrationRequest) : String :=
+  let cat := { hydrationCatalog hydrationTwinCase with closureInputs := [input] }
+  "{" ++ "\"name\":" ++ jsonString name ++ "," ++
+    "\"expected_selected\":" ++ boolString (SessionHydration.selectedDocuments cat request).isSome ++ "}"
+
+def deniedClosureInput (key : CanonicalOutput.Hydration.DocumentKey) :
+    SessionHydration.ClosureInput :=
+  { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
+      if observation.key = key then { observation with state := .denied } else observation }
+
+def sessionHydrationClosureCasesJson : String := jsonArray
+  [ closureCaseJson "exact_request_closure" hydrationClosureInput
+  , closureCaseJson "hydration_twin_rejected" hydrationClosureInput hydrationTwin
+  , closureCaseJson "wrong_root_session_rejected"
+      { hydrationClosureInput with request := { hydrationRequest with nativeSession := 1 } }
+      { hydrationRequest with nativeSession := 1 }
+  , closureCaseJson "message_acp_denied"
+      (deniedClosureInput ⟨.agentMessage, 201⟩)
+  , closureCaseJson "segment_acp_denied"
+      (deniedClosureInput ⟨.agentOutputSegment, 100⟩)
+  , closureCaseJson "foreign_scope_evidence_rejected"
+      { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
+          { observation with scope := { observation.scope with peer := "peer-foreign" } } } ]
 
 structure SessionHydrationApplyCase where
   name : String
@@ -123,7 +176,7 @@ def sessionHydrationApplyCaseJson (w : SessionHydrationApplyCase) : String :=
   let initial : SessionHydration.State :=
     { attempted := ∅, confirmedDelivered := ∅, terminals := ∅ }
   let next := SessionHydration.applyStep cat initial hydrationRequest delivery terminalWrite
-  let selected := SessionHydration.selectedDocuments cat hydrationRequest
+  let selected := (SessionHydration.selectedDocuments cat hydrationRequest).getD ∅
   let served := SessionHydration.terminal hydrationRequest .served selected ∈ next.terminals
   let rejected := SessionHydration.terminal hydrationRequest .rejected ∅ ∈ next.terminals
   "{"
