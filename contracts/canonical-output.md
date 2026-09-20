@@ -157,6 +157,26 @@ notification-delivered timestamp. Both request dependencies retain their existin
 ACP checks during hydration. Do not fabricate a second receipt column or let a
 tool publisher select an arbitrary request as the notification owner.
 
+Claiming the next queue entry must activate that exact authenticated physical
+request under the same local gate. Preserve the session transcript, sequence
+allocator, compaction cursor and earlier requests' tool ownership; do not reset
+them with the request lease. A live predecessor cannot be replaced. The wake's
+immutable input snapshot is derived from canonical notification bindings at the
+claim cutoff, not supplied as an arbitrary subset. Finishing the exact claim
+uses the authoritative terminal request decision: completed work acknowledges
+its snapshot; failed or cancelled work releases the queue without acknowledging
+it. A snapshot or separately persisted response cannot manufacture a terminal
+decision. Goal continuation publication retains its existing Goal owner and
+must join the actual queue admission, not fabricate a background wake.
+
+Provider acceptance and retry retraction use the existing retry transitions
+against the latest gate-held execution state. Policy-only actions cannot confirm
+durable publication, and raw publication cannot bypass retry eligibility. Exact
+replay validates the original canonical facts without spending another attempt.
+Backoff wake-up uses the actual monotone observation time, at or after the
+scheduled lower bound and within the request deadline; timer overshoot alone is
+not failure and must not rewind the owner's clock.
+
 The composed model must prove these cross-owner effects and sequence ordering,
 not merely accept isolated owner predicates. Native host stop/acknowledgement,
 remote replication latency and transaction isolation remain external evidence;
@@ -431,8 +451,9 @@ conflicting observations cannot become a successfully served empty manifest.
 | Stream-processor cumulative previews, in-flight message upserts, retraction resets | `agent/stream_processor.rs`: one immutable segment per flush, naming its writer and slicing its payload by stream; a Retracted closure commits before retry backoff. `agent/loop_stream.rs`: dispatch follows accepted closure/header publication with the boundaries above. `rendered_request/scope.rs` must allocate non-reused scopes across reclaim/restart. | Lean → conformance → runtime |
 | Tool `args`, `result`, `partial_output_*`; `AgentToolResult` SDL/row (deleted) | `AgentToolCall` owns execution/delivery and remote-only immutable `delegated_input`, created pending with the assistant header. The provider turn owns canonical argument bytes; the tool source owns output; tool terminalization closes empty and nonempty output before delivery. Existing completion notification owner composes authored wrappers by reference. | Spec → runtime |
 | `truncation/spill.rs`, spill links and discarded-spill flags | Owned provider-input boundary writes `PresentedPayload`: exact UTF-8 output ranges plus inline literal markers/separators. Preserve head/tail behavior and line normalization; retrieval hints name the tool call. Unreferenced retained output is not proof of delivery. `read_tool_output` reads the original stream. | Lean → conformance → runtime |
+| Tool-output ring storage and `read_tool_output` persisted/live/empty source dispatch | Read the exact physical tool's canonical open prefix or committed closed extent through shared reconstruction, then page those bytes. Registry loss cannot erase committed output; missing/conflicting facts are not an empty successful read. Retain generic paging guarantees and the separate host process-control registry, not a second authoritative payload store. | Lean → conformance → runtime |
 | Legacy `decode_persisted_message` / `present_persisted_message` and fallback tests (deleted) | Shared strict reconstruction produces native `Message`; existing `present_message` remains a rendering function. Missing closing records, conflicts, malformed JSON/media and illegal role/block combinations fail explicitly. | Spec → runtime |
-| `session/fork.rs` payload/tool/spill copies and spill remapping | Fork owner copies headers only, with `MessagePublication::Fork`, child-scoped message keys/sequences and no live request membership. Blocks keep the origin's closure references unchanged. Origin tool IDs remain provenance, not child executable rows. Compaction cursors still target retained child headers. | Lean → conformance → runtime |
+| `session/fork.rs` payload/tool/spill copies and spill remapping | Fork owner copies headers only, with `MessagePublication::Fork`, child-scoped message keys, unchanged numeric sequences in the child session and no live request membership. Readers enforce the same sequence preservation: independently valid copies cannot reorder history. Blocks keep the origin's closure references unchanged. Origin tool IDs remain provenance, not child executable rows. Compaction cursors still target retained child headers. | Lean → conformance → runtime |
 | Session-only hydration completeness | Existing owner serves authorized header closure: every referenced closing record, fork origins and the segments within their extents. Terminal selections resolve exact headers. Immutable IDs bind output content; mutable request/tool observations retain their owner checks. Receipt format stays unchanged; missing dependencies remain incomplete, denied dependencies reject. | Spec → Lean → conformance → runtime |
 | Response/spill desktop stores, queries, merge heuristics and CLI projections | Shared output reconstruction supplies native messages and live streams; request lifecycle supplies status. No consumer-local text repair or short-message fallback. Parent session removal cannot cascade into retained origin dependencies; no output GC is introduced here. | Consumers |
 | `client_protocol::{ResponseStatus, InvalidResponseStatus, ResponseSnapshot}`, `AttemptView.response`, response-aware projection functions (deleted); client execution variant `Streaming` (renamed `Running`) | `client_protocol` retains request-only input/output types. `Proofs/Client.lean` and client conformance must adopt the mapping above before the shared projection is reimplemented. Desktop `store/turns.rs` and response indexes; CLI `codex_shim/{turn,subagent_projection,history_projection,thread_projection,progress}` consume it with no response fallback. Existing protocol tests are handoff evidence, not the new contract. Preserve retry-tip ambiguity rejection and supersession selection. | Spec → Lean → conformance → consumers |
