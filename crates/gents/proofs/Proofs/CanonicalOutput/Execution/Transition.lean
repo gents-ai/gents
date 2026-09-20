@@ -242,14 +242,26 @@ def acceptAndPublishCore (world : World) (generation : Generation)
             else .error .transcriptRejected
 
 set_option maxHeartbeats 1000000 in
-/-- Both replay and fresh publication establish the complete tool projection
-inside the atomic core.  Callers need not recompute it after success. -/
-theorem acceptAndPublishCore_success_toolProjectionCoherent
+/-- Successful acceptance is either identity replay or the single fresh atomic
+post-state constructed by the core.  This is the common elimination lemma for
+consumers of acceptance; they need not repeat its admission branch ladder. -/
+theorem acceptAndPublishCore_success_effect
     (world post : World) (generation : Generation)
     (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
     (admissions : List ToolAdmission)
     (h : acceptAndPublishCore world generation closing message targets admissions = .ok post) :
-    toolProjectionCoherent post = true := by
+    (post = world ∧ toolProjectionCoherent post = true) ∨
+      ∃ lease delegated,
+        world.transcript.PublishableTurn (messageTurn message) ∧
+        post = { world with
+          lease := lease
+          segments := world.segments ++ [closing]
+          messages := world.messages ++ [message]
+          transcript := world.transcript.publishAcceptedAssistant
+            message.header.id (messageTurn message)
+          toolContexts := installAcceptedTools world message admissions
+          delegatedCalls := world.delegatedCalls ++ delegated } ∧
+        toolProjectionCoherent post = true := by
   simp (config := { maxSteps := 1000000 }) [acceptAndPublishCore] at h
   by_cases hc : segmentIdentityCollision world closing = true ∨
       messageIdentityCollision world message = true
@@ -266,8 +278,9 @@ theorem acceptAndPublishCore_success_toolProjectionCoherent
             acceptedToolsPresent world message = true
         · simp only [if_pos hp] at h
           split at h <;> try contradiction
+          rename_i hvalid
           cases h
-          simp_all
+          exact Or.inl ⟨rfl, hvalid.2⟩
         · simp only [if_neg hp] at h
           split at h <;> try contradiction
           split at h <;> try contradiction
@@ -280,9 +293,22 @@ theorem acceptAndPublishCore_success_toolProjectionCoherent
           split at h <;> try contradiction
           split at h <;> try contradiction
           all_goals cases h
-          all_goals assumption
+          all_goals first | exact Or.inr ⟨_, _, by simp_all, rfl, by assumption⟩
     · simp only [if_neg hn] at h
       contradiction
+
+/-- Both replay and fresh publication establish the complete tool projection
+inside the atomic core.  Callers need not recompute it after success. -/
+theorem acceptAndPublishCore_success_toolProjectionCoherent
+    (world post : World) (generation : Generation)
+    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (admissions : List ToolAdmission)
+    (h : acceptAndPublishCore world generation closing message targets admissions = .ok post) :
+    toolProjectionCoherent post = true := by
+  rcases acceptAndPublishCore_success_effect world post generation closing message targets
+    admissions h with ⟨_, hcoherent⟩ | ⟨_, _, _, _, hcoherent⟩
+  · exact hcoherent
+  · exact hcoherent
 
 def authoredRowPresent (world : World) (message : MessageEnvelope) : Bool :=
   match message.header.role with
@@ -655,10 +681,6 @@ def acceptedOwnedCalls (world : World) (generation : Generation) :
 def ownedByGeneration (world : World) (generation : Generation) (tool : OwnedTool) : Bool :=
   acceptedHeaderBindsToolGeneration world tool generation
 
-def terminalToolState : ToolExecution.ToolCallState → Bool
-  | .completed | .failed | .timedOut | .cancelled => true
-  | .pending | .running => false
-
 def normalCompletionToolsReady (world : World) (generation : Generation) : Bool :=
   world.toolContexts.all fun tool =>
     if ownedByGeneration world generation tool then
@@ -668,9 +690,9 @@ def normalCompletionToolsReady (world : World) (generation : Generation) : Bool 
       | .acceptedIntent, .running =>
           tool.context.awaitMode == .background && canonicalToolDelivered world tool
       | .spawnedBackground _, terminal =>
-          tool.context.awaitMode == .background && terminalToolState terminal
+          tool.context.awaitMode == .background && decide (isTerminal terminal)
       | .acceptedIntent, terminal => tool.context.startedAt.isNone ||
-          (terminalToolState terminal && canonicalToolDelivered world tool)
+          (decide (isTerminal terminal) && canonicalToolDelivered world tool)
     else true
 
 def handoffRunningTool (world : World) (tool : OwnedTool) : OwnedTool :=

@@ -117,7 +117,7 @@ def bridgeTerminalContext? (tool : OwnedTool) (state : Subagent.BridgedState)
   let (_, terminal) ← Subagent.BridgedState.findBridgeSlot?
     after.parent.tools state.bridgeCallId
   if terminal.callId != tool.context.callId ||
-      !CanonicalOutput.ToolDelivery.terminalState terminal.state then none
+      !decide (isTerminal terminal.state) then none
   else some terminal
 
 def terminalContext? (world : World) (tool : OwnedTool)
@@ -133,7 +133,7 @@ def terminalContext? (world : World) (tool : OwnedTool)
         if projected.currentTime ≤ world.lease.now then
           some { projected with currentTime := world.lease.now }
         else none
-  if CanonicalOutput.ToolDelivery.terminalState terminal.state then some terminal else none
+  if decide (isTerminal terminal.state) then some terminal else none
 
 def clearReconcileIntent (tool : OwnedTool)
     (context : ToolExecution.ToolCallContext) : OwnedTool :=
@@ -175,7 +175,7 @@ def appendToolOutput (world : World) (document : DocId)
   ToolWrite.lift world (appendToolOutputWrite world document record)
 
 def closeReplayValid (world : World) (tool : OwnedTool) (record : Segment) : Bool :=
-  CanonicalOutput.ToolDelivery.terminalState tool.context.state &&
+  decide (isTerminal tool.context.state) &&
     record ∈ world.segments &&
     CanonicalOutput.ToolDelivery.closedRecordValid world.segments
       tool.requestDoc tool.document record &&
@@ -273,7 +273,7 @@ def deliveryHeaderValid (world : World) (tool : OwnedTool)
   message.header.publication == .toolDelivery tool.document &&
     message.header.request == some tool.requestDoc &&
     message.header.session == tool.session && message.header.role == .user &&
-    CanonicalOutput.ToolDelivery.terminalState tool.context.state &&
+    decide (isTerminal tool.context.state) &&
     CanonicalOutput.ToolDelivery.sourceClosed world.segments tool.requestDoc tool.document &&
     (deliveryShape? message tool.document).isSome &&
     resultProviderMatches world tool message &&
@@ -300,7 +300,7 @@ def wakeNotificationHeaderValid (world : World) (tool : OwnedTool)
     message.header.publication == .toolDelivery tool.document &&
     message.header.session == tool.session && message.header.role == .user &&
     message.header.outcome == .complete &&
-    CanonicalOutput.ToolDelivery.terminalState tool.context.state &&
+    decide (isTerminal tool.context.state) &&
     CanonicalOutput.ToolDelivery.sourceClosed world.segments tool.requestDoc tool.document &&
     deliveryShape? message tool.document == some .backgroundNotification &&
     (envelopeRefs message).all (referenceOwnedByTool world tool) &&
@@ -659,32 +659,43 @@ theorem append_preserves_parent_lease (before after : World) (document : DocId)
     after.lease = before.lease := by
   exact ToolWrite.lift_preserves_lease h
 
-private theorem appendToolOutput_maps_constant_publications (world : World) (document : DocId)
-    (record : Segment) :
-    (appendToolOutput world document record).map
-        (fun post => (post.sessionId, post.messages, post.transcript.nextSeq)) =
-      (appendToolOutput world document record).map
-        (fun _ => (world.sessionId, world.messages, world.transcript.nextSeq)) := by
-  unfold appendToolOutput ToolWrite.lift appendToolOutputWrite
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  dsimp [ToolWrite.apply, ToolWrite.current]
-  split <;> try rfl
+/-- The lifecycle-relevant effect of a successful append. This exposes the
+single owned-tool replacement while keeping the write payload private. -/
+theorem append_success_lifecycle_effect (before after : World) (document : DocId)
+    (record : Segment) (h : appendToolOutput before document record = .ok after) :
+    after = before ∨ ∃ tool observed segments,
+      ownedToolByDocument? before document = some tool ∧
+      updateClock before tool = some observed ∧
+      CanonicalOutput.ToolDelivery.appendRecords before.segments
+        tool.requestDoc tool.document before.lease.now record = .ok segments ∧
+      after = { before with
+        segments := segments
+        toolContexts := replaceOwnedTool before.toolContexts document observed } := by
+  unfold appendToolOutput ToolWrite.lift appendToolOutputWrite at h
+  split at h <;> try contradiction
+  rename_i tool found
+  split at h <;> try contradiction
+  split at h
+  · left
+    simpa [Except.map, ToolWrite.apply_current] using h.symm
+  · split at h <;> try contradiction
+    rename_i observed clocked
+    split at h <;> try contradiction
+    split at h <;> try contradiction
+    rename_i segments appended
+    right
+    refine ⟨tool, observed, segments, found, clocked, appended, ?_⟩
+    simpa [Except.map, ToolWrite.apply, ToolWrite.current] using h.symm
 
 theorem append_preserves_publications (before after : World) (document : DocId)
     (record : Segment) (h : appendToolOutput before document record = .ok after) :
     after.sessionId = before.sessionId ∧ after.messages = before.messages ∧
       after.transcript.nextSeq = before.transcript.nextSeq := by
-  have hm := congrArg
-    (Except.map (fun post => (post.sessionId, post.messages, post.transcript.nextSeq))) h
-  rw [appendToolOutput_maps_constant_publications] at hm
-  simp only [h] at hm
-  change Except.ok (before.sessionId, before.messages, before.transcript.nextSeq) =
-    Except.ok (after.sessionId, after.messages, after.transcript.nextSeq) at hm
-  simpa only [Prod.mk.injEq] using (Except.ok.inj hm).symm
+  rcases append_success_lifecycle_effect before after document record h with same | effect
+  · subst after
+    exact ⟨rfl, rfl, rfl⟩
+  · rcases effect with ⟨tool, observed, segments, found, clocked, appended, rfl⟩
+    exact ⟨rfl, rfl, rfl⟩
 
 theorem append_preserves_nextSeq (before after : World) (document : DocId)
     (record : Segment) (h : appendToolOutput before document record = .ok after) :
@@ -697,34 +708,38 @@ theorem close_preserves_parent_lease (before after : World) (document : DocId)
     after.lease = before.lease := by
   exact ToolWrite.lift_preserves_lease h
 
-private theorem closeToolOutput_maps_constant_publications (world : World) (document : DocId)
-    (authority : CloseAuthority) (record : Segment) :
-    (closeToolOutput world document authority record).map
-        (fun post => (post.sessionId, post.messages, post.transcript.nextSeq)) =
-      (closeToolOutput world document authority record).map
-        (fun _ => (world.sessionId, world.messages, world.transcript.nextSeq)) := by
-  unfold closeToolOutput ToolWrite.lift closeToolOutputWrite
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  dsimp [ToolWrite.apply, ToolWrite.current, Transcript.TranscriptState.terminalizeToolCall]
-  split <;> rfl
+theorem close_success_effect (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment)
+    (h : closeToolOutput before document authority record = .ok after) :
+    (after.sessionId = before.sessionId ∧ after.messages = before.messages ∧
+      after.transcript.nextSeq = before.transcript.nextSeq) ∧
+      toolLifecycleProjectionCoherent after = true := by
+  unfold closeToolOutput ToolWrite.lift closeToolOutputWrite at h
+  split at h <;> try contradiction
+  rename_i preCoherent
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h
+  · have same : before = after := by
+      simpa [Except.map, ToolWrite.apply, ToolWrite.current] using h
+    rw [← same]
+    exact ⟨⟨rfl, rfl, rfl⟩, by simpa using preCoherent⟩
+  · split at h <;> try contradiction
+    split at h <;> try contradiction
+    dsimp at h
+    split at h
+    · contradiction
+    · rename_i postCoherent
+      simp [Except.map] at h
+      subst after
+      exact ⟨⟨rfl, rfl, rfl⟩, by simpa using postCoherent⟩
 
 theorem close_preserves_publications (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
     (h : closeToolOutput before document authority record = .ok after) :
     after.sessionId = before.sessionId ∧ after.messages = before.messages ∧
       after.transcript.nextSeq = before.transcript.nextSeq := by
-  have hm := congrArg
-    (Except.map (fun post => (post.sessionId, post.messages, post.transcript.nextSeq))) h
-  rw [closeToolOutput_maps_constant_publications] at hm
-  simp only [h] at hm
-  change Except.ok (before.sessionId, before.messages, before.transcript.nextSeq) =
-    Except.ok (after.sessionId, after.messages, after.transcript.nextSeq) at hm
-  simpa only [Prod.mk.injEq] using (Except.ok.inj hm).symm
+  exact (close_success_effect before after document authority record h).1
 
 theorem close_preserves_nextSeq (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
@@ -749,13 +764,13 @@ def PublicationEffect (before after : World) (message : MessageEnvelope) : Prop 
         message.sequence = before.transcript.nextSeq ∧
         after.transcript.nextSeq = before.transcript.nextSeq + 1))
 
-theorem PublicationEffect.allocator {before after : World} {message : MessageEnvelope}
+theorem PublicationEffect.nextSeq_monotone {before after : World} {message : MessageEnvelope}
     (effect : PublicationEffect before after message) :
-    after.transcript.nextSeq = before.transcript.nextSeq ∨
-      after.transcript.nextSeq = before.transcript.nextSeq + 1 := by
+    before.transcript.nextSeq ≤ after.transcript.nextSeq := by
   rcases effect.2 with replay | fresh
-  · exact Or.inl replay.2
-  · exact Or.inr fresh.2.2
+  · rw [replay.2]
+  · rw [fresh.2.2]
+    exact Nat.le_add_right _ 1
 
 set_option maxHeartbeats 1000000 in
 theorem publication_effect
@@ -784,22 +799,11 @@ theorem publication_effect
   have advance := fresh_delivery_advances_allocator before _ message _ (by assumption)
   exact ⟨rfl, Or.inr ⟨rfl, by simp_all, advance⟩⟩
 
-theorem publication_allocator_replays_or_advances
-    (before after : World) (document : DocId) (message : MessageEnvelope)
-    (h : publishToolDelivery before document message = .ok after) :
-    after.transcript.nextSeq = before.transcript.nextSeq ∨
-      after.transcript.nextSeq = before.transcript.nextSeq + 1 :=
-  (publication_effect before after document message h).allocator
-
 theorem publication_nextSeq_monotone
     (before after : World) (document : DocId) (message : MessageEnvelope)
     (h : publishToolDelivery before document message = .ok after) :
-    before.transcript.nextSeq ≤ after.transcript.nextSeq := by
-  rcases publication_allocator_replays_or_advances before after document message h with
-    same | fresh
-  · rw [same]
-  · rw [fresh]
-    exact Nat.le_add_right _ 1
+    before.transcript.nextSeq ≤ after.transcript.nextSeq :=
+  (publication_effect before after document message h).nextSeq_monotone
 
 private theorem backgroundNotification_effect
     (headerValid : World → OwnedTool → MessageEnvelope → Bool)
@@ -854,26 +858,6 @@ theorem goal_notification_preserves_parent_lease
     after.lease = before.lease := by
   exact ToolWrite.lift_preserves_lease h
 
-theorem wake_notification_allocator_replays_or_advances
-    (before after : World) (document : DocId) (binding : WakeDocumentBinding)
-    (message : MessageEnvelope)
-    (h : publishWakeNotification before document binding message = .ok after) :
-    after.transcript.nextSeq = before.transcript.nextSeq ∨
-      after.transcript.nextSeq = before.transcript.nextSeq + 1 := by
-  exact (backgroundNotification_effect
-    (fun world tool message => wakeNotificationHeaderValid world tool binding message)
-    before after document message h).allocator
-
-theorem goal_notification_allocator_replays_or_advances
-    (before after : World) (document : DocId) (binding : GoalNotificationBinding)
-    (message : MessageEnvelope)
-    (h : publishGoalNotification before document binding message = .ok after) :
-    after.transcript.nextSeq = before.transcript.nextSeq ∨
-      after.transcript.nextSeq = before.transcript.nextSeq + 1 := by
-  exact (backgroundNotification_effect
-    (fun world tool message => goalNotificationHeaderValid world tool binding message)
-    before after document message h).allocator
-
 theorem wake_notification_effect
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
     (message : MessageEnvelope)
@@ -896,23 +880,15 @@ theorem wake_notification_nextSeq_monotone
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
     (message : MessageEnvelope)
     (h : publishWakeNotification before document binding message = .ok after) :
-    before.transcript.nextSeq ≤ after.transcript.nextSeq := by
-  rcases wake_notification_allocator_replays_or_advances
-      before after document binding message h with same | fresh
-  · rw [same]
-  · rw [fresh]
-    exact Nat.le_add_right _ 1
+    before.transcript.nextSeq ≤ after.transcript.nextSeq :=
+  (wake_notification_effect before after document binding message h).nextSeq_monotone
 
 theorem goal_notification_nextSeq_monotone
     (before after : World) (document : DocId) (binding : GoalNotificationBinding)
     (message : MessageEnvelope)
     (h : publishGoalNotification before document binding message = .ok after) :
-    before.transcript.nextSeq ≤ after.transcript.nextSeq := by
-  rcases goal_notification_allocator_replays_or_advances
-      before after document binding message h with same | fresh
-  · rw [same]
-  · rw [fresh]
-    exact Nat.le_add_right _ 1
+    before.transcript.nextSeq ≤ after.transcript.nextSeq :=
+  (goal_notification_effect before after document binding message h).nextSeq_monotone
 
 theorem background_receipt_preserves_parent_lease
     (before after : World) (document : DocId) (closing : Segment) (message : MessageEnvelope)
@@ -952,21 +928,10 @@ theorem background_receipt_effect
   rw [← hwrite]
   exact ⟨rfl, Or.inr ⟨rfl, by simp_all, rfl⟩⟩
 
-theorem background_receipt_allocator_replays_or_advances
-    (before after : World) (document : DocId) (closing : Segment) (message : MessageEnvelope)
-    (h : publishBackgroundReceipt before document closing message = .ok after) :
-    after.transcript.nextSeq = before.transcript.nextSeq ∨
-      after.transcript.nextSeq = before.transcript.nextSeq + 1 :=
-  (background_receipt_effect before after document closing message h).allocator
-
 theorem background_receipt_nextSeq_monotone
     (before after : World) (document : DocId) (closing : Segment) (message : MessageEnvelope)
     (h : publishBackgroundReceipt before document closing message = .ok after) :
-    before.transcript.nextSeq ≤ after.transcript.nextSeq := by
-  rcases background_receipt_allocator_replays_or_advances before after document closing message h with
-    same | fresh
-  · rw [same]
-  · rw [fresh]
-    exact Nat.le_add_right _ 1
+    before.transcript.nextSeq ≤ after.transcript.nextSeq :=
+  (background_receipt_effect before after document closing message h).nextSeq_monotone
 
 end CanonicalOutput.Execution.ToolDelivery

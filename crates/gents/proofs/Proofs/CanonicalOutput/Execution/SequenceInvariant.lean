@@ -79,8 +79,6 @@ theorem appendRaw_preserves_sequenceBound (before after : World) (generation : G
     | (solve | cases hcore; exact hbound)
     | split at hcore
 
-set_option maxHeartbeats 2000000 in
-set_option maxRecDepth 100000 in
 theorem acceptAndPublish_preserves_sequenceBound
     (before after : World) (generation : Generation) (closing : Segment)
     (message : MessageEnvelope) (targets : List RemoteTarget) (admissions : List ToolAdmission)
@@ -88,47 +86,14 @@ theorem acceptAndPublish_preserves_sequenceBound
     (h : acceptAndPublish before generation closing message targets admissions = .ok after) :
     SequenceBound after := by
   have hcore := checked_core_success _ _ _ h
-  simp (config := { maxSteps := 1000000 }) [acceptAndPublishCore] at hcore
-  by_cases hc : segmentIdentityCollision before closing = true ∨
-      messageIdentityCollision before message = true
-  · simp only [if_pos hc] at hcore
-    contradiction
-  · simp only [if_neg hc] at hcore
-    by_cases hn : (targets.map (fun target => target.call)).Nodup
-    · simp only [if_pos hn] at hcore
-      by_cases hr : remoteTargetsMatchConfiguredRoutes before message targets = false
-      · simp only [if_pos hr] at hcore
-        contradiction
-      · simp only [if_neg hr] at hcore
-        by_cases hp : acceptedPublicationPresent before closing message targets = true ∧
-            acceptedToolsPresent before message = true
-        · simp only [if_pos hp] at hcore
-          split at hcore <;> try contradiction
-          cases hcore
-          exact hbound
-        · simp only [if_neg hp] at hcore
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          rename_i hsession
-          push_neg at hsession
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          cases hcore
-          apply SequenceBound.of_append (before := before) hbound
-          · rfl
-          · rfl
-          · simp [Transcript.TranscriptState.publishAcceptedAssistant]
-          · have hpub : before.transcript.PublishableTurn (messageTurn message) := by
-              simp_all
-            exact hpub.2.1
-    · simp only [if_neg hn] at hcore
-      contradiction
+  rcases acceptAndPublishCore_success_effect before after generation closing message targets
+    admissions hcore with ⟨rfl, _⟩ | ⟨_, _, hpub, rfl, _⟩
+  · exact hbound
+  · apply SequenceBound.of_append (before := before) hbound
+    · rfl
+    · rfl
+    · simp [Transcript.TranscriptState.publishAcceptedAssistant]
+    · exact hpub.2.1
 
 set_option maxHeartbeats 2000000 in
 set_option maxRecDepth 100000 in

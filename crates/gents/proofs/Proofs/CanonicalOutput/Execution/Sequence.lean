@@ -11,66 +11,49 @@ theorem accountOneOwnedTool_preserves_nextSeq
   split <;> try rfl
   split <;> rfl
 
-private theorem accountFold_preserves_nextSeq
-    (tools : List OwnedTool) (world : World) (generation : Generation) (interrupt : Bool) :
-    (tools.foldl (fun current original =>
-      let (tool, transcript) := accountOneOwnedTool current generation interrupt original
-      { current with
-        toolContexts := replaceOwnedTool current.toolContexts original.document tool
-        transcript := transcript }) world).transcript.nextSeq = world.transcript.nextSeq := by
-  induction tools generalizing world with
-  | nil => rfl
-  | cons tool rest ih =>
-      simp only [List.foldl_cons]
-      rw [ih]
-      exact accountOneOwnedTool_preserves_nextSeq world generation interrupt tool
-
-theorem accountOwnedTools_preserves_nextSeq
-    (world : World) (generation : Generation) (interrupt : Bool) :
-    (accountOwnedTools world generation interrupt).transcript.nextSeq =
-      world.transcript.nextSeq :=
-  accountFold_preserves_nextSeq world.toolContexts world generation interrupt
-
-private theorem accountFold_preserves_request_identity
+private theorem accountFold_preserves_frame
     (tools : List OwnedTool) (world : World) (generation : Generation) (interrupt : Bool) :
     let after := tools.foldl (fun current original =>
       let (tool, transcript) := accountOneOwnedTool current generation interrupt original
       { current with
         toolContexts := replaceOwnedTool current.toolContexts original.document tool
         transcript := transcript }) world
-    after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
+    after.transcript.nextSeq = world.transcript.nextSeq ∧
+      after.requestId = world.requestId ∧ after.sessionId = world.sessionId ∧
+      after.messages = world.messages := by
   induction tools generalizing world with
-  | nil => exact ⟨rfl, rfl⟩
+  | nil => exact ⟨rfl, rfl, rfl, rfl⟩
   | cons tool rest ih =>
-      simp only [List.foldl_cons]
-      exact ih _
+    simp only [List.foldl_cons]
+    have hrest := ih ({ world with
+      toolContexts := replaceOwnedTool world.toolContexts tool.document
+        (accountOneOwnedTool world generation interrupt tool).1
+      transcript := (accountOneOwnedTool world generation interrupt tool).2 })
+    exact ⟨hrest.1.trans (accountOneOwnedTool_preserves_nextSeq world generation interrupt tool),
+      hrest.2.1, hrest.2.2.1, hrest.2.2.2⟩
+
+theorem accountOwnedTools_preserves_nextSeq
+    (world : World) (generation : Generation) (interrupt : Bool) :
+    (accountOwnedTools world generation interrupt).transcript.nextSeq =
+      world.transcript.nextSeq :=
+  (accountFold_preserves_frame world.toolContexts world generation interrupt).1
 
 theorem accountOwnedTools_preserves_request_identity
     (world : World) (generation : Generation) (interrupt : Bool) :
     (accountOwnedTools world generation interrupt).requestId = world.requestId ∧
       (accountOwnedTools world generation interrupt).sessionId = world.sessionId :=
-  accountFold_preserves_request_identity world.toolContexts world generation interrupt
+  ⟨(accountFold_preserves_frame world.toolContexts world generation interrupt).2.1,
+    (accountFold_preserves_frame world.toolContexts world generation interrupt).2.2.1⟩
 
 theorem accountOwnedTools_preserves_sessionId
     (world : World) (generation : Generation) (interrupt : Bool) :
     (accountOwnedTools world generation interrupt).sessionId = world.sessionId :=
   (accountOwnedTools_preserves_request_identity world generation interrupt).2
 
-private theorem accountFold_preserves_messages
-    (tools : List OwnedTool) (world : World) (generation : Generation) (interrupt : Bool) :
-    (tools.foldl (fun current original =>
-      let (tool, transcript) := accountOneOwnedTool current generation interrupt original
-      { current with
-        toolContexts := replaceOwnedTool current.toolContexts original.document tool
-        transcript := transcript }) world).messages = world.messages := by
-  induction tools generalizing world with
-  | nil => rfl
-  | cons tool rest ih => simpa only [List.foldl_cons] using ih _
-
 theorem accountOwnedTools_preserves_messages
     (world : World) (generation : Generation) (interrupt : Bool) :
     (accountOwnedTools world generation interrupt).messages = world.messages :=
-  accountFold_preserves_messages world.toolContexts world generation interrupt
+  (accountFold_preserves_frame world.toolContexts world generation interrupt).2.2.2
 
 theorem accountOneMetadataOwnedTool_preserves_nextSeq
     (world : World) (generation : Generation) (tool : OwnedTool) :
@@ -81,45 +64,37 @@ theorem accountOneMetadataOwnedTool_preserves_nextSeq
   split <;> try rfl
   split <;> rfl
 
-private theorem accountMetadataFold_preserves_nextSeq
-    (tools : List OwnedTool) (world : World) (generation : Generation) :
-    (tools.foldl (fun current original =>
-      let (tool, transcript) := accountOneMetadataOwnedTool current generation original
-      { current with
-        toolContexts := replaceOwnedTool current.toolContexts original.document tool
-        transcript := transcript }) world).transcript.nextSeq = world.transcript.nextSeq := by
-  induction tools generalizing world with
-  | nil => rfl
-  | cons tool rest ih =>
-      simp only [List.foldl_cons]
-      rw [ih]
-      exact accountOneMetadataOwnedTool_preserves_nextSeq world generation tool
-
-theorem accountMetadataOwnedTools_preserves_nextSeq
-    (world : World) (generation : Generation) :
-    (accountMetadataOwnedTools world generation).transcript.nextSeq =
-      world.transcript.nextSeq :=
-  accountMetadataFold_preserves_nextSeq world.toolContexts world generation
-
-private theorem accountMetadataFold_preserves_request_identity
+private theorem accountMetadataFold_preserves_frame
     (tools : List OwnedTool) (world : World) (generation : Generation) :
     let after := tools.foldl (fun current original =>
       let (tool, transcript) := accountOneMetadataOwnedTool current generation original
       { current with
         toolContexts := replaceOwnedTool current.toolContexts original.document tool
         transcript := transcript }) world
-    after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
+    after.transcript.nextSeq = world.transcript.nextSeq ∧
+      after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
   induction tools generalizing world with
-  | nil => exact ⟨rfl, rfl⟩
+  | nil => exact ⟨rfl, rfl, rfl⟩
   | cons tool rest ih =>
-      simp only [List.foldl_cons]
-      exact ih _
+    simp only [List.foldl_cons]
+    have hrest := ih ({ world with
+      toolContexts := replaceOwnedTool world.toolContexts tool.document
+        (accountOneMetadataOwnedTool world generation tool).1
+      transcript := (accountOneMetadataOwnedTool world generation tool).2 })
+    exact ⟨hrest.1.trans (accountOneMetadataOwnedTool_preserves_nextSeq world generation tool),
+      hrest.2.1, hrest.2.2⟩
+
+theorem accountMetadataOwnedTools_preserves_nextSeq
+    (world : World) (generation : Generation) :
+    (accountMetadataOwnedTools world generation).transcript.nextSeq =
+      world.transcript.nextSeq :=
+  (accountMetadataFold_preserves_frame world.toolContexts world generation).1
 
 theorem accountMetadataOwnedTools_preserves_request_identity
     (world : World) (generation : Generation) :
     (accountMetadataOwnedTools world generation).requestId = world.requestId ∧
       (accountMetadataOwnedTools world generation).sessionId = world.sessionId :=
-  accountMetadataFold_preserves_request_identity world.toolContexts world generation
+  (accountMetadataFold_preserves_frame world.toolContexts world generation).2
 
 theorem prepareRecoveryItems_nextSeq_monotone
     (world : World) (expected fresh : Generation) (items : List RecoveryItem)
@@ -191,46 +166,16 @@ theorem revokeCorruptCore_preserves_request_identity
     | (solve | cases h; apply accountMetadataOwnedTools_preserves_request_identity)
     | split at h
 
-set_option maxHeartbeats 1000000 in
-set_option maxRecDepth 100000 in
 theorem acceptAndPublish_nextSeq_monotone
     (world after : World) (generation : Generation) (closing : Segment)
     (message : MessageEnvelope) (targets : List RemoteTarget) (admissions : List ToolAdmission)
     (h : acceptAndPublish world generation closing message targets admissions = .ok after) :
     world.transcript.nextSeq ≤ after.transcript.nextSeq := by
   have hcore := checked_core_success _ _ _ h
-  simp (config := { maxSteps := 1000000 }) [acceptAndPublishCore] at hcore
-  by_cases hc : segmentIdentityCollision world closing = true ∨
-      messageIdentityCollision world message = true
-  · simp only [if_pos hc] at hcore
-    contradiction
-  · simp only [if_neg hc] at hcore
-    by_cases hn : (targets.map (fun target => target.call)).Nodup
-    · simp only [if_pos hn] at hcore
-      by_cases hr : remoteTargetsMatchConfiguredRoutes world message targets = false
-      · simp only [if_pos hr] at hcore
-        contradiction
-      · simp only [if_neg hr] at hcore
-        by_cases hp : acceptedPublicationPresent world closing message targets = true ∧
-            acceptedToolsPresent world message = true
-        · simp only [if_pos hp] at hcore
-          split at hcore <;> try contradiction
-          cases hcore
-          exact Nat.le_refl _
-        · simp only [if_neg hp] at hcore
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          split at hcore <;> try contradiction
-          all_goals (cases hcore; simp [Transcript.TranscriptState.publishAcceptedAssistant])
-    · simp only [if_neg hn] at hcore
-      contradiction
+  rcases acceptAndPublishCore_success_effect world after generation closing message targets
+    admissions hcore with ⟨rfl, _⟩ | ⟨_, _, _, rfl, _⟩
+  · exact Nat.le_refl _
+  · simp [Transcript.TranscriptState.publishAcceptedAssistant]
 
 theorem publishAuthored_nextSeq_monotone
     (world after : World) (generation : Generation) (closing : Segment)

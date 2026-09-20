@@ -55,7 +55,6 @@ structure Result where
     publishNotification binding before document message = .ok execution
   notified : BackgroundCompletion.NotifiedCompletion
   queued : Option BackgroundCompletion.QueuedCompletion
-  wakeAlreadyPending : Bool
   sharedTranscript : notified.transcript = execution.transcript
 
 def observeNotification? (completion : BackgroundCompletion.TerminalCompletion)
@@ -106,7 +105,6 @@ def publishAndEnqueue? (before : World) (document : DocId)
           , published := hp
           , notified := notified
           , queued := queued
-          , wakeAlreadyPending := existing
           , sharedTranscript := hshared }
       else none
 

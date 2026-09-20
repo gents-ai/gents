@@ -177,16 +177,25 @@ def childActivation (result : Result) (configuredRoutes : List (DocId × Nat))
   , configuredRoutes := configuredRoutes, routesAuthenticated := routesAuthenticated
   , generation := generation, duration := duration, deadline := deadline }
 
+private theorem successful_publication_origin
+    (goal : Snapshot) (state : World) (actor : Gate.Actor) (now : Time)
+    (request : ClaimedRequest)
+    (binding : Binding) (entry : SessionQueue.QueueEntry) (result : Result)
+    (h : publishGoalChild? goal state actor now request binding entry = some result) :
+    result.beforeGoal = goal ∧ result.before = state ∧ result.request = request := by
+  unfold publishGoalChild? at h
+  dsimp only at h
+  repeat' split at h <;> try contradiction
+  all_goals rcases h with ⟨_, ⟨_, rfl⟩⟩; exact ⟨rfl, rfl, rfl⟩
+
 theorem successful_publication_uses_existing_goal_owner
     (goal : Snapshot) (state : World) (actor : Gate.Actor) (now : Time)
     (request : ClaimedRequest)
     (binding : Binding) (entry : SessionQueue.QueueEntry) (result : Result)
     (h : publishGoalChild? goal state actor now request binding entry = some result) :
     publishClaimed goal request true = (result.afterGoal, result.outcome) := by
-  unfold publishGoalChild? at h
-  dsimp only at h
-  repeat' split at h <;> try contradiction
-  all_goals rcases h with ⟨_, ⟨_, rfl⟩⟩; assumption
+  obtain ⟨hg, _, hr⟩ := successful_publication_origin goal state actor now request binding entry result h
+  simpa only [hg, hr] using result.ownerPublication
 
 theorem successful_publish_preserves_nextSeq
     (goal : Snapshot) (state : World) (actor : Gate.Actor) (now : Time)
@@ -195,27 +204,8 @@ theorem successful_publish_preserves_nextSeq
     (h : publishGoalChild? goal state actor now request binding entry = some result) :
     result.after.transcript.nextSeq =
       state.transcript.nextSeq := by
-  unfold publishGoalChild? at h
-  dsimp only at h
-  repeat' split at h <;> try contradiction
-  all_goals rcases h with ⟨_, ⟨_, rfl⟩⟩; rfl
-
-theorem fresh_publication_uses_session_queue_owner
-    (goal : Snapshot) (state : World) (actor : Gate.Actor) (now : Time)
-    (request : ClaimedRequest)
-    (binding : Binding) (entry : SessionQueue.QueueEntry) (result : Result)
-    (_h : publishGoalChild? goal state actor now request binding entry = some result)
-    (hfresh : result.outcome = .created) :
-    SessionQueue.step? result.before.queue (.coalescePending result.entry) =
-      some result.after.queue := result.freshEnqueued hfresh
-
-theorem replay_does_not_duplicate_queue_state
-    (goal : Snapshot) (state : World) (actor : Gate.Actor) (now : Time)
-    (request : ClaimedRequest)
-    (binding : Binding) (entry : SessionQueue.QueueEntry) (result : Result)
-    (_h : publishGoalChild? goal state actor now request binding entry = some result)
-    (hreplay : result.outcome = .recovered) :
-    result.after = result.before := result.replayInert hreplay
+  have origin := successful_publication_origin goal state actor now request binding entry result h
+  simpa only [origin.2.1] using result.nextSeqPreserved
 
 theorem paused_or_terminal_goal_cannot_fresh_publish
     (result : Result)

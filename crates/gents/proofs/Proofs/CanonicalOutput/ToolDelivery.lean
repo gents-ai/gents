@@ -126,10 +126,6 @@ def sourceClosed (records : List Segment) (request document : DocId) : Bool :=
   | .error _ => false
   | .ok record => closedRecordValid records request document record
 
-def terminalState : ToolExecution.ToolCallState → Bool
-  | .completed | .failed | .timedOut | .cancelled => true
-  | .pending | .running => false
-
 namespace Examples
 
 def first : Segment :=

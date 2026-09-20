@@ -176,7 +176,15 @@ constructs a successful activation trace from the existing ordinary-request
 fixture and applies both inductive proofs, rather than only checking its endpoint.
 
 Tool publication proofs now expose the actual replay-or-append effect on both
-headers and their allocator. Acceptance and header-only publication establish
+headers and their allocator. Provider acceptance likewise has one core success
+effect consumed by coherence, allocator, identity and sequence-bound proofs;
+accounting folds share frame proofs instead of separate field inductions.
+Tool append exposes its exact clock-only tool replacement, and close combines
+its publication frame with the existing checked lifecycle guarantee. These are
+operation effects, not a full tool-coherence induction. Goal publication consumes
+its stored proof evidence, and terminal classification uses the tool lifecycle
+owner's `isTerminal` rather than separate output-layer definitions.
+Acceptance and header-only publication establish
 tool projection coherence inside their cores, so their duplicate outer coherence
 checks are removed. The full tool-coherence and source-closure uniqueness
 invariants over the application trace remain outstanding; these two new

@@ -337,39 +337,8 @@ theorem evaluate_preserves_request_identity (operation : Operation) (before afte
   case accept generation closing message targets admissions =>
     have hcore := mapError_success Error.execution _ _ h
     replace hcore := checked_core_success _ _ _ hcore
-    simp (config := { maxSteps := 1000000 }) [acceptAndPublishCore] at hcore
-    by_cases hc : segmentIdentityCollision before closing = true ∨
-        messageIdentityCollision before message = true
-    · simp only [if_pos hc] at hcore
-      contradiction
-    · simp only [if_neg hc] at hcore
-      by_cases hn : (targets.map (fun target => target.call)).Nodup
-      · simp only [if_pos hn] at hcore
-        by_cases hr : remoteTargetsMatchConfiguredRoutes before message targets = false
-        · simp only [if_pos hr] at hcore
-          contradiction
-        · simp only [if_neg hr] at hcore
-          by_cases hp : acceptedPublicationPresent before closing message targets = true ∧
-              acceptedToolsPresent before message = true
-          · simp only [if_pos hp] at hcore
-            split at hcore <;> try contradiction
-            cases hcore
-            exact ⟨rfl, rfl⟩
-          · simp only [if_neg hp] at hcore
-            split at hcore <;> try contradiction
-            split at hcore <;> try contradiction
-            split at hcore <;> try contradiction
-            split at hcore <;> try contradiction
-            split at hcore <;> try contradiction
-            split at hcore <;> try contradiction
-            split at hcore <;> try contradiction
-            split at hcore <;> try contradiction
-            split at hcore <;> try contradiction
-            split at hcore <;> try contradiction
-            cases hcore
-            exact ⟨rfl, rfl⟩
-      · simp only [if_neg hn] at hcore
-        contradiction
+    rcases acceptAndPublishCore_success_effect before after generation closing message targets
+      admissions hcore with ⟨rfl, _⟩ | ⟨_, _, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
   all_goals
     have hcore := mapError_success Error.execution _ _ h
     try replace hcore := checked_core_success _ _ _ hcore
