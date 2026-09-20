@@ -322,6 +322,10 @@ pub struct AgentToolCallRow {
     pub lifecycle_state: Option<String>,
     #[serde(default)]
     pub child_request_id: Option<String>,
+    /// Physical accepted meta-call that created a separate native background
+    /// execution. Not a provider call ID; absent for directly requested tools.
+    #[serde(default)]
+    pub spawned_by_tool_call_doc_id: Option<String>,
     #[serde(default)]
     pub await_mode: Option<String>,
     #[serde(default)]
@@ -356,6 +360,16 @@ pub struct AgentToolCallRow {
     pub policy_network: Option<String>,
     #[serde(default)]
     pub cancel_cause: Option<String>,
+    /// Existing tool-owner handoff evidence. A cancellation intent is not proof
+    /// that an external process or remote child has stopped.
+    #[serde(default)]
+    pub cancel_cascade_intent_at: Option<String>,
+    #[serde(default)]
+    pub cancel_pending_remote_ack: Option<bool>,
+    #[serde(default)]
+    pub stuck_since: Option<String>,
+    #[serde(default)]
+    pub completion_notification_delivered_at: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<i64>,
 }

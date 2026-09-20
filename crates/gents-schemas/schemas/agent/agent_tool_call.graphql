@@ -10,6 +10,8 @@
 # closing record and assistant header before dispatch. Partial diagnostic headers may
 # name only terminal, nondispatchable rows. Dispatch/recovery read arguments
 # through the message block and recheck existing lifecycle authorization.
+# A separately spawned process is admitted by its accepted meta-call owner and
+# carries spawned_by_tool_call_doc_id; it is not another provider tool intent.
 # Remote hosts receive delegated_input instead of parent output dependencies:
 # document-level ACP cannot disclose only one stream of a mixed segment.
 type AgentToolCall @branchable {
@@ -25,7 +27,7 @@ type AgentToolCall @branchable {
     # Persistence/delivery state. A terminal failed tool may still use
     # "completed" here once its result or background notification is durable.
     status: String
-    # Authoritative execution outcome: pending, awaitingApproval, running,
+    # Authoritative execution outcome: pending, running,
     # completed, failed, timedOut, or cancelled.
     lifecycle_state: String @index
     started_at: DateTime
@@ -47,14 +49,22 @@ type AgentToolCall @branchable {
     cancel_policy: String
     cancel_cause: String
     child_request_id: String @index @immutable
+    # Separate spawn_process execution: exact accepted meta-call provenance.
+    # Same sequence/name is not sufficient when a turn has multiple spawns.
+    spawned_by_tool_call_doc_id: String @index @immutable
     spawn_target_did: String @index @immutable
     # DelegatedToolInput JSON: exact argument bytes and source provenance.
     # Required iff remotely delegated, absent on local calls; populated once
     # with accepted publication. No host grant to parent output is implied.
     delegated_input: JSON @immutable
     unclaimed_deadline_at: DateTime
+    # Durable cancellation/recovery handoff, not evidence the host has stopped.
+    # Generation recovery accounts for accepted pending/running calls in the
+    # same transaction; late acknowledgements/results retain this exact owner.
     cancel_cascade_intent_at: DateTime
     cancel_pending_remote_ack: Boolean
     stuck_since: DateTime
+    # Delivery is separate from lifecycle_state; a failed/cancelled/timedOut
+    # result can be durably published without changing its execution outcome.
     completion_notification_delivered_at: DateTime
 }

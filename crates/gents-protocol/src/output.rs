@@ -227,16 +227,18 @@ pub struct SegmentRun {
 }
 
 /// The existing authority that produced a source; never a new lease or host
-/// identity. Every record names it, which is what lets a reader or the lease
-/// owner classify unclosed output and ignore a superseded generation.
+/// identity. Every record names it, which lets the shared projection classify
+/// unclosed output and ignore a superseded generation. It never renews a lease.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutputWriter {
     /// A request execution generation. A superseded generation can still land
     /// an inert flush, but cannot close, publish, dispatch or terminalize.
     RequestExecution { execution_generation: String },
-    /// The tool lifecycle admits output until terminalization, and its
-    /// delivery owner admits authored completion notifications afterward.
+    /// The tool lifecycle admits output until terminalization. Its delivery
+    /// owner also admits an authored background-start receipt while running
+    /// and the separate completion notification afterward. The receipt does
+    /// not close the continuing tool output source.
     ToolExecution { tool_call_doc_id: String },
 }
 
@@ -341,6 +343,14 @@ pub enum MessagePublication {
         /// see TranscriptMessage. This is not permission to invent native metadata.
         execution_generation: String,
     },
+    /// Tool-owned invocation reply or completion notification. A background
+    /// invocation can reply with a native tool-result receipt while execution
+    /// remains running, then publish an ordinary-text notification on terminal
+    /// completion. Each publication retains its own immutable replay identity.
+    /// The existing notification/queue owner binds ordinary completion messages
+    /// to the coalesced wake request (or the parent for Goal-owned input-only
+    /// delivery). Payload references still name the originating tool's source;
+    /// publication request membership is not payload-source ownership.
     ToolDelivery {
         tool_call_doc_id: String,
     },
@@ -422,7 +432,10 @@ pub struct TranscriptMessage {
     pub agent_did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
-    /// Exact request this message belongs to. Absent only for history a fork
+    /// Exact request this message belongs to, not necessarily the request that
+    /// produced its referenced bytes. A background completion notification is
+    /// bound by the existing queue owner to its wake request; Goal-owned
+    /// input-only delivery stays parent-bound. Absent only for history a fork
     /// placed in a child session, which must not acquire live request
     /// membership. The logical `request_id` is not repeated here (#1425).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -681,6 +694,9 @@ pub struct LiveStream {
 pub enum LiveStreamState {
     /// No terminal fact is locally visible; this does not prove remote liveness.
     Unclosed,
+    /// Closure/publication is known but the exact message or its dependencies
+    /// are not yet reconstructable. Keep a validated contiguous preview while
+    /// reporting loading; never label a known-closed source as live activity.
     PendingPublication {
         outcome: OutputOutcome,
     },

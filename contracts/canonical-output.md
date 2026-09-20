@@ -65,6 +65,103 @@ retry boundary. Preserve call order and the cumulative invalid-tool budget: stop
 dispatch must account for every published undispatched call through the existing
 terminal owner, not silently drop it.
 
+### Request/tool ownership composition
+
+Accepted publication, dispatch, tool terminal output, result delivery and request
+termination share one authoritative session transcript and tool-document state.
+`ToolCallContext` is the existing lifecycle owner; its logical labels do not
+substitute for the physical `AgentToolCall`/request binding. A tool is bound to
+the exact accepted header's session, sequence and physical call document.
+Transcript tool rows are a checked projection of those lifecycle rows, not an
+independent execution machine. Publication installs pending lifecycle rows and
+their transcript projection in the same transaction; dispatch changes both.
+The shared transcript is session-wide: a previous request's background call may
+still deliver while the next request owns its lease. Generation numbers alone
+are not an ownership key. Cancellation/recovery must match the physical request
+and accepted header as well as the generation; delivery uses the originating
+call's request binding and never the currently active request's identity.
+`spawn_process` is an explicit exception to direct provider-intent membership:
+its separate native background execution row carries immutable
+`spawned_by_tool_call_doc_id`, naming the physical accepted meta-call that
+created it. Validate that parent and its configured operation through the
+existing spawn owner; matching a session/sequence/tool name alone is not
+provenance. The spawned row is not another assistant tool call and creates no
+invented provider reservation. Its lifecycle, output and completion notification
+retain the actual spawned document identity, while cancellation/recovery trace
+its request/generation ownership through the accepted parent call.
+That parent link is execution-admission provenance, not a new hydration grant.
+Output hydration follows the referenced spawned tool document and its request;
+it does not recursively expose the meta-call or parent arguments. Fork retention
+follows the canonical payload/header dependency graph, not arbitrary tool-row
+foreign keys.
+
+Normal request completion requires every started direct invocation to have its
+durable native reply. Foreground obligations additionally require terminal tool
+outcomes. A running foreground tool, or any started direct invocation whose reply
+has not been published, blocks normal completion. A separately spawned execution
+does not owe a second provider invocation reply. Never make this pass by
+automatically backgrounding or detaching the
+tool inside terminalization. An explicit existing tool-control operation may
+transfer a running call to background ownership first. Background mode and
+cancellation policy are separate: ordinary completion may leave owned background
+work running, while explicit interruption applies its cascade/detach policy.
+
+Recovery and exceptional termination cannot wait for an external process to
+acknowledge cancellation. In the same transaction as the generation swap or
+terminal decision, cancel exact owned pending calls before dispatch and hand
+running calls to the existing tool cancellation/recovery owner. Preserve their
+actual running lifecycle until terminal evidence arrives. Existing
+`cancel_cascade_intent_at`, `cancel_pending_remote_ack` and `stuck_since`
+observations represent the durable handoff; clearing parent in-flight ownership
+does not prove a host process stopped. Never resubmit a possibly-started effect
+as a new pending invocation. Unrelated requests' tools are untouched.
+
+Native restart recovery additionally requires the existing registry's exact
+physical-tool orphan observation; parent expiry is not proof of process absence.
+With no registered executor, recovery closes only already-committed output using
+a terminal-only Partial record. It may not invent a final flush. The ordinary
+notification still goes through the existing Goal/queue and native template owner.
+
+Tool delivery uses the session's single sequence allocator. Its canonical header,
+transcript row (native result or ordinary notification), delivery identity and
+tool-row projection commit together;
+replay reuses that exact publication and allocates no sequence. Execution outcome
+and delivery remain distinct: delivering a failed/cancelled/timed-out result
+does not change its lifecycle to completed. Pending direct-call cancellation may
+require a later empty output closure and native cancellation result; it must remain deliverable without
+redispatch. A late background result can close and publish after parent expiry
+or termination without renewing or reopening that request. Subagent bridges use
+the existing verified child-terminal owner, not a fabricated native completion.
+
+An invocation reply is not always execution completion. A background subagent
+returns a native `tool_result` receipt while its bridge remains running, then a
+separate ordinary-text completion notification after the child terminates.
+Preserve both publications and their independent replay identities. The receipt
+uses its own whole authored source under the tool writer; it does not close the
+still-running tool output source or claim a terminal lifecycle. The terminal
+notification follows the existing background-completion/Goal/session-queue
+owner, without appending a second copy of its transcript message. Native shapes
+distinguish the invocation reply from the notification; no new mutable response
+status is introduced. Compaction projects native provider call IDs, not physical
+tool-document IDs, and must retain the distinction between the initial native
+result and the later ordinary notification.
+
+The notification and continuation queue have one publication transaction. Without
+a Goal, the notification's `request_doc_id` names its coalesced wake request;
+Goal-owned input-only delivery remains parent-bound. This is publication
+membership, not the payload's provenance: references still resolve the exact
+originating tool/request source. Replay after a wake is claimed or finished uses
+the actual persisted notification-to-request binding and authenticated request
+source/key/session, not a bare active/terminal logical request ID or the tool's
+notification-delivered timestamp. Both request dependencies retain their existing
+ACP checks during hydration. Do not fabricate a second receipt column or let a
+tool publisher select an arbitrary request as the notification owner.
+
+The composed model must prove these cross-owner effects and sequence ordering,
+not merely accept isolated owner predicates. Native host stop/acknowledgement,
+remote replication latency and transaction isolation remain external evidence;
+receiving immutable delegated arguments alone never authorizes execution.
+
 ### Remote argument disclosure
 
 Remote subagent hosts retain argument-only disclosure. A multi-stream segment
@@ -203,9 +300,13 @@ a scheduled renewal alone cannot certify useful progress.
   winning twin or silently discard evidence.
 - **Integrity is separate from liveness.** Source append/publication/reconstruction
   still validate their own output. Invalid output does not corrupt the lease
-  deadline or prevent its independent renewal. A composed integrity-revocation
-  path is still required to terminate conflicted work without reconstructing it;
-  this lease change alone does not establish that escape or settle tool effects.
+  deadline or prevent its independent renewal. Composed integrity revocation uses
+  the existing policy-revoke generation CAS to terminate as dead/superseded
+  without reconstructing corrupt payloads. Exact immutable header/tool membership
+  still fences which pending calls are cancelled and which running calls receive
+  a reconciliation handoff. Preserve conflicting records as evidence; do not
+  manufacture a successful closure or claim external effects stopped. Tool
+  terminal acknowledgements remain independently deliverable after revocation.
 - **Timestamps describe output, not renewal authority.** The owner stamps
   `created_at` at admission, keeps source timestamps nondecreasing, and reuses
   them on replay. They never extend the request lease. The model's clock remains
@@ -240,6 +341,7 @@ benchmark holds it to:
 | Provider turn that fits one batch interval | 1 final-flush record + 1 header (+ pending tool rows), one transaction |
 | Whole authored or user message | 1 final-flush record + 1 header, one transaction |
 | Tool result | output flushes (closure on the last) + 1 header at delivery; +1 terminal-only record if already flushed |
+| Running background invocation receipt | 1 whole authored source with closure + 1 native-result header; separate from eventual output closure and completion notification |
 | Truncation markers, separators, notification wrappers | 0: inline literals in the header's presentation |
 | Retried attempt | +1 terminal-only Retracted record |
 | Closure/recovery after the final payload was already flushed | +1 terminal-only record; no old segment update |
@@ -301,6 +403,16 @@ require unrelated session history. Full-session hydration retains its exact mani
 and authorized reference-closure requirements. No range-fetch protocol, second
 hydration-completeness definition or selective-hydration optimization is added here;
 measure large-output transfer costs before proposing one.
+
+Live reconstruction selects the longest valid contiguous ordinal prefix, not all
+currently visible flushes as one all-or-nothing extent. A later ordinal arriving
+before an intermediate one must not erase the earlier preview. For the same source
+and writer, benign immutable arrivals preserve each displayed stream's declaration
+and byte prefix. A known closure bounds the preview and changes it to non-live
+pending publication; bytes outside that extent remain inert. Conflicts, denial,
+retraction, recovery narrowing and final presentation windows are explicit changes,
+not promises that every eventual rendered string extends the preview. This is one
+shared reconstruction rule, not another durable counter or consumer-local cache.
 
 Hydration selection must consume the canonical manifest builder for the exact
 admitted peer/requester/agent/session request, not a caller-supplied document set.
