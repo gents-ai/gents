@@ -1,5 +1,6 @@
 import Proofs.CanonicalOutput.Execution.Handover
 import Proofs.CanonicalOutput.Execution.GoalContinuation
+import Proofs.CanonicalOutput.Execution.RestartRecovery
 import Proofs.CompletionRetry.CanonicalGate
 
 /-!
@@ -13,22 +14,13 @@ private theorem begin_preserves_nextSeq
     (before after : World) (actor : Gate.Actor) (now : Time) (generation : Generation)
     (h : Handover.beginProcessing before actor now generation = some after) :
     after.transcript.nextSeq = before.transcript.nextSeq := by
-  unfold Handover.beginProcessing at h
-  dsimp only at h
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  cases h
-  rfl
+  rw [Handover.successful_begin_frame before after actor now generation h]
 
 private theorem finish_preserves_nextSeq
     (before : World) (after : Handover.FinishResult) (actor : Gate.Actor)
     (h : Handover.finishAndAcknowledge before actor = some after) :
     after.state.transcript.nextSeq = before.transcript.nextSeq := by
-  unfold Handover.finishAndAcknowledge at h
-  dsimp only at h
-  repeat' split at h <;> try contradiction
-  all_goals cases h; rfl
+  rw [Handover.successful_finish_frame before after actor h]
 
 /-- The request binding is the claim owner's observation, not a cast between
 logical queue IDs and physical output/request IDs. -/
@@ -210,6 +202,12 @@ inductive Trace : World → World → Prop where
       (result : GoalContinuation.Result)
       (h : GoalContinuation.publishGoalChild? goal before actor now request binding entry = some result) :
       Trace before result.after
+  | restart (before after : World) (actor : Gate.Actor) (now : Time)
+      (document : DocId) (binding : RestartRecovery.RestartBinding)
+      (closing : Segment) (wake : SessionQueue.QueueEntry)
+      (notificationBinding : WakeDocumentBinding)
+      (h : RestartRecovery.commit before actor now document binding closing wake
+        notificationBinding = some after) : Trace before after
   | trans {first second third : World} : Trace first second → Trace second third → Trace first third
 
 theorem provider_commit_nextSequence_monotone
@@ -298,6 +296,9 @@ theorem Trace.nextSequence_monotone {before after : World} (trace : Trace before
   | goal before goal actor now request binding entry result h =>
       exact Nat.le_of_eq (GoalContinuation.successful_publish_preserves_nextSeq
         goal before actor now request binding entry result h).symm
+  | restart before after actor now document binding closing wake notificationBinding h =>
+      exact RestartRecovery.successful_commit_nextSequence_monotone before after actor now
+        document binding closing wake notificationBinding h
   | trans _ _ first second => exact Nat.le_trans first second
 
 end CanonicalOutput.Execution.SessionComposition

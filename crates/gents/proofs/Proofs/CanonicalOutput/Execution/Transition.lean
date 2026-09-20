@@ -39,6 +39,13 @@ def freshMessageIdentity (world : World) (message : MessageEnvelope) : Bool :=
       (old.header.session == message.header.session && old.key == message.key) ||
       (old.header.session == message.header.session && old.sequence == message.sequence))
 
+theorem mapError_success {error₁ error₂ value : Type}
+    (f : error₁ → error₂) (result : Except error₁ value) (post : value)
+    (h : result.mapError f = .ok post) : result = .ok post := by
+  cases result with
+  | error error => simp [Except.mapError] at h
+  | ok value => simpa [Except.mapError] using h
+
 def checked (predicate : World → Bool) : Except Error World → Except Error World
   | .error error => .error error
   | .ok world => if predicate world then .ok world else .error .publicationIncomplete

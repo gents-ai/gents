@@ -91,13 +91,6 @@ def evaluate (operation : Operation) (world : World) : Except Error World :=
   | .terminalize generation outcome selection =>
       (Execution.terminalize world generation outcome selection).mapError .execution
 
-private theorem mapError_success {error₁ error₂ value : Type}
-    (f : error₁ → error₂) (result : Except error₁ value) (post : value)
-    (h : result.mapError f = .ok post) : result = .ok post := by
-  cases result with
-  | error error => simp [Except.mapError] at h
-  | ok value => simpa [Except.mapError] using h
-
 theorem evaluate_nextSequence_monotone (operation : Operation) (before after : World)
     (h : evaluate operation before = .ok after) :
     before.transcript.nextSeq ≤ after.transcript.nextSeq := by

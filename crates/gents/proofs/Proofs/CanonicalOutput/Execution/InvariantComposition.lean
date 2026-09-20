@@ -9,26 +9,22 @@ private theorem claim_sequenceBound (before after : World) (actor : Gate.Actor)
     (now : Time) (activation : Handover.Activation) (bound : SequenceBound before)
     (h : Handover.claimAndActivate before actor now activation = some after) :
     SequenceBound after := by
-  unfold Handover.claimAndActivate at h
-  dsimp only at h
-  repeat' first | contradiction | (solve | cases h; exact bound) | split at h
+  rw [Handover.successful_claim_frame before after actor now activation h]
+  exact bound
 
 private theorem begin_sequenceBound (before after : World) (actor : Gate.Actor)
     (now : Time) (generation : Generation) (bound : SequenceBound before)
     (h : Handover.beginProcessing before actor now generation = some after) :
     SequenceBound after := by
-  unfold Handover.beginProcessing at h
-  dsimp only at h
-  repeat' first | contradiction | (solve | cases h; exact bound) | split at h
+  rw [Handover.successful_begin_frame before after actor now generation h]
+  exact bound
 
 private theorem finish_sequenceBound (before : World) (after : Handover.FinishResult)
     (actor : Gate.Actor) (bound : SequenceBound before)
     (h : Handover.finishAndAcknowledge before actor = some after) :
     SequenceBound after.state := by
-  unfold Handover.finishAndAcknowledge at h
-  dsimp only at h
-  repeat' split at h <;> try contradiction
-  all_goals cases h; exact bound
+  rw [Handover.successful_finish_frame before after actor h]
+  exact bound
 
 private theorem goal_sequenceBound (goal : GoalAutomation.OperatorResume.Snapshot)
     (before : World) (actor : Gate.Actor) (now : Time)
@@ -125,6 +121,20 @@ theorem Trace.sequenceBound {before after : World} (trace : Trace before after)
       exact wake_sequenceBound before after actor now document message entry binding bound h
   | goal before goal actor now request binding entry result h =>
       exact goal_sequenceBound goal before actor now request binding entry result bound h
+  | restart before after actor now document binding closing wake notificationBinding h =>
+      obtain ⟨result, _, hc, hn, he, rfl⟩ := RestartRecovery.successful_commit_effect
+        before after actor now document binding closing wake notificationBinding h
+      have frame := ToolDelivery.close_preserves_publications _ _ document
+        (.native (RestartRecovery.closeAction result.cause)) closing hc
+      have closedBound : SequenceBound result.closed :=
+        bound.of_messages_eq frame.2.1 frame.1 (Nat.le_of_eq frame.2.2.symm)
+      have published := RestartRecovery.successful_enqueue_is_actual_notification
+        result.closed document binding.notification wake notificationBinding before.queue
+        result.continuation hn
+      have finalBound := ToolDelivery.publishWakeNotification_preserves_sequenceBound
+        result.closed result.continuation.execution document notificationBinding
+        binding.notification closedBound published
+      simpa only [he] using finalBound
   | trans _ _ first second => exact second (first bound)
 
 end CanonicalOutput.Execution.SessionComposition

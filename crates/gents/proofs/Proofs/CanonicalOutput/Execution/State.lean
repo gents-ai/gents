@@ -171,8 +171,6 @@ structure World where
     , usageCharged := 0 }
   deriving DecidableEq
 
-def World.lifecycle (world : World) : RequestState := world.lease.request
-
 def World.currentGeneration? (world : World) : Option Generation :=
   match world.lease.lease with
   | .active generation _ _ => some generation

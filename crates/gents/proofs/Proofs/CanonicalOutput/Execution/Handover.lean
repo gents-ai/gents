@@ -107,6 +107,27 @@ theorem successful_claim_has_exact_binding
   all_goals simp [freshRequestWorld] at *
   all_goals aesop
 
+/-- A successful claim changes exactly the physical-request and claim-control
+fields named here.  In particular, the durable session facts and retry owner
+are framed as one equation rather than independently reconstructed projections. -/
+theorem successful_claim_frame
+    (before after : World) (actor : Gate.Actor) (now : Time) (activation : Activation)
+    (h : claimAndActivate before actor now activation = some after) :
+    after =
+      { before with
+        requestId := after.requestId
+        remoteRoutes := after.remoteRoutes
+        lease := after.lease
+        terminalSelection := none
+        gateSchedule := after.gateSchedule
+        queue := after.queue
+        claimed := after.claimed } := by
+  unfold claimAndActivate at h
+  dsimp only at h
+  repeat' first | contradiction | split at h
+  all_goals cases h
+  all_goals rfl
+
 theorem successful_claim_preserves_session_facts
     (before after : World) (actor : Gate.Actor) (now : Time) (activation : Activation)
     (h : claimAndActivate before actor now activation = some after) :
@@ -117,10 +138,8 @@ theorem successful_claim_preserves_session_facts
     after.toolContexts = before.toolContexts ∧
     after.delegatedCalls = before.delegatedCalls ∧
     after.terminalSelection = none := by
-  unfold claimAndActivate at h
-  dsimp only at h
-  repeat' first | contradiction |
-    (solve | cases h; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩) | split at h
+  rw [successful_claim_frame before after actor now activation h]
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem successful_claim_preserves_nextSeq
     (before after : World) (actor : Gate.Actor) (now : Time) (activation : Activation)
@@ -147,6 +166,17 @@ def beginProcessing (state : World) (actor : Gate.Actor) (now : Time)
     | some lease =>
       some { world with lease := lease, gateSchedule :=
         { state.gateSchedule with phase := .releasable } }
+
+/-- Beginning processing writes only the execution lease and gate schedule. -/
+theorem successful_begin_frame
+    (before after : World) (actor : Gate.Actor) (now : Time) (generation : Generation)
+    (h : beginProcessing before actor now generation = some after) :
+    after = { before with lease := after.lease, gateSchedule := after.gateSchedule } := by
+  unfold beginProcessing at h
+  dsimp only at h
+  repeat' first | contradiction | split at h
+  all_goals cases h
+  all_goals rfl
 
 def terminalOutcome? (world : World) : Option RequestExecutionLease.Outcome :=
   match world.lease.lease with
@@ -195,5 +225,31 @@ def finishAndAcknowledge (state : World) (actor : Gate.Actor) : Option FinishRes
             queue := queue
             claimed := none },
           acknowledged, claimed.evidence, outcome ⟩
+
+/-- Finishing frames the full world outside gate scheduling and queue/claim
+control.  Acknowledgement, claim evidence, and outcome remain in `FinishResult`. -/
+theorem successful_finish_frame
+    (before : World) (after : FinishResult) (actor : Gate.Actor)
+    (h : finishAndAcknowledge before actor = some after) :
+    after.state =
+      { before with
+        gateSchedule := after.state.gateSchedule
+        queue := after.state.queue
+        claimed := after.state.claimed } := by
+  unfold finishAndAcknowledge at h
+  dsimp only at h
+  repeat' first | contradiction | split at h
+  all_goals cases h
+  all_goals rfl
+
+theorem successful_finish_clears_claim_control
+    (before : World) (after : FinishResult) (actor : Gate.Actor)
+    (h : finishAndAcknowledge before actor = some after) :
+    after.state.claimed = none ∧ after.state.queue.active = none := by
+  unfold finishAndAcknowledge at h
+  dsimp only at h
+  repeat' first | contradiction | split at h
+  all_goals cases h
+  all_goals exact ⟨rfl, finishActive_step_clears_active _ _ (by assumption)⟩
 
 end CanonicalOutput.Execution.Handover

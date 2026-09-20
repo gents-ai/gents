@@ -30,6 +30,20 @@ theorem idleClaimCoherent (state : World)
     ClaimCoherent state :=
   Or.inl ⟨hclaimed, hactive⟩
 
+private theorem claimed_with_initialRetry_coherent
+    (before claimed : World) (actor : Gate.Actor) (now : Time)
+    (activation : Handover.Activation) (scope : Nat)
+    (budget : CompletionRetry.Budget) (deadline : Option Time)
+    (h : Handover.claimAndActivate before actor now activation = some claimed) :
+    ClaimCoherent
+      { claimed with retry := initialRetry activation.request.document now scope budget deadline } := by
+  unfold Handover.claimAndActivate at h
+  dsimp only at h
+  repeat' first | contradiction | split at h
+  all_goals cases h
+  all_goals simp [ClaimCoherent, initialRetry, Handover.freshRequestWorld] at *
+  all_goals aesop
+
 theorem activation_preserves_claimCoherent
     (before after : World) (actor : Gate.Actor) (now : Time)
     (activation : Handover.Activation) (scope : Nat)
@@ -37,12 +51,14 @@ theorem activation_preserves_claimCoherent
     (h : activate before actor now activation scope budget deadline = some after) :
     ClaimCoherent after := by
   unfold activate at h
-  unfold Handover.claimAndActivate at h
-  dsimp only at h
-  repeat' first | contradiction | split at h
-  all_goals cases h
-  all_goals simp [ClaimCoherent, initialRetry, Handover.freshRequestWorld] at *
-  all_goals aesop
+  split at h <;> try contradiction
+  cases hc : Handover.claimAndActivate before actor now activation with
+  | none => simp [hc] at h
+  | some claimed =>
+      simp [hc] at h
+      cases h
+      exact claimed_with_initialRetry_coherent before claimed actor now activation scope budget
+        deadline hc
 
 private theorem preserve_from_control
     {before after : World} (coherent : ClaimCoherent before)
@@ -60,12 +76,13 @@ theorem finish_preserves_claimCoherent
     (before after : World) (actor : Gate.Actor)
     (acknowledged : List BackgroundCompletion.NotificationBinding)
     (h : finish before actor = some (after, acknowledged)) : ClaimCoherent after := by
-  unfold finish Handover.finishAndAcknowledge at h
-  dsimp only at h
-  repeat' first | contradiction |
-    (solve | cases h; exact Or.inl ⟨rfl,
-      Handover.finishActive_step_clears_active _ _ (by assumption)⟩) |
-    split at h
+  unfold finish at h
+  cases hc : Handover.finishAndAcknowledge before actor with
+  | none => simp [hc] at h
+  | some result =>
+      simp [hc] at h
+      rcases h with ⟨rfl, rfl⟩
+      exact Or.inl (Handover.successful_finish_clears_claim_control before result actor hc)
 
 private theorem completion_step_preserves_request
     (before after : CompletionRetry.State) (action : CompletionRetry.Action)
@@ -174,18 +191,12 @@ theorem Trace.claimCoherent {before after : World}
       | some session =>
           simp [hc] at h
           cases h
-          unfold Handover.claimAndActivate at hc
-          dsimp only at hc
-          repeat' first | contradiction | split at hc
-          all_goals cases hc
-          all_goals simp [ClaimCoherent, initialRetry, Handover.freshRequestWorld] at *
-          all_goals aesop
+          exact claimed_with_initialRetry_coherent prior session actor now
+            (GoalContinuation.childActivation result routes authenticated generation duration
+              leaseDeadline) scope budget deadline hc
   | beginProcessing before after actor now generation h =>
-      unfold Handover.beginProcessing at h
-      dsimp only at h
-      repeat' first | contradiction |
-        (solve | cases h; simpa [ClaimCoherent] using coherent) |
-        split at h
+      rw [Handover.successful_begin_frame before after actor now generation h]
+      exact coherent
   | wake before after actor now document message entry binding h =>
       have hf := BackgroundGate.successful_commit_preserves_claim_control
         before after actor now document message entry binding h
@@ -194,6 +205,11 @@ theorem Trace.claimCoherent {before after : World}
   | goal before goal actor now request binding entry result h =>
       have hf := GoalContinuation.successful_publication_preserves_claim_control
         goal before actor now request binding entry result h
+      exact preserve_from_control coherent hf.1 hf.2.1 hf.2.2.1 hf.2.2.2.2
+        (congrArg CompletionRetry.State.request hf.2.2.2.1)
+  | restart before after actor now document binding closing wake notificationBinding h =>
+      have hf := RestartRecovery.successful_commit_preserves_claim_control
+        before after actor now document binding closing wake notificationBinding h
       exact preserve_from_control coherent hf.1 hf.2.1 hf.2.2.1 hf.2.2.2.2
         (congrArg CompletionRetry.State.request hf.2.2.2.1)
   | trans left right ihleft ihrigh => exact ihrigh (ihleft coherent)

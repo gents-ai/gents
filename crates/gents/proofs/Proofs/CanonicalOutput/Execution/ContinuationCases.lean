@@ -166,16 +166,19 @@ def restartBinding (context : ToolExecution.ToolCallContext)
     notification := restartNotification
     authenticated := true }
 
+def restartReadyWorld : Option World := do
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
+    [foregroundAdmission]).toOption
+  let dispatched ← (dispatch accepted 7 permit).toOption
+  let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
+  (ToolDelivery.appendToolOutput backgrounded 600 restartRawOutput).toOption
+
 /-- The restart adapter consumes an exact physical binding.  A live process
 cannot be recovered, and the same legacy logical context cannot select another
 physical document.  The valid orphan path closes and then publishes/enqueues
 through the same shared owners as a normal late completion. -/
 def restartRecoveryCases : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [foregroundAdmission]).toOption
-  let dispatched ← (dispatch accepted 7 permit).toOption
-  let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
-  let withOutput ← (ToolDelivery.appendToolOutput backgrounded 600 restartRawOutput).toOption
+  let withOutput ← restartReadyWorld
   let tool ← ownedToolByDocument? withOutput 600
   let binding := restartBinding tool.context
   let notificationBinding := wakeBinding restartNotification
@@ -195,5 +198,47 @@ def restartRecoveryCases : Option Bool := do
 
 theorem restart_requires_orphaned_process_and_exact_physical_document :
     restartRecoveryCases = some true := by native_decide
+
+def restartGateInput : Option (World × RestartRecovery.RestartBinding) := do
+  let ready ← restartReadyWorld
+  let tool ← ownedToolByDocument? ready 600
+  let held ← Gate.acquire (Gate.initial ready) 1 true
+  pure ({ held with queue := wakeQueue }, restartBinding tool.context)
+
+/-- The application boundary commits the wake queue as well as output, admits
+only the current holder, and does not turn parent expiry into orphan evidence. -/
+def restartGateCase : Option Bool := do
+  let (before, binding) ← restartGateInput
+  let notificationBinding := wakeBinding restartNotification
+  let after ← RestartRecovery.commit before 1 5 600 binding
+    restartTerminalClose wakeEntry notificationBinding
+  let later ← RestartRecovery.commit before 1 6 600
+    { binding with notification := { binding.notification with createdAt := 6 } }
+    { restartTerminalClose with createdAt := 6 } wakeEntry notificationBinding
+  let tool ← ownedToolByDocument? after 600
+  pure (tool.context.state == .cancelled &&
+    after.messages.contains restartNotification &&
+    after.queue.pending.contains wakeEntry &&
+    after.queue.active == before.queue.active &&
+    after.gateOwner == some 1 && after.gateSchedule.phase == .releasable &&
+    after.lease == before.lease &&
+    later.lease == { before.lease with now := 6 } &&
+    (RestartRecovery.commit before 2 5 600 binding
+      restartTerminalClose wakeEntry notificationBinding).isNone &&
+    (RestartRecovery.commit before 1 4 600 binding
+      restartTerminalClose wakeEntry notificationBinding).isNone &&
+    (RestartRecovery.commit
+      { before with gateSchedule := { before.gateSchedule with phase := .releasable } }
+      1 5 600 binding restartTerminalClose wakeEntry notificationBinding).isNone &&
+    (RestartRecovery.commit
+      { before with gateSchedule :=
+        { before.gateSchedule with independent := false, siblingWaiting := true } }
+      1 5 600 binding restartTerminalClose wakeEntry notificationBinding).isNone &&
+    (RestartRecovery.commit before 1 5 600
+      { binding with observation := { binding.observation with executionRegistered := true } }
+      restartTerminalClose wakeEntry notificationBinding).isNone)
+
+theorem restart_gate_commits_queue_with_clock_only_progress_and_rejects_invalid_admission :
+    restartGateCase = some true := by native_decide
 
 end CanonicalOutput.Execution.ContinuationCases

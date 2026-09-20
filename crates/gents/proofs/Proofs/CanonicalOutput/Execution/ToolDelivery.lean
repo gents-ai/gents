@@ -77,6 +77,13 @@ theorem tool_write_preserves_request_identity {before after : World}
   obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
   exact ⟨rfl, rfl⟩
 
+theorem tool_write_preserves_composed_control {before after : World}
+    {result : Except Error ToolWrite} (h : ToolWrite.lift before result = .ok after) :
+    after.queue = before.queue ∧ after.claimed = before.claimed ∧
+      after.retry = before.retry := by
+  obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
+  exact ⟨rfl, rfl, rfl⟩
+
 inductive CloseAuthority where
   /-- A confirmed native lifecycle result. A cancellation request by itself is
   not this evidence; `.cancelDuringRun` means the host stop was confirmed. -/

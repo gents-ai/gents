@@ -51,13 +51,6 @@ theorem SequenceBound.of_append {before after : World} {message : MessageEnvelop
     subst candidate
     simpa [hsequence] using hnext
 
-private theorem mapError_success {error₁ error₂ value : Type}
-    (f : error₁ → error₂) (result : Except error₁ value) (post : value)
-    (h : result.mapError f = .ok post) : result = .ok post := by
-  cases result with
-  | error error => simp [Except.mapError] at h
-  | ok value => simpa [Except.mapError] using h
-
 set_option maxHeartbeats 1000000 in
 theorem renew_preserves_sequenceBound (before after : World) (generation : Generation)
     (deadline : Time) (hbound : SequenceBound before)

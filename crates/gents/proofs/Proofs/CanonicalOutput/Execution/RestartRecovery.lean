@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.BackgroundContinuation
+import Proofs.CanonicalOutput.Execution.BackgroundGate
 import Proofs.Recovery.Sweeps.BackgroundRestart
 
 /-!
@@ -143,23 +143,153 @@ def recoverAndNotify? (before : World) (document : DocId)
         else none
   else none
 
-theorem successful_restart_recovery_uses_existing_owners
-    (before : World) (document : DocId)
+theorem successful_recovery_origin
+    (before : World) (document : DocId) (binding : RestartBinding) (closing : Segment)
+    (wake : SessionQueue.QueueEntry) (notificationBinding : WakeDocumentBinding)
+    (queue : SessionQueue.SessionQueueState) (result : Result)
+    (h : recoverAndNotify? before document binding closing wake notificationBinding queue =
+      some result) :
+    result.before = before ∧ result.document = document ∧ result.restartBinding = binding ∧
+      result.closing = closing ∧ result.message = binding.notification ∧ result.wake = wake ∧
+      result.notificationBinding = notificationBinding ∧ result.queue = queue := by
+  unfold recoverAndNotify? at h
+  repeat' split at h <;> try contradiction
+  all_goals cases h
+  all_goals exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+
+theorem successful_enqueue_is_actual_notification
+    (before : World) (document : DocId) (message : MessageEnvelope)
+    (wake : SessionQueue.QueueEntry) (binding : WakeDocumentBinding)
+    (queue : SessionQueue.SessionQueueState) (result : BackgroundContinuation.Result)
+    (h : BackgroundContinuation.publishAndEnqueue? before document message wake binding queue =
+      some result) :
+    ToolDelivery.publishWakeNotification before document binding message = .ok result.execution := by
+  unfold BackgroundContinuation.publishAndEnqueue? at h
+  split at h
+  · contradiction
+  next execution hp =>
+    cases ht : ownedToolByDocument? execution document with
+    | none => simp [ht] at h
+    | some tool =>
+        simp [ht] at h
+        rcases h with ⟨_, _, _, _, h⟩
+        cases ho : BackgroundContinuation.observeNotification?
+            { toolState := tool.context.state
+            , notificationMessageId := message.header.id, wake := wake }
+            execution.transcript with
+        | none => simp [ho] at h
+        | some notified =>
+          simp [ho] at h
+          repeat' split at h <;> try contradiction
+          all_goals rcases h with ⟨_, h⟩
+          all_goals try contradiction
+          all_goals cases h
+          all_goals simpa [BackgroundContinuation.publishNotification] using hp
+
+/-- Restart closure and its ordinary background notification commit under the
+same storage holder.  The recovery adapter continues to reuse the close,
+notification, and queue owners; this wrapper only supplies their shared atomic
+boundary and installs the queue result they computed from the current world. -/
+def commit (state : World) (actor : Gate.Actor) (now : Time) (document : DocId)
+    (binding : RestartBinding) (closing : Segment)
+    (wake : SessionQueue.QueueEntry)
+    (notificationBinding : WakeDocumentBinding) : Option World :=
+  if state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
+      !StorageWriteGate.pollable state.gateSchedule || now < state.lease.now then none
+  else
+    let current := Gate.atTime state now
+    match recoverAndNotify? current document binding closing wake notificationBinding
+        state.queue with
+    | none => none
+    | some result => some
+        { result.execution with
+          gateOwner := state.gateOwner
+          gateSchedule := { state.gateSchedule with phase := .releasable }
+          queue := BackgroundGate.committedQueue state.queue result.continuation }
+
+theorem successful_commit_effect
+    (before after : World) (actor : Gate.Actor) (now : Time) (document : DocId)
     (binding : RestartBinding) (closing : Segment) (wake : SessionQueue.QueueEntry)
     (notificationBinding : WakeDocumentBinding)
-    (queue : SessionQueue.SessionQueueState) (result : Result)
-    (_h : recoverAndNotify? before document binding closing wake notificationBinding queue = some result) :
-    restartBindingValid result.before result.document result.restartBinding ∧
-      restartClosingValid result.before result.restartBindingTool result.closing ∧
-      restartEvidence? result.observation = some (result.cause, result.obligation) ∧
-      ToolDelivery.closeToolOutput result.before result.document
-          (.native (closeAction result.cause)) result.closing = .ok result.closed ∧
-      BackgroundContinuation.publishAndEnqueue? result.closed result.document
-        result.message result.wake result.notificationBinding result.queue = some result.continuation ∧
-      result.continuation.execution = result.execution :=
-  ⟨result.bindingValid, result.closingValid, result.evidence, result.closedBySharedOwner,
-    result.notifiedBySharedOwner,
-    result.continuationExecution⟩
+    (h : commit before actor now document binding closing wake notificationBinding = some after) :
+    ∃ result,
+      recoverAndNotify? (Gate.atTime before now) document binding closing wake
+          notificationBinding before.queue = some result ∧
+      ToolDelivery.closeToolOutput (Gate.atTime before now) document
+          (.native (closeAction result.cause)) closing = .ok result.closed ∧
+      BackgroundContinuation.publishAndEnqueue? result.closed document
+          binding.notification wake notificationBinding before.queue = some result.continuation ∧
+      result.continuation.execution = result.execution ∧
+      after = { result.execution with
+        gateOwner := before.gateOwner
+        gateSchedule := { before.gateSchedule with phase := .releasable }
+        queue := BackgroundGate.committedQueue before.queue result.continuation } := by
+  unfold commit at h
+  split at h
+  · contradiction
+  · cases hr : recoverAndNotify? (Gate.atTime before now) document binding closing wake
+        notificationBinding before.queue with
+    | none => simp [hr] at h
+    | some result =>
+        simp [hr] at h
+        cases h
+        have origin := successful_recovery_origin _ _ _ _ _ _ _ result hr
+        refine ⟨result, rfl, ?_, ?_, result.continuationExecution, rfl⟩
+        · simpa [origin.1, origin.2.1, origin.2.2.2.1] using
+            result.closedBySharedOwner
+        · simpa [origin.2.1, origin.2.2.2.2.1, origin.2.2.2.2.2.1,
+            origin.2.2.2.2.2.2.1, origin.2.2.2.2.2.2.2] using
+            result.notifiedBySharedOwner
+
+theorem successful_commit_preserves_claim_control
+    (before after : World) (actor : Gate.Actor) (now : Time) (document : DocId)
+    (binding : RestartBinding) (closing : Segment) (wake : SessionQueue.QueueEntry)
+    (notificationBinding : WakeDocumentBinding)
+    (h : commit before actor now document binding closing wake notificationBinding = some after) :
+    after.requestId = before.requestId ∧ after.sessionId = before.sessionId ∧
+      after.claimed = before.claimed ∧ after.retry = before.retry ∧
+      after.queue.active = before.queue.active := by
+  obtain ⟨result, _, hc, hn, he, hafter⟩ :=
+    successful_commit_effect _ _ _ _ _ _ _ _ _ h
+  subst after
+  have hpublished := successful_enqueue_is_actual_notification
+    result.closed document binding.notification wake notificationBinding before.queue
+      result.continuation hn
+  rw [he] at hpublished
+  have hclose := ToolDelivery.tool_write_preserves_request_identity hc
+  have hcloseControl := ToolDelivery.tool_write_preserves_composed_control hc
+  have hnotify := ToolDelivery.wake_notification_preserves_composed_control
+    result.closed result.execution document notificationBinding binding.notification
+      hpublished
+  have hactive := BackgroundContinuation.successful_enqueue_preserves_active
+    result.closed document binding.notification wake notificationBinding before.queue
+      result.continuation hn
+  exact ⟨hnotify.1.trans hclose.1, hnotify.2.1.trans hclose.2,
+    hnotify.2.2.2.1.trans hcloseControl.2.1,
+    hnotify.2.2.2.2.trans hcloseControl.2.2,
+    by
+      cases hq : result.continuation.queued <;>
+        simp [hq, BackgroundGate.committedQueue] at hactive ⊢
+      exact hactive⟩
+
+theorem successful_commit_nextSequence_monotone
+    (before after : World) (actor : Gate.Actor) (now : Time) (document : DocId)
+    (binding : RestartBinding) (closing : Segment) (wake : SessionQueue.QueueEntry)
+    (notificationBinding : WakeDocumentBinding)
+    (h : commit before actor now document binding closing wake notificationBinding = some after) :
+    before.transcript.nextSeq ≤ after.transcript.nextSeq := by
+  obtain ⟨result, _, hc, hn, he, hafter⟩ :=
+    successful_commit_effect _ _ _ _ _ _ _ _ _ h
+  subst after
+  have hpublished := successful_enqueue_is_actual_notification
+    result.closed document binding.notification wake notificationBinding before.queue
+      result.continuation hn
+  rw [he] at hpublished
+  have hclose := ToolDelivery.close_preserves_nextSeq _ _ document
+    (.native (closeAction result.cause)) closing hc
+  have hnotify := ToolDelivery.wake_notification_nextSeq_monotone
+    result.closed result.execution document notificationBinding binding.notification hpublished
+  exact Nat.le_of_eq (by simpa [Gate.atTime] using hclose.symm) |>.trans hnotify
 
 theorem live_registered_process_cannot_use_restart_adapter
     (before : World) (document : DocId)
