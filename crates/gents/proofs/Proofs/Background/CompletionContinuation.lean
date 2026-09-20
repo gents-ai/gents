@@ -42,11 +42,19 @@ structure NotifiedCompletion where
   preTranscript : Transcript.TranscriptState
   transcript : Transcript.TranscriptState
   terminal : isTerminal completion.toolState
-  appended :
-    transcript =
-      preTranscript.appendUserMessage
-        completion.notificationMessageId
-        Transcript.MessageKind.ordinary
+  /-- Fresh publication retains the executable append equation. Recovery may
+  instead observe the exact immutable row in a transcript that has since
+  advanced; in that case `freshAppend` is false and `durable` is authoritative. -/
+  freshAppend : Bool
+  appended : freshAppend = true →
+    transcript = preTranscript.appendUserMessage
+      completion.notificationMessageId Transcript.MessageKind.ordinary
+  durable : ∃ row,
+    row ∈ transcript.messages ∧
+    row.messageId = completion.notificationMessageId ∧
+    row.sessionId = transcript.sessionId ∧
+    row.role = Transcript.MessageRole.user ∧
+    row.kind = Transcript.MessageKind.ordinary
 
 /-- Append the model-visible notification. Live work cannot enter this stage. -/
 def appendNotification?
@@ -62,7 +70,15 @@ def appendNotification?
             completion.notificationMessageId
             Transcript.MessageKind.ordinary
       , terminal := h_terminal
-      , appended := rfl
+      , freshAppend := true
+      , appended := fun _ => rfl
+      , durable := by
+          refine ⟨{ messageId := completion.notificationMessageId
+                    , sessionId := pre.sessionId
+                    , sequence := pre.nextSeq
+                    , role := .user
+                    , kind := .ordinary }, ?_, rfl, rfl, rfl, rfl⟩
+          simp [Transcript.TranscriptState.appendUserMessage]
       }
   else
     none
@@ -193,18 +209,7 @@ def HasNotification (notified : NotifiedCompletion) : Prop :=
 theorem notified_completion_has_durable_message
     (notified : NotifiedCompletion) :
     HasNotification notified := by
-  let row : Transcript.MessageRow :=
-    { messageId := notified.completion.notificationMessageId
-    , sessionId := notified.preTranscript.sessionId
-    , sequence := notified.preTranscript.nextSeq
-    , role := .user
-    , kind := .ordinary
-    }
-  refine ⟨row, ?_, rfl, ?_, rfl, rfl⟩
-  · rw [notified.appended]
-    simp [Transcript.TranscriptState.appendUserMessage, row]
-  · rw [notified.appended]
-    rfl
+  exact notified.durable
 
 theorem goal_owned_delivery_retains_notification_without_wake
     (status : Goals.Status) (notified : NotifiedCompletion)

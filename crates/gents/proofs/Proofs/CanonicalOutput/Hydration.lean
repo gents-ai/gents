@@ -116,7 +116,12 @@ def lookupMessage (messages : List MessageEnvelope) (denied : List DocId) (id : 
   if id ∈ denied then .error .headerDenied
   else match uniqueRecord Error.headerUnavailable .conflictingMessages
       (messages.filter (fun message => message.header.id == id)) with
-    | .ok message => .ok message
+    | .ok message =>
+        if messages.any (fun other => other != message &&
+            other.header.session == message.header.session &&
+            (other.key == message.key || other.sequence == message.sequence)) then
+          .error .conflictingMessages
+        else .ok message
     | .error error => .error error
 
 def checkedOrigin (header : Header) : Except Error (Option DocId) :=
@@ -427,14 +432,33 @@ def cycleLeft : MessageEnvelope :=
   { childMessage with header :=
       { childMessage.header with id := 210, origin := some 211, publication := .fork 211 } }
 def cycleRight : MessageEnvelope :=
-  { childMessage with header :=
-      { childMessage.header with id := 211, origin := some 210, publication := .fork 210 } }
+  { childMessage with
+    header := { childMessage.header with
+      id := 211, origin := some 210, publication := .fork 210 }
+    key := "cycle-right"
+    sequence := 1 }
 
 example : resultMatches
     (buildManifest scope 2 [] [210] [] [cycleLeft, cycleRight] [closing]
       (access ++ [⟨scope, ⟨.agentMessage, 210⟩, .authorized⟩,
         ⟨scope, ⟨.agentMessage, 211⟩, .authorized⟩]) [] [])
     (.error .invalidOrigin) = true := by native_decide
+
+def sameKeyTwin : MessageEnvelope :=
+  { originMessage with header := { originMessage.header with id := 299 }, sequence := 1 }
+
+def sameSequenceTwin : MessageEnvelope :=
+  { originMessage with header := { originMessage.header with id := 298 }, key := "other" }
+
+def isMessageConflict : Except Error MessageEnvelope → Bool
+  | .error .conflictingMessages => true
+  | _ => false
+
+example : isMessageConflict (lookupMessage [originMessage, sameKeyTwin] []
+    originMessage.header.id) = true := by native_decide
+
+example : isMessageConflict (lookupMessage [originMessage, sameSequenceTwin] []
+    originMessage.header.id) = true := by native_decide
 
 end Examples
 end CanonicalOutput.Hydration

@@ -35,8 +35,8 @@ private instance (s : TranscriptState) : Decidable s.ToolCallReservedByMessage :
   unfold TranscriptState.ToolCallReservedByMessage TranscriptState.ReservedByPersistedMessage
   infer_instance
 
-private instance (s : TranscriptState) : Decidable s.CompletedToolCallsPaired := by
-  unfold TranscriptState.CompletedToolCallsPaired
+private instance (s : TranscriptState) : Decidable s.DeliveredToolCallsPaired := by
+  unfold TranscriptState.DeliveredToolCallsPaired
   have inst (call : ToolCallRow) : Decidable
       (∀ key, call.resultKey = some key → s.toolResultMessageCount key = 1) := by
     cases hk : call.resultKey <;> simp [hk] <;> infer_instance
@@ -46,7 +46,7 @@ private instance (s : TranscriptState) : Decidable s.ToolResultMessagesPaired :=
   unfold TranscriptState.ToolResultMessagesPaired
   have inst (row : MessageRow) : Decidable
       (∀ callId key, row.kind = .toolResult callId key → ∃ call ∈ s.toolCalls,
-        call.callId = callId ∧ call.state = .completed ∧ call.resultKey = some key) := by
+        call.callId = callId ∧ call.resultKey = some key) := by
     cases hk : row.kind <;> simp [hk] <;> infer_instance
   exact inferInstance
 

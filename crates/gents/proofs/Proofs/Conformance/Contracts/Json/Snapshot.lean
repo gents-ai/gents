@@ -53,6 +53,7 @@ import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 import Proofs.Conformance.RootAdmission
+import Proofs.Conformance.Contracts.Json.ExecutionGate
 
 namespace Conformance.Contracts
 
@@ -97,6 +98,8 @@ def snapshotJson : String :=
       ++ Conformance.RequestExecutionLeaseContracts.leaseCasesJson ++ ","
     ++ "\"request_execution_lease_trace_cases\":"
       ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
+    ++ "\"canonical_execution_gate_cases\":"
+      ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"inference_registry_cases\":"
       ++ Conformance.InferenceRegistry.casesJson ++ ","
     ++ "\"process_transition_cases\":"

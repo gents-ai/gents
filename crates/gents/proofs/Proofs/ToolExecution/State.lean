@@ -76,7 +76,7 @@ structure ToolCallContext where
   awaitMode      : Subagent.AwaitMode := .foreground
   cancelPolicy   : Subagent.CancelPolicy := .cascade
   childRequestId : Option RequestId := none
-  deriving Repr
+  deriving DecidableEq, Repr
 
 namespace ToolCallContext
 

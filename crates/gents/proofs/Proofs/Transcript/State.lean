@@ -196,23 +196,21 @@ def ToolCallReservedByMessage (s : TranscriptState) : Prop :=
   ∀ call, call ∈ s.toolCalls →
     ReservedByPersistedMessage s call
 
-def CompletedToolCallsPaired (s : TranscriptState) : Prop :=
+def DeliveredToolCallsPaired (s : TranscriptState) : Prop :=
   ∀ call, call ∈ s.toolCalls →
-    call.state = .completed →
-      ∀ key, call.resultKey = some key →
-        s.toolResultMessageCount key = 1
+    ∀ key, call.resultKey = some key →
+      s.toolResultMessageCount key = 1
 
 def ToolResultMessagesPaired (s : TranscriptState) : Prop :=
   ∀ row, row ∈ s.messages →
     ∀ callId key, row.kind = .toolResult callId key →
       ∃ call, call ∈ s.toolCalls ∧
         call.callId = callId ∧
-        call.state = .completed ∧
         call.resultKey = some key
 
 def PairClosed (s : TranscriptState) : Prop :=
   s.ToolCallReservedByMessage ∧
-    s.CompletedToolCallsPaired ∧
+    s.DeliveredToolCallsPaired ∧
     s.ToolResultMessagesPaired
 
 def StrongDrain (s : TranscriptState) : Prop :=
@@ -350,10 +348,26 @@ def dispatchToolCall (s : TranscriptState)
     inFlight := insert callId s.inFlight
   }
 
-def completeToolWithResult (s : TranscriptState)
+def dispatchToolCallWithMode (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) (mode : Subagent.AwaitMode) : TranscriptState :=
+  let dispatched := s.dispatchToolCall callId
+  match mode with
+  | .foreground => dispatched
+  | .background => { dispatched with inFlight := dispatched.inFlight.erase callId }
+
+def releaseParentInFlight (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) : TranscriptState :=
+  { s with inFlight := s.inFlight.erase callId }
+
+def claimParentInFlight (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) : TranscriptState :=
+  { s with inFlight := insert callId s.inFlight }
+
+def publishToolResult (s : TranscriptState)
     (callId : ToolExecution.ToolCallId)
     (messageId : MessageId)
-    (key : ToolResultKey) : TranscriptState :=
+    (key : ToolResultKey)
+    (terminal : ToolExecution.ToolCallState) : TranscriptState :=
   if s.hasToolResultKey key then s else
   { s with
     nextSeq := s.nextSeq + 1
@@ -364,9 +378,15 @@ def completeToolWithResult (s : TranscriptState)
        , role := .user
        , kind := .toolResult callId key }]
     toolCalls := replaceToolCall s.toolCalls callId
-      (fun row => { row with state := .completed, resultKey := some key })
+      (fun row => { row with state := terminal, resultKey := some key })
     inFlight := s.inFlight.erase callId
   }
+
+def completeToolWithResult (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId)
+    (messageId : MessageId)
+    (key : ToolResultKey) : TranscriptState :=
+  s.publishToolResult callId messageId key .completed
 
 def terminalizeToolCall (s : TranscriptState)
     (callId : ToolExecution.ToolCallId)

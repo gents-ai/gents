@@ -4,12 +4,13 @@ This directory contains the Lean 4 model for `gents`.
 
 ## Canonical output stack (#1571): Lean contract layer
 
-Status: not ready for the conformance handoff. The explicit-renewal revision
-separates liveness from output, but request/tool completion and recovery still
-need shared lifecycle/sequence ownership; reordered delivery still needs a
-non-rewinding partial preview; integrity revocation, retention and existing-install
-upgrade behavior remain open. A green Lean build is not evidence those seams are
-closed.
+Status: composed Lean revision validated; native conformance and implementation
+remain the next layers, not completed coverage. Explicit renewal separates
+liveness from output. The request/tool revision below composes lifecycle and
+delivery in a shared session world. The composition map records the checked
+joins and their limits, not a universal application-correctness theorem.
+Retention and existing-install upgrade behavior remain product boundaries; no
+garbage collector, migration conversion or data wipe is introduced here.
 
 Branch `feat/1571-canonical-transcript-lean` targets
 `feat/1571-canonical-transcript` (original baseline `3eaff8f16`). Foundational
@@ -22,8 +23,10 @@ presentation windows, conservative recovery text, and exact terminal selection.
 `Execution` composes these facts with the lease and transcript owners; producer
 acceptance publishes closure, header and pending tool intent atomically before
 dispatch. Recovery covers all unresolved provider sources before swapping the
-generation. `ToolDelivery` uses the existing tool lifecycle independently of the
-parent request, including partial results wrapped in complete notifications.
+generation. `Execution/ToolDelivery` applies the existing tool lifecycle and
+bridge transitions to that same world, including partial results wrapped in
+complete notifications. `ToolDelivery` is now only the source-validation kernel;
+it has no independent world, delivery flag or sequence allocator.
 
 `StreamingResponse` is now a pure immutable-output projection, not a mutable
 response lifecycle. Request-only status remains in `Client`; missing output does
@@ -78,8 +81,43 @@ Fresh Complete publication checks the entire authoritative data extent and
 timestamp order. Reconstruction and exact replay still ignore late facts outside
 the committed extent. Recovery replay validates committed artifacts independently
 of new-recovery eligibility; ordinary Text at part zero is the only recovery
-survivor. Terminalization settles exact request-owned pending tool rows without
-cancelling running/background or foreign rows.
+survivor. Normal completion requires foreground execution and delivery to finish;
+background ownership must already be explicit. Recovery and exceptional
+terminalization cancel exact owned pending calls and hand running calls to the
+existing cancellation/recovery owner without claiming a host stop. Other
+requests' calls are not part of that accounting, even when generation numbers
+coincide. Tool result delivery uses the same session cursor as provider and
+authored publication and preserves the actual terminal lifecycle outcome.
+
+### Composition map
+
+| Join | Shared owner and checked guarantee |
+| --- | --- |
+| Lease → publication → dispatch | `Execution/Gate` applies operations to the current gate-held world. Publication installs the exact physical tool reservations before dispatch. Output is not renewal evidence. |
+| Request → native/child tool → transcript | `Execution/ToolDelivery` applies existing lifecycle/bridge transitions to `Execution.World`; there is no second transcript allocator. A running background invocation receipt is distinct from a later ordinary completion notification. |
+| Recovery/revocation → tool effects | Generation swap cancels exact pending calls and records running-call handoff without pretending a process stopped. Policy revocation preserves corrupt bytes and uses structural ownership, not successful reconstruction, to account for tools. |
+| Notification → Goal/session queue | `Execution/BackgroundContinuation` atomically publishes the canonical ordinary notification and its queue decision. The notification belongs to the exact physical wake request, not its logical ID; Goal-owned input-only delivery stays parent-bound. `BackgroundGate` carries both existing owners under the same local gate. |
+| Restart sweep → physical tool → notification | `Execution/RestartRecovery` requires an authenticated exact physical tool observation and the existing registry-based orphan classification. Neither registry absence nor parent expiry proves an OS process stopped; native cleanup/stop and notification template fidelity remain refinement obligations. Recovery may close committed bytes as Partial, never invent output. |
+| Canonical native blocks → provider compaction | `Execution/Compaction` reconstructs published messages and extracts native provider keys, never physical tool IDs. Cursor advancement requires a provider-stable published prefix below the shared allocator; inspection alone cannot advance the cursor. |
+| Fork → hydration → publication | Forks retain origin references. Authorized hydration follows that dependency closure; missing origin is loading, denial stays denial, conflicting origin stays conflict. Origin tool identity is provenance, not permission to dispatch in the child. |
+| Retry → retraction → next provider attempt | `CompletionRetry/CanonicalExecution` uses actual canonical retraction/acceptance. Retry bounds remain owned by the retry model; native invocation must enter the latest-world gate. |
+
+The native `spawn_process` meta-call and its spawned background process are
+different physical rows. Immutable `spawned_by_tool_call_doc_id` supplies their
+provenance join; matching tool name or message sequence is not sufficient. This
+edge does not expand the hydration authorization graph. The spawned process owes
+no invented second provider invocation reply.
+`ToolGenesis` is a replay comparison over existing immutable/genesis observations,
+not another stored column. Where the current SDL permits a field such as tool
+name to change, native replay must read its genesis/accepted-header provenance;
+the current mutable value is not proof of the original operation.
+
+The older `CrossMachineComposed`/bridge theorems retain their stated coherence
+premises and domains. They are not silently promoted into universal facts about
+the richer shared world: independent background deadlines and eventual host
+acknowledgements still need the specified native refinement. Likewise,
+`RequestExecutionLease` kernel actions alone do not settle tool effects; the
+application owner must use their composed `Execution` transitions.
 
 Hydration selection runs the canonical builder for the exact admitted request,
 with scoped native ACP observations for every document. A missing/ambiguous input
@@ -92,14 +130,24 @@ they are not inductive invariants over all execution traces. Separate core lemma
 cover exact replay, fresh extent validation and terminal commits, while executable
 multi-step regressions establish non-vacuity. `Execution/Gate` composes actual
 operations with the existing gate schedule: another holder cannot commit, and the
-next holder reads the preceding durable world. Its producer-first/recovery-first
-cases do not prove a native mutex, database atomicity, scheduler fairness or a
+next holder reads the preceding durable world. `Execution/Sequence` derives
+allocator preservation/growth from the actual core operations, and
+`Gate.Trace.nextSequence_monotone` lifts those laws by induction over gate traces.
+`BackgroundGate.Trace.nextSequence_monotone` extends that induction to interleaved
+execution commits and atomic notification/queue commits in the paired world.
+These do not prove a native mutex, database atomicity, scheduler fairness or a
 global reachability invariant for every owner.
 
 Retry cap, deadline-fit and one-repair guarantees are retained as transition
 proofs. Segment retention is proved across observation traces; projected prefix
-growth and benign late-delivery stability have executable regressions, not a
-general projected-prefix theorem. Reconstruction is proved inert beyond the
+growth is now proved in `StreamingResponse/PrefixGrowth`: immutable record
+retention with no competing facts at already observed ordinals implies stable
+ordinal lookup, an extending contiguous flush list, and per-stream declaration
+and byte-prefix preservation in successful reconstruction. The live-view theorem
+uses the actual shared projection. Missing ordinals may arrive in any order;
+denial, conflict, retraction, recovery narrowing and final presentation changes
+are not benign extensions. Closed/loading and header-before-payload transitions
+also have executable regressions. Reconstruction is proved inert beyond the
 committed extent, but twins or conflicting closures must still invalidate a
 previously readable projection.
 Request interrupt intent remains modeled; writing the native `terminalized_at`
@@ -116,22 +164,25 @@ response-row fixtures are not evidence for the new `canonical_output_projection_
 Bindings marked follow-up in the coverage ledger remain implementation debt, not
 completed native coverage. Do not restore deleted generators as compatibility code.
 
-Previous repair validation: pinned Lean 4.18.0 `lake build` passed (1,129 targets),
+Composition repair validation: pinned Lean 4.18.0 `lake build` passed (1,141 targets),
 `git diff --check` passes, and the proof tree has no `sorry` or added axioms.
 Sol implementation agents cross-reviewed the execution, hydration and gate
-boundaries; the root review added the admitted two-flush truncation regression.
+boundaries. Root review checked native compaction/fork joins, the live-prefix
+growth proof chain, physical continuation provenance, and the integrated build.
+All fourteen gate seam regression checks pass, alongside tool-delivery,
+continuation/restart, compaction and reordered-hydration cases.
 No Rust build/tests or external fixture regeneration were run in this layer.
 
-Explicit-renewal revision: full pinned `lake build` passes (1,129 targets).
-Removed lease `OutputFact`/eligibility and global derived-progress scans. Renewal
+The explicit-renewal revision removed lease `OutputFact`/eligibility and global
+derived-progress scans. Renewal
 uses a due-only generation/observed-deadline CAS; output and producer decisions
 are lease stutters. The cadence bound, silent/input-wait cases, stale/expired
 rejection, arbitrary-output independence and renewal/recovery ordering are checked.
 Native decision fencing without an implicit deadline write remains a refinement
 obligation; a read-only snapshot check must not be mistaken for a serializing CAS.
 Affected-source validation still traverses its prefix, so this is not a proof of
-linear total streaming cost. The tool-composition and product gaps listed above
-remain open.
+linear total streaming cost. The subsequent tool-composition revision does not
+remove the remaining product gaps listed above.
 
 ## Configuration and session refactor contract layer
 

@@ -1201,6 +1201,11 @@ def caseCoverage : List CoverageEntry :=
       "Route through the canonical principal-scoped registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage
+      "canonical_execution_gate_cases"
+      "CanonicalExecutionGateCases"
+      "Composed lease, publication, tool lifecycle, recovery, delivery and gate traces are Lean witnesses. The next conformance layer must encode native operation inputs and drive the real transactional owners; the emitted success summaries are not native consumer coverage.")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (followUpCoverage
       "canonical_output_projection_cases"
       "CanonicalOutputProjectionCases"
       "Typed immutable projection, loading/conflict/denial, owner liveness and retained Partial diagnostics are executable Lean witnesses. Native projection plus ACP/genesis validation remains a bridge obligation.")

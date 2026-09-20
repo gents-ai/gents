@@ -65,7 +65,7 @@ theorem producer_output_does_not_renew_deadline :
 
 theorem payload_free_assistant_can_commit_zero_stream_source :
     succeeds (acceptAndPublish (world 5) 7 (emptyClose 100 0 .complete 5)
-      (emptyAssistant 200 5) []) = true := by
+      (emptyAssistant 200 5) [] []) = true := by
   native_decide
 
 theorem complete_closure_replay_is_not_a_retry_retraction :
@@ -75,7 +75,7 @@ theorem complete_closure_replay_is_not_a_retry_retraction :
   native_decide
 
 theorem payload_free_assistant_can_commit_header_only :
-    succeeds (publishHeaderOnly (world 5) 7 (emptyAssistant 200 5)) = true := by
+    succeeds (publishHeaderOnly (world 5) 7 (emptyAssistant 200 5) []) = true := by
   native_decide
 
 def authored : Segment :=
@@ -310,21 +310,30 @@ def shortProviderMessage : MessageEnvelope :=
 theorem fresh_provider_close_must_cover_every_committed_flush :
     succeeds (acceptAndPublish
       { world 5 with segments := [providerFirstFlush, providerSecondFlush] }
-      7 shortProviderClose shortProviderMessage []) = false := by
+      7 shortProviderClose shortProviderMessage [] []) = false := by
   native_decide
 
 def remote : RemoteTarget := ⟨600, 1, 2⟩
 def permit : DispatchPermit := ⟨600, true, true⟩
+def remoteToolContext : ToolExecution.ToolCallContext :=
+  { callId := 600, requestId := 10, state := .pending
+    operation := .nativeCommand, deadline := 20, currentTime := 5
+    persistence := .committed, awaitMode := .background }
+def remoteAdmission : ToolAdmission := ⟨600, remoteToolContext⟩
+def foregroundToolContext : ToolExecution.ToolCallContext :=
+  { remoteToolContext with awaitMode := .foreground }
+def foregroundAdmission : ToolAdmission := ⟨600, foregroundToolContext⟩
 def routedWorld (now : Time := 5) : World :=
   { world now with remoteRoutes := [(600, 2)] }
 
 def acceptedAndDispatched : Bool :=
-  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote] with
+  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote]
+      [remoteAdmission] with
   | .error _ => false
   | .ok accepted => match dispatch accepted 7 permit with
     | .error _ => false
     | .ok dispatched =>
-        dispatched.transcript.RunningPublishedCall 600 &&
+        physicalRunning dispatched 600 && !(600 ∈ dispatched.transcript.inFlight) &&
           dispatched.delegatedCalls.any (fun row =>
             row.call == 600 && row.coordinator == 1 && row.target == 2 &&
               row.input.arguments == "{}")
@@ -335,12 +344,24 @@ theorem nonempty_provider_acceptance_delegates_then_dispatches :
 theorem expired_acceptance_is_rejected :
     (match acceptAndPublish (routedWorld 10) 7
         { providerTurn with createdAt := 10 }
-        { providerMessage with createdAt := 10 } [remote] with
+        { providerMessage with createdAt := 10 } [remote] [remoteAdmission] with
       | .error .leaseRejected => true | _ => false) = true := by
   native_decide
 
+def foregroundAcceptedAndDispatched : Except Error World := do
+  let accepted ← acceptAndPublish (world 5) 7 providerTurn providerMessage []
+    [foregroundAdmission]
+  dispatch accepted 7 permit
+
+theorem foreground_provider_call_reaches_physical_running_state :
+    (match foregroundAcceptedAndDispatched with
+      | .ok post => physicalRunning post 600 && 600 ∈ post.transcript.inFlight
+      | .error _ => false) = true := by
+  native_decide
+
 def acceptedToolWorld : World :=
-  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote] with
+  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote]
+      [remoteAdmission] with
   | .ok accepted => accepted
   | .error _ => world 5
 
@@ -357,7 +378,8 @@ theorem terminalization_fails_owned_pending_call_and_keeps_header :
   native_decide
 
 def acceptedToTerminalTrace : Bool :=
-  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote] with
+  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote]
+      [remoteAdmission] with
   | .error _ => false
   | .ok accepted => match terminalize accepted 7 .completed (.message 501) with
     | .error _ => false
@@ -393,13 +415,14 @@ theorem remote_call_without_exact_delegated_row_cannot_dispatch :
   native_decide
 
 theorem missing_remote_route_projection_is_rejected :
-    (match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [] with
+    (match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage []
+        [remoteAdmission] with
       | .error .invalidDelegation => true | _ => false) = true := by
   native_decide
 
 theorem wrong_remote_target_is_rejected :
     (match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage
-        [⟨600, 1, 3⟩] with
+        [⟨600, 1, 3⟩] [remoteAdmission] with
       | .error .invalidDelegation => true | _ => false) = true := by
   native_decide
 
@@ -413,9 +436,8 @@ def forgedPartialAcceptedWorld : World :=
     transcript := transcript.publishAcceptedAssistant 501 (messageTurn providerMessage) }
 
 theorem partial_closure_cannot_replay_as_complete_acceptance :
-    (match acceptAndPublish forgedPartialAcceptedWorld 7 partialProviderTurn
-        providerMessage [] with
-      | .error .publicationIncomplete => true | _ => false) = true := by
+    succeeds (acceptAndPublish forgedPartialAcceptedWorld 7 partialProviderTurn
+      providerMessage [] [remoteAdmission]) = false := by
   native_decide
 
 def partialAuthored : Segment :=

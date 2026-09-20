@@ -1,5 +1,6 @@
 import Proofs.CanonicalOutput.State
 import Proofs.CanonicalOutput.Reconstruction
+import Proofs.CanonicalOutput.ReconstructionGrowth
 import Proofs.CanonicalOutput.Terminal
 import Proofs.CanonicalOutput.Examples
 import Proofs.CanonicalOutput.ClosureCases

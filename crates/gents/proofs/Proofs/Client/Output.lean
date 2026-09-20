@@ -24,7 +24,7 @@ def projectOutput (attempt : AttemptView)
   }
 
 def outputMissing : StreamingResponse.View → Bool
-  | .absent | .loading => true
+  | .absent | .loading | .settling _ => true
   | _ => false
 
 def activeRequestState : RequestState → Bool

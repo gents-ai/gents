@@ -270,10 +270,13 @@ def publicationAllowsSource (header : Header) (closing : Segment) : Bool :=
       | .provider _ _ _, .request _ => true
       | _, _ => false
   | .toolDelivery call =>
-      header.request == some closing.coordinate.request &&
       match closing.coordinate.source, closing.writer with
       | .tool sourceCall, .tool writerCall => sourceCall == call && writerCall == call
-      | .authored _, .tool writerCall => writerCall == call
+      /- Authored immediate receipts remain in the parent request. Ordinary
+      background notifications may belong to a separately authenticated wake
+      request while retaining exact refs to the parent tool source above. -/
+      | .authored _, .tool writerCall =>
+          header.request == some closing.coordinate.request && writerCall == call
       | _, _ => false
   | .fork _ => true
 
@@ -293,32 +296,41 @@ def validateMediaDeclaration (records : List Segment) (denied : List DocId)
       else .error .metadataMismatch
 
 def validateToolResultSource (records : List Segment) (denied : List DocId)
-    (call : DocId) (reference : PayloadRef) : Except MessageError Unit := do
+    (header : Header) (call : DocId) (reference : PayloadRef) : Except MessageError Unit := do
   let closing ← (resolveClose records denied reference).mapError
     (fun error => MessageError.reconstruction (.lookup error))
   match closing.coordinate.source, closing.writer with
   | .tool sourceCall, .tool writerCall =>
       if sourceCall == call && writerCall == call then .ok () else .error .wrongSource
+  | .authored _, .tool writerCall =>
+      let publicationMatches := match header.publication with
+        | .toolDelivery deliveryCall =>
+            deliveryCall == call && header.request == some closing.coordinate.request
+        /- A fork retains exact origin refs. Its closure is validated by the
+        fork/hydration owner rather than rewritten into the child request. -/
+        | .fork _ => true
+        | _ => false
+      if writerCall == call && publicationMatches then .ok () else .error .wrongSource
   | _, _ => .error .wrongSource
 
 def validateBlockMetadata (records : List Segment) (denied : List DocId) :
-    MessageBlock PayloadSpec → Except MessageError Unit
-  | .text _ | .reasoning _ _ => .ok ()
-  | .toolCall _ id callId name arguments _ _ => do
+    Header → MessageBlock PayloadSpec → Except MessageError Unit
+  | _, .text _ | _, .reasoning _ _ => .ok ()
+  | _, .toolCall _ id callId name arguments _ _ => do
       let (_, declaration) ← declaredPayload records denied arguments
       if declaration.kind == .arguments &&
           declaration.tool == some ⟨id, callId, name⟩ then .ok ()
       else .error .metadataMismatch
-  | .toolResult call _ _ parts =>
+  | header, .toolResult call _ _ parts =>
       parts.forM fun part => match part with
-      | .text payload => validateToolResultSource records denied call payload.reference
+      | .text payload => validateToolResultSource records denied header call payload.reference
       | .media media => do
           let _ ← validateMediaDeclaration records denied media
           match media.data with
           | .url _ | .unknown => .ok ()
           | .base64 payload | .raw payload | .string payload =>
-              validateToolResultSource records denied call payload.reference
-  | .media media => validateMediaDeclaration records denied media
+              validateToolResultSource records denied header call payload.reference
+  | _, .media media => validateMediaDeclaration records denied media
 
 def reconstructMedia (resolve : List PayloadKind → Bool → PayloadSpec →
     Except MessageError (List UInt8)) (media : Media PayloadSpec) :
@@ -411,7 +423,7 @@ def validateMessageStructure (records : List Segment) (denied : List DocId)
   else
     let _ ← (envelopeRefs message).forM
       (validateReferenceSource records denied message.header)
-    let _ ← message.blocks.forM (validateBlockMetadata records denied)
+    let _ ← message.blocks.forM (validateBlockMetadata records denied message.header)
     match message.header.publication with
     | .requestExecution _ => validateExactProviderPositions records denied message
     | .requestRecovery _ => validateRecoveryPositions records denied message

@@ -1,6 +1,9 @@
 import Proofs.CanonicalOutput.Delegation
 import Proofs.RequestExecutionLease
 import Proofs.Transcript
+import Proofs.ToolExecution.Executable
+import Proofs.Session.State
+import Proofs.Goals
 
 /-!
 # Canonical output execution composition
@@ -16,6 +19,77 @@ namespace CanonicalOutput.Execution
 
 abbrev Generation := Nat
 
+/-- A physical tool document and the existing lifecycle context that will back
+the accepted call. The context's older logical identifiers are not document
+authority and need not equal `document`. -/
+structure ToolAdmission where
+  document : DocId
+  context : ToolExecution.ToolCallContext
+  deriving DecidableEq, Repr
+
+inductive ToolProvenance where
+  | acceptedIntent
+  | spawnedBackground (parentToolDoc : DocId)
+  deriving DecidableEq, Repr
+
+structure ToolGenesis where
+  logicalCallId : ToolExecution.ToolCallId
+  logicalRequestId : RequestId
+  operation : ToolExecution.ToolOperation
+  childRequestId : Option RequestId
+  deriving DecidableEq, Repr
+
+def ToolGenesis.fromContext (context : ToolExecution.ToolCallContext) : ToolGenesis :=
+  { logicalCallId := context.callId
+  , logicalRequestId := context.requestId
+  , operation := context.operation
+  , childRequestId := context.childRequestId }
+
+/-- Exact accepted-header ownership plus projections of existing durable native
+cancellation/reconciliation fields. None of these fields claims that a running
+host effect has stopped. -/
+structure OwnedTool where
+  document : DocId
+  requestDoc : DocId
+  session : SessionId
+  acceptedSequence : Transcript.Sequence
+  provenance : ToolProvenance := .acceptedIntent
+  context : ToolExecution.ToolCallContext
+  cancelCascadeIntentAt : Option Time := none
+  cancelPendingRemoteAck : Bool := false
+  stuckSince : Option Time := none
+  deriving DecidableEq, Repr
+
+structure SpawnedToolAdmission where
+  document : DocId
+  parentToolDoc : DocId
+  context : ToolExecution.ToolCallContext
+  deriving DecidableEq, Repr
+
+/-- Authenticated projection of the existing durable wake AgentRequest and
+its physical document binding. Logical `entry.requestId` is never substituted
+for `wakeDocument`. -/
+structure WakeDocumentBinding where
+  entry : SessionQueue.QueueEntry
+  agent : Nat
+  session : SessionId
+  notificationMessageId : Transcript.MessageId
+  notificationSequence : Transcript.Sequence
+  wakeDocument : DocId
+  authenticated : Bool
+  deriving DecidableEq, Repr
+
+/-- Authenticated observation of the canonical Goal owner selected in the
+same transaction as a parent-bound completion notification. -/
+structure GoalNotificationBinding where
+  goalDocument : DocId
+  parentRequestDocument : DocId
+  agent : Nat
+  session : SessionId
+  status : Goals.Status
+  authenticated : Bool
+  deriving DecidableEq, Repr
+
 structure World where
   requestId : DocId
   sessionId : SessionId
@@ -30,6 +104,10 @@ structure World where
   segments : List Segment
   messages : List MessageEnvelope
   transcript : Transcript.TranscriptState
+  /-- Authoritative session compaction cursor. Fresh tool-result publication
+  must allocate strictly beyond it; exact replay does not allocate. -/
+  compactionCursor : Option Transcript.Sequence := none
+  toolContexts : List OwnedTool := []
   delegatedCalls : List DelegatedCall
   terminalSelection : Option TerminalSelection
   deriving DecidableEq

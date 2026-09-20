@@ -52,12 +52,13 @@ def retractBeforeRetry (world : World) (generation : Nat) (closing : Segment) :
 publication of this exact provider attempt. -/
 def acceptAndPublish (world : World) (generation : Nat) (closing : Segment)
     (message : MessageEnvelope)
-    (targets : List CanonicalOutput.Execution.RemoteTarget) : Except Error World :=
+    (targets : List CanonicalOutput.Execution.RemoteTarget)
+    (admissions : List CanonicalOutput.Execution.ToolAdmission) : Except Error World :=
   if sourceMatches world.retry closing = false then .error .wrongSource
   else match CompletionRetry.step? world.retry (.accept message.header.id) with
     | none => .error .policyRejected
     | some retry => match CanonicalOutput.Execution.acceptAndPublish
-        world.execution generation closing message targets with
+        world.execution generation closing message targets admissions with
       | .error error => .error (.execution error)
       | .ok execution => .ok ⟨execution, retry⟩
 
@@ -86,11 +87,12 @@ theorem retraction_success_records_policy_and_execution
 theorem acceptance_success_is_canonical
     {before after : World} {generation : Nat} {closing : Segment}
     {message : MessageEnvelope} {targets : List CanonicalOutput.Execution.RemoteTarget}
-    (h : acceptAndPublish before generation closing message targets = .ok after) :
+    {admissions : List CanonicalOutput.Execution.ToolAdmission}
+    (h : acceptAndPublish before generation closing message targets admissions = .ok after) :
     sourceMatches before.retry closing = true ∧
       CompletionRetry.step? before.retry (.accept message.header.id) = some after.retry ∧
       CanonicalOutput.Execution.acceptAndPublish before.execution generation closing
-        message targets = .ok after.execution := by
+        message targets admissions = .ok after.execution := by
   unfold acceptAndPublish at h
   split at h
   · contradiction
@@ -99,7 +101,7 @@ theorem acceptance_success_is_canonical
     | none => simp [hp] at h
     | some retry =>
         cases he : CanonicalOutput.Execution.acceptAndPublish before.execution generation
-            closing message targets with
+            closing message targets admissions with
         | error error => simp [hp, he] at h
         | ok execution =>
             simp [hp, he] at h
@@ -116,7 +118,8 @@ theorem retraction_success_preserves_accounted_usage
 theorem acceptance_success_preserves_accounted_usage
     {before after : World} {generation : Nat} {closing : Segment}
     {message : MessageEnvelope} {targets : List CanonicalOutput.Execution.RemoteTarget}
-    (h : acceptAndPublish before generation closing message targets = .ok after) :
+    {admissions : List CanonicalOutput.Execution.ToolAdmission}
+    (h : acceptAndPublish before generation closing message targets admissions = .ok after) :
     after.retry.usageCharged = before.retry.usageCharged :=
   CompletionRetry.acceptance_preserves_usage
     (acceptance_success_is_canonical h).2.1

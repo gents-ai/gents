@@ -103,8 +103,11 @@ theorem retraction_precedes_retry
 theorem accepted_publication_is_composed_atomically
     (pre post : World) (generation : Generation) (closing : Segment)
     (message : MessageEnvelope) (targets : List RemoteTarget)
-    (h : acceptAndPublish pre generation closing message targets = .ok post) :
+    (admissions : List ToolAdmission)
+    (h : acceptAndPublish pre generation closing message targets admissions = .ok post) :
     acceptedPublicationPresent post closing message targets = true ∧
+      acceptedToolsPresent post message = true ∧
+      toolProjectionCoherent post = true ∧
       remoteTargetsMatchConfiguredRoutes post message targets = true ∧
       validateClosingRecord post.segments closing = true ∧
       acceptedMessageValid post generation post.segments message = true ∧
@@ -112,13 +115,15 @@ theorem accepted_publication_is_composed_atomically
   unfold acceptAndPublish at h
   have hp := checked_success _ _ _ h
   simp only [Bool.and_eq_true] at hp
-  exact ⟨hp.1.1.1.1, hp.1.1.1.2, hp.1.1.2, hp.1.2, hp.2⟩
+  exact ⟨hp.1.1.1.1.1.1, hp.1.1.1.1.1.2, hp.1.1.1.1.2,
+    hp.1.1.1.2, hp.1.1.2, hp.1.2, hp.2⟩
 
 theorem fresh_accept_core_success_requires_exact_extent
     (world post : World) (generation : Generation) (closing : Segment)
     (message : MessageEnvelope) (targets : List RemoteTarget)
+    (admissions : List ToolAdmission)
     (hnotReplay : acceptedPublicationPresent world closing message targets = false)
-    (h : acceptAndPublishCore world generation closing message targets = .ok post) :
+    (h : acceptAndPublishCore world generation closing message targets admissions = .ok post) :
     freshCompleteExtentExact (world.segments ++ [closing]) closing = true := by
   by_contra hnotExact
   have hexact : freshCompleteExtentExact (world.segments ++ [closing]) closing = false :=
@@ -138,11 +143,13 @@ theorem dispatch_requires_committed_intent_and_marks_running
     (pre post : World) (generation : Generation)
     (permit : DispatchPermit)
     (h : dispatch pre generation permit = .ok post) :
-    post.transcript.RunningPublishedCall permit.call ∧
-      dispatchPublicationValid post generation permit.call = true := by
+    physicalRunning post permit.call = true ∧
+      toolDispatchPublicationValid post generation permit.call = true ∧
+      toolProjectionCoherent post = true := by
   unfold dispatch at h
   have hp := checked_success _ _ _ h
-  simpa only [Bool.and_eq_true, decide_eq_true_eq] using hp
+  simp only [Bool.and_eq_true] at hp
+  exact ⟨hp.1.1, hp.1.2, hp.2⟩
 
 theorem authored_publication_is_atomic_and_headed
     (pre post : World) (generation : Generation) (closing : Segment)
@@ -188,17 +195,22 @@ theorem fresh_complete_extent_accounts_for_all_data
 
 theorem header_only_publication_is_atomic
     (pre post : World) (generation : Generation) (message : MessageEnvelope)
-    (h : publishHeaderOnly pre generation message = .ok post) :
+    (admissions : List ToolAdmission)
+    (h : publishHeaderOnly pre generation message admissions = .ok post) :
     headerOnlyPublicationPresent post message = true ∧
-      headerOnlyMessageValid post generation message = true := by
+      headerOnlyMessageValid post generation message = true ∧
+      acceptedToolsPresent post message = true ∧ toolProjectionCoherent post = true := by
   unfold publishHeaderOnly at h
-  simpa only [Bool.and_eq_true] using (checked_success _ _ _ h)
+  have hp := checked_success _ _ _ h
+  simp only [Bool.and_eq_true] at hp
+  exact ⟨hp.1.1.1, hp.1.1.2, hp.1.2, hp.2⟩
 
 theorem recovery_is_all_sources_single_winner_and_exact
     (pre post : World) (expected next : Generation)
     (duration deadline : Time) (items : List RecoveryItem)
     (h : recoverExpiredBatch pre expected next duration deadline items = .ok post) :
     recoveryBatchPresent post next items = true ∧
+      toolProjectionCoherent post = true ∧
       (recoveryReplayValid pre expected next items ||
         recoveryCoversAllSources pre expected items) = true ∧
       items.all (fun item =>
@@ -209,7 +221,7 @@ theorem recovery_is_all_sources_single_winner_and_exact
   unfold recoverExpiredBatch at h
   have hp := checked_success _ _ _ h
   simp only [Bool.and_eq_true] at hp
-  exact ⟨hp.1.1, hp.1.2, hp.2⟩
+  exact ⟨hp.1.1.1, hp.1.1.2, hp.1.2, hp.2⟩
 
 theorem exact_recovery_replay_core_does_not_renew_or_republish
     (world post : World) (expected fresh : Generation)
@@ -227,11 +239,12 @@ theorem terminal_selection_commits_with_lifecycle
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
     (h : terminalize pre generation outcome selection = .ok post) :
     terminalReplayPresent post generation outcome selection = true ∧
-      terminalSelectionValid post selection = true ∧ ownedPendingSettled post = true := by
+      terminalSelectionValid post selection = true ∧
+      ownedPendingSettled post generation = true ∧ toolProjectionCoherent post = true := by
   unfold terminalize at h
   have hp := checked_success _ _ _ h
   simp only [Bool.and_eq_true] at hp
-  exact ⟨hp.1.1, hp.1.2, hp.2⟩
+  exact ⟨hp.1.1.1, hp.1.1.2, hp.1.2, hp.2⟩
 
 theorem admitted_terminal_core_commits_lifecycle_and_pending_cancellation
     (world : World)
@@ -241,14 +254,16 @@ theorem admitted_terminal_core_commits_lifecycle_and_pending_cancellation
     (hvalid : terminalSelectionValid world selection = true)
     (hnotReplay : terminalReplayPresent world generation outcome selection = false)
     (hempty : world.terminalSelection.isSome = false)
-    (hlease : RequestExecutionLease.step? world.lease
+    (hready : ¬ (outcome = .completed ∧
+      normalCompletionToolsReady world generation = false))
+    (hlease : RequestExecutionLease.step?
+      (accountOwnedTools world generation (outcome != .completed)).lease
       (.finalize .mutationWriteGate generation outcome) = some lease) :
     terminalizeCore world generation outcome selection = .ok
-      { world with
+      { accountOwnedTools world generation (outcome != .completed) with
         lease := lease
-        transcript := terminalizeOwnedPending world
         terminalSelection := some selection } := by
-  simp [terminalizeCore, hvalid, hnotReplay, hempty, hlease]
+  simp [terminalizeCore, hvalid, hnotReplay, hempty, hready, hlease]
 
 theorem no_message_requires_no_eligible_owned_assistant
     (world : World)
@@ -266,14 +281,152 @@ theorem prepared_batch_enables_composed_recovery
     (expected next : Generation) (duration deadline : Time) (items : List RecoveryItem)
     (hnotReplay : recoveryReplayValid world expected next items = false)
     (hprepare : prepareRecoveryBatch world expected next items = .ok prepared)
-    (hlease : RequestExecutionLease.step? world.lease
+    (hlease : RequestExecutionLease.step?
+      (preparedRecoveryWorld world prepared expected).lease
       (.recoverExpired .mutationWriteGate expected next duration deadline) = some lease) :
     recoverExpiredBatchCore world expected next duration deadline items =
-      .ok { world with
-        lease := lease
-        segments := prepared.segments
-        messages := prepared.messages
-        transcript := prepared.transcript } := by
+      .ok { preparedRecoveryWorld world prepared expected with
+        lease := lease } := by
   simp [recoverExpiredBatchCore, hnotReplay, hprepare, hlease]
+
+theorem accounting_cancels_exact_owned_pending
+    (world : World) (generation : Generation) (tool : OwnedTool)
+    (howned : ownedByGeneration world generation tool = true)
+    (hpending : tool.context.state = .pending) :
+    accountOneOwnedTool world generation true tool =
+      ({ tool with context := { tool.context with state := .cancelled } },
+        world.transcript.terminalizeToolCall tool.document .cancelled) := by
+  simp [accountOneOwnedTool, howned, hpending,
+    ToolExecution.ToolCallContext.step?]
+
+theorem accounting_hands_off_running_without_claiming_stop
+    (world : World) (generation : Generation) (tool : OwnedTool)
+    (howned : ownedByGeneration world generation tool = true)
+    (hrunning : tool.context.state = .running) :
+    accountOneOwnedTool world generation true tool =
+      (handoffRunningTool world tool,
+        world.transcript.releaseParentInFlight tool.document) ∧
+      (handoffRunningTool world tool).context.state = .running ∧
+      tool.document ∉
+        (world.transcript.releaseParentInFlight tool.document).inFlight := by
+  simp [accountOneOwnedTool, howned, hrunning, handoffRunningTool,
+    Transcript.TranscriptState.releaseParentInFlight]
+
+theorem accounting_ignores_foreign_request_even_same_generation
+    (world : World) (generation : Generation) (tool : OwnedTool)
+    (hforeign : tool.requestDoc ≠ world.requestId) :
+    accountOneOwnedTool world generation true tool = (tool, world.transcript) := by
+  have hnotOwned : acceptedHeaderBindsToolGeneration world tool generation = false := by
+    unfold acceptedHeaderBindsToolGeneration
+    cases tool.provenance <;> simp [hforeign]
+  simp [accountOneOwnedTool, ownedByGeneration, hnotOwned]
+
+theorem explicit_background_control_updates_physical_and_parent_hook
+    (world : World) (generation : Generation) (tool : OwnedTool)
+    (lease : RequestExecutionLease.World Generation)
+    (hlookup : ownedToolByDocument? world tool.document = some tool)
+    (howned : acceptedHeaderBindsToolGeneration world tool generation = true)
+    (hrunning : tool.context.state = .running)
+    (hforeground : tool.context.awaitMode = .foreground)
+    (hcancel : tool.cancelCascadeIntentAt = none)
+    (hstuck : tool.stuckSince = none)
+    (hlease : RequestExecutionLease.step? world.lease
+      (.authorizeProducerDecision .mutationWriteGate generation .dispatch) = some lease) :
+    changeToolControlCore world generation tool.document .background = .ok
+      { world with
+        lease := lease
+        toolContexts := replaceOwnedTool world.toolContexts tool.document
+          { tool with context := { tool.context with awaitMode := .background } }
+        transcript := world.transcript.releaseParentInFlight tool.document } := by
+  simp [changeToolControlCore, toolControlAction, hlookup, howned, hcancel, hstuck,
+    ToolExecution.ToolCallContext.step?, hrunning, hforeground, hlease]
+
+theorem tool_control_success_preserves_projection_coherence
+    (world post : World) (generation : Generation) (document : DocId)
+    (action : ToolExecution.ToolCallContext.Action)
+    (h : changeToolControl world generation document action = .ok post) :
+    toolProjectionCoherent post = true := by
+  unfold changeToolControl at h
+  exact checked_success _ _ _ h
+
+theorem spawned_background_admission_is_owned_without_fabricated_intent
+    (world post : World) (generation : Generation)
+    (admission : SpawnedToolAdmission)
+    (h : admitSpawnedBackground world generation admission = .ok post) :
+    toolProjectionCoherent post = true ∧ spawnedToolPresent post admission = true := by
+  unfold admitSpawnedBackground at h
+  have hp := checked_success _ _ _ h
+  simpa only [Bool.and_eq_true] using hp
+
+theorem spawned_admission_lost_ack_replay_is_identity
+    (world : World) (generation : Generation) (admission : SpawnedToolAdmission)
+    (hreplay : spawnedAdmissionReplayValid world admission = true) :
+    admitSpawnedBackgroundCore world generation admission = .ok world := by
+  simp [admitSpawnedBackgroundCore, hreplay]
+
+theorem second_spawned_child_for_parent_is_rejected
+    (world : World) (generation : Generation) (admission : SpawnedToolAdmission)
+    (hnotReplay : spawnedAdmissionReplayValid world admission = false)
+    (hexisting : world.toolContexts.any (fun tool =>
+      tool.provenance == .spawnedBackground admission.parentToolDoc) = true) :
+    admitSpawnedBackgroundCore world generation admission = .error .transcriptRejected := by
+  simp [admitSpawnedBackgroundCore, hnotReplay, hexisting]
+
+theorem fresh_completed_core_requires_foreground_accounting
+    (world post : World) (generation : Generation) (selection : TerminalSelection)
+    (hnotReplay : terminalReplayPresent world generation .completed selection = false)
+    (h : terminalizeCore world generation .completed selection = .ok post) :
+    normalCompletionToolsReady world generation = true := by
+  by_contra hnot
+  have hfalse : normalCompletionToolsReady world generation = false :=
+    Bool.eq_false_of_not_eq_true hnot
+  simp only [terminalizeCore] at h
+  split at h <;> try contradiction
+  split at h
+  · rename_i hreplay
+    exact Bool.noConfusion (hnotReplay.symm.trans hreplay)
+  · split at h <;> try contradiction
+    simp [hfalse] at h
+
+theorem remote_bytes_do_not_bypass_execution_admission
+    (world : World) (generation : Generation) (permit : DispatchPermit)
+    (hpublication : toolDispatchPublicationValid world generation permit.call = true)
+    (hnotRunning : physicalRunning world permit.call = false)
+    (hdenied : remoteExecutionAdmitted world permit.call = false) :
+    dispatchCore world generation permit = .error .transcriptRejected := by
+  simp [dispatchCore, hpublication, hnotRunning, hdenied]
+
+theorem revoke_corrupt_exact_replay_is_identity
+    (world : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (hreplay : terminalReplayPresent world fresh outcome selection = true) :
+    revokeCorruptCore world expected fresh outcome selection = .ok world := by
+  simp [revokeCorruptCore, hreplay]
+
+theorem revoke_corrupt_preserves_conflicting_output_facts
+    (world post : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (h : revokeCorrupt world expected fresh outcome selection = .ok post) :
+    post.segments = world.segments ∧ post.messages = world.messages := by
+  unfold revokeCorrupt at h
+  have hp := checked_success _ _ _ h
+  simp only [Bool.and_eq_true, beq_iff_eq] at hp
+  exact ⟨hp.1.2, hp.2⟩
+
+theorem metadata_owned_pending_is_cancelled_by_revocation_accounting
+    (world : World) (generation : Generation) (tool : OwnedTool)
+    (howned : metadataOwnedByGeneration world generation tool = true)
+    (hpending : tool.context.state = .pending) :
+    (accountOneMetadataOwnedTool world generation tool).1.context.state = .cancelled := by
+  simp [accountOneMetadataOwnedTool, howned, hpending,
+    ToolExecution.ToolCallContext.step?]
+
+theorem metadata_owned_running_is_handed_off_without_fake_stop
+    (world : World) (generation : Generation) (tool : OwnedTool)
+    (howned : metadataOwnedByGeneration world generation tool = true)
+    (hrunning : tool.context.state = .running) :
+    (accountOneMetadataOwnedTool world generation tool).1.context.state = .running ∧
+      (accountOneMetadataOwnedTool world generation tool).1.stuckSince = some world.lease.now := by
+  simp [accountOneMetadataOwnedTool, howned, hrunning, handoffRunningTool]
 
 end CanonicalOutput.Execution

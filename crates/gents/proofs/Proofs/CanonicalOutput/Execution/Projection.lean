@@ -155,6 +155,308 @@ def targetIntent (message : MessageEnvelope) (call : DocId) : Option ToolIntent 
   | [intent] => some intent
   | _ => none
 
+def ownedToolByDocument? (world : World) (document : DocId) : Option OwnedTool :=
+  match world.toolContexts.filter (fun tool => tool.document == document) with
+  | [tool] => some tool
+  | _ => none
+
+def replaceOwnedTool (tools : List OwnedTool) (document : DocId)
+    (replacement : OwnedTool) : List OwnedTool :=
+  tools.map fun tool => if tool.document == document then replacement else tool
+
+def physicalRunning (world : World) (document : DocId) : Bool :=
+  match ownedToolByDocument? world document with
+  | some tool => tool.context.state == .running
+  | none => false
+
+/-- Replicated argument bytes are not permission to start. The authoritative
+tool document must still be pending and free of cancellation/reconcile handoff
+markers at the shared-state admission boundary. Replication latency and the
+native remote gate that supplies this observation are refinement premises. -/
+def remoteExecutionAdmitted (world : World) (document : DocId) : Bool :=
+  match ownedToolByDocument? world document with
+  | some tool => tool.context.state == .pending &&
+      tool.cancelCascadeIntentAt.isNone && !tool.cancelPendingRemoteAck &&
+      tool.stuckSince.isNone
+  | none => false
+
+def transcriptToolByDocument? (world : World) (document : DocId) :
+    Option Transcript.ToolCallRow :=
+  match world.transcript.toolCalls.filter (fun row => row.callId == document) with
+  | [row] => some row
+  | _ => none
+
+def toolHandedOff (tool : OwnedTool) : Bool :=
+  tool.stuckSince.isSome || tool.context.awaitMode == .background
+
+/-- Session-wide physical ownership remains anchored to the exact accepted
+assistant header even after another request becomes current in the same
+session. This deliberately does not reinterpret the old header through the
+current request's generation. -/
+def directAcceptedHeaderBindsTool (world : World) (tool : OwnedTool) : Bool :=
+  world.messages.any fun message =>
+    message.header.request == some tool.requestDoc &&
+      message.header.session == tool.session && message.sequence == tool.acceptedSequence &&
+      message.header.role == .assistant && message.header.outcome == .complete &&
+      (match message.header.publication with | .requestExecution _ => true | _ => false) &&
+      (toolIntents message).any (fun intent => intent.call == tool.document) &&
+      (match reconstructMessage world.segments noDeniedDocuments message with
+       | .ok _ => true | .error _ => false) &&
+      world.transcript.messages.any (fun row =>
+        row.messageId == message.header.id && row.sessionId == tool.session &&
+          row.sequence == tool.acceptedSequence && row.role == .assistant &&
+          decide (row.kind.referencesToolCall tool.document))
+
+/-- Structural ownership for already-published lifecycle work. Conflicting
+segment bytes do not erase ownership, but ambiguous message metadata does. -/
+def directAcceptedHeaderMetadataBindsTool (world : World) (tool : OwnedTool) : Bool :=
+  match (world.messages.filter fun message =>
+      message.header.request == some tool.requestDoc &&
+        message.header.session == tool.session && message.sequence == tool.acceptedSequence &&
+        message.header.role == .assistant && message.header.outcome == .complete &&
+        (match message.header.publication with | .requestExecution _ => true | _ => false)).dedup with
+  | [message] =>
+      (toolIntents message).any (fun intent => intent.call == tool.document) &&
+        world.transcript.messages.any (fun row =>
+          row.messageId == message.header.id && row.sessionId == tool.session &&
+            row.sequence == tool.acceptedSequence && row.role == .assistant &&
+            decide (row.kind.referencesToolCall tool.document))
+  | _ => false
+
+def metadataOwnedByGeneration (world : World) (generation : Generation)
+    (tool : OwnedTool) : Bool :=
+  let direct (document : DocId) :=
+    tool.requestDoc == world.requestId && world.messages.any fun message =>
+      message.header.request == some tool.requestDoc &&
+        message.header.session == tool.session && message.sequence == tool.acceptedSequence &&
+        message.header.role == .assistant && message.header.outcome == .complete &&
+        message.header.publication == .requestExecution generation &&
+        (toolIntents message).any (fun intent => intent.call == document)
+  match tool.provenance with
+  | .acceptedIntent => direct tool.document && directAcceptedHeaderMetadataBindsTool world tool
+  | .spawnedBackground parentDoc =>
+      direct parentDoc && tool.document != parentDoc &&
+        match ownedToolByDocument? world parentDoc with
+        | some parent => parent.provenance == .acceptedIntent &&
+            parent.requestDoc == tool.requestDoc && parent.session == tool.session &&
+            parent.acceptedSequence == tool.acceptedSequence &&
+            directAcceptedHeaderMetadataBindsTool world parent
+        | none => false
+
+def spawnParentIntentValid (world : World) (tool : OwnedTool) (parentDoc : DocId) : Bool :=
+  match ownedToolByDocument? world parentDoc with
+  | some parent => parent.provenance == .acceptedIntent &&
+      parent.requestDoc == tool.requestDoc && parent.session == tool.session &&
+      parent.acceptedSequence == tool.acceptedSequence &&
+      directAcceptedHeaderMetadataBindsTool world parent &&
+      world.messages.any (fun message =>
+        message.header.request == some tool.requestDoc &&
+          message.header.session == tool.session &&
+          message.sequence == tool.acceptedSequence &&
+          (toolIntents message).any (fun intent =>
+            intent.call == parentDoc && intent.name == "spawn_process"))
+  | none => false
+
+def acceptedHeaderBindsTool (world : World) (tool : OwnedTool) : Bool :=
+  match tool.provenance with
+  | .acceptedIntent => directAcceptedHeaderMetadataBindsTool world tool
+  | .spawnedBackground parentDoc =>
+      spawnParentIntentValid world tool parentDoc &&
+        tool.document != parentDoc && tool.context.awaitMode == .background &&
+        tool.context.childRequestId.isNone
+
+def acceptedHeaderBindsToolGeneration (world : World) (tool : OwnedTool)
+    (generation : Generation) : Bool :=
+  let direct (document : DocId) :=
+    tool.requestDoc == world.requestId && world.messages.any fun message =>
+      message.header.request == some tool.requestDoc &&
+        message.header.session == tool.session && message.sequence == tool.acceptedSequence &&
+        message.header.role == .assistant && message.header.outcome == .complete &&
+        message.header.publication == .requestExecution generation &&
+        (toolIntents message).any (fun intent => intent.call == document)
+  match tool.provenance with
+  | .acceptedIntent => direct tool.document
+  | .spawnedBackground parentDoc =>
+      spawnParentIntentValid world tool parentDoc && direct parentDoc
+
+def messageContainsToolResult (message : MessageEnvelope) (document : DocId) : Bool :=
+  message.blocks.any fun block => match block with
+  | .toolResult call _ _ _ => call == document
+  | _ => false
+
+def acceptedProviderId? (world : World) (tool : OwnedTool) : Option String :=
+  match (world.messages.filter (fun message =>
+      message.header.request == some tool.requestDoc &&
+        message.header.session == tool.session &&
+        message.sequence == tool.acceptedSequence &&
+        message.header.role == .assistant && message.header.outcome == .complete &&
+        (match message.header.publication with | .requestExecution _ => true | _ => false))).dedup with
+  | [message] => (targetIntent message tool.document).map (fun intent => intent.providerId)
+  | _ => none
+
+def canonicalToolResultBound (world : World) (tool : OwnedTool)
+    (key : Transcript.ToolResultKey) : Bool :=
+  key.sessionId == tool.session && key.logicalResultId == tool.document &&
+    (world.transcript.messages.filter (fun row =>
+      row.kind == .toolResult tool.document key)).length == 1 &&
+    match world.transcript.messages.filter (fun row =>
+        row.kind == .toolResult tool.document key) with
+    | [row] => match (world.messages.filter (fun message =>
+        message.header.id == row.messageId && key.payloadHash == message.header.id &&
+          message.header.session == row.sessionId &&
+          message.header.request == some tool.requestDoc &&
+          message.header.session == tool.session &&
+          message.header.publication == .toolDelivery tool.document &&
+          message.sequence == row.sequence && message.header.role == .user)).dedup with
+      | [message] =>
+          (match message.blocks with
+          | [.toolResult call providerId _ _] =>
+              call == tool.document && acceptedProviderId? world tool == some providerId
+          | _ => false) &&
+          match reconstructMessage world.segments noDeniedDocuments message with
+          | .ok _ => true | .error _ => false
+      | _ => false
+    | _ => false
+
+def runningReceiptSourceBound (world : World) (tool : OwnedTool) : Bool :=
+  world.messages.any fun message =>
+    message.header.publication == .toolDelivery tool.document &&
+      message.header.request == some tool.requestDoc &&
+      message.header.session == tool.session &&
+      messageContainsToolResult message tool.document &&
+      (envelopeRefs message).all (fun reference =>
+        match resolveClose world.segments noDeniedDocuments reference with
+        | .error _ => false
+        | .ok closing =>
+            closing.coordinate.request == tool.requestDoc &&
+            (match closing.coordinate.source with | .authored _ => true | _ => false) &&
+            closing.writer == .tool tool.document)
+
+/-- Lifecycle-only projection used for terminal acknowledgements. It retains
+exact physical/header ownership and transcript state but deliberately does not
+reconstruct already-published result payloads, whose later corruption cannot
+wedge a real host/tool acknowledgement. -/
+def toolLifecycleProjectionCoherent (world : World) : Bool :=
+  (world.toolContexts.map (fun tool => tool.document)).Nodup &&
+    world.toolContexts.all (fun tool =>
+      tool.session == world.sessionId && acceptedHeaderBindsTool world tool &&
+        match tool.provenance with
+        | .acceptedIntent =>
+            match transcriptToolByDocument? world tool.document with
+            | none => false
+            | some row =>
+                row.sessionId == tool.session &&
+                  row.messageSequence == tool.acceptedSequence &&
+                  row.state == tool.context.state &&
+                  (decide (tool.document ∈ world.transcript.inFlight) ==
+                    (tool.context.state == .running && !toolHandedOff tool))
+        | .spawnedBackground _ =>
+            (transcriptToolByDocument? world tool.document).isNone &&
+              decide (tool.document ∉ world.transcript.inFlight)) &&
+    world.transcript.toolCalls.all (fun row =>
+      match ownedToolByDocument? world row.callId with
+      | some tool => tool.provenance == .acceptedIntent && tool.session == row.sessionId &&
+          tool.acceptedSequence == row.messageSequence
+      | none => false)
+
+/-- The physical document is the join key. Logical identifiers inside the
+tool context never substitute for the accepted request/header binding. In
+addition to lifecycle coherence, every published result key has exact canonical
+authority; pending rows cannot carry results. A running result remains the
+exact invocation receipt after an explicit foreground reattachment: current
+await mode controls parent blocking, while `runningReceiptSourceBound` retains
+the immutable receipt provenance. -/
+def toolProjectionCoherent (world : World) : Bool :=
+  toolLifecycleProjectionCoherent world && world.toolContexts.all (fun tool =>
+    match tool.provenance, transcriptToolByDocument? world tool.document with
+    | .acceptedIntent, some row =>
+        match row.resultKey with
+        | none => true
+        | some key => canonicalToolResultBound world tool key &&
+            (isTerminal row.state ||
+              (row.state == .running && runningReceiptSourceBound world tool))
+    | .spawnedBackground _, none => true
+    | _, _ => false)
+
+/-- A result key is delivery only when its unique transcript result row is
+backed by the canonical user/tool-result message for this physical document. -/
+def canonicalToolDelivered (world : World) (tool : OwnedTool) : Bool :=
+  match transcriptToolByDocument? world tool.document with
+  | none => false
+  | some call => match call.resultKey with
+    | none => false
+    | some key => canonicalToolResultBound world tool key
+
+def admissionsValid (world : World) (message : MessageEnvelope)
+    (admissions : List ToolAdmission) : Bool :=
+  admissions.map (fun admission => admission.document) ==
+      (toolIntents message).map (fun intent => intent.call) &&
+    (admissions.map (fun admission => admission.document)).Nodup &&
+    admissions.all (fun admission =>
+      admission.context.state == .pending &&
+        !(world.toolContexts.any (fun tool => tool.document == admission.document)) &&
+        (if world.remoteRoutes.any (fun route => route.1 == admission.document) then
+          admission.context.awaitMode == .background
+        else true))
+
+def installAcceptedTools (world : World) (message : MessageEnvelope)
+    (admissions : List ToolAdmission) : List OwnedTool :=
+  world.toolContexts ++ admissions.map (fun admission =>
+    { document := admission.document
+    , requestDoc := world.requestId
+    , session := message.header.session
+    , acceptedSequence := message.sequence
+    , provenance := .acceptedIntent
+    , context := admission.context })
+
+def spawnedAdmissionValid (world : World) (generation : Generation)
+    (admission : SpawnedToolAdmission) : Bool :=
+  !(world.toolContexts.any (fun tool => tool.document == admission.document)) &&
+    !(world.toolContexts.any (fun tool =>
+      tool.provenance == .spawnedBackground admission.parentToolDoc)) &&
+    admission.document != admission.parentToolDoc &&
+    admission.context.state == .pending &&
+    admission.context.awaitMode == .background &&
+    admission.context.childRequestId.isNone &&
+    match ownedToolByDocument? world admission.parentToolDoc with
+    | some parent => parent.provenance == .acceptedIntent &&
+        parent.context.state == .running &&
+        acceptedHeaderBindsToolGeneration world parent generation &&
+        world.messages.any (fun message =>
+          message.header.request == some parent.requestDoc &&
+            message.header.session == parent.session &&
+            message.sequence == parent.acceptedSequence &&
+            (toolIntents message).any (fun intent =>
+              intent.call == admission.parentToolDoc && intent.name == "spawn_process"))
+    | none => false
+
+def installSpawnedTool (world : World) (admission : SpawnedToolAdmission) :
+    Option OwnedTool := do
+  let parent ← ownedToolByDocument? world admission.parentToolDoc
+  some
+    { document := admission.document
+    , requestDoc := parent.requestDoc
+    , session := parent.session
+    , acceptedSequence := parent.acceptedSequence
+    , provenance := .spawnedBackground admission.parentToolDoc
+    , context := admission.context }
+
+def spawnedToolPresent (world : World) (admission : SpawnedToolAdmission) : Bool :=
+  match ownedToolByDocument? world admission.document with
+  | some tool => tool.provenance == .spawnedBackground admission.parentToolDoc &&
+      ToolGenesis.fromContext tool.context == ToolGenesis.fromContext admission.context &&
+      (transcriptToolByDocument? world admission.document).isNone
+  | none => false
+
+def spawnedAdmissionReplayValid (world : World)
+    (admission : SpawnedToolAdmission) : Bool :=
+  match world.toolContexts.filter (fun tool =>
+      tool.provenance == .spawnedBackground admission.parentToolDoc) with
+  | [tool] => tool.document == admission.document &&
+      ToolGenesis.fromContext tool.context == ToolGenesis.fromContext admission.context &&
+      acceptedHeaderBindsTool world tool
+  | _ => false
+
 /-- `RemoteTarget.call` and `ToolIntent.call` are the exact physical pending
 tool document identity carried by the typed block. `providerId` remains native
 provider metadata and never substitutes for this document key. The authenticated
@@ -238,5 +540,24 @@ def terminalSelectionValid (world : World) (selection : TerminalSelection) : Boo
           | .ok _ => true
           | .error _ => false
         | _ => false
+
+def eligibleOwnedAssistantMetadataExists (world : World) : Bool :=
+  world.messages.any fun message =>
+    message.header.request == some world.requestId &&
+      message.header.session == world.sessionId && message.header.role == .assistant &&
+      terminalPublicationEligible message.header.publication
+
+/-- Exceptional policy revocation resolves only immutable header identity.
+Conflicting payload bytes remain visible and are neither selected nor repaired. -/
+def terminalSelectionMetadataValid (world : World)
+    (selection : TerminalSelection) : Bool :=
+  match selection with
+  | .noMessage => !eligibleOwnedAssistantMetadataExists world
+  | .message _ => match resolveTerminal (world.messages.map (fun message => message.header))
+      noDeniedDocuments world.requestId world.sessionId (some selection) with
+    | .error _ => false
+    | .ok none => false
+    | .ok (some header) =>
+        (world.messages.filter (fun message => message.header == header)).dedup.length == 1
 
 end CanonicalOutput.Execution

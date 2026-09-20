@@ -43,6 +43,7 @@ structure Observation where
 inductive View where
   | absent
   | live (streams : Streams)
+  | settling (streams : Streams)
   | loading
   | denied
   | conflicted
@@ -80,6 +81,28 @@ def messageScoped (observation : Observation) (message : MessageEnvelope) : Bool
             CanonicalOutput.Hydration.forkMetadataMatches message originMessage
         | .error _ => false
     | _ => message.header.request == some observation.request
+
+/-- Scope failure is structural invalidity, but an unavailable fork origin is
+still a replica observation and retains its missing/denied/conflict class. -/
+def messageScopeResult (observation : Observation)
+    (message : MessageEnvelope) : Except View Unit :=
+  if message.header.session != observation.session ||
+      !(message.header.id == observation.target.messageId) then .error .invalid
+  else match message.header.publication with
+  | .fork origin =>
+      if message.header.request.isSome || message.header.origin != some origin then
+        .error .invalid
+      else match CanonicalOutput.Hydration.lookupMessage observation.messages
+          observation.deniedHeaders origin with
+      | .error .headerUnavailable => .error .loading
+      | .error .headerDenied => .error .denied
+      | .error .conflictingMessages => .error .conflicted
+      | .error _ => .error .invalid
+      | .ok originMessage =>
+          if CanonicalOutput.Hydration.forkMetadataMatches message originMessage then .ok ()
+          else .error .invalid
+  | _ => if message.header.request == some observation.request then .ok ()
+      else .error .invalid
 
 def visibleStreams (streams : Streams) : Streams :=
   streams.filter fun stream => stream.1.kind != .opaque
@@ -120,6 +143,94 @@ def messageAt (messages : List MessageEnvelope) (id : DocId) :
     Except Unit MessageEnvelope :=
   uniqueRecord () () (messages.filter fun message => message.header.id == id)
 
+def messageCoordinateConflict (messages : List MessageEnvelope)
+    (message : MessageEnvelope) : Bool :=
+  messages.any fun other => other != message &&
+    (other.header.id == message.header.id ||
+      (other.header.session == message.header.session && other.key == message.key) ||
+      (other.header.session == message.header.session && other.sequence == message.sequence))
+
+/-- Contiguous ordinal reconstruction for an open source. This stops at the
+first gap and rejects twins, malformed consumed runs, wrong writers and timestamp regressions.
+It is never used for authored output, which requires an immutable header. -/
+inductive OpenError where | loading | conflicted | invalid
+  deriving DecidableEq, Repr
+
+def contiguousFlushes (records : List Segment) (writer : Writer) :
+    Nat → Nat → Except OpenError (List Flush)
+  | _, 0 => .ok []
+  | ordinal, fuel + 1 =>
+      match flushAt records writer ordinal with
+      | .error (.missingOrdinal _) => .ok []
+      | .error (.conflictingOrdinal _) => .error .conflicted
+      | .error _ => .error .invalid
+      | .ok flush => do
+          let rest ← contiguousFlushes records writer (ordinal + 1) fuel
+          .ok (flush :: rest)
+
+def reconstructPrefix (observation : Observation) (limit : Option Nat) :
+    Except OpenError Streams := do
+  let source := CanonicalOutput.Execution.sourceData
+    observation.records observation.target.coordinate
+  let data := match limit with
+    | none => source
+    | some count => source.filter fun (record : Segment) =>
+        record.flush.any (fun (flush : Flush) => flush.ordinal < count)
+  if data.isEmpty then .error .loading
+  else if data.all (fun record => record.writer == observation.target.writer) = false then
+    .error .invalid
+  else if CanonicalOutput.Execution.timestampsNondecreasing data = false then .error .invalid
+  else if !(data.filterMap (fun (record : Segment) =>
+      record.flush.map (fun (flush : Flush) => flush.ordinal))).Nodup then
+    .error .conflicted
+  else
+  let flushes ← contiguousFlushes data observation.target.writer 0 (limit.getD data.length)
+  if flushes.isEmpty then .error .loading else
+  match consumeFlushes flushes [] with
+  | .ok streams => .ok (visibleStreams streams)
+  | .error _ => .error .invalid
+
+def reconstructOpen (observation : Observation) : Except OpenError Streams :=
+  reconstructPrefix observation none
+
+def reconstructBeforeClose (observation : Observation) (closing : Segment) :
+    Except OpenError Streams :=
+  match closing.close with
+  | some (.closed _ count _) => reconstructPrefix observation (some count)
+  | _ => .error .invalid
+
+def loadingOrSettling (observation : Observation) : View :=
+  match reconstructOpen observation with
+  | .ok streams => .settling streams
+  | .error .loading => .loading
+  | .error .conflicted => .conflicted
+  | .error .invalid => .invalid
+
+def loadingOrSettlingBeforeClose (observation : Observation) (closing : Segment) : View :=
+  match reconstructBeforeClose observation closing with
+  | .ok streams => .settling streams
+  | .error .loading => .loading
+  | .error .conflicted => .conflicted
+  | .error .invalid => .invalid
+
+private def referencedTargetClose? (observation : Observation) :
+    List PayloadRef → Option Segment
+  | [] => none
+  | ref :: rest =>
+      match resolveClose observation.records observation.deniedSegments ref with
+      | .ok closing =>
+          if closing.coordinate == observation.target.coordinate &&
+              closing.writer == observation.target.writer then some closing
+          else referencedTargetClose? observation rest
+      | .error _ => referencedTargetClose? observation rest
+
+def settlingForReferencedTarget (observation : Observation)
+    (message : MessageEnvelope) : View :=
+  if sourceDenied observation then .denied
+  else match referencedTargetClose? observation message.header.refs with
+  | some closing => loadingOrSettlingBeforeClose observation closing
+  | none => .loading
+
 def projectPublished (observation : Observation) (id : DocId) : View :=
   if id ∈ observation.deniedHeaders then .denied
   else match messageAt observation.messages id with
@@ -128,36 +239,17 @@ def projectPublished (observation : Observation) (id : DocId) : View :=
           .loading
         else .conflicted
     | .ok message =>
-        if !messageScoped observation message then .invalid
-        else if observation.dependencyDenials.any fun denial =>
+        if messageCoordinateConflict observation.messages message then .conflicted
+        else match messageScopeResult observation message with
+        | .error view => view
+        | .ok () => if observation.dependencyDenials.any fun denial =>
             message.header.refs.any fun ref => ref.closeId == denial.rootCloseId then .denied
-        else match reconstructMessage observation.records observation.deniedSegments message with
-          | .ok native => .published message native
-          | .error error => classifyMessageError error
-
-/-- Contiguous ordinal reconstruction for an open source. This rejects gaps,
-twins, malformed runs, wrong writers and timestamp regressions before preview.
-It is never used for authored output, which requires an immutable header. -/
-inductive OpenError where | loading | conflicted | invalid
-  deriving DecidableEq, Repr
-
-def reconstructOpen (observation : Observation) : Except OpenError Streams := do
-  let data := CanonicalOutput.Execution.sourceData
-    observation.records observation.target.coordinate
-  if data.isEmpty then .error .loading
-  else if data.all (fun record => record.writer == observation.target.writer) = false then
-    .error .invalid
-  else if CanonicalOutput.Execution.timestampsNondecreasing data = false then .error .invalid
-  else
-  let flushes ← (List.range data.length).mapM fun ordinal =>
-    match flushAt data observation.target.writer ordinal with
-    | .ok flush => .ok flush
-    | .error (.missingOrdinal _) => .error .loading
-    | .error (.conflictingOrdinal _) => .error .conflicted
-    | .error _ => .error .invalid
-  match consumeFlushes flushes [] with
-  | .ok streams => .ok (visibleStreams streams)
-  | .error _ => .error .invalid
+          else match reconstructMessage observation.records observation.deniedSegments message with
+            | .ok native => .published message native
+            | .error (.reconstruction (.lookup .unavailable)) => .loading
+            | .error (.reconstruction (.extent (.missingOrdinal _))) =>
+                settlingForReferencedTarget observation message
+            | .error error => classifyMessageError error
 
 def streamReferenced (headers : List Header) (closing : Segment) (stream : Nat) : Bool :=
   headers.any fun header => header.refs.any fun ref =>
@@ -178,7 +270,9 @@ def resolvedReferencingHeaders (observation : Observation) (closing : Segment) :
   let candidates :=
     (observation.messages.filter fun message =>
       referencesClose message closing &&
-      message.header.request == some observation.request &&
+      (match message.header.publication with
+       | .toolDelivery _ => true
+       | _ => message.header.request == some observation.request) &&
       message.header.session == observation.session).dedup
   candidates.mapM fun candidate =>
     match messageAt observation.messages candidate.header.id with
@@ -201,7 +295,7 @@ def projectUnheadedClosed (observation : Observation) (closing : Segment)
   else if sourceDenied observation ||
       observation.dependencyDenials.any (fun denial => denial.rootCloseId == closing.id) then
     .denied
-  else if !observation.requestTerminal then .loading
+  else if !observation.requestTerminal then loadingOrSettlingBeforeClose observation closing
   else match resolveTerminalPayload observation.messages observation.records
       observation.deniedHeaders observation.deniedSegments observation.request
       observation.session observation.terminalSelection observation.dependencyDenials with
@@ -212,11 +306,11 @@ def projectUnheadedClosed (observation : Observation) (closing : Segment)
             match resolvedReferencingHeaders observation closing with
             | .error view => view
             | .ok headers => match reconstructExtent observation.records closing with
-              | .error (.missingOrdinal _) => .loading
+              | .error (.missingOrdinal _) => loadingOrSettlingBeforeClose observation closing
               | .error (.conflictingOrdinal _) => .conflicted
               | .error _ => .invalid
               | .ok streams => .retainedPartial (retainedStreams headers closing streams)
-        | _, _ => .loading
+        | _, _ => loadingOrSettlingBeforeClose observation closing
 
 def project (observation : Observation) : View :=
   match observation.target.messageId with

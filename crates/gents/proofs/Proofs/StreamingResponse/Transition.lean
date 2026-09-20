@@ -9,7 +9,8 @@ changing. Canonical execution, not this projection, authorizes those facts. -/
 inductive Transition : Observation → Observation → Prop
   | deliverSegment (observation : Observation) (record : Segment) :
       Transition observation
-        { observation with records := CanonicalOutput.deliver observation.records record }
+        { observation with
+          records := CanonicalOutput.deliver observation.records record }
   | deliverMessage (observation : Observation) (message : MessageEnvelope) :
       Transition observation
         { observation with

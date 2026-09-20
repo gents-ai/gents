@@ -200,7 +200,8 @@ theorem transition_retains_messages
   | dispatch_tool_call _ h_post => simpa [h_post] using h_mem
   | complete_tool_with_result _ _ h_fresh h_post =>
       subst h_post
-      simp [TranscriptState.completeToolWithResult, h_fresh, h_mem]
+      simp [TranscriptState.completeToolWithResult, TranscriptState.publishToolResult,
+        h_fresh, h_mem]
   | observe_duplicate_tool_result _ h_post => simpa [h_post] using h_mem
   | append_distinct_tool_result _ h_post =>
       subst h_post
@@ -234,7 +235,7 @@ theorem duplicate_tool_result_observation_noops (s : TranscriptState)
     (callId : ToolExecution.ToolCallId) (messageId : MessageId) (key : ToolResultKey)
     (h_seen : s.hasToolResultKey key = true) :
     s.completeToolWithResult callId messageId key = s := by
-  simp [TranscriptState.completeToolWithResult, h_seen]
+  simp [TranscriptState.completeToolWithResult, TranscriptState.publishToolResult, h_seen]
 
 theorem complete_tool_with_result_preserves_other_inflight
     (s : TranscriptState)
@@ -243,7 +244,7 @@ theorem complete_tool_with_result_preserves_other_inflight
     (messageId : MessageId) (key : ToolResultKey)
     (h_in : otherCallId ∈ s.inFlight) :
     otherCallId ∈ (s.completeToolWithResult callId messageId key).inFlight := by
-  unfold TranscriptState.completeToolWithResult
+  unfold TranscriptState.completeToolWithResult TranscriptState.publishToolResult
   split
   · exact h_in
   · simp [Finset.mem_erase, h_ne, h_in]
@@ -255,7 +256,7 @@ theorem complete_tool_with_result_preserves_fresh_key
     (h_fresh : s.hasToolResultKey otherKey = false) :
     (s.completeToolWithResult callId messageId key).hasToolResultKey otherKey =
       false := by
-  unfold TranscriptState.completeToolWithResult
+  unfold TranscriptState.completeToolWithResult TranscriptState.publishToolResult
   split
   · exact h_fresh
   simp only [TranscriptState.hasToolResultKey,

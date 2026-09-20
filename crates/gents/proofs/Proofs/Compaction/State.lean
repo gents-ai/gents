@@ -108,7 +108,18 @@ Assistant mixed content is represented only by its call-symbol set here, so
 full content normalization remains part of the native adapter refinement.
 `ToolResultKey.logicalResultId/payloadHash` remain
 the existing typed result-owner fingerprint; this model binds its session but
-does not invent a second durable result identity or hash native bytes. -/
+does not invent a second durable result identity or hash native bytes.
+
+Forked results keep native call IDs and exact origin content, but their
+publication owner is the fork. `rowPublished` obtains the origin-validated
+canonical projection before using this shape predicate. -/
+def resultPublicationMatches (publication : CanonicalOutput.MessagePublication)
+    (physical : CanonicalOutput.DocId) : Bool :=
+  match publication with
+  | .toolDelivery call => call == physical
+  | .fork _ => true
+  | _ => false
+
 def kindMatches (row : MessageRow) (message : CanonicalOutput.MessageEnvelope)
     (native : CanonicalOutput.ReconstructedMessage) : Bool :=
   let calls := nativeToolCallSymbols native
@@ -123,7 +134,7 @@ def kindMatches (row : MessageRow) (message : CanonicalOutput.MessageEnvelope)
         match native.blocks with
         | [.toolResult physicalCall id callId _] =>
             providerCallSymbol id callId == call &&
-              message.header.publication == .toolDelivery physicalCall
+              resultPublicationMatches message.header.publication physicalCall
         | _ => false
 
 /-- A row is eligible for compaction only when its exact immutable header and

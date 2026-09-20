@@ -169,11 +169,20 @@ def acceptedPublicationPresent (world : World) (closing : Segment)
     | .error _ => false
     | .ok rows => delegatedRowsPresent world rows
 
+def acceptedToolsPresent (world : World) (message : MessageEnvelope) : Bool :=
+  (toolIntents message).all fun intent =>
+    match ownedToolByDocument? world intent.call with
+    | some tool => tool.requestDoc == world.requestId &&
+        tool.session == message.header.session &&
+        tool.acceptedSequence == message.sequence
+    | none => false
+
 /-- Accepted provider turn transaction: validated Complete closure, typed native
 message, assistant transcript row, every ordered pending tool intent, and each
 requested remote-only delegated argument row appear together before dispatch. -/
 def acceptAndPublishCore (world : World) (generation : Generation)
-    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget) :
+    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (admissions : List ToolAdmission) :
     Except Error World :=
   let header := message.header
   let turn := messageTurn message
@@ -182,11 +191,13 @@ def acceptAndPublishCore (world : World) (generation : Generation)
   else if ¬ (targets.map (fun target => target.call)).Nodup then .error .invalidDelegation
   else if remoteTargetsMatchConfiguredRoutes world message targets = false then
     .error .invalidDelegation
-  else if acceptedPublicationPresent world closing message targets then
+  else if acceptedPublicationPresent world closing message targets &&
+      acceptedToolsPresent world message then
     if !messageIdentityCollision world message && closedComplete closing &&
         validateClosingRecord world.segments closing &&
         acceptedMessageValid world generation world.segments message &&
-        acceptedSourceBound world generation closing message then .ok world
+        acceptedSourceBound world generation closing message &&
+        toolProjectionCoherent world then .ok world
     else .error .publicationIncomplete
   else if freshSegmentIdentity world closing = false ∨
       freshMessageIdentity world message = false then .error .identityCollision
@@ -205,20 +216,25 @@ def acceptAndPublishCore (world : World) (generation : Generation)
         acceptedMessageValid world generation segments message = false ∨
         acceptedSourceBound world generation closing message = false then
       .error .invalidHeader
-    else if ¬ world.transcript.PublishableTurn turn then .error .transcriptRejected
+    else if ¬ world.transcript.PublishableTurn turn ||
+        admissionsValid world message admissions = false then .error .transcriptRejected
     else match prepareDelegatedCalls world segments message targets with
     | .error error => .error error
     | .ok delegated =>
         match RequestExecutionLease.step? world.lease
             (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
         | none => .error .leaseRejected
-        | some lease => .ok
-            { world with
+        | some lease =>
+            let candidate : World :=
+              { world with
               lease := lease
               segments := segments
               messages := world.messages ++ [message]
               transcript := world.transcript.publishAcceptedAssistant header.id turn
+              toolContexts := installAcceptedTools world message admissions
               delegatedCalls := world.delegatedCalls ++ delegated }
+            if toolProjectionCoherent candidate then .ok candidate
+            else .error .transcriptRejected
 
 def authoredRowPresent (world : World) (message : MessageEnvelope) : Bool :=
   match message.header.role with
@@ -292,11 +308,12 @@ def appendHeaderOnlyRow (transcript : Transcript.TranscriptState)
 /-- Payload-free Complete assistant/user publication needs no synthetic source.
 Its header and transcript row still commit atomically behind the request gate. -/
 def publishHeaderOnlyCore (world : World) (generation : Generation)
-    (message : MessageEnvelope) : Except Error World :=
+    (message : MessageEnvelope) (admissions : List ToolAdmission) : Except Error World :=
   if messageIdentityCollision world message then .error .identityCollision
-  else if headerOnlyPublicationPresent world message then
+  else if headerOnlyPublicationPresent world message && acceptedToolsPresent world message then
     if !messageIdentityCollision world message &&
-        headerOnlyMessageValid world generation message then .ok world
+        headerOnlyMessageValid world generation message &&
+        toolProjectionCoherent world then .ok world
     else .error .publicationIncomplete
   else if freshMessageIdentity world message = false then .error .identityCollision
   else if message.createdAt != world.lease.now ||
@@ -305,14 +322,19 @@ def publishHeaderOnlyCore (world : World) (generation : Generation)
       message.sequence != world.transcript.nextSeq then .error .transcriptRejected
   else if message.header.role == .assistant &&
       ¬ world.transcript.PublishableTurn (messageTurn message) then .error .transcriptRejected
+  else if admissionsValid world message admissions = false then .error .transcriptRejected
   else match RequestExecutionLease.step? world.lease
       (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
   | none => .error .leaseRejected
-  | some lease => .ok
-      { world with
+  | some lease =>
+      let candidate : World :=
+        { world with
         lease := lease
         messages := world.messages ++ [message]
+        toolContexts := installAcceptedTools world message admissions
         transcript := appendHeaderOnlyRow world.transcript message }
+      if toolProjectionCoherent candidate then .ok candidate
+      else .error .transcriptRejected
 
 def dispatchPublicationValid (world : World) (generation : Generation)
     (callId : ToolExecution.ToolCallId) : Bool :=
@@ -341,18 +363,85 @@ def dispatchPublicationValid (world : World) (generation : Generation)
               | _ => false
   | _ => false
 
+def toolDispatchPublicationValid (world : World) (generation : Generation)
+    (document : DocId) : Bool :=
+  match ownedToolByDocument? world document with
+  | some tool => match tool.provenance with
+    | .acceptedIntent => dispatchPublicationValid world generation document
+    | .spawnedBackground _ => acceptedHeaderBindsToolGeneration world tool generation
+  | none => false
+
+def toolReadyToDispatch (world : World) (document : DocId) : Bool :=
+  match ownedToolByDocument? world document with
+  | some tool => match tool.provenance with
+    | .acceptedIntent => decide (world.transcript.ReadyToDispatch document)
+    | .spawnedBackground _ => tool.context.state == .pending
+  | none => false
+
 def dispatchCore (world : World) (generation : Generation)
     (permit : DispatchPermit) : Except Error World :=
   let callId := permit.call
-  if dispatchPublicationValid world generation callId = false then .error .publicationIncomplete
-  else if world.transcript.RunningPublishedCall callId then .ok world
+  if toolDispatchPublicationValid world generation callId = false then .error .publicationIncomplete
+  else if physicalRunning world callId then .ok world
   else if !permit.cancellationAllows || !permit.toolPolicyAllows then .error .transcriptRejected
-  else if ¬ world.transcript.ReadyToDispatch callId then .error .transcriptRejected
-  else match RequestExecutionLease.step? world.lease
-      (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
-  | none => .error .leaseRejected
-  | some lease => .ok
-      { world with lease := lease, transcript := world.transcript.dispatchToolCall callId }
+  else if toolReadyToDispatch world callId = false ||
+      remoteExecutionAdmitted world callId = false then .error .transcriptRejected
+  else match ownedToolByDocument? world callId with
+  | none => .error .transcriptRejected
+  | some tool =>
+      if world.lease.now < tool.context.currentTime then .error .transcriptRejected
+      else
+      let current := { tool.context with currentTime := world.lease.now }
+      match ToolExecution.ToolCallContext.step? current .dispatch with
+      | none => .error .transcriptRejected
+      | some context =>
+          match RequestExecutionLease.step? world.lease
+              (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+          | none => .error .leaseRejected
+          | some lease =>
+              let updated := { tool with context := context }
+              .ok { world with
+                lease := lease
+                toolContexts := replaceOwnedTool world.toolContexts callId updated
+                transcript := world.transcript.dispatchToolCallWithMode
+                  callId context.awaitMode }
+
+def toolControlAction : ToolExecution.ToolCallContext.Action → Bool
+  | .background | .foreground | .detach => true
+  | _ => false
+
+/-- Explicit mode/policy control for the exact accepted physical tool. It is
+generation-fenced through the request owner, and foreground reacquisition is
+forbidden after durable handoff or parent terminalization. -/
+def changeToolControlCore (world : World) (generation : Generation) (document : DocId)
+    (action : ToolExecution.ToolCallContext.Action) : Except Error World :=
+  if toolControlAction action = false then .error .transcriptRejected
+  else match ownedToolByDocument? world document with
+  | none => .error .transcriptRejected
+  | some tool =>
+      if acceptedHeaderBindsToolGeneration world tool generation = false ||
+          tool.cancelCascadeIntentAt.isSome || tool.stuckSince.isSome then
+        .error .transcriptRejected
+      else if action == .foreground && world.terminalSelection.isSome then
+        .error .terminalRejected
+      else if action == .foreground && tool.provenance != .acceptedIntent then
+        .error .transcriptRejected
+      else match ToolExecution.ToolCallContext.step? tool.context action with
+      | none => .error .transcriptRejected
+      | some context =>
+          match RequestExecutionLease.step? world.lease
+              (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+          | none => .error .leaseRejected
+          | some lease =>
+              let updated := { tool with context := context }
+              let transcript := match action with
+                | .background => world.transcript.releaseParentInFlight document
+                | .foreground => world.transcript.claimParentInFlight document
+                | _ => world.transcript
+              .ok { world with
+                lease := lease
+                toolContexts := replaceOwnedTool world.toolContexts document updated
+                transcript := transcript }
 
 def recoveryExtentExact (world : World) (expected : Generation)
     (closing : Segment) : Bool :=
@@ -495,10 +584,120 @@ def recoveryReplayValid (world : World) (expected fresh : Generation)
                   !messageIdentityCollision world message &&
                   publicationRowPresent world message.header (messageTurn message)
 
-/-- One gate transaction closes every unresolved keyed provider source before
-the old generation becomes inaccessible, reusing exact Partial closures when
-already present. Optional conservative recovery headers/rows and the fresh
-generation swap commit atomically. -/
+def terminalReplayPresent (world : World) (generation : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection) : Bool :=
+  world.lease.lease == .terminal generation outcome &&
+    world.terminalSelection == some selection
+
+def acceptedOwnedCalls (world : World) (generation : Generation) :
+    List (SessionId × Transcript.Sequence × ToolExecution.ToolCallId) :=
+  world.messages.flatMap fun message =>
+    match message.header.publication with
+    | .requestExecution owner =>
+        if owner == generation && acceptedMessageValid world owner world.segments message &&
+            publicationRowPresent world message.header (messageTurn message) then
+          (toolIntents message).map (fun intent =>
+            (message.header.session, message.sequence, intent.call))
+        else []
+    | _ => []
+
+def ownedByGeneration (world : World) (generation : Generation) (tool : OwnedTool) : Bool :=
+  acceptedHeaderBindsToolGeneration world tool generation
+
+def terminalToolState : ToolExecution.ToolCallState → Bool
+  | .completed | .failed | .timedOut | .cancelled => true
+  | .pending | .running => false
+
+def normalCompletionToolsReady (world : World) (generation : Generation) : Bool :=
+  world.toolContexts.all fun tool =>
+    if ownedByGeneration world generation tool then
+      match tool.provenance, tool.context.state with
+      | _, .pending => true
+      | .spawnedBackground _, .running => tool.context.awaitMode == .background
+      | .acceptedIntent, .running =>
+          tool.context.awaitMode == .background && canonicalToolDelivered world tool
+      | .spawnedBackground _, terminal =>
+          tool.context.awaitMode == .background && terminalToolState terminal
+      | .acceptedIntent, terminal => tool.context.startedAt.isNone ||
+          (terminalToolState terminal && canonicalToolDelivered world tool)
+    else true
+
+def handoffRunningTool (world : World) (tool : OwnedTool) : OwnedTool :=
+  { tool with
+    cancelCascadeIntentAt :=
+      if tool.context.cancelPolicy == .cascade then some world.lease.now
+      else tool.cancelCascadeIntentAt
+    cancelPendingRemoteAck :=
+      tool.cancelPendingRemoteAck ||
+        (tool.context.cancelPolicy == .cascade &&
+          world.delegatedCalls.any (fun delegated => delegated.call == tool.document))
+    stuckSince := some world.lease.now }
+
+def accountOneOwnedTool (world : World) (generation : Generation)
+    (interruptRunning : Bool) (tool : OwnedTool) : OwnedTool × Transcript.TranscriptState :=
+  if !ownedByGeneration world generation tool then (tool, world.transcript)
+  else match tool.context.state with
+  | .pending =>
+      match ToolExecution.ToolCallContext.step? tool.context
+          (.cancelBeforeDispatch .interrupted) with
+      | none => (tool, world.transcript)
+      | some context =>
+          ({ tool with context := context },
+            world.transcript.terminalizeToolCall tool.document .cancelled)
+  | .running =>
+      let accounted := if interruptRunning then handoffRunningTool world tool else tool
+      (accounted, world.transcript.releaseParentInFlight tool.document)
+  | _ => (tool, world.transcript.releaseParentInFlight tool.document)
+
+def accountOwnedTools (world : World) (generation : Generation)
+    (interruptRunning : Bool) : World :=
+  world.toolContexts.foldl (fun current original =>
+    let (tool, transcript) := accountOneOwnedTool current generation interruptRunning original
+    { current with
+      toolContexts := replaceOwnedTool current.toolContexts original.document tool
+      transcript := transcript }) world
+
+def accountOneMetadataOwnedTool (world : World) (generation : Generation)
+    (tool : OwnedTool) : OwnedTool × Transcript.TranscriptState :=
+  if !metadataOwnedByGeneration world generation tool then (tool, world.transcript)
+  else match tool.context.state with
+  | .pending =>
+      match ToolExecution.ToolCallContext.step? tool.context
+          (.cancelBeforeDispatch .interrupted) with
+      | none => (tool, world.transcript)
+      | some context => ({ tool with context := context },
+          world.transcript.terminalizeToolCall tool.document .cancelled)
+  | .running =>
+      (handoffRunningTool world tool,
+        world.transcript.releaseParentInFlight tool.document)
+  | _ => (tool, world.transcript.releaseParentInFlight tool.document)
+
+def accountMetadataOwnedTools (world : World) (generation : Generation) : World :=
+  world.toolContexts.foldl (fun current original =>
+    let (tool, transcript) := accountOneMetadataOwnedTool current generation original
+    { current with
+      toolContexts := replaceOwnedTool current.toolContexts original.document tool
+      transcript := transcript }) world
+
+def ownedPendingSettled (world : World) (generation : Generation) : Bool :=
+  world.transcript.toolCalls.all fun row =>
+    if (row.sessionId, row.messageSequence, row.callId) ∈ acceptedOwnedCalls world generation then
+      row.state != .pending
+    else true
+
+def preparedRecoveryWorld (world : World) (prepared : RecoveryPrepared)
+    (expected : Generation) : World :=
+  accountOwnedTools
+    { world with
+      segments := prepared.segments
+      messages := prepared.messages
+      transcript := prepared.transcript }
+    expected true
+
+/-- One gate transaction closes every unresolved keyed provider source, accounts
+every exact old-generation tool document, and only then swaps generation.
+Running effects remain running; durable cancellation/reconcile intent releases
+the crashed parent's hook without claiming a host acknowledgement. -/
 def recoverExpiredBatchCore (world : World) (expected fresh : Generation)
     (duration deadline : Time) (items : List RecoveryItem) : Except Error World :=
   if recoveryReplayValid world expected fresh items then
@@ -506,41 +705,12 @@ def recoverExpiredBatchCore (world : World) (expected fresh : Generation)
   else match prepareRecoveryBatch world expected fresh items with
   | .error error => .error error
   | .ok prepared =>
-      match RequestExecutionLease.step? world.lease
+      let accounted := preparedRecoveryWorld world prepared expected
+      match RequestExecutionLease.step? accounted.lease
           (.recoverExpired .mutationWriteGate expected fresh duration deadline) with
       | none => .error .leaseRejected
       | some lease => .ok
-          { world with
-            lease := lease
-            segments := prepared.segments
-            messages := prepared.messages
-            transcript := prepared.transcript }
-
-def terminalReplayPresent (world : World) (generation : Generation)
-    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection) : Bool :=
-  world.lease.lease == .terminal generation outcome &&
-    world.terminalSelection == some selection
-
-def acceptedOwnedCalls (world : World) :
-    List (SessionId × Transcript.Sequence × ToolExecution.ToolCallId) :=
-  world.messages.flatMap fun message =>
-    match message.header.publication with
-    | .requestExecution generation =>
-        if acceptedMessageValid world generation world.segments message &&
-            publicationRowPresent world message.header (messageTurn message) then
-          (toolIntents message).map (fun intent =>
-            (message.header.session, message.sequence, intent.call))
-        else []
-    | _ => []
-
-def terminalizeOwnedPending (world : World) : Transcript.TranscriptState :=
-  world.transcript.cancelPendingOwnedCalls (acceptedOwnedCalls world)
-
-def ownedPendingSettled (world : World) : Bool :=
-  world.transcript.toolCalls.all fun row =>
-    if (row.sessionId, row.messageSequence, row.callId) ∈ acceptedOwnedCalls world then
-      row.state != .pending
-    else true
+          { accounted with lease := lease }
 
 /-- Final request lifecycle and exact terminal-output selection commit together.
 No latest-message fallback is available. -/
@@ -550,14 +720,33 @@ def terminalizeCore (world : World) (generation : Generation)
   if terminalSelectionValid world selection = false then .error .terminalRejected
   else if terminalReplayPresent world generation outcome selection then .ok world
   else if world.terminalSelection.isSome then .error .terminalRejected
-  else match RequestExecutionLease.step? world.lease
+  else if outcome == .completed && normalCompletionToolsReady world generation = false then
+    .error .terminalRejected
+  else
+    let accounted := accountOwnedTools world generation (outcome != .completed)
+    match RequestExecutionLease.step? accounted.lease
       (.finalize .mutationWriteGate generation outcome) with
   | none => .error .leaseRejected
   | some lease => .ok
-      { world with
+      { accounted with
         lease := lease
-        transcript := terminalizeOwnedPending world
         terminalSelection := some selection }
+
+/-- Escape from post-acceptance payload corruption. This path deliberately
+uses only immutable header/tool provenance and the policy-revocation lease
+action; it never repairs, chooses, or closes conflicting output bytes. -/
+def revokeCorruptCore (world : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection) :
+    Except Error World :=
+  if terminalReplayPresent world fresh outcome selection then .ok world
+  else if world.terminalSelection.isSome ||
+      terminalSelectionMetadataValid world selection = false then .error .terminalRejected
+  else
+    let accounted := accountMetadataOwnedTools world expected
+    match RequestExecutionLease.step? accounted.lease
+        (.policyRevoke .mutationWriteGate expected fresh outcome) with
+    | none => .error .leaseRejected
+    | some lease => .ok { accounted with lease := lease, terminalSelection := some selection }
 
 def appendRaw (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=
@@ -574,21 +763,58 @@ def retractBeforeRetry (world : World) (generation : Generation)
     (retractBeforeRetryCore world generation record)
 
 def acceptAndPublish (world : World) (generation : Generation)
-    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget) :
+    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (admissions : List ToolAdmission) :
     Except Error World :=
   checked (fun post =>
-    acceptedPublicationPresent post closing message targets &&
+    acceptedPublicationPresent post closing message targets && acceptedToolsPresent post message &&
+      toolProjectionCoherent post &&
       remoteTargetsMatchConfiguredRoutes post message targets &&
       validateClosingRecord post.segments closing &&
       acceptedMessageValid post generation post.segments message &&
       acceptedSourceBound post generation closing message)
-    (acceptAndPublishCore world generation closing message targets)
+    (acceptAndPublishCore world generation closing message targets admissions)
 
 def dispatch (world : World) (generation : Generation)
     (permit : DispatchPermit) : Except Error World :=
-  checked (fun post => decide (post.transcript.RunningPublishedCall permit.call) &&
-    dispatchPublicationValid post generation permit.call)
+  checked (fun post => physicalRunning post permit.call &&
+    toolDispatchPublicationValid post generation permit.call && toolProjectionCoherent post)
     (dispatchCore world generation permit)
+
+/-- The running accepted `spawn_process` owner creates a distinct childless
+background lifecycle row. It inherits exact request/session/sequence and
+generation ownership from that physical parent, but creates no assistant tool
+intent or transcript tool-call row of its own. -/
+def admitSpawnedBackgroundCore (world : World) (generation : Generation)
+    (admission : SpawnedToolAdmission) : Except Error World :=
+  if spawnedAdmissionReplayValid world admission then .ok world
+  else if world.toolContexts.any (fun tool =>
+      tool.provenance == .spawnedBackground admission.parentToolDoc) then
+    .error .transcriptRejected
+  else if spawnedAdmissionValid world generation admission = false then
+    .error .transcriptRejected
+  else match installSpawnedTool world admission with
+  | none => .error .transcriptRejected
+  | some spawned =>
+      match RequestExecutionLease.step? world.lease
+          (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+      | none => .error .leaseRejected
+      | some lease =>
+          let candidate := { world with
+            lease := lease
+            toolContexts := world.toolContexts ++ [spawned] }
+          if toolProjectionCoherent candidate then .ok candidate
+          else .error .transcriptRejected
+
+def admitSpawnedBackground (world : World) (generation : Generation)
+    (admission : SpawnedToolAdmission) : Except Error World :=
+  checked (fun post => toolProjectionCoherent post && spawnedToolPresent post admission)
+    (admitSpawnedBackgroundCore world generation admission)
+
+def changeToolControl (world : World) (generation : Generation) (document : DocId)
+    (action : ToolExecution.ToolCallContext.Action) : Except Error World :=
+  checked toolProjectionCoherent
+    (changeToolControlCore world generation document action)
 
 def publishAuthored (world : World) (generation : Generation)
     (closing : Segment) (message : MessageEnvelope) : Except Error World :=
@@ -599,17 +825,19 @@ def publishAuthored (world : World) (generation : Generation)
     (publishAuthoredCore world generation closing message)
 
 def publishHeaderOnly (world : World) (generation : Generation)
-    (message : MessageEnvelope) : Except Error World :=
+    (message : MessageEnvelope) (admissions : List ToolAdmission) : Except Error World :=
   checked (fun post =>
     headerOnlyPublicationPresent post message &&
-      headerOnlyMessageValid post generation message)
-    (publishHeaderOnlyCore world generation message)
+      headerOnlyMessageValid post generation message && acceptedToolsPresent post message &&
+      toolProjectionCoherent post)
+    (publishHeaderOnlyCore world generation message admissions)
 
 def recoverExpiredBatch (world : World) (expected fresh : Generation)
     (duration deadline : Time) (items : List RecoveryItem) :
     Except Error World :=
   checked (fun post =>
     recoveryBatchPresent post fresh items &&
+      toolProjectionCoherent post &&
       (recoveryReplayValid world expected fresh items ||
         recoveryCoversAllSources world expected items) &&
       items.all (fun item =>
@@ -624,7 +852,17 @@ def terminalize (world : World) (generation : Generation)
     Except Error World :=
   checked (fun post =>
     terminalReplayPresent post generation outcome selection &&
-      terminalSelectionValid post selection && ownedPendingSettled post)
+      terminalSelectionValid post selection && ownedPendingSettled post generation &&
+      toolProjectionCoherent post)
     (terminalizeCore world generation outcome selection)
+
+def revokeCorrupt (world : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection) :
+    Except Error World :=
+  checked (fun post =>
+    terminalReplayPresent post fresh outcome selection &&
+      terminalSelectionMetadataValid post selection &&
+      post.segments == world.segments && post.messages == world.messages)
+    (revokeCorruptCore world expected fresh outcome selection)
 
 end CanonicalOutput.Execution

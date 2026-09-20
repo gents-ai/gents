@@ -78,6 +78,7 @@ def viewName : View → String
   | .absent => "absent"
   | .live _ => "live"
   | .loading => "loading"
+  | .settling _ => "settling"
   | .denied => "denied"
   | .conflicted => "conflicted"
   | .invalid => "invalid"
@@ -177,7 +178,7 @@ theorem projection_cases_pin_boundaries :
     outputProjectionCases.map (fun witness => viewName witness.expected) =
        ["published", "published", "loading", "conflicted", "loading", "denied",
        "live", "absent", "loading", "retained_partial", "loading",
-       "retracted", "absent", "loading", "loading", "loading", "published", "conflicted",
+       "retracted", "absent", "settling", "loading", "settling", "published", "conflicted",
        "live"] := by
   native_decide
 
@@ -189,8 +190,52 @@ theorem header_before_payload_dependencies_is_loading :
     project (baseObservation (records := [])) = .loading := by
   native_decide
 
+def sampleWaitingClose : Segment :=
+  { sampleComplete with flush := none, close := some (.closed .complete 2 [1, 1]) }
+
+def sampleWrongWaitingClose : Segment :=
+  { sampleWaitingClose with coordinate := ⟨11, .provider 0 0 0⟩ }
+
+theorem header_arrival_preserves_valid_open_prefix_as_settling :
+    project (baseObservation (records := [sampleOpen, sampleWaitingClose])) =
+      .settling [(sampleText, [65])] := by
+  native_decide
+
+theorem header_without_exact_target_close_does_not_attach_preview :
+    project (baseObservation (records := [sampleOpen])) = .loading := by
+  native_decide
+
+theorem header_wrong_source_target_does_not_attach_preview :
+    project (baseObservation (records := [sampleOpen, sampleWrongWaitingClose])) !=
+      .settling [(sampleText, [65])] := by
+  native_decide
+
+theorem header_denied_target_prefix_is_denied :
+    project { baseObservation (records := [sampleOpen, sampleWaitingClose]) with
+      deniedSegments := [100] } = .denied := by
+  native_decide
+
+theorem same_session_different_id_same_key_is_conflicted :
+    project { baseObservation with messages :=
+      [sampleMessage, { sampleMessage with
+        header := { sampleMessage.header with id := 299 }, sequence := 1 }] } = .conflicted := by
+  native_decide
+
+theorem same_session_different_id_same_sequence_is_conflicted :
+    project { baseObservation with messages :=
+      [sampleMessage, { sampleMessage with
+        header := { sampleMessage.header with id := 298 }, key := "other" }] } = .conflicted := by
+  native_decide
+
 theorem closed_complete_source_is_not_live :
-    project (baseObservation (messages := []) (messageId := none)) = .loading := by
+    project (baseObservation (messages := []) (messageId := none)) =
+      .settling [(sampleText, [65])] := by
+  native_decide
+
+theorem closed_preview_ignores_malformed_data_beyond_committed_extent :
+    project (baseObservation
+      (records := [sampleComplete, { sampleLateBeyondExtent with writer := .request 99 }])
+      (messages := []) (messageId := none)) = .settling [(sampleText, [65])] := by
   native_decide
 
 /-- This deliberately does not claim arbitrary late records are harmless:

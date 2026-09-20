@@ -3,3 +3,10 @@ import Proofs.CanonicalOutput.Execution.Projection
 import Proofs.CanonicalOutput.Execution.Transition
 import Proofs.CanonicalOutput.Execution.Properties
 import Proofs.CanonicalOutput.Execution.Examples
+import Proofs.CanonicalOutput.Execution.ToolDelivery
+import Proofs.CanonicalOutput.Execution.BackgroundContinuation
+import Proofs.CanonicalOutput.Execution.RestartRecovery
+import Proofs.CanonicalOutput.Execution.BackgroundGate
+import Proofs.CanonicalOutput.Execution.ToolDeliveryCases
+import Proofs.CanonicalOutput.Execution.ContinuationCases
+import Proofs.CanonicalOutput.Execution.CompactionCases
