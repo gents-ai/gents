@@ -145,7 +145,7 @@ not only message-sequence or tool-lifecycle coherence.
 `Execution/SessionComposition.Trace.nextSequence_monotone` lifts those laws over
 the single composed trace, including execution commits and atomic notification/
 queue commits, without a raw gate trace escape around retry policy.
-Its sequence invariant also crosses physical
+Its allocator monotonicity theorem also crosses physical
 request activation, finish, Goal publication and wake delivery. Authentication of
 native claim/Goal/configuration observations remains a bridge premise; these
 adapters do not introduce a second identity or configuration authority.
@@ -160,10 +160,28 @@ four-field write (segments, messages, transcript, tool contexts); the common lif
 cannot write the parent lease or composed controls. `Gate.Operation` remains the
 closed admitted-operation vocabulary, not an arbitrary transition callback.
 Provider acceptance/retraction still require the retry-mediated application path.
-The full coherence invariant over that application trace is still outstanding;
-flattening and frame preservation do not establish it or justify deleting the
-remaining defensive postchecks. Native conformance regeneration remains deferred
-until that proof/encoding work settles.
+Two inductive invariants now use that same application trace, with no invariant
+premises added to its constructors. `InvariantComposition.Trace.sequenceBound`
+proves that every current-session canonical header remains below the shared
+allocator, assuming this bound initially. `ClaimInvariant` proves
+`Trace.claimCoherent`: an idle world has no active queue entry; a claimed world
+agrees on physical request, session, logical queue entry and retry owner.
+Empty message storage establishes the first invariant; an unclaimed world with
+an inactive queue establishes the second. Activation establishes claim coherence,
+and finish restores the idle case. Both proofs cover provider/retry commits,
+ordinary gate operations, handover, Goal publication and background wake delivery.
+They do not assert sequence uniqueness or correctness of arbitrary imported seeds.
+`SessionCompositionCases.actual_activation_trace_preserves_both_invariants`
+constructs a successful activation trace from the existing ordinary-request
+fixture and applies both inductive proofs, rather than only checking its endpoint.
+
+Tool publication proofs now expose the actual replay-or-append effect on both
+headers and their allocator. Acceptance and header-only publication establish
+tool projection coherence inside their cores, so their duplicate outer coherence
+checks are removed. The full tool-coherence and source-closure uniqueness
+invariants over the application trace remain outstanding; these two new
+invariants do not justify deleting the other defensive postchecks. Native
+conformance regeneration remains deferred until that proof/encoding work settles.
 
 Retry cap, deadline-fit and one-repair guarantees are retained as transition
 proofs. Segment retention is proved across observation traces; projected prefix
@@ -214,6 +232,13 @@ validator equivalence, and preservation of every migrated regression assertion.
 The full-state continuation case caught an accidental queue/retry reset during
 gate initialization; initialization now touches only gate controls. The final
 aggregate build passes, as do the import-closure guard's three unit tests.
+
+The subsequent sequence/claim invariant checkpoint passed the pinned Lean 4.18.0
+aggregate build (1,157 targets) and all three import-closure guard tests. Sol review
+checked every application trace constructor, unchanged admission semantics and
+the new activation trace witness. No `sorry` or new axioms were introduced.
+This checkpoint adds inductive proof coverage; it is not a net line-count reduction
+or completion of the remaining full-coherence invariant work.
 
 The explicit-renewal revision removed lease `OutputFact`/eligibility and global
 derived-progress scans. Renewal

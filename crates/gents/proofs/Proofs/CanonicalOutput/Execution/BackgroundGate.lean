@@ -59,4 +59,32 @@ theorem successful_commit_preserves_allocator_monotonicity
         simpa [BackgroundContinuation.publishNotification, hbefore, hdocument,
           hmessage, hbinding] using result.published
 
+theorem successful_commit_preserves_claim_control
+    (before after : World) (actor : Gate.Actor) (now : Time)
+    (document : DocId) (message : MessageEnvelope) (wake : SessionQueue.QueueEntry)
+    (binding : WakeDocumentBinding)
+    (h : commit before actor now document message wake binding = some after) :
+    after.requestId = before.requestId ∧ after.sessionId = before.sessionId ∧
+      after.claimed = before.claimed ∧ after.retry = before.retry ∧
+      after.queue.active = before.queue.active := by
+  unfold commit at h
+  split at h <;> try contradiction
+  cases hp : BackgroundContinuation.publishAndEnqueue?
+      (Gate.atTime before now) document message wake binding before.queue with
+  | none => simp [hp] at h
+  | some result =>
+      simp [hp] at h
+      rcases h with ⟨⟨⟨⟨hbefore, _⟩, _⟩, _⟩, rfl⟩
+      have hf := CanonicalOutput.Execution.ToolDelivery.wake_notification_preserves_composed_control
+        result.before result.execution result.document result.binding result.message result.published
+      have ha := BackgroundContinuation.successful_enqueue_preserves_active
+        (Gate.atTime before now) document message wake binding before.queue result hp
+      exact ⟨by simpa [hbefore] using hf.1,
+        by simpa [hbefore] using hf.2.1,
+        by simpa [hbefore] using hf.2.2.2.1,
+        by simpa [hbefore] using hf.2.2.2.2,
+        by
+          cases hq : result.queued <;> simp [hq, committedQueue] at ha ⊢
+          exact ha⟩
+
 end CanonicalOutput.Execution.BackgroundGate

@@ -137,6 +137,25 @@ def publishGoalChild? (goal : Snapshot) (state : World)
         else none
     | _ => none
 
+theorem successful_publication_preserves_claim_control
+    (goal : Snapshot) (before : World) (actor : Gate.Actor) (now : Time)
+    (request : ClaimedRequest) (binding : Binding) (entry : SessionQueue.QueueEntry)
+    (result : Result)
+    (h : publishGoalChild? goal before actor now request binding entry = some result) :
+    result.after.requestId = before.requestId ∧
+      result.after.sessionId = before.sessionId ∧
+      result.after.claimed = before.claimed ∧ result.after.retry = before.retry ∧
+      result.after.queue.active = before.queue.active := by
+  unfold publishGoalChild? at h
+  dsimp only at h
+  repeat' first | contradiction |
+    (solve | cases h; simp_all [releaseGate, SessionQueue.step?, actualSessionIdle]) |
+    split at h
+  cases h
+  refine ⟨rfl, rfl, rfl, rfl, ?_⟩
+  apply SessionQueue.coalescePending_preserves_active
+  assumption
+
 def childAdmission (result : Result) : Handover.PhysicalRequestAdmission :=
   { document := result.binding.childDocument
   , entry := result.entry

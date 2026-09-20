@@ -15,4 +15,6 @@ import Proofs.CanonicalOutput.Execution.HandoverCases
 import Proofs.CanonicalOutput.Execution.GoalContinuation
 import Proofs.CanonicalOutput.Execution.GoalContinuationCases
 import Proofs.CanonicalOutput.Execution.SessionComposition
+import Proofs.CanonicalOutput.Execution.InvariantComposition
+import Proofs.CanonicalOutput.Execution.ClaimInvariant
 import Proofs.CanonicalOutput.Execution.SessionCompositionCases

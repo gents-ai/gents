@@ -315,4 +315,83 @@ theorem successful_commit_nextSequence_monotone
       cases h
       exact evaluate_nextSequence_monotone operation (atTime before now) execution heval
 
+set_option maxHeartbeats 2000000 in
+/-- Ordinary gated commits cannot retarget the physical request or session.
+Only the separate handover owner changes the active request identity. -/
+theorem evaluate_preserves_request_identity (operation : Operation) (before after : World)
+    (h : evaluate operation before = .ok after) :
+    after.requestId = before.requestId ∧ after.sessionId = before.sessionId := by
+  cases operation <;> simp only [evaluate] at h
+  all_goals first
+    | exact ToolDelivery.tool_write_preserves_request_identity
+        (mapError_success Error.delivery _ _ h)
+    | skip
+  case compact cursor =>
+    cases hc : Compaction.advanceCursor? before cursor with
+    | none => simp [hc] at h
+    | some post =>
+      simp [hc] at h
+      subst after
+      unfold Compaction.advanceCursor? at hc
+      repeat' first | contradiction | (solve | cases hc; exact ⟨rfl, rfl⟩) | split at hc
+  case accept generation closing message targets admissions =>
+    have hcore := mapError_success Error.execution _ _ h
+    replace hcore := checked_core_success _ _ _ hcore
+    simp (config := { maxSteps := 1000000 }) [acceptAndPublishCore] at hcore
+    by_cases hc : segmentIdentityCollision before closing = true ∨
+        messageIdentityCollision before message = true
+    · simp only [if_pos hc] at hcore
+      contradiction
+    · simp only [if_neg hc] at hcore
+      by_cases hn : (targets.map (fun target => target.call)).Nodup
+      · simp only [if_pos hn] at hcore
+        by_cases hr : remoteTargetsMatchConfiguredRoutes before message targets = false
+        · simp only [if_pos hr] at hcore
+          contradiction
+        · simp only [if_neg hr] at hcore
+          by_cases hp : acceptedPublicationPresent before closing message targets = true ∧
+              acceptedToolsPresent before message = true
+          · simp only [if_pos hp] at hcore
+            split at hcore <;> try contradiction
+            cases hcore
+            exact ⟨rfl, rfl⟩
+          · simp only [if_neg hp] at hcore
+            split at hcore <;> try contradiction
+            split at hcore <;> try contradiction
+            split at hcore <;> try contradiction
+            split at hcore <;> try contradiction
+            split at hcore <;> try contradiction
+            split at hcore <;> try contradiction
+            split at hcore <;> try contradiction
+            split at hcore <;> try contradiction
+            split at hcore <;> try contradiction
+            split at hcore <;> try contradiction
+            cases hcore
+            exact ⟨rfl, rfl⟩
+      · simp only [if_neg hn] at hcore
+        contradiction
+  all_goals
+    have hcore := mapError_success Error.execution _ _ h
+    try replace hcore := checked_core_success _ _ _ hcore
+    first
+      | exact recoverExpiredBatchCore_preserves_request_identity _ _ _ _ _ _ _ hcore
+      | exact terminalizeCore_preserves_request_identity _ _ _ _ _ hcore
+      | exact revokeCorruptCore_preserves_request_identity _ _ _ _ _ _ hcore
+      | simp only [Execution.renew, renewCore, appendRaw, appendRawCore,
+          retractBeforeRetryCore, acceptAndPublishCore, publishAuthoredCore,
+          publishHeaderOnlyCore, dispatchCore, admitSpawnedBackgroundCore,
+          changeToolControlCore] at hcore
+        try dsimp only at hcore
+        repeat' first
+          | contradiction
+          | (solve | cases hcore; exact ⟨rfl, rfl⟩)
+          | split at hcore
+
+theorem successful_commit_preserves_request_identity (before after : World)
+    (actor : Actor) (now : Time) (operation : Operation)
+    (h : commit before actor now operation = some after) :
+    after.requestId = before.requestId ∧ after.sessionId = before.sessionId := by
+  obtain ⟨execution, he, rfl⟩ := commit_reads_current_world before after actor now operation h
+  exact evaluate_preserves_request_identity operation (atTime before now) execution he
+
 end CanonicalOutput.Execution.Gate

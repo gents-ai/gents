@@ -31,6 +31,47 @@ theorem accountOwnedTools_preserves_nextSeq
       world.transcript.nextSeq :=
   accountFold_preserves_nextSeq world.toolContexts world generation interrupt
 
+private theorem accountFold_preserves_request_identity
+    (tools : List OwnedTool) (world : World) (generation : Generation) (interrupt : Bool) :
+    let after := tools.foldl (fun current original =>
+      let (tool, transcript) := accountOneOwnedTool current generation interrupt original
+      { current with
+        toolContexts := replaceOwnedTool current.toolContexts original.document tool
+        transcript := transcript }) world
+    after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
+  induction tools generalizing world with
+  | nil => exact ⟨rfl, rfl⟩
+  | cons tool rest ih =>
+      simp only [List.foldl_cons]
+      exact ih _
+
+theorem accountOwnedTools_preserves_request_identity
+    (world : World) (generation : Generation) (interrupt : Bool) :
+    (accountOwnedTools world generation interrupt).requestId = world.requestId ∧
+      (accountOwnedTools world generation interrupt).sessionId = world.sessionId :=
+  accountFold_preserves_request_identity world.toolContexts world generation interrupt
+
+theorem accountOwnedTools_preserves_sessionId
+    (world : World) (generation : Generation) (interrupt : Bool) :
+    (accountOwnedTools world generation interrupt).sessionId = world.sessionId :=
+  (accountOwnedTools_preserves_request_identity world generation interrupt).2
+
+private theorem accountFold_preserves_messages
+    (tools : List OwnedTool) (world : World) (generation : Generation) (interrupt : Bool) :
+    (tools.foldl (fun current original =>
+      let (tool, transcript) := accountOneOwnedTool current generation interrupt original
+      { current with
+        toolContexts := replaceOwnedTool current.toolContexts original.document tool
+        transcript := transcript }) world).messages = world.messages := by
+  induction tools generalizing world with
+  | nil => rfl
+  | cons tool rest ih => simpa only [List.foldl_cons] using ih _
+
+theorem accountOwnedTools_preserves_messages
+    (world : World) (generation : Generation) (interrupt : Bool) :
+    (accountOwnedTools world generation interrupt).messages = world.messages :=
+  accountFold_preserves_messages world.toolContexts world generation interrupt
+
 theorem accountOneMetadataOwnedTool_preserves_nextSeq
     (world : World) (generation : Generation) (tool : OwnedTool) :
     (accountOneMetadataOwnedTool world generation tool).2.nextSeq =
@@ -60,6 +101,26 @@ theorem accountMetadataOwnedTools_preserves_nextSeq
       world.transcript.nextSeq :=
   accountMetadataFold_preserves_nextSeq world.toolContexts world generation
 
+private theorem accountMetadataFold_preserves_request_identity
+    (tools : List OwnedTool) (world : World) (generation : Generation) :
+    let after := tools.foldl (fun current original =>
+      let (tool, transcript) := accountOneMetadataOwnedTool current generation original
+      { current with
+        toolContexts := replaceOwnedTool current.toolContexts original.document tool
+        transcript := transcript }) world
+    after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
+  induction tools generalizing world with
+  | nil => exact ⟨rfl, rfl⟩
+  | cons tool rest ih =>
+      simp only [List.foldl_cons]
+      exact ih _
+
+theorem accountMetadataOwnedTools_preserves_request_identity
+    (world : World) (generation : Generation) :
+    (accountMetadataOwnedTools world generation).requestId = world.requestId ∧
+      (accountMetadataOwnedTools world generation).sessionId = world.sessionId :=
+  accountMetadataFold_preserves_request_identity world.toolContexts world generation
+
 theorem prepareRecoveryItems_nextSeq_monotone
     (world : World) (expected fresh : Generation) (items : List RecoveryItem)
     (before after : RecoveryPrepared)
@@ -85,15 +146,50 @@ theorem prepareRecoveryBatch_nextSeq_monotone
   · contradiction
   · exact prepareRecoveryItems_nextSeq_monotone world expected fresh items _ after h
 
-theorem checked_core_success (predicate : World → Bool) (result : Except Error World)
-    (after : World) (h : checked predicate result = .ok after) : result = .ok after := by
-  cases he : result with
-  | error error => simp [checked, he] at h
-  | ok post =>
-      simp only [checked, he] at h
-      split at h
-      · cases h; rfl
-      · contradiction
+theorem recoverExpiredBatchCore_preserves_request_identity
+    (world after : World) (expected fresh : Generation) (duration deadline : Time)
+    (items : List RecoveryItem)
+    (h : recoverExpiredBatchCore world expected fresh duration deadline items = .ok after) :
+    after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
+  unfold recoverExpiredBatchCore at h
+  split at h
+  · cases h; exact ⟨rfl, rfl⟩
+  · split at h <;> try contradiction
+    rename_i prepared hprepared
+    dsimp only at h
+    split at h <;> try contradiction
+    cases h
+    simpa only [preparedRecoveryWorld] using
+      accountOwnedTools_preserves_request_identity
+        { world with
+          segments := prepared.segments
+          messages := prepared.messages
+          transcript := prepared.transcript }
+        expected true
+
+theorem terminalizeCore_preserves_request_identity
+    (world after : World) (generation : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (h : terminalizeCore world generation outcome selection = .ok after) :
+    after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
+  simp only [terminalizeCore] at h
+  repeat' first
+    | contradiction
+    | (solve | cases h; exact ⟨rfl, rfl⟩)
+    | (solve | cases h; apply accountOwnedTools_preserves_request_identity)
+    | split at h
+
+theorem revokeCorruptCore_preserves_request_identity
+    (world after : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (h : revokeCorruptCore world expected fresh outcome selection = .ok after) :
+    after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
+  simp only [revokeCorruptCore] at h
+  repeat' first
+    | contradiction
+    | (solve | cases h; exact ⟨rfl, rfl⟩)
+    | (solve | cases h; apply accountMetadataOwnedTools_preserves_request_identity)
+    | split at h
 
 set_option maxHeartbeats 1000000 in
 set_option maxRecDepth 100000 in

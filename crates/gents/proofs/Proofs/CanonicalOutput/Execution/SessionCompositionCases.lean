@@ -1,4 +1,5 @@
-import Proofs.CanonicalOutput.Execution.SessionComposition
+import Proofs.CanonicalOutput.Execution.InvariantComposition
+import Proofs.CanonicalOutput.Execution.ClaimInvariant
 import Proofs.CanonicalOutput.Execution.GoalContinuationCases
 
 namespace CanonicalOutput.Execution.SessionComposition.Cases
@@ -118,6 +119,55 @@ operations move the storage gate. -/
 
 theorem actual_activation_retry_terminal_finish_composes :
     activateRetryFinish = some true := by native_decide
+
+def activationTraceWitness : Option (World × World) := do
+  let before ← initial
+  let after ← activate before 1 6 ordinaryActivation 0 budget (some 11)
+  pure (before, after)
+
+theorem activationTraceWitness_isSome : activationTraceWitness.isSome = true := by
+  native_decide
+
+private theorem initial_seed_invariants (before : World)
+    (h : initial = some before) : ClaimCoherent before ∧ SequenceBound before := by
+  unfold initial at h
+  cases hg : Gate.acquire (Gate.initial parentWorld) 1 true with
+  | none => simp [hg] at h
+  | some gate =>
+      have hgate := Gate.acquire_preserves_durable_world
+        (Gate.initial parentWorld) gate 1 true hg
+      simp [hg] at h
+      cases h
+      constructor
+      · exact idleClaimCoherent _ rfl rfl
+      · apply empty_messages_sequenceBound
+        rw [hgate]
+        rfl
+
+/-- The executable fixture supplies an actual application `Trace.activate`,
+not merely a second computation with the same endpoint. Both seed predicates
+therefore reach the successfully activated world through their trace theorems. -/
+theorem actual_activation_trace_preserves_both_invariants :
+    ∃ before after,
+      Trace before after ∧ ClaimCoherent before ∧ SequenceBound before ∧
+        ClaimCoherent after ∧ SequenceBound after := by
+  obtain ⟨pair, hwitness⟩ := Option.isSome_iff_exists.mp activationTraceWitness_isSome
+  rcases pair with ⟨before, after⟩
+  unfold activationTraceWitness at hwitness
+  cases hi : initial with
+  | none => simp [hi] at hwitness
+  | some seeded =>
+      simp [hi] at hwitness
+      cases ha : activate seeded 1 6 ordinaryActivation 0 budget (some 11) with
+      | none => simp [ha] at hwitness
+      | some activated =>
+          simp [ha] at hwitness
+          rcases hwitness with ⟨rfl, rfl⟩
+          have trace : Trace seeded activated := .activate 1 6 ordinaryActivation 0
+            budget (some 11) ha
+          have seed := initial_seed_invariants seeded hi
+          exact ⟨seeded, activated, trace, seed.1, seed.2,
+            trace.claimCoherent seed.1, trace.sequenceBound seed.2⟩
 
 /-- The application Goal entrypoint consumes a proof of the actual Goal owner
 publication; the receipt cannot be supplied as an unjoined caller record. -/

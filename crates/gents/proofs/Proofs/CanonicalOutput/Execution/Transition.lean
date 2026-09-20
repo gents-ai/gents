@@ -43,6 +43,16 @@ def checked (predicate : World → Bool) : Except Error World → Except Error W
   | .error error => .error error
   | .ok world => if predicate world then .ok world else .error .publicationIncomplete
 
+theorem checked_core_success (predicate : World → Bool) (result : Except Error World)
+    (after : World) (h : checked predicate result = .ok after) : result = .ok after := by
+  cases he : result with
+  | error error => simp [checked, he] at h
+  | ok post =>
+      simp only [checked, he] at h
+      split at h
+      · cases h; rfl
+      · contradiction
+
 def rawReplayShape (world : World) (generation : Generation) (record : Segment) : Bool :=
   record.coordinate.request == world.requestId &&
     record.writer == .request generation && providerSource record.coordinate.source &&
@@ -231,6 +241,49 @@ def acceptAndPublishCore (world : World) (generation : Generation)
             if toolProjectionCoherent candidate then .ok candidate
             else .error .transcriptRejected
 
+set_option maxHeartbeats 1000000 in
+/-- Both replay and fresh publication establish the complete tool projection
+inside the atomic core.  Callers need not recompute it after success. -/
+theorem acceptAndPublishCore_success_toolProjectionCoherent
+    (world post : World) (generation : Generation)
+    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (admissions : List ToolAdmission)
+    (h : acceptAndPublishCore world generation closing message targets admissions = .ok post) :
+    toolProjectionCoherent post = true := by
+  simp (config := { maxSteps := 1000000 }) [acceptAndPublishCore] at h
+  by_cases hc : segmentIdentityCollision world closing = true ∨
+      messageIdentityCollision world message = true
+  · simp only [if_pos hc] at h
+    contradiction
+  · simp only [if_neg hc] at h
+    by_cases hn : (targets.map (fun target => target.call)).Nodup
+    · simp only [if_pos hn] at h
+      by_cases hr : remoteTargetsMatchConfiguredRoutes world message targets = false
+      · simp only [if_pos hr] at h
+        contradiction
+      · simp only [if_neg hr] at h
+        by_cases hp : acceptedPublicationPresent world closing message targets = true ∧
+            acceptedToolsPresent world message = true
+        · simp only [if_pos hp] at h
+          split at h <;> try contradiction
+          cases h
+          simp_all
+        · simp only [if_neg hp] at h
+          split at h <;> try contradiction
+          split at h <;> try contradiction
+          split at h <;> try contradiction
+          split at h <;> try contradiction
+          split at h <;> try contradiction
+          split at h <;> try contradiction
+          split at h <;> try contradiction
+          split at h <;> try contradiction
+          split at h <;> try contradiction
+          split at h <;> try contradiction
+          all_goals cases h
+          all_goals assumption
+    · simp only [if_neg hn] at h
+      contradiction
+
 def authoredRowPresent (world : World) (message : MessageEnvelope) : Bool :=
   match message.header.role with
   | .system => message.header.session == world.transcript.sessionId &&
@@ -330,6 +383,20 @@ def publishHeaderOnlyCore (world : World) (generation : Generation)
         transcript := appendHeaderOnlyRow world.transcript message }
       if toolProjectionCoherent candidate then .ok candidate
       else .error .transcriptRejected
+
+set_option maxHeartbeats 1000000 in
+/-- Header-only replay and fresh publication both establish the complete tool
+projection in the core transaction. -/
+theorem publishHeaderOnlyCore_success_toolProjectionCoherent
+    (world post : World) (generation : Generation)
+    (message : MessageEnvelope) (admissions : List ToolAdmission)
+    (h : publishHeaderOnlyCore world generation message admissions = .ok post) :
+    toolProjectionCoherent post = true := by
+  simp only [publishHeaderOnlyCore] at h
+  repeat' first
+    | contradiction
+    | (solve | cases h; simp_all)
+    | split at h
 
 def dispatchPublicationValid (world : World) (generation : Generation)
     (callId : ToolExecution.ToolCallId) : Bool :=
@@ -749,7 +816,6 @@ def acceptAndPublish (world : World) (generation : Generation)
     Except Error World :=
   checked (fun post =>
     acceptedPublicationPresent post closing message targets && acceptedToolsPresent post message &&
-      toolProjectionCoherent post &&
       remoteTargetsMatchConfiguredRoutes post message targets &&
       validateClosingRecord post.segments closing &&
       acceptedMessageValid post generation post.segments message &&
@@ -809,8 +875,7 @@ def publishHeaderOnly (world : World) (generation : Generation)
     (message : MessageEnvelope) (admissions : List ToolAdmission) : Except Error World :=
   checked (fun post =>
     headerOnlyPublicationPresent post message &&
-      headerOnlyMessageValid post generation message && acceptedToolsPresent post message &&
-      toolProjectionCoherent post)
+      headerOnlyMessageValid post generation message && acceptedToolsPresent post message)
     (publishHeaderOnlyCore world generation message admissions)
 
 def recoverExpiredBatch (world : World) (expected fresh : Generation)

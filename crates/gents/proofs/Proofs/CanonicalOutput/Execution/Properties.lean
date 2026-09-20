@@ -124,10 +124,12 @@ theorem accepted_publication_is_composed_atomically
       validateClosingRecord post.segments closing = true ∧
       acceptedMessageValid post generation post.segments message = true ∧
       acceptedSourceBound post generation closing message = true := by
-  unfold acceptAndPublish at h
+  have hcore := checked_core_success _ _ _ h
+  have hcoherent := acceptAndPublishCore_success_toolProjectionCoherent
+    pre post generation closing message targets admissions hcore
   have hp := checked_success _ _ _ h
   simp only [Bool.and_eq_true] at hp
-  exact ⟨hp.1.1.1.1.1.1, hp.1.1.1.1.1.2, hp.1.1.1.1.2,
+  exact ⟨hp.1.1.1.1.1, hp.1.1.1.1.2, hcoherent,
     hp.1.1.1.2, hp.1.1.2, hp.1.2, hp.2⟩
 
 theorem fresh_accept_core_success_requires_exact_extent
@@ -212,10 +214,12 @@ theorem header_only_publication_is_atomic
     headerOnlyPublicationPresent post message = true ∧
       headerOnlyMessageValid post generation message = true ∧
       acceptedToolsPresent post message = true ∧ toolProjectionCoherent post = true := by
-  unfold publishHeaderOnly at h
+  have hcore := checked_core_success _ _ _ h
+  have hcoherent := publishHeaderOnlyCore_success_toolProjectionCoherent
+    pre post generation message admissions hcore
   have hp := checked_success _ _ _ h
   simp only [Bool.and_eq_true] at hp
-  exact ⟨hp.1.1.1, hp.1.1.2, hp.1.2, hp.2⟩
+  exact ⟨hp.1.1, hp.1.2, hp.2, hcoherent⟩
 
 theorem recovery_is_all_sources_single_winner_and_exact
     (pre post : World) (expected next : Generation)

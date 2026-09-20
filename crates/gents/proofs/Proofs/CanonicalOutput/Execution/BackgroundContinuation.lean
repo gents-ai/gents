@@ -110,6 +110,42 @@ def publishAndEnqueue? (before : World) (document : DocId)
           , sharedTranscript := hshared }
       else none
 
+theorem successful_enqueue_preserves_active
+    (before : World) (document : DocId) (message : MessageEnvelope)
+    (wake : SessionQueue.QueueEntry) (binding : WakeDocumentBinding)
+    (queue : SessionQueue.SessionQueueState) (result : Result)
+    (h : publishAndEnqueue? before document message wake binding queue = some result) :
+    (match result.queued with
+      | some value => value.queue.active
+      | none => queue.active) = queue.active := by
+  unfold publishAndEnqueue? at h
+  split at h
+  · contradiction
+  next execution hp =>
+    cases ht : ownedToolByDocument? execution document with
+    | none => simp [ht] at h
+    | some tool =>
+        simp [ht] at h
+        rcases h with ⟨_, _, _, _, h⟩
+        cases ho : observeNotification?
+            { toolState := tool.context.state
+            , notificationMessageId := message.header.id, wake := wake }
+            execution.transcript with
+        | none => simp [ho] at h
+        | some notified =>
+          simp [ho] at h
+          repeat' split at h <;> try contradiction
+          all_goals rcases h with ⟨_, h⟩
+          all_goals try contradiction
+          all_goals cases h
+          all_goals simp_all [BackgroundCompletion.enqueueWake?, SessionQueue.step?]
+          all_goals rename_i value
+          all_goals rcases value with ⟨_, _, _, hvalue⟩
+          all_goals repeat' split at hvalue <;> try contradiction
+          all_goals cases hvalue
+          all_goals apply SessionQueue.coalescePending_preserves_active
+          all_goals assumption
+
 def claimContinuation? (result : Result) : Option BackgroundCompletion.Continuation :=
   result.queued.bind BackgroundCompletion.claimContinuation?
 
