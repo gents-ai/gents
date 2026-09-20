@@ -46,14 +46,14 @@ def parentWorld : World :=
 def idleQueue : SessionQueue.SessionQueueState :=
   { scope := ⟨1, 1, none⟩, active := none, pending := [], terminal := ∅ }
 
-def heldState : Option Handover.State := do
+def heldState : Option World := do
   let gate ← Gate.acquire (Gate.initial parentWorld) 1 true
-  pure { paired := { gate := gate, queue := idleQueue }, claimed := none }
+  pure { gate with queue := idleQueue, claimed := none }
 
-def reacquire (state : Handover.State) : Option Handover.State := do
-  let released ← Gate.scheduling state.paired.gate 1 .release
+def reacquire (state : World) : Option World := do
+  let released ← Gate.scheduling state 1 .release
   let held ← Gate.acquire released 1 true
-  pure { state with paired := { state.paired with gate := held } }
+  pure held
 
 def freshReplayAndClaim : Option Bool := do
   let state ← heldState
@@ -64,14 +64,14 @@ def freshReplayAndClaim : Option Bool := do
   let replay ← publishGoalChild? fresh.afterGoal replayState 1 5 claimedRequest
     (physicalBinding .active) goalEntry
   if replay.outcome != .recovered ||
-      replay.after.paired.queue.active != replay.before.paired.queue.active ||
-      replay.after.paired.queue.pending != replay.before.paired.queue.pending ||
-      replay.after.paired.queue.terminal != replay.before.paired.queue.terminal
+      replay.after.queue.active != replay.before.queue.active ||
+      replay.after.queue.pending != replay.before.queue.pending ||
+      replay.after.queue.terminal != replay.before.queue.terminal
     then none
   let activated ← Handover.claimAndActivate replay.after 1 5
     (childActivation replay [] true 8 5 10)
-  pure (activated.paired.gate.execution.requestId == 200 &&
-    activated.paired.queue.active == some 20 &&
+  pure (activated.requestId == 200 &&
+    activated.queue.active == some 20 &&
     activated.claimed.map (·.logicalRequest) == some 20)
 
 theorem fresh_goal_child_replays_then_uses_actual_handover :

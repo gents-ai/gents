@@ -64,14 +64,14 @@ def goalEntryValid (world : World) (request : ClaimedRequest)
     entry.queuedAfter == some binding.parentLogical &&
     decide (entry.coalesceWellFormed world.sessionId)
 
-def actualSessionIdle (state : Handover.State) : Bool :=
-  state.claimed.isNone && state.paired.queue.active.isNone && state.paired.queue.pending.isEmpty
+def actualSessionIdle (state : World) : Bool :=
+  state.claimed.isNone && state.queue.active.isNone && state.queue.pending.isEmpty
 
 structure Result where
   beforeGoal : Snapshot
   afterGoal : Snapshot
-  before : Handover.State
-  after : Handover.State
+  before : World
+  after : World
   request : ClaimedRequest
   binding : Binding
   entry : SessionQueue.QueueEntry
@@ -79,45 +79,41 @@ structure Result where
   ownerPublication : publishClaimed beforeGoal request true = (afterGoal, outcome)
   allowed : outcome = .created ∨ outcome = .recovered
   freshEnqueued : outcome = .created →
-    SessionQueue.step? before.paired.queue (.coalescePending entry) =
-      some after.paired.queue
+    SessionQueue.step? before.queue (.coalescePending entry) =
+      some after.queue
   replayInert : outcome = .recovered → after = before
-  nextSeqPreserved : after.paired.gate.execution.transcript.nextSeq =
-    before.paired.gate.execution.transcript.nextSeq
+  nextSeqPreserved : after.transcript.nextSeq =
+    before.transcript.nextSeq
 
-def gateHeld (state : Handover.State) (actor : Gate.Actor) (now : Time) : Bool :=
-  state.paired.gate.owner == some actor && state.paired.gate.schedule.phase == .storage &&
-    StorageWriteGate.pollable state.paired.gate.schedule &&
-    state.paired.gate.execution.lease.now ≤ now
+def gateHeld (state : World) (actor : Gate.Actor) (now : Time) : Bool :=
+  state.gateOwner == some actor && state.gateSchedule.phase == .storage &&
+    StorageWriteGate.pollable state.gateSchedule &&
+    state.lease.now ≤ now
 
-def releaseGate (state : Handover.State) (now : Time) : Handover.State :=
-  let gate := state.paired.gate
-  { state with paired := { state.paired with gate :=
-      { execution := Gate.atTime gate.execution now
-      , owner := gate.owner
-      , schedule := { gate.schedule with phase := .releasable } } } }
+def releaseGate (state : World) (now : Time) : World :=
+  { Gate.atTime state now with
+    gateSchedule := { state.gateSchedule with phase := .releasable } }
 
-def publishGoalChild? (goal : Snapshot) (state : Handover.State)
+def publishGoalChild? (goal : Snapshot) (state : World)
     (actor : Gate.Actor) (now : Time)
     (request : ClaimedRequest) (binding : Binding)
     (entry : SessionQueue.QueueEntry) : Option Result :=
-  let world := state.paired.gate.execution
+  let world := state
   if !gateHeld state actor now || !bindingValid world goal request binding ||
-      state.paired.queue.scope.agent != world.principal ||
-      state.paired.queue.sessionId != world.sessionId ||
-      binding.childRequester != state.paired.queue.scope.requester ||
+      state.queue.scope.agent != world.principal ||
+      state.queue.sessionId != world.sessionId ||
+      binding.childRequester != state.queue.scope.requester ||
       !goalEntryValid world request binding entry then none
   else
     match hp : publishClaimed goal request true with
     | (post, .created) =>
         if !canonicalParentTerminal world binding || !actualSessionIdle state ||
             !request.terminalParent || !request.sessionIdle then none
-        else match hstep : SessionQueue.step? state.paired.queue (.coalescePending entry) with
+        else match hstep : SessionQueue.step? state.queue (.coalescePending entry) with
         | none => none
         | some queue => some
             { beforeGoal := goal, afterGoal := post, before := state
-            , after := { (releaseGate state now) with paired :=
-                { (releaseGate state now).paired with queue := queue } }
+            , after := { (releaseGate state now) with queue := queue }
             , request := request, binding := binding, entry := entry
             , outcome := .created, ownerPublication := hp
             , allowed := Or.inl rfl
@@ -127,9 +123,9 @@ def publishGoalChild? (goal : Snapshot) (state : Handover.State)
         -- Lost acknowledgement after the atomic Goal/request publication.  The
         -- exact child may already be pending, active, or terminal; do not create
         -- another queue row or claim it here.
-        if entry ∈ state.paired.queue.pending ||
-            state.paired.queue.active == some entry.requestId ||
-            decide (entry.requestId ∈ state.paired.queue.terminal) then
+        if entry ∈ state.queue.pending ||
+            state.queue.active == some entry.requestId ||
+            decide (entry.requestId ∈ state.queue.terminal) then
           some
             { beforeGoal := goal, afterGoal := post, before := state
             , after := state
@@ -163,7 +159,7 @@ def childActivation (result : Result) (configuredRoutes : List (DocId × Nat))
   , generation := generation, duration := duration, deadline := deadline }
 
 theorem successful_publication_uses_existing_goal_owner
-    (goal : Snapshot) (state : Handover.State) (actor : Gate.Actor) (now : Time)
+    (goal : Snapshot) (state : World) (actor : Gate.Actor) (now : Time)
     (request : ClaimedRequest)
     (binding : Binding) (entry : SessionQueue.QueueEntry) (result : Result)
     (h : publishGoalChild? goal state actor now request binding entry = some result) :
@@ -174,28 +170,28 @@ theorem successful_publication_uses_existing_goal_owner
   all_goals rcases h with ⟨_, ⟨_, rfl⟩⟩; assumption
 
 theorem successful_publish_preserves_nextSeq
-    (goal : Snapshot) (state : Handover.State) (actor : Gate.Actor) (now : Time)
+    (goal : Snapshot) (state : World) (actor : Gate.Actor) (now : Time)
     (request : ClaimedRequest) (binding : Binding) (entry : SessionQueue.QueueEntry)
     (result : Result)
     (h : publishGoalChild? goal state actor now request binding entry = some result) :
-    result.after.paired.gate.execution.transcript.nextSeq =
-      state.paired.gate.execution.transcript.nextSeq := by
+    result.after.transcript.nextSeq =
+      state.transcript.nextSeq := by
   unfold publishGoalChild? at h
   dsimp only at h
   repeat' split at h <;> try contradiction
   all_goals rcases h with ⟨_, ⟨_, rfl⟩⟩; rfl
 
 theorem fresh_publication_uses_session_queue_owner
-    (goal : Snapshot) (state : Handover.State) (actor : Gate.Actor) (now : Time)
+    (goal : Snapshot) (state : World) (actor : Gate.Actor) (now : Time)
     (request : ClaimedRequest)
     (binding : Binding) (entry : SessionQueue.QueueEntry) (result : Result)
     (_h : publishGoalChild? goal state actor now request binding entry = some result)
     (hfresh : result.outcome = .created) :
-    SessionQueue.step? result.before.paired.queue (.coalescePending result.entry) =
-      some result.after.paired.queue := result.freshEnqueued hfresh
+    SessionQueue.step? result.before.queue (.coalescePending result.entry) =
+      some result.after.queue := result.freshEnqueued hfresh
 
 theorem replay_does_not_duplicate_queue_state
-    (goal : Snapshot) (state : Handover.State) (actor : Gate.Actor) (now : Time)
+    (goal : Snapshot) (state : World) (actor : Gate.Actor) (now : Time)
     (request : ClaimedRequest)
     (binding : Binding) (entry : SessionQueue.QueueEntry) (result : Result)
     (_h : publishGoalChild? goal state actor now request binding entry = some result)

@@ -162,68 +162,56 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
       rw [terminalize_preserves_nextSeq before after generation outcome selection
         (mapError_success Error.execution _ _ h)]
 
-structure State where
-  execution : World
-  owner : Option Actor
-  schedule : StorageWriteGate.State
-  deriving DecidableEq
+def initial (world : World) : World :=
+  { world with gateOwner := none, gateSchedule := ⟨.released, true, false⟩ }
 
-def initial (world : World) : State := ⟨world, none, ⟨.released, true, false⟩⟩
+def acquire (state : World) (actor : Actor) (independent : Bool) : Option World :=
+  if state.gateOwner.isSome || StorageWriteGate.held state.gateSchedule then none
+  else some { state with gateOwner := some actor, gateSchedule := ⟨.storage, independent, false⟩ }
 
-def acquire (state : State) (actor : Actor) (independent : Bool) : Option State :=
-  if state.owner.isSome || StorageWriteGate.held state.schedule then none
-  else some { state with owner := some actor, schedule := ⟨.storage, independent, false⟩ }
-
-def scheduling (state : State) (actor : Actor) (event : StorageWriteGate.Event) : Option State :=
-  if state.owner != some actor then none
+def scheduling (state : World) (actor : Actor) (event : StorageWriteGate.Event) : Option World :=
+  if state.gateOwner != some actor then none
   else
-    let schedule := StorageWriteGate.step state.schedule event
+    let schedule := StorageWriteGate.step state.gateSchedule event
     some { state with
-      schedule := schedule
-      owner := if StorageWriteGate.held schedule then state.owner else none }
+      gateSchedule := schedule
+      gateOwner := if StorageWriteGate.held schedule then state.gateOwner else none }
 
 def atTime (world : World) (now : Time) : World :=
   { world with lease := { world.lease with now := now } }
 
+def finishCommit (before execution : World) : World :=
+  { execution with
+    gateOwner := before.gateOwner
+    gateSchedule := { before.gateSchedule with phase := .releasable }
+    queue := before.queue
+    claimed := before.claimed
+    retry := before.retry }
+
 /-- The authoritative read and the result are inside the same held gate.
 Failed evaluation commits nothing. The holder must still finish cleanup/release
 through the scheduling owner; an error is not an implicit unlocked state. -/
-def commit (state : State) (actor : Actor) (now : Time) (operation : Operation) : Option State :=
-  if state.owner != some actor || state.schedule.phase != .storage ||
-      !StorageWriteGate.pollable state.schedule || now < state.execution.lease.now then none
-  else match evaluate operation (atTime state.execution now) with
+def commit (state : World) (actor : Actor) (now : Time) (operation : Operation) : Option World :=
+  if state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
+      !StorageWriteGate.pollable state.gateSchedule || now < state.lease.now then none
+  else match evaluate operation (atTime state now) with
     | .error _ => none
-    | .ok execution => some { state with
-        execution := execution
-        schedule := { state.schedule with phase := .releasable } }
+    | .ok execution => some (finishCommit state execution)
 
-/-- An integration trace is made only of successful gate commits and explicit
-release/reacquisition steps. It cannot postulate a fixture-only state jump. -/
-inductive Trace : State → State → Prop where
-  | refl (state : State) : Trace state state
-  | acquire {before after : State} (actor : Actor) (independent : Bool)
-      (h : Gate.acquire before actor independent = some after) : Trace before after
-  | scheduling {before after : State} (actor : Actor) (event : StorageWriteGate.Event)
-      (h : Gate.scheduling before actor event = some after) : Trace before after
-  | commit {before after : State} (actor : Actor) (now : Time) (operation : Operation)
-      (h : Gate.commit before actor now operation = some after) : Trace before after
-  | trans {first second third : State} : Trace first second → Trace second third →
-      Trace first third
-
-theorem other_actor_cannot_commit (state : State) (actor : Actor) (now : Time)
-    (operation : Operation) (h : state.owner ≠ some actor) :
+theorem other_actor_cannot_commit (state : World) (actor : Actor) (now : Time)
+    (operation : Operation) (h : state.gateOwner ≠ some actor) :
     commit state actor now operation = none := by
   simp [commit, h]
 
-theorem successful_commit_identifies_holder (before after : State) (actor : Actor)
+theorem successful_commit_identifies_holder (before after : World) (actor : Actor)
     (now : Time) (operation : Operation)
-    (h : commit before actor now operation = some after) : before.owner = some actor := by
+    (h : commit before actor now operation = some after) : before.gateOwner = some actor := by
   by_contra howner
   rw [other_actor_cannot_commit before actor now operation howner] at h
   contradiction
 
 theorem two_successes_from_one_gate_have_same_actor
-    (before left right : State) (actorLeft actorRight : Actor) (timeLeft timeRight : Time)
+    (before left right : World) (actorLeft actorRight : Actor) (timeLeft timeRight : Time)
     (opLeft opRight : Operation)
     (hleft : commit before actorLeft timeLeft opLeft = some left)
     (hright : commit before actorRight timeRight opRight = some right) :
@@ -232,27 +220,27 @@ theorem two_successes_from_one_gate_have_same_actor
   have hr := successful_commit_identifies_holder before right actorRight timeRight opRight hright
   exact Option.some.inj (hl.symm.trans hr)
 
-theorem held_gate_cannot_be_acquired (state : State) (actor : Actor) (independent : Bool)
-    (h : StorageWriteGate.held state.schedule = true) :
+theorem held_gate_cannot_be_acquired (state : World) (actor : Actor) (independent : Bool)
+    (h : StorageWriteGate.held state.gateSchedule = true) :
     acquire state actor independent = none := by
   simp [acquire, h]
 
-theorem suspended_holder_cannot_commit (state : State) (actor : Actor) (now : Time)
-    (operation : Operation) (h : state.schedule = StorageWriteGate.suspended) :
+theorem suspended_holder_cannot_commit (state : World) (actor : Actor) (now : Time)
+    (operation : Operation) (h : state.gateSchedule = StorageWriteGate.suspended) :
     commit state actor now operation = none := by
   simp [commit, h, StorageWriteGate.suspended, StorageWriteGate.pollable]
 
-theorem scheduling_preserves_durable_world (before after : State) (actor : Actor)
+theorem scheduling_preserves_durable_world (before after : World) (actor : Actor)
     (event : StorageWriteGate.Event) (h : scheduling before actor event = some after) :
-    after.execution = before.execution := by
+    after = { before with gateOwner := after.gateOwner, gateSchedule := after.gateSchedule } := by
   unfold scheduling at h
   split at h
   · contradiction
   · cases h; rfl
 
-theorem acquire_preserves_durable_world (before after : State) (actor : Actor)
+theorem acquire_preserves_durable_world (before after : World) (actor : Actor)
     (independent : Bool) (h : acquire before actor independent = some after) :
-    after.execution = before.execution := by
+    after = { before with gateOwner := after.gateOwner, gateSchedule := after.gateSchedule } := by
   unfold acquire at h
   split at h
   · contradiction
@@ -260,29 +248,39 @@ theorem acquire_preserves_durable_world (before after : State) (actor : Actor)
 
 /-- A core equation, not a postcondition rechecked by a wrapper: successful
 commit evaluated this operation on the latest world held by this gate. -/
-theorem commit_reads_current_world (before after : State) (actor : Actor) (now : Time)
+theorem commit_reads_current_world (before after : World) (actor : Actor) (now : Time)
     (operation : Operation) (h : commit before actor now operation = some after) :
-    evaluate operation (atTime before.execution now) = .ok after.execution := by
+    ∃ execution, evaluate operation (atTime before now) = .ok execution ∧
+      after = finishCommit before execution := by
   unfold commit at h
   split at h
   · contradiction
-  · cases heval : evaluate operation (atTime before.execution now) with
+  · cases heval : evaluate operation (atTime before now) with
     | error error => simp [heval] at h
-    | ok execution => simp [heval] at h; cases h; rfl
+    | ok execution => simp [heval] at h; cases h; exact ⟨execution, rfl, rfl⟩
 
-theorem committed_gate_stays_held (before after : State) (actor : Actor) (now : Time)
+theorem committed_gate_stays_held (before after : World) (actor : Actor) (now : Time)
     (operation : Operation) (h : commit before actor now operation = some after) :
-    after.owner = before.owner ∧ StorageWriteGate.held after.schedule = true := by
+    after.gateOwner = before.gateOwner ∧ StorageWriteGate.held after.gateSchedule = true := by
   unfold commit at h
   split at h
   · contradiction
-  · cases heval : evaluate operation (atTime before.execution now) with
+  · cases heval : evaluate operation (atTime before now) with
     | error error => simp [heval] at h
     | ok execution => simp [heval] at h; cases h; exact ⟨rfl, rfl⟩
 
+theorem commit_preserves_composed_control (before after : World) (actor : Actor) (now : Time)
+    (operation : Operation) (h : commit before actor now operation = some after) :
+    after.queue = before.queue ∧ after.claimed = before.claimed ∧ after.retry = before.retry := by
+  unfold commit at h
+  split at h <;> try contradiction
+  cases heval : evaluate operation (atTime before now) with
+  | error error => simp [heval] at h
+  | ok execution => simp [heval] at h; cases h; exact ⟨rfl, rfl, rfl⟩
+
 /-- Even when storage has returned, a sibling cannot acquire until the
 existing owner performs the explicit release step. -/
-theorem sibling_waits_for_release (before after : State) (actor other : Actor)
+theorem sibling_waits_for_release (before after : World) (actor other : Actor)
     (now : Time) (operation : Operation)
     (h : commit before actor now operation = some after) (independent : Bool) :
     acquire after other independent = none :=
@@ -290,35 +288,31 @@ theorem sibling_waits_for_release (before after : State) (actor other : Actor)
     (committed_gate_stays_held before after actor now operation h).2
 
 theorem next_holder_reads_previous_commit
-    (committed released acquired after : State) (previous next : Actor)
+    (committed released acquired after : World) (previous next : Actor)
     (independent : Bool) (now : Time) (operation : Operation)
     (hrelease : scheduling committed previous .release = some released)
     (hacquire : acquire released next independent = some acquired)
     (hcommit : commit acquired next now operation = some after) :
-    evaluate operation (atTime committed.execution now) = .ok after.execution := by
-  have hread := commit_reads_current_world acquired after next now operation hcommit
-  have hreleaseWorld := scheduling_preserves_durable_world committed released previous .release hrelease
-  have hacquireWorld := acquire_preserves_durable_world released acquired next independent hacquire
-  rwa [hacquireWorld, hreleaseWorld] at hread
+    acquired = { committed with gateOwner := acquired.gateOwner, gateSchedule := acquired.gateSchedule } ∧
+    ∃ execution, evaluate operation (atTime acquired now) = .ok execution ∧
+      after = finishCommit acquired execution := by
+  have hr := scheduling_preserves_durable_world committed released previous .release hrelease
+  have ha := acquire_preserves_durable_world released acquired next independent hacquire
+  constructor
+  · rw [ha, hr]
+  · exact commit_reads_current_world acquired after next now operation hcommit
 
 theorem successful_commit_nextSequence_monotone
-    (before after : State) (actor : Actor) (now : Time) (operation : Operation)
+    (before after : World) (actor : Actor) (now : Time) (operation : Operation)
     (h : commit before actor now operation = some after) :
-    before.execution.transcript.nextSeq ≤ after.execution.transcript.nextSeq := by
-  have heval := commit_reads_current_world before after actor now operation h
-  exact evaluate_nextSequence_monotone operation (atTime before.execution now)
-    after.execution heval
-
-theorem Trace.nextSequence_monotone {before after : State} (trace : Trace before after) :
-    before.execution.transcript.nextSeq ≤ after.execution.transcript.nextSeq := by
-  induction trace with
-  | refl => exact Nat.le_refl _
-  | acquire actor independent h =>
-      rw [acquire_preserves_durable_world _ _ actor independent h]
-  | scheduling actor event h =>
-      rw [scheduling_preserves_durable_world _ _ actor event h]
-  | commit actor now operation h =>
-      exact successful_commit_nextSequence_monotone _ _ actor now operation h
-  | trans left right ihLeft ihRight => exact Nat.le_trans ihLeft ihRight
+    before.transcript.nextSeq ≤ after.transcript.nextSeq := by
+  unfold commit at h
+  split at h <;> try contradiction
+  cases heval : evaluate operation (atTime before now) with
+  | error error => simp [heval] at h
+  | ok execution =>
+      simp [heval] at h
+      cases h
+      exact evaluate_nextSequence_monotone operation (atTime before now) execution heval
 
 end CanonicalOutput.Execution.Gate

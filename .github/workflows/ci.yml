@@ -409,6 +409,11 @@ jobs:
             exit 1
           fi
 
+      - name: Check proof import closure
+        run: |
+          python3 .github/scripts/test-lean-import-closure.py
+          cd crates/gents/proofs && lake build importClosure
+
       - name: Build proofs
         working-directory: crates/gents/proofs
         run: lake build

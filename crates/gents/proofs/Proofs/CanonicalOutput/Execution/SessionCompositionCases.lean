@@ -20,17 +20,19 @@ def ordinaryActivation : Handover.Activation :=
   , evidence := .ordinary, configuredRoutes := [], routesAuthenticated := true
   , generation := 8, duration := 5, deadline := 11 }
 
-def initial : Option State := do
+def initial : Option World := do
   let gate ← Gate.acquire (Gate.initial parentWorld) 1 true
   let queue : SessionQueue.SessionQueueState :=
     { scope := ⟨1, 1, none⟩, active := none, pending := [ordinaryEntry], terminal := ∅ }
-  pure { session := { paired := { gate := gate, queue := queue }, claimed := none }
-       , retry := initialRetry 999 5 0 budget (some 11) }
+  pure { gate with
+    queue := queue
+    claimed := none
+    retry := initialRetry 999 5 0 budget (some 11) }
 
-def releaseAcquire (state : State) : Option State := do
-  let released ← CompletionRetry.CanonicalGate.scheduling (retryView state) 1 .release
-  let held ← CompletionRetry.CanonicalGate.acquire released 1 true
-  pure (withRetryView state held)
+def releaseAcquire (state : World) : Option World := do
+  let released ← Gate.scheduling state 1 .release
+  let held ← Gate.acquire released 1 true
+  pure held
 
 def providerRaw : Segment :=
   { id := 810, coordinate := ⟨200, .provider 0 0 0⟩, writer := .request 8
@@ -58,48 +60,42 @@ owner, retry policy, canonical transcript gate, terminal owner, and queue finish
 owner. Physical request `200` remains distinct from logical queue request `20`.
 No state record is replaced between transitions; only the owners' acquire/release
 operations move the storage gate. -/
-@[noinline] opaque begunPhase : Option State := do
+@[noinline] opaque begunPhase : Option World := do
   let before ← initial
   let activated ← activate before 1 6 ordinaryActivation 0 budget (some 11)
   let heldForBegin ← releaseAcquire activated
-  let begunSession ← Handover.beginProcessing heldForBegin.session 1 6 8
-  pure { heldForBegin with session := begunSession }
+  Handover.beginProcessing heldForBegin 1 6 8
 
-@[noinline] opaque retractedPhase : Option State := do
+@[noinline] opaque retractedPhase : Option World := do
   let begun ← begunPhase
   let heldForRaw ← releaseAcquire begun
-  let rawView ← CompletionRetry.CanonicalGate.commitGate (retryView heldForRaw) 1 6
+  let rawState ← CompletionRetry.CanonicalGate.commitGate heldForRaw 1 6
     ⟨.append 8 providerRaw, rfl⟩
-  let rawState := withRetryView heldForRaw rawView
-  let streaming ← CompletionRetry.CanonicalGate.stepPolicy (retryView rawState) 6 ⟨.issue, rfl⟩
-  let streamingState := withRetryView rawState streaming
-  let failed ← CompletionRetry.CanonicalGate.stepPolicy (retryView streamingState) 6
+  let streamingState ← CompletionRetry.CanonicalGate.stepPolicy rawState 6 ⟨.issue, rfl⟩
+  let failedState ← CompletionRetry.CanonicalGate.stepPolicy streamingState 6
     ⟨.observeFailure .transport "io" 7, rfl⟩
-  let failedState := withRetryView streamingState failed
   let heldForRetract ← releaseAcquire failedState
   (commitProvider heldForRetract 1 6 (.retract 8 retryClose)).toOption
 
-@[noinline] opaque delayedPhase : Option State := do
+@[noinline] opaque delayedPhase : Option World := do
   let retracted ← retractedPhase
-  let backingOff ← CompletionRetry.CanonicalGate.stepPolicy (retryView retracted) 6
+  let backingOff ← CompletionRetry.CanonicalGate.stepPolicy retracted 6
     ⟨.schedule, rfl⟩
   let delayed ← CompletionRetry.CanonicalGate.stepPolicy backingOff 9 ⟨.wake 9, rfl⟩
-  pure (withRetryView retracted delayed)
+  pure delayed
 
-@[noinline] opaque acceptedPhase : Option State := do
+@[noinline] opaque acceptedPhase : Option World := do
   let issuingState ← delayedPhase
-  let streamingAgain ← CompletionRetry.CanonicalGate.stepPolicy (retryView issuingState) 9
+  let streamingAgainState ← CompletionRetry.CanonicalGate.stepPolicy issuingState 9
     ⟨.issue, rfl⟩
-  let streamingAgainState := withRetryView issuingState streamingAgain
   let heldForAccept ← releaseAcquire streamingAgainState
   (commitProvider heldForAccept 1 9 (.accept 8 acceptedClose acceptedMessage [] [])).toOption
 
-@[noinline] opaque finishedPhase : Option State := do
+@[noinline] opaque finishedPhase : Option World := do
   let accepted ← acceptedPhase
   let heldForTerminal ← releaseAcquire accepted
-  let terminalView ← CompletionRetry.CanonicalGate.commitGate (retryView heldForTerminal) 1 9
+  let terminal ← CompletionRetry.CanonicalGate.commitGate heldForTerminal 1 9
     ⟨.terminalize 8 .completed (.message 813), rfl⟩
-  let terminal := withRetryView heldForTerminal terminalView
   let heldForFinish ← releaseAcquire terminal
   let (finished, acknowledged) ← finish heldForFinish 1
   if acknowledged != [] then none else pure finished
@@ -110,15 +106,15 @@ operations move the storage gate. -/
   let delayed ← delayedPhase
   let accepted ← acceptedPhase
   let finished ← finishedPhase
-  pure (begun.session.paired.gate.execution.requestId == 200 &&
-    begun.session.paired.queue.active == some 20 && begun.retry.phase == .issuing &&
+  pure (begun.requestId == 200 &&
+    begun.queue.active == some 20 && begun.retry.phase == .issuing &&
     retracted.retry.phase == .retracted .transport "io" 7 &&
     delayed.retry.phase == .issuing && delayed.retry.attempt == 1 &&
     accepted.retry.phase == .accepted 813 &&
-    finished.session.paired.gate.execution.lease.request == .completed &&
-    finished.session.paired.gate.execution.terminalSelection == some (.message 813) &&
-    finished.session.paired.queue.active.isNone && finished.session.claimed.isNone &&
-    finished.session.paired.gate.execution.transcript.nextSeq == 1)
+    finished.lease.request == .completed &&
+    finished.terminalSelection == some (.message 813) &&
+    finished.queue.active.isNone && finished.claimed.isNone &&
+    finished.transcript.nextSeq == 1)
 
 theorem actual_activation_retry_terminal_finish_composes :
     activateRetryFinish = some true := by native_decide
@@ -132,13 +128,13 @@ publication; the receipt cannot be supplied as an unjoined caller record. -/
   | none => none
   | some result =>
       let held ← GoalContinuation.Cases.reacquire result.after
-      let before : State :=
-        { session := held, retry := initialRetry 999 5 0 budget (some 10) }
+      let before : World :=
+        { held with retry := initialRetry 999 5 0 budget (some 10) }
       let published : GoalPublication result :=
         ⟨claimedGoal, state, 1, 5, claimedRequest, physicalBinding .active, goalEntry, hp⟩
       let after ← activateGoal before 1 5 result published [] true 8 5 10 0 budget (some 10)
-      pure (after.session.paired.gate.execution.requestId == 200 &&
-        after.session.paired.queue.active == some 20 &&
+      pure (after.requestId == 200 &&
+        after.queue.active == some 20 &&
         after.retry.request == 200 && after.retry.phase == .issuing)
 
 theorem actual_goal_publication_enters_typed_application_activation :

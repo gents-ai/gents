@@ -17,11 +17,6 @@ open CanonicalOutput
 
 abbrev Actor := CanonicalOutput.Execution.Gate.Actor
 
-structure State where
-  gate : CanonicalOutput.Execution.Gate.State
-  retry : CompletionRetry.State
-  deriving DecidableEq
-
 inductive Operation where
   | retract (generation : Nat) (closing : Segment)
   | accept (generation : Nat) (closing : Segment) (message : MessageEnvelope)
@@ -37,8 +32,8 @@ inductive Error where
   | gate
   deriving DecidableEq, Repr
 
-def requestCoherent (state : State) : Bool :=
-  state.retry.request == state.gate.execution.requestId
+def requestCoherent (state : CanonicalOutput.Execution.World) : Bool :=
+  state.retry.request == state.requestId
 
 def atTime (state : CompletionRetry.State) (now : Time) : Option CompletionRetry.State :=
   if state.now ≤ now then some { state with now := now } else none
@@ -97,17 +92,17 @@ theorem policyStep_preserves_now (before after : CompletionRetry.State) (operati
 world and the retry policy at the same authoritative time.  A replay retains the
 already-advanced retry state while still asking the execution owner to validate
 the exact immutable fact. -/
-def commit (state : State) (actor : Actor) (now : Time) (operation : Operation) :
-    Except Error State :=
+def commit (state : CanonicalOutput.Execution.World) (actor : Actor) (now : Time)
+    (operation : Operation) : Except Error CanonicalOutput.Execution.World :=
   if !requestCoherent state then .error .request
   else match atTime state.retry now with
   | none => .error .clock
   | some observedRetry => match policyStep observedRetry operation with
     | .error error => .error error
-    | .ok retry => match CanonicalOutput.Execution.Gate.commit state.gate actor now
+    | .ok retry => match CanonicalOutput.Execution.Gate.commit state actor now
         (gateOperation operation) with
       | none => .error .gate
-      | some gate => .ok ⟨gate, retry⟩
+      | some world => .ok { world with retry := retry }
 
 def policyActionAllowed : CompletionRetry.Action → Bool
   | .confirmRetraction _ | .accept _ => false
@@ -123,21 +118,13 @@ def policyClockAllowed (now : Time) (action : CompletionRetry.Action) : Bool :=
 /-- Policy-only progress never impersonates canonical acceptance or retraction.
 It advances at a clock no older than either composed owner; the next closure
 decision must still enter `commit` and its held execution gate. -/
-def stepPolicy (state : State) (now : Time) (operation : PolicyOperation) : Option State := do
-  if !requestCoherent state || now < state.gate.execution.lease.now ||
+def stepPolicy (state : CanonicalOutput.Execution.World) (now : Time)
+    (operation : PolicyOperation) : Option CanonicalOutput.Execution.World := do
+  if !requestCoherent state || now < state.lease.now ||
       !policyClockAllowed now operation.val then none
   let observed ← atTime state.retry now
   let retry ← CompletionRetry.step? observed operation.val
   some { state with retry := retry }
-
-def acquire (state : State) (actor : Actor) (independent : Bool) : Option State := do
-  let gate ← CanonicalOutput.Execution.Gate.acquire state.gate actor independent
-  some { state with gate := gate }
-
-def scheduling (state : State) (actor : Actor)
-    (event : StorageWriteGate.Event) : Option State := do
-  let gate ← CanonicalOutput.Execution.Gate.scheduling state.gate actor event
-  some { state with gate := gate }
 
 def gateOperationAllowed : CanonicalOutput.Execution.Gate.Operation → Bool
   | .accept .. | .retract .. => false
@@ -148,58 +135,52 @@ abbrev GateOperation := { operation : CanonicalOutput.Execution.Gate.Operation /
 
 /-- All non-closure execution work continues to use the existing gate. Provider
 acceptance and retry retraction are unrepresentable here and must use `commit`. -/
-def commitGate (state : State) (actor : Actor) (now : Time)
-    (operation : GateOperation) : Option State := do
+def commitGate (state : CanonicalOutput.Execution.World) (actor : Actor) (now : Time)
+    (operation : GateOperation) : Option CanonicalOutput.Execution.World := do
   if !requestCoherent state then none
-  let gate ← CanonicalOutput.Execution.Gate.commit state.gate actor now operation.val
-  some { state with gate := gate }
+  CanonicalOutput.Execution.Gate.commit state actor now operation.val
 
-inductive Trace : State → State → Prop where
-  | refl (state : State) : Trace state state
-  | commit {before after : State} (actor : Actor) (now : Time) (operation : Operation)
-      (h : commit before actor now operation = .ok after) : Trace before after
-  | policy {before after : State} (now : Time) (operation : PolicyOperation)
-      (h : stepPolicy before now operation = some after) : Trace before after
-  | acquire {before after : State} (actor : Actor) (independent : Bool)
-      (h : acquire before actor independent = some after) : Trace before after
-  | scheduling {before after : State} (actor : Actor) (event : StorageWriteGate.Event)
-      (h : scheduling before actor event = some after) : Trace before after
-  | gate {before after : State} (actor : Actor) (now : Time) (operation : GateOperation)
-      (h : commitGate before actor now operation = some after) : Trace before after
-  | trans {first second third : State} : Trace first second → Trace second third →
-      Trace first third
-
-theorem successful_commit_is_actual_gate_commit {before after : State}
+theorem successful_commit_is_actual_gate_commit
+    {before after : CanonicalOutput.Execution.World}
     (actor : Actor) (now : Time) (operation : Operation)
     (h : commit before actor now operation = .ok after) :
-    CanonicalOutput.Execution.Gate.commit before.gate actor now (gateOperation operation) =
-      some after.gate := by
+    CanonicalOutput.Execution.Gate.commit before actor now (gateOperation operation) =
+      some { after with retry := before.retry } := by
   unfold commit at h
   split at h <;> try contradiction
   split at h <;> try contradiction
   split at h <;> try contradiction
-  cases hg : CanonicalOutput.Execution.Gate.commit before.gate actor now
+  cases hg : CanonicalOutput.Execution.Gate.commit before actor now
       (gateOperation operation) with
   | none => simp [hg] at h
-  | some gate => simp [hg] at h; cases h; rfl
+  | some gate =>
+      have hretry := (CanonicalOutput.Execution.Gate.commit_preserves_composed_control
+        before gate actor now (gateOperation operation) hg).2.2
+      simp [hg] at h
+      cases h
+      congr 1
+      cases gate
+      simp_all
 
-theorem commit_nextSequence_monotone {before after : State} (actor : Actor) (now : Time)
+theorem commit_nextSequence_monotone {before after : CanonicalOutput.Execution.World}
+    (actor : Actor) (now : Time)
     (operation : Operation) (h : commit before actor now operation = .ok after) :
-    before.gate.execution.transcript.nextSeq ≤ after.gate.execution.transcript.nextSeq := by
+    before.transcript.nextSeq ≤ after.transcript.nextSeq := by
   unfold commit at h
   split at h <;> try contradiction
   split at h <;> try contradiction
   split at h <;> try contradiction
-  cases hg : CanonicalOutput.Execution.Gate.commit before.gate actor now
+  cases hg : CanonicalOutput.Execution.Gate.commit before actor now
       (gateOperation operation) with
   | none => simp [hg] at h
   | some gate =>
       simp [hg] at h
       cases h
       exact CanonicalOutput.Execution.Gate.successful_commit_nextSequence_monotone
-        before.gate gate actor now (gateOperation operation) hg
+        before gate actor now (gateOperation operation) hg
 
-theorem commit_synchronizes_retry_clock {before after : State} (actor : Actor) (now : Time)
+theorem commit_synchronizes_retry_clock {before after : CanonicalOutput.Execution.World}
+    (actor : Actor) (now : Time)
     (operation : Operation) (h : commit before actor now operation = .ok after) :
     after.retry.now = now := by
   unfold commit at h
@@ -217,7 +198,7 @@ theorem commit_synchronizes_retry_clock {before after : State} (actor : Actor) (
       cases hp : policyStep observed operation with
       | error error => simp [hp] at h
       | ok retry =>
-        cases hg : CanonicalOutput.Execution.Gate.commit before.gate actor now
+        cases hg : CanonicalOutput.Execution.Gate.commit before actor now
             (gateOperation operation) with
         | none => simp [hp, hg] at h
         | some gate =>
@@ -225,9 +206,9 @@ theorem commit_synchronizes_retry_clock {before after : State} (actor : Actor) (
           cases h
           exact (policyStep_preserves_now observed retry operation hp).trans hnow
 
-theorem stepPolicy_preserves_gate {before after : State} (now : Time)
+theorem stepPolicy_preserves_gate {before after : CanonicalOutput.Execution.World} (now : Time)
     (operation : PolicyOperation) (h : stepPolicy before now operation = some after) :
-    after.gate = before.gate := by
+    after = { before with retry := after.retry } := by
   unfold stepPolicy at h
   split at h <;> try contradiction
   cases ht : atTime before.retry now with
@@ -235,52 +216,24 @@ theorem stepPolicy_preserves_gate {before after : State} (now : Time)
   | some observed =>
     cases hp : CompletionRetry.step? observed operation.val with
     | none => simp [ht, hp] at h
-    | some retry => simp [ht, hp] at h; cases h; rfl
+    | some retry =>
+        simp [ht, hp] at h
+        cases h
+        cases before
+        simp
 
-theorem acquire_preserves_gate_world {before after : State} (actor : Actor)
-    (independent : Bool) (h : acquire before actor independent = some after) :
-    after.gate.execution = before.gate.execution := by
-  unfold CanonicalGate.acquire at h
-  cases hg : CanonicalOutput.Execution.Gate.acquire before.gate actor independent with
-  | none => simp [hg] at h
-  | some gate =>
-    simp [hg] at h; cases h
-    exact CanonicalOutput.Execution.Gate.acquire_preserves_durable_world
-      before.gate gate actor independent hg
-
-theorem scheduling_preserves_gate_world {before after : State} (actor : Actor)
-    (event : StorageWriteGate.Event) (h : scheduling before actor event = some after) :
-    after.gate.execution = before.gate.execution := by
-  unfold CanonicalGate.scheduling at h
-  cases hg : CanonicalOutput.Execution.Gate.scheduling before.gate actor event with
-  | none => simp [hg] at h
-  | some gate =>
-    simp [hg] at h; cases h
-    exact CanonicalOutput.Execution.Gate.scheduling_preserves_durable_world
-      before.gate gate actor event hg
-
-theorem commitGate_nextSequence_monotone {before after : State} (actor : Actor)
+theorem commitGate_nextSequence_monotone
+    {before after : CanonicalOutput.Execution.World} (actor : Actor)
     (now : Time) (operation : GateOperation)
     (h : commitGate before actor now operation = some after) :
-    before.gate.execution.transcript.nextSeq ≤ after.gate.execution.transcript.nextSeq := by
+    before.transcript.nextSeq ≤ after.transcript.nextSeq := by
   unfold commitGate at h
   split at h <;> try contradiction
-  cases hg : CanonicalOutput.Execution.Gate.commit before.gate actor now operation.val with
+  cases hg : CanonicalOutput.Execution.Gate.commit before actor now operation.val with
   | none => simp [hg] at h
   | some gate =>
     simp [hg] at h; cases h
     exact CanonicalOutput.Execution.Gate.successful_commit_nextSequence_monotone
-      before.gate gate actor now operation.val hg
-
-theorem Trace.nextSequence_monotone {before after : State} (trace : Trace before after) :
-    before.gate.execution.transcript.nextSeq ≤ after.gate.execution.transcript.nextSeq := by
-  induction trace with
-  | refl => exact Nat.le_refl _
-  | commit actor now operation h => exact commit_nextSequence_monotone actor now operation h
-  | policy now operation h => rw [stepPolicy_preserves_gate now operation h]
-  | acquire actor independent h => rw [acquire_preserves_gate_world actor independent h]
-  | scheduling actor event h => rw [scheduling_preserves_gate_world actor event h]
-  | gate actor now operation h => exact commitGate_nextSequence_monotone actor now operation h
-  | trans left right ihLeft ihRight => exact Nat.le_trans ihLeft ihRight
+      before after actor now operation.val hg
 
 end CompletionRetry.CanonicalGate

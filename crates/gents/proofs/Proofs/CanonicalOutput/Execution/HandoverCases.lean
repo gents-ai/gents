@@ -20,10 +20,10 @@ def nextActivation (requester : Option Nat := none) : Activation :=
   , configuredRoutes := [(44, 2)], routesAuthenticated := true
   , generation := 8, duration := 5, deadline := 11 }
 
-def reacquire (state : State) : Option State := do
-  let released ← Gate.scheduling state.paired.gate 1 .release
+def reacquire (state : World) : Option World := do
+  let released ← Gate.scheduling state 1 .release
   let held ← Gate.acquire released 1 true
-  pure { state with paired := { state.paired with gate := held } }
+  pure held
 
 def terminalRunningParent : Option World := do
   let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
@@ -34,35 +34,32 @@ def terminalRunningParent : Option World := do
     backgroundReceiptClose backgroundReceiptMessage).toOption
   (terminalize receipted 7 .completed (.message 501)).toOption
 
-def claimedNext : Option State := do
+def claimedNext : Option World := do
   let parent ← terminalRunningParent
   let gate ← Gate.acquire (Gate.initial parent) 1 true
   let queue : SessionQueue.SessionQueueState :=
     { scope := ⟨1, 1, none⟩, active := none, pending := [nextEntry], terminal := ∅ }
-  claimAndActivate { paired := { gate := gate, queue := queue }, claimed := none }
-    1 6 nextActivation
+  claimAndActivate { gate with queue := queue, claimed := none } 1 6 nextActivation
 
 def actualHandoverLateToolAndFinish : Option Bool := do
   let claimed ← claimedNext
-  if claimed.paired.gate.execution.remoteRoutes != [(44, 2)] then none
+  if claimed.remoteRoutes != [(44, 2)] then none
   let held ← reacquire claimed
   let begun ← beginProcessing held 1 6 8
   let toolHeld ← reacquire begun
-  let oldTool ← ownedToolByDocument? toolHeld.paired.gate.execution 600
+  let oldTool ← ownedToolByDocument? toolHeld 600
   let lateClose := { toolOutputClose with createdAt := 7 }
-  let closedGate ← Gate.commit toolHeld.paired.gate 1 7
+  let closeState ← Gate.commit toolHeld 1 7
     (.toolClose 600 (.bridge (completedBridge oldTool.context) .bridge_complete) lateClose)
-  let closeState := { toolHeld with paired := { toolHeld.paired with gate := closedGate } }
   let terminalHeld ← reacquire closeState
-  let terminalGate ← Gate.commit terminalHeld.paired.gate 1 7
+  let terminal ← Gate.commit terminalHeld 1 7
     (.terminalize 8 .failed .noMessage)
-  let finishHeld ← reacquire
-    { terminalHeld with paired := { terminalHeld.paired with gate := terminalGate } }
+  let finishHeld ← reacquire terminal
   let finished ← finishAndAcknowledge finishHeld 1
-  let oldAfter ← ownedToolByDocument? finished.state.paired.gate.execution 600
-  pure (finished.state.claimed.isNone && finished.state.paired.queue.active.isNone &&
+  let oldAfter ← ownedToolByDocument? finished.state 600
+  pure (finished.state.claimed.isNone && finished.state.queue.active.isNone &&
     oldAfter.context.state == .completed &&
-    finished.state.paired.gate.execution.requestId == 801)
+    finished.state.requestId == 801)
 
 theorem old_background_tool_survives_claim_and_closes_before_exact_finish :
     actualHandoverLateToolAndFinish = some true := by native_decide
@@ -76,7 +73,7 @@ def requesterMismatchRejected : Bool :=
       | some gate =>
           let queue : SessionQueue.SessionQueueState :=
             { scope := ⟨1, 1, some 33⟩, active := none, pending := [nextEntry], terminal := ∅ }
-          (claimAndActivate { paired := { gate := gate, queue := queue }, claimed := none }
+          (claimAndActivate { gate with queue := queue, claimed := none }
             1 6 nextActivation).isNone
 
 theorem foreign_requester_scope_cannot_activate : requesterMismatchRejected = true := by
@@ -90,7 +87,7 @@ def expiredBeginRejected : Option Bool := do
 theorem begin_uses_current_time_and_rejects_expired_lease :
     expiredBeginRejected = some true := by native_decide
 
-def wakeClaimed : Option State := do
+def wakeClaimed : Option World := do
   let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
     [bridgeAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
@@ -123,7 +120,7 @@ def wakeClaimed : Option State := do
     , generation := 8
     , duration := 5
     , deadline := 11 }
-  claimAndActivate { paired := { gate := gate, queue := queued.queue }, claimed := none }
+  claimAndActivate { gate with queue := queued.queue, claimed := none }
     1 6 activation
 
 def finishWake (outcome : RequestExecutionLease.Outcome) : Option FinishResult := do
@@ -131,16 +128,15 @@ def finishWake (outcome : RequestExecutionLease.Outcome) : Option FinishResult :
   let held ← reacquire claimed
   let begun ← beginProcessing held 1 6 8
   let terminalHeld ← reacquire begun
-  let terminal ← Gate.commit terminalHeld.paired.gate 1 7
+  let terminal ← Gate.commit terminalHeld 1 7
     (.terminalize 8 outcome .noMessage)
-  let finishHeld ← reacquire
-    { terminalHeld with paired := { terminalHeld.paired with gate := terminal } }
+  let finishHeld ← reacquire terminal
   finishAndAcknowledge finishHeld 1
 
 def failedWakeReleasesWithoutAcknowledgement : Option Bool := do
   let result ← finishWake .failed
   pure (result.acknowledged.isEmpty && result.state.claimed.isNone &&
-    result.state.paired.queue.active.isNone && wakeEntry.requestId ∈ result.state.paired.queue.terminal)
+    result.state.queue.active.isNone && wakeEntry.requestId ∈ result.state.queue.terminal)
 
 theorem failed_background_wake_releases_claim_without_acknowledging_delivery :
     failedWakeReleasesWithoutAcknowledgement = some true := by native_decide
@@ -150,7 +146,7 @@ def completedWakeAcknowledgesExactSnapshot : Option Bool := do
   pure (result.acknowledged ==
     [{ messageId := (wakeNotificationMessage 2).header.id, sequence := 2
      , wakeRequestId := wakeEntry.requestId }] &&
-    result.state.paired.queue.active.isNone)
+    result.state.queue.active.isNone)
 
 theorem completed_background_wake_acknowledges_exact_claim_snapshot :
     completedWakeAcknowledgesExactSnapshot = some true := by native_decide

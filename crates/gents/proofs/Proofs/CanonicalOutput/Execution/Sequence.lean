@@ -205,7 +205,8 @@ theorem renew_preserves_nextSeq (world after : World) (generation : Generation)
 theorem appendRaw_preserves_nextSeq (world after : World) (generation : Generation)
     (record : Segment) (h : appendRaw world generation record = .ok after) :
     after.transcript.nextSeq = world.transcript.nextSeq := by
-  have hcore := checked_core_success _ _ _ h
+  have hcore := h
+  unfold appendRaw at hcore
   simp only [appendRawCore] at hcore
   try dsimp only at hcore
   repeat' first | contradiction | (solve | cases hcore; rfl) | split at hcore

@@ -31,6 +31,17 @@ same document is not a twin; a different identity or content remains a conflict.
 def uniqueRecord {α ε : Type} [DecidableEq α] (missing conflict : ε)
     (records : List α) : Except ε α := uniqueRecordRaw missing conflict records.dedup
 
+/-- Every visible document at this immutable identity has exactly these bytes. -/
+def exactIdentityAt (records : List Segment) (record : Segment) : Bool :=
+  (records.filter (fun other => other.id == record.id)).all (fun other => other == record)
+
+/-- Flush timestamps respect ordinal order within a reconstructed source. -/
+def timestampsNondecreasing (records : List Segment) : Bool :=
+  records.all fun left => records.all fun right =>
+    match left.flush, right.flush with
+    | some a, some b => if a.ordinal ≤ b.ordinal then left.createdAt ≤ right.createdAt else true
+    | _, _ => true
+
 theorem uniqueRecord_order_independent {α ε : Type} [DecidableEq α]
     (missing conflict : ε) (left right : List α) (h : left.Perm right) :
     uniqueRecord missing conflict left = uniqueRecord missing conflict right :=

@@ -135,17 +135,35 @@ cover exact replay, fresh extent validation and terminal commits, while executab
 multi-step regressions establish non-vacuity. `Execution/Gate` composes actual
 operations with the existing gate schedule: another holder cannot commit, and the
 next holder reads the preceding durable world. `Execution/Sequence` derives
-allocator preservation/growth from the actual core operations, and
-`Gate.Trace.nextSequence_monotone` lifts those laws by induction over gate traces.
-`BackgroundGate.Trace.nextSequence_monotone` extends that induction to interleaved
-execution commits and atomic notification/queue commits in the paired world.
-`Execution/SessionComposition` wires these owners together without a raw gate
-trace escape around retry policy. Its sequence invariant also crosses physical
+allocator preservation/growth from the actual core operations.
+The raw-append core directly establishes its former wrapper postcondition, so it
+needs no second check. Retraction is different: an arbitrary imported snapshot
+may contain an exact replay closure plus another closure at the same coordinate;
+the core replay is then inert while the wrapper rejects the ambiguous closure
+set. Removing that check requires a source-closure uniqueness reachability proof,
+not only message-sequence or tool-lifecycle coherence.
+`Execution/SessionComposition.Trace.nextSequence_monotone` lifts those laws over
+the single composed trace, including execution commits and atomic notification/
+queue commits, without a raw gate trace escape around retry policy.
+Its sequence invariant also crosses physical
 request activation, finish, Goal publication and wake delivery. Authentication of
 native claim/Goal/configuration observations remains a bridge premise; these
 adapters do not introduce a second identity or configuration authority.
 These do not prove a native mutex, database atomicity, scheduler fairness or a
 global reachability invariant for every owner.
+
+The composed owners now share `Execution.World`: gate scheduling, queue, claim,
+and retry state are fields rather than nested state wrappers. Gate commits retain
+the queue/claim/retry controls, and acquisition/scheduling preserve every field
+except gate ownership and scheduling. Tool-delivery cores return a restricted
+four-field write (segments, messages, transcript, tool contexts); the common lift
+cannot write the parent lease or composed controls. `Gate.Operation` remains the
+closed admitted-operation vocabulary, not an arbitrary transition callback.
+Provider acceptance/retraction still require the retry-mediated application path.
+The full coherence invariant over that application trace is still outstanding;
+flattening and frame preservation do not establish it or justify deleting the
+remaining defensive postchecks. Native conformance regeneration remains deferred
+until that proof/encoding work settles.
 
 Retry cap, deadline-fit and one-repair guarantees are retained as transition
 proofs. Segment retention is proved across observation traces; projected prefix
@@ -173,7 +191,8 @@ response-row fixtures are not evidence for the new `canonical_output_projection_
 Bindings marked follow-up in the coverage ledger remain implementation debt, not
 completed native coverage. Do not restore deleted generators as compatibility code.
 
-Composition repair validation: pinned Lean 4.18.0 `lake build` passed (1,150 targets),
+Composition repair validation: pinned Lean 4.18.0 `lake build` passed (1,154 targets,
+including the import-closure guard and standalone fixture roots),
 `git diff --check` passes, and the proof tree has no `sorry` or added axioms.
 Sol implementation agents cross-reviewed the execution, hydration and gate
 boundaries. Root review checked native compaction/fork joins, the live-prefix
@@ -189,6 +208,12 @@ and retry timer overshoot are checked. Retired response-only recovery,
 gate-bypassing retry wrappers, and ring/persisted-result reader dispatch are
 removed rather than retained as alternative machines.
 No Rust build/tests or external fixture regeneration were run in this layer.
+
+The structural cleanup was cross-reviewed by Sol agents for frame strength,
+validator equivalence, and preservation of every migrated regression assertion.
+The full-state continuation case caught an accidental queue/retry reset during
+gate initialization; initialization now touches only gate controls. The final
+aggregate build passes, as do the import-closure guard's three unit tests.
 
 The explicit-renewal revision removed lease `OutputFact`/eligibility and global
 derived-progress scans. Renewal
@@ -348,6 +373,16 @@ lake build
 lake build Proofs.Conformance.Contracts
 lake env lean --run Proofs/Conformance/Contracts.lean
 ```
+
+The default build also checks that every local proof module belongs to the
+transitive import closure of the build roots. `proofRoots` in `lakefile.lean`
+feeds both the compiler and this inventory check. Three standalone conformance
+programs (`ClientObservationOrdering`, `ClientPresentationAgreement`, and
+`StorageWriteGate`) have separate `main` definitions and are explicit build
+roots, rather than unchecked files or imports of the shared barrel. The obsolete
+`CancelPropagation` wrapper and unused generic `Recovery/Outcome` accounting
+module are removed; cancellation and canonical recovery retain their existing
+owners and executable cases.
 
 ## What Is Proven
 

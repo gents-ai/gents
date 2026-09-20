@@ -179,7 +179,7 @@ def reconstructPrefix (observation : Observation) (limit : Option Nat) :
   if data.isEmpty then .error .loading
   else if data.all (fun record => record.writer == observation.target.writer) = false then
     .error .invalid
-  else if CanonicalOutput.Execution.timestampsNondecreasing data = false then .error .invalid
+  else if CanonicalOutput.timestampsNondecreasing data = false then .error .invalid
   else if !(data.filterMap (fun (record : Segment) =>
       record.flush.map (fun (flush : Flush) => flush.ordinal))).Nodup then
     .error .conflicted

@@ -231,6 +231,44 @@ theorem claimed_continuation_sees_terminal_notification
     notified_completion_has_durable_message continuation.queued.notified,
     continuation.activeWake⟩
 
+/-- End-to-end evidence retained by a claimed background continuation. This
+connects the actual notification publication (fresh when applicable), the
+same-session coalesced enqueue, and the subsequent queue claim. -/
+theorem claimed_continuation_retains_publication_enqueue_claim_chain
+    (continuation : Continuation) :
+    isTerminal continuation.queued.notified.completion.toolState ∧
+      HasNotification continuation.queued.notified ∧
+      continuation.queued.preQueue.sessionId =
+        continuation.queued.notified.transcript.sessionId ∧
+      (continuation.queued.notified.completion.wake.source = .backgroundCompletion ∧
+        continuation.queued.notified.completion.wake.coalesceWellFormed
+          continuation.queued.preQueue.sessionId) ∧
+      SessionQueue.containsCoalescedQueueKey
+        continuation.queued.preQueue.pending
+        SessionQueue.QueueSource.backgroundCompletion
+        continuation.queued.preQueue.sessionId = false ∧
+      SessionQueue.step? continuation.queued.preQueue
+        (.coalescePending continuation.queued.notified.completion.wake) =
+          some continuation.queued.queue ∧
+      SessionQueue.step? continuation.queued.queue .claimNext =
+        some continuation.queue ∧
+      continuation.queue.active =
+        some continuation.queued.notified.completion.wake.requestId ∧
+      (continuation.queued.notified.freshAppend = true →
+        continuation.queued.notified.transcript =
+          continuation.queued.notified.preTranscript.appendUserMessage
+            continuation.queued.notified.completion.notificationMessageId
+            Transcript.MessageKind.ordinary) := by
+  exact ⟨continuation.queued.notified.terminal,
+    continuation.queued.notified.durable,
+    continuation.queued.sameSession,
+    continuation.queued.wakeWellFormed,
+    continuation.queued.wakeKeyMissing,
+    continuation.queued.enqueued,
+    continuation.claimed,
+    continuation.activeWake,
+    continuation.queued.notified.appended⟩
+
 /-! ## Executable canonical acceptance witness -/
 
 def canonicalTranscript : Transcript.TranscriptState :=
@@ -738,13 +776,7 @@ def recoverWakeDelivery (input : WakeRecoveryInput) : WakeRecoveryProjection :=
   , retryEligible := input.requestState == .failed && input.claimSnapshot.isSome
   }
 
-theorem recovery_preserves_terminal_request (input : WakeRecoveryInput)
-    (_h : isTerminal input.requestState) :
-    (recoverWakeDelivery input).requestState = input.requestState := by
-  rfl
-
-theorem recovery_preserves_unfinished_request (input : WakeRecoveryInput)
-    (_h : ¬ isTerminal input.requestState) :
+theorem recovery_preserves_request (input : WakeRecoveryInput) :
     (recoverWakeDelivery input).requestState = input.requestState := by
   rfl
 
@@ -760,11 +792,6 @@ theorem recovery_does_not_retry_cancelled_wake (input : WakeRecoveryInput)
       input.requestState = .dead) :
     (recoverWakeDelivery input).retryEligible = false := by
   rcases h with h | h | h <;> simp [recoverWakeDelivery, h, isTerminal]
-
-theorem recovery_without_attempt_preserves_request (input : WakeRecoveryInput)
-    (hclaim : input.claimSnapshot = none) :
-    (recoverWakeDelivery input).requestState = input.requestState := by
-  simp [recoverWakeDelivery, hclaim]
 
 def deliveryCrashInput : DeliveryCrashPoint → WakeRecoveryInput
   | .beforeClaim =>

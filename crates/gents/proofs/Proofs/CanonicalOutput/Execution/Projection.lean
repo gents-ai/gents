@@ -41,20 +41,11 @@ def requestWriterGeneration? : Writer → Option Generation
 def writtenBy (generation : Generation) (record : Segment) : Bool :=
   requestWriterGeneration? record.writer == some generation
 
-def exactIdentityAt (records : List Segment) (record : Segment) : Bool :=
-  (records.filter (fun other => other.id == record.id)).all (fun other => other == record)
-
 def sourceIdentitiesValid (records : List Segment) (coordinate : Coordinate) : Bool :=
   (sourceRecords records coordinate).all (exactIdentityAt records)
 
 def sourceData (records : List Segment) (coordinate : Coordinate) : List Segment :=
   (sourceRecords records coordinate).filter (fun record => record.flush.isSome) |>.dedup
-
-def timestampsNondecreasing (records : List Segment) : Bool :=
-  records.all fun left => records.all fun right =>
-    match left.flush, right.flush with
-    | some a, some b => if a.ordinal ≤ b.ordinal then left.createdAt ≤ right.createdAt else true
-    | _, _ => true
 
 def reconstructOpenPrefix (records : List Segment) (coordinate : Coordinate)
     (writer : Writer) : Except IntegrityError Streams := do
@@ -193,24 +184,6 @@ def transcriptToolByDocument? (world : World) (document : DocId) :
 
 def toolHandedOff (tool : OwnedTool) : Bool :=
   tool.stuckSince.isSome || tool.context.awaitMode == .background
-
-/-- Session-wide physical ownership remains anchored to the exact accepted
-assistant header even after another request becomes current in the same
-session. This deliberately does not reinterpret the old header through the
-current request's generation. -/
-def directAcceptedHeaderBindsTool (world : World) (tool : OwnedTool) : Bool :=
-  world.messages.any fun message =>
-    message.header.request == some tool.requestDoc &&
-      message.header.session == tool.session && message.sequence == tool.acceptedSequence &&
-      message.header.role == .assistant && message.header.outcome == .complete &&
-      (match message.header.publication with | .requestExecution _ => true | _ => false) &&
-      (toolIntents message).any (fun intent => intent.call == tool.document) &&
-      (match reconstructMessage world.segments noDeniedDocuments message with
-       | .ok _ => true | .error _ => false) &&
-      world.transcript.messages.any (fun row =>
-        row.messageId == message.header.id && row.sessionId == tool.session &&
-          row.sequence == tool.acceptedSequence && row.role == .assistant &&
-          decide (row.kind.referencesToolCall tool.document))
 
 /-- Structural ownership for already-published lifecycle work. Conflicting
 segment bytes do not erase ownership, but ambiguous message metadata does. -/

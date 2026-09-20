@@ -74,10 +74,22 @@ theorem appendRaw_preserves_request_control
     (h : appendRaw pre generation record = .ok post) :
     record ∈ post.segments ∧ post.lease.request = pre.lease.request ∧
       post.lease.lease = pre.lease.lease := by
-  unfold appendRaw at h
-  have hp := checked_success _ _ _ h
-  simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hp
-  exact ⟨hp.1.1, hp.1.2, hp.2⟩
+  unfold appendRaw appendRawCore at h
+  split at h <;> try contradiction
+  split at h
+  · split at h <;> try contradiction
+    cases h
+    exact ⟨by assumption, rfl, rfl⟩
+  · split at h <;> try contradiction
+    split at h <;> try contradiction
+    next lease hlease =>
+      dsimp only at h
+      split at h <;> try contradiction
+      cases h
+      have hid := (RequestExecutionLease.append_output_is_identity_and_never_renews
+        pre.lease lease generation hlease).1
+      subst lease
+      exact ⟨by simp, rfl, rfl⟩
 
 theorem exact_raw_replay_core_is_identity
     (world post : World) (generation : Generation) (record : Segment)

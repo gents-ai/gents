@@ -22,7 +22,7 @@ opaque outputAloneDoesNotRenew : Option Bool := do
   let items := [RecoveryItem.mk (partialClose 101 0 1 10)
     (some (recoveryMessage 200 101 0 10))]
   let recovered ← commit recoveryHeld 2 10 (.recover 7 8 5 20 items)
-  pure (recovered.execution.currentGeneration? == some 8)
+  pure (recovered.currentGeneration? == some 8)
 
 /-- Under the scheduling premise that the owner of a published, dispatched tool
 intent reaches its held write gate at the due time, it renews explicitly before
@@ -39,9 +39,9 @@ opaque toolWaitExplicitRenewal : Option Bool := do
   let renewalHeld ← acquire dispatchReleased 1 false
   let renewed ← commit renewalHeld 1 8 (.renew 7 10)
   let released ← scheduling renewed 1 .release
-  pure (renewed.execution.lease.lease == .active 7 5 13 &&
-    physicalRunning renewed.execution 600 &&
-    !(600 ∈ renewed.execution.transcript.inFlight) && released.owner.isNone)
+  pure (renewed.lease.lease == .active 7 5 13 &&
+    physicalRunning renewed 600 &&
+    !(600 ∈ renewed.transcript.inFlight) && released.gateOwner.isNone)
 
 opaque recoveryBeforeStaleWriter : Option Bool := do
   let held ← acquire (initial (world 5)) 1 true
@@ -54,13 +54,13 @@ opaque recoveryBeforeStaleWriter : Option Bool := do
   let staleHeld ← acquire releasedAgain 1 true
   let late : Segment := { raw 102 0 1 11 with flush := some ⟨1, [⟨0, 1, none⟩], [66]⟩ }
   pure ((commit staleHeld 1 11 (.append 7 late)).isNone &&
-    recovered.execution.currentGeneration? == some 8)
+    recovered.currentGeneration? == some 8)
 
 opaque sameTaskWaitDoesNotCommit : Option Bool := do
   let held ← acquire (initial (world 5)) 1 false
   let suspended ← scheduling held 1 .siblingWait
   pure ((commit suspended 1 5 (.append 7 (raw 100 0 0 5))).isNone &&
-    suspended.execution.segments.isEmpty)
+    suspended.segments.isEmpty)
 
 /-- The truncation counterexample is reached through admitted raw appends,
 not by assuming an arbitrary malformed initial collection. -/
@@ -121,7 +121,7 @@ def backgroundReceiptMessage : MessageEnvelope :=
     blocks := [.toolResult 600 "native-call" none
       [.text ⟨⟨702, 0⟩, .composed [.literal [91], .range 0 1, .literal [93]]⟩]] }
 
-def releaseAndAcquire (state : State) (actor : Actor := 1) : Option State := do
+def releaseAndAcquire (state : World) (actor : Actor := 1) : Option World := do
   let released ← scheduling state actor .release
   acquire released actor true
 
@@ -146,11 +146,11 @@ opaque foregroundEndToEnd : Option Bool := do
   let terminalHeld ← releaseAndAcquire replayed
   let terminal ← commit terminalHeld 1 5
     (.terminalize 7 .completed (.message 501))
-  pure (physicalRunning dispatched.execution 600 &&
-    terminal.execution.lease.request == .completed &&
-    terminal.execution.transcript.nextSeq == 2 &&
-    terminal.execution.messages.contains (foregroundResultMessage 1) &&
-    replayed.execution == delivered.execution)
+  pure (physicalRunning dispatched 600 &&
+    terminal.lease.request == .completed &&
+    terminal.transcript.nextSeq == 2 &&
+    terminal.messages.contains (foregroundResultMessage 1) &&
+    replayed == delivered)
 
 opaque foregroundCompletionWhileRunningRejected : Option Bool := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
@@ -171,33 +171,33 @@ opaque foregroundCompletionWhileRunningRejected : Option Bool := do
 
 /-- Backgrounding is an explicit fenced transition. The parent then completes,
 and the still-running tool closes and publishes afterward without reviving it. -/
-opaque backgroundAccepted : Option State := do
+opaque backgroundAccepted : Option World := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
   commit acceptHeld 1 5 (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
 
-opaque backgroundDispatched : Option State := do
+opaque backgroundDispatched : Option World := do
   let accepted ← backgroundAccepted
   let dispatchHeld ← releaseAndAcquire accepted
   commit dispatchHeld 1 5 (.dispatch 7 permit)
 
-opaque backgroundControlled : Option State := do
+opaque backgroundControlled : Option World := do
   let dispatched ← backgroundDispatched
   let backgroundHeld ← releaseAndAcquire dispatched
   commit backgroundHeld 1 5 (.toolControl 7 600 .background)
 
-opaque backgroundReceipted : Option State := do
+opaque backgroundReceipted : Option World := do
   let backgrounded ← backgroundControlled
   let receiptHeld ← releaseAndAcquire backgrounded
   commit receiptHeld 1 5
     (.backgroundReceipt 600 backgroundReceiptClose backgroundReceiptMessage)
 
-opaque backgroundTerminal : Option State := do
+opaque backgroundTerminal : Option World := do
   let receipted ← backgroundReceipted
   let terminalHeld ← releaseAndAcquire receipted
   commit terminalHeld 1 5
     (.terminalize 7 .completed (.message 501))
 
-opaque backgroundClosed : Option State := do
+opaque backgroundClosed : Option World := do
   let terminal ← backgroundTerminal
   let closeHeld ← releaseAndAcquire terminal
   commit closeHeld 1 5
@@ -206,8 +206,8 @@ opaque backgroundClosed : Option State := do
 opaque backgroundLateDelivery : Option Bool := do
   let terminal ← backgroundTerminal
   let closed ← backgroundClosed
-  let delivered ← publishWakeSummary closed.execution terminal.execution.lease
-  pure (terminal.execution.lease.request == .completed &&
+  let delivered ← publishWakeSummary closed terminal.lease
+  pure (terminal.lease.request == .completed &&
     delivered)
 
 opaque recoveryCancelsPendingAtomically : Option Bool := do
@@ -217,13 +217,13 @@ opaque recoveryCancelsPendingAtomically : Option Bool := do
   let releasedForRecovery ← scheduling accepted 1 .release
   let recoveryHeld ← acquire releasedForRecovery 2 true
   let recovered ← commit recoveryHeld 2 10 (.recover 7 8 5 20 [])
-  let tool ← ownedToolByDocument? recovered.execution 600
+  let tool ← ownedToolByDocument? recovered 600
   let released ← scheduling recovered 2 .release
   let staleHeld ← acquire released 1 true
   pure (tool.context.state == .cancelled &&
-    recovered.execution.currentGeneration? == some 8 &&
+    recovered.currentGeneration? == some 8 &&
     (commit staleHeld 1 10 (.dispatch 7 permit)).isNone &&
-    !remoteExecutionAdmitted recovered.execution 600)
+    !remoteExecutionAdmitted recovered 600)
 
 opaque recoveryHandsOffRunning : Option Bool := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
@@ -234,11 +234,11 @@ opaque recoveryHandsOffRunning : Option Bool := do
   let releasedForRecovery ← scheduling dispatched 1 .release
   let recoveryHeld ← acquire releasedForRecovery 2 true
   let recovered ← commit recoveryHeld 2 10 (.recover 7 8 5 20 [])
-  let tool ← ownedToolByDocument? recovered.execution 600
+  let tool ← ownedToolByDocument? recovered 600
   pure (tool.context.state == .running && tool.stuckSince == some 10 &&
     tool.cancelCascadeIntentAt == some 10 &&
-    !(600 ∈ recovered.execution.transcript.inFlight) &&
-    recovered.execution.currentGeneration? == some 8)
+    !(600 ∈ recovered.transcript.inFlight) &&
+    recovered.currentGeneration? == some 8)
 
 def foreignProviderTurn : Segment :=
   { providerTurn with coordinate := ⟨11, .provider 0 1 0⟩ }

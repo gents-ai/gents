@@ -4,11 +4,6 @@ namespace CanonicalOutput.Execution
 
 open RequestExecutionLease
 
-def activeGeneration? (world : World) : Option Generation :=
-  match world.lease.lease with
-  | .active generation _ _ => some generation
-  | _ => none
-
 /-- Explicit owner heartbeat. Due time, generation fencing, stale-deadline
 rejection, and the new deadline are all decided by the lease state machine.
 Unlike output operations, renewal does not inspect or reconstruct canonical
@@ -495,11 +490,6 @@ def reusableOrFreshClosure (world : World) (expected : Generation)
       recoveryExtentExact world expected closing
   | _ => false
 
-def installRecoveryClosures (segments : List Segment)
-    (items : List RecoveryItem) : List Segment :=
-  items.foldl (fun result item =>
-    if item.closing ∈ result then result else result ++ [item.closing]) segments
-
 def prepareRecoveryItems (world : World) (expected fresh : Generation) :
     List RecoveryItem → RecoveryPrepared → Except Error RecoveryPrepared
   | [], prepared => .ok prepared
@@ -545,12 +535,6 @@ def prepareRecoveryBatch (world : World) (expected fresh : Generation)
   if recoveryCoversAllSources world expected items = false then .error .invalidSegment
   else prepareRecoveryItems world expected fresh items
     ⟨world.segments, world.messages, world.transcript⟩
-
-def recoveryBatchValid (world : World) (expected fresh : Generation)
-    (items : List RecoveryItem) : Bool :=
-  match prepareRecoveryBatch world expected fresh items with
-  | .ok _ => true
-  | .error _ => false
 
 def recoveryItemPresent (world : World) (item : RecoveryItem) : Bool :=
   item.closing ∈ world.segments && match item.message with
@@ -750,10 +734,7 @@ def revokeCorruptCore (world : World) (expected fresh : Generation)
 
 def appendRaw (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=
-  checked (fun post =>
-    record ∈ post.segments && post.lease.request == world.lease.request &&
-      post.lease.lease == world.lease.lease)
-    (appendRawCore world generation record)
+  appendRawCore world generation record
 
 def retractBeforeRetry (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=

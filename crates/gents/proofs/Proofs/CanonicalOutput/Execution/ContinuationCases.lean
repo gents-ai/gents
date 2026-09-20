@@ -52,8 +52,10 @@ def wakeContinuationTrace : Option Bool := do
     composed.execution 600 message wakeEntry binding finished
   let held ← Gate.acquire (Gate.initial closed) 1 true
   let gateCommitted ← BackgroundGate.commit
-    { gate := held, queue := wakeQueue } 1 5 600 message wakeEntry binding
-  pure (gateCommitted.gate.execution == composed.execution &&
+    { held with queue := wakeQueue } 1 5 600 message wakeEntry binding
+  pure (gateCommitted == { composed.execution with
+      gateOwner := some 1, gateSchedule := { held.gateSchedule with phase := .releasable },
+      queue := queued.queue } &&
     gateCommitted.queue.scope.agent == queued.queue.scope.agent &&
     gateCommitted.queue.sessionId == queued.queue.sessionId &&
     gateCommitted.queue.scope.requester == queued.queue.scope.requester &&
@@ -125,11 +127,11 @@ def goalGateDoesNotCreateWake : Option Bool := do
   let closed ← (ToolDelivery.closeToolOutput backgrounded 600
     (.native .complete) toolOutputClose).toOption
   let held ← Gate.acquire (Gate.initial closed) 1 true
-  let before : BackgroundGate.State := { gate := held, queue := wakeQueue }
-  let committed ← BackgroundGate.commitExecution before 1 5
+  let before := { held with queue := wakeQueue }
+  let committed ← Gate.commit before 1 5
     (.toolGoalDeliver 600 goalBinding (toolDeliveryMessage 1))
-  pure (committed.gate.execution.messages.contains (toolDeliveryMessage 1) &&
-    committed.gate.execution.transcript.nextSeq == 2 &&
+  pure (committed.messages.contains (toolDeliveryMessage 1) &&
+    committed.transcript.nextSeq == 2 &&
     committed.queue.scope.agent == before.queue.scope.agent &&
     committed.queue.sessionId == before.queue.sessionId &&
     committed.queue.scope.requester == before.queue.scope.requester &&

@@ -12,10 +12,10 @@ def retry (phase : CompletionRetry.Phase) (attempt : Nat := 0) : CompletionRetry
     transportUsed := 0, resampleUsed := 0, repairUsed := false
     lastParseError := none, now := 5, deadline := some 10, attempt, usageCharged := 0 }
 
-def held (phase : CompletionRetry.Phase) (attempt : Nat := 0) : Option State := do
+def held (phase : CompletionRetry.Phase) (attempt : Nat := 0) : Option CanonicalOutput.Execution.World := do
   let gate ← CanonicalOutput.Execution.Gate.acquire
     (CanonicalOutput.Execution.Gate.initial (world 5)) 1 true
-  pure ⟨gate, retry phase attempt⟩
+  pure { gate with retry := retry phase attempt }
 
 def acceptance : Operation :=
   .accept 7 (emptyClose 100 0 .complete 5) (emptyAssistant 200 5) [] []
@@ -26,7 +26,7 @@ def acceptanceCommitsPolicyAndCanonicalOutput : Bool :=
   | some before => match commit before 1 5 acceptance with
     | .error _ => false
     | .ok after => after.retry.phase == .accepted 200 &&
-        (emptyAssistant 200 5) ∈ after.gate.execution.messages
+        (emptyAssistant 200 5) ∈ after.messages
 
 theorem acceptance_commits_policy_and_canonical_output :
     acceptanceCommitsPolicyAndCanonicalOutput = true := by native_decide
@@ -63,16 +63,16 @@ def exactAcceptanceReplay : Bool :=
   | some before => match commit before 1 5 acceptance with
     | .error _ => false
     | .ok accepted =>
-      match CanonicalOutput.Execution.Gate.scheduling accepted.gate 1 .release with
+      match CanonicalOutput.Execution.Gate.scheduling accepted 1 .release with
       | none => false
       | some released =>
         match CanonicalOutput.Execution.Gate.acquire released 1 true with
         | none => false
         | some reacquired =>
-          match commit { accepted with gate := reacquired } 1 5 acceptance with
+          match commit reacquired 1 5 acceptance with
           | .error _ => false
           | .ok replayed => replayed.retry == accepted.retry &&
-              replayed.gate.execution == accepted.gate.execution
+              replayed == accepted
 
 theorem exact_acceptance_replay_is_inert : exactAcceptanceReplay = true := by native_decide
 
@@ -80,11 +80,11 @@ def retractionClose : Segment :=
   { id := 101, coordinate := ⟨10, .provider 0 0 0⟩, writer := .request 7
     flush := none, close := some .retracted, createdAt := 5 }
 
-def heldForRetraction : Option State := do
+def heldForRetraction : Option CanonicalOutput.Execution.World := do
   let execution := world 5 [raw 100 0 0 5]
   let gate ← CanonicalOutput.Execution.Gate.acquire
     (CanonicalOutput.Execution.Gate.initial execution) 1 true
-  pure ⟨gate, retry (.retractRequired .transport "io" 6)⟩
+  pure { gate with retry := retry (.retractRequired .transport "io" 6) }
 
 def retractionAndReplay : Bool :=
   match heldForRetraction with
@@ -92,18 +92,18 @@ def retractionAndReplay : Bool :=
   | some before => match commit before 1 5 (.retract 7 retractionClose) with
     | .error _ => false
     | .ok retracted =>
-      match CanonicalOutput.Execution.Gate.scheduling retracted.gate 1 .release with
+      match CanonicalOutput.Execution.Gate.scheduling retracted 1 .release with
       | none => false
       | some released =>
         match CanonicalOutput.Execution.Gate.acquire released 1 true with
         | none => false
         | some reacquired =>
-          match commit { retracted with gate := reacquired } 1 5 (.retract 7 retractionClose) with
+          match commit reacquired 1 5 (.retract 7 retractionClose) with
           | .error _ => false
           | .ok replayed =>
               replayed.retry.phase == .retracted .transport "io" 6 &&
                 replayed.retry == retracted.retry &&
-                replayed.gate.execution == retracted.gate.execution
+                replayed == retracted
 
 theorem retraction_and_exact_replay_share_policy_and_gate : retractionAndReplay = true := by
   native_decide
@@ -122,12 +122,12 @@ def retryScheduleWakeTrace : Bool :=
         match stepPolicy backingOff 6 wake with
         | none => false
         | some issuing => issuing.retry.phase == .issuing && issuing.retry.attempt == 1 &&
-            issuing.retry.now == 6 && issuing.gate == retracted.gate
+            issuing.retry.now == 6 && { issuing with retry := retracted.retry } == retracted
 
 theorem retry_schedule_and_wake_preserve_gate_and_clock : retryScheduleWakeTrace = true := by
   native_decide
 
-def scheduledBackoff : Option State := do
+def scheduledBackoff : Option CanonicalOutput.Execution.World := do
   let before ← heldForRetraction
   let retracted ← (commit before 1 5 (.retract 7 retractionClose)).toOption
   stepPolicy retracted 5 ⟨.schedule, rfl⟩
@@ -159,7 +159,7 @@ def nonClosureGateOperationRemainsAvailable : Bool :=
     match commitGate before 1 8 renewal with
     | none => false
     | some after => after.retry == before.retry &&
-        after.gate.execution.lease.lease == .active 7 5 13
+        after.lease.lease == .active 7 5 13
 
 theorem restricted_gate_surface_keeps_nonclosure_operations :
     nonClosureGateOperationRemainsAvailable = true := by native_decide

@@ -117,6 +117,7 @@ structure SessionQueueState where
   active : Option RequestId
   pending : List QueueEntry
   terminal : Finset RequestId
+  deriving DecidableEq
 
 /-- Queue execution belongs to the same exact session identity as durable sessions. -/
 def SessionQueueState.sessionId (s : SessionQueueState) : SessionId := s.scope.session

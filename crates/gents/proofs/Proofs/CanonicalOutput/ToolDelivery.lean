@@ -28,9 +28,6 @@ def openSource (records : List Segment) (request document : DocId) : Bool :=
 def identityAvailable (records : List Segment) (record : Segment) : Bool :=
   !(records.any fun old => old.id == record.id)
 
-def exactIdentityAt (records : List Segment) (record : Segment) : Bool :=
-  (records.filter (fun old => old.id == record.id)).all (fun old => old == record)
-
 def ownedRecord (records : List Segment) (request document : DocId)
     (currentTime : Time) (record : Segment) : Bool :=
   record.coordinate == coordinate request document &&
@@ -38,17 +35,11 @@ def ownedRecord (records : List Segment) (request document : DocId)
     (sourceRecords records (coordinate request document)).all
       (fun previous => previous.createdAt ≤ record.createdAt)
 
-def sourceTimestampsValid (records : List Segment) : Bool :=
-  records.all fun left => records.all fun right =>
-    match left.flush, right.flush with
-    | some a, some b => if a.ordinal ≤ b.ordinal then left.createdAt ≤ right.createdAt else true
-    | _, _ => true
-
 def validOpenData (records : List Segment) (source : Coordinate) (writer : Writer) : Bool :=
   let sourceRecords := sourceRecords records source
   let data := sourceRecords.filter (fun record => record.flush.isSome) |>.dedup
   sourceRecords.all (exactIdentityAt records) &&
-    sourceTimestampsValid data &&
+    timestampsNondecreasing data &&
     match (List.range data.length).mapM (flushAt data writer) with
     | .error _ => false
     | .ok flushes => match consumeFlushes flushes [] with
@@ -73,7 +64,7 @@ def closedRecordValid (records : List Segment) (request document : DocId)
           let selected := extent records source count
           selected.all (exactIdentityAt records) &&
             validOpenData selected source (.tool document) &&
-            sourceTimestampsValid selected &&
+            timestampsNondecreasing selected &&
             selected.all (fun previous => previous.createdAt ≤ record.createdAt)
       | _ => false) &&
     match uniqueRecord Error.malformed .conflict (closures records source) with

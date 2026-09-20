@@ -23,6 +23,52 @@ inductive Error where
   | cursor
   deriving DecidableEq, Repr
 
+/-- The complete write authority of tool delivery. Identity, request control,
+the parent lease, routing, compaction authority, delegation, and terminal
+selection remain read-only inputs from `World`. -/
+private structure ToolWrite where
+  segments : List Segment
+  messages : List MessageEnvelope
+  transcript : Transcript.TranscriptState
+  toolContexts : List OwnedTool
+
+private def ToolWrite.current (world : World) : ToolWrite :=
+  { segments := world.segments
+  , messages := world.messages
+  , transcript := world.transcript
+  , toolContexts := world.toolContexts }
+
+private def ToolWrite.apply (world : World) (write : ToolWrite) : World :=
+  { world with
+    segments := write.segments
+    messages := write.messages
+    transcript := write.transcript
+    toolContexts := write.toolContexts }
+
+@[simp] private theorem ToolWrite.apply_current (world : World) :
+    ToolWrite.apply world (ToolWrite.current world) = world := by
+  cases world
+  rfl
+
+private def ToolWrite.lift (world : World) (result : Except Error ToolWrite) : Except Error World :=
+  result.map (ToolWrite.apply world)
+
+private theorem ToolWrite.lift_success {world after : World} {result : Except Error ToolWrite}
+    (h : ToolWrite.lift world result = .ok after) :
+    ∃ write, result = .ok write ∧ after = ToolWrite.apply world write := by
+  cases result with
+  | error error => simp [ToolWrite.lift, Except.map] at h
+  | ok write =>
+      have heq : ToolWrite.apply world write = after := by
+        simpa [ToolWrite.lift, Except.map] using h
+      exact ⟨write, rfl, heq.symm⟩
+
+private theorem ToolWrite.lift_preserves_lease {world after : World}
+    {result : Except Error ToolWrite} (h : ToolWrite.lift world result = .ok after) :
+    after.lease = world.lease := by
+  obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
+  rfl
+
 inductive CloseAuthority where
   /-- A confirmed native lifecycle result. A cancellation request by itself is
   not this evidence; `.cancelDuringRun` means the host stop was confirmed. -/
@@ -94,15 +140,15 @@ request lease, including when the parent is already terminal. This hot path
 checks the exact indexed tool binding and its source prefix; it does not rescan
 every other accepted header in the session. Native storage refines this lookup
 through its immutable document index and transaction gate. -/
-def appendToolOutput (world : World) (document : DocId)
-    (record : Segment) : Except Error World :=
+private def appendToolOutputWrite (world : World) (document : DocId)
+    (record : Segment) : Except Error ToolWrite :=
   match ownedToolByDocument? world document with
   | none => .error .missingTool
   | some tool =>
       if !bindingValid world tool then .error .ownership
       else if record ∈ world.segments &&
           CanonicalOutput.ToolDelivery.appendReplayValid world.segments
-            tool.requestDoc tool.document record then .ok world
+            tool.requestDoc tool.document record then .ok (ToolWrite.current world)
       else match updateClock world tool with
       | none => .error .clock
       | some observed =>
@@ -112,10 +158,13 @@ def appendToolOutput (world : World) (document : DocId)
               tool.requestDoc tool.document world.lease.now record with
           | .error error => .error (.source error)
           | .ok segments =>
-              let post := { world with
+              .ok { ToolWrite.current world with
                 segments := segments
                 toolContexts := replaceOwnedTool world.toolContexts document observed }
-              .ok post
+
+def appendToolOutput (world : World) (document : DocId)
+    (record : Segment) : Except Error World :=
+  ToolWrite.lift world (appendToolOutputWrite world document record)
 
 def closeReplayValid (world : World) (tool : OwnedTool) (record : Segment) : Bool :=
   CanonicalOutput.ToolDelivery.terminalState tool.context.state &&
@@ -135,14 +184,14 @@ def closeReplayValid (world : World) (tool : OwnedTool) (record : Segment) : Boo
 /-- Closure and confirmed native terminal state commit together. The transcript
 row receives that exact terminal state and leaves `inFlight`; result pairing is
 added only by `publishToolDelivery`. -/
-def closeToolOutput (world : World) (document : DocId)
-    (authority : CloseAuthority) (record : Segment) : Except Error World :=
+private def closeToolOutputWrite (world : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment) : Except Error ToolWrite :=
   if !toolLifecycleProjectionCoherent world then .error .ownership
   else match ownedToolByDocument? world document with
   | none => .error .missingTool
   | some tool =>
       if !bindingValid world tool then .error .ownership
-      else if closeReplayValid world tool record then .ok world
+      else if closeReplayValid world tool record then .ok (ToolWrite.current world)
       else match terminalContext? world tool authority with
       | none => .error .lifecycle
       | some context =>
@@ -151,11 +200,16 @@ def closeToolOutput (world : World) (document : DocId)
           | .error error => .error (.source error)
           | .ok segments =>
               let updated := clearReconcileIntent tool context
-              let post := { world with
+              let write := { ToolWrite.current world with
                 segments := segments
                 toolContexts := replaceOwnedTool world.toolContexts document updated
                 transcript := world.transcript.terminalizeToolCall document context.state }
-              if !toolLifecycleProjectionCoherent post then .error .ownership else .ok post
+              let post := ToolWrite.apply world write
+              if !toolLifecycleProjectionCoherent post then .error .ownership else .ok write
+
+def closeToolOutput (world : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment) : Except Error World :=
+  ToolWrite.lift world (closeToolOutputWrite world document authority record)
 
 def matchingMessageIdentity (left right : MessageEnvelope) : Bool :=
   left.header.id == right.header.id ||
@@ -415,18 +469,20 @@ background invocation (native or linked child). The call remains physically runn
 its transcript result pairing and the shared message cursor advance. Final
 completion is a later ordinary notification through the typed Goal or wake
 publication boundary. -/
-def publishBackgroundReceipt (world : World) (document : DocId)
-    (closing : Segment) (message : MessageEnvelope) : Except Error World :=
+private def publishBackgroundReceiptWrite (world : World) (document : DocId)
+    (closing : Segment) (message : MessageEnvelope) : Except Error ToolWrite :=
   if !toolProjectionCoherent world then .error .ownership
   else match ownedToolByDocument? world document with
   | none => .error .missingTool
   | some tool =>
       if !bindingValid world tool then .error .ownership
-      else if backgroundReceiptReplayValid world tool closing message then .ok world
+      else if backgroundReceiptReplayValid world tool closing message then
+        .ok (ToolWrite.current world)
       else if !backgroundReceiptRecordValid world tool closing ||
           world.messages.any (matchingMessageIdentity message) then .error .publication
       else
-        let staged := { world with segments := world.segments ++ [closing] }
+        let staged := ToolWrite.apply world
+          { ToolWrite.current world with segments := world.segments ++ [closing] }
         if !backgroundReceiptHeaderValid staged tool closing message ||
             message.createdAt != world.lease.now then .error .publication
         else match updateClock world tool with
@@ -446,18 +502,23 @@ def publishBackgroundReceipt (world : World) (document : DocId)
             else
               let transcript := world.transcript.publishToolResult
                 document message.header.id key .running
-              let post := { world with
+              let write := { ToolWrite.current world with
                 segments := staged.segments
                 messages := world.messages ++ [message]
                 transcript := transcript
                 toolContexts := replaceOwnedTool world.toolContexts document updated }
-              if !toolProjectionCoherent post then .error .ownership else .ok post
+              let post := ToolWrite.apply world write
+              if !toolProjectionCoherent post then .error .ownership else .ok write
+
+def publishBackgroundReceipt (world : World) (document : DocId)
+    (closing : Segment) (message : MessageEnvelope) : Except Error World :=
+  ToolWrite.lift world (publishBackgroundReceiptWrite world document closing message)
 
 /-- Fresh publication allocates exactly `transcript.nextSeq` and derives its
 result key from session, physical tool document, and immutable header identity.
 Exact replay allocates nothing and is allowed even after compaction advanced. -/
-def publishToolDelivery (world : World) (document : DocId)
-    (message : MessageEnvelope) : Except Error World :=
+private def publishToolDeliveryWrite (world : World) (document : DocId)
+    (message : MessageEnvelope) : Except Error ToolWrite :=
   if !toolProjectionCoherent world then .error .ownership
   else match ownedToolByDocument? world document with
   | none => .error .missingTool
@@ -465,7 +526,7 @@ def publishToolDelivery (world : World) (document : DocId)
       if !bindingValid world tool then .error .ownership
       else if deliveryShape? message document != some .foregroundResult then
         .error .publication
-      else if publicationReplayValid world tool message then .ok world
+      else if publicationReplayValid world tool message then .ok (ToolWrite.current world)
       else if world.messages.any (matchingMessageIdentity message) then .error .publication
       else if !deliveryHeaderValid world tool message || message.createdAt != world.lease.now then
         .error .publication
@@ -477,21 +538,27 @@ def publishToolDelivery (world : World) (document : DocId)
           match freshDeliveryTranscript? world tool message with
           | none => .error .publication
           | some transcript =>
-              let post := { world with
+              let write := { ToolWrite.current world with
                 messages := world.messages ++ [message]
                 transcript := transcript
                 toolContexts := replaceOwnedTool world.toolContexts document updated }
-              if !toolProjectionCoherent post then .error .ownership else .ok post
+              let post := ToolWrite.apply world write
+              if !toolProjectionCoherent post then .error .ownership else .ok write
 
-private def publishBackgroundNotificationWith
+def publishToolDelivery (world : World) (document : DocId)
+    (message : MessageEnvelope) : Except Error World :=
+  ToolWrite.lift world (publishToolDeliveryWrite world document message)
+
+private def publishBackgroundNotificationWriteWith
     (headerValid : World → OwnedTool → MessageEnvelope → Bool)
-    (world : World) (document : DocId) (message : MessageEnvelope) : Except Error World :=
+    (world : World) (document : DocId) (message : MessageEnvelope) : Except Error ToolWrite :=
   if !toolProjectionCoherent world then .error .ownership
   else match ownedToolByDocument? world document with
   | none => .error .missingTool
   | some tool =>
       if !bindingValid world tool then .error .ownership
-      else if notificationReplayValid headerValid world tool message then .ok world
+      else if notificationReplayValid headerValid world tool message then
+        .ok (ToolWrite.current world)
       else if world.messages.any (matchingMessageIdentity message) then .error .publication
       else if !headerValid world tool message || message.createdAt != world.lease.now then
         .error .publication
@@ -503,11 +570,18 @@ private def publishBackgroundNotificationWith
           match freshDeliveryTranscript? world tool message with
           | none => .error .publication
           | some transcript =>
-              let post := { world with
+              let write := { ToolWrite.current world with
                 messages := world.messages ++ [message]
                 transcript := transcript
                 toolContexts := replaceOwnedTool world.toolContexts document updated }
-              if !toolProjectionCoherent post then .error .ownership else .ok post
+              let post := ToolWrite.apply world write
+              if !toolProjectionCoherent post then .error .ownership else .ok write
+
+private def publishBackgroundNotificationWith
+    (headerValid : World → OwnedTool → MessageEnvelope → Bool)
+    (world : World) (document : DocId) (message : MessageEnvelope) : Except Error World :=
+  ToolWrite.lift world
+    (publishBackgroundNotificationWriteWith headerValid world document message)
 
 /-- A non-Goal background notification is request-owned by the exact physical
 wake document from the authenticated queue transaction. Its payload refs stay
@@ -527,13 +601,6 @@ def publishGoalNotification (world : World) (document : DocId)
     (fun world tool message => goalNotificationHeaderValid world tool binding message)
     world document message
 
-/-- Every canonical message in the session is behind the one shared allocator.
-This deliberately does not require a transcript row for system messages. -/
-def messageSequenceCoherent (world : World) : Bool :=
-  world.messages.all fun message =>
-    message.header.session != world.sessionId ||
-      message.sequence < world.transcript.nextSeq
-
 theorem exact_append_replay_is_inert
     (world : World) (document : DocId) (tool : OwnedTool) (record : Segment)
     (found : ownedToolByDocument? world document = some tool)
@@ -542,7 +609,8 @@ theorem exact_append_replay_is_inert
     (valid : CanonicalOutput.ToolDelivery.appendReplayValid world.segments
       tool.requestDoc tool.document record = true) :
     appendToolOutput world document record = .ok world := by
-  simp [appendToolOutput, found, bound, present, valid]
+  simp [appendToolOutput, appendToolOutputWrite, ToolWrite.lift, Except.map,
+    found, bound, present, valid]
 
 theorem exact_close_replay_is_inert
     (world : World) (document : DocId) (tool : OwnedTool)
@@ -552,7 +620,8 @@ theorem exact_close_replay_is_inert
     (bound : bindingValid world tool = true)
     (valid : closeReplayValid world tool record = true) :
     closeToolOutput world document authority record = .ok world := by
-  simp [closeToolOutput, coherent, found, bound, valid]
+  simp [closeToolOutput, closeToolOutputWrite, ToolWrite.lift, Except.map,
+    coherent, found, bound, valid]
 
 theorem exact_publication_replay_ignores_clock_and_cursor
     (world : World) (document : DocId) (tool : OwnedTool)
@@ -563,7 +632,8 @@ theorem exact_publication_replay_ignores_clock_and_cursor
     (shape : deliveryShape? message document = some .foregroundResult)
     (valid : publicationReplayValid world tool message = true) :
     publishToolDelivery world document message = .ok world := by
-  simp [publishToolDelivery, coherent, found, bound, shape, valid]
+  simp [publishToolDelivery, publishToolDeliveryWrite, ToolWrite.lift, Except.map,
+    coherent, found, bound, shape, valid]
 
 theorem exact_background_receipt_replay_ignores_clock_and_cursor
     (world : World) (document : DocId) (tool : OwnedTool)
@@ -573,41 +643,25 @@ theorem exact_background_receipt_replay_ignores_clock_and_cursor
     (bound : bindingValid world tool = true)
     (valid : backgroundReceiptReplayValid world tool closing message = true) :
     publishBackgroundReceipt world document closing message = .ok world := by
-  simp [publishBackgroundReceipt, coherent, found, bound, valid]
-
-theorem appendToolOutput_maps_constant_lease (world : World) (document : DocId)
-    (record : Segment) :
-    (appendToolOutput world document record).map (fun post => post.lease) =
-      (appendToolOutput world document record).map (fun _ => world.lease) := by
-  unfold appendToolOutput
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  dsimp
-  split <;> try rfl
-  split <;> try rfl
+  simp [publishBackgroundReceipt, publishBackgroundReceiptWrite, ToolWrite.lift, Except.map,
+    coherent, found, bound, valid]
 
 theorem append_preserves_parent_lease (before after : World) (document : DocId)
     (record : Segment) (h : appendToolOutput before document record = .ok after) :
     after.lease = before.lease := by
-  have hm := congrArg (Except.map (fun post => post.lease)) h
-  rw [appendToolOutput_maps_constant_lease] at hm
-  simp only [h] at hm
-  change Except.ok before.lease = Except.ok after.lease at hm
-  exact (Except.ok.inj hm).symm
+  exact ToolWrite.lift_preserves_lease h
 
 theorem appendToolOutput_maps_constant_nextSeq (world : World) (document : DocId)
     (record : Segment) :
     (appendToolOutput world document record).map (fun post => post.transcript.nextSeq) =
       (appendToolOutput world document record).map (fun _ => world.transcript.nextSeq) := by
-  unfold appendToolOutput
+  unfold appendToolOutput ToolWrite.lift appendToolOutputWrite
   split <;> try rfl
   split <;> try rfl
   split <;> try rfl
   split <;> try rfl
   split <;> try rfl
-  dsimp
+  dsimp [ToolWrite.apply, ToolWrite.current]
   split <;> try rfl
 
 theorem append_preserves_nextSeq (before after : World) (document : DocId)
@@ -619,29 +673,11 @@ theorem append_preserves_nextSeq (before after : World) (document : DocId)
   change Except.ok before.transcript.nextSeq = Except.ok after.transcript.nextSeq at hm
   exact (Except.ok.inj hm).symm
 
-theorem closeToolOutput_maps_constant_lease (world : World) (document : DocId)
-    (authority : CloseAuthority) (record : Segment) :
-    (closeToolOutput world document authority record).map (fun post => post.lease) =
-      (closeToolOutput world document authority record).map (fun _ => world.lease) := by
-  unfold closeToolOutput
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  dsimp
-  split <;> rfl
-
 theorem close_preserves_parent_lease (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
     (h : closeToolOutput before document authority record = .ok after) :
     after.lease = before.lease := by
-  have hm := congrArg (Except.map (fun post => post.lease)) h
-  rw [closeToolOutput_maps_constant_lease] at hm
-  simp only [h] at hm
-  change Except.ok before.lease = Except.ok after.lease at hm
-  exact (Except.ok.inj hm).symm
+  exact ToolWrite.lift_preserves_lease h
 
 theorem closeToolOutput_maps_constant_nextSeq (world : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment) :
@@ -649,14 +685,14 @@ theorem closeToolOutput_maps_constant_nextSeq (world : World) (document : DocId)
         (fun post => post.transcript.nextSeq) =
       (closeToolOutput world document authority record).map
         (fun _ => world.transcript.nextSeq) := by
-  unfold closeToolOutput
+  unfold closeToolOutput ToolWrite.lift closeToolOutputWrite
   split <;> try rfl
   split <;> try rfl
   split <;> try rfl
   split <;> try rfl
   split <;> try rfl
   split <;> try rfl
-  dsimp [Transcript.TranscriptState.terminalizeToolCall]
+  dsimp [ToolWrite.apply, ToolWrite.current, Transcript.TranscriptState.terminalizeToolCall]
   split <;> rfl
 
 theorem close_preserves_nextSeq (before after : World) (document : DocId)
@@ -669,35 +705,11 @@ theorem close_preserves_nextSeq (before after : World) (document : DocId)
   change Except.ok before.transcript.nextSeq = Except.ok after.transcript.nextSeq at hm
   exact (Except.ok.inj hm).symm
 
-set_option maxHeartbeats 1000000 in
-theorem publishToolDelivery_maps_constant_lease (world : World) (document : DocId)
-    (message : MessageEnvelope) :
-    (publishToolDelivery world document message).map (fun post => post.lease) =
-      (publishToolDelivery world document message).map (fun _ => world.lease) := by
-  unfold publishToolDelivery
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  dsimp
-  split <;> try rfl
-  split <;> try rfl
-
 theorem publication_preserves_parent_lease (before after : World) (document : DocId)
     (message : MessageEnvelope)
     (h : publishToolDelivery before document message = .ok after) :
     after.lease = before.lease := by
-  have hm := congrArg (Except.map (fun post => post.lease)) h
-  rw [publishToolDelivery_maps_constant_lease] at hm
-  simp only [h] at hm
-  change Except.ok before.lease = Except.ok after.lease at hm
-  exact (Except.ok.inj hm).symm
+  exact ToolWrite.lift_preserves_lease h
 
 set_option maxHeartbeats 1000000 in
 theorem publication_allocator_replays_or_advances
@@ -706,19 +718,24 @@ theorem publication_allocator_replays_or_advances
     after.transcript.nextSeq = before.transcript.nextSeq ∨
       after.transcript.nextSeq = before.transcript.nextSeq + 1 := by
   unfold publishToolDelivery at h
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  cases h
+  obtain ⟨write, hwrite, rfl⟩ := ToolWrite.lift_success h
+  clear h
+  unfold publishToolDeliveryWrite at hwrite
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  · rw [← hwrite, ToolWrite.apply_current]
+    exact Or.inl rfl
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  cases hwrite
   have advance := fresh_delivery_advances_allocator before _ message _ (by assumption)
   exact Or.inr advance
 
@@ -732,27 +749,6 @@ theorem publication_nextSeq_monotone
   · rw [fresh]
     exact Nat.le_add_right _ 1
 
-private theorem backgroundNotification_maps_constant_lease
-    (headerValid : World → OwnedTool → MessageEnvelope → Bool)
-    (world : World) (document : DocId) (message : MessageEnvelope) :
-    (publishBackgroundNotificationWith headerValid world document message).map
-        (fun post => post.lease) =
-      (publishBackgroundNotificationWith headerValid world document message).map
-        (fun _ => world.lease) := by
-  unfold publishBackgroundNotificationWith
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  dsimp
-  split <;> try rfl
-  split <;> try rfl
-
 private theorem backgroundNotification_allocator_replays_or_advances
     (headerValid : World → OwnedTool → MessageEnvelope → Bool)
     (before after : World) (document : DocId) (message : MessageEnvelope)
@@ -760,18 +756,23 @@ private theorem backgroundNotification_allocator_replays_or_advances
     after.transcript.nextSeq = before.transcript.nextSeq ∨
       after.transcript.nextSeq = before.transcript.nextSeq + 1 := by
   unfold publishBackgroundNotificationWith at h
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  split at h <;> try simp_all
-  cases h
+  obtain ⟨write, hwrite, rfl⟩ := ToolWrite.lift_success h
+  clear h
+  unfold publishBackgroundNotificationWriteWith at hwrite
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  · rw [← hwrite, ToolWrite.apply_current]
+    exact Or.inl rfl
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  cases hwrite
   have advance := fresh_delivery_advances_allocator before _ message _ (by assumption)
   exact Or.inr advance
 
@@ -780,24 +781,14 @@ theorem wake_notification_preserves_parent_lease
     (message : MessageEnvelope)
     (h : publishWakeNotification before document binding message = .ok after) :
     after.lease = before.lease := by
-  unfold publishWakeNotification at h
-  have hm := congrArg (Except.map (fun post => post.lease)) h
-  rw [backgroundNotification_maps_constant_lease] at hm
-  simp only [h] at hm
-  change Except.ok before.lease = Except.ok after.lease at hm
-  exact (Except.ok.inj hm).symm
+  exact ToolWrite.lift_preserves_lease h
 
 theorem goal_notification_preserves_parent_lease
     (before after : World) (document : DocId) (binding : GoalNotificationBinding)
     (message : MessageEnvelope)
     (h : publishGoalNotification before document binding message = .ok after) :
     after.lease = before.lease := by
-  unfold publishGoalNotification at h
-  have hm := congrArg (Except.map (fun post => post.lease)) h
-  rw [backgroundNotification_maps_constant_lease] at hm
-  simp only [h] at hm
-  change Except.ok before.lease = Except.ok after.lease at hm
-  exact (Except.ok.inj hm).symm
+  exact ToolWrite.lift_preserves_lease h
 
 theorem wake_notification_allocator_replays_or_advances
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
@@ -841,39 +832,11 @@ theorem goal_notification_nextSeq_monotone
   · rw [fresh]
     exact Nat.le_add_right _ 1
 
-set_option maxHeartbeats 1000000 in
-theorem background_receipt_maps_constant_lease
-    (world : World) (document : DocId) (closing : Segment) (message : MessageEnvelope) :
-    (publishBackgroundReceipt world document closing message).map (fun post => post.lease) =
-      (publishBackgroundReceipt world document closing message).map (fun _ => world.lease) := by
-  unfold publishBackgroundReceipt
-  -- projection, lookup, binding, replay, and fresh record admission
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  dsimp
-  -- header, clock, lifecycle, sequence, cursor, and transcript row
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  split <;> try rfl
-  -- unique result key and post-projection integrity
-  split <;> try rfl
-  split <;> try rfl
-
 theorem background_receipt_preserves_parent_lease
     (before after : World) (document : DocId) (closing : Segment) (message : MessageEnvelope)
     (h : publishBackgroundReceipt before document closing message = .ok after) :
     after.lease = before.lease := by
-  have hm := congrArg (Except.map (fun post => post.lease)) h
-  rw [background_receipt_maps_constant_lease] at hm
-  simp only [h] at hm
-  change Except.ok before.lease = Except.ok after.lease at hm
-  exact (Except.ok.inj hm).symm
+  exact ToolWrite.lift_preserves_lease h
 
 set_option maxHeartbeats 1000000 in
 theorem background_receipt_allocator_replays_or_advances
@@ -882,20 +845,30 @@ theorem background_receipt_allocator_replays_or_advances
     after.transcript.nextSeq = before.transcript.nextSeq ∨
       after.transcript.nextSeq = before.transcript.nextSeq + 1 := by
   unfold publishBackgroundReceipt at h
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  split at h <;> try simp_all [Transcript.TranscriptState.publishToolResult]
-  rw [← h]
+  obtain ⟨write, hwrite, rfl⟩ := ToolWrite.lift_success h
+  clear h
+  unfold publishBackgroundReceiptWrite at hwrite
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  · rw [← hwrite, ToolWrite.apply_current]
+    exact Or.inl rfl
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  rw [← hwrite]
   exact Or.inr rfl
 
 theorem background_receipt_nextSeq_monotone

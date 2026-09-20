@@ -36,11 +36,6 @@ def wakeDocumentBindingValid (world : World) (message : MessageEnvelope)
         row.role == .user && row.kind == .ordinary) &&
     decide (binding.entry.coalesceWellFormed queue.sessionId)
 
-def wakeBindingDurable (queue : SessionQueue.SessionQueueState)
-    (binding : WakeDocumentBinding) : Bool :=
-  binding.entry ∈ queue.pending || queue.active == some binding.entry.requestId ||
-    decide (binding.entry.requestId ∈ queue.terminal)
-
 /-- Pending coalescing may accompany a fresh publication. Once the wake has
 left pending, only an exact publication replay may reuse its durable receipt. -/
 def wakeBindingAcceptsPublication (before : World) (message : MessageEnvelope)
@@ -81,44 +76,39 @@ def observeNotification? (completion : BackgroundCompletion.TerminalCompletion)
 
 def publishAndEnqueue? (before : World) (document : DocId)
     (message : MessageEnvelope) (wake : SessionQueue.QueueEntry)
-    (binding : WakeDocumentBinding) (queue : SessionQueue.SessionQueueState) : Option Result := do
-  let execution ← match publishNotification binding before document message with
-    | .error _ => none
-    | .ok post => some post
-  let tool ← ownedToolByDocument? execution document
-  if tool.context.awaitMode != .background then none
-  if ToolDelivery.deliveryShape? message document != some .backgroundNotification then none
-  if queue.sessionId != execution.sessionId || queue.scope.agent != execution.principal then none
-  if binding.entry != wake || wake.source != .backgroundCompletion ||
-      !wake.coalesceWellFormed queue.sessionId then none
-  let completion : BackgroundCompletion.TerminalCompletion :=
-    { toolState := tool.context.state
-    , notificationMessageId := message.header.id
-    , wake := wake }
-  let notified ← observeNotification? completion execution.transcript
-  if hshared : notified.transcript = execution.transcript then
-    let existing := wakeDocumentBindingValid execution message queue notified wake binding &&
-      wakeBindingAcceptsPublication before message queue binding
-    let queued ← match BackgroundCompletion.enqueueWake? notified queue with
-      | some value => some (some value)
-      | none => if existing then some none else none
-    match hp : publishNotification binding before document message with
-    | .error _ => none
-    | .ok post =>
-        if he : post = execution then
-          some
-            { before := before
-            , execution := execution
-            , document := document
-            , message := message
-            , binding := binding
-            , published := by simpa [he] using hp
-            , notified := notified
-            , queued := queued
-            , wakeAlreadyPending := existing
-            , sharedTranscript := hshared }
-        else none
-  else none
+    (binding : WakeDocumentBinding) (queue : SessionQueue.SessionQueueState) : Option Result :=
+  match hp : publishNotification binding before document message with
+  | .error _ => none
+  | .ok execution => do
+      let tool ← ownedToolByDocument? execution document
+      if tool.context.awaitMode != .background then none
+      if ToolDelivery.deliveryShape? message document != some .backgroundNotification then none
+      if queue.sessionId != execution.sessionId || queue.scope.agent != execution.principal then none
+      if binding.entry != wake || wake.source != .backgroundCompletion ||
+          !wake.coalesceWellFormed queue.sessionId then none
+      let completion : BackgroundCompletion.TerminalCompletion :=
+        { toolState := tool.context.state
+        , notificationMessageId := message.header.id
+        , wake := wake }
+      let notified ← observeNotification? completion execution.transcript
+      if hshared : notified.transcript = execution.transcript then
+        let existing := wakeDocumentBindingValid execution message queue notified wake binding &&
+          wakeBindingAcceptsPublication before message queue binding
+        let queued ← match BackgroundCompletion.enqueueWake? notified queue with
+          | some value => some (some value)
+          | none => if existing then some none else none
+        some
+          { before := before
+          , execution := execution
+          , document := document
+          , message := message
+          , binding := binding
+          , published := hp
+          , notified := notified
+          , queued := queued
+          , wakeAlreadyPending := existing
+          , sharedTranscript := hshared }
+      else none
 
 def claimContinuation? (result : Result) : Option BackgroundCompletion.Continuation :=
   result.queued.bind BackgroundCompletion.claimContinuation?

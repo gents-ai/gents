@@ -4,6 +4,9 @@ import Proofs.Transcript
 import Proofs.ToolExecution.Executable
 import Proofs.Session.State
 import Proofs.Goals
+import Proofs.StorageWriteGate
+import Proofs.Background.CompletionContinuation
+import Proofs.CompletionRetry.State
 
 /-!
 # Canonical output execution composition
@@ -18,6 +21,50 @@ boundaries. Every mutating transition below represents one local
 namespace CanonicalOutput.Execution
 
 abbrev Generation := Nat
+
+namespace Handover
+
+structure PhysicalRequestAdmission where
+  document : DocId
+  entry : SessionQueue.QueueEntry
+  agent : Nat
+  session : SessionId
+  requester : Option Nat
+  authenticated : Bool
+  deriving DecidableEq, Repr
+
+structure GoalChildReceipt where
+  goalDocument : DocId
+  request : PhysicalRequestAdmission
+  parentPhysical : DocId
+  parentLogical : RequestId
+  authenticated : Bool
+  deriving DecidableEq, Repr
+
+inductive ClaimEvidence where
+  | backgroundWake (snapshot : BackgroundCompletion.WakeAttemptSnapshot)
+  | ordinary
+  | goalChild (receipt : GoalChildReceipt)
+  deriving DecidableEq, Repr
+
+structure Activation where
+  request : PhysicalRequestAdmission
+  evidence : ClaimEvidence
+  configuredRoutes : List (DocId × Nat)
+  routesAuthenticated : Bool
+  generation : Generation
+  duration : Time
+  deadline : Time
+  deriving DecidableEq, Repr
+
+structure ClaimedBinding where
+  physicalRequest : DocId
+  logicalRequest : RequestId
+  session : SessionId
+  evidence : ClaimEvidence
+  deriving DecidableEq, Repr
+
+end Handover
 
 /-- A physical tool document and the existing lifecycle context that will back
 the accepted call. The context's older logical identifiers are not document
@@ -110,6 +157,18 @@ structure World where
   toolContexts : List OwnedTool := []
   delegatedCalls : List DelegatedCall
   terminalSelection : Option TerminalSelection
+  gateOwner : Option Nat := none
+  gateSchedule : StorageWriteGate.State := ⟨.released, true, false⟩
+  queue : SessionQueue.SessionQueueState :=
+    { scope := { agent := 0, session := 0, requester := none }
+    , active := none, pending := [], terminal := ∅ }
+  claimed : Option Handover.ClaimedBinding := none
+  retry : CompletionRetry.State :=
+    { request := 0, scope := 0, turn := 0, phase := .issuing
+    , budget := { transportRetries := 0, resampleRetries := 0, allowRepair := false }
+    , transportUsed := 0, resampleUsed := 0, repairUsed := false
+    , lastParseError := none, now := 0, deadline := none, attempt := 0
+    , usageCharged := 0 }
   deriving DecidableEq
 
 def World.lifecycle (world : World) : RequestState := world.lease.request
@@ -140,8 +199,6 @@ structure DispatchPermit where
 
 inductive IntegrityError where
   | identityConflict
-  | headerConflict
-  | closureConflict (coordinate : Coordinate)
   | malformedSource (coordinate : Coordinate)
   | invalidWriter (coordinate : Coordinate)
   deriving DecidableEq, Repr
@@ -163,12 +220,7 @@ structure RecoveryPrepared where
 
 inductive Error where
   | integrity (error : IntegrityError)
-  | wrongRequest
-  | wrongSession
-  | wrongGeneration
-  | wrongTimestamp
   | sourceAlreadyClosed
-  | sourceStillOpen
   | invalidSegment
   | invalidHeader
   | invalidRecoveryHeader
