@@ -632,7 +632,6 @@ structure WakeAttemptSnapshot where
   wakeRequestId : RequestId
   throughSequence : Nat
   bindings : List NotificationBinding
-  terminalState : RequestState
   deriving DecidableEq, Repr
 
 def WakeAttemptSnapshot.attemptedBindings
@@ -642,8 +641,8 @@ def WakeAttemptSnapshot.attemptedBindings
       binding.sequence ≤ snapshot.throughSequence
 
 def WakeAttemptSnapshot.acknowledgedBindings
-    (snapshot : WakeAttemptSnapshot) : List NotificationBinding :=
-  if snapshot.terminalState = .completed then snapshot.attemptedBindings else []
+    (snapshot : WakeAttemptSnapshot) (terminalState : RequestState) : List NotificationBinding :=
+  if terminalState = .completed then snapshot.attemptedBindings else []
 
 theorem successor_binding_after_cutoff_not_attempted
     (snapshot : WakeAttemptSnapshot)
@@ -653,15 +652,15 @@ theorem successor_binding_after_cutoff_not_attempted
   simp [WakeAttemptSnapshot.attemptedBindings, Nat.not_le.mpr h_after]
 
 theorem completed_attempt_acknowledges_exact_snapshot
-    (snapshot : WakeAttemptSnapshot)
-    (h_completed : snapshot.terminalState = .completed) :
-    snapshot.acknowledgedBindings = snapshot.attemptedBindings := by
+    (snapshot : WakeAttemptSnapshot) (terminalState : RequestState)
+    (h_completed : terminalState = .completed) :
+    snapshot.acknowledgedBindings terminalState = snapshot.attemptedBindings := by
   simp [WakeAttemptSnapshot.acknowledgedBindings, h_completed]
 
 theorem failed_attempt_acknowledges_nothing
-    (snapshot : WakeAttemptSnapshot)
-    (h_failed : snapshot.terminalState = .failed) :
-    snapshot.acknowledgedBindings = [] := by
+    (snapshot : WakeAttemptSnapshot) (terminalState : RequestState)
+    (h_failed : terminalState = .failed) :
+    snapshot.acknowledgedBindings terminalState = [] := by
   simp [WakeAttemptSnapshot.acknowledgedBindings, h_failed]
 
 def attemptedBindingFixture : NotificationBinding :=
@@ -670,44 +669,41 @@ def attemptedBindingFixture : NotificationBinding :=
 def successorBindingFixture : NotificationBinding :=
   { messageId := 42, sequence := 6, wakeRequestId := 902 }
 
-def completedSnapshotFixture : WakeAttemptSnapshot :=
+def canonicalSnapshotFixture : WakeAttemptSnapshot :=
   { wakeRequestId := 901
   , throughSequence := 5
   , bindings := [attemptedBindingFixture, successorBindingFixture]
-  , terminalState := .completed
   }
 
-def failedSnapshotFixture : WakeAttemptSnapshot :=
-  { completedSnapshotFixture with terminalState := .failed }
-
 theorem canonical_completed_snapshot_acknowledges_owned_notification :
-    completedSnapshotFixture.acknowledgedBindings = [attemptedBindingFixture] := by
+    canonicalSnapshotFixture.acknowledgedBindings .completed = [attemptedBindingFixture] := by
   native_decide
 
 theorem canonical_successor_notification_excluded_from_active_snapshot :
-    successorBindingFixture ∉ completedSnapshotFixture.attemptedBindings := by
+    successorBindingFixture ∉ canonicalSnapshotFixture.attemptedBindings := by
   native_decide
 
 theorem canonical_failed_snapshot_retains_unacknowledged_notification :
-    failedSnapshotFixture.acknowledgedBindings = [] ∧
-      failedSnapshotFixture.attemptedBindings = [attemptedBindingFixture] := by
+    canonicalSnapshotFixture.acknowledgedBindings .failed = [] ∧
+      canonicalSnapshotFixture.attemptedBindings = [attemptedBindingFixture] := by
   native_decide
 
 /-! ## Crash-boundary recovery
 
 Acknowledgement is not a second mutable protocol step.  It is a projection of
-the durable claim snapshot and the recovered request terminal state.  This
-closes the four crash boundaries in the delivery protocol: before claim there
-is no attempted snapshot to acknowledge; an inference failure retains the
-snapshot for bounded redrive; a committed successful response repairs the
-request to completed; and a crash while a reader projects acknowledgement
-cannot create a partially acknowledged state.
+the durable claim snapshot and the authoritative request terminal state.  This
+closes the three reachable crash boundaries in the delivery protocol: before
+claim there is no attempted snapshot to acknowledge; an unfinished claimed
+attempt remains owned until the existing lease/recovery owner terminalizes it; and a
+crash while a reader projects acknowledgement cannot create a partially
+acknowledged state.  Canonical request completion and terminal-output selection
+commit together; there is no response-only state that can repair an unfinished
+request to completed.
 -/
 
 inductive DeliveryCrashPoint where
   | beforeClaim
   | duringInference
-  | afterResponsePersistence
   | duringAcknowledgement
   deriving DecidableEq, Repr
 
@@ -718,45 +714,46 @@ structure WakeRecoveryProjection where
   retryEligible : Bool
   deriving DecidableEq, Repr
 
-inductive DurableResponseState where
-  | absent
-  | completed
-  | failed
-  deriving DecidableEq, Repr
-
 structure WakeRecoveryInput where
   requestState : RequestState
   claimSnapshot : Option WakeAttemptSnapshot
-  responseState : DurableResponseState
   deriving DecidableEq, Repr
 
 def attemptedFromSnapshot : Option WakeAttemptSnapshot → List NotificationBinding
   | none => []
   | some snapshot => snapshot.attemptedBindings
 
-/-- Existing terminal request outcomes win. Responses repair only unfinished
-requests; an observed unfinished attempt without a response becomes failed.
-Without a claim, preserve the current admission state. This projection does
-not authorize retries: `redriveWakeFromRows?` still applies authoritative head,
-physical parent, ownership and budget gates. -/
+/-- Request lifecycle is authoritative. A claim snapshot neither completes nor
+fails unfinished work; the existing lease/recovery owner must first commit a
+terminal outcome. Canonical output never repairs request lifecycle here:
+successful completion already committed its exact terminal selection with the
+request owner. This projection does not itself authorize retries:
+`redriveWakeFromRows?` still applies authoritative head, physical parent,
+ownership and budget gates to an actually failed request. -/
 def recoverWakeDelivery (input : WakeRecoveryInput) : WakeRecoveryProjection :=
   let attempted := attemptedFromSnapshot input.claimSnapshot
-  let state :=
-    if isTerminal input.requestState then input.requestState
-    else match input.responseState with
-      | .completed => .completed
-      | .failed => .failed
-      | .absent => if input.claimSnapshot.isSome then .failed else input.requestState
-  { requestState := state
+  { requestState := input.requestState
   , attemptedBindings := attempted
-  , acknowledgedBindings := if state = .completed then attempted else []
-  , retryEligible := state == .failed && input.claimSnapshot.isSome
+  , acknowledgedBindings := if input.requestState = .completed then attempted else []
+  , retryEligible := input.requestState == .failed && input.claimSnapshot.isSome
   }
 
 theorem recovery_preserves_terminal_request (input : WakeRecoveryInput)
-    (h : isTerminal input.requestState) :
+    (_h : isTerminal input.requestState) :
     (recoverWakeDelivery input).requestState = input.requestState := by
-  simp [recoverWakeDelivery, h]
+  rfl
+
+theorem recovery_preserves_unfinished_request (input : WakeRecoveryInput)
+    (_h : ¬ isTerminal input.requestState) :
+    (recoverWakeDelivery input).requestState = input.requestState := by
+  rfl
+
+theorem live_claim_acknowledges_nothing_and_cannot_redrive
+    (input : WakeRecoveryInput)
+    (h : input.requestState = .claimed ∨ input.requestState = .processing) :
+    (recoverWakeDelivery input).acknowledgedBindings = [] ∧
+      (recoverWakeDelivery input).retryEligible = false := by
+  rcases h with h | h <;> simp [recoverWakeDelivery, h]
 
 theorem recovery_does_not_retry_cancelled_wake (input : WakeRecoveryInput)
     (h : input.requestState = .interrupted ∨ input.requestState = .superseded ∨
@@ -765,30 +762,22 @@ theorem recovery_does_not_retry_cancelled_wake (input : WakeRecoveryInput)
   rcases h with h | h | h <;> simp [recoverWakeDelivery, h, isTerminal]
 
 theorem recovery_without_attempt_preserves_request (input : WakeRecoveryInput)
-    (hclaim : input.claimSnapshot = none) (hresponse : input.responseState = .absent) :
+    (hclaim : input.claimSnapshot = none) :
     (recoverWakeDelivery input).requestState = input.requestState := by
-  simp [recoverWakeDelivery, hclaim, hresponse]
+  simp [recoverWakeDelivery, hclaim]
 
 def deliveryCrashInput : DeliveryCrashPoint → WakeRecoveryInput
   | .beforeClaim =>
       { requestState := .pending
       , claimSnapshot := none
-      , responseState := .absent
       }
   | .duringInference =>
       { requestState := .processing
-      , claimSnapshot := some failedSnapshotFixture
-      , responseState := .absent
-      }
-  | .afterResponsePersistence =>
-      { requestState := .processing
-      , claimSnapshot := some completedSnapshotFixture
-      , responseState := .completed
+      , claimSnapshot := some canonicalSnapshotFixture
       }
   | .duringAcknowledgement =>
       { requestState := .completed
-      , claimSnapshot := some completedSnapshotFixture
-      , responseState := .completed
+      , claimSnapshot := some canonicalSnapshotFixture
       }
 
 def recoverDeliveryCrash (point : DeliveryCrashPoint) : WakeRecoveryProjection :=
@@ -806,15 +795,9 @@ def deliveryCrashRecoveryAccepted : DeliveryCrashPoint → Bool
   | .duringInference =>
       let recovered := recoverDeliveryCrash .duringInference
       decide
-        (recovered.requestState = .failed ∧
+        (recovered.requestState = .processing ∧
          recovered.attemptedBindings = [attemptedBindingFixture] ∧
          recovered.acknowledgedBindings = [] ∧
-         recovered.retryEligible = true)
-  | .afterResponsePersistence =>
-      let recovered := recoverDeliveryCrash .afterResponsePersistence
-      decide
-        (recovered.requestState = .completed ∧
-         recovered.acknowledgedBindings = recovered.attemptedBindings ∧
          recovered.retryEligible = false)
   | .duringAcknowledgement =>
       let recovered := recoverDeliveryCrash .duringAcknowledgement
@@ -827,12 +810,8 @@ theorem restart_before_claim_preserves_pending_delivery :
     deliveryCrashRecoveryAccepted .beforeClaim = true := by
   native_decide
 
-theorem inference_failure_retains_snapshot_for_redrive :
+theorem live_inference_retains_snapshot_without_redrive :
     deliveryCrashRecoveryAccepted .duringInference = true := by
-  native_decide
-
-theorem committed_response_recovers_exact_acknowledgement :
-    deliveryCrashRecoveryAccepted .afterResponsePersistence = true := by
   native_decide
 
 theorem acknowledgement_projection_has_no_partial_crash_state :

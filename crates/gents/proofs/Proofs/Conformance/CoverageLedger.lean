@@ -1076,10 +1076,10 @@ def caseCoverage : List CoverageEntry :=
       "R4cBackgroundWorkCases"
       "gents_desktop_bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only")
       "background-tools" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
-      "conformance::generated_read_tool_output_witness_drives_hook_dispatch")
+      "#1571: replace the retired state/registry dispatch consumer with canonical_source_reconstruction over physical tool segments; migrate the generated witness schema. Generic paging coverage below is unchanged.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "tool_output_paging_cases"

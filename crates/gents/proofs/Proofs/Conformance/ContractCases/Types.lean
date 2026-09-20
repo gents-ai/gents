@@ -673,24 +673,19 @@ structure ReadTranscriptHidesBridgeRows where
   renderedTranscript : String
   deriving Repr
 
-/-- Three-way `read_tool_output` dispatch (#937): a running row with a live
-    ring-buffer snapshot serves the live tail; a running row with no
-    snapshot — the post-restart shape, since the registry is volatile —
-    serves empty output; a terminal row serves the persisted completion.
-    Sources and paging numbers are computed from
-    `Subagent.ToolOutput.readDispatch` / `readSlice`. -/
-structure ReadToolOutputDispatchesByState where
+/-- Canonical `read_tool_output`: open and closed reads use the same immutable
+    physical tool source; missing/conflicting facts are rejection. -/
+structure ReadToolOutputCanonicalSourceReconstruction where
   toolCallId : String
-  runningSource : String
-  runningNoBufferSource : String
-  terminalSource : String
-  runningPayload : String
-  runningNoBufferPayload : String
-  terminalPayload : String
-  runningNextOffset : Nat
-  runningTotalBytes : Nat
-  runningHasMore : Bool
-  terminalTotalBytes : Nat
+  canonicalSource : String
+  openPayload : String
+  closedPayload : String
+  nextOffset : Nat
+  totalBytes : Nat
+  hasMore : Bool
+  missingRejected : Bool
+  conflictRejected : Bool
+  lateSuffixIgnored : Bool
   deriving Repr
 
 structure SteerAppendPreservesLineage where

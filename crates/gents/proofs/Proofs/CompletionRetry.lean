@@ -3,6 +3,8 @@ import Proofs.CompletionRetry.Transition
 import Proofs.CompletionRetry.Executable
 import Proofs.CompletionRetry.Properties
 import Proofs.CompletionRetry.CanonicalExecution
+import Proofs.CompletionRetry.CanonicalGate
+import Proofs.CompletionRetry.CanonicalGateCases
 import Proofs.CompletionRetry.Contracts
 import Proofs.CompletionRetry.OutputObligation
 import Proofs.CompletionRetry.InvalidToolProgress

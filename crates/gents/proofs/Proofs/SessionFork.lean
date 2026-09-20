@@ -1,5 +1,6 @@
 import Proofs.AgentSession
 import Proofs.CanonicalOutput.Message
+import Proofs.CanonicalOutput.Hydration
 import Mathlib.Data.List.Basic
 import Mathlib.Data.List.Dedup
 
@@ -43,6 +44,19 @@ def copyPrefix (source : History) (child : AgentSession.Scope)
       (fun message => copyMessage child (childDocumentId message.header.id) childKey message)
   , compactions := (source.compactions.filter (fun c => c.throughSequence < cut)).map
       (fun c => { c with id := childDocumentId c.id, session := child.session }) }
+
+theorem copied_header_satisfies_reader_provenance (child : AgentSession.Scope)
+    (id : DocId) (key : String → String) (origin : MessageEnvelope) :
+    Hydration.forkMetadataMatches (copyMessage child id key origin) origin = true := by
+  simp [Hydration.forkMetadataMatches, copyMessage, forkHeader]
+
+/-- The publisher and reader use the same sequence space. No per-message
+remapping can change tool-pair order or what an inherited compaction cursor names. -/
+theorem copied_prefix_preserves_order (source : History) (child : AgentSession.Scope)
+    (ids : DocId → DocId) (keys : String → String) (cut : Nat) :
+    ((copyPrefix source child ids keys cut).messages.map (·.sequence)) =
+      (source.messages.filter (fun message => message.sequence < cut)).map (·.sequence) := by
+  simp [copyPrefix, copyMessage, List.map_map]
 
 def validChain (session : SessionId) : Nat → Option Nat → List Compaction → Bool
   | _, _, [] => true

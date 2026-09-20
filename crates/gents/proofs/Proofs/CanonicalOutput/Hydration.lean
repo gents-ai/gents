@@ -130,13 +130,24 @@ def checkedOrigin (header : Header) : Except Error (Option DocId) :=
       if header.origin = some origin then .ok (some origin) else .error .invalidOrigin
   | _ => if header.origin = none then .ok none else .error .invalidOrigin
 
-/-- A fork may change child identity, session, key and sequence only. Native
+/-- A fork may change child identity, session and key only. Numeric sequence
+is retained in the child session, exactly as the fork publication owner writes
+it; readers cannot authorize an arbitrary reorder of individually valid copies. Native
 content, source references, outcome, role and creation provenance remain the
 origin facts. -/
 def forkMetadataMatches (child origin : MessageEnvelope) : Bool :=
   child.header == forkHeader origin.header child.header.id child.header.session &&
     child.nativeId == origin.nativeId && child.blocks == origin.blocks &&
-    child.createdAt == origin.createdAt
+    child.createdAt == origin.createdAt && child.sequence == origin.sequence
+
+theorem fork_metadata_preserves_sequence (child origin : MessageEnvelope)
+    (h : forkMetadataMatches child origin = true) : child.sequence = origin.sequence := by
+  simp only [forkMetadataMatches, Bool.and_eq_true, beq_iff_eq] at h
+  exact h.2
+
+theorem reordered_fork_rejected (child origin : MessageEnvelope)
+    (h : child.sequence ≠ origin.sequence) : forkMetadataMatches child origin = false := by
+  simp [forkMetadataMatches, h]
 
 /-- Every referenced physical request is retained. Tool-owned sources also
 retain the exact lifecycle row; authored delivery derives its owner from the
@@ -434,9 +445,14 @@ def cycleLeft : MessageEnvelope :=
 def cycleRight : MessageEnvelope :=
   { childMessage with
     header := { childMessage.header with
-      id := 211, origin := some 210, publication := .fork 210 }
-    key := "cycle-right"
-    sequence := 1 }
+      id := 211, session := 1, origin := some 210, publication := .fork 210 }
+    key := "cycle-right" }
+
+/-- Per-header content equality cannot grant a reordered child transcript. -/
+example : resultMatches
+    (buildManifest scope 2 [] [201] []
+      [originMessage, { childMessage with sequence := childMessage.sequence + 1 }]
+      [closing] access [] []) (.error .originMismatch) = true := by native_decide
 
 example : resultMatches
     (buildManifest scope 2 [] [210] [] [cycleLeft, cycleRight] [closing]

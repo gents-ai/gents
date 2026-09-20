@@ -86,6 +86,14 @@ theorem fork_without_origin_cannot_be_compacted :
     (prefixView? { forked with messages := published.messages.map copied } 2).isNone = true := by
   native_decide
 
+def reorderedFork : World :=
+  { forked with messages := published.messages ++ published.messages.map (fun message =>
+      { copied message with sequence := 2 - message.sequence }) }
+
+/-- Unique child sequence numbers do not authorize reordering copied content. -/
+theorem reordered_fork_cannot_advance_compaction :
+    advanceCursor? reorderedFork 2 = none := by native_decide
+
 theorem cannot_advance_cursor_past_allocator :
     advanceCursor? published 3 = none := by native_decide
 

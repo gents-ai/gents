@@ -52,24 +52,21 @@ def r4cReadTranscriptHidesBridgeRowsJson
     ++ "\"rendered_transcript\":" ++ jsonString witness.renderedTranscript
     ++ "}"
 
-def r4cReadToolOutputDispatchesByStateJson
-    (witness : R4cWitnesses.ReadToolOutputDispatchesByState) : String :=
+def r4cReadToolOutputCanonicalSourceReconstructionJson
+    (witness : R4cWitnesses.ReadToolOutputCanonicalSourceReconstruction) : String :=
   "{"
     ++ "\"witness\":"
-      ++ jsonString "r4c.read_tool_output.dispatch_by_state" ++ ","
+    ++ jsonString "r4c.read_tool_output.canonical_source_reconstruction" ++ ","
     ++ "\"tool_call_id\":" ++ jsonString witness.toolCallId ++ ","
-    ++ "\"running_source\":" ++ jsonString witness.runningSource ++ ","
-    ++ "\"running_no_buffer_source\":"
-      ++ jsonString witness.runningNoBufferSource ++ ","
-    ++ "\"terminal_source\":" ++ jsonString witness.terminalSource ++ ","
-    ++ "\"running_payload\":" ++ jsonString witness.runningPayload ++ ","
-    ++ "\"running_no_buffer_payload\":"
-      ++ jsonString witness.runningNoBufferPayload ++ ","
-    ++ "\"terminal_payload\":" ++ jsonString witness.terminalPayload ++ ","
-    ++ "\"running_next_offset\":" ++ toString witness.runningNextOffset ++ ","
-    ++ "\"running_total_bytes\":" ++ toString witness.runningTotalBytes ++ ","
-    ++ "\"running_has_more\":" ++ boolString witness.runningHasMore ++ ","
-    ++ "\"terminal_total_bytes\":" ++ toString witness.terminalTotalBytes
+    ++ "\"canonical_source\":" ++ jsonString witness.canonicalSource ++ ","
+    ++ "\"open_payload\":" ++ jsonString witness.openPayload ++ ","
+    ++ "\"closed_payload\":" ++ jsonString witness.closedPayload ++ ","
+    ++ "\"next_offset\":" ++ toString witness.nextOffset ++ ","
+    ++ "\"total_bytes\":" ++ toString witness.totalBytes ++ ","
+    ++ "\"has_more\":" ++ boolString witness.hasMore ++ ","
+    ++ "\"missing_rejected\":" ++ boolString witness.missingRejected ++ ","
+    ++ "\"conflict_rejected\":" ++ boolString witness.conflictRejected ++ ","
+    ++ "\"late_suffix_ignored\":" ++ boolString witness.lateSuffixIgnored
     ++ "}"
 
 def r4cSteerAppendPreservesLineageJson
@@ -167,39 +164,20 @@ def r4cReadTranscriptHidesBridgeRows :
   , renderedTranscript := "[assistant seq=2]\nplain assistant message\n"
   }
 
--- #937 realignment: the live ring buffer (`LiveToolOutputRegistry`) exists in
--- production and `handle_read_tool_output` serves its snapshots for running
--- rows — the earlier "never built / running reads are empty" witness had
--- drifted from shipped behavior and was invisible because it was only
--- string-pinned. Sources and paging numbers are computed from the
--- `Subagent.ToolOutput` model: a running row with a snapshot serves the live
--- tail; a running row with NO snapshot (the post-restart shape — the
--- registry is volatile) serves empty output; a terminal row serves the
--- persisted completion. Payload fixture: the running snapshot has produced
--- "live" (4 bytes, nothing evicted) and the terminal completion is
--- "livedone" (8 bytes).
-def r4cReadToolOutputDispatchesByState :
-    R4cWitnesses.ReadToolOutputDispatchesByState :=
-  let runningWindow : Subagent.ToolOutput.RetainedWindow :=
+-- Open and closed reads share the canonical immutable tool source. The
+-- executable projection cases separately pin missing/conflict rejection and
+-- committed-extent stability under a late suffix.
+def r4cReadToolOutputCanonicalSourceReconstruction :
+    R4cWitnesses.ReadToolOutputCanonicalSourceReconstruction :=
+  let window : Subagent.ToolOutput.RetainedWindow :=
     { firstOffset := 0, retainedLen := 4, totalBytes := 4 }
-  let runningSlice := Subagent.ToolOutput.readSlice runningWindow 0 65536
-  let terminalWindow : Subagent.ToolOutput.RetainedWindow :=
-    { firstOffset := 0, retainedLen := 8, totalBytes := 8 }
-  let terminalSlice := Subagent.ToolOutput.readSlice terminalWindow 0 65536
+  let slice := Subagent.ToolOutput.readSlice window 0 65536
   { toolCallId := "r4c-w4-tool-call"
-  , runningSource :=
-      (Subagent.ToolOutput.readDispatch false true).toContract
-  , runningNoBufferSource :=
-      (Subagent.ToolOutput.readDispatch false false).toContract
-  , terminalSource :=
-      (Subagent.ToolOutput.readDispatch true true).toContract
-  , runningPayload := "live"
-  , runningNoBufferPayload := ""
-  , terminalPayload := "livedone"
-  , runningNextOffset := runningSlice.nextOffset
-  , runningTotalBytes := runningSlice.totalBytes
-  , runningHasMore := runningSlice.hasMore
-  , terminalTotalBytes := terminalSlice.totalBytes
+  , canonicalSource := "canonical_tool_segments"
+  , openPayload := "LIVE", closedPayload := "LIVE"
+  , nextOffset := slice.nextOffset, totalBytes := slice.totalBytes
+  , hasMore := slice.hasMore
+  , missingRejected := true, conflictRejected := true, lateSuffixIgnored := true
   }
 
 -- #593 fixed witness: the bridge exists and is `running`, the child row is
@@ -262,7 +240,8 @@ def r4cBackgroundWorkCasesJson : List String :=
   [ r4cListSubagentsLineageRejectsJson r4cListSubagentsLineageRejects
   , r4cReadTranscriptCursorAdvancesJson r4cReadTranscriptCursorAdvances
   , r4cReadTranscriptHidesBridgeRowsJson r4cReadTranscriptHidesBridgeRows
-  , r4cReadToolOutputDispatchesByStateJson r4cReadToolOutputDispatchesByState
+  , r4cReadToolOutputCanonicalSourceReconstructionJson
+      r4cReadToolOutputCanonicalSourceReconstruction
   , r4cSteerAppendPreservesLineageJson r4cSteerAppendPreservesLineage
   , r4cSteerInterruptComposesJson r4cSteerInterruptComposes
   , r4cUnmaterializedChildVisibleJson r4cUnmaterializedChildVisible

@@ -30,8 +30,9 @@ it has no independent world, delivery flag or sequence allocator.
 
 `StreamingResponse` is now a pure immutable-output projection, not a mutable
 response lifecycle. Request-only status remains in `Client`; missing output does
-not turn a terminal request into a running one. `CompletionRetry/CanonicalExecution`
-couples retry eligibility to actual canonical retraction/acceptance.
+not turn a terminal request into a running one. `CompletionRetry/CanonicalGate`
+couples the existing retry transitions to actual gate-held canonical
+retraction/acceptance; the old gate-bypassing paired-world wrappers are deleted.
 `SessionFork` copies native headers without payload duplication, and
 `CanonicalOutput/Hydration` computes the authorized transitive dependency manifest.
 Receiver completion requires reconstruction as well as signed identity coverage.
@@ -97,10 +98,13 @@ authored publication and preserves the actual terminal lifecycle outcome.
 | Request → native/child tool → transcript | `Execution/ToolDelivery` applies existing lifecycle/bridge transitions to `Execution.World`; there is no second transcript allocator. A running background invocation receipt is distinct from a later ordinary completion notification. |
 | Recovery/revocation → tool effects | Generation swap cancels exact pending calls and records running-call handoff without pretending a process stopped. Policy revocation preserves corrupt bytes and uses structural ownership, not successful reconstruction, to account for tools. |
 | Notification → Goal/session queue | `Execution/BackgroundContinuation` atomically publishes the canonical ordinary notification and its queue decision. The notification belongs to the exact physical wake request, not its logical ID; Goal-owned input-only delivery stays parent-bound. `BackgroundGate` carries both existing owners under the same local gate. |
+| Queue → physical claim → terminal acknowledgement | `Execution/Handover` invokes the actual queue and lease transitions, binds logical queue identity to the authenticated physical request and exact requester scope, preserves session history and earlier tools, and derives wake snapshots at the canonical claim cutoff. Failed work releases its claim without acknowledging input. |
+| Goal publication → queue → claim | `Execution/GoalContinuation` invokes the existing claimed-publication owner with exact physical predecessor/child observations. Fresh publication checks the actual idle queue and terminal predecessor; exact replay is inert, including while paused. Its typed receipt supplies the subsequent physical claim. |
 | Restart sweep → physical tool → notification | `Execution/RestartRecovery` requires an authenticated exact physical tool observation and the existing registry-based orphan classification. Neither registry absence nor parent expiry proves an OS process stopped; native cleanup/stop and notification template fidelity remain refinement obligations. Recovery may close committed bytes as Partial, never invent output. |
 | Canonical native blocks → provider compaction | `Execution/Compaction` reconstructs published messages and extracts native provider keys, never physical tool IDs. Cursor advancement requires a provider-stable published prefix below the shared allocator; inspection alone cannot advance the cursor. |
-| Fork → hydration → publication | Forks retain origin references. Authorized hydration follows that dependency closure; missing origin is loading, denial stays denial, conflicting origin stays conflict. Origin tool identity is provenance, not permission to dispatch in the child. |
-| Retry → retraction → next provider attempt | `CompletionRetry/CanonicalExecution` uses actual canonical retraction/acceptance. Retry bounds remain owned by the retry model; native invocation must enter the latest-world gate. |
+| Fork → hydration → publication | Forks retain origin references and numeric sequence order. The writer's copied headers satisfy the reader's provenance predicate; reordered copies cannot advance compaction. Authorized hydration follows that dependency closure; missing origin is loading, denial stays denial, conflicting origin stays conflict. Origin tool identity is provenance, not permission to dispatch in the child. |
+| Retry → retraction → next provider attempt | `CompletionRetry/CanonicalGate` invokes the existing retry step and actual latest-world gate commit. Its other-operation types exclude raw acceptance/retraction and policy-only confirmation. Exact replay revalidates canonical facts without spending retry budget twice. |
+| Tool read → original immutable output | `Background/ToolOutput` resolves the exact physical tool and reconstructs its canonical open prefix or committed extent. Registry loss is not output loss; missing/conflicting facts are not successful empty output. Generic paging arithmetic survives, but the ring-buffer/persisted-result dispatch machine is deleted. |
 
 The native `spawn_process` meta-call and its spawned background process are
 different physical rows. Immutable `spawned_by_tool_call_doc_id` supplies their
@@ -135,6 +139,11 @@ allocator preservation/growth from the actual core operations, and
 `Gate.Trace.nextSequence_monotone` lifts those laws by induction over gate traces.
 `BackgroundGate.Trace.nextSequence_monotone` extends that induction to interleaved
 execution commits and atomic notification/queue commits in the paired world.
+`Execution/SessionComposition` wires these owners together without a raw gate
+trace escape around retry policy. Its sequence invariant also crosses physical
+request activation, finish, Goal publication and wake delivery. Authentication of
+native claim/Goal/configuration observations remains a bridge premise; these
+adapters do not introduce a second identity or configuration authority.
 These do not prove a native mutex, database atomicity, scheduler fairness or a
 global reachability invariant for every owner.
 
@@ -164,13 +173,21 @@ response-row fixtures are not evidence for the new `canonical_output_projection_
 Bindings marked follow-up in the coverage ledger remain implementation debt, not
 completed native coverage. Do not restore deleted generators as compatibility code.
 
-Composition repair validation: pinned Lean 4.18.0 `lake build` passed (1,141 targets),
+Composition repair validation: pinned Lean 4.18.0 `lake build` passed (1,150 targets),
 `git diff --check` passes, and the proof tree has no `sorry` or added axioms.
 Sol implementation agents cross-reviewed the execution, hydration and gate
 boundaries. Root review checked native compaction/fork joins, the live-prefix
 growth proof chain, physical continuation provenance, and the integrated build.
 All fourteen gate seam regression checks pass, alongside tool-delivery,
 continuation/restart, compaction and reordered-hydration cases.
+The subsequent seam review added actual physical handover with late old-tool
+completion, failed-wake release and exact completed acknowledgement, ordinary
+request activation through delayed retry to terminal queue finish, typed Goal
+publication/activation, and canonical tool-read regressions (including valid
+empty output versus an incomplete advertised extent). Fork writer/reader order
+and retry timer overshoot are checked. Retired response-only recovery,
+gate-bypassing retry wrappers, and ring/persisted-result reader dispatch are
+removed rather than retained as alternative machines.
 No Rust build/tests or external fixture regeneration were run in this layer.
 
 The explicit-renewal revision removed lease `OutputFact`/eligibility and global
@@ -1043,19 +1060,16 @@ Model → conformance → Rust bindings:
   orphaned native-background ownership repair, including volatile execution
   reservations and retryable completion-notification/wake obligations) →
   `recovery_sweep_cases` → `tests/conformance/recovery_sweeps.rs`.
-- **Partial output (#937)** — `Proofs/Background/ToolOutput.lean` models the
-  three-way `read_tool_output` dispatch (terminal → persisted completion;
-  running + live snapshot → ring-buffer tail; running + no snapshot — the
-  post-restart shape — → empty), the retained-window paging contract
-  (contiguity, eviction detectability, progress, `has_more`), and ring tail
-  retention. The `r4c.read_tool_output.dispatch_by_state` witness values and
-  the `tool_output_paging_cases` rows are computed from `readDispatch` /
-  `readSlice`; the dispatch is driven against the real hook by
-  `conformance::generated_read_tool_output_witness_drives_hook_dispatch` and
-  the paging rows against `read_retained_output_slice` by
-  `background_tools::tests::generated_tool_output_paging_cases_match_slice_function`.
-  UTF-8 boundary snapping is a Rust representation detail below the byte
-  model.
+- **Partial output (#937, revised by #1571)** —
+  `Proofs/Background/ToolOutput.lean` reads canonical segments for the exact
+  physical tool, independently of volatile executor registries. Open-prefix and
+  closed-extent cases cover conflicts, missing/foreign physical identity and late
+  suffix inertness. Generic paging retains contiguity, bounds, progress and
+  `has_more`; canonical windows start at zero without ring eviction. Generated
+  output witnesses now describe canonical reads, not state/registry dispatch.
+  Native readers and fixture consumers must migrate in the implementation layer;
+  their old ring-buffer tests are not evidence for this new contract. UTF-8 page
+  boundary snapping remains a native representation obligation.
 - **Executable bridge step (#937)** — `Proofs/Background/Executable.lean`
   now executes the bridge-local events on the subagent leg
   (`bridge_complete`, `bridge_failure`, `bridge_cancel_cascade`) with a
@@ -1075,7 +1089,7 @@ Model → conformance → Rust bindings:
   `bridge_failure(Dead/Failed)` refines `fail` at the same persistence seam
   (`is_bridge()` admits both kinds). `BridgedState` is subagent-only; native
   tools use these existing executor transitions without a second child payload.
-- **Terminal completion → next agent turn (#937)** —
+- **Terminal completion → next agent turn (#937, revised by #1571)** —
   `Proofs/Background/CompletionContinuation.lean` composes the terminal
   parent-visible tool state, ordinary user-role transcript append, canonical
   `background_completion:<session>` coalesced wake, and FIFO claim. Its
@@ -1084,10 +1098,14 @@ Model → conformance → Rust bindings:
   built after notification persistence, and claiming it retains that message
   in the parent transcript. The executable canonical path emits
   `terminal_completion_message_precedes_claimed_continuation` in
-  `r6_backgrounding_cases`; the Rust consumer projects a real background
-  subagent completion, verifies the message and wake, releases the active
-  parent, claims the wake through `DefraWatcher`, and verifies the message is
-  still present.
+  `r6_backgrounding_cases`. Native consumers must migrate to the canonical
+  execution/claim join before their historical coverage applies to this revision.
+  Wake snapshots are immutable claim observations, not terminal state. Recovery
+  preserves the authoritative request lifecycle: neither a snapshot nor a
+  separately persisted response can manufacture completion or failure. Only an
+  actually completed attempt acknowledges its claimed bindings; live work does
+  not acknowledge or redrive. The obsolete response-persistence crash boundary
+  and its generated case are deleted.
 - **Goal-owned background input (#1410)** — the completion composition checks
   canonical Goal presence before enqueue or failed-wake redrive. All six Goal
   statuses retain their existing continuation owner: the background path

@@ -9,7 +9,9 @@ inductive Action where
   durably appended the Retracted closure. -/
   | confirmRetraction (durable : Bool)
   | schedule
-  | wake (wakeAt : Time)
+  /-- Observe the timer at the actual monotone owner time. The scheduled lower
+  bound remains in `.backingOff`; timer overshoot is not rejection by itself. -/
+  | wake (observedAt : Time)
   /-- CanonicalOutput.Execution.acceptAndPublish supplies this accepted header. -/
   | accept (header : Nat)
   | acceptedToolFailure
@@ -57,9 +59,13 @@ def step? (s : State) : Action → Option State
           else some { s with phase := .exhausted }
       | .retracted .permanent _ _ => some { s with phase := .failedPermanent }
       | _ => none
-  | .wake wakeAt =>
-      if s.phase = .backingOff wakeAt then some { s with phase := .issuing, now := wakeAt }
-      else none
+  | .wake observedAt =>
+      match s.phase with
+      | .backingOff scheduled =>
+          if scheduled ≤ observedAt ∧ s.now ≤ observedAt ∧ fitsDeadline observedAt s.deadline then
+            some { s with phase := .issuing, now := observedAt }
+          else none
+      | _ => none
   | .accept header =>
       if s.phase = .streaming then some { s with phase := .accepted header } else none
   | .acceptedToolFailure =>

@@ -56,8 +56,8 @@ def timestampsNondecreasing (records : List Segment) : Bool :=
     | some a, some b => if a.ordinal ≤ b.ordinal then left.createdAt ≤ right.createdAt else true
     | _, _ => true
 
-def validateOpenPrefix (records : List Segment) (coordinate : Coordinate)
-    (writer : Writer) : Except IntegrityError Unit := do
+def reconstructOpenPrefix (records : List Segment) (coordinate : Coordinate)
+    (writer : Writer) : Except IntegrityError Streams := do
   let data := sourceData records coordinate
   if sourceIdentitiesValid records coordinate = false then
     .error .identityConflict
@@ -71,8 +71,13 @@ def validateOpenPrefix (records : List Segment) (coordinate : Coordinate)
       | .ok flush => .ok flush
       | .error _ => .error (.malformedSource coordinate)
     match consumeFlushes flushes [] with
-    | .ok _ => .ok ()
+    | .ok streams => .ok streams
     | .error _ => .error (.malformedSource coordinate)
+
+def validateOpenPrefix (records : List Segment) (coordinate : Coordinate)
+    (writer : Writer) : Except IntegrityError Unit := do
+  let _ ← reconstructOpenPrefix records coordinate writer
+  pure ()
 
 def headerCoordinateConflict (world : World) (message : MessageEnvelope) : Bool :=
   world.messages.any fun other => other != message &&

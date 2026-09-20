@@ -10,3 +10,9 @@ import Proofs.CanonicalOutput.Execution.BackgroundGate
 import Proofs.CanonicalOutput.Execution.ToolDeliveryCases
 import Proofs.CanonicalOutput.Execution.ContinuationCases
 import Proofs.CanonicalOutput.Execution.CompactionCases
+import Proofs.CanonicalOutput.Execution.Handover
+import Proofs.CanonicalOutput.Execution.HandoverCases
+import Proofs.CanonicalOutput.Execution.GoalContinuation
+import Proofs.CanonicalOutput.Execution.GoalContinuationCases
+import Proofs.CanonicalOutput.Execution.SessionComposition
+import Proofs.CanonicalOutput.Execution.SessionCompositionCases

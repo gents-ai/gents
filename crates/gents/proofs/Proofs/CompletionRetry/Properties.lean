@@ -111,6 +111,19 @@ theorem scheduled_backoff_fits_deadline {s s' : State} {wake : Time}
   all_goals subst s'
   all_goals simp_all
 
+/-- Timer delivery may overshoot its scheduled lower bound, but a successful
+wake records the actual observation monotonically and still fits the request
+deadline. -/
+theorem successful_wake_uses_observed_time {s s' : State} {observed : Time}
+    (h : step? s (.wake observed) = some s') :
+    ∃ scheduled, s.phase = .backingOff scheduled ∧ scheduled ≤ observed ∧
+      s.now ≤ observed ∧ fitsDeadline observed s.deadline ∧
+      s'.phase = .issuing ∧ s'.now = observed := by
+  cases hp : s.phase <;> simp [step?, hp] at h
+  rename_i scheduled
+  rcases h with ⟨bounds, rfl⟩
+  exact ⟨scheduled, rfl, bounds.1, bounds.2.1, bounds.2.2, rfl, rfl⟩
+
 /-- Repair is a single consumable policy capability. A successful repair issue
 marks it used and advances the attempt exactly once. -/
 theorem repair_issue_consumes_capability {s s' : State}
