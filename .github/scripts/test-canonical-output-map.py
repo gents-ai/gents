@@ -68,8 +68,35 @@ def unrelated := "-- not a comment"
                                               "Example"), {"first", "second", "newCase"})
         with self.assertRaises(ValueError):
             mapping.constructors("inductive Example where | hidden", "Example")
+        self.assertEqual(mapping.constructors("inductive Example where\n  | first | second", "Example"),
+                         {"first", "second"})
+        self.assertEqual(mapping.constructors(
+            "inductive Example where\n  | first (p : {x : Nat | x > 0})\n  | second", "Example"),
+            {"first", "second"})
         with self.assertRaises(ValueError):
-            mapping.constructors("inductive Example where\n  | first | hidden", "Example")
+            mapping.constructors("inductive Example where\n  | first (p : Nat", "Example")
+
+    def test_nested_seam_requires_admission_mapping(self):
+        row = next(row for row in self.rows if any(
+            name.rsplit(".", 1)[0] in mapping.SEAM_INVENTORIES for name in row["constructors"]))
+        del row["admission"]
+        self.assertIn("nested seam needs an explicit admission", self.errors())
+        row["admission"] = {"boundary": "Unmapped.entry", "disposition": "routed", "reason": "route"}
+        self.assertIn("admission boundary must reference", self.errors())
+        row["admission"]["disposition"] = "always_safe"
+        self.assertIn("nested seam needs an explicit admission", self.errors())
+
+    def test_optional_admission_is_validated(self):
+        row = next(row for row in self.rows if not row["constructors"])
+        for admission in (None, {"boundary": "X", "disposition": "routed", "reason": "why", "extra": True},
+                          {"boundary": "X", "disposition": "routed", "reason": " "}):
+            with self.subTest(admission=admission):
+                row["admission"] = admission
+                self.assertIn("nested seam needs an explicit admission", self.errors())
+
+    def test_unknown_constructor_fails(self):
+        self.rows[0]["constructors"].append("Unknown.Action.deleted")
+        self.assertIn("unknown constructor: Unknown.Action.deleted", self.errors())
 
     def test_declaration_requires_real_namespace(self):
         source = """namespace Actual

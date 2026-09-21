@@ -55,6 +55,8 @@ The checked handoff inventory is the mapping for this work:
 | [Execution](canonical-output-map-execution.json) | Gate operations, application trace, retry, queue/claim handover, tool delivery, Goal/background continuation, restart and the four invariants. |
 | [Projection](canonical-output-map-projection.json) | Reconstruction, provider input/compaction, live observation, terminal output, delegation, forks/hydration and client observation joins. |
 | [Native premises](canonical-output-map-native.json) | Lease actions, transaction/gate/clock/genesis/ACP experiments, SDL/catalog and pairing routes. |
+| [Tool/subagent joins](canonical-output-map-tools.json) | Tool lifecycle actions, closure authority, child-bridge events, physical parent links and notification authority. |
+| [Control joins](canonical-output-map-control.json) | Retry mediation, session queue actions and write-gate scheduling events. |
 
 Each entry identifies actual Lean declarations, existing generated groups, intended
 native owner modules, consumer locations, required boundary cases and retired
@@ -72,11 +74,29 @@ Fixture status is independent of native status:
   and coverage ledger can establish native coverage after implementation/testing.
   Structural trace identity/composition may instead be `not_applicable`.
 
-`lake build` checks all constructors of `Gate.Operation`,
-`SessionComposition.Trace` and `RequestExecutionLease.Action` are assigned exactly
-once. It also rejects stale model declarations, missing paths, unknown fixture
-groups and duplicate mapping IDs. CI additionally compares groups with the actual
-generated JSON and runs negative controls for omissions and stale references:
+`lake build` checks constructor assignments exactly once across ten selected
+vocabularies: the outer gate/application trace/lease actions; tool lifecycle,
+closure authority and child-bridge events; retry actions and canonical retry
+operations; session queue actions and write-gate scheduling events. It also
+rejects stale model declarations, missing paths, unknown fixture groups and
+duplicate mapping IDs. CI compares the source inventory with Lean's actual
+inductive constructor metadata, resolves referenced declarations with Lean, and
+checks fixture groups against generated JSON.
+
+Nested seam entries must state their `admission` boundary, disposition and reason.
+The boundary must be a mapped model declaration. `admitted` means that entry
+point handles the action subject to its guards, not unconditional acceptance;
+`rejected` is relative to the named boundary; `routed` names the owner through
+which it must pass instead. Cancellation intent is not a confirmed host stop,
+and a durable child outcome is not unscoped permission to finish any parent.
+Automated queue removal is distinct from wake acknowledgement: only finishing
+the completed physical claimed wake acknowledges its captured attempted bindings;
+failed or cancelled attempts acknowledge none.
+Mapping checks enforce the inventory and references; the disposition's semantic
+accuracy still requires model review and subsequent conformance cases.
+
+Negative controls cover omissions, duplicate assignments, stale references,
+namespace mistakes and missing admission boundaries:
 
 ```sh
 python3 .github/scripts/check-canonical-output-map.py
