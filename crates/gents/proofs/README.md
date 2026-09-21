@@ -1214,6 +1214,18 @@ Model → conformance → Rust bindings:
 
 ### Compaction
 
+`Compaction.ReductionEngine.reduceRebuildAndAuthorize` binds the initial request
+estimate to its projection, computes the canonical effective threshold, and
+rebuilds from the exact reduction checkpoint and retained suffix before measuring
+again. `CanonicalOutput.Execution.Compaction.reduceCanonicalRebuildAndAuthorize`
+adds exact canonical-message reconstruction on both sides, with one fixed request
+context and a separate checkpoint callback (a new summary is not a document ID).
+Successful dispatch proves threshold admission, positive output, the exact dynamic
+output clamp and estimated input-plus-output within context. Fresh repaired views
+use `projectAndAuthorize`. Projection, estimation and the authorized snapshot are
+explicit native premises; these proofs do not establish provider serialization,
+tokenizer accuracy, summarizer quality or the repair transformation itself.
+
 `Proofs/Compaction` models transcript reduction — the one place where the
 durable transcript and the provider view diverge on purpose, and therefore the
 place where "everything persisted can be projected back out" is most at risk.

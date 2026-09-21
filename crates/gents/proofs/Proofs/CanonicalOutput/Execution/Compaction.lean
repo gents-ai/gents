@@ -1,5 +1,6 @@
 import Proofs.CanonicalOutput.Execution.State
 import Proofs.Compaction.State
+import Proofs.Compaction.ReductionEngine
 
 /-!
 # Canonical publication / provider compaction boundary
@@ -65,6 +66,233 @@ def publishedRow? (world : World) (message : MessageEnvelope) :
   | .published actual native =>
       if actual == message then nativeRow? message native else none
   | _ => none
+
+/-! ## Native provider-projection seam
+
+The provider serializer is deliberately not duplicated in Lean.  This adapter
+does own the other half of the boundary: an explicitly selected, ordered list
+of canonical message identities must resolve to the exact reconstructed native
+messages before the native provider projection callback can run.  Missing,
+conflicting, loading, or incomplete publications therefore fail the whole
+request instead of being filtered out of the estimate.
+-/
+
+/-- Resolve one canonical identity to its exact published native message.
+Duplicate delivery of the same immutable envelope is harmless; two different
+envelopes at the identity are ambiguous and fail closed. -/
+def reconstructedMessage? (world : World) (id : DocId) : Option ReconstructedMessage := do
+  let message ← match (world.messages.filter fun candidate =>
+      candidate.header.session == world.sessionId && candidate.header.id == id).dedup with
+    | [message] => some message
+    | _ => none
+  match StreamingResponse.project (observation world message) with
+  | .published actual native =>
+      if actual == message then some native else none
+  | _ => none
+
+/-- Compose canonical reconstruction with the native provider owner. `fixed`
+captures every non-message request layer. The error value describes failure at
+this already-authorized snapshot boundary; authorization itself remains the
+native observation owner's premise. -/
+def canonicalProviderRequest {Fixed Request Error : Type}
+    (world : World) (fixed : Fixed)
+    (project : Fixed → List ReconstructedMessage → Except Error Request)
+    (projectionError : Error) (messageIds : List DocId) : Except Error Request :=
+  match messageIds.mapM (reconstructedMessage? world) with
+  | none => .error projectionError
+  | some native => project fixed native
+
+theorem canonicalProviderRequest_success_uses_exact_reconstruction
+    {Fixed Request Error : Type}
+    (world : World) (messageIds : List DocId) (fixed : Fixed)
+    (project : Fixed → List ReconstructedMessage → Except Error Request)
+    (projectionError : Error) (request : Request)
+    (h : canonicalProviderRequest world fixed project projectionError messageIds = .ok request) :
+    ∃ native, messageIds.mapM (reconstructedMessage? world) = some native ∧
+      project fixed native = .ok request := by
+  cases hnatives : messageIds.mapM (reconstructedMessage? world) with
+  | none => simp [canonicalProviderRequest, hnatives] at h
+  | some native =>
+      simp [canonicalProviderRequest, hnatives] at h
+      exact ⟨native, rfl, h⟩
+
+/-- Reconstruct the exact retained canonical suffix before injecting the new
+checkpoint.  The checkpoint is a generated provider message payload, never
+reinterpreted as a canonical document identity. -/
+def canonicalRebuiltRequest {Fixed Request Error : Type}
+    (world : World) (fixed : Fixed)
+    (rebuild : Fixed → Nat → List ReconstructedMessage → Except Error Request)
+    (projectionError : Error) (checkpoint : Nat) (retainedSuffix : List DocId) :
+    Except Error Request :=
+  match retainedSuffix.mapM (reconstructedMessage? world) with
+  | none => .error projectionError
+  | some native => rebuild fixed checkpoint native
+
+/-- Canonical-output entry into the shared reduction/remeasurement owner.  The
+initial projection and retained-suffix rebuild share the same fixed request
+context, while only the latter receives the generated checkpoint. -/
+def reduceCanonicalRebuildAndAuthorize {Fixed Request Error : Type}
+    (world : World) (fixed : Fixed)
+    (project : Fixed → List ReconstructedMessage → Except Error Request)
+    (rebuild : Fixed → Nat → List ReconstructedMessage → Except Error Request)
+    (estimate : Request → Except Error Nat) (projectionError : Error)
+    (source : List DocId) (contextWindow thresholdBasisPoints configuredMaxOutputTokens : Nat)
+    (canFit : Bool) (prefixLength checkpoint : Nat) :
+    Except Error (_root_.Compaction.ReductionEngine.RebuiltDispatch Error Request) :=
+  _root_.Compaction.ReductionEngine.reduceRebuildAndAuthorize
+    (canonicalProviderRequest world fixed project projectionError)
+    (canonicalRebuiltRequest world fixed rebuild projectionError)
+    estimate source contextWindow thresholdBasisPoints configuredMaxOutputTokens
+    canFit prefixLength checkpoint
+
+theorem canonical_rebuilt_success_uses_exact_suffix {Fixed Request Error : Type}
+    (world : World) (fixed : Fixed)
+    (rebuild : Fixed → Nat → List ReconstructedMessage → Except Error Request)
+    (projectionError : Error) (checkpoint : Nat) (retainedSuffix : List DocId)
+    (request : Request)
+    (h : canonicalRebuiltRequest world fixed rebuild projectionError checkpoint retainedSuffix =
+      .ok request) :
+    ∃ native, retainedSuffix.mapM (reconstructedMessage? world) = some native ∧
+      rebuild fixed checkpoint native = .ok request := by
+  cases hnatives : retainedSuffix.mapM (reconstructedMessage? world) with
+  | none => simp [canonicalRebuiltRequest, hnatives] at h
+  | some native =>
+      simp [canonicalRebuiltRequest, hnatives] at h
+      exact ⟨native, rfl, h⟩
+
+/-- Canonical composition inherits the shared post-reduction threshold and
+positive-output authorization; its projectors are definitionally the exact
+canonical reconstruction adapters above. -/
+theorem canonical_composed_dispatch_is_authorized {Fixed Request Error : Type}
+    (world : World) (fixed : Fixed)
+    (project : Fixed → List ReconstructedMessage → Except Error Request)
+    (rebuild : Fixed → Nat → List ReconstructedMessage → Except Error Request)
+    (estimate : Request → Except Error Nat) (projectionError : Error)
+    (source : List DocId) (contextWindow thresholdBasisPoints configuredMaxOutputTokens : Nat)
+    (canFit : Bool) (prefixLength checkpoint outputTokens : Nat)
+    (projected : _root_.Compaction.ReductionEngine.RebuiltRequest Request)
+    (h : reduceCanonicalRebuildAndAuthorize world fixed project rebuild estimate projectionError
+      source contextWindow thresholdBasisPoints configuredMaxOutputTokens canFit prefixLength
+      checkpoint = .ok (.dispatch projected outputTokens)) :
+    let budget := PromptAssembly.Budget.effectiveInputBudget
+      (PromptAssembly.Budget.configuredThresholdBudget contextWindow thresholdBasisPoints)
+      contextWindow
+    _root_.Compaction.ReductionEngine.decideThreshold projected.inputTokens budget = .notNeeded ∧
+      PromptAssembly.Budget.CanDispatch projected.inputTokens contextWindow
+        configuredMaxOutputTokens ∧ 0 < outputTokens ∧
+      outputTokens = PromptAssembly.Budget.effectiveOutputBudget projected.inputTokens
+        contextWindow configuredMaxOutputTokens ∧
+      projected.inputTokens + outputTokens ≤ contextWindow := by
+  exact _root_.Compaction.ReductionEngine.composed_dispatch_is_authorized
+    (canonicalProviderRequest world fixed project projectionError)
+    (canonicalRebuiltRequest world fixed rebuild projectionError)
+    estimate source contextWindow thresholdBasisPoints configuredMaxOutputTokens canFit
+    prefixLength checkpoint outputTokens projected h
+
+/-- A successful composed dispatch used the exact reconstructed canonical
+source and exact reconstructed retained suffix. The generated checkpoint is
+passed separately to the rebuild owner. -/
+theorem canonical_composed_dispatch_binds_reconstruction {Fixed Request Error : Type}
+    (world : World) (fixed : Fixed)
+    (project : Fixed → List ReconstructedMessage → Except Error Request)
+    (rebuild : Fixed → Nat → List ReconstructedMessage → Except Error Request)
+    (estimate : Request → Except Error Nat) (projectionError : Error)
+    (source : List DocId) (contextWindow thresholdBasisPoints configuredMaxOutputTokens : Nat)
+    (canFit : Bool) (prefixLength checkpoint outputTokens : Nat)
+    (projected : _root_.Compaction.ReductionEngine.RebuiltRequest Request)
+    (h : reduceCanonicalRebuildAndAuthorize world fixed project rebuild estimate projectionError
+      source contextWindow thresholdBasisPoints configuredMaxOutputTokens canFit prefixLength
+      checkpoint = .ok (.dispatch projected outputTokens)) :
+    ∃ initialNative retainedNative initialRequest compactedPrefix retainedSuffix,
+      source.mapM (reconstructedMessage? world) = some initialNative ∧
+      project fixed initialNative = .ok initialRequest ∧
+      compactedPrefix ++ retainedSuffix = source ∧
+      retainedSuffix.mapM (reconstructedMessage? world) = some retainedNative ∧
+      rebuild fixed checkpoint retainedNative = .ok projected.request := by
+  obtain ⟨initial, compactedPrefix, retainedSuffix, _, hinitial, _, hpartition, _, _,
+      hrebuilt, _⟩ :=
+    _root_.Compaction.ReductionEngine.composed_dispatch_binds_exact_source
+      (canonicalProviderRequest world fixed project projectionError)
+      (canonicalRebuiltRequest world fixed rebuild projectionError) estimate source
+      contextWindow thresholdBasisPoints configuredMaxOutputTokens canFit prefixLength checkpoint
+      outputTokens projected h
+  obtain ⟨initialNative, hsource, hproject⟩ :=
+    canonicalProviderRequest_success_uses_exact_reconstruction world source fixed project
+      projectionError initial.request hinitial
+  obtain ⟨retainedNative, hsuffix, hrebuild⟩ :=
+    canonical_rebuilt_success_uses_exact_suffix world fixed rebuild projectionError checkpoint
+      retainedSuffix projected.request hrebuilt
+  exact ⟨initialNative, retainedNative, initial.request, compactedPrefix, retainedSuffix, hsource,
+    hproject, hpartition, hsuffix, hrebuild⟩
+
+/-- A successful provider request witnesses the exact reconstructed list given
+to the native projection owner; there is no independent list on which an
+estimator could operate. -/
+private theorem mapM_some_resolves_member {α β : Type} (f : α → Option β)
+    (items : List α) (values : List β) (item : α)
+    (hmapped : items.mapM f = some values) (hmember : item ∈ items) :
+    ∃ value, f item = some value := by
+  induction items generalizing values with
+  | nil => simp at hmember
+  | cons first rest ih =>
+      cases hfirst : f first with
+      | none => simp [hfirst] at hmapped
+      | some firstValue =>
+          cases hrest : rest.mapM f with
+          | none => simp [hfirst, hrest] at hmapped
+          | some restValues =>
+              simp [hfirst, hrest] at hmapped
+              subst values
+              simp only [List.mem_cons] at hmember
+              cases hmember with
+              | inl heq => subst item; exact ⟨firstValue, hfirst⟩
+              | inr hmember => exact ih restValues hrest hmember
+
+/-- Any unresolved selected identity, including one in the middle or at the
+end, prevents the callback from manufacturing a request from a shortened
+history. -/
+theorem canonicalProviderRequest_unresolved_selected_is_error
+    {Fixed Request Error : Type}
+    (world : World) (messageIds : List DocId) (id : DocId) (fixed : Fixed)
+    (project : Fixed → List ReconstructedMessage → Except Error Request)
+    (projectionError : Error)
+    (hmember : id ∈ messageIds) (hmissing : reconstructedMessage? world id = none) :
+    canonicalProviderRequest world fixed project projectionError messageIds =
+      .error projectionError := by
+  cases hnatives : messageIds.mapM (reconstructedMessage? world) with
+  | none => simp [canonicalProviderRequest, hnatives]
+  | some native =>
+      obtain ⟨resolved, hresolved⟩ := mapM_some_resolves_member
+        (reconstructedMessage? world) messageIds native id hnatives hmember
+      rw [hmissing] at hresolved
+      contradiction
+
+/-- Empty, missing, ambiguous, and non-published observations cannot resolve a
+native message merely because a provider callback exists. -/
+theorem reconstructedMessage_requires_exact_publication
+    (world : World) (id : DocId) (native : ReconstructedMessage)
+    (h : reconstructedMessage? world id = some native) :
+    ∃ message, (world.messages.filter fun candidate =>
+        candidate.header.session == world.sessionId && candidate.header.id == id).dedup =
+          [message] ∧
+      StreamingResponse.project (observation world message) = .published message native := by
+  let selected := (world.messages.filter fun candidate =>
+    candidate.header.session == world.sessionId && candidate.header.id == id).dedup
+  cases hselected : selected with
+  | nil => simp [reconstructedMessage?, selected, hselected] at h
+  | cons message rest =>
+      cases rest with
+      | cons second tail => simp [reconstructedMessage?, selected, hselected] at h
+      | nil =>
+          cases hproject : StreamingResponse.project (observation world message) with
+          | published actual projected =>
+              by_cases heq : actual = message
+              · subst actual
+                simp [reconstructedMessage?, selected, hselected, hproject] at h
+                subst projected
+                exact ⟨message, by simpa [selected] using hselected, hproject⟩
+              · simp [reconstructedMessage?, selected, hselected, hproject, heq] at h
+          | _ => simp [reconstructedMessage?, selected, hselected, hproject] at h
 
 /-- Select an exact immutable prefix. The caller may choose a cursor but not
 manufacture row classifications. Invalid/unsupported native shapes reject the
