@@ -56,6 +56,8 @@ The PR descriptions drop every mention of the optimization model. PR 1's owners 
 
 - Order is Lean, then conformance, then Rust. Each PR targets its parent branch.
 - Lean proofs contain no `sorry`. CI greps for it. If a tactic fails, fix the tactic; never weaken a theorem statement without recording why in the PR description.
+- **rustfmt is a CI gate.** `cargo fmt --all --check` must exit 0 before every Rust commit. rustfmt orders `mod` and `use` lines alphabetically, so where a task says to add a module or re-export "directly after" another line in `lean_vocab_test/support.rs` or a `mod.rs`, place it in alphabetical position instead; running `cargo fmt -p gents` does this. New files under `lean_vocab_test/` open with a `//!` header naming the Lean owner they mirror and stating that decoding is strict.
+- **Every top-level `Proofs/*.lean` file needs a conformance home.** `tests/conformance/structure.rs` test `every_lean_model_has_a_declared_conformance_home` enumerates them. A PR that adds one must add its entry there in the same PR: a `Gap` with an issue-prefixed rationale until a consumer exists, then `Module("conformance/<file>.rs")`.
 - Use `tracing`, never `println!`, in `crates/gents/src`.
 - Escape every interpolated GraphQL string with `graphql::escape_graphql_string()`.
 - Never emit `[]` in a DefraDB mutation; use `null` for an empty nillable list.

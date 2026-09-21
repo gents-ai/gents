@@ -22,6 +22,8 @@
 - `EvalRun`, `EvalTrial` and `EvalVerdict` have no status or lifecycle field. Do not add one.
 - **Scores are integer basis points.** The spec's fallback is taken: the verdict column is `score_bp: Int` in `0..=10000`, null for a non-evidence verdict. The repository has no `@immutable Float` precedent, and integers are exact in both Lean and Rust.
 - Configuration structs follow the repository convention: typed structs for SDL `JSON` fields, `#[serde(deny_unknown_fields)]`, the `ts_rs::TS` derive behind the `typescript` feature. Two fields are deliberately raw `serde_json::Value`: a check's `params` and a fixture document's `document`. Their schemas belong to the named check and to the app collection.
+- **rustfmt is a CI gate.** `cargo fmt --all --check` must exit 0 before every Rust commit. rustfmt orders `mod` and `use` lines alphabetically, so where a task says to add a module or re-export "directly after" another line in `lean_vocab_test/support.rs` or a `mod.rs`, place it in alphabetical position instead; running `cargo fmt -p gents` does this. New files under `lean_vocab_test/` open with a `//!` header naming the Lean owner they mirror and stating that decoding is strict.
+- **Every top-level `Proofs/*.lean` file needs a conformance home.** `tests/conformance/structure.rs` test `every_lean_model_has_a_declared_conformance_home` enumerates them. A PR that adds one must add its entry there in the same PR: a `Gap` with an issue-prefixed rationale until a consumer exists, then `Module("conformance/<file>.rs")`.
 - Use `tracing`, never `println!`. Escape interpolated GraphQL strings with `escape_graphql_string`. Never emit `[]` in a mutation; use `null` for an empty nillable list.
 - Baseline migration pins are computed by DefraDB. Obtain them from the pin-authoring test; never hand-write one.
 - Before each push: `cargo test -p gents`, `cargo check --workspace --all-targets`, and `lake build` in `crates/gents/proofs` for Lean changes.
@@ -1337,7 +1339,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Flip the ledger entries to consumers**
+- [ ] **Step 3: Flip the ledger entries and the structure entry to consumers**
+
+In `crates/gents/tests/conformance/structure.rs`, change the `Eval` entry from its `Gap` to `Module("conformance/eval.rs")`, following the form of the file's other `Module` entries.
 
 In `CoverageLedger.lean`, change the four `followUpCoverage` entries from Task 2 to `consumerCoverage`, each with the consumer string `"conformance::rust_eval_outcome_vocabulary_and_projection_match_lean"` in place of the follow-up sentence. If Task 2's contingency was used, restore the `"eval"` feature tag and the `featureSurfaceRequirements` entry.
 

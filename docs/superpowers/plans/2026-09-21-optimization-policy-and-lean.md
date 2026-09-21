@@ -22,6 +22,8 @@
 - A rule change is a new policy version, never an edit to `PolicyV2`.
 - `POLICY_VERSION` is `"v2"`. `"v1"` was the superseded pooled-Fisher design and never shipped.
 - Parameter defaults are placeholders marked uncalibrated until the A/A calibration sets them.
+- **rustfmt is a CI gate.** `cargo fmt --all --check` must exit 0 before every Rust commit. rustfmt orders `mod` and `use` lines alphabetically, so where a task says to add a module or re-export "directly after" another line in `lean_vocab_test/support.rs` or a `mod.rs`, place it in alphabetical position instead; running `cargo fmt -p gents` does this. New files under `lean_vocab_test/` open with a `//!` header naming the Lean owner they mirror and stating that decoding is strict.
+- **Every top-level `Proofs/*.lean` file needs a conformance home.** `tests/conformance/structure.rs` test `every_lean_model_has_a_declared_conformance_home` enumerates them. A PR that adds one must add its entry there in the same PR: a `Gap` with an issue-prefixed rationale until a consumer exists, then `Module("conformance/<file>.rs")`.
 - Use `tracing`, never `println!`.
 - Before each push: `cargo test -p gents`, `cargo check --workspace --all-targets`, and `lake build` in `crates/gents/proofs` for Lean changes.
 - Commit with `git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit ...`.
@@ -242,6 +244,8 @@ end Optimization
 ```
 
 - [ ] **Step 2: Register and map**
+
+In `crates/gents/tests/conformance/structure.rs`, add an `Optimization` entry next to the `Eval` entry, as a `Gap` whose rationale begins `#1455` and says the consumer is `optimization::policy::tests::gates_costs_and_decisions_match_lean`, landing in the policy PR of this stack. Copy the `Eval` entry's exact form. Validate it with `RUST_MIN_STACK=16777216 cargo test -p gents --test conformance every_lean_model_has_a_declared_conformance_home`.
 
 Append to `crates/gents/proofs/Proofs.lean`:
 
@@ -1156,7 +1160,9 @@ pub use policy::{
 
 In `crates/gents/src/lib.rs` add `pub mod optimization;` after `pub mod oneshot;`.
 
-- [ ] **Step 3: Flip the ledger entry**
+- [ ] **Step 3: Flip the ledger entry and the structure entry**
+
+In `crates/gents/tests/conformance/structure.rs`, change the `Optimization` entry from its `Gap` to the form the file uses for a model whose consumer is a lib unit test; if the file only has `Module(...)` for files under `tests/conformance/`, keep it a `Gap` and rewrite its rationale to name the landed consumer `optimization::policy::tests::gates_costs_and_decisions_match_lean`.
 
 In `CoverageLedger.lean`, replace the `optimization_cases` `followUpCoverage` entry with:
 
