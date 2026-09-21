@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct BackgroundCompletionClaimSnapshot {
@@ -462,8 +463,15 @@ impl RequestLifecycle {
         let now = chrono::Utc::now();
         let claimed_at = now.to_rfc3339();
         let execution_generation = uuid::Uuid::new_v4().to_string();
-        let execution_lease_expires_at =
-            now + chrono::Duration::seconds(self.execution_lease_duration_secs as i64);
+        let lease_secs = i64::try_from(self.execution_lease_duration_secs)
+            .context("execution lease duration out of range")?;
+        let lease_ms = lease_secs
+            .checked_mul(1000)
+            .filter(|value| *value > 0)
+            .context("execution lease duration must be positive and representable")?;
+        let execution_lease_expires_at = now
+            .checked_add_signed(chrono::Duration::milliseconds(lease_ms))
+            .context("execution lease expiry out of range")?;
         let synthesized_deadline_at =
             now + chrono::Duration::seconds(self.deadline_duration_secs as i64);
         let deadline_at = self
@@ -524,7 +532,7 @@ impl RequestLifecycle {
                         claimed_at: "{escaped_claimed_at}",
                         execution_generation: "{escaped_execution_generation}",
                         execution_lease_expires_at: "{escaped_execution_lease_expires_at}",
-                        execution_progress_seq: 0,
+                        execution_lease_secs: {lease_secs},
                         {budget_field}
                         {background_completion_snapshot_fields}
                         deadline: "{escaped_deadline}"
@@ -593,7 +601,13 @@ impl RequestLifecycle {
         self.background_completion_input_through_sequence =
             background_completion_input_through_sequence;
         self.valid_until_at_claim = valid_until_at_claim;
-        self.execution_lease = Some(RequestExecutionLease::new(execution_generation));
+        self.execution_lease = Some(RequestExecutionLease::new(execution_generation.clone()));
+        self.renewal_task = Some(super::execution_renewal::RenewalTask::start(
+            self.node.clone(),
+            self.request.doc_id.clone(),
+            execution_generation,
+            lease_ms as u64,
+        ));
 
         Ok(ClaimOutcome::Claimed)
     }

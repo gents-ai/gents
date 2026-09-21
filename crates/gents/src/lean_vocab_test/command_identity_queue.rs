@@ -45,11 +45,11 @@ pub(crate) struct LeanCommandEnvCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LeanLiveOverlayCase {
     pub(crate) name: String,
-    #[serde(rename = "responseStatus")]
-    pub(crate) response_status: String,
-    pub(crate) materialized: bool,
+    #[serde(rename = "liveOutputAvailable")]
+    pub(crate) live_output_available: bool,
     #[serde(rename = "hasDurableOwner")]
     pub(crate) has_durable_owner: bool,
     #[serde(rename = "precedingToolCalls")]

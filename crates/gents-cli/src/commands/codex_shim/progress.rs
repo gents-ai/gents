@@ -338,7 +338,7 @@ pub(super) fn response_field_is_blank(response: &Value, field: &str) -> bool {
 
 pub(super) fn codex_turn_status(state: ClientTurnState) -> codex::TurnStatus {
     match state {
-        ClientTurnState::WaitingForClaim | ClientTurnState::Streaming => {
+        ClientTurnState::WaitingForClaim | ClientTurnState::Running => {
             codex::TurnStatus::InProgress
         }
         ClientTurnState::Completed => codex::TurnStatus::Completed,
@@ -472,7 +472,7 @@ mod tests {
             codex::TurnStatus::Failed
         );
         assert_eq!(
-            codex_turn_status(ClientTurnState::Streaming),
+            codex_turn_status(ClientTurnState::Running),
             codex::TurnStatus::InProgress
         );
         assert_eq!(

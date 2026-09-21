@@ -83,6 +83,44 @@ pub fn decode_transcript_message_row(row: &serde_json::Value) -> Result<Transcri
     Ok(TranscriptMessageRow { doc_id, message })
 }
 
+/// Create mutation for one canonical `AgentOutputSegment` row. The document
+/// travels as a typed GraphQL variable, never as rendered GraphQL text: JSON
+/// keys (including arbitrary `additional_params` object keys) and JSON empty
+/// arrays are preserved verbatim by the variable encoder and are not nillable
+/// SDL lists.
+pub const CREATE_AGENT_OUTPUT_SEGMENT_MUTATION: &str = "mutation($input: \
+AgentOutputSegmentMutationInputArg!) { create_AgentOutputSegment(input: $input) { _docID } }";
+
+/// Create mutation for one canonical `AgentMessage` row. The document travels
+/// as a typed GraphQL variable, never as rendered GraphQL text: JSON keys
+/// (including arbitrary `additional_params` object keys) and JSON empty arrays
+/// are preserved verbatim by the variable encoder and are not nillable SDL
+/// lists.
+pub const CREATE_AGENT_MESSAGE_MUTATION: &str = "mutation($input: \
+AgentMessageMutationInputArg!) { create_AgentMessage(input: $input) { _docID } }";
+
+/// Build the `execute_with_variables` variables for one canonical
+/// `AgentOutputSegment` create: the strict protocol segment serialized as the
+/// `$input` variable, with no GraphQL-text rendering of the JSON.
+pub fn output_segment_create_variables(
+    segment: &gents_protocol::output::OutputSegment,
+) -> Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "input": serde_json::to_value(segment).context("serializing canonical AgentOutputSegment")?
+    }))
+}
+
+/// Build the `execute_with_variables` variables for one canonical
+/// `AgentMessage` create: the strict protocol message serialized as the
+/// `$input` variable, with no GraphQL-text rendering of the JSON.
+pub fn transcript_message_create_variables(
+    message: &gents_protocol::output::TranscriptMessage,
+) -> Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "input": serde_json::to_value(message).context("serializing canonical AgentMessage")?
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +215,124 @@ mod tests {
         row["_docID"] = serde_json::json!("msg-1");
         row["content"] = serde_json::json!("retired serialized native message");
         assert!(decode_transcript_message_row(&row).is_err());
+    }
+
+    /// A minimal closed segment whose closing record declares no streams: the
+    /// serialized `stream_bytes` is a JSON empty array, which must survive as
+    /// a JSON array in the `$input` variable (not a nillable SDL list `null`).
+    fn closed_segment_no_streams() -> gents_protocol::output::OutputSegment {
+        gents_protocol::output::OutputSegment {
+            agent_did: "agent".into(),
+            requester_did: None,
+            session_id: "session".into(),
+            request_doc_id: "request".into(),
+            source: gents_protocol::output::OutputSource::Authored {
+                key: "prompt".into(),
+            },
+            writer: gents_protocol::output::OutputWriter::RequestExecution {
+                execution_generation: "gen-1".into(),
+            },
+            ordinal: None,
+            runs: Vec::new(),
+            payload: String::new(),
+            close: Some(gents_protocol::output::SourceClose::Closed {
+                outcome: gents_protocol::output::OutputOutcome::Complete,
+                segments: 0,
+                stream_bytes: Vec::new(),
+            }),
+            created_at: "2026-09-09T22:30:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn segment_create_variables_preserve_json_empty_arrays() {
+        let variables = output_segment_create_variables(&closed_segment_no_streams()).unwrap();
+        let input = variables.get("input").unwrap();
+        assert_eq!(input["close"]["stream_bytes"], serde_json::json!([]));
+        assert!(input["close"]["stream_bytes"].is_array());
+        assert!(input["runs"].is_null(), "empty runs skip-serialize");
+    }
+
+    #[test]
+    fn segment_create_variables_shape_matches_execute_with_variables_pattern() {
+        let variables = output_segment_create_variables(&closed_segment_no_streams()).unwrap();
+        let object = variables.as_object().unwrap();
+        assert_eq!(object.len(), 1, "exactly the $input variable");
+        assert!(object.contains_key("input"));
+        assert!(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
+            .contains("$input: AgentOutputSegmentMutationInputArg!"));
+        assert!(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
+            .contains("create_AgentOutputSegment(input: $input)"));
+    }
+
+    #[test]
+    fn message_create_variables_preserve_unicode_payloads() {
+        let mut message = decode_transcript_message_row(&transcript_message_row())
+            .unwrap()
+            .message;
+        // 18 UTF-8 bytes, 10 chars: byte-exactness must survive the variable.
+        let unicode = "héllo 🌍 中文";
+        message.blocks = vec![gents_protocol::output::MessageBlock::Text {
+            text: gents_protocol::output::PresentedPayload {
+                output: gents_protocol::output::PayloadRef {
+                    close_doc_id: "close-1".into(),
+                    stream: 0,
+                },
+                presentation: gents_protocol::output::PayloadPresentation::Composed {
+                    parts: vec![gents_protocol::output::PresentationPart::Literal {
+                        text: unicode.into(),
+                    }],
+                },
+            },
+        }];
+        let variables = transcript_message_create_variables(&message).unwrap();
+        let input = variables.get("input").unwrap();
+        let literal = &input["blocks"][0]["text"]["presentation"]["parts"][0]["text"];
+        assert_eq!(literal.as_str().unwrap(), unicode);
+        assert_eq!(
+            literal.as_str().unwrap().len(),
+            18,
+            "UTF-8 byte length preserved"
+        );
+        assert_eq!(literal.as_str().unwrap().chars().count(), 10);
+        assert!(CREATE_AGENT_MESSAGE_MUTATION.contains("$input: AgentMessageMutationInputArg!"));
+        assert!(CREATE_AGENT_MESSAGE_MUTATION.contains("create_AgentMessage(input: $input)"));
+    }
+
+    #[test]
+    fn message_create_variables_preserve_arbitrary_additional_params_keys() {
+        let mut message = decode_transcript_message_row(&transcript_message_row())
+            .unwrap()
+            .message;
+        // Arbitrary provider-opaque object keys, including empty-string and
+        // GraphQL-hostile characters, must pass through the variable verbatim.
+        message.blocks = vec![gents_protocol::output::MessageBlock::ToolCall {
+            tool_call_doc_id: "call-1".into(),
+            id: "id-1".into(),
+            call_id: None,
+            name: "bash".into(),
+            arguments: gents_protocol::output::PayloadRef {
+                close_doc_id: "close-1".into(),
+                stream: 0,
+            },
+            signature: None,
+            additional_params: Some(serde_json::json!({
+                "": "empty key",
+                "key with spaces": 1,
+                "$weird/\\\"key\\\"": [true, null],
+                "nested": {"ünïcode": "🌍"}
+            })),
+        }];
+        let variables = transcript_message_create_variables(&message).unwrap();
+        let params = &variables["input"]["blocks"][0]["additional_params"];
+        let params = params.as_object().unwrap();
+        assert_eq!(params.len(), 4);
+        assert_eq!(params.get("").unwrap(), "empty key");
+        assert_eq!(params.get("key with spaces").unwrap(), 1);
+        assert_eq!(
+            params.get("$weird/\\\"key\\\"").unwrap(),
+            &serde_json::json!([true, null])
+        );
+        assert_eq!(params.get("nested").unwrap()["ünïcode"], "🌍");
     }
 }

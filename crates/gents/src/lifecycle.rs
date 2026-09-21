@@ -12,9 +12,10 @@ mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 mod claim;
 mod execution_lease;
+mod execution_renewal;
 pub(crate) use execution_lease::{
     recover_execution_generation, revoke_execution_generation, ExecutionWriteFence,
-    ExecutionWriteKind, RequestExecutionLease,
+    RequestExecutionLease,
 };
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
@@ -414,7 +415,6 @@ pub struct RequestLifecycle {
     request: AgentRequest,
     request_commit_cid: Option<String>,
     response_doc_id: Option<String>,
-    progress_seq: u32,
     deadline_duration_secs: u64,
     configured_max_total_tokens: Option<u64>,
     claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -423,6 +423,7 @@ pub struct RequestLifecycle {
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
     execution_lease: Option<RequestExecutionLease>,
     execution_lease_duration_secs: u64,
+    renewal_task: Option<execution_renewal::RenewalTask>,
 }
 
 impl RequestLifecycle {

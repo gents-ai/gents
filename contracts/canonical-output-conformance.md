@@ -7,6 +7,20 @@ do not merge it without the validated implementation stack.
 
 ## Adapter contract
 
+Implementation checkpoint: the Rust descendant compiles the production row
+codecs and lease policy directly in `gents-lean-contract/tests/native_output_policy.rs`.
+Generated active-lease cases drive begin, append authorization, producer
+authorization and bounded renewal. This is pure-helper coverage, not transaction,
+timer, recovery or tool-handoff coverage. The full generated snapshot is decoded
+by `runtime_snapshot`; successful decoding alone is not native execution.
+
+The protocol now has a sealed-stream reconstruction primitive and request-only
+client projections. Its unit regressions do not yet bind the generated complete
+message/live-output projection cases. Those adapters, the segment publication
+owner, terminalization/recovery and canonical history consumers remain required
+before integrated validation. Do not restore deleted response/progress helpers
+to bridge those remaining compiler errors.
+
 Generate inputs and expected observations from the executable Lean owners, not
 from a second Rust state machine. Native adapters receive only the inputs; the
 harness compares independently observed results with the generated expectation.

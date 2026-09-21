@@ -27,10 +27,11 @@ fn generated_consumers_resolve_to_registered_tests() {
         .filter(|entry| !entry.consumer.is_empty())
         .map(|entry| entry.consumer.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        consumer_registry::assert_registered_conformance_consumers_resolve(),
-        declared
-    );
+    let registered = consumer_registry::assert_registered_conformance_consumers_resolve();
+    let stale: Vec<_> = registered.difference(&declared).collect();
+    let missing: Vec<_> = declared.difference(&registered).collect();
+    assert!(stale.is_empty() && missing.is_empty(),
+        "consumer registry disagrees with Lean ledger: stale={stale:?}, missing={missing:?}");
 }
 
 #[test]

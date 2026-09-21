@@ -6,8 +6,8 @@ use gents_protocol::row::AgentRequestRow;
 use super::*;
 use crate::streaming::StreamWriter;
 
-/// The lifecycle owns both authorization and renewal for durable response writes.
-/// A stream buffer carries this fence, but cannot invent a renewal policy.
+/// Identity fence for request-owned output. Renewal is a separate lifecycle task;
+/// a segment append never writes the request row or extends its lease.
 #[derive(Debug, Clone)]
 pub(crate) struct ExecutionWriteFence {
     pub(crate) request_doc_id: String,
@@ -15,86 +15,12 @@ pub(crate) struct ExecutionWriteFence {
     pub(crate) lease_duration_secs: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExecutionWriteKind {
-    Begin,
-    Progress,
-    Observe,
-}
-
-impl ExecutionWriteFence {
-    pub(crate) async fn execute_response_write(
-        &self,
-        node: &EmbeddedNode,
-        response_mutation: &str,
-        kind: ExecutionWriteKind,
-    ) -> Result<defra_node::QueryResponse> {
-        crate::config_client::ConfigAccess::transact_local_idempotent(
-            node,
-            None,
-            crate::config_client::IdempotentTransactionRetry::Standard,
-            "lifecycle.response_progress",
-            move |txn| Box::pin(async move {
-                    let doc_id = escape_graphql_string(&self.request_doc_id);
-                    let query = format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ request_id lifecycle_state execution_generation execution_lease_expires_at execution_progress_seq }} }}"#);
-                    let result = txn.execute_local_response(&query).await?;
-                    let row = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
-                        .context("execution owner request disappeared")?;
-                    let expiry = row.execution_lease_expires_at.as_deref().context("missing execution expiry")?;
-                    let deadline = DateTime::parse_from_rfc3339(expiry)?.with_timezone(&Utc);
-                    let now = Utc::now();
-                    let new_deadline = (now + chrono::Duration::seconds(self.lease_duration_secs as i64))
-                        .max(deadline + chrono::Duration::milliseconds(1));
-                    let state = row.lifecycle_state.context("missing execution state")?;
-                    let owner = row.execution_generation.as_deref().context("missing execution generation")?;
-                    let response_query = format!(r#"{{ AgentResponse(filter: {{ request_doc_id: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ _docID status content interrupted_at }} }}"#);
-                    let response_result = txn.execute_local_response(&response_query).await?;
-                    let response = crate::graphql::first_row::<ResponseLeaseView>(&response_result, "AgentResponse")?;
-                    let operation = match kind {
-                        ExecutionWriteKind::Begin => super::execution_policy::ExecutionOperation::Begin,
-                        ExecutionWriteKind::Progress => super::execution_policy::ExecutionOperation::Progress { new_deadline: new_deadline.timestamp_millis() },
-                        ExecutionWriteKind::Observe => super::execution_policy::ExecutionOperation::Observe,
-                    };
-                    anyhow::ensure!(super::execution_policy::authorize_live_execution(
-                        super::execution_policy::ExecutionObservation {
-                            request: state, response_streaming: response.as_ref().map(|v| v.status == "streaming"), generation: owner,
-                            deadline: deadline.timestamp_millis(), progress_seq: u64::try_from(row.execution_progress_seq.context("missing execution progress")?)?,
-                        }, &self.execution_generation, now.timestamp_millis(), operation
-                    ), "stale or expired execution generation cannot write response");
-                    let generation = escape_graphql_string(owner);
-                    let expiry = escape_graphql_string(expiry);
-                    let seq = row.execution_progress_seq.unwrap_or(0);
-                    let input = if kind == ExecutionWriteKind::Progress {
-                        format!(r#"execution_lease_expires_at: "{}", execution_progress_seq: {}"#,
-                            new_deadline.to_rfc3339(), seq.checked_add(1).context("execution progress overflow")?)
-                    } else if kind == ExecutionWriteKind::Begin {
-                        format!(r#"lifecycle_state: "{}""#, RequestLifecycleState::Processing)
-                    } else {
-                        format!(r#"execution_generation: "{generation}""#)
-                    };
-                    let mutation = format!(r#"mutation {{ update_AgentRequest(
-                        filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
-                            execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }},
-                            execution_progress_seq: {{ _eq: {seq} }} }}, input: {{ {input} }}
-                    ) {{ _docID }} }}"#);
-                    let result = txn.execute_local_response(&mutation).await?;
-                    anyhow::ensure!(result.data.as_ref().and_then(|v| v.get("update_AgentRequest")).is_some_and(response_has_documents),
-                        "execution generation lost response write");
-                    let result = txn.execute_local_response(response_mutation).await?;
-                    anyhow::ensure!(result.data.as_ref().and_then(|v| v.get("update_AgentResponse").or_else(|| v.get("create_AgentResponse"))).is_some_and(response_has_documents)
-                        || extract_single_doc_id(&result, "create_AgentResponse").is_some(),
-                        "owned response write matched no document");
-                Ok::<_, anyhow::Error>(result)
-            })
-        ).await
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExecutionGeneration(String);
 
 impl Drop for RequestLifecycle {
     fn drop(&mut self) {
+        self.renewal_task.take();
         let Some(lease) = self.execution_lease.as_ref() else {
             return;
         };
@@ -238,23 +164,17 @@ impl RequestLifecycle {
             .context("missing execution expiry")?;
         let deadline = DateTime::parse_from_rfc3339(expiry)?;
         anyhow::ensure!(
-            super::execution_policy::authorize_live_execution(
-                super::execution_policy::ExecutionObservation {
+            super::execution_policy::authorize_producer_decision(
+                super::execution_policy::LeaseObservation {
                     request: row.lifecycle_state.context("missing execution state")?,
-                    response_streaming: Some(true),
                     generation: row
                         .execution_generation
                         .as_deref()
                         .context("missing execution generation")?,
-                    deadline: deadline.timestamp_millis(),
-                    progress_seq: u64::try_from(
-                        row.execution_progress_seq
-                            .context("missing execution progress")?
-                    )?,
+                    deadline_ms: deadline.timestamp_millis(),
                 },
                 self.execution_generation()?,
                 Utc::now().timestamp_millis(),
-                super::execution_policy::ExecutionOperation::Observe,
             ),
             "execution lease expired or ownership was revoked"
         );

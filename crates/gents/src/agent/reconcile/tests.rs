@@ -124,7 +124,7 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
         deadline: None,
         execution_generation: None,
         execution_lease_expires_at: None,
-        execution_progress_seq: 0,
+        execution_lease_secs: None,
         subagent_depth: 1,
         caused_by_parent_request_id: Some("parent-request".to_string()),
         caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),

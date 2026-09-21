@@ -37,6 +37,9 @@ use crate::message::{
 };
 use crate::rendered_request::CaptureScope;
 
+/// Shared closed-source reconstruction; header and live-view owners build on it.
+pub mod reconstruction;
+
 /// What produced a run of content. Its identity is known before the first
 /// byte arrives, so segments never wait on the closing record or message that later
 /// names them.

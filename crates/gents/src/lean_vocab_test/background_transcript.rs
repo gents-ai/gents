@@ -27,19 +27,18 @@ pub(crate) enum LeanR4cBackgroundWorkCase {
         bridge_call_id: String,
         rendered_transcript: String,
     },
-    #[serde(rename = "r4c.read_tool_output.dispatch_by_state")]
-    ReadToolOutputDispatchesByState {
+    #[serde(rename = "r4c.read_tool_output.canonical_source_reconstruction")]
+    ReadToolOutputCanonicalSourceReconstruction {
         tool_call_id: String,
-        running_source: String,
-        running_no_buffer_source: String,
-        terminal_source: String,
-        running_payload: String,
-        running_no_buffer_payload: String,
-        terminal_payload: String,
-        running_next_offset: u64,
-        running_total_bytes: u64,
-        running_has_more: bool,
-        terminal_total_bytes: u64,
+        canonical_source: String,
+        open_payload: String,
+        closed_payload: String,
+        next_offset: u64,
+        total_bytes: u64,
+        has_more: bool,
+        missing_rejected: bool,
+        conflict_rejected: bool,
+        late_suffix_ignored: bool,
     },
     #[serde(rename = "r4c.steer_subagent.append_preserves_lineage")]
     SteerAppendPreservesLineage {
@@ -95,8 +94,8 @@ impl LeanR4cBackgroundWorkCase {
             Self::ReadTranscriptHidesBridgeRows { .. } => {
                 "r4c.read_subagent_transcript.hides_bridge_rows"
             }
-            Self::ReadToolOutputDispatchesByState { .. } => {
-                "r4c.read_tool_output.dispatch_by_state"
+            Self::ReadToolOutputCanonicalSourceReconstruction { .. } => {
+                "r4c.read_tool_output.canonical_source_reconstruction"
             }
             Self::SteerAppendPreservesLineage { .. } => {
                 "r4c.steer_subagent.append_preserves_lineage"

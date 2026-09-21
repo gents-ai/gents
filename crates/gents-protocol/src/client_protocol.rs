@@ -7,6 +7,8 @@
 //!
 //! Implements the request-only projection in `Proofs/Client/Types.lean`.
 
+use std::collections::HashSet;
+
 pub use crate::request_lifecycle::{InvalidRequestLifecycleState, RequestLifecycleState};
 
 /// Client execution indicators, independent of output availability.
@@ -98,6 +100,73 @@ pub fn project_attempt(view: &AttemptView) -> ClientHeadProjection {
     ClientHeadProjection {
         turn_state: derive_attempt(view),
         request_state: view.request.lifecycle_state,
+    }
+}
+
+/// Request-only projection of one persisted attempt.
+///
+/// Two arguments only: the persisted lifecycle state and whether the request is
+/// superseded. Persisted responses carry no execution facts, so there is no
+/// response argument. Returns `None` when the persisted state is not a valid
+/// lifecycle value.
+pub fn derive_persisted_attempt(
+    lifecycle_state: &str,
+    is_superseded: bool,
+) -> Option<ClientTurnState> {
+    project_persisted_attempt(lifecycle_state, is_superseded).map(|view| view.turn_state)
+}
+
+/// Request-only head projection of one persisted attempt.
+///
+/// Same two arguments as [`derive_persisted_attempt`]; see there for why there
+/// is no response argument. Returns `None` when the persisted state is not a
+/// valid lifecycle value.
+pub fn project_persisted_attempt(
+    lifecycle_state: &str,
+    is_superseded: bool,
+) -> Option<ClientHeadProjection> {
+    let lifecycle_state = RequestLifecycleState::parse(lifecycle_state).ok()?;
+    Some(project_attempt(&AttemptView {
+        request: RequestSnapshot {
+            request_id: String::new(),
+            retry_parent_request: None,
+            lifecycle_state,
+            is_superseded,
+        },
+    }))
+}
+
+/// Unordered retry-tip resolution over already-authorized attempts.
+///
+/// The caller supplies the scoped candidate set (agent/session scoping is the
+/// caller's authorization decision, not re-derived here). The turn head is the
+/// exactly one candidate that no other candidate references as its retry
+/// parent. Duplicate request IDs and zero or multiple tips return `None`.
+/// Closed cycles have no tip; this is not complete graph validation.
+pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
+    let mut seen = HashSet::new();
+    for attempt in attempts {
+        if !seen.insert(attempt.request.request_id.as_str()) {
+            return None;
+        }
+    }
+
+    // Candidate tips are exactly the attempts whose ID is not named as a retry
+    // parent by another attempt (Proofs/Client/Types.lean `retryTips`).
+    let parents: HashSet<_> = attempts
+        .iter()
+        .filter_map(|attempt| attempt.request.retry_parent_request.as_deref())
+        .collect();
+    let mut tips = attempts
+        .iter()
+        .filter(|attempt| !parents.contains(attempt.request.request_id.as_str()));
+
+    // Exactly one tip, or fail closed: zero tips (including a closed cycle,
+    // where every member is referenced as a parent) and multiple-tip ambiguity
+    // are both rejected. This is a projection, not complete graph validation.
+    match (tips.next(), tips.next()) {
+        (Some(tip), None) => Some(derive_attempt(tip)),
+        _ => None,
     }
 }
 

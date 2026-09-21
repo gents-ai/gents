@@ -297,8 +297,8 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         created_at: "2026-03-12T00:00:00Z".into(),
         deadline: None,
         execution_generation: None,
+        execution_lease_secs: None,
         execution_lease_expires_at: None,
-        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -903,4 +903,44 @@ fn canonical_request_conversion_rejects_negative_or_overflowing_depth() {
             .expect_err("invalid schema-width conversion must fail");
         assert!(error.to_string().contains("subagent_depth"), "{error:#}");
     }
+}
+
+fn canonical_request_row_with_lease_secs(
+    lease_secs: Option<i64>,
+) -> gents_protocol::row::AgentRequestRow {
+    gents_protocol::row::AgentRequestRow {
+        doc_id: Some("doc-lease".to_string()),
+        request_id: "req-lease".to_string(),
+        agent_did: Some("did:key:z-lease".to_string()),
+        session_id: Some("session-lease".to_string()),
+        behavior_id: Some("behavior".to_string()),
+        content: Some("lease test".to_string()),
+        created_at: Some("2026-09-04T00:00:00Z".to_string()),
+        execution_lease_secs: lease_secs,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn canonical_request_conversion_preserves_explicit_lease_duration() {
+    let request = AgentRequest::try_from(canonical_request_row_with_lease_secs(Some(300)))
+        .expect("explicit lease duration must convert");
+    assert_eq!(request.execution_lease_secs, Some(300));
+}
+
+#[test]
+fn canonical_request_conversion_accepts_absent_lease_duration() {
+    let request = AgentRequest::try_from(canonical_request_row_with_lease_secs(None))
+        .expect("absent lease duration must convert");
+    assert_eq!(request.execution_lease_secs, None);
+}
+
+#[test]
+fn canonical_request_conversion_rejects_negative_lease_duration() {
+    let error = AgentRequest::try_from(canonical_request_row_with_lease_secs(Some(-1)))
+        .expect_err("negative lease duration must fail");
+    assert!(
+        error.to_string().contains("execution_lease_secs"),
+        "{error:#}"
+    );
 }

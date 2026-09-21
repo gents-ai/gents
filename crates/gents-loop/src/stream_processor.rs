@@ -140,7 +140,7 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
                         "persist in-flight assistant tool-call turn",
                     )?;
                     if advanced {
-                        self.lifecycle.advance().await?;
+                        self.lifecycle.validate_owned_execution().await?;
                     }
                 }
                 Ok(StreamAction::Continue)
@@ -175,7 +175,7 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
                     "persist streamed tool result",
                 )?;
                 if advanced {
-                    self.lifecycle.advance().await?;
+                    self.lifecycle.validate_owned_execution().await?;
                 }
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
@@ -185,7 +185,7 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
                 let _ = self.stream_writer.flush_pending(self.doc_id).await?;
                 if let Some(message) = self.assistant_turn.take_message() {
                     let sequence = self.persistence_hook.persist_message(&message).await?;
-                    self.lifecycle.advance().await?;
+                    self.lifecycle.validate_owned_execution().await?;
                     self.persistence_hook.apply_persistence_policy(
                         self.persistence_hook
                             .mark_current_response_materialized(sequence)

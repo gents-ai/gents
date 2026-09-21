@@ -382,7 +382,7 @@ fn wake_agent_request(
         deadline: None,
         execution_generation: None,
         execution_lease_expires_at: None,
-        execution_progress_seq: 0,
+        execution_lease_secs: None,
         subagent_depth: 0,
         caused_by_parent_request_id: Some(parent.request_id.clone()),
         caused_by_parent_request_doc_id: Some(parent.doc_id.clone()),

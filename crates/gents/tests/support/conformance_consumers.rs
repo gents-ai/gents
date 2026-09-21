@@ -462,20 +462,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_session_hydration_apply_cases_match_terminal_delivery_core",
         },
         ConformanceConsumer::RustTest {
-            id: "conformance::session_hydration::generated_session_hydration_progress_cases_match_observe",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance/session_hydration.rs",
-            module_path: "conformance::session_hydration",
-            function: "generated_session_hydration_progress_cases_match_observe",
-        },
-        ConformanceConsumer::RustTest {
-            id: "conformance::session_hydration::generated_session_hydration_durable_cases_match_storage_projection",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance/session_hydration.rs",
-            module_path: "conformance::session_hydration",
-            function: "generated_session_hydration_durable_cases_match_storage_projection",
-        },
-        ConformanceConsumer::RustTest {
             id: "conformance::enrollment::generated_enrollment_cases_match_production_transition_core",
             package: "gents",
             source_path: "crates/gents/tests/conformance/enrollment.rs",
@@ -537,13 +523,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance.rs",
             module_path: "conformance",
             function: "generated_self_config_cases_fence_patch_merge",
-        },
-        ConformanceConsumer::RustTest {
-            id: "conformance::completion_retry_lean_witness_cases_hold",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance.rs",
-            module_path: "conformance",
-            function: "completion_retry_lean_witness_cases_hold",
         },
         ConformanceConsumer::RustTest {
             id: "cli_mcp_probe::mcp_probe_json_reports_health_snapshot_for_registry_service",
@@ -805,13 +784,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_restart_disposition_cases_drive_recover_all",
         },
         ConformanceConsumer::RustTest {
-            id: "conformance::generated_read_tool_output_witness_drives_hook_dispatch",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance.rs",
-            module_path: "conformance",
-            function: "generated_read_tool_output_witness_drives_hook_dispatch",
-        },
-        ConformanceConsumer::RustTest {
             id: "background_tools::tests::generated_tool_output_paging_cases_match_slice_function",
             package: "gents",
             source_path: "crates/gents/src/background_tools.rs",
@@ -915,13 +887,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance.rs",
             module_path: "conformance",
             function: "generated_transcript_cases_drive_agent_message_ordering_contract",
-        },
-        ConformanceConsumer::RustTest {
-            id: "conformance::generated_compaction_reducer_cases_pin_contract",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance.rs",
-            module_path: "conformance",
-            function: "generated_compaction_reducer_cases_pin_contract",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::prompt_assembly::generated_sanitize_cases_drive_the_production_sanitizer",
