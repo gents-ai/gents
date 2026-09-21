@@ -35,8 +35,8 @@ type EvalDefinition @branchable
     subject: JSON
     fixtures: JSON
     cases: JSON
-    tags: [String]
     updated_at: String
+    tags: [String]
 }
 ```
 
