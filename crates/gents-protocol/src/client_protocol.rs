@@ -5,9 +5,7 @@
 //! dependencies do not demote a terminal request, and visible bytes do not complete
 //! an active one. `Running` does not assert that bytes are currently arriving.
 //!
-//! The response-aware projection is retired. Update `Proofs/Client.lean`, then
-//! generated conformance, before implementing the request-only projection here.
-//! See `contracts/canonical-output.md` for the target mapping and deletion owners.
+//! Implements the request-only projection in `Proofs/Client/Types.lean`.
 
 pub use crate::request_lifecycle::{InvalidRequestLifecycleState, RequestLifecycleState};
 
@@ -81,7 +79,27 @@ impl ClientHeadProjection {
     }
 }
 
-// Existing cases remain as handoff evidence; migrate after Client.lean, not by
-// restoring ResponseStatus or adapting the old response-precedence table.
+pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
+    use RequestLifecycleState as Request;
+    if view.request.is_superseded {
+        return ClientTurnState::Superseded;
+    }
+    match view.request.lifecycle_state {
+        Request::WorkspaceBindingPending | Request::Pending => ClientTurnState::WaitingForClaim,
+        Request::Claimed | Request::Processing | Request::InputRequired => ClientTurnState::Running,
+        Request::Completed => ClientTurnState::Completed,
+        Request::Failed | Request::Dead => ClientTurnState::Failed,
+        Request::Superseded => ClientTurnState::Superseded,
+        Request::Interrupted => ClientTurnState::Interrupted,
+    }
+}
+
+pub fn project_attempt(view: &AttemptView) -> ClientHeadProjection {
+    ClientHeadProjection {
+        turn_state: derive_attempt(view),
+        request_state: view.request.lifecycle_state,
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
+mod canonical_rows;
 mod compaction_entries;
 mod control;
 mod fork;

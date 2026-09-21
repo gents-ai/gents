@@ -5,12 +5,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client_protocol::{
-    project_attempt, AttemptView, ClientHeadProjection, ClientTurnState, RequestLifecycleState,
-    RequestSnapshot, ResponseSnapshot, ResponseStatus,
+    project_attempt, AttemptView, ClientHeadProjection, ClientTurnState, RequestSnapshot,
 };
-use crate::row::{
-    AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentToolCallRow, AgentToolResultRow,
-};
+use crate::output::TranscriptMessage;
+use crate::row::{AgentRequestRow, AgentToolCallRow};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphqlSubmittedRequest {
@@ -21,7 +19,6 @@ pub struct GraphqlSubmittedRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphqlTurnState {
     pub request: Option<AgentRequestRow>,
-    pub response: Option<AgentResponseRow>,
 }
 
 impl GraphqlTurnState {
@@ -31,17 +28,6 @@ impl GraphqlTurnState {
 
     pub fn derived_turn_state(&self) -> Option<ClientTurnState> {
         self.projected_head().map(|head| head.turn_state)
-    }
-
-    pub fn response_is_durably_complete(&self) -> bool {
-        self.request.as_ref().is_some_and(|request| {
-            matches!(
-                request.lifecycle_state,
-                Some(RequestLifecycleState::Completed | RequestLifecycleState::Superseded)
-            )
-        }) && self.response.as_ref().is_some_and(|response| {
-            matches!(response.status.as_deref(), Some("complete" | "completed"))
-        })
     }
 
     pub fn successor_request_id(&self) -> Option<String> {
@@ -64,11 +50,6 @@ impl GraphqlTurnState {
                 is_superseded: clean_optional_string(request.superseded_by_request.as_deref())
                     .is_some(),
             },
-            response: self
-                .response
-                .as_ref()
-                .and_then(graphql_response_status)
-                .map(|status| ResponseSnapshot { status }),
         })
     }
 }
@@ -79,10 +60,9 @@ pub struct GraphqlSessionShape {
     pub request_id: String,
     pub turn_state: Option<String>,
     pub request: Option<AgentRequestRow>,
-    pub response: Option<AgentResponseRow>,
-    pub messages: Vec<AgentMessageRow>,
+    /// Headers only. Payload readiness is resolved separately by reconstruction.
+    pub messages: Vec<TranscriptMessage>,
     pub tool_calls: Vec<AgentToolCallRow>,
-    pub tool_results: Vec<AgentToolResultRow>,
 }
 
 /// Adapt whole-object mutation variables to the pinned DefraDB parser, which
@@ -865,16 +845,6 @@ pub fn turn_state_query(request_id: &str) -> String {
                 interrupt_requested_at
                 valid_until
             }}
-            AgentResponse(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
-                response_key
-                request_id
-                status
-                content
-                error_message
-                materialized_message_sequence
-                materialized_at
-                interrupted_at
-            }}
         }}"#
     )
 }
@@ -885,11 +855,17 @@ pub fn session_shape_query(session_id: &str) -> String {
         r#"{{
             AgentMessage(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ sequence: ASC }}) {{
                 message_key
+                session_id
+                agent_did
+                requester_did
+                request_doc_id
+                publication
+                outcome
                 sequence
                 role
-                content
-                reasoning
-                timestamp
+                native_id
+                blocks
+                created_at
             }}
             AgentToolCall(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ message_sequence: ASC }}) {{
                 tool_call_key
@@ -901,8 +877,6 @@ pub fn session_shape_query(session_id: &str) -> String {
                 lifecycle_state
                 child_request_id
                 await_mode
-                args
-                result
                 deadline_at
                 selected_service_id
                 selected_tool_name
@@ -917,18 +891,6 @@ pub fn session_shape_query(session_id: &str) -> String {
                 policy_network
                 cancel_cause
                 latency_ms
-            }}
-            AgentToolResult(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ created_at: ASC }}) {{
-                agent_did
-                session_id
-                tool_name
-                tool_input
-                output_text
-                truncated
-                truncation_metadata
-                conversation_doc_id
-                created_at
-                discarded_because_interrupted
             }}
         }}"#
     )
@@ -948,15 +910,7 @@ pub fn parse_turn_state_response(
         .cloned()
         .map(serde_json::from_value)
         .transpose()?;
-    let response = data
-        .get("AgentResponse")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()?;
-
-    Ok(GraphqlTurnState { request, response })
+    Ok(GraphqlTurnState { request })
 }
 
 pub fn parse_session_shape_response(
@@ -981,12 +935,6 @@ pub fn parse_session_shape_response(
         .map(serde_json::from_value)
         .transpose()?
         .unwrap_or_default();
-    let tool_results = data
-        .get("AgentToolResult")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()?
-        .unwrap_or_default();
 
     Ok(GraphqlSessionShape {
         session_id: session_id.to_string(),
@@ -995,15 +943,9 @@ pub fn parse_session_shape_response(
             .derived_turn_state()
             .map(|state| format!("{state:?}")),
         request: turn_state.request,
-        response: turn_state.response,
         messages,
         tool_calls,
-        tool_results,
     })
-}
-
-fn graphql_response_status(row: &AgentResponseRow) -> Option<ResponseStatus> {
-    ResponseStatus::try_from(row.status.as_deref().unwrap_or_default()).ok()
 }
 
 #[cfg(feature = "native")]
@@ -1107,20 +1049,13 @@ mod tests {
                     "retry_parent_request": "",
                     "superseded_by_request": "",
                     "lifecycle_state": "completed"
-                }],
-                "AgentResponse": [{
-                    "response_key": "resp-1",
-                    "request_id": "req-1",
-                    "status": "complete",
-                    "content": "hello",
-                    "error_message": ""
                 }]
             }
         });
 
         let state = parse_turn_state_response(&value).expect("parse turn state");
         assert_eq!(state.derived_turn_state(), Some(ClientTurnState::Completed));
-        assert!(state.response_is_durably_complete());
+        assert!(state.projected_head().unwrap().is_terminal());
     }
 
     #[test]
@@ -1156,7 +1091,7 @@ mod tests {
         assert!(turn_query.contains("failure_reason"));
         assert!(turn_query.contains("interrupt_requested_at"));
         assert!(turn_query.contains("valid_until"));
-        assert!(turn_query.contains("interrupted_at"));
+        assert!(!turn_query.contains("AgentResponse"));
 
         let session_query = session_shape_query("session-1");
         assert!(session_query.contains("selected_service_id"));
@@ -1164,7 +1099,9 @@ mod tests {
         assert!(session_query.contains("tool_failure_class"));
         assert!(session_query.contains("cancel_cause"));
         assert!(session_query.contains("latency_ms"));
-        assert!(session_query.contains("discarded_because_interrupted"));
+        assert!(session_query.contains("publication"));
+        assert!(session_query.contains("blocks"));
+        assert!(!session_query.contains("AgentToolResult"));
     }
 
     #[test]
