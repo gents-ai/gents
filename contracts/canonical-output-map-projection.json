@@ -83,7 +83,9 @@
         "Advance the compaction cursor only across a provider-stable published prefix below the shared sequence allocator.",
         "Show provider-view fixpoint and prefix stability under later canonical publication, including forked headers and background notification pairs.",
         "Replace LeanCompactionReducerCase.response_status with the modeled publication_ready, provider_fixpoint, and turn_boundary checks instead of restoring response lifecycle state.",
-        "Replace the response-status gate only after its surviving published-prefix guarantee is exercised on concrete native inputs."
+        "Replace the response-status gate only after its surviving published-prefix guarantee is exercised on concrete native inputs.",
+        "MODEL GAP, owned by the Lean layer: compose reconstructed native messages through the existing provider_input complete-body projection/estimation owner into Compaction.ReductionEngine.decideThreshold. That threshold currently takes inputTokens as a free number and Execution/Compaction.lean carries no estimate provenance. Payload presentation fixtures do not establish provider sizing, overflow boundaries or reduction decisions. The real serialized-request experiment is tracked separately by native.external-projected-request-threshold in the implementation layer.",
+        "Still summary-only: the reducer and cursor cases. Their concrete row inputs must be exported before the response-status gate is replaced."
       ],
       "retired_bindings": [
         "compaction::ResponseStatus",
@@ -94,6 +96,25 @@
         "LeanCompactionReducerCase.response_status"
       ],
       "constructors": []
+    },
+    {
+      "id": "projection-payload-presentation",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.PayloadPresentationContracts.payloadLengths" },
+        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.PayloadPresentationContracts.cases" }
+      ],
+      "constructors": [],
+      "generated_groups": ["canonical_payload_presentation_cases"],
+      "fixture_status": "concrete_inputs",
+      "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "Compare stored and reconstructed payload lengths for full presentation, literals, head/tail windows and missing dependencies.",
+        "This group covers reconstruction only: payload counts exclude metadata, URLs, escaping and request structure and do not establish provider sizing or a compaction decision.",
+        "The actual serialized-request estimate/threshold join is tracked separately by native.external-projected-request-threshold."
+      ],
+      "retired_bindings": []
     },
     {
       "id": "projection-live-prefix-observation-order",

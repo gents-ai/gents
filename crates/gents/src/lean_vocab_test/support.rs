@@ -178,6 +178,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
+    pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub(crate) compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
@@ -818,6 +819,8 @@ mod background_transcript;
 mod canonical_execution;
 #[path = "canonical_output.rs"]
 mod canonical_output;
+#[path = "canonical_presentation.rs"]
+mod canonical_presentation;
 #[path = "client_session.rs"]
 mod client_session;
 #[path = "codex_shim.rs"]
@@ -856,6 +859,7 @@ mod triggers_runtime_apply;
 pub(crate) use background_transcript::*;
 pub(crate) use canonical_execution::*;
 pub(crate) use canonical_output::*;
+pub(crate) use canonical_presentation::*;
 pub(crate) use client_session::*;
 pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
@@ -1342,6 +1346,11 @@ pub(crate) fn lean_canonical_output_projection_cases(
 
 pub(crate) fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalExecutionCase] {
     &lean_contract_snapshot().canonical_execution_gate_cases
+}
+
+pub(crate) fn lean_canonical_payload_presentation_cases() -> &'static [LeanPayloadPresentationCase]
+{
+    &lean_contract_snapshot().canonical_payload_presentation_cases
 }
 
 pub(crate) fn lean_compaction_reducer_cases() -> &'static [LeanCompactionReducerCase] {

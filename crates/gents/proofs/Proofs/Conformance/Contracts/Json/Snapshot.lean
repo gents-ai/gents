@@ -54,6 +54,7 @@ import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.Contracts.Json.ExecutionGate
+import Proofs.Conformance.Contracts.Json.PayloadPresentation
 
 namespace Conformance.Contracts
 
@@ -100,6 +101,8 @@ def snapshotJson : String :=
       ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
+    ++ "\"canonical_payload_presentation_cases\":"
+      ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
     ++ "\"inference_registry_cases\":"
       ++ Conformance.InferenceRegistry.casesJson ++ ","
     ++ "\"process_transition_cases\":"

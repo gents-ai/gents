@@ -103,6 +103,37 @@
       ]
     },
     {
+      "id": "native.external-projected-request-threshold",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.decideThreshold" }
+      ],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents/src/provider_input.rs",
+        "crates/gents/src/provider_input/budget.rs",
+        "crates/gents/src/compaction.rs",
+        "crates/gents/src/agent/daemon/request.rs",
+        "crates/gents/src/agent/loop_stream/request_assembly.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/provider_input/tests.rs",
+        "crates/gents/src/compaction/tests.rs",
+        "crates/gents/tests/conformance/compaction_gate.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "IMPLEMENTATION-LAYER EXPERIMENT: reconstruct authorized canonical messages, build the real CompletionRequest through its existing owner, and project/serialize it through the configured ProviderInputCounter. Do not recreate provider serialization in a fixture or substitute payload-length sums.",
+        "Observe the real projected body and the estimate passed to ReductionAdmission::for_input. Include metadata, escaping, tool schemas and framing; respect the existing exclusion of output-limit fields and the configured effective-budget calculation.",
+        "Construct and measure complete requests at effective budget and one estimated token above it. Assert equality is NotNeeded and only a strictly greater estimate is reduction-eligible. Raw payload byte counts cannot stand in for these measured boundaries.",
+        "Exercise literal-expanded and head/tail presentations and missing dependencies; incomplete reconstruction must not become a smaller dispatchable request.",
+        "After reduction, rebuild and reproject the complete request and reject dispatch if its new estimate still exceeds the effective budget.",
+        "The existing Lean threshold rule covers supplied numbers only. Estimate provenance through reconstruction and provider projection remains an unmodeled composition obligation; this pending native experiment and the payload fixtures do not close it."
+      ],
+      "retired_bindings": []
+    },
+    {
       "id": "native.external-atomic-commit-and-replay",
       "model_symbols": [],
       "constructors": [],

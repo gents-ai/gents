@@ -75,6 +75,28 @@ pub(crate) struct LeanCanonicalToolAdmission {
     pub(crate) child_request_id: Option<u64>,
 }
 
+/// A background tool spawned by an already running parent tool. It shares the
+/// lifecycle context fields of [`LeanCanonicalToolAdmission`] and additionally
+/// names the physical parent tool document that owns it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCanonicalSpawnedToolAdmission {
+    pub(crate) document: u64,
+    pub(crate) parent_tool_document: u64,
+    pub(crate) call_id: u64,
+    pub(crate) request_id: u64,
+    pub(crate) state: String,
+    pub(crate) operation: String,
+    pub(crate) deadline: u64,
+    pub(crate) started_at: Option<u64>,
+    pub(crate) current_time: u64,
+    pub(crate) failure_class: Option<String>,
+    pub(crate) persistence: String,
+    pub(crate) await_mode: String,
+    pub(crate) cancel_policy: String,
+    pub(crate) child_request_id: Option<u64>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum LeanCanonicalExecutionOperation {
@@ -133,6 +155,85 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         deadline: u64,
         items: Vec<LeanCanonicalRecoveryItem>,
     },
+    /// Explicit due-only deadline CAS. Output and dispatch never extend the lease.
+    RenewLease {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        expected_deadline: u64,
+    },
+    /// Guarded raw output insert. It checks the live lease but never updates it.
+    AppendOutput {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        record: LeanCanonicalSegment,
+    },
+    /// The same guarded insert attempted by a same-task holder whose sibling
+    /// awaits the gate. The holder is unpollable, so nothing may commit.
+    AppendOutputWhileSiblingWaits {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        record: LeanCanonicalSegment,
+    },
+    /// Accepted provider turn with caller-supplied closure, header and admissions.
+    AcceptTurn {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        closing: LeanCanonicalSegment,
+        message: LeanCanonicalMessage<LeanPayloadSpec>,
+        targets: Vec<LeanCanonicalRemoteTarget>,
+        admissions: Vec<LeanCanonicalToolAdmission>,
+    },
+    BackgroundTool {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        document: u64,
+        action: String,
+    },
+    PublishBackgroundReceipt {
+        actor: u64,
+        now: u64,
+        parent_document: u64,
+        closing: LeanCanonicalSegment,
+        message: LeanCanonicalMessage<LeanPayloadSpec>,
+    },
+    AdmitSpawnedBackground {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        admission: LeanCanonicalSpawnedToolAdmission,
+    },
+    PublishAuthored {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        closing: LeanCanonicalSegment,
+        message: LeanCanonicalMessage<LeanPayloadSpec>,
+    },
+    /// Advance the compaction watermark across a provider-stable published prefix.
+    AdvanceCompactionCursor { actor: u64, now: u64, cursor: u64 },
+    /// Integrity revocation: terminate conflicted work without reconstructing it
+    /// and without discarding either conflicting fact.
+    RevokeCorrupt {
+        actor: u64,
+        now: u64,
+        expected_generation: u64,
+        fresh_generation: u64,
+        outcome: String,
+        selection: LeanTerminalSelection,
+    },
+    /// A distinct immutable fact arriving by replication. It bypasses the local
+    /// mutation gate, so the native fixture must insert it as a remote merge and
+    /// never route it through the execution owner.
+    DeliverReplicatedSegment {
+        actor: u64,
+        now: u64,
+        record: LeanCanonicalSegment,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,7 +252,18 @@ impl LeanCanonicalExecutionOperation {
             | Self::CloseForegroundTool { actor, now, .. }
             | Self::DeliverForegroundResult { actor, now, .. }
             | Self::TerminalizeCompleted { actor, now, .. }
-            | Self::RecoverExpiredGeneration { actor, now, .. } => (*actor, *now),
+            | Self::RecoverExpiredGeneration { actor, now, .. }
+            | Self::RenewLease { actor, now, .. }
+            | Self::AppendOutput { actor, now, .. }
+            | Self::AppendOutputWhileSiblingWaits { actor, now, .. }
+            | Self::AcceptTurn { actor, now, .. }
+            | Self::BackgroundTool { actor, now, .. }
+            | Self::PublishBackgroundReceipt { actor, now, .. }
+            | Self::AdmitSpawnedBackground { actor, now, .. }
+            | Self::PublishAuthored { actor, now, .. }
+            | Self::AdvanceCompactionCursor { actor, now, .. }
+            | Self::RevokeCorrupt { actor, now, .. }
+            | Self::DeliverReplicatedSegment { actor, now, .. } => (*actor, *now),
         }
     }
 }
@@ -166,11 +278,48 @@ pub(crate) struct LeanCanonicalExecutionObservation {
     pub(crate) tool_stuck_since: Option<u64>,
     pub(crate) tool_cancel_intent_at: Option<u64>,
     pub(crate) in_flight: bool,
-    pub(crate) message_count: usize,
     pub(crate) next_sequence: u64,
     pub(crate) accepted_sequence: Option<u64>,
     pub(crate) physical_tool_request: Option<u64>,
     pub(crate) lease_deadline: Option<u64>,
+    pub(crate) compaction_cursor: Option<u64>,
+    /// Exact durable rows. Fixture output is deterministically ordered, while
+    /// harness comparison treats native rows as multisets with multiplicity.
+    pub(crate) segments: Vec<LeanCanonicalSegment>,
+    pub(crate) messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
+}
+
+fn exact_multiset_eq<T: PartialEq>(left: &[T], right: &[T]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut matched = vec![false; right.len()];
+    left.iter().all(|item| {
+        let Some(index) = right
+            .iter()
+            .enumerate()
+            .position(|(index, candidate)| !matched[index] && item == candidate)
+        else {
+            return false;
+        };
+        matched[index] = true;
+        true
+    })
+}
+
+fn observations_match(
+    actual: &LeanCanonicalExecutionObservation,
+    expected: &LeanCanonicalExecutionObservation,
+) -> bool {
+    if !exact_multiset_eq(&actual.segments, &expected.segments)
+        || !exact_multiset_eq(&actual.messages, &expected.messages)
+    {
+        return false;
+    }
+    let mut normalized = actual.clone();
+    normalized.segments.clone_from(&expected.segments);
+    normalized.messages.clone_from(&expected.messages);
+    &normalized == expected
 }
 
 /// Asynchronous boundary for a stateful native execution fixture. The adapter
@@ -232,7 +381,7 @@ where
             .apply(&mut native, *query_document, action)
             .await
             .map_err(|error| format!("{name} step {index}: native adapter failed: {error}"))?;
-        if &actual != expected {
+        if !observations_match(&actual, expected) {
             return Err(format!(
                 "{name} step {index} ({:?}): expected {expected:?}, got {actual:?}",
                 action
@@ -240,4 +389,16 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exact_multiset_eq;
+
+    #[test]
+    fn exact_multiset_comparison_is_order_independent_and_multiplicity_sensitive() {
+        assert!(exact_multiset_eq(&[1, 2, 1], &[2, 1, 1]));
+        assert!(!exact_multiset_eq(&[1, 2], &[1, 3]));
+        assert!(!exact_multiset_eq(&[1, 1], &[1, 2]));
+    }
 }

@@ -37,10 +37,79 @@ cases exercise their critical boundaries but do not prove those properties of
 Rust. Native observations must include durable rows and ownership/accounting,
 not just a successful return code.
 
+## Exported execution scripts
+
+`canonical_execution_gate_cases` carries sixteen native scripts beside its
+summary witnesses. Every expectation is computed by folding the inputs through
+the modeled gate (`acquire`, `commit`, release through the scheduling owner) and
+projecting the resulting world; none is a literal.
+
+| Family | Scripts |
+| --- | --- |
+| Tool seam | pending remote recovery cancels before dispatch; running recovery records handoff; completion rejected while a foreground tool runs; close, deliver, then complete |
+| Lease ordering | renewal wins before recovery; output does not renew; stale writer loses after recovery; dispatched tool wait renews explicitly |
+| Publication and tools | a short Complete closure cannot truncate committed flushes; a background tool closes after its parent is terminal; spawned admission replays inertly and rejects a conflicting child |
+| Integrity | a distinct replicated twin, then revocation with a pending tool and with a running tool |
+| Compaction join | cursor eligibility; a late foreground result rejected after a background receipt |
+| Scheduling | a suspended same-task holder publishes nothing |
+
+A script step is either a gate commit or `deliver_replicated_segment`. The second
+models a remote merge: it bypasses the local mutation gate, so a native fixture
+must insert it as a replicated fact and never route it through the execution
+owner. A holder whose commit was rejected is still in the storage phase and
+observes `storageReturned` before it can release. Rejection is not an unlock.
+
+Observations carry full `segments` and `messages`, plus `compaction_cursor`, tool
+and lease fields; there are no parallel row counters. Adapters normalize physical identities
+back to fixture symbols. The exporter sorts by symbolic ID and canonical JSON;
+the native harness compares full facts independent of arrival order, preserving
+twins and duplicate multiplicity. Equal counts alone do
+not establish preservation: a rejected or inert write must leave the exact
+observed immutable facts unchanged.
+
+Two summaries deliberately remain summaries. `foreign_request_same_generation_unchanged`
+needs a nonempty seed, which the empty-seed contract forbids. The wake-publication
+half of `explicit_background_parent_terminal_late_delivery` belongs to the
+background continuation owner rather than a gate operation.
+
+## Payload presentation before provider-input sizing
+
+`canonical_payload_presentation_cases` measures only reconstructed payload fields.
+Headers select presentations of stored streams, and neither payload length
+bounds the other:
+
+| Case | Stored payload bytes | Presented payload bytes |
+| --- | --- | --- |
+| Full presentation | 3 | 3 |
+| Inline literals around a range | 1 | 3 |
+| Head and tail window with a marker | 10 | 7 |
+| Missing dependency | no measurement | no measurement |
+
+These numbers are **not** provider request sizes or token estimates. They exclude
+inline metadata, URLs, escaping, request structure and tool schemas. The adapter
+observes payload lengths at the native reconstruction boundary; it must not bind
+this assertion to the output or input size of `provider_input::estimate_request`.
+Missing dependencies yield no measurement, not a smaller fallback.
+
+The existing `provider_input` owner projects complete native messages into the
+provider-specific body and estimates its serialized JSON. Keep that owner:
+reconstructed message → provider request projection → request estimate →
+compaction threshold. The Lean layer does not yet compose that chain:
+`Compaction.ReductionEngine.decideThreshold` takes `inputTokens` as a free number and the canonical
+compaction join carries no estimate provenance. A future Lean composition must
+track that provenance; an honest end-to-end test must also execute the real
+native projection owner in the implementation layer. Neither is supplied by
+payload-length fixtures. The concrete native experiment is tracked separately as
+`native.external-projected-request-threshold`, with `not_exported`/`pending`
+status. The reducer/cursor row fixtures remain `summary_only`; payload fixtures
+have their own reconstruction-only map entry. No tokenizer or reduction decision
+is modeled by this fixture group.
+
 ## External premises to test
 
 | Premise / owner | Required native experiment and observation |
 | --- | --- |
+| Provider request projection and compaction admission | Reconstruct messages, build the real `CompletionRequest`, and project/serialize it through the configured `ProviderInputCounter`. Observe the actual request estimate passed to `ReductionAdmission::for_input`, including metadata, schemas, framing and escaping rather than a payload sum. Construct measured requests at the effective budget and one estimated token above it: equality does not trigger reduction; strictly greater does. Reproject after reduction and reject dispatch if still over budget. This is implementation-layer work, not an exported Lean input-size fixture. |
 | DefraDB transaction adapter | Fail each write in closure/header/tool-intent publication and recovery generation-swap/accounting batches; observe all-or-none committed facts. Lose the commit acknowledgement and replay exact identities without duplicate dispatch or terminal effects. |
 | Mutation write gate | Race renewal, recovery, publication and dispatch through the existing per-node gate; observe the serial winner and unchanged loser. Probe a second process and remote merge separately: the model excludes their serialization, so their results must not be presented as a proved mutex guarantee. Conflicting facts must remain diagnosable and revocable. |
 | Clock and independent renewal owner | Block provider/tool reads while the timer renews on bounded cadence; reject early, stale-deadline and expired renewals. Suspend past expiry and resume: the old owner cannot publish or dispatch. Exercise forward/backward clock changes and document the native clock mapping; Lean uses abstract nondecreasing time, not a wall-clock guarantee. |
@@ -113,6 +182,22 @@ python3 .github/scripts/test-canonical-output-map.py
 # After lake build:
 python3 .github/scripts/check-canonical-output-map.py --check-export
 ```
+
+The foundation is red, so these new Rust decoders have not been compiled or run
+here. A temporary structural lint checks a deliberately limited subset of their
+declarations against generated JSON. It is not Rust parsing or Serde execution;
+passing it does not establish that the actual decoders accept the contract:
+
+```sh
+python3 .github/scripts/test-lean-rust-decoders.py
+# After lake build:
+python3 .github/scripts/check-lean-rust-decoders.py
+```
+
+Unsupported attributes/layouts in reachable types must fail closed. Types
+re-exported from `gents-protocol` are presence-only observations, not validated
+decoders. Retire this lint when actual decoder tests can run; do not expand it
+into another implementation of Serde.
 
 This is an inventory check, not a proof of adapter fidelity or a claim that every
 Lean declaration has a native test. Cross-owner requirements and external premises

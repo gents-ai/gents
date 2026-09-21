@@ -1,4 +1,5 @@
 import Proofs.CanonicalOutput.Execution.GateCases
+import Proofs.CanonicalOutput.Execution.CompactionCases
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.RequestExecutionLease
@@ -23,23 +24,75 @@ inductive Input where
   | deliverForeground
   | terminalizeCompleted
   | recover (actor : Nat) (now fresh deadline : Nat)
+  | renew (now expectedDeadline : Nat)
+  | appendRaw (actor now : Nat) (record : Segment)
+  | recoverItems (actor now fresh deadline : Nat) (items : List RecoveryItem)
+  | acceptTurn (closing : Segment) (message : MessageEnvelope)
+      (admissions : List ToolAdmission)
+  | dispatchCall (now call : Nat)
+  | backgroundTool
+  | backgroundReceipt
+  | admitSpawned (admission : SpawnedToolAdmission)
+  | publishAuthored (closing : Segment) (message : MessageEnvelope)
+  | compact (cursor : Nat)
+  | deliverResult (sequence : Nat)
+  | appendWhileSiblingWaits (record : Segment)
+  | revokeDead (actor now fresh : Nat)
+  /-- A distinct immutable fact arriving by replication. It bypasses the local
+  gate exactly as the contract says a remote merge does, so it is not an
+  `Operation` and cannot be rejected by the execution owner. -/
+  | replicate (record : Segment)
 
-def Input.operation : Input → Operation
-  | .acceptForeground => .accept 7 providerTurn providerMessage [] [foregroundAdmission]
-  | .acceptRemote => .accept 7 providerTurn providerMessage [remote] [remoteAdmission]
-  | .dispatch _ => .dispatch 7 permit
-  | .closeForeground => .toolClose 600 (.native .complete) toolOutputClose
-  | .deliverForeground => .toolDeliver 600 (foregroundResultMessage 1)
-  | .terminalizeCompleted => .terminalize 7 .completed (.message 501)
-  | .recover _ _ fresh deadline => .recover 7 fresh 5 deadline []
+/-- What one script step does to the modeled world. -/
+inductive Step where
+  | commit (operation : Operation)
+  /-- Same-task acquisition whose sibling then awaits the gate: the only poller
+  of the holder is suspended, so the write cannot commit. -/
+  | commitWhileSiblingWaits (operation : Operation)
+  | replicate (record : Segment)
+
+def Input.step : Input → Step
+  | .acceptForeground =>
+      .commit (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
+  | .acceptRemote =>
+      .commit (.accept 7 providerTurn providerMessage [remote] [remoteAdmission])
+  | .dispatch _ => .commit (.dispatch 7 permit)
+  | .closeForeground => .commit (.toolClose 600 (.native .complete) toolOutputClose)
+  | .deliverForeground => .commit (.toolDeliver 600 (foregroundResultMessage 1))
+  | .terminalizeCompleted => .commit (.terminalize 7 .completed (.message 501))
+  | .recover _ _ fresh deadline => .commit (.recover 7 fresh 5 deadline [])
+  | .renew _ expectedDeadline => .commit (.renew 7 expectedDeadline)
+  | .appendRaw _ _ record => .commit (.append 7 record)
+  | .recoverItems _ _ fresh deadline items => .commit (.recover 7 fresh 5 deadline items)
+  | .acceptTurn closing message admissions =>
+      .commit (.accept 7 closing message [] admissions)
+  | .dispatchCall _ call => .commit (.dispatch 7 ⟨call, true, true⟩)
+  | .backgroundTool => .commit (.toolControl 7 600 .background)
+  | .backgroundReceipt =>
+      .commit (.backgroundReceipt 600 backgroundReceiptClose backgroundReceiptMessage)
+  | .admitSpawned admission => .commit (.admitSpawned 7 admission)
+  | .publishAuthored closing message => .commit (.authored 7 closing message)
+  | .compact cursor => .commit (.compact cursor)
+  | .deliverResult sequence => .commit (.toolDeliver 600 (foregroundResultMessage sequence))
+  | .revokeDead _ _ fresh => .commit (.revoke 7 fresh .dead (.message 501))
+  | .appendWhileSiblingWaits record => .commitWhileSiblingWaits (.append 7 record)
+  | .replicate record => .replicate record
 
 def Input.actor : Input → Nat
   | .recover actor .. => actor
+  | .appendRaw actor .. => actor
+  | .recoverItems actor .. => actor
+  | .revokeDead actor .. => actor
   | _ => 1
 
 def Input.now : Input → Nat
   | .dispatch now => now
   | .recover _ now .. => now
+  | .renew now _ => now
+  | .appendRaw _ now _ => now
+  | .recoverItems _ now .. => now
+  | .dispatchCall now _ => now
+  | .revokeDead _ now _ => now
   | _ => 5
 
 def Input.tag : Input → String
@@ -50,6 +103,20 @@ def Input.tag : Input → String
   | .deliverForeground => "deliver_foreground_result"
   | .terminalizeCompleted => "terminalize_completed"
   | .recover .. => "recover_expired_generation"
+  | .renew .. => "renew_lease"
+  | .appendRaw .. => "append_output"
+  | .recoverItems .. => "recover_expired_generation"
+  | .acceptTurn .. => "accept_turn"
+  | .dispatchCall .. => "dispatch"
+  | .backgroundTool => "background_tool"
+  | .backgroundReceipt => "publish_background_receipt"
+  | .admitSpawned _ => "admit_spawned_background"
+  | .publishAuthored .. => "publish_authored"
+  | .compact _ => "advance_compaction_cursor"
+  | .deliverResult _ => "deliver_foreground_result"
+  | .revokeDead .. => "revoke_corrupt"
+  | .appendWhileSiblingWaits _ => "append_output_while_sibling_waits"
+  | .replicate _ => "deliver_replicated_segment"
 
 structure Observation where
   accepted : Bool
@@ -59,12 +126,22 @@ structure Observation where
   toolStuckSince : Option Nat
   toolCancelIntentAt : Option Nat
   inFlight : Bool
-  messageCount : Nat
   nextSequence : Nat
   acceptedSequence : Option Nat
   physicalToolRequest : Option Nat
   leaseDeadline : Option Nat
+  compactionCursor : Option Nat
+  segments : List Segment
+  messages : List MessageEnvelope
   deriving DecidableEq
+
+def normalizedSegments (segments : List Segment) : List Segment :=
+  segments.mergeSort fun left right =>
+    (left.id, canonicalSegmentJson left) ≤ (right.id, canonicalSegmentJson right)
+
+def normalizedMessages (messages : List MessageEnvelope) : List MessageEnvelope :=
+  messages.mergeSort fun left right =>
+    (left.header.id, canonicalMessageJson left) ≤ (right.header.id, canonicalMessageJson right)
 
 def observe (document : Nat) (accepted : Bool) (world : World) : Observation :=
   let tool := ownedToolByDocument? world document
@@ -75,26 +152,50 @@ def observe (document : Nat) (accepted : Bool) (world : World) : Observation :=
     toolStuckSince := tool.bind (·.stuckSince)
     toolCancelIntentAt := tool.bind (·.cancelCascadeIntentAt)
     inFlight := document ∈ world.transcript.inFlight
-    messageCount := world.messages.length
     nextSequence := world.transcript.nextSeq
     acceptedSequence := tool.map (·.acceptedSequence)
     physicalToolRequest := tool.map (·.requestDoc)
     leaseDeadline := match world.lease.lease with
       | .active _ _ deadline | .recoverable _ _ deadline => some deadline
-      | _ => none }
+      | _ => none
+    compactionCursor := world.compactionCursor
+    segments := normalizedSegments world.segments
+    messages := normalizedMessages world.messages }
 
+/-- Release through the modeled scheduling owner. A holder whose commit was
+rejected is still in the storage phase: rollback must be observed returning
+before the gate can be released. Rejection is never an implicit unlock. -/
 def releaseFor (world : World) (actor : Nat) : Option World :=
-  if world.gateOwner.isSome then scheduling world actor .release else some world
+  if world.gateOwner.isNone then some world
+  else do
+    let returned ←
+      if world.gateSchedule.phase == .storage then scheduling world actor .storageReturned
+      else some world
+    scheduling returned actor .release
 
 /-- Run each input through the real modeled gate. A rejected operation records
-`accepted = false` and leaves the durable world unchanged, matching rollback. -/
+`accepted = false` and leaves the durable world unchanged, matching rollback.
+A replicated fact is delivered by the same exact-fact union the model uses for
+remote merge; it never acquires the local gate. -/
 def runStep (document : Nat) (world : World) (previousActor : Nat)
     (input : Input) : Option (World × Nat × Observation) := do
-  let released ← releaseFor world previousActor
-  let held ← acquire released input.actor true
-  match commit held input.actor input.now input.operation with
-  | some after => some (after, input.actor, observe document true after)
-  | none => some (held, input.actor, observe document false held)
+  match input.step with
+  | .replicate record =>
+      let after := { world with segments := deliver world.segments record }
+      some (after, previousActor, observe document true after)
+  | .commitWhileSiblingWaits operation =>
+      let released ← releaseFor world previousActor
+      let held ← acquire released input.actor false
+      let suspended ← scheduling held input.actor .siblingWait
+      match commit suspended input.actor input.now operation with
+      | some after => some (after, input.actor, observe document true after)
+      | none => some (suspended, input.actor, observe document false suspended)
+  | .commit operation =>
+      let released ← releaseFor world previousActor
+      let held ← acquire released input.actor true
+      match commit held input.actor input.now operation with
+      | some after => some (after, input.actor, observe document true after)
+      | none => some (held, input.actor, observe document false held)
 
 def run (seed : World) (document : Nat) (inputs : List Input) : Option (List Observation) := do
   let (_, _, observations) ← inputs.foldlM (fun (world, actor, observations) input => do
@@ -109,10 +210,24 @@ structure Case where
   inputs : List Input
   expected : Option (List Observation)
 
-def mkCase (name : String) (world : World) (inputs : List Input) : Case :=
-  ⟨name, world, 600, inputs, run world 600 inputs⟩
+def mkCaseFor (name : String) (world : World) (document : Nat)
+    (inputs : List Input) : Case :=
+  ⟨name, world, document, inputs, run world document inputs⟩
 
-def cases : List Case :=
+def mkCase (name : String) (world : World) (inputs : List Input) : Case :=
+  mkCaseFor name world 600 inputs
+
+def recoveryItems : List RecoveryItem :=
+  [RecoveryItem.mk (partialClose 101 0 1 10) (some (recoveryMessage 200 101 0 10))]
+
+def lateStaleFlush : Segment :=
+  { raw 102 0 1 11 with flush := some ⟨1, [⟨0, 1, none⟩], [66]⟩ }
+
+def compactionBoundary : MessageEnvelope :=
+  CanonicalOutput.Execution.Compaction.Examples.boundary
+
+/-- The four original tool-seam scripts. -/
+def toolSeamCases : List Case :=
   [ mkCase "pending_remote_recovery_cancels_before_dispatch"
       (routedWorld 5) [.acceptRemote, .recover 2 10 8 20, .dispatch 10]
   , mkCase "running_foreground_recovery_records_handoff"
@@ -123,22 +238,94 @@ def cases : List Case :=
       (world 5) [.acceptForeground, .dispatch 5, .closeForeground,
         .deliverForeground, .terminalizeCompleted] ]
 
-def admissionJson (value : ToolAdmission) : String :=
-  "{" ++ "\"document\":" ++ toString value.document ++ ","
-    ++ "\"call_id\":" ++ toString value.context.callId ++ ","
-    ++ "\"request_id\":" ++ toString value.context.requestId ++ ","
-    ++ "\"state\":" ++ jsonString value.context.state.toDefraDB ++ ","
-    ++ "\"operation\":" ++ jsonString value.context.operation.toDefraDB ++ ","
-    ++ "\"deadline\":" ++ toString value.context.deadline ++ ","
-    ++ "\"started_at\":" ++ jsonOptionalNat value.context.startedAt ++ ","
-    ++ "\"current_time\":" ++ toString value.context.currentTime ++ ","
+/-- Lease ordering: only explicit due renewal moves the deadline; output and
+dispatch do not, and a superseded writer is inert. -/
+def leaseOrderingCases : List Case :=
+  [ mkCase "renewal_wins_before_recovery"
+      (world 5) [.renew 8 10, .recover 2 10 8 20]
+  , mkCase "output_append_keeps_deadline_then_recovery_swaps"
+      (world 5) [.appendRaw 1 5 (raw 100 0 0 5), .recoverItems 2 10 8 20 recoveryItems]
+  , mkCase "stale_append_rejected_after_recovery"
+      (world 5) [.appendRaw 1 5 (raw 100 0 0 5), .recoverItems 2 10 8 20 recoveryItems,
+        .appendRaw 1 11 lateStaleFlush]
+  , mkCase "dispatched_tool_wait_explicitly_renews"
+      (routedWorld 5) [.acceptRemote, .dispatch 5, .renew 8 10] ]
+
+/-- Publication integrity and the tool lifecycle beyond the foreground path. -/
+def publicationCases : List Case :=
+  [ mkCase "short_complete_closure_rejected_after_two_flushes"
+      (world 5) [.appendRaw 1 5 providerFirstFlush, .appendRaw 1 5 providerSecondFlush,
+        .acceptTurn shortProviderClose shortProviderMessage [remoteAdmission]]
+  , mkCase "background_tool_closes_after_parent_terminal"
+      (world 5) [.acceptForeground, .dispatch 5, .backgroundTool, .backgroundReceipt,
+        .terminalizeCompleted, .closeForeground]
+  , mkCaseFor "spawned_admission_replays_and_rejects_conflicting_child" (world 5) 601
+      [.acceptTurn spawnProviderTurn spawnProviderMessage [foregroundAdmission],
+        .dispatch 5, .admitSpawned spawnedAdmission, .dispatchCall 5 601,
+        .admitSpawned spawnedAdmission,
+        .admitSpawned { spawnedAdmission with document := 602 }] ]
+
+/-- A distinct replicated twin makes the source unreconstructable. Revocation
+must still terminate the request without discarding either fact. -/
+def integrityCases : List Case :=
+  [ mkCase "corrupt_twin_revocation_cancels_pending_tool"
+      (world 5) [.acceptForeground, .replicate corruptTwin, .revokeDead 1 5 8]
+  , mkCase "corrupt_twin_revocation_hands_off_running_tool"
+      (world 5) [.acceptForeground, .dispatch 5, .replicate corruptTwin,
+        .revokeDead 1 5 8, .closeForeground] ]
+
+/-- The compaction watermark shares the transcript allocator with tool
+delivery. The first script pins cursor eligibility. The second pins why a
+compacted prefix stays stable: a background receipt is the native pairing row,
+so a late result is rejected at every sequence, with or without a cursor,
+rather than republished as a second native result inside that prefix. -/
+def compactionCases : List Case :=
+  [ mkCase "compaction_cursor_requires_stable_published_prefix"
+      (world 5) [.acceptForeground, .dispatch 5, .compact 0, .closeForeground,
+        .deliverForeground, .publishAuthored authored compactionBoundary,
+        .compact 3, .compact 2, .compact 2, .compact 1]
+  , mkCase "late_foreground_result_rejected_after_background_receipt"
+      (world 5) [.acceptForeground, .dispatch 5, .backgroundTool, .backgroundReceipt,
+        .publishAuthored authored compactionBoundary, .compact 2,
+        .closeForeground, .deliverResult 1, .deliverResult 3, .compact 3] ]
+
+/-- Write-gate scheduling premise: a suspended same-task holder publishes
+nothing. It must be the final step, since a suspended holder cannot release. -/
+def schedulingCases : List Case :=
+  [ mkCase "suspended_same_task_holder_append_rejected"
+      (world 5) [.appendWhileSiblingWaits (raw 100 0 0 5)] ]
+
+def cases : List Case :=
+  schedulingCases ++ toolSeamCases ++ leaseOrderingCases ++ publicationCases ++ integrityCases ++
+    compactionCases
+
+def contextFieldsJson (context : ToolExecution.ToolCallContext) : String :=
+  "\"call_id\":" ++ toString context.callId ++ ","
+    ++ "\"request_id\":" ++ toString context.requestId ++ ","
+    ++ "\"state\":" ++ jsonString context.state.toDefraDB ++ ","
+    ++ "\"operation\":" ++ jsonString context.operation.toDefraDB ++ ","
+    ++ "\"deadline\":" ++ toString context.deadline ++ ","
+    ++ "\"started_at\":" ++ jsonOptionalNat context.startedAt ++ ","
+    ++ "\"current_time\":" ++ toString context.currentTime ++ ","
     ++ "\"failure_class\":" ++
-      (value.context.failureClass.map (jsonString ∘ ToolExecution.FailureClass.toDefraDB)).getD "null" ++ ","
-    ++ "\"persistence\":" ++ jsonString value.context.persistence.toDefraDB ++ ","
-    ++ "\"await_mode\":" ++ jsonString value.context.awaitMode.toDefraDB ++ ","
-    ++ "\"cancel_policy\":" ++ jsonString value.context.cancelPolicy.toDefraDB ++
-      ",\"child_request_id\":" ++
-      jsonOptionalNat value.context.childRequestId ++ "}"
+      (context.failureClass.map (jsonString ∘ ToolExecution.FailureClass.toDefraDB)).getD "null" ++ ","
+    ++ "\"persistence\":" ++ jsonString context.persistence.toDefraDB ++ ","
+    ++ "\"await_mode\":" ++ jsonString context.awaitMode.toDefraDB ++ ","
+    ++ "\"cancel_policy\":" ++ jsonString context.cancelPolicy.toDefraDB ++
+      ",\"child_request_id\":" ++ jsonOptionalNat context.childRequestId
+
+def admissionJson (value : ToolAdmission) : String :=
+  "{" ++ "\"document\":" ++ toString value.document ++ "," ++
+    contextFieldsJson value.context ++ "}"
+
+def spawnedAdmissionJson (value : SpawnedToolAdmission) : String :=
+  "{" ++ "\"document\":" ++ toString value.document ++ ","
+    ++ "\"parent_tool_document\":" ++ toString value.parentToolDoc ++ "," ++
+    contextFieldsJson value.context ++ "}"
+
+def recoveryItemJson (value : RecoveryItem) : String :=
+  "{\"closing\":" ++ canonicalSegmentJson value.closing ++ ",\"message\":" ++
+    (value.message.map canonicalMessageJson).getD "null" ++ "}"
 
 def targetJson (value : RemoteTarget) : String :=
   "{\"call\":" ++ toString value.call ++ ",\"coordinator\":" ++
@@ -158,7 +345,14 @@ def seedJson (value : World) : String :=
 def inputJson (input : Input) : String :=
   let common := "{\"operation\":" ++ jsonString input.tag ++
     ",\"actor\":" ++ toString input.actor ++ ",\"now\":" ++ toString input.now
-  match input.operation with
+  match input.step with
+  | .replicate record => common ++ ",\"record\":" ++ canonicalSegmentJson record ++ "}"
+  | .commitWhileSiblingWaits (.append generation record) =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"record\":" ++
+        canonicalSegmentJson record ++ "}"
+  | .commitWhileSiblingWaits _ => "null"
+  | .commit operation =>
+  match operation with
   | .accept generation closing message targets admissions =>
       common ++ ",\"generation\":" ++ toString generation ++ ",\"closing\":" ++
         canonicalSegmentJson closing ++ ",\"message\":" ++ canonicalMessageJson message ++
@@ -181,11 +375,35 @@ def inputJson (input : Input) : String :=
         jsonString (Conformance.RequestExecutionLeaseContracts.outcomeName outcome) ++
         ",\"selection\":{\"kind\":\"message\",\"id\":" ++
         toString id ++ "}}"
-  | .recover expected fresh duration deadline [] =>
+  | .recover expected fresh duration deadline items =>
       common ++ ",\"expected_generation\":" ++ toString expected ++
         ",\"fresh_generation\":" ++ toString fresh ++ ",\"duration\":" ++
         toString duration ++ ",\"deadline\":" ++ toString deadline ++
-        ",\"items\":[]}"
+        ",\"items\":" ++ jsonArray (items.map recoveryItemJson) ++ "}"
+  | .renew generation expectedDeadline =>
+      common ++ ",\"generation\":" ++ toString generation ++
+        ",\"expected_deadline\":" ++ toString expectedDeadline ++ "}"
+  | .append generation record =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"record\":" ++
+        canonicalSegmentJson record ++ "}"
+  | .toolControl generation document .background =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"document\":" ++
+        toString document ++ ",\"action\":\"background\"}"
+  | .backgroundReceipt parentDocument closing message =>
+      common ++ ",\"parent_document\":" ++ toString parentDocument ++ ",\"closing\":" ++
+        canonicalSegmentJson closing ++ ",\"message\":" ++ canonicalMessageJson message ++ "}"
+  | .admitSpawned generation admission =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"admission\":" ++
+        spawnedAdmissionJson admission ++ "}"
+  | .authored generation closing message =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"closing\":" ++
+        canonicalSegmentJson closing ++ ",\"message\":" ++ canonicalMessageJson message ++ "}"
+  | .compact cursor => common ++ ",\"cursor\":" ++ toString cursor ++ "}"
+  | .revoke expected fresh outcome (.message id) =>
+      common ++ ",\"expected_generation\":" ++ toString expected ++
+        ",\"fresh_generation\":" ++ toString fresh ++ ",\"outcome\":" ++
+        jsonString (Conformance.RequestExecutionLeaseContracts.outcomeName outcome) ++
+        ",\"selection\":{\"kind\":\"message\",\"id\":" ++ toString id ++ "}}"
   | _ => "null"
 
 def observationJson (value : Observation) : String :=
@@ -196,11 +414,13 @@ def observationJson (value : Observation) : String :=
     ++ "\"tool_stuck_since\":" ++ jsonOptionalNat value.toolStuckSince ++ ","
     ++ "\"tool_cancel_intent_at\":" ++ jsonOptionalNat value.toolCancelIntentAt ++ ","
     ++ "\"in_flight\":" ++ jsonOptionalBool (some value.inFlight) ++ ","
-    ++ "\"message_count\":" ++ toString value.messageCount ++ ","
     ++ "\"next_sequence\":" ++ toString value.nextSequence ++ ","
     ++ "\"accepted_sequence\":" ++ jsonOptionalNat value.acceptedSequence ++ ","
     ++ "\"physical_tool_request\":" ++ jsonOptionalNat value.physicalToolRequest ++ ","
-    ++ "\"lease_deadline\":" ++ jsonOptionalNat value.leaseDeadline ++ "}"
+    ++ "\"lease_deadline\":" ++ jsonOptionalNat value.leaseDeadline ++ ","
+    ++ "\"compaction_cursor\":" ++ jsonOptionalNat value.compactionCursor ++ ","
+    ++ "\"segments\":" ++ jsonArray (value.segments.map canonicalSegmentJson) ++ ","
+    ++ "\"messages\":" ++ jsonArray (value.messages.map canonicalMessageJson) ++ "}"
 
 def caseJson (value : Case) : String :=
   "{" ++ "\"kind\":\"native_execution\","
@@ -232,6 +452,27 @@ example : cases.all (fun value => !value.inputs.isEmpty &&
     match value.expected with
     | some observations => observations.length == value.inputs.length
     | none => false) = true := by
+  native_decide
+
+/-- Cardinality alone is insufficient: exact normalized durable facts distinguish
+same-count payload and identity corruption. -/
+example :
+    let original := raw 100 0 0 5
+    let changedPayload := { original with flush := original.flush.map fun flush =>
+      { flush with payload := [66] } }
+    let changedIdentity := { original with id := 101 }
+    let originalMessage := providerMessage
+    let changedMessagePayload := { originalMessage with blocks := [] }
+    let changedMessageIdentity :=
+      { originalMessage with header := { originalMessage.header with id := 999 } }
+    [original].length = [changedPayload].length ∧
+      observe 600 true (world 5 [original]) ≠ observe 600 true (world 5 [changedPayload]) ∧
+      observe 600 true (world 5 [original]) ≠ observe 600 true (world 5 [changedIdentity]) ∧
+      [originalMessage].length = [changedMessagePayload].length ∧
+      observe 600 true { world 5 with messages := [originalMessage] } ≠
+        observe 600 true { world 5 with messages := [changedMessagePayload] } ∧
+      observe 600 true { world 5 with messages := [originalMessage] } ≠
+        observe 600 true { world 5 with messages := [changedMessageIdentity] } := by
   native_decide
 
 end Conformance.NativeExecutionContracts

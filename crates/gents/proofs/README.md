@@ -235,6 +235,18 @@ The stack is now published as specification #1585 and Lean #1586. The branch
 for native adapter boundaries, external-premise experiments and remaining breadth.
 The four application-trace invariants are universal Lean proofs, not additional
 finite case groups or evidence that a native adapter has run.
+`Conformance/Contracts/Json/NativeExecution` derives every execution expectation by
+folding modeled inputs through the real gate; a replicated fact is delivered
+outside it, as a remote merge is. Its observations include exact normalized
+immutable segments and messages, not only row counts.
+`Conformance/Contracts/Json/PayloadPresentation` exports stored and presented
+payload lengths from reconstruction, not provider request sizes or token usage.
+`Compaction.ReductionEngine.decideThreshold` still takes `inputTokens` as a free input: no theorem
+connects a reduction decision through the existing `provider_input` complete-body
+projection/estimation owner to reconstructed input. Payload-length fixtures do
+not establish that connection. The formal composition is still open, and the
+actual serialized-request/threshold experiment is separately tracked as
+`native.external-projected-request-threshold` for the implementation layer.
 
 The new canonical output layer has no native conformance consumer yet. Regenerate
 fixtures and replace the retired response cases in `tests/conformance/coverage.rs`,

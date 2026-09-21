@@ -242,7 +242,8 @@
       "treat elapsed as passage of time only; deadlineObserved is the explicit timeout observation",
       "hold the gate throughout cleanup and dropping until cleanupReturned or dropReturned makes release possible",
       "exercise storage return, cleanup return and drop return paths before release",
-      "retain the suspended-forever counterexample: executor service and storage or cleanup return are external premises, not proved liveness"
+      "retain the suspended-forever counterexample: executor service and storage or cleanup return are external premises, not proved liveness",
+      "The sibling-wait boundary is exercised at operation level by suspended_same_task_holder_append_rejected in canonical_execution_gate_cases, and rejected commits release through storageReturned. The event vocabulary itself is still not exported as inputs, so this entry stays not_exported."
     ],
     "retired_bindings": [],
     "admission": {

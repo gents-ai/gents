@@ -905,6 +905,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CanonicalExecutionGateCases".to_string(),
         ));
     }
+    if !lean_canonical_payload_presentation_cases().is_empty() {
+        emitted.insert((
+            "canonical_payload_presentation_cases".to_string(),
+            "CanonicalPayloadPresentationCases".to_string(),
+        ));
+    }
     if !lean_compaction_reducer_cases().is_empty() {
         emitted.insert((
             "compaction_reducer_cases".to_string(),
