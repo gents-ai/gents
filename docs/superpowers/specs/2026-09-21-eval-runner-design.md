@@ -1,7 +1,7 @@
 # Eval runner design (issue #1515, sub-project 2a)
 
-Status: **DRAFT, brainstorm in progress (2026-09-21).** Section 1 is presented and awaits approval.
-Sections 2 to 4 are not yet written. Baseline: `main` at `0deb7659c`.
+Status: **DRAFT, brainstorm in progress (2026-09-21).** Section 1 is approved. Section 2 is presented and awaits approval.
+Sections 3 and 4 are not yet written. Baseline: `main` at `0deb7659c`.
 Umbrella: `2026-09-21-eval-and-optimization-umbrella.md`. Contract: `2026-09-21-eval-core-contract-design.md`.
 
 ## Decisions taken so far
@@ -60,7 +60,7 @@ that `gents eval rm` deletes.
 No fixed monitor pack exists in the repository. Every #1512 suite has a configurator author the
 monitor inside the trial. M3 creates the golden subject and chooses its tool ceiling.
 
-## Section 1: shape and the seam (awaiting approval)
+## Section 1: shape and the seam (approved)
 
 The runner is a library under `crates/gents/src/eval/runner/`. It holds no state of its own.
 Everything it knows is in the launching home's documents.
@@ -111,10 +111,72 @@ projection the runner writes is already modeled in `Eval.lean` from M1. The rule
 attempt wins; abandoned attempts are `infrastructure`" becomes a conformance case on `plan.rs` and
 `grade.rs`, not a new proof.
 
+## Section 2: the trial lifecycle inside `EmbeddedExecutor` (awaiting approval)
+
+One trial is one call to `execute(spec)`. It runs these steps in order. Every failure in steps 1 to 3
+returns evidence with `failure_kind: infrastructure` and no stages; nothing panics and nothing is
+retried inside the executor. Retry is the runner's decision.
+
+**1. Materialize the subject.** At freeze time the runner copies each cell's pack contents into the
+run directory and records the pack digest in `origin`. The executor reads the pack from there and
+verifies the digest before use. A candidate is therefore never installed into the launching home. It
+exists only inside the run directory until `promote` writes its one changed field. The launching
+home's installed packs are the source for a baseline cell; a candidate cell's source is the
+optimization driver, which writes the modified pack into the run directory itself.
+
+**2. Create the home.** A fresh DefraDB data directory and a fresh `KeyIdentity` at
+`<run dir>/trials/<trial_id>/home/`, plus an empty `workspace/` beside it. The trial agent DID is
+that identity. The runner is the only holder of the key, so it acts as the trial's operator: it
+installs the pack with `DesiredStateApplyPlan::from_pack_config` and `apply_desired_state_plan`,
+writes the inference binding (with `seed`) as an `InferenceBackend` document, installs a
+`WorkspaceRoot` pointing at `workspace/`, and installs the fixtures: input documents through the
+same apply path, and files into `workspace/`. Then it boots `Gents` on that node and starts the
+completion loop.
+
+**3. Open the session.** The executor creates one `AgentSession` for the trial, selecting
+`behavior_id`. Every stage's request joins that session, so `(trial_agent_did, session_id)` names
+all the evidence.
+
+**4. Run the stages.** For each `(stage_id, prompt, deadline_secs)` in order, the executor writes an
+`AgentRequest` into the session the way `gents request` does, then polls `lifecycle_state` until a
+terminal state or the deadline. On the deadline it interrupts through the existing interrupt owner,
+waits the existing 30-second grace, and records `deadline`. A terminal `Failed` is classified by the
+same rules `stages.rs` uses today (`tool`, `runtime`, `model_acceptance`, `provider` with its
+reason), which move into `src/` with the code. After any non-`passed` stage, the remaining stages
+are not submitted and are recorded as `skipped_prerequisite`. Captures still run for the failed
+stage: partial work is evidence.
+
+**5. Capture after each stage.** The executor runs the spec's capture queries against the trial
+node, from the runner side, and stores the rows under each capture's `name`. Session records
+(requests, messages, tool calls, inference calls, responses) are always collected for the stage.
+A file capture is `{name, kind: "file", glob}` over `workspace/`; the evidence records
+`{name, path, sha256, bytes}` per matched file and never the contents. Checks that need contents
+read them through the locator. This is the durable file-evidence reference #1515 asks for.
+
+**6. Close.** The executor stops the completion loop, shuts the node down, and returns
+`TrialEvidence` with `usage` summed from `InferenceCall` rows (`null` if any total is absent), the
+`anchor` (terminal states, request and inference-call counts, file digests count), and
+`evidence_digest` over the canonical evidence. The home stays on disk; `home_hint` is its path.
+
+**Retention.** The layout is `<launching home>/eval/runs/<run_id>/{cells/<cell_id>/pack/,
+trials/<trial_id>/{home/,workspace/}}`. `gents eval rm <run_id>` (M4) deletes the run directory
+after the documents. No cap and no TTL in 2a; `eval show` reports the directory size. A trial
+whose home was deleted still has its documents; `recollect` returns `None` and a regrade of it is
+refused with a clear error.
+
+**Seed.** The binding's `seed` is `seed_base + trial_index`. Whether a provider honours it is
+recorded, not assumed: the plan verifies D4F and OpenRouter and the report notes the finding. A
+provider that ignores the seed still gets paired arms; only the variance reduction is lost.
+
+**What moves from `tests/` into `src/`.** Three pieces of #1512 support become library code under
+`eval::runner::embedded`: the home factory (`test_db_in`), the terminal-state wait with interrupt
+(`observe_request`), and the session evidence read (`retain_request_evidence`), plus the stage
+failure classifier from `stages.rs`. The #1512 tests then import them from `src/`, so nothing is
+duplicated and `make live-configurator-eval` keeps working. The `tests/` copies are deleted in the
+same PR.
+
 ## Sections still to come
 
-2. The trial lifecycle inside `EmbeddedExecutor`: home creation, pack install, stage submission,
-   deadline and interrupt, capture, retention on disk.
 3. The run loop: freezing, concurrency, the retry breaker, write ordering, cancellation,
    invalidation.
 4. Testing and phasing: the scripted matrix, the `MockStreamingBackend` canary test, the PR stack.
