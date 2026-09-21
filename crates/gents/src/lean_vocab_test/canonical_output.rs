@@ -1,4 +1,9 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use serde::Deserialize;
+
+pub(crate) type ProjectionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -342,25 +347,43 @@ pub(crate) struct LeanReconstructedMessage {
     pub(crate) blocks: Vec<LeanMessageBlock<Vec<u8>>>,
 }
 
+/// Asynchronous boundary for the native projection owner. The adapter receives
+/// only modeled inputs; fixture expectations remain owned by the harness.
+pub(crate) trait CanonicalOutputProjectionAdapter {
+    type Error: std::fmt::Display;
+
+    fn project<'a>(
+        &'a mut self,
+        input: &'a LeanCanonicalOutputObservation,
+    ) -> ProjectionFuture<'a, Result<LeanCanonicalOutputView, Self::Error>>;
+}
+
 /// Drives a native adapter using only the modeled observation. Keeping the
-/// expected value outside the callback prevents an adapter from accidentally
-/// implementing the fixture comparison instead of the production projection.
-pub(crate) fn assert_canonical_output_projection_cases<F>(
+/// expected value outside the adapter prevents it from implementing the fixture
+/// comparison instead of the production projection.
+pub(crate) async fn assert_canonical_output_projection_cases<A>(
     cases: &[LeanCanonicalOutputProjectionCase],
-    mut project: F,
-) where
-    F: FnMut(&LeanCanonicalOutputObservation) -> LeanCanonicalOutputView,
+    adapter: &mut A,
+) -> Result<(), String>
+where
+    A: CanonicalOutputProjectionAdapter,
 {
-    assert!(
-        !cases.is_empty(),
-        "canonical output projection fixture set must not be empty"
-    );
-    for case in cases {
-        let actual = project(&case.input);
-        assert_eq!(
-            actual, case.expected,
-            "canonical output case `{}`",
-            case.name
-        );
+    if cases.is_empty() {
+        return Err("canonical output projection fixture set must not be empty".to_owned());
     }
+    for case in cases {
+        let actual = adapter.project(&case.input).await.map_err(|error| {
+            format!(
+                "canonical output case `{}`: adapter failed: {error}",
+                case.name
+            )
+        })?;
+        if actual != case.expected {
+            return Err(format!(
+                "canonical output case `{}`: expected {:?}, got {actual:?}",
+                case.name, case.expected
+            ));
+        }
+    }
+    Ok(())
 }

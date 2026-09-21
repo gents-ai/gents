@@ -12,6 +12,11 @@ from a second Rust state machine. Native adapters receive only the inputs; the
 harness compares independently observed results with the generated expectation.
 Do not construct native rows from expected results or replace a missing owner
 with a test-only policy implementation.
+The projection and execution harnesses accept asynchronous, fallible native
+adapters; execution initializes one fixture and retains it across the full script.
+Adapters receive modeled inputs only and normalize database observations back to
+fixture symbols before returning. Adapter errors are test failures, not modeled
+rejections; a modeled rejection still returns the observed unchanged durable state.
 
 The initial bridge covers immutable output projection, composed execution
 operations and explicit request lease renewal. Fixture decoding, successful Lean
@@ -82,6 +87,10 @@ rejects stale model declarations, missing paths, unknown fixture groups and
 duplicate mapping IDs. CI compares the source inventory with Lean's actual
 inductive constructor metadata, resolves referenced declarations with Lean, and
 checks fixture groups against generated JSON.
+The exported execution envelope must retain concrete input scripts, unique case
+names and one decision observation per operation; summary witnesses must succeed.
+These are fixture-integrity checks, not a substitute for Rust decoding or native
+execution.
 
 Nested seam entries must state their `admission` boundary, disposition and reason.
 The boundary must be a mapped model declaration. `admitted` means that entry
@@ -129,3 +138,22 @@ Validation at this layer: `lake build`, import-closure checks, generated JSON
 extraction and structural checks, and Rust formatting. Run native Rust suites and
 the integrated workspace checks once the implementation layer replaces the
 deleted schema/runtime contracts. No native pass is claimed by this layer alone.
+
+## Implementation entry order
+
+1. Bind immutable reconstruction and explicit lease renewal to their production
+   owners, with authorized fixture creation and symbolic-ID normalization. Run the
+   concrete projection/lease fixtures and the database-premise experiments above.
+2. Bind the composed execution scripts to those same owners and the existing tool
+   lifecycle. Observe persisted facts after each accepted or rejected operation;
+   never synthesize the observation from the requested action. Extend concrete
+   exports for summary-only/unexported mappings before claiming those seams.
+3. Migrate provider input, compaction, hydration/client and continuation consumers
+   in their named owners; delete their obsolete response-based assertions with
+   the replaced implementation. Register each real native consumer and advance
+   its ledger status only after running it. Validate the integrated stack before
+   merging any layer.
+
+The separate queue UX audit is [#1589](https://github.com/gents-ai/gents/issues/1589),
+after this refactor. It does not authorize changing queue/notification policy in
+these fixtures.

@@ -98,6 +98,27 @@ def unrelated := "-- not a comment"
         self.rows[0]["constructors"].append("Unknown.Action.deleted")
         self.assertIn("unknown constructor: Unknown.Action.deleted", self.errors())
 
+    def test_execution_export_envelope(self):
+        script = {"name": "script", "kind": "native_execution", "seed": {},
+                  "operations": [{"operation": "dispatch"}],
+                  "expected_observations": [{"accepted": False}]}
+        summary = {"name": "summary", "kind": "trace_summary", "completed": True}
+        mapping.check_execution_export({"canonical_execution_gate_cases": [script, summary]})
+        with self.assertRaises(ValueError):
+            mapping.check_execution_export([])
+        invalid = [[], [None], [summary], [script, script],
+                   [{**summary, "completed": False}, script],
+                   [{**script, "operations": []}],
+                   [{**script, "operations": [{"operation": 1}]}],
+                   [{**script, "operations": [{"operation": " "}]}],
+                   [{**script, "expected_observations": None}],
+                   [{**script, "expected_observations": [{}]}],
+                   [{**script, "seed": None}],
+                   [{**script, "kind": "unknown"}]]
+        for cases in invalid:
+            with self.subTest(cases=cases), self.assertRaises(ValueError):
+                mapping.check_execution_export({"canonical_execution_gate_cases": cases})
+
     def test_declaration_requires_real_namespace(self):
         source = """namespace Actual
 section Example

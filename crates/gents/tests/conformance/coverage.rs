@@ -452,6 +452,9 @@ fn lean_feature_matrix_covers_every_declared_required_surface() {
 #[test]
 fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     let snapshot = lean_contract_snapshot();
+    // This set records fixture groups that decoded successfully. It does not
+    // establish native consumption; only registered consumers and the ledger's
+    // consumer entries may make that claim.
     let mut emitted = BTreeSet::new();
     let boundary_ids = snapshot
         .boundaries

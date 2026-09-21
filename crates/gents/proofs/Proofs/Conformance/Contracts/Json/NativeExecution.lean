@@ -158,25 +158,35 @@ def seedJson (value : World) : String :=
 def inputJson (input : Input) : String :=
   let common := "{\"operation\":" ++ jsonString input.tag ++
     ",\"actor\":" ++ toString input.actor ++ ",\"now\":" ++ toString input.now
-  match input with
-  | .acceptForeground => common ++ ",\"generation\":7,\"closing\":" ++
-      canonicalSegmentJson providerTurn ++ ",\"message\":" ++ canonicalMessageJson providerMessage ++
-      ",\"targets\":[],\"admissions\":[" ++ admissionJson foregroundAdmission ++ "]}"
-  | .acceptRemote => common ++ ",\"generation\":7,\"closing\":" ++
-      canonicalSegmentJson providerTurn ++ ",\"message\":" ++ canonicalMessageJson providerMessage ++
-      ",\"targets\":[" ++ targetJson remote ++ "],\"admissions\":[" ++
-      admissionJson remoteAdmission ++ "]}"
-  | .dispatch _ => common ++ ",\"generation\":7,\"call\":600,"
-      ++ "\"cancellation_allows\":true,\"tool_policy_allows\":true}"
-  | .closeForeground => common ++ ",\"document\":600,\"authority_outcome\":\"complete\","
-      ++ "\"record\":" ++ canonicalSegmentJson toolOutputClose ++ "}"
-  | .deliverForeground => common ++ ",\"document\":600,\"message\":" ++
-      canonicalMessageJson (foregroundResultMessage 1) ++ "}"
-  | .terminalizeCompleted => common ++ ",\"generation\":7,\"outcome\":\"completed\","
-      ++ "\"selection\":{\"kind\":\"message\",\"id\":501}}"
-  | .recover _ _ fresh deadline => common ++ ",\"expected_generation\":7,"
-      ++ "\"fresh_generation\":" ++ toString fresh ++ ",\"duration\":5,"
-      ++ "\"deadline\":" ++ toString deadline ++ ",\"items\":[]}"
+  match input.operation with
+  | .accept generation closing message targets admissions =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"closing\":" ++
+        canonicalSegmentJson closing ++ ",\"message\":" ++ canonicalMessageJson message ++
+        ",\"targets\":" ++ jsonArray (targets.map targetJson) ++ ",\"admissions\":" ++
+        jsonArray (admissions.map admissionJson) ++ "}"
+  | .dispatch generation permit =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"call\":" ++
+        toString permit.call ++ ",\"cancellation_allows\":" ++
+        jsonOptionalBool (some permit.cancellationAllows) ++ ",\"tool_policy_allows\":" ++
+        jsonOptionalBool (some permit.toolPolicyAllows) ++ "}"
+  | .toolClose document (.native .complete) record =>
+      common ++ ",\"document\":" ++ toString document ++
+        ",\"authority_outcome\":\"complete\",\"record\":" ++
+        canonicalSegmentJson record ++ "}"
+  | .toolDeliver document message =>
+      common ++ ",\"document\":" ++ toString document ++ ",\"message\":" ++
+        canonicalMessageJson message ++ "}"
+  | .terminalize generation outcome (.message id) =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"outcome\":" ++
+        jsonString (Conformance.RequestExecutionLeaseContracts.outcomeName outcome) ++
+        ",\"selection\":{\"kind\":\"message\",\"id\":" ++
+        toString id ++ "}}"
+  | .recover expected fresh duration deadline [] =>
+      common ++ ",\"expected_generation\":" ++ toString expected ++
+        ",\"fresh_generation\":" ++ toString fresh ++ ",\"duration\":" ++
+        toString duration ++ ",\"deadline\":" ++ toString deadline ++
+        ",\"items\":[]}"
+  | _ => "null"
 
 def observationJson (value : Observation) : String :=
   "{" ++ "\"accepted\":" ++ jsonOptionalBool (some value.accepted) ++ ","
@@ -205,9 +215,23 @@ def casesJson : String := jsonArray (cases.map caseJson)
 
 example : cases.all (fun value => value.expected.isSome) = true := by native_decide
 
+/-- Collections represented as empty, plus omitted optional execution state, are
+empty in every modeled seed. -/
 example : cases.all (fun value => value.seed.segments.isEmpty && value.seed.messages.isEmpty &&
     value.seed.transcript.messages.isEmpty && value.seed.transcript.toolCalls.isEmpty &&
-    value.seed.transcript.inFlight == ∅ && value.seed.toolContexts.isEmpty) = true := by
+    value.seed.transcript.inFlight == ∅ && value.seed.compactionCursor.isNone &&
+    value.seed.toolContexts.isEmpty && value.seed.delegatedCalls.isEmpty &&
+    value.seed.terminalSelection.isNone && value.seed.gateOwner.isNone &&
+    value.seed.claimed.isNone) = true := by
+  native_decide
+
+/-- Every script is substantive, serializable through its modeled operations,
+and produces exactly one observation for each attempted operation. -/
+example : cases.all (fun value => !value.inputs.isEmpty &&
+    (value.inputs.map inputJson).all (· != "null") &&
+    match value.expected with
+    | some observations => observations.length == value.inputs.length
+    | none => false) = true := by
   native_decide
 
 end Conformance.NativeExecutionContracts

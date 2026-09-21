@@ -1,9 +1,14 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use serde::Deserialize;
 
 use super::canonical_output::{
     LeanCanonicalMessage, LeanCanonicalSegment, LeanPayloadSpec, LeanTerminalSelection,
 };
 use super::request_execution_lease::LeanRequestExecutionWorld;
+
+pub(crate) type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -168,21 +173,33 @@ pub(crate) struct LeanCanonicalExecutionObservation {
     pub(crate) lease_deadline: Option<u64>,
 }
 
+/// Asynchronous boundary for a stateful native execution fixture. The adapter
+/// receives the seed and operations, but never the expected observations.
+pub(crate) trait CanonicalExecutionAdapter {
+    type Error: std::fmt::Display;
+    type Native;
+
+    fn initialize<'a>(
+        &'a mut self,
+        seed: &'a LeanCanonicalExecutionSeed,
+    ) -> ExecutionFuture<'a, Result<Self::Native, Self::Error>>;
+
+    fn apply<'a>(
+        &'a mut self,
+        native: &'a mut Self::Native,
+        query_document: u64,
+        operation: &'a LeanCanonicalExecutionOperation,
+    ) -> ExecutionFuture<'a, Result<LeanCanonicalExecutionObservation, Self::Error>>;
+}
+
 /// Initializes one native fixture and drives the entire generated script on
-/// that same handle. Neither callback can inspect the Lean expectations.
-pub(crate) fn assert_native_execution_case<E, N, I, F>(
+/// that same handle. The adapter cannot inspect the Lean expectations.
+pub(crate) async fn assert_native_execution_case<A>(
     case: &LeanCanonicalExecutionCase,
-    initialize: I,
-    mut apply: F,
+    adapter: &mut A,
 ) -> Result<(), String>
 where
-    E: std::fmt::Display,
-    I: FnOnce(&LeanCanonicalExecutionSeed) -> Result<N, E>,
-    F: FnMut(
-        &mut N,
-        u64,
-        &LeanCanonicalExecutionOperation,
-    ) -> Result<LeanCanonicalExecutionObservation, E>,
+    A: CanonicalExecutionAdapter,
 {
     let LeanCanonicalExecutionCase::NativeExecution {
         name,
@@ -206,10 +223,14 @@ where
         return Err(format!("{name}: native execution script is empty"));
     }
 
-    let mut native = initialize(seed)
+    let mut native = adapter
+        .initialize(seed)
+        .await
         .map_err(|error| format!("{name}: native fixture initialization failed: {error}"))?;
     for (index, (action, expected)) in operations.iter().zip(expected_observations).enumerate() {
-        let actual = apply(&mut native, *query_document, action)
+        let actual = adapter
+            .apply(&mut native, *query_document, action)
+            .await
             .map_err(|error| format!("{name} step {index}: native adapter failed: {error}"))?;
         if &actual != expected {
             return Err(format!(

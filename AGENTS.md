@@ -50,6 +50,12 @@ order:
 Plumbing and tooling need no proof change when they preserve semantics. The
 [proof map](crates/gents/proofs/README.md) identifies the modeled surfaces.
 
+Conformance has one semantic source: the executable Lean owners. Serialize actual
+modeled inputs/actions and derive expectations through those owners; do not keep
+separate fixture constants or test-only Rust policy machines that mirror their behavior.
+Explicit regression expectations must be checked against model execution. Wire
+decoders and native adapters translate representations, not redefine policy.
+
 ## Ownership
 
 - Request state is only `lifecycle_state`, using

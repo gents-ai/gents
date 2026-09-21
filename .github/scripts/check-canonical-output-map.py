@@ -190,6 +190,45 @@ def check(root, entries, exported_groups):
     return errors
 
 
+def check_execution_export(payload):
+    """Validate the executable handoff envelope, not native behavior or policy."""
+    if not isinstance(payload, dict):
+        raise ValueError("contract export must be an object")
+    cases = payload.get("canonical_execution_gate_cases")
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("canonical execution export must contain cases")
+    names, native_count = set(), 0
+    for case in cases:
+        if not isinstance(case, dict):
+            raise ValueError("execution cases must be objects")
+        name = case.get("name")
+        if not isinstance(name, str) or not name.strip() or name in names:
+            raise ValueError("execution case names must be nonempty and unique")
+        names.add(name)
+        if case.get("kind") == "trace_summary":
+            if case.get("completed") is not True:
+                raise ValueError(f"{name}: execution summary witness did not succeed")
+        elif case.get("kind") == "native_execution":
+            native_count += 1
+            operations, observations = case.get("operations"), case.get("expected_observations")
+            if (not isinstance(operations, list) or not operations or
+                    not isinstance(observations, list) or len(operations) != len(observations)):
+                raise ValueError(f"{name}: native script needs one observation per operation")
+            if not isinstance(case.get("seed"), dict):
+                raise ValueError(f"{name}: native script needs an input seed")
+            for operation, observation in zip(operations, observations):
+                if (not isinstance(operation, dict) or
+                        not isinstance(operation.get("operation"), str) or
+                        not operation["operation"].strip()):
+                    raise ValueError(f"{name}: native script has a missing operation")
+                if not isinstance(observation, dict) or type(observation.get("accepted")) is not bool:
+                    raise ValueError(f"{name}: native script has a missing decision observation")
+        else:
+            raise ValueError(f"{name}: unknown execution fixture kind")
+    if not native_count:
+        raise ValueError("execution export contains summaries but no native input scripts")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
@@ -229,7 +268,9 @@ def main():
                                     cwd=args.root / PROOFS, check=True, capture_output=True, text=True)
             payload = result.stdout.split("---BEGIN GENTS LEAN CONTRACT JSON---", 1)[1].split(
                 "---END GENTS LEAN CONTRACT JSON---", 1)[0]
-            groups = set(json.loads(payload))
+            exported = json.loads(payload)
+            check_execution_export(exported)
+            groups = set(exported)
         errors = check(args.root, entries, groups)
     except subprocess.CalledProcessError as error:
         print(error.stdout + error.stderr, file=sys.stderr)
