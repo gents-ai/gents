@@ -1,7 +1,7 @@
 # Eval runner design (issue #1515, sub-project 2a)
 
-Status: **DRAFT, brainstorm in progress (2026-09-21).** Section 1 is approved. Section 2 is presented and awaits approval.
-Sections 3 and 4 are not yet written. Baseline: `main` at `0deb7659c`.
+Status: **DRAFT, brainstorm in progress (2026-09-21).** Sections 1 and 2 are approved. Section 3 is presented and awaits approval.
+Section 4 is not yet written. Baseline: `main` at `0deb7659c`.
 Umbrella: `2026-09-21-eval-and-optimization-umbrella.md`. Contract: `2026-09-21-eval-core-contract-design.md`.
 
 ## Decisions taken so far
@@ -111,7 +111,7 @@ projection the runner writes is already modeled in `Eval.lean` from M1. The rule
 attempt wins; abandoned attempts are `infrastructure`" becomes a conformance case on `plan.rs` and
 `grade.rs`, not a new proof.
 
-## Section 2: the trial lifecycle inside `EmbeddedExecutor` (awaiting approval)
+## Section 2: the trial lifecycle inside `EmbeddedExecutor` (approved)
 
 One trial is one call to `execute(spec)`. It runs these steps in order. Every failure in steps 1 to 3
 returns evidence with `failure_kind: infrastructure` and no stages; nothing panics and nothing is
@@ -175,8 +175,68 @@ failure classifier from `stages.rs`. The #1512 tests then import them from `src/
 duplicated and `make live-configurator-eval` keeps working. The `tests/` copies are deleted in the
 same PR.
 
+## Section 3: the run loop (awaiting approval)
+
+`run(access, request, executor, cancel) -> RunOutcome` and `resume(access, run_id, executor,
+cancel) -> RunOutcome`. Both are one async call in the caller's process. `RunOutcome` is counts
+only: trials completed, abandoned, NotEvidence, and whether the breaker tripped. Reports are M4.
+
+**Freeze.** `run` validates the `RunRequest` before it writes anything: the definition exists and
+its digest matches; every selected case is on the requested split; each cell resolves to a pack
+(the launching home's installed pack for a baseline, a caller-supplied pack directory for a
+candidate) and to an inference binding; the binding is not an OAuth subscription; no cell's tools
+grant `Unrestricted` bash when the executor is embedded. Then it materializes each cell's pack into
+the run directory, and writes the `EvalRun` with its frozen `origin` in one transaction. `run_id`
+is caller-chosen. Freeze is idempotent: an existing run with the same `run_id` and an equal
+`origin` is reused; an existing run with a different `origin` is refused. An invalidated run is
+refused for both `run` and `resume`.
+
+**Plan.** `plan(origin, existing_trials)` yields one `PlannedTrial` per
+`(cell, case, trial_index)` that has no completed attempt, with `attempt` one above the highest
+existing attempt for that slot. The order is `trial_index`, then `case_id`, then `cell_id`, so the
+two arms of a pair are adjacent in the schedule and see the provider at nearly the same time. The
+`trial_id` is a digest of `(run_id, cell_id, case_id, trial_index, attempt)`, so a resume that
+plans the same slot twice cannot create two rows.
+
+**Execute.** Planned trials run through `buffer_unordered(concurrency)`, default 1. Per trial, in
+this order:
+
+1. Write the `EvalTrial` row with a null `completion`. This happens before `execute`, so a crash
+   leaves a row that says "attempted, not finished", which is the fact resume needs.
+2. `executor.execute(spec)`.
+3. `grade(case, evidence, registry)`, then `append_verdicts`.
+4. `complete_trial`, the write-once completion. This is the commit point. Verdicts before
+   completion means a crash between them leaves verdicts attached to a row that resume abandons,
+   and those verdicts are keyed to the abandoned `trial_id`, so they never collide with the retry's.
+
+**Retry and the breaker.** A trial whose evidence class is NotEvidence is re-planned as a new
+attempt, up to `max_infra_retries` (frozen in `origin`, default 3), with exponential backoff
+starting at 5 seconds. A run-level counter tracks consecutive NotEvidence trials across all slots;
+at `breaker_threshold` (default 5) the loop stops launching, waits for in-flight trials, and
+returns a typed `ProviderDown` error. The run stays resumable. A completed trial resets the
+counter. A Fail never retries: it is the subject's result.
+
+**Cancellation.** `cancel` is a token the caller owns. On cancel the loop stops launching,
+interrupts each in-flight trial's current request through the existing interrupt owner, waits the
+grace period, and returns. In-flight trials keep their null completion and are abandoned by the next
+resume. Cancellation is in-process only in 2a: a run is hosted by the calling process, and no other
+process holds the trial nodes. `gents eval cancel <run_id>` (M4) therefore signals the hosting
+process; a cross-process cancel document is a 2b item beside the reconciler.
+
+**Invalidation.** `invalidate_run(run_id, by, reason)` sets `invalidated` and nothing else. The
+runner refuses to resume it. Reports, `compare`, and exposure counts exclude it. It is never
+deleted by invalidation; `eval rm` is the only deletion.
+
+**Two cells, one loop.** The optimization driver (M6b) calls the same `run` twice per round: a
+train run with one cell, and a validation run with two cells sharing `seed_base`. It reads
+`RunOutcome` to decide whether the round has enough evidence, then reads verdicts through the M1
+document functions. The runner does not know it is being driven.
+
+**Failure of the launching home.** A write to the launching home that fails (the node is down,
+the disk is full) is not a trial outcome. `run` returns the error, the trial that was in flight
+keeps its null completion, and resume repairs it. The runner never converts its own I/O failures
+into `infrastructure` verdicts, because that would count the harness's fault against the subject.
+
 ## Sections still to come
 
-3. The run loop: freezing, concurrency, the retry breaker, write ordering, cancellation,
-   invalidation.
 4. Testing and phasing: the scripted matrix, the `MockStreamingBackend` canary test, the PR stack.
