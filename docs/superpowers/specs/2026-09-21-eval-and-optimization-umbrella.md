@@ -138,3 +138,12 @@ the LLM proposer and its evidence projection.
 - Whether a reserved-collection list for `DatastoreToolSurface` already exists.
 - CLAUDE.md's "Configuration refactor stack" section describes #1430 as in flight. It merged on
   2026-09-11, so adding a `PackConfig` root is not blocked by it.
+
+## 8. Implementation plans
+
+| Milestone | Plan |
+|---|---|
+| Track 0 | `plans/2026-09-21-optimization-substrate-1-foundation.md`, following its Track 0 execution guide |
+| M1 | `plans/2026-09-21-eval-core-contract.md` |
+| M6, pure half | `plans/2026-09-21-optimization-policy-and-lean.md` |
+| M2, M3, M4, the rest of M6 | not yet planned; each waits for its spec |

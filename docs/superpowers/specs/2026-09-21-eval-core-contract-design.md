@@ -131,7 +131,9 @@ type EvalVerdict @branchable
     check_version: String @immutable
     tier: String @immutable
     outcome_kind: String @immutable
-    score: Float @immutable
+    provider_reason: String @immutable
+    score_bp: Int @immutable
+    weight: Int @immutable
     raw: JSON @immutable
     feedback: String @immutable
     regrade_of: String @immutable
@@ -142,6 +144,12 @@ type EvalVerdict @branchable
 - Every field is immutable. Re-grading appends a row whose `regrade_of` names the verdict it
   supersedes. Consumers read the latest verdict per `(trial, stage, check)`. A raw verdict is never
   lost.
+- `score_bp` is integer basis points in `0..=10000`, null for a non-evidence verdict. Integers were
+  chosen over `Float` during planning: the repository has no `@immutable Float` precedent, and
+  integers are exact in both Lean and Rust.
+- `provider_reason` is `rejected`, `unavailable` or null. The kind-to-class projection needs it.
+- `weight` is the check's weight copied from the definition, so a reducer does not re-read the
+  definition.
 - `raw` holds the check's own verdict verbatim, including `{reason_code, detail}`.
 - `feedback` is written only when the case is on the train split. The runner enforces this, not the
   check.
@@ -165,9 +173,9 @@ excluded.
 completes. If a stage never ran, the runner writes a verdict for each of its checks carrying the
 stage's failure kind. Denominators are rows, not inferences from gaps.
 
-| `outcome_kind` | Meaning | Class | `score` |
+| `outcome_kind` | Meaning | Class | `score_bp` |
 |---|---|---|---|
-| `passed` | The check ran and was satisfied | Pass | from the check, in (0, 1] |
+| `passed` | The check ran and was satisfied | Pass | from the check, up to 10000 |
 | `model_acceptance` | The check ran and was not satisfied | Fail | from the check; may be partial |
 | `deadline` | The stage ran out of time | Fail | 0 |
 | `tool` | A tool execution failed | Fail | 0 |
@@ -176,6 +184,7 @@ stage's failure kind. Denominators are rows, not inferences from gaps.
 | `provider`, reason `rejected` | A 4xx such as context overflow or a content-policy refusal | Fail | 0 |
 | `provider`, reason `unavailable` | A 5xx, a connection failure, rate limiting | NotEvidence | null |
 | `infrastructure` | The trial home, runner or host failed; abandoned attempts | NotEvidence | null |
+| `provider`, no reason | The evaluator could not tell which | Unknown | null |
 | `inconclusive` | The evaluator could not tell | Unknown | null |
 | `grader` | The check itself errored | Unknown | null |
 | `unknown` | Could not be classified | Unknown | null |
@@ -310,6 +319,5 @@ authorization.
 ## 7. Open items
 
 - The ACP disagreement and the reserved-collection question, both recorded in the umbrella.
-- DefraDB `Float` behavior for `score`, including null handling under `@immutable`. If it is
-  unsuitable, `score_bp: Int` in basis points is the fallback, and the optimization policy already
-  quantizes to basis points.
+- Resolved during planning: `score` is `score_bp: Int`, not `Float`.
+- Implementation plan: `docs/superpowers/plans/2026-09-21-eval-core-contract.md`.

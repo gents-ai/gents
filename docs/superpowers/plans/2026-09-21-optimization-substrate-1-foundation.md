@@ -1,9 +1,44 @@
 # Optimization Substrate, Plan 1 of 3: Foundation Implementation Plan
 
-> **Status after the 2026-09-21 redesign.** PR 1 Task 1 (`publishIf`) and PR 3 (the Rust
-> compare-and-set) are valid and can start now. PR 1 Task 2 (`Proofs/Optimization.lean`) and PR 2
-> (conformance) are partly valid: the two integer gates and their generated cases are restated in
-> `specs/2026-09-21-optimization-on-eval-design.md` section 8, so re-plan those tasks from that spec.
+> **Status after the 2026-09-21 redesign: execute this plan as "Track 0" only.** `publishIf` and the
+> Rust compare-and-set are unchanged by the redesign and can start now. Everything about
+> `Proofs/Optimization.lean` and the `optimization_cases` conformance family is superseded by
+> `2026-09-21-optimization-policy-and-lean.md`. Follow the Track 0 execution guide below; where it
+> conflicts with a task's text, the guide wins.
+
+## Track 0 execution guide
+
+Three PRs, same branch names and bases as written below.
+
+**PR 1 (`optimization/01-lean`): `publishIf` only.**
+- Execute **Task 1** in full.
+- **Skip Task 2** entirely. Do not create `Proofs/Optimization.lean` and do not add its import.
+- Execute **Task 3** with these changes: skip Step 1 (the `Proofs/Optimization.lean` row). Execute
+  Steps 2, 3 and 4. The commit message becomes `docs(proofs): map publishIf`.
+
+**PR 2 (`optimization/02-conformance`): `publishIf` cases only.**
+- **Task 4:** execute Step 1. **Skip Step 2** (do not create `Proofs/Conformance/Optimization.lean`).
+  In Step 3, do not add the `import Proofs.Conformance.Optimization` line, and insert only these two
+  lines after the `apply_reconcile_cases` splice:
+  ```lean
+      ++ "\"publish_if_cases\":"
+        ++ ApplyReconcile.ContractCases.publishIfCasesJson ++ ","
+  ```
+  In Step 4, add only the `publish_if_cases` ledger entry, and do not add the `"optimization"`
+  `featureSurfaceRequirements` entry. Execute Step 5. The Step 5 contingency does not apply. The
+  commit message becomes `proofs(conformance): emit publishIf cases`.
+- **Task 5:** in Step 1, create `crates/gents/src/lean_vocab_test/publish_if.rs` instead of
+  `optimization.rs`, containing only the `use` lines, `LeanPublishIfExpectation` and
+  `LeanPublishIfCase`. In Step 2, the module is `publish_if` (`#[path = "publish_if.rs"] mod
+  publish_if;` and `pub(crate) use publish_if::*;`), add only the `publish_if_cases` snapshot field,
+  and add only the `lean_publish_if_cases` accessor. In Step 3, add only the
+  `publish_if_cases.len() == 7` assertion and only the `publish_if_cases` emitted-domain block.
+  Execute Steps 4 and 5. The commit message becomes `test(conformance): deserialize publishIf cases`.
+
+**PR 3 (`optimization/03-cas`): unchanged.** Execute **Task 6** and **Task 7** in full.
+
+The PR descriptions drop every mention of the optimization model. PR 1's owners line becomes
+`ApplyReconcile/Publication` only.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

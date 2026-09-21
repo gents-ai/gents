@@ -236,3 +236,8 @@ was not already there.
 | `plans/…-1-foundation.md`, PR 1 Task 2 (`Optimization.lean`) and PR 2 (conformance) | Partly valid. The integer gates and their generated cases are restated per section 8; re-plan with this spec |
 | `plans/…-2-core-and-driver.md` | Superseded. `target.rs` and the journal mechanics carry over; the policy, the evaluator seam, the journal vocabulary and the driver do not |
 | `plans/…-3-promotion-and-live-demo.md` | Superseded. `promote`, `show` and the CLI carry over and gain `revert`; PR 7 is deleted |
+
+## 11. Implementation plans
+
+- The pure half (Lean model, conformance, `PolicyV2`): `plans/2026-09-21-optimization-policy-and-lean.md`.
+- The job record, driver, `promote`, `show` and `revert` wait for the eval runner's API (eval spec 2).
