@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Order is Lean, then conformance, then Rust. Each PR targets its parent branch.
+- **Narrow Lean imports only.** The Mathlib prebuilt cache is not available on the development machine, so only the Mathlib modules the repo already imports are compiled. Never import `Mathlib.Tactic` or any other broad module: it forces a from-source build of most of Mathlib. `simp`, `simp_all`, `decide`, `cases`, `rcases`, `split`, `omega`, `rename_i` and `rfl` are in Lean core. Before adding an import, confirm its `.olean` exists under `.lake/packages/mathlib/.lake/build/lib/`.
 - Lean proofs contain no `sorry`. If a tactic fails, fix the tactic; never weaken a statement without recording why in the PR description.
 - All four eval collections are `@branchable`. The directive is irreversible after a schema is created.
 - `EvalDefinition` and `EvalVerdict` are listed in `LOCAL_AUDIT_COLLECTION_NAMES`. `EvalRun` and `EvalTrial` are not.
@@ -72,7 +73,6 @@ Branch: `eval/01-lean`, base `main`.
 
 ```lean
 import Mathlib.Data.List.Basic
-import Mathlib.Tactic
 
 /-! Eval core contract (#1515): the closed outcome vocabulary and its projection
 onto evidence classes.

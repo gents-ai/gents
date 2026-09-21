@@ -15,6 +15,7 @@
 ## Global Constraints
 
 - Order is Lean, then conformance, then Rust. Each PR targets its parent branch.
+- **Narrow Lean imports only.** The Mathlib prebuilt cache is not available on the development machine, so only the Mathlib modules the repo already imports are compiled. Never import `Mathlib.Tactic` or any other broad module: it forces a from-source build of most of Mathlib. `simp`, `simp_all`, `decide`, `cases`, `rcases`, `split`, `omega`, `rename_i` and `rfl` are in Lean core. Before adding an import, confirm its `.olean` exists under `.lake/packages/mathlib/.lake/build/lib/`.
 - Lean proofs contain no `sorry`. If a tactic fails, fix the tactic; never weaken a statement without recording why in the PR description.
 - Every quantity is an integer: scores and tolerances in basis points, the significance level and p-values in parts per million. Lean and Rust compute the arithmetic gates identically.
 - The policy is pure: no I/O, no clock, no unseeded randomness. The Monte Carlo seed is an argument.
@@ -59,7 +60,6 @@ Branch: `optimization/10-lean`, base `eval/01-lean`.
 ```lean
 import Proofs.Eval
 import Mathlib.Data.List.Basic
-import Mathlib.Tactic
 
 /-! Configuration optimization (#1455), on the eval core contract.
 
