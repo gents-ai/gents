@@ -19,6 +19,7 @@ Decided in this brainstorm:
 | Where the `TrialExecutor` seam sits | Wide: `execute(spec) -> TrialEvidence`, plus `recollect(locator)` for regrades. Evidence is plain data | Checks become pure functions over evidence, which spec 3 assumes. The scripted executor is a lookup table. Spec 2b becomes a third executor with no runner change |
 | How evidence gets the documents a subject produced | Definition-declared capture: a case declares `capture: [{name, collection, filter}]`, held runner-side and never sent into the trial. Session records are always captured | Evidence stays small, check inputs are explicit, and scripted evidence is easy to write. The field is additive to the case shape and lands with M3 |
 | How a trial home reaches a model | The runner copies the cell's frozen inference binding into the trial home. Credentials resolve from the runner's process environment, as #1512 does. OAuth-subscription backends are refused at freeze time | It is the smallest change and already proven. An `OAuthCredential` is scoped to one agent DID, and N homes would race on refresh. A runner-hosted inference proxy is a 2b candidate |
+| Trial isolation in 2a | Embedded-first. At freeze time the embedded executor refuses any subject whose tools configuration grants `Unrestricted` bash. No bash, the sandboxed workspace modes, and datastore and file tools under a workspace root inside the trial home are allowed | `BashMode::Unrestricted` runs commands unmodified with the runner's privileges and environment, including API keys. Only the workspace modes get `sandbox-exec`, and only on macOS. A candidate prompt is untrusted text that steers an agent, so "embedded is not a sandbox" has to be an enforced boundary, not a caveat |
 
 Facts from the harness scout that shape the design:
 
@@ -37,6 +38,28 @@ Facts from the harness scout that shape the design:
   string or a transcript excerpt. They carry ids, enum strings and counts only. Detail belongs in
   `EvalVerdict.raw` or stays in the trial home.
 
+## Deviation from #1515
+
+Issue #1515 names "one independent Gents process and retained home/database/workspace per trial" as
+the design direction, and records #1512's embedded databases in one test process as the current
+state. Spec 2a keeps the retained home, database, workspace and identity per trial, but runs trials
+in one process. A process or container executor is spec 2b.
+
+The evidence for deferring it: the `monitor-mailbox` family is document-driven, forbids machine
+inspection in its own prompt, and already runs on `EmbeddedNode`. It can seed about twenty independent
+cases for M3 with a golden monitor that needs no bash. The `host-steward` and `host-maintenance`
+families (18 cases) are host-only: the monitor runs `df`, `sha256sum`, `stat` and `wget` inside a
+container, and every fault is container filesystem or permission state. Porting them needs spec 2b,
+which is therefore the stated prerequisite of spec 3b. The wide executor seam exists so that 2b is a
+third `TrialExecutor` and changes nothing in the runner.
+
+Two #1515 requirements are not yet designed and belong to section 2: durable references to file
+evidence (project snapshots, screenshots, external grader evidence), and the retained-home layout
+that `gents eval rm` deletes.
+
+No fixed monitor pack exists in the repository. Every #1512 suite has a configurator author the
+monitor inside the trial. M3 creates the golden subject and chooses its tool ceiling.
+
 ## Section 1: shape and the seam (awaiting approval)
 
 The runner is a library under `crates/gents/src/eval/runner/`. It holds no state of its own.
@@ -44,7 +67,7 @@ Everything it knows is in the launching home's documents.
 
 | File | Owns | Pure |
 |---|---|---|
-| `freeze.rs` | Turns a `RunRequest` into a written `EvalRun`. Resolves the definition to `(id, comparability_version, digest)`, selects cases by split, resolves each cell's pack digest, `behavior_id` and inference binding, and refuses OAuth-subscription backends. Idempotent on `run_id` | I/O |
+| `freeze.rs` | Turns a `RunRequest` into a written `EvalRun`. Resolves the definition to `(id, comparability_version, digest)`, selects cases by split, resolves each cell's pack digest, `behavior_id` and inference binding, refuses OAuth-subscription backends, and refuses a subject that grants `Unrestricted` bash when the executor is embedded. Idempotent on `run_id` | I/O |
 | `plan.rs` | `plan(origin, existing_trials) -> Vec<PlannedTrial>`: the cells x cases x trial-index matrix, minus trials that already have a completion, with the next `attempt` for the rest | pure |
 | `executor.rs` | The trait, `TrialSpec`, `TrialEvidence`, `TrialLocator` | types |
 | `scripted.rs` | `ScriptedExecutor`: a table of evidence keyed by `(cell label, case_id, trial_index, attempt)` | pure |
