@@ -27,12 +27,8 @@ theorem cancelPendingRow_callId (document : DocId) (row : Transcript.ToolCallRow
 theorem cancelPendingWorld_owned_lookup (world : World) (document key : DocId) :
     ownedToolByDocument? (cancelPendingWorld world document) key =
       (ownedToolByDocument? world key).map (cancelPendingTool document) := by
-  unfold ownedToolByDocument? cancelPendingWorld
-  rw [filter_map_key world.toolContexts (·.document) key (cancelPendingTool document)
-    (cancelPendingTool_document document)]
-  cases world.toolContexts.filter (fun tool => tool.document == key) with
-  | nil => rfl
-  | cons head tail => cases tail <;> rfl
+  exact ownedToolByDocument_map world (cancelPendingTool document) key
+    (cancelPendingTool_document document)
 
 theorem cancelPendingWorld_row_lookup (world : World) (document key : DocId) :
     transcriptToolByDocument? (cancelPendingWorld world document) key =

@@ -12,15 +12,7 @@ theorem ownedToolByDocument_map (world : World) (edit : OwnedTool → OwnedTool)
     | [tool] => some tool | _ => none) =
     (match world.toolContexts.filter (fun tool : OwnedTool => tool.document == document) with
     | [tool] => some tool | _ => none).map edit
-  have commute : (world.toolContexts.map edit).filter
-      (fun tool => tool.document == document) =
-      (world.toolContexts.filter (fun tool => tool.document == document)).map edit := by
-    induction world.toolContexts with
-    | nil => rfl
-    | cons head tail ih =>
-      simp only [List.map_cons, List.filter_cons, hdocument]
-      split <;> simp_all
-  rw [commute]
+  rw [filter_map_key world.toolContexts (·.document) document edit hdocument]
   cases world.toolContexts.filter (fun tool => tool.document == document) with
   | nil => rfl
   | cons head tail => cases tail <;> rfl

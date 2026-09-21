@@ -20,12 +20,8 @@ theorem clockWorld_owned_lookup (world : World) (document : DocId) (now : Time)
     (key : DocId) :
     ownedToolByDocument? (clockWorld world document now) key =
       (ownedToolByDocument? world key).map (clockEdit document now) := by
-  unfold ownedToolByDocument? clockWorld
-  rw [filter_map_key world.toolContexts (·.document) key (clockEdit document now)
-    (clockEdit_document document now)]
-  cases world.toolContexts.filter (fun tool => tool.document == key) with
-  | nil => rfl
-  | cons head tail => cases tail <;> rfl
+  exact ownedToolByDocument_map world (clockEdit document now) key
+    (clockEdit_document document now)
 
 theorem clockWorld_binding (world : World) (document : DocId) (now : Time)
     (tool : OwnedTool) :

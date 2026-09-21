@@ -222,12 +222,6 @@ def drainAutomatedWakeups
     terminal := s.terminal ∪ drainedRequestIds source queueKey s.pending
   }
 
-def createdOrdered (s : SessionQueueState) : Prop :=
-  CreatedOrdered s.pending
-
-def uniqueCoalescedQueueKeys (s : SessionQueueState) : Prop :=
-  UniqueCoalescedQueueKeys s.pending
-
 end SessionQueueState
 
 end SessionQueue

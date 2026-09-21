@@ -21,20 +21,20 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
     exact retractBeforeRetry_preserves_toolProjectionCoherent before after generation record coherent
       (mapError_success Gate.Error.execution _ _ h)
   | accept generation closing message targets admissions =>
-    exact acceptAndPublish_preserves_toolProjectionCoherent before after generation closing
-      message targets admissions (mapError_success Gate.Error.execution _ _ h)
+    exact (accepted_publication_is_composed_atomically before after generation closing
+      message targets admissions (mapError_success Gate.Error.execution _ _ h)).2.2.1
   | authored generation closing message =>
     exact publishAuthored_preserves_toolProjectionCoherent before after generation closing
       message coherent (mapError_success Gate.Error.execution _ _ h)
   | headerOnly generation message admissions =>
-    exact publishHeaderOnly_preserves_toolProjectionCoherent before after generation message
-      admissions (mapError_success Gate.Error.execution _ _ h)
+    exact (header_only_publication_is_atomic before after generation message admissions
+      (mapError_success Gate.Error.execution _ _ h)).2.2.2
   | dispatch generation permit =>
-    exact dispatch_preserves_toolProjectionCoherent before after generation permit
-      (mapError_success Gate.Error.execution _ _ h)
+    exact (dispatch_requires_committed_intent_and_marks_running before after generation permit
+      (mapError_success Gate.Error.execution _ _ h)).2.2
   | admitSpawned generation admission =>
-    exact admitSpawnedBackground_preserves_toolProjectionCoherent before after generation admission
-      (mapError_success Gate.Error.execution _ _ h)
+    exact (spawned_background_admission_is_owned_without_fabricated_intent before after generation
+      admission (mapError_success Gate.Error.execution _ _ h)).1
   | toolControl generation document action =>
     exact tool_control_success_preserves_projection_coherence before after generation document action
       (mapError_success Gate.Error.execution _ _ h)
@@ -62,14 +62,14 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
       subst after
       exact advanceCursor_preserves_toolProjectionCoherent before post cursor coherent hc
   | recover expected fresh duration deadline items =>
-    exact recoverExpiredBatch_preserves_toolProjectionCoherent before after expected fresh duration deadline items
-      (mapError_success Gate.Error.execution _ _ h)
+    exact (recovery_is_all_sources_single_winner_and_exact before after expected fresh duration deadline
+      items (mapError_success Gate.Error.execution _ _ h)).2.1
   | revoke expected fresh outcome selection =>
     exact revokeCorrupt_preserves_toolProjectionCoherent before after expected fresh outcome selection
       coherent (mapError_success Gate.Error.execution _ _ h)
   | terminalize generation outcome selection =>
-    exact terminalize_preserves_toolProjectionCoherent before after generation outcome selection
-      (mapError_success Gate.Error.execution _ _ h)
+    exact (terminal_selection_commits_with_lifecycle before after generation outcome selection
+      (mapError_success Gate.Error.execution _ _ h)).2.2.2
 
 theorem Gate.successful_commit_preserves_toolProjectionCoherent
     (before after : World) (actor : Gate.Actor) (now : Time) (operation : Gate.Operation)

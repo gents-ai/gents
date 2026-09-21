@@ -757,38 +757,6 @@ theorem close_success_effect (before after : World) (document : DocId)
       subst after
       exact ⟨⟨rfl, rfl, rfl⟩, by simpa using postCoherent⟩
 
-theorem closeToolOutput_success_segment_effect (before after : World) (document : DocId)
-    (authority : CloseAuthority) (record : Segment)
-    (h : closeToolOutput before document authority record = .ok after) :
-    after.segments = before.segments ∨
-      ∃ request sourceDoc, after.segments = before.segments ++ [record] ∧
-        closures before.segments (CanonicalOutput.ToolDelivery.coordinate request sourceDoc) = [] ∧
-        CanonicalOutput.ToolDelivery.identityAvailable before.segments record = true ∧
-        CanonicalOutput.ToolDelivery.ownedRecord before.segments request sourceDoc
-          before.lease.now record = true := by
-  unfold closeToolOutput ToolWrite.lift closeToolOutputWrite at h
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  rename_i tool found
-  split at h <;> try contradiction
-  split at h
-  · left
-    have same : before = after := by
-      simpa [Except.map, ToolWrite.apply_current] using h
-    simp [same]
-  · split at h <;> try contradiction
-    split at h <;> try contradiction
-    rename_i segments closed
-    dsimp at h
-    split at h <;> try contradiction
-    simp [Except.map] at h
-    subst after
-    rcases CanonicalOutput.ToolDelivery.closeRecords_success_effect
-      before.segments segments tool.requestDoc tool.document before.lease.now record closed with
-      replay | fresh
-    · exact Or.inl replay
-    · exact Or.inr ⟨tool.requestDoc, tool.document, by simpa [ToolWrite.apply] using fresh⟩
-
 theorem close_preserves_publications (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
     (h : closeToolOutput before document authority record = .ok after) :
@@ -824,6 +792,24 @@ theorem close_success_write_effect (before after : World) (document : DocId)
     simp [Except.map] at h
     subst after
     exact Or.inr ⟨tool, context, segments, found, terminal, closed, rfl⟩
+
+theorem closeToolOutput_success_segment_effect (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment)
+    (h : closeToolOutput before document authority record = .ok after) :
+    after.segments = before.segments ∨
+      ∃ request sourceDoc, after.segments = before.segments ++ [record] ∧
+        closures before.segments (CanonicalOutput.ToolDelivery.coordinate request sourceDoc) = [] ∧
+        CanonicalOutput.ToolDelivery.identityAvailable before.segments record = true ∧
+        CanonicalOutput.ToolDelivery.ownedRecord before.segments request sourceDoc
+          before.lease.now record = true := by
+  rcases close_success_write_effect before after document authority record h with same | effect
+  · exact Or.inl (congrArg World.segments same)
+  · obtain ⟨tool, context, segments, _, _, closed, rfl⟩ := effect
+    rcases CanonicalOutput.ToolDelivery.closeRecords_success_effect
+      before.segments segments tool.requestDoc tool.document before.lease.now record closed with
+      replay | fresh
+    · exact Or.inl replay
+    · exact Or.inr ⟨tool.requestDoc, tool.document, fresh⟩
 
 theorem close_preserves_nextSeq (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)

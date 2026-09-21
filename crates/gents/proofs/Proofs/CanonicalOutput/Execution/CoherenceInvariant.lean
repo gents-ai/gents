@@ -212,54 +212,6 @@ theorem renew_preserves_toolProjectionCoherent
   obtain ⟨lease, _, rfl⟩ := renew_success_is_exact_lease_cas before after generation deadline h
   exact coherent
 
-theorem acceptAndPublish_preserves_toolProjectionCoherent
-    (before after : World) (generation : Generation) (closing : Segment)
-    (message : MessageEnvelope) (targets : List RemoteTarget) (admissions : List ToolAdmission)
-    (h : acceptAndPublish before generation closing message targets admissions = .ok after) :
-    toolProjectionCoherent after = true :=
-  acceptAndPublishCore_success_toolProjectionCoherent before after generation closing
-    message targets admissions (checked_core_success _ _ _ h)
-
-theorem publishHeaderOnly_preserves_toolProjectionCoherent
-    (before after : World) (generation : Generation)
-    (message : MessageEnvelope) (admissions : List ToolAdmission)
-    (h : publishHeaderOnly before generation message admissions = .ok after) :
-    toolProjectionCoherent after = true :=
-  publishHeaderOnlyCore_success_toolProjectionCoherent before after generation message
-    admissions (checked_core_success _ _ _ h)
-
-theorem dispatch_preserves_toolProjectionCoherent
-    (before after : World) (generation : Generation) (permit : DispatchPermit)
-    (h : dispatch before generation permit = .ok after) :
-    toolProjectionCoherent after = true :=
-  (dispatch_requires_committed_intent_and_marks_running before after generation permit h).2.2
-
-theorem admitSpawnedBackground_preserves_toolProjectionCoherent
-    (before after : World) (generation : Generation) (admission : SpawnedToolAdmission)
-    (h : admitSpawnedBackground before generation admission = .ok after) :
-    toolProjectionCoherent after = true := by
-  have hp := checked_success _ _ _ h
-  simp only [Bool.and_eq_true] at hp
-  exact hp.1
-
-theorem recoverExpiredBatch_preserves_toolProjectionCoherent
-    (before after : World) (expected fresh : Generation) (duration deadline : Time)
-    (items : List RecoveryItem)
-    (h : recoverExpiredBatch before expected fresh duration deadline items = .ok after) :
-    toolProjectionCoherent after = true := by
-  have hp := checked_success _ _ _ h
-  simp only [Bool.and_eq_true] at hp
-  exact hp.1.1.2
-
-theorem terminalize_preserves_toolProjectionCoherent
-    (before after : World) (generation : Generation)
-    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
-    (h : terminalize before generation outcome selection = .ok after) :
-    toolProjectionCoherent after = true := by
-  have hp := checked_success _ _ _ h
-  simp only [Bool.and_eq_true] at hp
-  exact hp.2
-
 theorem advanceCursor_preserves_toolProjectionCoherent
     (before after : World) (sequence : Transcript.Sequence)
     (coherent : toolProjectionCoherent before = true)
