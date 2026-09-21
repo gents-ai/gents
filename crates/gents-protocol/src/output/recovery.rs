@@ -5,12 +5,12 @@
 //! flush extent and constructs the Partial closure plus the narrowed text-only
 //! header blocks that may be committed together by that owner.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::reconstruction::ObservedSegment;
 use super::{
     MessageBlock, OutputOutcome, OutputSource, OutputWriter, PayloadPresentation, PayloadRef,
-    PresentedPayload, SourceClose, StreamDeclaration, StreamPayload,
+    PresentedPayload, SourceClose, StreamPayload,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,72 +159,28 @@ pub fn plan_recovery_prefix(
         return Err(RecoveryPlanError::MissingOrdinal { ordinal: missing });
     }
 
-    let mut streams: Vec<(StreamDeclaration, u64)> = Vec::new();
-    let mut positions = BTreeSet::new();
-    let mut previous_created_at = None;
     for ordinal in 0..count {
         let candidates = slots.get(&ordinal).expect("dense extent checked");
         let first = candidates[0];
         if candidates.iter().any(|candidate| *candidate != first) {
             return Err(RecoveryPlanError::ConflictingOrdinal { ordinal });
         }
-        let segment = first.segment;
-        let created_at = chrono::DateTime::parse_from_rfc3339(&segment.created_at)
-            .map_err(|_| RecoveryPlanError::MalformedExtent)?;
-        if previous_created_at.is_some_and(|previous| created_at < previous) {
-            return Err(RecoveryPlanError::MalformedExtent);
-        }
-        previous_created_at = Some(created_at);
-        if segment.runs.is_empty() {
-            return Err(RecoveryPlanError::MalformedExtent);
-        }
-        let mut offset = 0usize;
-        for run in &segment.runs {
-            if run.bytes == 0 && run.declaration.is_none() {
-                return Err(RecoveryPlanError::MalformedExtent);
-            }
-            let bytes =
-                usize::try_from(run.bytes).map_err(|_| RecoveryPlanError::MalformedExtent)?;
-            let end = offset
-                .checked_add(bytes)
-                .ok_or(RecoveryPlanError::MalformedExtent)?;
-            // Recovery accounts for every stream as UTF-8 but deliberately
-            // does not decode omitted JSON, reasoning, signatures or media.
-            segment
-                .payload
-                .get(offset..end)
-                .ok_or(RecoveryPlanError::MalformedExtent)?;
-            if let Some(declaration) = &run.declaration {
-                if run.stream as usize != streams.len()
-                    || !positions.insert((declaration.block_index, declaration.part_index))
-                {
-                    return Err(RecoveryPlanError::MalformedExtent);
-                }
-                streams.push((declaration.clone(), u64::from(run.bytes)));
-            } else {
-                let stream = streams
-                    .get_mut(run.stream as usize)
-                    .ok_or(RecoveryPlanError::MalformedExtent)?;
-                stream.1 = stream
-                    .1
-                    .checked_add(u64::from(run.bytes))
-                    .ok_or(RecoveryPlanError::MalformedExtent)?;
-            }
-            offset = end;
-        }
-        if offset != segment.payload.len() {
-            return Err(RecoveryPlanError::MalformedExtent);
-        }
     }
-
-    let stream_bytes = streams.iter().map(|stream| stream.1).collect();
-    let mut text = streams
+    // Producer writes and recovery share run/declaration/time validation. Only
+    // recovery's narrower source eligibility and text selection differ.
+    let extent =
+        super::extent::inspect_open_source(records, request_doc_id, source, expected_writer)
+            .map_err(|_| RecoveryPlanError::MalformedExtent)?;
+    let stream_bytes = extent.stream_bytes;
+    let mut text = extent
+        .streams
         .iter()
         .enumerate()
-        .filter(|(_, (declaration, _))| {
-            matches!(declaration.payload, StreamPayload::Text) && declaration.part_index == 0
+        .filter(|(_, stream)| {
+            matches!(stream.declaration.payload, StreamPayload::Text)
+                && stream.declaration.part_index == 0
         })
-        .map(|(stream, (declaration, _))| (declaration, stream as u32))
+        .map(|(index, stream)| (&stream.declaration, index as u32))
         .collect::<Vec<_>>();
     text.sort_by_key(|(declaration, _)| (declaration.block_index, declaration.part_index));
     let retained_streams = text.into_iter().map(|(_, stream)| stream).collect();
@@ -242,7 +198,7 @@ pub fn plan_recovery_prefix(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::output::{MediaKind, OutputSegment, SegmentRun};
+    use crate::output::{MediaKind, OutputSegment, SegmentRun, StreamDeclaration};
     use crate::rendered_request::{CaptureScope, CaptureScopeKind};
 
     fn source() -> OutputSource {
