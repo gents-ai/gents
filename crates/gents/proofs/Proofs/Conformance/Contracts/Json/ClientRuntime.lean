@@ -170,6 +170,11 @@ private def messageBlockJson {α : Type} (payloadJson : α → String) : Canonic
        jsonArray (parts.map (resultPartJson payloadJson)))
   | .media value => tagged "media" (",\"value\":" ++ mediaJson payloadJson value)
 
+def reconstructedMessageJson (native : CanonicalOutput.ReconstructedMessage) : String :=
+  "{\"role\":" ++ jsonString (roleJson native.role) ++
+    ",\"native_id\":" ++ optionalStringJson native.nativeId ++
+    ",\"blocks\":" ++ jsonArray (native.blocks.map (messageBlockJson byteArrayJson)) ++ "}"
+
 def canonicalMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
   let h := message.header
   "{\"header\":{\"id\":" ++ toString h.id ++ ",\"session\":" ++ toString h.session ++
@@ -213,9 +218,8 @@ private def outputViewJson : StreamingResponse.View → String
   | .settling streams => tagged "settling" (",\"streams\":" ++ streamsJson streams)
   | .retainedPartial streams => tagged "retained_partial" (",\"streams\":" ++ streamsJson streams)
   | .published message native => tagged "published"
-      (",\"message\":" ++ canonicalMessageJson message ++ ",\"native\":{\"role\":" ++
-       jsonString (roleJson native.role) ++ ",\"native_id\":" ++ optionalStringJson native.nativeId ++
-       ",\"blocks\":" ++ jsonArray (native.blocks.map (messageBlockJson byteArrayJson)) ++ "}")
+      (",\"message\":" ++ canonicalMessageJson message ++
+       ",\"native\":" ++ reconstructedMessageJson native)
 
 def outputProjectionCaseJson
     (witness : StreamingResponse.OutputProjectionCase) : String :=

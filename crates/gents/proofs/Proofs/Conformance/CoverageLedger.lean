@@ -1207,8 +1207,23 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "canonical_payload_presentation_cases"
       "CanonicalPayloadPresentationCases"
-      "Stored and presented payload lengths are derived by reconstruction, not provider request sizing. Neither payload length bounds the other; missing dependencies yield no measurement. Compaction.ReductionEngine.decideThreshold is not yet composed with the provider_input projection owner. The real serialized-request/threshold experiment is separately tracked as native.external-projected-request-threshold for implementation; this group is reconstruction-only, not compaction or native consumer coverage.")
+      "Stored and presented payload lengths are derived by reconstruction, not provider request sizing. Neither payload length bounds the other; missing dependencies yield no measurement. The compaction projection join has a separate fixture group. The real serialized-request/threshold experiment remains native.external-projected-request-threshold for implementation; this group is reconstruction-only, not compaction or native consumer coverage.")
       "canonical-output" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "compaction_projection_join_cases"
+      "CompactionProjectionJoinCases"
+      "Model-derived projection/estimate/reduction and rebuilt-admission observations bind exact input identities, failure propagation and threshold/output-capacity boundaries. Provider projection and estimation are explicit fallible native premises, not modeled serializers. Native adapters and the real serialized-request experiment remain pending; controlled observations are not native consumer coverage.")
+      "compaction" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "compaction_canonical_projection_cases"
+      "CompactionCanonicalProjectionCases"
+      "Concrete canonical records and selected identities exercise the composed reconstruction/projection/reduction entry. Compare full native messages at initial and checkpoint-rebuild callbacks, and reject missing or loading dependencies without shortened history. The native serializer and ACP-authorized snapshot remain external premises.")
+      "compaction" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "repaired_projection_admission_cases"
+      "RepairedProjectionAdmissionCases"
+      "Fresh provider-view admission reprojects and re-estimates supplied repaired input; generated observations cover failures, equality, over-threshold and output-capacity checks. This does not model the repair transformation or establish native consumer coverage.")
+      "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "canonical_output_projection_cases"
       "CanonicalOutputProjectionCases"

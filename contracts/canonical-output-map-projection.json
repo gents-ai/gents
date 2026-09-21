@@ -84,7 +84,7 @@
         "Show provider-view fixpoint and prefix stability under later canonical publication, including forked headers and background notification pairs.",
         "Replace LeanCompactionReducerCase.response_status with the modeled publication_ready, provider_fixpoint, and turn_boundary checks instead of restoring response lifecycle state.",
         "Replace the response-status gate only after its surviving published-prefix guarantee is exercised on concrete native inputs.",
-        "MODEL GAP, owned by the Lean layer: compose reconstructed native messages through the existing provider_input complete-body projection/estimation owner into Compaction.ReductionEngine.decideThreshold. That threshold currently takes inputTokens as a free number and Execution/Compaction.lean carries no estimate provenance. Payload presentation fixtures do not establish provider sizing, overflow boundaries or reduction decisions. The real serialized-request experiment is tracked separately by native.external-projected-request-threshold in the implementation layer.",
+        "The formal projection/estimate/reduction boundary has its own projection-compaction-threshold-join entry. It does not upgrade these summary-only reducer/cursor rows or prove native serialization. The real serialized-request experiment remains native.external-projected-request-threshold.",
         "Still summary-only: the reducer and cursor cases. Their concrete row inputs must be exported before the response-status gate is replaced."
       ],
       "retired_bindings": [
@@ -96,6 +96,31 @@
         "LeanCompactionReducerCase.response_status"
       ],
       "constructors": []
+    },
+    {
+      "id": "projection-compaction-threshold-join",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.reduceCanonicalRebuildAndAuthorize" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.canonical_composed_dispatch_binds_reconstruction" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.reduceRebuildAndAuthorize" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.projectAndAuthorize" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.composed_dispatch_binds_exact_source" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.composed_dispatch_is_authorized" }
+      ],
+      "constructors": [],
+      "generated_groups": ["compaction_projection_join_cases", "compaction_canonical_projection_cases", "repaired_projection_admission_cases"],
+      "fixture_status": "concrete_inputs",
+      "native_owner_paths": ["crates/gents/src/provider_input.rs", "crates/gents/src/compaction.rs", "crates/gents/src/agent/loop_stream/request_assembly.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/compaction_projection_join.rs", "crates/gents/src/lean_vocab_test/compaction_canonical_projection.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "Resolve exact selected canonical identities to reconstructed native messages without silently dropping a missing, ambiguous or incomplete publication.",
+        "Drive reduction from the estimate of the projected complete request, including fixed request layers through the existing native callback; never substitute stored or presented payload sums.",
+        "Exercise equality and one-over budget, projection/estimation failure, invalid reduction partitions, and exact checkpoint-plus-suffix rebuilding.",
+        "Reproject and remeasure after reduction or provider-view repair, rejecting a still-over-budget request or one with no positive output capacity.",
+        "Controlled projection observations exercise the formal composition only. Run native.external-projected-request-threshold to validate the real serializer and estimator; native consumer coverage is still pending."
+      ],
+      "retired_bindings": []
     },
     {
       "id": "projection-payload-presentation",

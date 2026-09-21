@@ -12,8 +12,8 @@ length or token usage. Neither payload quantity bounds the other.
 The existing `provider_input` owner projects complete native messages into a
 provider-specific request and estimates that serialized body, including metadata,
 escaping, tool schemas and other request fields. These fixtures must not replace
-that owner with a sum of payload sizes. The threshold/projection join remains a
-separate Lean-layer obligation; no tokenizer or reduction decision is modeled here.
+that owner with a sum of payload sizes. The threshold/projection join has its
+own model and fixtures; no tokenizer or reduction decision is modeled here.
 -/
 namespace Conformance.PayloadPresentationContracts
 

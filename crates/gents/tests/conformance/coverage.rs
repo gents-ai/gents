@@ -1001,6 +1001,24 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ReductionEngineCases".to_string(),
         ));
     }
+    if !snapshot.compaction_projection_join_cases.is_empty() {
+        emitted.insert((
+            "compaction_projection_join_cases".to_string(),
+            "CompactionProjectionJoinCases".to_string(),
+        ));
+    }
+    if !snapshot.compaction_canonical_projection_cases.is_empty() {
+        emitted.insert((
+            "compaction_canonical_projection_cases".to_string(),
+            "CompactionCanonicalProjectionCases".to_string(),
+        ));
+    }
+    if !snapshot.repaired_projection_admission_cases.is_empty() {
+        emitted.insert((
+            "repaired_projection_admission_cases".to_string(),
+            "RepairedProjectionAdmissionCases".to_string(),
+        ));
+    }
     if !snapshot.rendered_capture_key_cases.is_empty() {
         emitted.insert((
             "rendered_capture_cases".to_string(),

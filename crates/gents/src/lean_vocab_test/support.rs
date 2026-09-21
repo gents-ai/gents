@@ -195,6 +195,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
     pub(crate) rolling_compaction_cases: Vec<LeanRollingCompactionCase>,
     pub(crate) reduction_engine_cases: Vec<LeanReductionEngineCase>,
+    pub(crate) compaction_projection_join_cases: Vec<LeanCompactionProjectionJoinCase>,
+    pub(crate) compaction_canonical_projection_cases: Vec<LeanCanonicalCompactionCase>,
+    pub(crate) repaired_projection_admission_cases: Vec<LeanRepairedProjectionCase>,
     pub(crate) rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     pub(crate) capture_scope_cases: Vec<LeanCaptureScopeCase>,
     pub(crate) capture_order_cases: Vec<LeanCaptureOrderCase>,
@@ -827,6 +830,10 @@ mod client_session;
 mod codex_shim;
 #[path = "command_identity_queue.rs"]
 mod command_identity_queue;
+#[path = "compaction_canonical_projection.rs"]
+mod compaction_canonical_projection;
+#[path = "compaction_projection_join.rs"]
+mod compaction_projection_join;
 #[path = "composed_invariants.rs"]
 mod composed_invariants;
 #[path = "descendant_graph.rs"]
@@ -863,6 +870,8 @@ pub(crate) use canonical_presentation::*;
 pub(crate) use client_session::*;
 pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
+pub(crate) use compaction_canonical_projection::*;
+pub(crate) use compaction_projection_join::*;
 pub(crate) use composed_invariants::*;
 pub(crate) use descendant_graph::*;
 pub(crate) use durable_reduction::*;
@@ -1419,6 +1428,20 @@ pub(crate) fn lean_rolling_compaction_cases() -> &'static [LeanRollingCompaction
 
 pub(crate) fn lean_reduction_engine_cases() -> &'static [LeanReductionEngineCase] {
     &lean_contract_snapshot().reduction_engine_cases
+}
+
+pub(crate) fn lean_compaction_projection_join_cases() -> &'static [LeanCompactionProjectionJoinCase]
+{
+    &lean_contract_snapshot().compaction_projection_join_cases
+}
+
+pub(crate) fn lean_compaction_canonical_projection_cases() -> &'static [LeanCanonicalCompactionCase]
+{
+    &lean_contract_snapshot().compaction_canonical_projection_cases
+}
+
+pub(crate) fn lean_repaired_projection_admission_cases() -> &'static [LeanRepairedProjectionCase] {
+    &lean_contract_snapshot().repaired_projection_admission_cases
 }
 
 pub(crate) fn lean_rendered_capture_key_cases() -> &'static [LeanRenderedCaptureKeyCase] {

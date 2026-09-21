@@ -94,16 +94,34 @@ Missing dependencies yield no measurement, not a smaller fallback.
 The existing `provider_input` owner projects complete native messages into the
 provider-specific body and estimates its serialized JSON. Keep that owner:
 reconstructed message → provider request projection → request estimate →
-compaction threshold. The Lean layer does not yet compose that chain:
-`Compaction.ReductionEngine.decideThreshold` takes `inputTokens` as a free number and the canonical
-compaction join carries no estimate provenance. A future Lean composition must
-track that provenance; an honest end-to-end test must also execute the real
-native projection owner in the implementation layer. Neither is supplied by
-payload-length fixtures. The concrete native experiment is tracked separately as
+compaction threshold. The formal join now resolves selected canonical message
+identities through the existing publication/reconstruction owner, then passes
+that exact ordered native list to a fallible provider-projection callback. The
+reduction owner estimates that projected request, not an independent payload
+count. After reduction it rebuilds from the checkpoint and retained suffix and
+projects and estimates again before authorizing dispatch. Provider-view repair
+also requires fresh admission; shrinking the history is not evidence of fit.
+
+`compaction_projection_join_cases` exercises this composition with explicit
+projection/estimation observations. Those observations are controlled inputs at
+the native-owner boundary, not a Lean implementation of provider serialization.
+`compaction_canonical_projection_cases` supplies the actual immutable records
+and selected identities and compares the complete native messages passed to
+initial projection and checkpoint rebuilding. Missing selected identities and
+loading dependencies stop the composition instead of shortening the request.
+`repaired_projection_admission_cases` exercises fresh admission after a provider
+view has been repaired; it does not model the repair transformation itself.
+The latter two groups separate `input` from `expected`, so native adapters cannot
+receive expected messages or decisions as construction inputs.
+The complete fixed request context (system prompt, tools, documents and provider
+parameters) belongs to that callback. An honest end-to-end test must still run
+the real native projection owner. Budget safety is relative to its estimate, not
+a proof that the estimate equals the provider's actual tokenizer count. The
+concrete experiment is tracked separately as
 `native.external-projected-request-threshold`, with `not_exported`/`pending`
 status. The reducer/cursor row fixtures remain `summary_only`; payload fixtures
 have their own reconstruction-only map entry. No tokenizer or reduction decision
-is modeled by this fixture group.
+is modeled by the payload-presentation fixture group.
 
 ## External premises to test
 

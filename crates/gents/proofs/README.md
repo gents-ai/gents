@@ -241,12 +241,18 @@ outside it, as a remote merge is. Its observations include exact normalized
 immutable segments and messages, not only row counts.
 `Conformance/Contracts/Json/PayloadPresentation` exports stored and presented
 payload lengths from reconstruction, not provider request sizes or token usage.
-`Compaction.ReductionEngine.decideThreshold` still takes `inputTokens` as a free input: no theorem
-connects a reduction decision through the existing `provider_input` complete-body
-projection/estimation owner to reconstructed input. Payload-length fixtures do
-not establish that connection. The formal composition is still open, and the
-actual serialized-request/threshold experiment is separately tracked as
-`native.external-projected-request-threshold` for the implementation layer.
+The compaction projection join connects exact canonical message reconstruction
+to a fallible complete-request projection and estimation boundary, then to the
+existing reduction decision. Rebuilt requests are projected and measured again;
+dispatch requires both threshold admission and positive output capacity. The
+provider serializer and estimator remain explicit native parameters, not a
+second implementation in Lean. `compaction_projection_join_cases` supplies
+controlled observations at that boundary; it does not establish that native
+serialization produced them. `compaction_canonical_projection_cases` supplies
+the immutable records and checks full reconstructed native messages;
+`repaired_projection_admission_cases` covers remeasurement of repaired input.
+The actual serialized-request/threshold experiment
+remains `native.external-projected-request-threshold` in the implementation layer.
 
 The new canonical output layer has no native conformance consumer yet. Regenerate
 fixtures and replace the retired response cases in `tests/conformance/coverage.rs`,

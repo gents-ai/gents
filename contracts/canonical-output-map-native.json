@@ -129,7 +129,7 @@
         "Construct and measure complete requests at effective budget and one estimated token above it. Assert equality is NotNeeded and only a strictly greater estimate is reduction-eligible. Raw payload byte counts cannot stand in for these measured boundaries.",
         "Exercise literal-expanded and head/tail presentations and missing dependencies; incomplete reconstruction must not become a smaller dispatchable request.",
         "After reduction, rebuild and reproject the complete request and reject dispatch if its new estimate still exceeds the effective budget.",
-        "The existing Lean threshold rule covers supplied numbers only. Estimate provenance through reconstruction and provider projection remains an unmodeled composition obligation; this pending native experiment and the payload fixtures do not close it."
+        "The formal join now binds canonical reconstruction, fallible projection/estimation, reduction and rebuilt admission. Its callbacks remain native premises: controlled conformance observations and payload fixtures do not establish that real provider serialization produced the estimate."
       ],
       "retired_bindings": []
     },

@@ -22,6 +22,9 @@ GROUPS = {
     "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
     "canonical_payload_presentation_cases": "LeanPayloadPresentationCase",
     "canonical_output_projection_cases": "LeanCanonicalOutputProjectionCase",
+    "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
+    "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
+    "repaired_projection_admission_cases": "LeanRepairedProjectionCase",
     "request_execution_lease_cases": "LeanRequestExecutionLeaseCase",
     "request_execution_lease_trace_cases": "LeanRequestExecutionLeaseTraceCase",
 }

@@ -35,6 +35,8 @@ import Proofs.Conformance.Contracts.Json.RequestInput
 import Proofs.Conformance.Contracts.Json.AggregateBudget
 import Proofs.Conformance.Contracts.Json.RollingCompaction
 import Proofs.Conformance.Contracts.Json.ReductionEngine
+import Proofs.Conformance.Contracts.Json.CompactionProjectionJoin
+import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups
@@ -368,6 +370,12 @@ def snapshotJson : String :=
       ++ rollingCompactionCasesJson ++ ","
     ++ "\"reduction_engine_cases\":"
       ++ reductionEngineCasesJson ++ ","
+    ++ "\"compaction_projection_join_cases\":"
+      ++ compactionProjectionJoinCasesJson ++ ","
+    ++ "\"compaction_canonical_projection_cases\":"
+      ++ compactionCanonicalProjectionCasesJson ++ ","
+    ++ "\"repaired_projection_admission_cases\":"
+      ++ repairedProjectionAdmissionCasesJson ++ ","
     ++ "\"rendered_capture_key_cases\":"
       ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"capture_scope_cases\":"
