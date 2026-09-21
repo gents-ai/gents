@@ -1,7 +1,7 @@
 # Eval runner design (issue #1515, sub-project 2a)
 
-Status: **DRAFT, brainstorm in progress (2026-09-21).** Sections 1 to 3 are approved. Section 4 is
-presented and awaits approval. Baseline: `main` at `0deb7659c`.
+Status: design, approved section by section on 2026-09-21, then self-reviewed (the self-review's
+changes are marked *[self-review]*). Baseline: `main` at `0deb7659c`.
 
 ## What this spec is
 
@@ -107,13 +107,20 @@ completion is abandoned, and the plan emits the same slot with `attempt + 1`.
 
 ```rust
 trait TrialExecutor {
+    /// What this executor can isolate. `freeze` checks a subject's tool
+    /// ceiling against it: `Embedded` refuses `Unrestricted` bash.
+    fn isolation(&self) -> Isolation; // Embedded | Process
     /// Never returns Err. A home that fails to boot is evidence with
     /// `failure_kind: infrastructure`.
     async fn execute(&self, spec: &TrialSpec) -> TrialEvidence;
-    /// Re-reads evidence from a retained trial home, for regrades.
-    async fn recollect(&self, at: &TrialLocator) -> Option<TrialEvidence>;
+    /// Re-reads evidence from a retained trial home, for regrades. Takes
+    /// the capture list because a locator alone does not say what to read.
+    async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence>;
 }
 ```
+
+*[self-review]* `isolation()` is how `freeze.rs` knows which refusals apply without knowing the
+executor's type, and `recollect` takes the captures because the locator names a home, not a query.
 
 `TrialSpec` holds only what a trial is allowed to contain: the subject pack, `behavior_id`, the
 inference binding with `seed`, the fixtures, the ordered `(stage_id, prompt, deadline_secs)` list, and
@@ -123,10 +130,16 @@ the capture queries. The capture queries run after each stage, from outside the 
 executor never receives the case, so it cannot leak it. Threat T1 is structural, not a convention.
 
 `TrialEvidence` holds `locator` (`trial_agent_did`, `session_id`, `home_hint`); `stages`, each with
-`{stage_id, request_id, terminal_state, failure_kind, messages, tool_calls, captures}`; `usage` (token
-sums, `null` when unknown); and `anchor`. The anchor keeps the contract's definition: terminal states
-plus request and inference-call counts. An `evidence_digest` is added beside it, which is additive
-because `completion` is JSON.
+`{stage_id, request_id, terminal_state, failure_kind, provider_reason, messages, tool_calls,
+captures}`; `usage` (token sums, `null` when unknown); and `anchor`. The anchor keeps the contract's
+definition: terminal states plus request and inference-call counts. An `evidence_digest` is added
+beside it, which is additive because `completion` is JSON.
+
+*[self-review]* `terminal_state` is `RequestLifecycleState`, `failure_kind` is `OutcomeKind` and
+`provider_reason` is `ProviderReason`: the closed types M1's `documents.rs` uses, never strings.
+`home_hint` is a path relative to the launching home's root, so a moved home keeps a valid hint.
+`evidence_digest` is SHA-256 over the canonical JSON (sorted keys) of `stages`, `usage` and
+`anchor`, excluding `locator`, so the digest is the same wherever the home sits.
 
 Because `execute` never fails, the error taxonomy stays in one place: the outcome vocabulary.
 
@@ -155,9 +168,15 @@ optimization driver, which writes the modified pack into the run directory itsel
 that identity. The runner is the only holder of the key, so it acts as the trial's operator: it
 installs the pack with `DesiredStateApplyPlan::from_pack_config` and `apply_desired_state_plan`,
 writes the inference binding (with `seed`) as an `InferenceBackend` document, installs a
-`WorkspaceRoot` pointing at `workspace/`, and installs the fixtures: input documents through the
-same apply path, and files into `workspace/`. Then it boots `Gents` on that node and starts the
-completion loop.
+`WorkspaceRoot` pointing at `workspace/`, and installs the fixtures, then boots `Gents` on that node
+and starts the completion loop.
+
+*[self-review]* Fixtures install by kind. Schemas are registered first, through the same schema
+registration the runtime uses at startup. Configuration documents (members of the `Collection`
+enum) go through the apply path. Input documents in runtime or fixture collections, such as a
+`MonitorInput` row, are not apply-controlled; they are written by a direct create mutation through
+the trial's `ConfigAccess`, with every interpolated string escaped. Files are copied into
+`workspace/`. The `evaluator_did` recorded on the `EvalRun` is the launching home's identity.
 
 **3. Open the session.** The executor creates one `AgentSession` for the trial, selecting
 `behavior_id`. Every stage's request joins that session, so `(trial_agent_did, session_id)` names
@@ -166,11 +185,22 @@ all the evidence.
 **4. Run the stages.** For each `(stage_id, prompt, deadline_secs)` in order, the executor writes an
 `AgentRequest` into the session the way `gents request` does, then polls `lifecycle_state` until a
 terminal state or the deadline. On the deadline it interrupts through the existing interrupt owner,
-waits the existing 30-second grace, and records `deadline`. A terminal `Failed` is classified by the
-same rules `stages.rs` uses today (`tool`, `runtime`, `model_acceptance`, `provider` with its
-reason), which move into `src/` with the code. After any non-`passed` stage, the remaining stages
-are not submitted and are recorded as `skipped_prerequisite`. Captures still run for the failed
-stage: partial work is evidence.
+waits the existing 30-second grace, and records `deadline`. The request's terminal state is classified
+by the rules `stages.rs` uses today, which move into `src/` with the code: `Completed` is
+`passed` (the stage ran), `Failed` is `tool`, `runtime` or `provider` with its reason, an
+interrupt on the deadline is `deadline`, and `Dead` or `Superseded` is `runtime`. After any stage
+whose request did not reach `Completed`, the remaining stages are not submitted and are recorded
+as `skipped_prerequisite`. Captures still run for the failed stage: partial work is evidence.
+
+*[self-review]* `model_acceptance` is never assigned by the executor. It is a grading outcome:
+`grade.rs` writes it when an acceptance check fails on a stage that ran. The executor never sees
+checks, so it cannot know whether a completed stage "passed" in that sense, and a later stage is
+therefore not skipped because an earlier stage's checks failed, only because the earlier stage did
+not run to completion. A recovery case whose first stage reported the wrong findings still runs its
+second stage, and its reducer decides the case.
+
+Submission goes through the same library function the `gents request` command calls; the plan names
+it. The capture `filter` is a DefraDB filter object passed verbatim in 2a; spec 3 may narrow it.
 
 **5. Capture after each stage.** The executor runs the spec's capture queries against the trial
 node, from the runner side, and stores the rows under each capture's `name`. Session records
@@ -206,7 +236,7 @@ same PR.
 *Implements: M2's run freezing, write-once completion, verdict writing, NotEvidence retries, and resume by attempt. The API M6b's driver and M4's `cancel`/`invalidate` call.*
 
 `run(access, request, executor, cancel) -> RunOutcome` and `resume(access, run_id, executor,
-cancel) -> RunOutcome`. Both are one async call in the caller's process. `RunOutcome` is counts
+cancel) -> RunOutcome`. Both are one async call in the caller's process. `RunOutcome` is the `run_id` and counts
 only: trials completed, abandoned, NotEvidence, and whether the breaker tripped. Reports are M4.
 
 **Freeze.** `run` validates the `RunRequest` before it writes anything: the definition exists and
@@ -239,8 +269,9 @@ this order:
 
 **Retry and the breaker.** A trial whose evidence class is NotEvidence is re-planned as a new
 attempt, up to `max_infra_retries` (frozen in `origin`, default 3), with exponential backoff
-starting at 5 seconds. A run-level counter tracks consecutive NotEvidence trials across all slots;
-at `breaker_threshold` (default 5) the loop stops launching, waits for in-flight trials, and
+starting at 5 seconds and capped at 60. A run-level counter tracks consecutive NotEvidence trials
+across all slots; at `breaker_threshold` (frozen in `origin` beside `max_infra_retries`, default 5,
+*[self-review]* an additive key in the `origin` JSON) the loop stops launching, waits for in-flight trials, and
 returns a typed `ProviderDown` error. The run stays resumable. A completed trial resets the
 counter. A Fail never retries: it is the subject's result.
 
@@ -265,7 +296,7 @@ the disk is full) is not a trial outcome. `run` returns the error, the trial tha
 keeps its null completion, and resume repairs it. The runner never converts its own I/O failures
 into `infrastructure` verdicts, because that would count the harness's fault against the subject.
 
-## Section 4: testing and phasing (awaiting approval)
+## Section 4: testing and phasing (approved)
 
 *Implements: M2's canary test, and the PR stack the M2 implementation plan is written from.*
 
@@ -278,7 +309,8 @@ into `infrastructure` verdicts, because that would count the harness's fault aga
    write is already proven in M1.
 2. *Runner tests on `ScriptedExecutor`* against an embedded launching home: freeze idempotence and
    refusal on a changed origin; a simulated crash after step 1 and after step 3 of the per-trial
-   order, then resume; the breaker tripping at the threshold and the run resuming after; cancel
+   order, then resume (*[self-review]* simulated by a `ConfigAccess` wrapper that fails the
+   chosen write, which section 3 already defines as "return the error, leave the row null"); the breaker tripping at the threshold and the run resuming after; cancel
    abandoning in-flight trials; an invalidated run refusing resume; verdicts written before the
    completion; two cells sharing `seed_base`; `concurrency = 4` producing the same documents as
    `concurrency = 1`. This layer is what M6b's scripted matrix reuses.
