@@ -418,6 +418,11 @@ jobs:
         working-directory: crates/gents/proofs
         run: lake build
 
+      - name: Check canonical output conformance mapping
+        run: |
+          python3 .github/scripts/test-canonical-output-map.py
+          python3 .github/scripts/check-canonical-output-map.py --check-export
+
       # Desktop consumers exercise generated ClientShell contracts here, after
       # the proof build has warmed the persistent Lake cache.
       - uses: actions/setup-node@v7

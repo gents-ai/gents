@@ -24,6 +24,11 @@ target importClosure pkg : Unit := Job.async do
     pkg.dir.toString] ++ proofRoots.map toString }
 
 @[default_target]
+target canonicalOutputMap pkg : Unit := Job.async do
+  proc { cmd := "python3", args := #[
+    (pkg.dir / "../../../.github/scripts/check-canonical-output-map.py").toString] }
+
+@[default_target]
 lean_lib Proofs where
   srcDir := "."
   roots := proofRoots

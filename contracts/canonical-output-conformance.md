@@ -48,12 +48,53 @@ fixture serializer accepting the data.
 
 ## Remaining bridge breadth
 
-After the initial projection/execution/lease slice, migrate the existing
-transcript/provider-input, compaction/cursor, fork/hydration, retry, background
-continuation and client-observation consumers in their current owners. Preserve
-interrupt timestamps, late background delivery and physical request/tool binding
-checks when removing their obsolete response-row assertions. Keep per-domain
-follow-ups in the coverage ledger until each native binding is registered and run.
+The checked handoff inventory is the mapping for this work:
+
+| Inventory | Responsibility |
+| --- | --- |
+| [Execution](canonical-output-map-execution.json) | Gate operations, application trace, retry, queue/claim handover, tool delivery, Goal/background continuation, restart and the four invariants. |
+| [Projection](canonical-output-map-projection.json) | Reconstruction, provider input/compaction, live observation, terminal output, delegation, forks/hydration and client observation joins. |
+| [Native premises](canonical-output-map-native.json) | Lease actions, transaction/gate/clock/genesis/ACP experiments, SDL/catalog and pairing routes. |
+
+Each entry identifies actual Lean declarations, existing generated groups, intended
+native owner modules, consumer locations, required boundary cases and retired
+bindings. Owner/consumer paths identify where to implement or migrate a binding;
+their presence **does not claim that the new Rust implementation already exists**.
+Fixture status is independent of native status:
+
+- `concrete_inputs`: an exported input/expectation boundary exists for the named slice;
+  the required-cases list still identifies missing variants and joins.
+- `summary_only`: an emitted witness/count/Boolean exists, but is insufficient to
+  drive the native operation. Export the actual inputs before writing the adapter.
+- `not_exported`: the model or external obligation is mapped, but its concrete
+  conformance fixture/experiment remains to be implemented.
+- Native `pending` is expected at this layer. Only the existing consumer registry
+  and coverage ledger can establish native coverage after implementation/testing.
+  Structural trace identity/composition may instead be `not_applicable`.
+
+`lake build` checks all constructors of `Gate.Operation`,
+`SessionComposition.Trace` and `RequestExecutionLease.Action` are assigned exactly
+once. It also rejects stale model declarations, missing paths, unknown fixture
+groups and duplicate mapping IDs. CI additionally compares groups with the actual
+generated JSON and runs negative controls for omissions and stale references:
+
+```sh
+python3 .github/scripts/check-canonical-output-map.py
+python3 .github/scripts/test-canonical-output-map.py
+# After lake build:
+python3 .github/scripts/check-canonical-output-map.py --check-export
+```
+
+This is an inventory check, not a proof of adapter fidelity or a claim that every
+Lean declaration has a native test. Cross-owner requirements and external premises
+still require review; adding a new independent model family requires extending
+the mapping/checker's explicit scope. Do not turn missing Rust into fake coverage
+or implement a parallel test-only state machine.
+
+Migrate the named consumers in their existing owners. Preserve interrupt
+timestamps, late background delivery and physical request/tool binding when
+removing obsolete response-row assertions. Keep per-domain follow-ups in the
+coverage ledger until each native binding is registered and run.
 
 The decoder no longer contains `LeanResponseTransitionCase`,
 `LeanResponseInterruptFlowCase`, or lease response/progress fields. Existing
