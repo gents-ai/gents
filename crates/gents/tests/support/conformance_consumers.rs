@@ -140,13 +140,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_slot_accounting_cases_pin_inference_and_fleet_contracts",
         },
         ConformanceConsumer::RustTest {
-            id: "lean_vocab_test::request_execution_lease_policy::generated_request_execution_lease_cases_fence_production_policy",
-            package: "gents",
-            source_path: "crates/gents/src/lean_vocab_test/request_execution_lease_policy.rs",
-            module_path: "lean_vocab_test::request_execution_lease_policy",
-            function: "generated_request_execution_lease_cases_fence_production_policy",
-        },
-        ConformanceConsumer::RustTest {
             id: "background_tools::tests::generated_child_failure_projections_match_bridge_owner",
             package: "gents",
             source_path: "crates/gents/src/background_tools.rs",
@@ -616,13 +609,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "session_snapshot_binds_request_lifecycle_operator_ui_cases",
         },
         ConformanceConsumer::RustTest {
-            id: "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_streaming_response_overlay_consumes_generated_transition_cases",
-            package: "gents-desktop-bridge",
-            source_path: "crates/gents-desktop-bridge/src/snapshot/tests/session_state.rs",
-            module_path: "gents_desktop_bridge::snapshot::tests::session_state",
-            function: "session_snapshot_streaming_response_overlay_consumes_generated_transition_cases",
-        },
-        ConformanceConsumer::RustTest {
             id: "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_transcript_rendering_consumes_generated_transcript_cases",
             package: "gents-desktop-bridge",
             source_path: "crates/gents-desktop-bridge/src/snapshot/tests/session_state.rs",
@@ -929,20 +915,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance.rs",
             module_path: "conformance",
             function: "generated_transcript_cases_drive_agent_message_ordering_contract",
-        },
-        ConformanceConsumer::RustTest {
-            id: "conformance::generated_streaming_response_cases_pin_lifecycle_contract",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance.rs",
-            module_path: "conformance",
-            function: "generated_streaming_response_cases_pin_lifecycle_contract",
-        },
-        ConformanceConsumer::RustTest {
-            id: "conformance::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance.rs",
-            module_path: "conformance",
-            function: "generated_streaming_response_interrupt_flow_cases_drive_daemon_contract",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::generated_compaction_reducer_cases_pin_contract",

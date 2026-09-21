@@ -229,6 +229,13 @@ timestamp is an explicit request-row adapter obligation, not a proved Lean field
 
 ### Next-layer conformance handoff
 
+The stack is now published as specification #1585 and Lean #1586. The branch
+`feat/1571-canonical-transcript-conformance` starts the generated bridge; see
+[`contracts/canonical-output-conformance.md`](../../../contracts/canonical-output-conformance.md)
+for native adapter boundaries, external-premise experiments and remaining breadth.
+The four application-trace invariants are universal Lean proofs, not additional
+finite case groups or evidence that a native adapter has run.
+
 The new canonical output layer has no native conformance consumer yet. Regenerate
 fixtures and replace the retired response cases in `tests/conformance/coverage.rs`,
 `tests/conformance/structure.rs`, `tests/conformance/streaming_compaction.rs`,

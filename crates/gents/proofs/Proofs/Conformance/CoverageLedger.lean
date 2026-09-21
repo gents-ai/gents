@@ -519,16 +519,15 @@ def caseCoverage : List CoverageEntry :=
       "ProviderEofCases"
       "lean_vocab_test::request_execution_lease_policy::generated_provider_eof_cases_fence_production_policy")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
+  , tagged (followUpCoverage
       "request_execution_lease_cases"
       "RequestExecutionLeaseCases"
-      "lean_vocab_test::request_execution_lease_policy::generated_request_execution_lease_cases_fence_production_policy"
-      "Covers production begin/progress/finalize/revocation guards. Abstract claim freshness and recovery effects still require generated database consumer coverage.")
+      "#1571 explicit-renewal input/expected-state cases supersede the retired response/progress policy adapter. Bind the generated actions to native claim, due-only deadline CAS, producer admission and terminal/recovery owners; decoding fixtures is not native coverage.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "request_execution_lease_trace_cases"
       "RequestExecutionLeaseTraceCases"
-      "Lean-first #1341 race contract. Runtime recovery tests must consume these generated expiry/drop, stale-owner, and single terminal-effect traces when the lease is implemented.")
+      "#1571 generated bounded-renewal, expiry/drop, stale-owner and terminal-effect traces require native execution, including independent timer polling and suspend/resume. No scheduler fairness or wall-clock continuity is proved.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "lifecycle_transition_cases"
@@ -1203,7 +1202,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "canonical_execution_gate_cases"
       "CanonicalExecutionGateCases"
-      "Composed lease, publication, tool lifecycle, recovery, delivery and gate traces are Lean witnesses. The next conformance layer must encode native operation inputs and drive the real transactional owners; the emitted success summaries are not native consumer coverage.")
+      "Composed lease, publication, tool lifecycle, recovery, delivery and gate witnesses require native transactional owners. The application Trace separately proves sequence bounds, claim coherence, full tool coherence and closure uniqueness inductively; finite generated cases do not establish these universal invariants in Rust. Typed adapter fixtures and success summaries are not native consumer coverage.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (followUpCoverage
       "canonical_output_projection_cases"

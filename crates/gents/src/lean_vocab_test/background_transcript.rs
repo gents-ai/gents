@@ -319,61 +319,6 @@ pub(crate) struct LeanTranscriptCase {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct LeanResponseTransitionCase {
-    // Runtime action arguments must never be reconstructed from expected output.
-    pub(crate) input_error_reason: Option<String>,
-    pub(crate) token_delta: Option<usize>,
-    pub(crate) materialize_sequence: Option<usize>,
-    pub(crate) name: String,
-    pub(crate) group: String,
-    pub(crate) action: String,
-    pub(crate) legal: bool,
-    pub(crate) pre_status: String,
-    pub(crate) post_status: String,
-    pub(crate) pre_live_tail: String,
-    pub(crate) post_live_tail: String,
-    /// #492 reasoning-presence in the live tail before/after the step.
-    #[serde(default)]
-    pub(crate) pre_tail_reasoning: String,
-    #[serde(default)]
-    pub(crate) post_tail_reasoning: String,
-    /// #492 durable reasoning-presence persisted into the materialized
-    /// `AgentMessage.reasoning` field before/after the step.
-    #[serde(default)]
-    pub(crate) pre_durable_reasoning: String,
-    #[serde(default)]
-    pub(crate) post_durable_reasoning: String,
-    pub(crate) pre_token_count: usize,
-    pub(crate) post_token_count: usize,
-    pub(crate) error_reason: Option<String>,
-    pub(crate) pre_materialized_seq: Option<usize>,
-    pub(crate) post_materialized_seq: Option<usize>,
-    pub(crate) expected_request_state: Option<String>,
-    pub(crate) expected_request_persistence: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct LeanResponseInterruptFlowCase {
-    pub(crate) name: String,
-    pub(crate) group: String,
-    pub(crate) action: String,
-    pub(crate) pre_request_state: String,
-    pub(crate) post_request_state: String,
-    pub(crate) pre_response_status: String,
-    pub(crate) post_response_status: String,
-    pub(crate) pre_inference_call_state: String,
-    pub(crate) post_inference_call_state: String,
-    pub(crate) response_error_reason: String,
-    pub(crate) interrupted_at_required: bool,
-    pub(crate) completed_at_required: bool,
-    pub(crate) live_tail_cleared: bool,
-    pub(crate) partial_turn_materialized: bool,
-    pub(crate) request_terminal: bool,
-    pub(crate) response_terminal: bool,
-    pub(crate) inference_call_terminal: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub(crate) struct LeanCompactionReducerCase {
     pub(crate) name: String,
     pub(crate) group: String,
@@ -384,7 +329,9 @@ pub(crate) struct LeanCompactionReducerCase {
     pub(crate) preserves_pairs: bool,
     pub(crate) preserves_order: bool,
     pub(crate) gate_open: Option<bool>,
-    pub(crate) response_status: String,
+    pub(crate) publication_ready: bool,
+    pub(crate) provider_fixpoint: bool,
+    pub(crate) turn_boundary: bool,
     pub(crate) safe_to_reduce: bool,
     pub(crate) reducer_is_identity: bool,
     pub(crate) reducer_is_idempotent: bool,

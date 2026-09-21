@@ -43,6 +43,13 @@ def sampleOpenContinuation : Segment :=
     flush := some ⟨1, [⟨0, 1, none⟩, ⟨1, 1, none⟩], [67, 68]⟩
     createdAt := 6 }
 
+/-- The committed extent exists, but its declared run lengths consume more
+bytes than the immutable payload contains. -/
+def sampleMalformedSealed : Segment :=
+  { sampleComplete with
+    flush := some ⟨0,
+      [⟨0, 2, some sampleText⟩, ⟨1, 1, some sampleOpaque⟩], [65, 66]⟩ }
+
 def textSpec : PayloadSpec := ⟨⟨100, 0⟩, .full⟩
 def opaqueSpec : PayloadSpec := ⟨⟨100, 1⟩, .full⟩
 
@@ -59,6 +66,33 @@ def sampleForkMessage : MessageEnvelope :=
   { sampleMessage with
     header := forkHeader sampleMessage.header 201 2
     key := "child-turn", sequence := 0 }
+
+def sampleReasoning : Declaration := { block := 0, part := 0, kind := .reasoning }
+def sampleArguments : Declaration :=
+  { block := 1, part := 0, kind := .arguments
+    tool := some ⟨"provider-call", some "call-alias", "lookup"⟩ }
+
+/-- A native assistant payload which exercises both nested reasoning parts and
+tool-call argument JSON. Expectations for this witness still come exclusively
+from `project`/`reconstructMessage`; this is not a second projection policy. -/
+def sampleNativePayload : Segment :=
+  { id := 110, coordinate := sampleCoordinate, writer := .request 7
+    flush := some ⟨0,
+      [⟨0, 3, some sampleReasoning⟩, ⟨1, 2, some sampleArguments⟩],
+      [119, 104, 121, 123, 125]⟩
+    close := some (.closed .complete 1 [3, 2]), createdAt := 5 }
+
+def sampleNativeMessage : MessageEnvelope :=
+  { header :=
+      { id := 210, session := 1, request := some 10, origin := none
+        refs := [⟨110, 0⟩, ⟨110, 1⟩]
+        outcome := .complete, role := .assistant, publication := .requestExecution 7 }
+    key := "native-turn", sequence := 1, nativeId := some "assistant-native"
+    blocks :=
+      [.reasoning (some "reasoning-id") [.text ⟨⟨110, 0⟩, .full⟩ (some "sig")],
+       .toolCall 42 "provider-call" (some "call-alias") "lookup"
+          ⟨⟨110, 1⟩, .full⟩ (some "tool-sig") (some "{\"mode\":\"fast\"}")]
+    createdAt := 7 }
 
 def baseObservation
     (records : List Segment := [sampleComplete])
@@ -121,6 +155,13 @@ private def case (name : String) (input : Observation) : OutputProjectionCase :=
 
 def outputProjectionCases : List OutputProjectionCase :=
   [ case "published_typed_message_filters_opaque_presentation" baseObservation
+  , case "published_native_reasoning_and_tool_arguments"
+      (baseObservation (records := [sampleNativePayload])
+        (messages := [sampleNativeMessage]) (messageId := some 210))
+  , case "malformed_sealed_payload_is_invalid"
+      (baseObservation (records := [sampleMalformedSealed]))
+  , case "raw_exact_record_replay_is_idempotent"
+      (baseObservation (records := [sampleComplete, sampleComplete]))
   , case "fork_projection_uses_exact_child_session_and_origin_without_request_membership"
       { baseObservation (messages := [sampleMessage, sampleForkMessage])
           (messageId := some 201) with session := 2 }
@@ -172,11 +213,12 @@ def outputProjectionCases : List OutputProjectionCase :=
         (messages := []) (messageId := none))
   ]
 
-theorem outputProjectionCases_count : outputProjectionCases.length = 19 := by decide
+theorem outputProjectionCases_count : outputProjectionCases.length = 22 := by decide
 
 theorem projection_cases_pin_boundaries :
     outputProjectionCases.map (fun witness => viewName witness.expected) =
-       ["published", "published", "loading", "conflicted", "loading", "denied",
+       ["published", "published", "invalid", "published", "published", "loading",
+       "conflicted", "loading", "denied",
        "live", "absent", "loading", "retained_partial", "loading",
        "retracted", "absent", "settling", "loading", "settling", "published", "conflicted",
        "live"] := by

@@ -1,5 +1,6 @@
 import Proofs.CanonicalOutput.Execution.GateCases
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Contracts.Json.NativeExecution
 
 namespace Conformance.ExecutionGateContracts
 
@@ -27,10 +28,13 @@ def cases : List Case :=
      , ⟨"corrupt_payload_revocation_preserves_facts", some corruptRevocationCases⟩ ]
 
 def caseJson (value : Case) : String :=
-  "{" ++ "\"name\":" ++ jsonString value.name ++ ","
+  "{" ++ "\"kind\":\"trace_summary\","
+    ++ "\"name\":" ++ jsonString value.name ++ ","
     ++ "\"completed\":" ++ jsonOptionalBool (some (value.observed == some true)) ++ "}"
 
-def casesJson : String := jsonArray (cases.map caseJson)
+def casesJson : String := jsonArray
+  (cases.map caseJson ++ Conformance.NativeExecutionContracts.cases.map
+    Conformance.NativeExecutionContracts.caseJson)
 
 example : cases.all (fun value => value.observed == some true) = true := by
   native_decide

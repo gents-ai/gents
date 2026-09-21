@@ -890,16 +890,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "TranscriptConformanceCases".to_string(),
         ));
     }
-    if !lean_response_transition_cases().is_empty() {
+    if !lean_canonical_output_projection_cases().is_empty() {
         emitted.insert((
-            "streaming_response_cases".to_string(),
-            "ResponseTransitionCases".to_string(),
+            "canonical_output_projection_cases".to_string(),
+            "CanonicalOutputProjectionCases".to_string(),
         ));
     }
-    if !lean_response_interrupt_flow_cases().is_empty() {
+    if !lean_canonical_execution_gate_cases().is_empty() {
         emitted.insert((
-            "streaming_response_interrupt_flow_cases".to_string(),
-            "ResponseInterruptFlowCases".to_string(),
+            "canonical_execution_gate_cases".to_string(),
+            "CanonicalExecutionGateCases".to_string(),
         ));
     }
     if !lean_compaction_reducer_cases().is_empty() {
