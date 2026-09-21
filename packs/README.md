@@ -19,6 +19,8 @@ gents pack run pipeline --http-port 19191 --keep-home
 A pack directory holds `manifest.json` and the assets that manifest declares.
 Nothing that is not declared travels, so the manifest is the whole description
 of the pack, and the pack's digest is computed over exactly what it declares.
+A pack does not have to live in this repository: the same directory works
+wherever it is, and `gents pack install ./my_pack` installs it from there.
 
 ```json
 {
@@ -104,6 +106,32 @@ gents pack publish shipping_plugins-0.1.0.tar.gz  # push it to the registry
 gents pack install acme/shipping_plugins          # from the registry, anywhere
 ```
 
+A pack outside this repository installs without a registry in between:
+
+```sh
+gents pack show ./shipping_plugins                # inspect before installing
+gents pack install ./shipping_plugins --home <home>
+gents pack install shipping_plugins-0.1.0.tar.gz --home <home>
+```
+
+An argument is read as a path when it says so - it ends in `.tar.gz`/`.tgz`,
+is absolute, or starts with `./` or `../` - or when it is a directory that
+really holds a `manifest.json`. Otherwise it is a bundled pack name or a
+registry `namespace/name` coordinate, so those three stay unambiguous and a
+bare name never silently resolves to a directory that happens to sit in the
+working directory. A path that names nothing is refused as that path: it is
+never retried as a registry lookup for a coordinate nobody typed.
+
+A directory is packed and read back through the archive reader before it is
+installed, so a pack from a path is admitted under exactly the rules a
+downloaded one is - its manifest is checked the same way, it carries only
+what it declares, and its digest is the one `gents pack build` would produce.
+That digest is the pack's identity and the asset-cache key, so installing a
+directory, installing the `.tar.gz` built from it, and installing the same
+pack once published all name the same pack. `gents pack prune ./my_pack`
+prunes that pack's cache by the same path. Graph packs remain installable
+only when compiled into the binary, from a path as from the registry.
+
 A plugin is also managed on its own, without a pack around it:
 
 ```sh
@@ -138,7 +166,8 @@ before it is opened.
 
 ## Installation and execution
 
-`pack install` resolves bundled assets by name, without a source checkout.
+`pack install` resolves bundled assets by name, without a source checkout,
+and resolves a path from the filesystem.
 Graph packs use the runtime graph installer; document packs use schema-first
 desired-state application. Neither submits scenario seed documents nor prunes
 unrelated configuration. Enabled schedules and triggers can execute when their
@@ -241,8 +270,8 @@ runtime completion behavior.
 Keep concise run summaries, reviewed outputs and issue links. Never bundle
 `runs/`, node homes, credentials, build caches or raw logs. Package embedding
 uses declared assets, not recursive discovery of an operator's workspace.
-Source resolution is separate from installation; GitHub and registry sources
-are future work, not implemented download features.
+Source resolution is separate from installation. A pack resolves from a path
+or, once published, from the registry; GitHub sources remain future work.
 
 ## Worked examples
 

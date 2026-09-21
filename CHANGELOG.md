@@ -6,6 +6,14 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+### Added
+
+- Install, inspect and prune a pack from a path: `gents pack install
+  ./my_pack` or `gents pack install my_pack-0.1.0.tar.gz` admits an
+  out-of-tree pack through the same manifest rules, declared-asset set and
+  content digest a bundled or published pack is held to, so publishing to a
+  registry is a way to distribute a pack rather than a step in authoring one.
+
 ## 0.18.3 - 2026-09-18
 
 ### Fixed

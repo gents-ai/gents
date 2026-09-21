@@ -302,6 +302,7 @@ pub(crate) struct GraphScopeArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackShowArgs {
+    #[arg(help = "Bundled pack name, or a path to a pack directory or built .tar.gz")]
     pub(crate) package: String,
 }
 
@@ -309,7 +310,7 @@ pub(crate) struct PackShowArgs {
 pub(crate) enum PackCommand {
     /// List all packs bundled in this binary.
     List,
-    /// Inspect a pack manifest and declared assets.
+    /// Inspect a pack manifest and declared assets, bundled or under a path.
     Show(PackShowArgs),
     /// Install a pack into an initialized node; never seed or prune.
     Install(PackInstallArgs),
@@ -398,6 +399,7 @@ pub(crate) struct PackPublishArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackPruneArgs {
+    #[arg(help = "Bundled pack name, or the path the pack was installed from")]
     pub(crate) package: String,
     #[arg(long, help = "Home containing the local pack asset cache")]
     pub(crate) home: Option<PathBuf>,
@@ -405,6 +407,10 @@ pub(crate) struct PackPruneArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackInstallArgs {
+    #[arg(
+        help = "Pack to install: a bundled name, a registry `namespace/name`, or a path to a \
+                pack directory or built .tar.gz"
+    )]
     pub(crate) package: String,
     #[arg(
         long,
@@ -437,7 +443,7 @@ pub(crate) struct PackInstallArgs {
     pub(crate) force_rebind_concrete_did: bool,
     #[arg(
         long,
-        help = "Pack registry base URL, used when the pack is not bundled in this binary. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL, used when the pack is neither a path nor bundled in this binary. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
 }
