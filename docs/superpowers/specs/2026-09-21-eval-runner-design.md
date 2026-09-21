@@ -1,7 +1,7 @@
 # Eval runner design (issue #1515, sub-project 2a)
 
-Status: **DRAFT, brainstorm in progress (2026-09-21).** Sections 1 and 2 are approved. Section 3 is
-presented and awaits approval. Section 4 is not yet written. Baseline: `main` at `0deb7659c`.
+Status: **DRAFT, brainstorm in progress (2026-09-21).** Sections 1 to 3 are approved. Section 4 is
+presented and awaits approval. Baseline: `main` at `0deb7659c`.
 
 ## What this spec is
 
@@ -201,7 +201,7 @@ failure classifier from `stages.rs`. The #1512 tests then import them from `src/
 duplicated and `make live-configurator-eval` keeps working. The `tests/` copies are deleted in the
 same PR.
 
-## Section 3: the run loop (awaiting approval)
+## Section 3: the run loop (approved)
 
 *Implements: M2's run freezing, write-once completion, verdict writing, NotEvidence retries, and resume by attempt. The API M6b's driver and M4's `cancel`/`invalidate` call.*
 
@@ -265,6 +265,54 @@ the disk is full) is not a trial outcome. `run` returns the error, the trial tha
 keeps its null completion, and resume repairs it. The runner never converts its own I/O failures
 into `infrastructure` verdicts, because that would count the harness's fault against the subject.
 
-## Sections still to come
+## Section 4: testing and phasing (awaiting approval)
 
-4. Testing and phasing: the scripted matrix, the `MockStreamingBackend` canary test, the PR stack.
+*Implements: M2's canary test, and the PR stack the M2 implementation plan is written from.*
+
+**Four test layers, cheapest first.**
+
+1. *Pure unit tests* on `plan.rs`, `grade.rs` and `ScriptedExecutor`: the trial matrix, resume
+   numbering, deterministic `trial_id`, pair-adjacent ordering, `skipped_prerequisite` rows for
+   stages that never ran, and the rule "latest completed attempt wins; an abandoned attempt is
+   `infrastructure`" as one table-driven test. No Lean is added; the outcome vocabulary these tests
+   write is already proven in M1.
+2. *Runner tests on `ScriptedExecutor`* against an embedded launching home: freeze idempotence and
+   refusal on a changed origin; a simulated crash after step 1 and after step 3 of the per-trial
+   order, then resume; the breaker tripping at the threshold and the run resuming after; cancel
+   abandoning in-flight trials; an invalidated run refusing resume; verdicts written before the
+   completion; two cells sharing `seed_base`; `concurrency = 4` producing the same documents as
+   `concurrency = 1`. This layer is what M6b's scripted matrix reuses.
+3. *The canary test* on `EmbeddedExecutor` with `MockStreamingBackend`: one real embedded trial
+   home, a scripted model, one document fixture and one file fixture, two stages where the second
+   is skipped in the failing variant, a document capture and a file capture, a stable
+   `evidence_digest` across two identical runs, and the freeze-time refusals for `Unrestricted`
+   bash and an OAuth binding. The canary uses a hand-built `TrialSpec`, so it does not wait for
+   M3's `capture` field on `EvalDefinition`.
+4. *A live smoke test*, ignored by default and gated by the same environment variables #1512 uses:
+   one trial on D4F or OpenRouter. It records whether the provider honoured `seed` and prints the
+   finding.
+
+**The minimal M3 that M2 needs.** The umbrella lists "a minimal M3" as M2's dependency. It is
+one named check so the canary can grade: `captured_rows_count {name, min}` over a document
+capture, registered in `eval::checks` as the seed of spec 3's registry. Spec 3 owns everything
+after that.
+
+**PR stack.** Each PR targets its parent and passes `cargo test -p gents` and
+`cargo check --workspace --all-targets` on its own.
+
+| PR | Content | Risk |
+|---|---|---|
+| 1 | Move the #1512 support into `src/`: the home factory, the wait with interrupt, the session evidence read, the stage failure classifier, under `eval::runner::embedded`. The #1512 tests import them; the `tests/` copies are deleted. No behavior change | Largest diff, lowest risk. `make live-configurator-eval` is the check |
+| 2 | `executor.rs` types, `ScriptedExecutor`, `plan.rs`, `grade.rs`, with layer-1 tests | Pure code |
+| 3 | `freeze.rs`, `record.rs`, `mod.rs` with `run` and `resume`, the retry breaker and cancel, with layer-2 tests | The runner's logic; the crash-resume tests are the gate |
+| 4 | `EmbeddedExecutor`, the `captured_rows_count` check, the canary and the live smoke | The only PR that boots a runtime |
+
+**M2 acceptance.** `run` on `ScriptedExecutor` survives every crash point with resume; the canary
+passes on a clean checkout with no network; a live smoke trial completes on one real provider;
+`make live-configurator-eval` still passes after PR 1.
+
+**Out of scope, with a home.** The CLI and reports (M4). The `capture` field on
+`EvalDefinition` and every check beyond the seed (M3, spec 3). A process-per-trial executor, an
+enforced evaluator DID, a runner-hosted inference proxy and cross-process cancel (spec 2b).
+Retention TTLs (spec 4b).
+
