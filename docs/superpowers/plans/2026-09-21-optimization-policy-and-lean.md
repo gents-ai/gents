@@ -12,6 +12,31 @@
 
 **Depends on:** `2026-09-21-eval-core-contract.md` PR A (`Proofs/Eval.lean`) for the Lean work, and its PR E (`gents::eval::scoring`) for the Rust work. The driver, the job record, `promote` and `revert` are not in this plan: they need the runner API from eval spec 2.
 
+## Parallel execution note (2026-09-21)
+
+This plan runs in its own Herdr workspace beside M2 and M3, under
+`docs/superpowers/orchestration/2026-09-21-parallel-coordinators.md`, whose standing rules bind every
+task here. Three adjustments to the text below:
+
+- **Base every PR on the pinned `eval/05-contract` commit** named in the orchestration document's
+  Pins table, not on `eval/01-lean` or `eval/02-conformance`. That branch already contains
+  `Proofs/Eval.lean`, the eval conformance emission, and `gents::eval::{outcome, scoring, documents}`.
+  Stack the three PRs `optimization/10-lean` → `optimization/11-conformance` → `optimization/12-policy`
+  on top of it. Ignore the rebase and cherry-pick instructions under PR 2 and PR 3.
+- **The scoring API landed with these facts**, which the plan's text predates: `PairedEvidence` has
+  public fields `pairs: Vec<Pair>`, `keys: usize`, `dropped_baseline: usize`, `dropped_candidate: usize`
+  and a method `dropped_keys() -> usize`; the two drop counters overlap when neither side is evidence
+  and must never be summed or subtracted from `keys` (use them as per-cell rates, as the gates do);
+  `Pair` has public `case_id`, `trial_index`, `baseline_bp`, `candidate_bp`. The `paired(...)` test
+  helper and `evidence_from_paired` in Task 3 compile against this as written. A duplicated
+  `(case, trial_index)` on a side is already resolved by `pair_trials` (that side reads Unknown), so
+  the policy never sees duplicates.
+- **The `structure.rs` entry** for `Proofs/Optimization.lean` (Task 2, the `Gap` whose rationale
+  begins `#1455`) is required, not optional; the enumeration test fails without it.
+
+Interface changes to `gents::eval::*` are not made here. If a task appears to need one, the
+coordinator stops and messages the orchestrator.
+
 ## Global Constraints
 
 - Order is Lean, then conformance, then Rust. Each PR targets its parent branch.
@@ -25,6 +50,7 @@
 - **rustfmt is a CI gate.** `cargo fmt --all --check` must exit 0 before every Rust commit. rustfmt orders `mod` and `use` lines alphabetically, so where a task says to add a module or re-export "directly after" another line in `lean_vocab_test/support.rs` or a `mod.rs`, place it in alphabetical position instead; running `cargo fmt -p gents` does this. New files under `lean_vocab_test/` open with a `//!` header naming the Lean owner they mirror and stating that decoding is strict.
 - **Every top-level `Proofs/*.lean` file needs a conformance home.** `tests/conformance/structure.rs` test `every_lean_model_has_a_declared_conformance_home` enumerates them. A PR that adds one must add its entry there in the same PR: a `Gap` with an issue-prefixed rationale until a consumer exists, then `Module("conformance/<file>.rs")`.
 - Use `tracing`, never `println!`.
+- Foreground commands only: never background a command, never `sleep`, never poll. Redirect long output to a log file and grep it. `CARGO_BUILD_JOBS=4`. The conformance binary needs `RUST_MIN_STACK=16777216`.
 - Before each push: `cargo test -p gents`, `cargo check --workspace --all-targets`, and `lake build` in `crates/gents/proofs` for Lean changes.
 - Commit with `git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit ...`.
 
