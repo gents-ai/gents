@@ -1,6 +1,9 @@
 import Proofs.CanonicalOutput.Execution.InvariantComposition
 import Proofs.CanonicalOutput.Execution.ClaimInvariant
+import Proofs.CanonicalOutput.Execution.ClosureInvariant
+import Proofs.CanonicalOutput.Execution.CoherenceComposition
 import Proofs.CanonicalOutput.Execution.GoalContinuationCases
+import Proofs.CanonicalOutput.Execution.Examples
 
 namespace CanonicalOutput.Execution.SessionComposition.Cases
 
@@ -129,7 +132,9 @@ theorem activationTraceWitness_isSome : activationTraceWitness.isSome = true := 
   native_decide
 
 private theorem initial_seed_invariants (before : World)
-    (h : initial = some before) : ClaimCoherent before ∧ SequenceBound before := by
+    (h : initial = some before) :
+    ClaimCoherent before ∧ SequenceBound before ∧ ClosureUnique before ∧
+      toolProjectionCoherent before = true := by
   unfold initial at h
   cases hg : Gate.acquire (Gate.initial parentWorld) 1 true with
   | none => simp [hg] at h
@@ -138,19 +143,30 @@ private theorem initial_seed_invariants (before : World)
         (Gate.initial parentWorld) gate 1 true hg
       simp [hg] at h
       cases h
-      constructor
-      · exact idleClaimCoherent _ rfl rfl
+      refine ⟨idleClaimCoherent _ rfl rfl, ?_, ?_, ?_⟩
       · apply empty_messages_sequenceBound
         rw [hgate]
         rfl
+      · intro coordinate left hleft
+        rw [hgate] at hleft
+        simp [Gate.initial, closures, sourceRecords, parentWorld] at hleft
+      · apply empty_toolProjectionCoherent
+        · rw [hgate]
+          rfl
+        · rw [hgate]
+          rfl
 
 /-- The executable fixture supplies an actual application `Trace.activate`,
-not merely a second computation with the same endpoint. Both seed predicates
-therefore reach the successfully activated world through their trace theorems. -/
-theorem actual_activation_trace_preserves_both_invariants :
+not merely a second computation with the same endpoint. All four seed
+predicates therefore reach the successfully activated world through their
+trace theorems. -/
+theorem actual_activation_trace_preserves_all_invariants :
     ∃ before after,
-      Trace before after ∧ ClaimCoherent before ∧ SequenceBound before ∧
-        ClaimCoherent after ∧ SequenceBound after := by
+      Trace before after ∧
+        ClaimCoherent before ∧ SequenceBound before ∧ ClosureUnique before ∧
+          toolProjectionCoherent before = true ∧
+        ClaimCoherent after ∧ SequenceBound after ∧ ClosureUnique after ∧
+          toolProjectionCoherent after = true := by
   obtain ⟨pair, hwitness⟩ := Option.isSome_iff_exists.mp activationTraceWitness_isSome
   rcases pair with ⟨before, after⟩
   unfold activationTraceWitness at hwitness
@@ -166,8 +182,62 @@ theorem actual_activation_trace_preserves_both_invariants :
           have trace : Trace seeded activated := .activate 1 6 ordinaryActivation 0
             budget (some 11) ha
           have seed := initial_seed_invariants seeded hi
-          exact ⟨seeded, activated, trace, seed.1, seed.2,
-            trace.claimCoherent seed.1, trace.sequenceBound seed.2⟩
+          exact ⟨seeded, activated, trace, seed.1, seed.2.1, seed.2.2.1, seed.2.2.2,
+            trace.claimCoherent seed.1, trace.sequenceBound seed.2.1,
+            trace.closureUnique seed.2.2.1, trace.toolProjectionCoherent seed.2.2.2⟩
+
+namespace RunningRevocation
+
+open CanonicalOutput.Execution.Examples
+
+def seed : World :=
+  let running :=
+    ((acceptAndPublish (world 5) 7 providerTurn providerMessage [] [foregroundAdmission] >>=
+      fun accepted => dispatch accepted 7 permit).toOption).getD (world 5)
+  { running with retry := { running.retry with request := running.requestId } }
+
+def held : World :=
+  (Gate.acquire (Gate.initial seed) 1 true).getD (Gate.initial seed)
+
+def after : Option World :=
+  CompletionRetry.CanonicalGate.commitGate held 1 5
+    ⟨.revoke 7 8 .dead (.message 501), rfl⟩
+
+def checks : Option Bool := after.map fun post =>
+  physicalRunning held 600 && decide (600 ∉ post.transcript.inFlight)
+
+theorem after_isSome : after.isSome = true := by native_decide
+
+theorem checks_hold : checks = some true := by native_decide
+
+private theorem held_closureUnique : ClosureUnique held := by
+  have hs : held.segments = [providerTurn] := by native_decide
+  intro coordinate left hleft right hright
+  simp [hs, closures, sourceRecords] at hleft hright
+  exact hleft.1.trans hright.1.symm
+
+/-- A real held-gate revocation of a physically running tool supplies an
+actual `Trace.gate`. Both new invariants are transported by the trace theorems,
+while the executable witness confirms the running pre-state and released
+in-flight post-state. -/
+theorem running_revocation_trace_preserves_new_invariants :
+    ∃ post, Trace held post ∧ ClosureUnique held ∧
+      toolProjectionCoherent held = true ∧ ClosureUnique post ∧
+      toolProjectionCoherent post = true ∧ physicalRunning held 600 = true ∧
+      600 ∉ post.transcript.inFlight := by
+  obtain ⟨post, hpost⟩ := Option.isSome_iff_exists.mp after_isSome
+  have hcommit : CompletionRetry.CanonicalGate.commitGate held 1 5
+      ⟨.revoke 7 8 .dead (.message 501), rfl⟩ = some post := by
+    simpa [after] using hpost
+  have trace : Trace held post := .gate held post 1 5 _ hcommit
+  have coherent : toolProjectionCoherent held = true := by native_decide
+  have hchecks := checks_hold
+  simp [checks, hpost] at hchecks
+  exact ⟨post, trace, held_closureUnique, coherent,
+    trace.closureUnique held_closureUnique, trace.toolProjectionCoherent coherent,
+    hchecks.1, hchecks.2⟩
+
+end RunningRevocation
 
 /-- The application Goal entrypoint consumes a proof of the actual Goal owner
 publication; the receipt cannot be supplied as an unjoined caller record. -/

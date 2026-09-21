@@ -704,6 +704,22 @@ theorem append_preserves_publications (before after : World) (document : DocId)
   · rcases effect with ⟨tool, observed, segments, found, clocked, appended, rfl⟩
     exact ⟨rfl, rfl, rfl⟩
 
+theorem append_success_segment_effect (before after : World) (document : DocId)
+    (record : Segment) (h : appendToolOutput before document record = .ok after) :
+    after.segments = before.segments ∨
+      (after.segments = before.segments ++ [record] ∧ record.close = none ∧
+        closures before.segments record.coordinate = [] ∧
+        CanonicalOutput.ToolDelivery.identityAvailable before.segments record = true) := by
+  rcases append_success_lifecycle_effect before after document record h with same | effect
+  · subst after
+    exact Or.inl rfl
+  · rcases effect with ⟨tool, observed, segments, found, clocked, appended, rfl⟩
+    rcases CanonicalOutput.ToolDelivery.appendRecords_success_effect
+      before.segments segments tool.requestDoc tool.document before.lease.now record appended with
+      replay | fresh
+    · exact Or.inl replay
+    · exact Or.inr fresh
+
 theorem append_preserves_nextSeq (before after : World) (document : DocId)
     (record : Segment) (h : appendToolOutput before document record = .ok after) :
     after.transcript.nextSeq = before.transcript.nextSeq :=
@@ -741,12 +757,73 @@ theorem close_success_effect (before after : World) (document : DocId)
       subst after
       exact ⟨⟨rfl, rfl, rfl⟩, by simpa using postCoherent⟩
 
+theorem closeToolOutput_success_segment_effect (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment)
+    (h : closeToolOutput before document authority record = .ok after) :
+    after.segments = before.segments ∨
+      ∃ request sourceDoc, after.segments = before.segments ++ [record] ∧
+        closures before.segments (CanonicalOutput.ToolDelivery.coordinate request sourceDoc) = [] ∧
+        CanonicalOutput.ToolDelivery.identityAvailable before.segments record = true ∧
+        CanonicalOutput.ToolDelivery.ownedRecord before.segments request sourceDoc
+          before.lease.now record = true := by
+  unfold closeToolOutput ToolWrite.lift closeToolOutputWrite at h
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  rename_i tool found
+  split at h <;> try contradiction
+  split at h
+  · left
+    have same : before = after := by
+      simpa [Except.map, ToolWrite.apply_current] using h
+    simp [same]
+  · split at h <;> try contradiction
+    split at h <;> try contradiction
+    rename_i segments closed
+    dsimp at h
+    split at h <;> try contradiction
+    simp [Except.map] at h
+    subst after
+    rcases CanonicalOutput.ToolDelivery.closeRecords_success_effect
+      before.segments segments tool.requestDoc tool.document before.lease.now record closed with
+      replay | fresh
+    · exact Or.inl replay
+    · exact Or.inr ⟨tool.requestDoc, tool.document, by simpa [ToolWrite.apply] using fresh⟩
+
 theorem close_preserves_publications (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
     (h : closeToolOutput before document authority record = .ok after) :
     after.sessionId = before.sessionId ∧ after.messages = before.messages ∧
       after.transcript.nextSeq = before.transcript.nextSeq := by
   exact (close_success_effect before after document authority record h).1
+
+theorem close_success_write_effect (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment)
+    (h : closeToolOutput before document authority record = .ok after) :
+    after = before ∨ ∃ tool context segments,
+      ownedToolByDocument? before document = some tool ∧
+      terminalContext? before tool authority = some context ∧
+      CanonicalOutput.ToolDelivery.closeRecords before.segments tool.requestDoc tool.document
+        before.lease.now record = .ok segments ∧
+      after = { before with
+        segments := segments
+        toolContexts := replaceOwnedTool before.toolContexts document (clearReconcileIntent tool context)
+        transcript := before.transcript.terminalizeToolCall document context.state } := by
+  unfold closeToolOutput ToolWrite.lift closeToolOutputWrite at h
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  rename_i tool found
+  split at h <;> try contradiction
+  split at h
+  · left; simpa [Except.map, ToolWrite.apply_current] using h.symm
+  · split at h <;> try contradiction
+    rename_i context terminal
+    split at h <;> try contradiction
+    rename_i segments closed
+    dsimp at h
+    split at h <;> try contradiction
+    simp [Except.map] at h
+    subst after
+    exact Or.inr ⟨tool, context, segments, found, terminal, closed, rfl⟩
 
 theorem close_preserves_nextSeq (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
@@ -812,6 +889,25 @@ theorem publication_nextSeq_monotone
     before.transcript.nextSeq ≤ after.transcript.nextSeq :=
   (publication_effect before after document message h).nextSeq_monotone
 
+set_option maxHeartbeats 1000000 in
+theorem publishToolDelivery_preserves_segments
+    (before after : World) (document : DocId) (message : MessageEnvelope)
+    (h : publishToolDelivery before document message = .ok after) :
+    after.segments = before.segments := by
+  unfold publishToolDelivery at h
+  obtain ⟨write, hwrite, rfl⟩ := ToolWrite.lift_success h
+  unfold publishToolDeliveryWrite at hwrite
+  repeat' first
+    | contradiction
+    | (solve | cases hwrite; rfl)
+    | (solve | simp_all [ToolWrite.apply_current, ToolWrite.apply, ToolWrite.current])
+    | split at hwrite
+  dsimp at hwrite
+  split at hwrite <;> try contradiction
+  simp at hwrite
+  rw [← hwrite]
+  rfl
+
 private theorem backgroundNotification_effect
     (headerValid : World → OwnedTool → MessageEnvelope → Bool)
     (before after : World) (document : DocId) (message : MessageEnvelope)
@@ -837,6 +933,26 @@ private theorem backgroundNotification_effect
   cases hwrite
   have advance := fresh_delivery_advances_allocator before _ message _ (by assumption)
   exact ⟨rfl, Or.inr ⟨rfl, by simp_all, advance⟩⟩
+
+set_option maxHeartbeats 1000000 in
+private theorem publishBackgroundNotification_preserves_segments
+    (headerValid : World → OwnedTool → MessageEnvelope → Bool)
+    (before after : World) (document : DocId) (message : MessageEnvelope)
+    (h : publishBackgroundNotificationWith headerValid before document message = .ok after) :
+    after.segments = before.segments := by
+  unfold publishBackgroundNotificationWith at h
+  obtain ⟨write, hwrite, rfl⟩ := ToolWrite.lift_success h
+  unfold publishBackgroundNotificationWriteWith at hwrite
+  repeat' first
+    | contradiction
+    | (solve | cases hwrite; rfl)
+    | (solve | simp_all [ToolWrite.apply_current, ToolWrite.apply, ToolWrite.current])
+    | split at hwrite
+  dsimp at hwrite
+  split at hwrite <;> try contradiction
+  simp at hwrite
+  rw [← hwrite]
+  rfl
 
 theorem wake_notification_preserves_parent_lease
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
@@ -864,6 +980,24 @@ theorem goal_notification_preserves_parent_lease
     (h : publishGoalNotification before document binding message = .ok after) :
     after.lease = before.lease := by
   exact ToolWrite.lift_preserves_lease h
+
+theorem wake_notification_preserves_segments
+    (before after : World) (document : DocId) (binding : WakeDocumentBinding)
+    (message : MessageEnvelope)
+    (h : publishWakeNotification before document binding message = .ok after) :
+    after.segments = before.segments :=
+  publishBackgroundNotification_preserves_segments
+    (fun world tool candidate => wakeNotificationHeaderValid world tool binding candidate)
+    before after document message h
+
+theorem goal_notification_preserves_segments
+    (before after : World) (document : DocId) (binding : GoalNotificationBinding)
+    (message : MessageEnvelope)
+    (h : publishGoalNotification before document binding message = .ok after) :
+    after.segments = before.segments :=
+  publishBackgroundNotification_preserves_segments
+    (fun world tool candidate => goalNotificationHeaderValid world tool binding candidate)
+    before after document message h
 
 theorem wake_notification_effect
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
@@ -940,5 +1074,142 @@ theorem background_receipt_nextSeq_monotone
     (h : publishBackgroundReceipt before document closing message = .ok after) :
     before.transcript.nextSeq ≤ after.transcript.nextSeq :=
   (background_receipt_effect before after document closing message h).nextSeq_monotone
+
+set_option maxHeartbeats 1000000 in
+theorem background_receipt_segment_effect
+    (before after : World) (document : DocId) (closing : Segment)
+    (message : MessageEnvelope)
+    (h : publishBackgroundReceipt before document closing message = .ok after) :
+    after.segments = before.segments ∨
+      (after.segments = before.segments ++ [closing] ∧
+        freshSegmentIdentity before closing = true ∧
+        sourceOpen before closing.coordinate = true) := by
+  unfold publishBackgroundReceipt at h
+  obtain ⟨write, hwrite, rfl⟩ := ToolWrite.lift_success h
+  clear h
+  unfold publishBackgroundReceiptWrite at hwrite
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite
+  · left
+    simp at hwrite
+    subst write
+    rfl
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    backgroundReceiptRecordValid, Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [backgroundReceiptRecordValid,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [backgroundReceiptRecordValid,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [backgroundReceiptRecordValid,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [backgroundReceiptRecordValid,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [backgroundReceiptRecordValid,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [backgroundReceiptRecordValid,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [backgroundReceiptRecordValid,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [backgroundReceiptRecordValid,
+    Transcript.TranscriptState.publishToolResult]
+  rw [← hwrite]
+  right
+  simp [ToolWrite.apply, ToolWrite.current]
+
+set_option maxHeartbeats 1000000 in
+/-- Every successful foreground delivery leaves the complete tool projection
+coherent.  This exposes the postcondition already enforced by the publication
+transaction, including its exact-replay branch. -/
+theorem publishToolDelivery_success_toolProjectionCoherent
+    (before after : World) (document : DocId) (message : MessageEnvelope)
+    (h : publishToolDelivery before document message = .ok after) :
+    toolProjectionCoherent after = true := by
+  unfold publishToolDelivery at h
+  obtain ⟨write, hwrite, rfl⟩ := ToolWrite.lift_success h
+  clear h
+  unfold publishToolDeliveryWrite at hwrite
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  rename_i preCoherent
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  · rw [← hwrite, ToolWrite.apply_current]
+    simpa using preCoherent
+  repeat' first | contradiction | (solve | simp_all) | split at hwrite
+
+set_option maxHeartbeats 1000000 in
+/-- The atomic background receipt path checks the same complete projection
+after installing its closure, message, transcript result, and tool state. -/
+theorem publishBackgroundReceipt_success_toolProjectionCoherent
+    (before after : World) (document : DocId) (closing : Segment)
+    (message : MessageEnvelope)
+    (h : publishBackgroundReceipt before document closing message = .ok after) :
+    toolProjectionCoherent after = true := by
+  unfold publishBackgroundReceipt at h
+  obtain ⟨write, hwrite, rfl⟩ := ToolWrite.lift_success h
+  clear h
+  unfold publishBackgroundReceiptWrite at hwrite
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  rename_i preCoherent
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current,
+    Transcript.TranscriptState.publishToolResult]
+  · rw [← hwrite, ToolWrite.apply_current]
+    simpa using preCoherent
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+  split at hwrite <;> try simp_all [Transcript.TranscriptState.publishToolResult]
+
+private theorem publishBackgroundNotification_success_toolProjectionCoherent
+    (headerValid : World → OwnedTool → MessageEnvelope → Bool)
+    (before after : World) (document : DocId) (message : MessageEnvelope)
+    (h : publishBackgroundNotificationWith headerValid before document message = .ok after) :
+    toolProjectionCoherent after = true := by
+  unfold publishBackgroundNotificationWith at h
+  obtain ⟨write, hwrite, rfl⟩ := ToolWrite.lift_success h
+  clear h
+  unfold publishBackgroundNotificationWriteWith at hwrite
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  rename_i preCoherent
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  split at hwrite <;> try simp_all [ToolWrite.apply_current]
+  · rw [← hwrite, ToolWrite.apply_current]
+    simpa using preCoherent
+  repeat' first | contradiction | (solve | simp_all) | split at hwrite
+
+theorem publishWakeNotification_success_toolProjectionCoherent
+    (before after : World) (document : DocId) (binding : WakeDocumentBinding)
+    (message : MessageEnvelope)
+    (h : publishWakeNotification before document binding message = .ok after) :
+    toolProjectionCoherent after = true :=
+  publishBackgroundNotification_success_toolProjectionCoherent
+    (fun world tool candidate => wakeNotificationHeaderValid world tool binding candidate)
+    before after document message h
+
+theorem publishGoalNotification_success_toolProjectionCoherent
+    (before after : World) (document : DocId) (binding : GoalNotificationBinding)
+    (message : MessageEnvelope)
+    (h : publishGoalNotification before document binding message = .ok after) :
+    toolProjectionCoherent after = true :=
+  publishBackgroundNotification_success_toolProjectionCoherent
+    (fun world tool candidate => goalNotificationHeaderValid world tool binding candidate)
+    before after document message h
 
 end CanonicalOutput.Execution.ToolDelivery

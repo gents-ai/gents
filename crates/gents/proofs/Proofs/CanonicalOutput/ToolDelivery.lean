@@ -120,6 +120,38 @@ def closeRecords (records : List Segment) (request document : DocId)
     if !freshClosedRecordValid next request document record then .error .malformed
     else .ok next
 
+/-- A successful append is replay or one globally fresh, non-closing record at
+an open source.  This is the structural interface used by composed invariants. -/
+theorem appendRecords_success_effect (records after : List Segment)
+    (request document : DocId) (currentTime : Time) (record : Segment)
+    (h : appendRecords records request document currentTime record = .ok after) :
+    after = records ∨
+      (after = records ++ [record] ∧ record.close = none ∧
+        closures records record.coordinate = [] ∧ identityAvailable records record = true) := by
+  unfold appendRecords at h
+  repeat' first
+    | contradiction
+    | (solve | simp_all [openSource, ownedRecord])
+    | split at h
+
+/-- A successful close is replay or one globally fresh closure installed at a
+previously open source. -/
+theorem closeRecords_success_effect (records after : List Segment)
+    (request document : DocId) (currentTime : Time) (record : Segment)
+    (h : closeRecords records request document currentTime record = .ok after) :
+    after = records ∨
+      (after = records ++ [record] ∧
+        closures records (coordinate request document) = [] ∧
+        identityAvailable records record = true ∧
+        ownedRecord records request document currentTime record = true) := by
+  unfold closeRecords at h
+  repeat' first
+    | contradiction
+    | (solve | simp_all [openSource, freshClosedRecordValid, exactExtent])
+    | split at h
+  dsimp at h
+  split at h <;> simp_all [openSource, freshClosedRecordValid, exactExtent]
+
 def sourceClosed (records : List Segment) (request document : DocId) : Bool :=
   match uniqueRecord Error.malformed .conflict
       (closures records (coordinate request document)) with

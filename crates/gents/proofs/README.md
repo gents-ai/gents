@@ -160,36 +160,56 @@ four-field write (segments, messages, transcript, tool contexts); the common lif
 cannot write the parent lease or composed controls. `Gate.Operation` remains the
 closed admitted-operation vocabulary, not an arbitrary transition callback.
 Provider acceptance/retraction still require the retry-mediated application path.
-Two inductive invariants now use that same application trace, with no invariant
+Four inductive invariants now use that same application trace, with no invariant
 premises added to its constructors. `InvariantComposition.Trace.sequenceBound`
 proves that every current-session canonical header remains below the shared
 allocator, assuming this bound initially. `ClaimInvariant` proves
 `Trace.claimCoherent`: an idle world has no active queue entry; a claimed world
 agrees on physical request, session, logical queue entry and retry owner.
-Empty message storage establishes the first invariant; an unclaimed world with
-an inactive queue establishes the second. Activation establishes claim coherence,
-and finish restores the idle case. Both proofs cover provider/retry commits,
+`CoherenceComposition.Trace.toolProjectionCoherent` preserves the full physical
+tool/header/transcript join, including canonical result reconstruction and running
+receipt provenance. `ClosureInvariant.Trace.closureUnique` preserves pairwise
+equality of closure records at each source coordinate; exact duplicate delivery
+is allowed, distinct competing closures are not.
+Empty message storage establishes the allocator invariant; an unclaimed world
+with an inactive queue establishes claim coherence. Empty tool contexts and
+transcript tool rows establish tool coherence; empty segment storage establishes
+closure uniqueness. Activation establishes claim coherence, and finish restores
+the idle case. All four proofs cover provider/retry commits,
 ordinary gate operations, handover, Goal publication and background wake delivery.
 They also cover the gated restart commit, including its queue application.
 They do not assert sequence uniqueness or correctness of arbitrary imported seeds.
-`SessionCompositionCases.actual_activation_trace_preserves_both_invariants`
+`SessionCompositionCases.actual_activation_trace_preserves_all_invariants`
 constructs a successful activation trace from the existing ordinary-request
-fixture and applies both inductive proofs, rather than only checking its endpoint.
+fixture and applies all four inductive proofs, rather than only checking its endpoint.
+`RunningRevocation.running_revocation_trace_preserves_new_invariants` also
+constructs a real gated revocation trace with a running tool, transports both new
+invariants, and checks that the parent's in-flight claim is released.
 
 Tool publication proofs now expose the actual replay-or-append effect on both
 headers and their allocator. Provider acceptance likewise has one core success
 effect consumed by coherence, allocator, identity and sequence-bound proofs;
 accounting folds share frame proofs instead of separate field inductions.
-Tool append exposes its exact clock-only tool replacement, and close combines
-its publication frame with the existing checked lifecycle guarantee. These are
-operation effects, not a full tool-coherence induction. Goal publication consumes
+Tool append exposes its exact clock-only tool replacement. Close combines its
+checked lifecycle guarantee with a proof that terminal accounting retains existing
+canonical result authority. Request revocation preserves coherence through the
+whole accounting fold: pending calls cancel, running calls hand off, and later
+fold entries retain their exact original tool identities. Shared key-preserving
+map proofs replace separate selected/foreign lookup scaffolding.
+`ReconstructionFrame.reconstructMessage_append_open` proves that globally fresh
+writes at an open coordinate preserve every already successful native message
+reconstruction, across all block kinds and metadata checks. This is the common
+argument for provider, authored, and tool writes—not an assumption that immutable
+bytes alone make a later append harmless. Goal publication consumes
 its stored proof evidence, and terminal classification uses the tool lifecycle
 owner's `isTerminal` rather than separate output-layer definitions.
 Acceptance and header-only publication establish
 tool projection coherence inside their cores, so their duplicate outer coherence
-checks are removed. The full tool-coherence and source-closure uniqueness
-invariants over the application trace remain outstanding; these two new
-invariants do not justify deleting the other defensive postchecks. Native
+checks are removed. Other defensive postchecks remain where their guarantees are
+used by the induction; an inductive theorem that consumes a check does not justify
+removing that check. These theorems describe admitted application transitions from
+valid seeds, not arbitrary conflicting replica imports, native scheduler fairness,
+or cross-process exclusion. Native
 conformance regeneration remains deferred until that proof/encoding work settles.
 
 Retry cap, deadline-fit and one-repair guarantees are retained as transition

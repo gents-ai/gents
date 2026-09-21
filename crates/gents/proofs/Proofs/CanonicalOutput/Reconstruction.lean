@@ -31,6 +31,17 @@ same document is not a twin; a different identity or content remains a conflict.
 def uniqueRecord {α ε : Type} [DecidableEq α] (missing conflict : ε)
     (records : List α) : Except ε α := uniqueRecordRaw missing conflict records.dedup
 
+theorem uniqueRecord_eq_ok_iff {α ε : Type} [DecidableEq α]
+    (missing conflict : ε) (records : List α) (record : α) :
+    uniqueRecord missing conflict records = .ok record ↔ records.dedup = [record] := by
+  unfold uniqueRecord
+  cases hrecords : records.dedup with
+  | nil => simp [uniqueRecordRaw]
+  | cons first rest =>
+      cases rest with
+      | nil => simp [uniqueRecordRaw]
+      | cons second tail => simp [uniqueRecordRaw]
+
 /-- Every visible document at this immutable identity has exactly these bytes. -/
 def exactIdentityAt (records : List Segment) (record : Segment) : Bool :=
   (records.filter (fun other => other.id == record.id)).all (fun other => other == record)

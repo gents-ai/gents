@@ -5,17 +5,9 @@ namespace CanonicalOutput
 theorem uniqueRecord_success_mem {α ε : Type} [DecidableEq α]
     (missing conflict : ε) (records : List α) (record : α)
     (h : uniqueRecord missing conflict records = .ok record) : record ∈ records := by
-  cases hd : records.dedup with
-  | nil => simp only [uniqueRecord, hd] at h; contradiction
-  | cons first rest =>
-      cases rest with
-      | nil =>
-          simp only [uniqueRecord, hd] at h
-          change Except.ok first = Except.ok record at h
-          cases h
-          have hm : record ∈ records.dedup := by rw [hd]; simp
-          simpa using hm
-      | cons second tail => simp only [uniqueRecord, hd] at h; contradiction
+  apply List.mem_dedup.mp
+  rw [(uniqueRecord_eq_ok_iff missing conflict records record).mp h]
+  simp
 
 theorem flushAt_success_has_ordinal_record
     (records : List Segment) (writer : Writer) (ordinal : Nat) (flush : Flush)
