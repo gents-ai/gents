@@ -53,5 +53,5 @@ Filled in by the orchestrator at spin-up.
 
 | Name | Commit |
 |---|---|
-| `eval/05-contract` pinned for M6a and M2 | (set when Task 7's fix round lands) |
+| `eval/05-contract` pinned for M6a and M2 | `595fd8bc2` |
 | `eval/03-definition` for M3 | `2629d4a11` |
