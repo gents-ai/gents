@@ -1,5 +1,5 @@
 use crate::message::{
-    AssistantContent, Message, Reasoning, ReasoningContent, Text, ToolResult, ToolResultContent,
+    AssistantContent, Message, Reasoning, ReasoningContent, ToolResult, ToolResultContent,
     UserContent,
 };
 
@@ -180,6 +180,7 @@ fn looks_like_tool_call_markup(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::Text;
 
     #[test]
     fn tool_result_messages_present_as_tool_rows() {

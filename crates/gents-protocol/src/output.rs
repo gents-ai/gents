@@ -39,6 +39,7 @@ use crate::rendered_request::CaptureScope;
 
 /// Shared closed-source reconstruction; header and live-view owners build on it.
 pub mod reconstruction;
+pub mod recovery;
 
 /// What produced a run of content. Its identity is known before the first
 /// byte arrives, so segments never wait on the closing record or message that later
@@ -457,6 +458,53 @@ pub struct TranscriptMessage {
     pub created_at: String,
 }
 
+impl TranscriptMessage {
+    /// Every sealed payload dependency named by this header, in native block
+    /// order. Readers use this to build the exact immutable dependency closure;
+    /// it is deliberately shared rather than reimplemented by hydration,
+    /// history, exports, or provider input.
+    pub fn payload_references(&self) -> Vec<&PayloadRef> {
+        let mut references = Vec::new();
+        for block in &self.blocks {
+            match block {
+                MessageBlock::Text { text } => references.push(&text.output),
+                MessageBlock::Reasoning { parts, .. } => {
+                    for part in parts {
+                        match part {
+                            ReasoningPart::Text { text, .. } | ReasoningPart::Summary { text } => {
+                                references.push(text)
+                            }
+                            ReasoningPart::Encrypted { data }
+                            | ReasoningPart::Redacted { data } => references.push(data),
+                        }
+                    }
+                }
+                MessageBlock::ToolCall { arguments, .. } => references.push(arguments),
+                MessageBlock::ToolResult { parts, .. } => {
+                    for part in parts {
+                        match part {
+                            ToolResultPart::Text { text } => references.push(&text.output),
+                            ToolResultPart::Media(media) => match &media.data {
+                                MediaData::Base64 { data }
+                                | MediaData::Raw { data }
+                                | MediaData::String { data } => references.push(data),
+                                MediaData::Url { .. } | MediaData::Unknown => {}
+                            },
+                        }
+                    }
+                }
+                MessageBlock::Media(media) => match &media.data {
+                    MediaData::Base64 { data }
+                    | MediaData::Raw { data }
+                    | MediaData::String { data } => references.push(data),
+                    MediaData::Url { .. } | MediaData::Unknown => {}
+                },
+            }
+        }
+        references
+    }
+}
+
 /// One native content item with its payload strings replaced by references.
 /// Small provider-opaque values (ids, signatures, additional params) stay
 /// inline: they are structure, not streamed output.
@@ -652,6 +700,95 @@ pub enum ReconstructionError {
     InvalidPayload { reference: PayloadRef },
 }
 
+impl ReconstructionError {
+    /// Errors that can become reconstructable when immutable dependencies
+    /// replicate. All other variants are authorization or integrity failures.
+    pub fn is_incomplete(&self) -> bool {
+        matches!(
+            self,
+            Self::UnresolvedClose { .. }
+                | Self::MissingSegment { .. }
+                | Self::UnresolvedTerminalOutput { .. }
+        )
+    }
+}
+
+impl std::fmt::Display for ReconstructionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnresolvedClose { close_doc_id } => {
+                write!(f, "unresolved closing segment {close_doc_id}")
+            }
+            Self::AccessDenied { doc_id } => {
+                write!(f, "access denied to output dependency {doc_id}")
+            }
+            Self::InvalidReference { reference } => write!(
+                f,
+                "invalid output reference {}:{}",
+                reference.close_doc_id, reference.stream
+            ),
+            Self::MissingSegment {
+                close_doc_id,
+                ordinal,
+            } => write!(
+                f,
+                "missing output segment {ordinal} for closure {close_doc_id}"
+            ),
+            Self::ConflictingSegments {
+                close_doc_id,
+                ordinal,
+            } => write!(
+                f,
+                "conflicting output segment {ordinal} for closure {close_doc_id}"
+            ),
+            Self::ExtentMismatch { reference, bytes } => write!(
+                f,
+                "sealed output extent mismatch for {}:{} (expected {bytes} bytes)",
+                reference.close_doc_id, reference.stream
+            ),
+            Self::ConflictingClosures {
+                request_doc_id,
+                source,
+            } => write!(
+                f,
+                "conflicting output closures for request {request_doc_id}, source {source:?}"
+            ),
+            Self::ConflictingMessages {
+                session_id,
+                message_key,
+            } => write!(
+                f,
+                "conflicting transcript message {message_key} in session {session_id}"
+            ),
+            Self::InvalidWriter {
+                request_doc_id,
+                source,
+            } => write!(
+                f,
+                "invalid output writer for request {request_doc_id}, source {source:?}"
+            ),
+            Self::UnresolvedTerminalOutput { request_doc_id } => {
+                write!(f, "unresolved terminal output for request {request_doc_id}")
+            }
+            Self::InvalidStructure { detail } => {
+                write!(f, "invalid canonical output structure: {detail}")
+            }
+            Self::InvalidPresentation { reference } => write!(
+                f,
+                "invalid presentation for {}:{}",
+                reference.close_doc_id, reference.stream
+            ),
+            Self::InvalidPayload { reference } => write!(
+                f,
+                "invalid payload for {}:{}",
+                reference.close_doc_id, reference.stream
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ReconstructionError {}
+
 /// Output for a request that no message references yet, grouped by declared
 /// native position: sources with no visible closing record, and closed sources awaiting
 /// publication (tool output before delivery, interrupted output before
@@ -700,9 +837,7 @@ pub enum LiveStreamState {
     /// Closure/publication is known but the exact message or its dependencies
     /// are not yet reconstructable. Keep a validated contiguous preview while
     /// reporting loading; never label a known-closed source as live activity.
-    PendingPublication {
-        outcome: OutputOutcome,
-    },
+    PendingPublication { outcome: OutputOutcome },
     /// These closed Partial provider bytes remain outside published native messages
     /// after request terminalization, including fragments omitted by recovery.
     /// Diagnostic-only: not current activity, pending delivery or provider input.

@@ -3,9 +3,17 @@
 //! never implies denial, and missing bytes never produce a shortened message.
 
 use super::{
-    OutputSegment, OutputSource, OutputWriter, PayloadRef, ReconstructionError, SourceClose,
-    StreamDeclaration,
+    MediaData, MediaKind, MediaType, MessageBlock, MessagePublication, MessageRole, OutputSegment,
+    OutputSource, OutputWriter, PayloadPresentation, PayloadRef, PresentationPart,
+    PresentedPayload, ReasoningPart, ReconstructionError, SourceClose, StreamDeclaration,
+    StreamPayload, ToolResultPart, TranscriptMessage,
 };
+use crate::message::{
+    AssistantContent, Audio, Document, DocumentSourceKind, Image, Message, Reasoning,
+    ReasoningContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent,
+    Video,
+};
+use base64::Engine;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,13 +68,69 @@ fn writer_matches_source(source: &OutputSource, writer: &OutputWriter) -> bool {
     }
 }
 
-pub fn reconstruct_stream(
+fn invalid_extent(reference: &PayloadRef, bytes: u64) -> ReconstructionError {
+    ReconstructionError::ExtentMismatch {
+        reference: reference.clone(),
+        bytes,
+    }
+}
+
+/// Reconstruct a header's selected text without retaining a second payload
+/// copy. Ranges are byte offsets in the sealed UTF-8 stream; literals are the
+/// only small runtime-owned bytes allowed between selected output ranges.
+pub fn reconstruct_presented_payload(
     records: &[ObservedSegment<'_>],
     denied: &[String],
     dependency_denials: &[DependencyDenial],
+    payload: &PresentedPayload,
+) -> Result<String, ReconstructionError> {
+    let stream = reconstruct_stream(records, denied, dependency_denials, &payload.output)?;
+    present_stream(&stream.text, payload)
+}
+
+fn present_stream(text: &str, payload: &PresentedPayload) -> Result<String, ReconstructionError> {
+    match &payload.presentation {
+        PayloadPresentation::Full => Ok(text.to_owned()),
+        PayloadPresentation::Composed { parts } => {
+            let mut rendered = String::new();
+            for part in parts {
+                match part {
+                    PresentationPart::Literal { text } => rendered.push_str(text),
+                    PresentationPart::OutputRange {
+                        start_byte,
+                        end_byte,
+                    } => {
+                        let start = usize::try_from(*start_byte).map_err(|_| {
+                            ReconstructionError::InvalidPresentation {
+                                reference: payload.output.clone(),
+                            }
+                        })?;
+                        let end = usize::try_from(*end_byte).map_err(|_| {
+                            ReconstructionError::InvalidPresentation {
+                                reference: payload.output.clone(),
+                            }
+                        })?;
+                        let selected = text.get(start..end).ok_or_else(|| {
+                            ReconstructionError::InvalidPresentation {
+                                reference: payload.output.clone(),
+                            }
+                        })?;
+                        rendered.push_str(selected);
+                    }
+                }
+            }
+            Ok(rendered)
+        }
+    }
+}
+
+fn closing_for_reference<'a>(
+    records: &[ObservedSegment<'a>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
     reference: &PayloadRef,
-) -> Result<ReconstructedStream, ReconstructionError> {
-    // Stable diagnostics even when several denied dependencies are reordered.
+) -> Result<ObservedSegment<'a>, ReconstructionError> {
+    // Keep authorization behavior identical to the stream primitive.
     if let Some(doc_id) = dependency_denials
         .iter()
         .filter(|d| d.root_close_id == reference.close_doc_id)
@@ -86,7 +150,7 @@ pub fn reconstruct_stream(
         records
             .iter()
             .copied()
-            .filter(|r| r.doc_id == reference.close_doc_id),
+            .filter(|record| record.doc_id == reference.close_doc_id),
         ReconstructionError::UnresolvedClose {
             close_doc_id: reference.close_doc_id.clone(),
         },
@@ -97,19 +161,103 @@ pub fn reconstruct_stream(
             ),
         },
     )?;
-    let invalid_reference = || ReconstructionError::InvalidReference {
-        reference: reference.clone(),
-    };
+    if !matches!(closing.segment.close, Some(SourceClose::Closed { .. })) {
+        return Err(ReconstructionError::InvalidReference {
+            reference: reference.clone(),
+        });
+    }
+    Ok(closing)
+}
+
+fn reference_allowed_by_publication(
+    message: &TranscriptMessage,
+    closing: ObservedSegment<'_>,
+) -> bool {
+    match &message.publication {
+        MessagePublication::RequestExecution {
+            execution_generation,
+        } => {
+            message.request_doc_id.as_deref() == Some(&closing.segment.request_doc_id)
+                && matches!(
+                    (&closing.segment.source, &closing.segment.writer),
+                    (OutputSource::ProviderTurn { .. }, OutputWriter::RequestExecution { execution_generation: writer })
+                        | (OutputSource::Authored { .. }, OutputWriter::RequestExecution { execution_generation: writer })
+                        if writer == execution_generation
+                )
+        }
+        MessagePublication::RequestRecovery { .. } => {
+            message.request_doc_id.as_deref() == Some(&closing.segment.request_doc_id)
+                && matches!(
+                    (&closing.segment.source, &closing.segment.writer),
+                    (
+                        OutputSource::ProviderTurn { .. },
+                        OutputWriter::RequestExecution { .. }
+                    )
+                )
+        }
+        MessagePublication::ToolDelivery { tool_call_doc_id } => {
+            match (&closing.segment.source, &closing.segment.writer) {
+                (
+                    OutputSource::ToolCall {
+                        tool_call_doc_id: source,
+                    },
+                    OutputWriter::ToolExecution {
+                        tool_call_doc_id: writer,
+                    },
+                ) => source == tool_call_doc_id && writer == tool_call_doc_id,
+                (
+                    OutputSource::Authored { .. },
+                    OutputWriter::ToolExecution {
+                        tool_call_doc_id: writer,
+                    },
+                ) => {
+                    writer == tool_call_doc_id
+                        && message.request_doc_id.as_deref()
+                            == Some(&closing.segment.request_doc_id)
+                }
+                _ => false,
+            }
+        }
+        MessagePublication::Fork { .. } => true,
+    }
+}
+
+fn validate_reference_source(
+    records: &[ObservedSegment<'_>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
+    message: &TranscriptMessage,
+    reference: &PayloadRef,
+) -> Result<(), ReconstructionError> {
+    let closing = closing_for_reference(records, denied, dependency_denials, reference)?;
+    if reference_allowed_by_publication(message, closing) {
+        Ok(())
+    } else {
+        Err(ReconstructionError::InvalidStructure {
+            detail: "payload source is not admitted by message publication".to_owned(),
+        })
+    }
+}
+
+pub fn reconstruct_stream(
+    records: &[ObservedSegment<'_>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
+    reference: &PayloadRef,
+) -> Result<ReconstructedStream, ReconstructionError> {
+    let closing = closing_for_reference(records, denied, dependency_denials, reference)?;
     let Some(SourceClose::Closed {
         segments: count,
         stream_bytes,
         ..
     }) = &closing.segment.close
     else {
-        return Err(invalid_reference());
+        unreachable!("closing_for_reference only returns closed records")
     };
     let Some(expected_bytes) = stream_bytes.get(reference.stream as usize) else {
-        return Err(invalid_reference());
+        return Err(ReconstructionError::InvalidReference {
+            reference: reference.clone(),
+        });
     };
     let same_source = |r: &ObservedSegment<'_>| {
         r.segment.request_doc_id == closing.segment.request_doc_id
@@ -236,6 +384,634 @@ pub fn reconstruct_stream(
         return Err(malformed());
     }
     Ok(streams.swap_remove(reference.stream as usize))
+}
+
+fn expect_payload(
+    stream: &ReconstructedStream,
+    reference: &PayloadRef,
+    allowed: &[fn(&StreamPayload) -> bool],
+    presentation_is_full: bool,
+    json: bool,
+) -> Result<(), ReconstructionError> {
+    if !allowed
+        .iter()
+        .any(|allowed| allowed(&stream.declaration.payload))
+        || (!presentation_is_full
+            && !matches!(
+                stream.declaration.payload,
+                StreamPayload::Text | StreamPayload::ToolOutput
+            ))
+    {
+        return Err(invalid_extent(reference, stream.text.len() as u64));
+    }
+    if json && serde_json::from_str::<serde_json::Value>(&stream.text).is_err() {
+        return Err(ReconstructionError::InvalidPayload {
+            reference: reference.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn is_text(payload: &StreamPayload) -> bool {
+    matches!(payload, StreamPayload::Text)
+}
+fn is_tool_output(payload: &StreamPayload) -> bool {
+    matches!(payload, StreamPayload::ToolOutput)
+}
+fn is_reasoning(payload: &StreamPayload) -> bool {
+    matches!(payload, StreamPayload::Reasoning)
+}
+fn is_reasoning_opaque(payload: &StreamPayload) -> bool {
+    matches!(payload, StreamPayload::ReasoningOpaque)
+}
+fn is_reasoning_summary(payload: &StreamPayload) -> bool {
+    matches!(payload, StreamPayload::ReasoningSummary)
+}
+fn is_arguments(payload: &StreamPayload) -> bool {
+    matches!(payload, StreamPayload::ToolArguments { .. })
+}
+
+fn resolve_full(
+    records: &[ObservedSegment<'_>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
+    reference: &PayloadRef,
+    allowed: &[fn(&StreamPayload) -> bool],
+    json: bool,
+) -> Result<String, ReconstructionError> {
+    let stream = reconstruct_stream(records, denied, dependency_denials, reference)?;
+    expect_payload(&stream, reference, allowed, true, json)?;
+    Ok(stream.text)
+}
+
+fn resolve_presented(
+    records: &[ObservedSegment<'_>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
+    payload: &PresentedPayload,
+    allowed: &[fn(&StreamPayload) -> bool],
+) -> Result<String, ReconstructionError> {
+    let stream = reconstruct_stream(records, denied, dependency_denials, &payload.output)?;
+    expect_payload(
+        &stream,
+        &payload.output,
+        allowed,
+        matches!(payload.presentation, PayloadPresentation::Full),
+        false,
+    )?;
+    present_stream(&stream.text, payload)
+}
+
+fn media_data(
+    records: &[ObservedSegment<'_>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
+    media: &super::MediaBlock,
+) -> Result<DocumentSourceKind, ReconstructionError> {
+    let media_stream = |reference: &PayloadRef| {
+        let stream = reconstruct_stream(records, denied, dependency_denials, reference)?;
+        match &stream.declaration.payload {
+            StreamPayload::Media { media_kind } if media_kind == &media.kind => Ok(stream.text),
+            _ => Err(invalid_extent(reference, stream.text.len() as u64)),
+        }
+    };
+    match &media.data {
+        MediaData::Url { url } => Ok(DocumentSourceKind::Url(url.clone())),
+        MediaData::Unknown => Ok(DocumentSourceKind::Unknown),
+        MediaData::Base64 { data } => Ok(DocumentSourceKind::Base64(media_stream(data)?)),
+        MediaData::String { data } => Ok(DocumentSourceKind::String(media_stream(data)?)),
+        MediaData::Raw { data } => {
+            let encoded = media_stream(data)?;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| ReconstructionError::InvalidPayload {
+                    reference: data.clone(),
+                })?;
+            Ok(DocumentSourceKind::Raw(decoded))
+        }
+    }
+}
+
+fn validate_media_shape(media: &super::MediaBlock) -> bool {
+    match (&media.kind, &media.media_type, &media.detail) {
+        (MediaKind::Image, Some(MediaType::Image(_)) | None, _) => true,
+        (MediaKind::Audio, Some(MediaType::Audio(_)) | None, None) => true,
+        (MediaKind::Video, Some(MediaType::Video(_)) | None, None) => true,
+        (MediaKind::Document, Some(MediaType::Document(_)) | None, None) => true,
+        _ => false,
+    }
+}
+
+fn reconstruct_media(
+    records: &[ObservedSegment<'_>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
+    media: &super::MediaBlock,
+) -> Result<(MediaKind, DocumentSourceKind), ReconstructionError> {
+    if !validate_media_shape(media) {
+        return Err(ReconstructionError::InvalidStructure {
+            detail: "media kind, media type, and detail are not a native combination".to_owned(),
+        });
+    }
+    Ok((
+        media.kind,
+        media_data(records, denied, dependency_denials, media)?,
+    ))
+}
+
+fn validate_native_shape(message: &TranscriptMessage) -> Result<(), ReconstructionError> {
+    let allowed = |block: &MessageBlock| match block {
+        MessageBlock::Text { .. } => true,
+        MessageBlock::Reasoning { .. } | MessageBlock::ToolCall { .. } => {
+            message.role == MessageRole::Assistant
+        }
+        MessageBlock::ToolResult { parts, .. } => {
+            message.role == MessageRole::User
+                && parts.iter().all(|part| match part {
+                    ToolResultPart::Text { .. } => true,
+                    ToolResultPart::Media(media) => media.kind == MediaKind::Image,
+                })
+        }
+        MessageBlock::Media(media) => {
+            message.role == MessageRole::User
+                || (message.role == MessageRole::Assistant && media.kind == MediaKind::Image)
+        }
+    };
+    if !message.blocks.iter().all(allowed)
+        || matches!(message.role, MessageRole::System)
+            && (message.native_id.is_some()
+                || !matches!(message.blocks.as_slice(), [MessageBlock::Text { .. }]))
+        || matches!(message.role, MessageRole::User) && message.native_id.is_some()
+    {
+        return Err(ReconstructionError::InvalidStructure {
+            detail: "illegal native message role or block shape".to_owned(),
+        });
+    }
+    match &message.publication {
+        MessagePublication::RequestExecution { .. } => {
+            if message.request_doc_id.is_none() {
+                return Err(ReconstructionError::InvalidStructure { detail: "request publication lacks request membership".to_owned() });
+            }
+        }
+        MessagePublication::RequestRecovery { .. } => {
+            if message.request_doc_id.is_none()
+                || message.role != MessageRole::Assistant
+                || message.outcome != super::OutputOutcome::Partial
+                || message.native_id.is_some()
+                || !message.blocks.iter().all(|block| matches!(block, MessageBlock::Text { text } if matches!(text.presentation, PayloadPresentation::Full)))
+            {
+                return Err(ReconstructionError::InvalidStructure { detail: "invalid recovery header".to_owned() });
+            }
+        }
+        MessagePublication::ToolDelivery { tool_call_doc_id } => {
+            if message.request_doc_id.is_none()
+                || message.role != MessageRole::User
+                || message.blocks.iter().any(|block| match block {
+                    MessageBlock::Text { .. } => false,
+                    MessageBlock::ToolResult { tool_call_doc_id: id, .. } => id != tool_call_doc_id,
+                    _ => true,
+                })
+            {
+                return Err(ReconstructionError::InvalidStructure { detail: "invalid tool delivery header".to_owned() });
+            }
+        }
+        MessagePublication::Fork { origin_message_doc_id } => {
+            if message.request_doc_id.is_some() || origin_message_doc_id.is_empty() {
+                return Err(ReconstructionError::InvalidStructure { detail: "invalid fork provenance".to_owned() });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reconstruct one complete canonical transcript header into its native message.
+/// This is the sole protocol-level path for history, provider input, forks and
+/// exports: it validates immutable provenance before exposing any bytes.
+pub fn reconstruct_message(
+    records: &[ObservedSegment<'_>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
+    message: &TranscriptMessage,
+) -> Result<Message, ReconstructionError> {
+    validate_native_shape(message)?;
+
+    let validate_reference = |reference: &PayloadRef| {
+        validate_reference_source(records, denied, dependency_denials, message, reference)
+    };
+    // Closures/source provenance are validated before native decoding.
+    let mut provenance_failure = None;
+    for reference in message.payload_references() {
+        if provenance_failure.is_none() {
+            provenance_failure = validate_reference(reference).err();
+        }
+    }
+    if let Some(error) = provenance_failure {
+        return Err(error);
+    }
+
+    let mut provider_positions: Vec<(OutputSource, u32, u32)> = Vec::new();
+    let mut check_position = |reference: &PayloadRef,
+                              block: u32,
+                              part: u32,
+                              exact: bool|
+     -> Result<(), ReconstructionError> {
+        let closing = closing_for_reference(records, denied, dependency_denials, reference)?;
+        if let OutputSource::ProviderTurn { .. } = &closing.segment.source {
+            let stream = reconstruct_stream(records, denied, dependency_denials, reference)?;
+            if exact
+                && (stream.declaration.block_index != block
+                    || stream.declaration.part_index != part)
+            {
+                return Err(invalid_extent(reference, stream.text.len() as u64));
+            }
+            if matches!(
+                message.publication,
+                MessagePublication::RequestRecovery { .. }
+            ) && (!matches!(stream.declaration.payload, StreamPayload::Text)
+                || stream.declaration.part_index != 0)
+            {
+                return Err(invalid_extent(reference, stream.text.len() as u64));
+            }
+            provider_positions.push((
+                closing.segment.source.clone(),
+                stream.declaration.block_index,
+                stream.declaration.part_index,
+            ));
+        }
+        Ok(())
+    };
+    for (block_index, block) in message.blocks.iter().enumerate() {
+        let block_index =
+            u32::try_from(block_index).map_err(|_| ReconstructionError::InvalidStructure {
+                detail: "too many message blocks".to_owned(),
+            })?;
+        match block {
+            MessageBlock::Text { text } => check_position(
+                &text.output,
+                block_index,
+                0,
+                matches!(
+                    message.publication,
+                    MessagePublication::RequestExecution { .. }
+                ),
+            )?,
+            MessageBlock::Reasoning { parts, .. } => {
+                for (part_index, part) in parts.iter().enumerate() {
+                    let reference = match part {
+                        ReasoningPart::Text { text, .. } | ReasoningPart::Summary { text } => text,
+                        ReasoningPart::Encrypted { data } | ReasoningPart::Redacted { data } => {
+                            data
+                        }
+                    };
+                    check_position(
+                        reference,
+                        block_index,
+                        u32::try_from(part_index).map_err(|_| {
+                            ReconstructionError::InvalidStructure {
+                                detail: "too many message parts".to_owned(),
+                            }
+                        })?,
+                        matches!(
+                            message.publication,
+                            MessagePublication::RequestExecution { .. }
+                        ),
+                    )?;
+                }
+            }
+            MessageBlock::ToolCall { arguments, .. } => check_position(
+                arguments,
+                block_index,
+                0,
+                matches!(
+                    message.publication,
+                    MessagePublication::RequestExecution { .. }
+                ),
+            )?,
+            MessageBlock::ToolResult { parts, .. } => {
+                for (part_index, part) in parts.iter().enumerate() {
+                    let part_index = u32::try_from(part_index).map_err(|_| {
+                        ReconstructionError::InvalidStructure {
+                            detail: "too many message parts".to_owned(),
+                        }
+                    })?;
+                    match part {
+                        ToolResultPart::Text { text } => check_position(
+                            &text.output,
+                            block_index,
+                            part_index,
+                            matches!(
+                                message.publication,
+                                MessagePublication::RequestExecution { .. }
+                            ),
+                        )?,
+                        ToolResultPart::Media(media) => {
+                            if let MediaData::Base64 { data }
+                            | MediaData::Raw { data }
+                            | MediaData::String { data } = &media.data
+                            {
+                                check_position(
+                                    data,
+                                    block_index,
+                                    part_index,
+                                    matches!(
+                                        message.publication,
+                                        MessagePublication::RequestExecution { .. }
+                                    ),
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+            MessageBlock::Media(media) => {
+                if let MediaData::Base64 { data }
+                | MediaData::Raw { data }
+                | MediaData::String { data } = &media.data
+                {
+                    check_position(
+                        data,
+                        block_index,
+                        0,
+                        matches!(
+                            message.publication,
+                            MessagePublication::RequestExecution { .. }
+                        ),
+                    )?;
+                }
+            }
+        }
+    }
+    for pair in provider_positions.windows(2) {
+        if pair[0].0 == pair[1].0 && (pair[0].1, pair[0].2) >= (pair[1].1, pair[1].2) {
+            return Err(ReconstructionError::InvalidStructure {
+                detail: "provider payload declarations are out of native order".to_owned(),
+            });
+        }
+    }
+
+    let assistant_content =
+        |block: &MessageBlock| -> Result<AssistantContent, ReconstructionError> {
+            match block {
+                MessageBlock::Text { text } => Ok(AssistantContent::Text(Text {
+                    text: resolve_presented(
+                        records,
+                        denied,
+                        dependency_denials,
+                        text,
+                        &[is_text, is_tool_output],
+                    )?,
+                })),
+                MessageBlock::Reasoning { id, parts } => {
+                    Ok(AssistantContent::Reasoning(Reasoning {
+                        id: id.clone(),
+                        content: parts
+                            .iter()
+                            .map(|part| match part {
+                                ReasoningPart::Text { text, signature } => {
+                                    Ok(ReasoningContent::Text {
+                                        text: resolve_full(
+                                            records,
+                                            denied,
+                                            dependency_denials,
+                                            text,
+                                            &[is_reasoning],
+                                            false,
+                                        )?,
+                                        signature: signature.clone(),
+                                    })
+                                }
+                                ReasoningPart::Encrypted { data } => {
+                                    Ok(ReasoningContent::Encrypted(resolve_full(
+                                        records,
+                                        denied,
+                                        dependency_denials,
+                                        data,
+                                        &[is_reasoning_opaque],
+                                        false,
+                                    )?))
+                                }
+                                ReasoningPart::Redacted { data } => {
+                                    Ok(ReasoningContent::Redacted {
+                                        data: resolve_full(
+                                            records,
+                                            denied,
+                                            dependency_denials,
+                                            data,
+                                            &[is_reasoning_opaque],
+                                            false,
+                                        )?,
+                                    })
+                                }
+                                ReasoningPart::Summary { text } => {
+                                    Ok(ReasoningContent::Summary(resolve_full(
+                                        records,
+                                        denied,
+                                        dependency_denials,
+                                        text,
+                                        &[is_reasoning_summary],
+                                        false,
+                                    )?))
+                                }
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    }))
+                }
+                MessageBlock::ToolCall {
+                    id,
+                    call_id,
+                    name,
+                    arguments,
+                    signature,
+                    additional_params,
+                    ..
+                } => {
+                    let stream =
+                        reconstruct_stream(records, denied, dependency_denials, arguments)?;
+                    if !matches!(&stream.declaration.payload, StreamPayload::ToolArguments { id: declared_id, call_id: declared_call_id, name: declared_name } if declared_id == id && declared_call_id == call_id && declared_name == name)
+                    {
+                        return Err(invalid_extent(arguments, stream.text.len() as u64));
+                    }
+                    let argument_reference = arguments.clone();
+                    expect_payload(&stream, arguments, &[is_arguments], true, true)?;
+                    let arguments = stream.text;
+                    let arguments = serde_json::from_str(&arguments).map_err(|_| {
+                        ReconstructionError::InvalidPayload {
+                            reference: argument_reference,
+                        }
+                    })?;
+                    Ok(AssistantContent::ToolCall(ToolCall {
+                        id: id.clone(),
+                        call_id: call_id.clone(),
+                        function: ToolFunction {
+                            name: name.clone(),
+                            arguments,
+                        },
+                        signature: signature.clone(),
+                        additional_params: additional_params.clone(),
+                    }))
+                }
+                MessageBlock::Media(media) if media.kind == MediaKind::Image => {
+                    let (_, data) = reconstruct_media(records, denied, dependency_denials, media)?;
+                    Ok(AssistantContent::Image(Image {
+                        data,
+                        media_type: match &media.media_type {
+                            Some(MediaType::Image(value)) => Some(value.clone()),
+                            _ => None,
+                        },
+                        detail: media.detail.clone(),
+                        additional_params: media.additional_params.clone(),
+                    }))
+                }
+                _ => Err(ReconstructionError::InvalidStructure {
+                    detail: "non-assistant block in assistant message".to_owned(),
+                }),
+            }
+        };
+    match message.role {
+        MessageRole::System => match &message.blocks[0] {
+            MessageBlock::Text { text } => Ok(Message::System {
+                content: resolve_presented(
+                    records,
+                    denied,
+                    dependency_denials,
+                    text,
+                    &[is_text, is_tool_output],
+                )?,
+            }),
+            _ => unreachable!(),
+        },
+        MessageRole::Assistant => Ok(Message::Assistant {
+            id: message.native_id.clone(),
+            content: message
+                .blocks
+                .iter()
+                .map(assistant_content)
+                .collect::<Result<Vec<_>, _>>()?,
+        }),
+        MessageRole::User => {
+            let mut content = Vec::new();
+            for block in &message.blocks {
+                match block {
+                    MessageBlock::Text { text } => content.push(UserContent::Text(Text {
+                        text: resolve_presented(
+                            records,
+                            denied,
+                            dependency_denials,
+                            text,
+                            &[is_text, is_tool_output],
+                        )?,
+                    })),
+                    MessageBlock::ToolResult {
+                        id, call_id, parts, ..
+                    } => content.push(UserContent::ToolResult(ToolResult {
+                        id: id.clone(),
+                        call_id: call_id.clone(),
+                        content: parts
+                            .iter()
+                            .map(|part| match part {
+                                ToolResultPart::Text { text } => {
+                                    Ok(ToolResultContent::Text(Text {
+                                        text: resolve_presented(
+                                            records,
+                                            denied,
+                                            dependency_denials,
+                                            text,
+                                            &[is_tool_output],
+                                        )?,
+                                    }))
+                                }
+                                ToolResultPart::Media(media) => {
+                                    let (_, data) = reconstruct_media(
+                                        records,
+                                        denied,
+                                        dependency_denials,
+                                        media,
+                                    )?;
+                                    Ok(ToolResultContent::Image(Image {
+                                        data,
+                                        media_type: match &media.media_type {
+                                            Some(MediaType::Image(value)) => Some(value.clone()),
+                                            _ => None,
+                                        },
+                                        detail: media.detail.clone(),
+                                        additional_params: media.additional_params.clone(),
+                                    }))
+                                }
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    })),
+                    MessageBlock::Media(media) => {
+                        let (kind, data) =
+                            reconstruct_media(records, denied, dependency_denials, media)?;
+                        match (kind, &media.media_type) {
+                            (MediaKind::Image, Some(MediaType::Image(media_type))) => {
+                                content.push(UserContent::Image(Image {
+                                    data,
+                                    media_type: Some(media_type.clone()),
+                                    detail: media.detail.clone(),
+                                    additional_params: media.additional_params.clone(),
+                                }))
+                            }
+                            (MediaKind::Image, None) => content.push(UserContent::Image(Image {
+                                data,
+                                media_type: None,
+                                detail: media.detail.clone(),
+                                additional_params: media.additional_params.clone(),
+                            })),
+                            (MediaKind::Audio, Some(MediaType::Audio(media_type))) => {
+                                content.push(UserContent::Audio(Audio {
+                                    data,
+                                    media_type: Some(media_type.clone()),
+                                    additional_params: media.additional_params.clone(),
+                                }))
+                            }
+                            (MediaKind::Audio, None) => content.push(UserContent::Audio(Audio {
+                                data,
+                                media_type: None,
+                                additional_params: media.additional_params.clone(),
+                            })),
+                            (MediaKind::Video, Some(MediaType::Video(media_type))) => {
+                                content.push(UserContent::Video(Video {
+                                    data,
+                                    media_type: Some(media_type.clone()),
+                                    additional_params: media.additional_params.clone(),
+                                }))
+                            }
+                            (MediaKind::Video, None) => content.push(UserContent::Video(Video {
+                                data,
+                                media_type: None,
+                                additional_params: media.additional_params.clone(),
+                            })),
+                            (MediaKind::Document, Some(MediaType::Document(media_type))) => content
+                                .push(UserContent::Document(Document {
+                                    data,
+                                    media_type: Some(media_type.clone()),
+                                    additional_params: media.additional_params.clone(),
+                                })),
+                            (MediaKind::Document, None) => {
+                                content.push(UserContent::Document(Document {
+                                    data,
+                                    media_type: None,
+                                    additional_params: media.additional_params.clone(),
+                                }))
+                            }
+                            _ => {
+                                return Err(ReconstructionError::InvalidStructure {
+                                    detail: "media type does not match native content".to_owned(),
+                                })
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(ReconstructionError::InvalidStructure {
+                            detail: "non-user block in user message".to_owned(),
+                        })
+                    }
+                }
+            }
+            Ok(Message::User { content })
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -981,5 +1757,301 @@ mod tests {
         records.push((foreign_id, foreign));
         let stream = reconstruct(&records, &reference("close-1", 0)).expect("reconstructs");
         assert_eq!(stream.text, "hello");
+    }
+
+    fn provider_message(blocks: Vec<MessageBlock>) -> TranscriptMessage {
+        TranscriptMessage {
+            message_key: "message-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            agent_did: "did:key:z6MkAgent".to_owned(),
+            requester_did: None,
+            request_doc_id: Some("request-1".to_owned()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: "gen-1".to_owned(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: 0,
+            role: MessageRole::Assistant,
+            native_id: Some("native-1".to_owned()),
+            blocks,
+            created_at: "2025-01-01T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn reconstructs_native_assistant_message_and_composed_payload() {
+        let records = hello_source();
+        let payload = PresentedPayload {
+            output: reference("close-1", 0),
+            presentation: PayloadPresentation::Composed {
+                parts: vec![
+                    PresentationPart::OutputRange {
+                        start_byte: 0,
+                        end_byte: 2,
+                    },
+                    PresentationPart::Literal {
+                        text: "! ".to_owned(),
+                    },
+                    PresentationPart::OutputRange {
+                        start_byte: 2,
+                        end_byte: 5,
+                    },
+                ],
+            },
+        };
+        let message = reconstruct_message(
+            &observations(&records),
+            &[],
+            &[],
+            &provider_message(vec![MessageBlock::Text { text: payload }]),
+        )
+        .expect("strictly reconstructs");
+        assert_eq!(
+            message,
+            Message::Assistant {
+                id: Some("native-1".to_owned()),
+                content: vec![AssistantContent::Text(Text {
+                    text: "he! llo".to_owned(),
+                })],
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_provider_payload_at_a_rewritten_native_position() {
+        let records = hello_source();
+        let message = provider_message(vec![
+            MessageBlock::Text {
+                text: PresentedPayload {
+                    output: reference("close-1", 0),
+                    presentation: PayloadPresentation::Full,
+                },
+            },
+            MessageBlock::Text {
+                text: PresentedPayload {
+                    output: reference("close-1", 0),
+                    presentation: PayloadPresentation::Full,
+                },
+            },
+        ]);
+        assert!(matches!(
+            reconstruct_message(&observations(&records), &[], &[], &message),
+            Err(ReconstructionError::ExtentMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_presented_range_without_shortening_output() {
+        let records = hello_source();
+        let payload = PresentedPayload {
+            output: reference("close-1", 0),
+            presentation: PayloadPresentation::Composed {
+                parts: vec![PresentationPart::OutputRange {
+                    start_byte: 1,
+                    end_byte: 99,
+                }],
+            },
+        };
+        assert!(matches!(
+            reconstruct_presented_payload(&observations(&records), &[], &[], &payload),
+            Err(ReconstructionError::InvalidPresentation { .. })
+        ));
+    }
+
+    #[test]
+    fn native_tool_call_requires_exact_declared_identity_and_valid_json() {
+        let records = vec![segment(
+            "close-args",
+            Some(0),
+            vec![run(
+                0,
+                2,
+                Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::ToolArguments {
+                        id: "call-1".to_owned(),
+                        call_id: None,
+                        name: "echo".to_owned(),
+                    },
+                }),
+            )],
+            "{}",
+            closed(1, vec![2]),
+        )];
+        let header = provider_message(vec![MessageBlock::ToolCall {
+            tool_call_doc_id: "tool-1".to_owned(),
+            id: "call-1".to_owned(),
+            call_id: None,
+            name: "echo".to_owned(),
+            arguments: reference("close-args", 0),
+            signature: None,
+            additional_params: None,
+        }]);
+        assert!(matches!(
+            reconstruct_message(&observations(&records), &[], &[], &header),
+            Ok(Message::Assistant { content, .. }) if matches!(&content[..], [AssistantContent::ToolCall(_)])
+        ));
+        let mut wrong = header;
+        wrong.blocks = vec![MessageBlock::ToolCall {
+            tool_call_doc_id: "tool-1".to_owned(),
+            id: "wrong".to_owned(),
+            call_id: None,
+            name: "echo".to_owned(),
+            arguments: reference("close-args", 0),
+            signature: None,
+            additional_params: None,
+        }];
+        assert!(matches!(
+            reconstruct_message(&observations(&records), &[], &[], &wrong),
+            Err(ReconstructionError::ExtentMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn recovery_can_omit_unparseable_argument_stream_but_not_reference_it() {
+        let records = vec![segment(
+            "close-mixed",
+            Some(0),
+            vec![
+                run(0, 1, Some(text_declaration(0))),
+                run(
+                    1,
+                    1,
+                    Some(StreamDeclaration {
+                        block_index: 1,
+                        part_index: 0,
+                        payload: StreamPayload::ToolArguments {
+                            id: "call".to_owned(),
+                            call_id: None,
+                            name: "echo".to_owned(),
+                        },
+                    }),
+                ),
+            ],
+            "x{",
+            Some(SourceClose::Closed {
+                outcome: OutputOutcome::Partial,
+                segments: 1,
+                stream_bytes: vec![1, 1],
+            }),
+        )];
+        let recovered = TranscriptMessage {
+            publication: MessagePublication::RequestRecovery {
+                execution_generation: "recovery".to_owned(),
+            },
+            outcome: OutputOutcome::Partial,
+            native_id: None,
+            blocks: vec![MessageBlock::Text {
+                text: PresentedPayload {
+                    output: reference("close-mixed", 0),
+                    presentation: PayloadPresentation::Full,
+                },
+            }],
+            ..provider_message(vec![])
+        };
+        assert_eq!(
+            reconstruct_message(&observations(&records), &[], &[], &recovered),
+            Ok(Message::assistant("x"))
+        );
+    }
+
+    #[test]
+    fn fork_has_no_request_membership_and_preserves_dependency_authorization() {
+        let records = hello_source();
+        let fork = TranscriptMessage {
+            request_doc_id: None,
+            publication: MessagePublication::Fork {
+                origin_message_doc_id: "origin-1".to_owned(),
+            },
+            blocks: vec![MessageBlock::Text {
+                text: PresentedPayload {
+                    output: reference("close-1", 0),
+                    presentation: PayloadPresentation::Full,
+                },
+            }],
+            ..provider_message(vec![])
+        };
+        assert!(reconstruct_message(&observations(&records), &[], &[], &fork).is_ok());
+        assert!(matches!(
+            reconstruct_message(&observations(&records), &["close-1".to_owned()], &[], &fork),
+            Err(ReconstructionError::AccessDenied { .. })
+        ));
+        let invalid = TranscriptMessage {
+            request_doc_id: Some("request-1".to_owned()),
+            ..fork
+        };
+        assert!(matches!(
+            reconstruct_message(&observations(&records), &[], &[], &invalid),
+            Err(ReconstructionError::InvalidStructure { .. })
+        ));
+    }
+
+    #[test]
+    fn media_payload_kind_must_match_native_media_block() {
+        let records = vec![segment(
+            "close-media",
+            Some(0),
+            vec![run(
+                0,
+                4,
+                Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Media {
+                        media_kind: MediaKind::Audio,
+                    },
+                }),
+            )],
+            "aGk=",
+            closed(1, vec![4]),
+        )];
+        let media = super::super::MediaBlock {
+            kind: MediaKind::Image,
+            data: MediaData::Raw {
+                data: reference("close-media", 0),
+            },
+            media_type: None,
+            detail: None,
+            additional_params: None,
+        };
+        let header = provider_message(vec![MessageBlock::Media(media)]);
+        assert!(matches!(
+            reconstruct_message(&observations(&records), &[], &[], &header),
+            Err(ReconstructionError::ExtentMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn system_and_tool_delivery_role_shapes_are_not_interchangeable() {
+        let records = hello_source();
+        let mut system = provider_message(vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: reference("close-1", 0),
+                presentation: PayloadPresentation::Full,
+            },
+        }]);
+        system.role = MessageRole::System;
+        assert!(matches!(
+            reconstruct_message(&observations(&records), &[], &[], &system),
+            Err(ReconstructionError::InvalidStructure { .. })
+        ));
+
+        let mut delivery = provider_message(vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: reference("close-1", 0),
+                presentation: PayloadPresentation::Full,
+            },
+        }]);
+        delivery.role = MessageRole::User;
+        delivery.native_id = None;
+        delivery.publication = MessagePublication::ToolDelivery {
+            tool_call_doc_id: "tool-1".to_owned(),
+        };
+        // Provider bytes cannot be smuggled into a tool-owned delivery.
+        assert!(matches!(
+            reconstruct_message(&observations(&records), &[], &[], &delivery),
+            Err(ReconstructionError::InvalidStructure { .. })
+        ));
     }
 }

@@ -4960,6 +4960,7 @@ version = "0.18.5"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "bs58",
  "chrono",
  "ciborium",
