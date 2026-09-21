@@ -36,8 +36,13 @@ type EvalDefinition @branchable
     fixtures: JSON
     cases: JSON
     tags: [String]
+    updated_at: String
 }
 ```
+
+- `updated_at` is written by the mutation owner and stripped from the identity digest, as for every
+  apply-controlled collection. `mint_recreate_identity` depends on it: without it, removing a
+  definition and reinstalling byte-identical content would regenerate a tombstoned docID.
 
 - `subject` declares what the definition evaluates: `{kind: "behavior", inference_slots: [...]}`.
 - `fixtures` lists pack-asset digests, input documents and schemas to install in a trial.
