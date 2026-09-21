@@ -37,10 +37,12 @@ use crate::message::{
 };
 use crate::rendered_request::CaptureScope;
 
-/// Shared closed-source reconstruction; header and live-view owners build on it.
-pub mod reconstruction;
 /// Strict reconstruction of an unsealed source for recovery/closure planning.
 pub mod extent;
+/// Shared immutable fork-origin validation for runtime and replica readers.
+pub mod origin;
+/// Shared closed-source reconstruction; header and live-view owners build on it.
+pub mod reconstruction;
 pub mod recovery;
 
 /// What produced a run of content. Its identity is known before the first

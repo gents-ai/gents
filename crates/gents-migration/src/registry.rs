@@ -410,12 +410,13 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreieyeycrjfo5xsumx6ddnwqwtlvt4ufjjb4ayole7dgnrsp3wplhqq"
+        "bafyreibvvqzwu2xapbiybybwtx46ydmlub5tn2teocx7e7fq7jue4nw5kq"
     ),
-    // #1571 implementation layer must author the fresh OutputSegment
-    // pins and refresh Request/Message/ToolCall pins together.
-    // No fabricated CIDs or
-    // old response/spill baseline entries. Catalog coverage remains a hard gate.
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
+        gents_protocol::schemas::AGENT_OUTPUT_SEGMENT,
+        "bafyreicetn5wfjia3tirpwnxd3hmfptjulkttd4ppl4bisqjs6rkn7lfgm"
+    ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
         gents_protocol::schemas::AGENT_SESSION,
@@ -439,12 +440,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_MESSAGE_NAME,
         gents_protocol::schemas::AGENT_MESSAGE,
-        "bafyreig7x5jbsj5mlpd2k2whc2v6d4tbwnwik6l3nvu67oiwb2vc4x2wru"
+        "bafyreigj4ru2gxajvrt65ssrufewgw6e3wsaxmdgei7y5zsjsdejyaugt4"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL,
-        "bafyreigb4fvfiyixw73psc5xqsxlzuhyoy7dxkowesrrpke6ktla74d5ji"
+        "bafyreigq76lzwzf5ewak4jynoaze2vmdxkmihkfojlxpkroq5mc3w7msly"
     ),
     baseline_entry!(
         gents_protocol::schemas::COMPACTION_ENTRY_NAME,
