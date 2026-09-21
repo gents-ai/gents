@@ -206,6 +206,24 @@ impl PackArchive {
         })
     }
 
+    /// Reads a pack directory that is not part of this build: an
+    /// out-of-tree pack, in the working copy where it is being authored or
+    /// wherever it was unpacked.
+    ///
+    /// The directory is packed and read straight back, so a pack installed
+    /// from a path is admitted by exactly the rules a downloaded one is,
+    /// carries exactly the assets its manifest declares, and has the digest
+    /// `gents pack build` would have given it. That is the whole point of
+    /// going through the container rather than reading the directory
+    /// directly: a local pack cannot be a pack that only passes because it
+    /// came from a trusted place, and the route it took cannot change what
+    /// it is. Packs are small by this module's own bounds, so the round trip
+    /// costs a fraction of a second.
+    pub fn read_dir(dir: &Path) -> Result<Self> {
+        let (bytes, _) = pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
+        Self::from_bytes(&bytes).with_context(|| format!("reading {}", dir.display()))
+    }
+
     pub fn manifest(&self) -> &PackManifest {
         &self.manifest
     }
@@ -436,6 +454,60 @@ mod tests {
             bundled.digest,
             "a pack installed from a registry must be the same pack as the one compiled in"
         );
+    }
+
+    #[test]
+    fn a_pack_read_from_a_directory_is_the_same_pack() {
+        let (_guard, root) = bundled_pack_dir("mailbox");
+        let local = PackArchive::read_dir(&root).expect("reading a pack directory");
+        let bundled = crate::pack::resolve_pack("mailbox").expect("a bundled pack");
+        assert_eq!(
+            local.digest().expect("local digest"),
+            bundled.digest,
+            "a pack installed from a path must be the same pack as the one compiled in"
+        );
+        for path in declared_paths(&bundled.manifest) {
+            assert_eq!(
+                local.asset(&path).expect("local asset"),
+                bundled.asset(&path).expect("bundled asset"),
+                "{path} differs"
+            );
+        }
+    }
+
+    #[test]
+    fn a_directory_pack_carries_only_what_its_manifest_declares() {
+        let (_guard, root) = bundled_pack_dir("mailbox");
+        std::fs::write(root.join("undeclared.json"), b"{}").expect("write");
+        let local = PackArchive::read_dir(&root).expect("reading a pack directory");
+        assert!(
+            local.asset("undeclared.json").is_err(),
+            "a file beside the pack that the manifest does not declare must not travel"
+        );
+    }
+
+    #[test]
+    fn a_directory_missing_a_declared_asset_is_refused_by_name() {
+        let (_guard, root) = bundled_pack_dir("mailbox");
+        let manifest = crate::pack::resolve_pack("mailbox")
+            .expect("a bundled pack")
+            .manifest;
+        let declared = manifest
+            .metadata
+            .assets
+            .first()
+            .expect("mailbox declares assets");
+        std::fs::remove_file(root.join(declared)).expect("remove");
+        let error = PackArchive::read_dir(&root)
+            .expect_err("a pack missing a declared asset is not a pack")
+            .to_string();
+        assert!(error.contains(&root.display().to_string()), "{error}");
+    }
+
+    #[test]
+    fn a_directory_without_a_manifest_is_not_a_pack() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(PackArchive::read_dir(dir.path()).is_err());
     }
 
     #[test]

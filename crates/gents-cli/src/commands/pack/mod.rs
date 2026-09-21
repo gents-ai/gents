@@ -1,6 +1,7 @@
 //! One package-facing CLI; install writes stay with their existing owners.
 mod build;
 mod cli_process;
+mod local;
 pub(crate) mod registry;
 mod scenario;
 mod secscan;
@@ -47,9 +48,17 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
             crate::print_json(&json!({"packs":entries}))
         }
         PackCommand::Show(args) => {
-            let pack = resolve_pack(&args.package)?;
+            // A pack under a path is inspectable before it is installed and
+            // before it is published, which is when an author most wants to
+            // see what their manifest actually declares. Bundled lookup is
+            // unchanged, and no registry call is made: showing a pack must
+            // not reach the network for a name that is simply misspelled.
+            let pack = match local::local_pack_argument(&args.package) {
+                Some(path) => PackSource::Local(local::load(&path)?),
+                None => PackSource::Bundled(resolve_pack(&args.package)?),
+            };
             let dependency_origins = pack
-                .manifest
+                .manifest()
                 .metadata
                 .dependencies
                 .iter()
@@ -61,10 +70,11 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
                 })
                 .collect::<Result<Vec<_>>>()?;
             crate::print_json(&json!({
-                "origin_tag": gents::pack::pack_origin_tag(&pack.manifest.name)?,
+                "origin_tag": gents::pack::pack_origin_tag(&pack.manifest().name)?,
                 "dependency_origins": dependency_origins,
-                "manifest": pack.manifest,
-                "digest": pack.digest,
+                "manifest": pack.manifest(),
+                "digest": pack.digest(),
+                "source": pack.describe(),
             }))
         }
         PackCommand::Install(args) => install(args).await,
@@ -79,12 +89,13 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
     }
 }
 
-/// A pack, wherever it came from: compiled into this binary, or downloaded
-/// from the registry and verified. Everything past resolution (materialize,
-/// cache, install) works the same either way, so it is written once against
-/// this instead of twice against `ResolvedPack` and a registry type.
+/// A pack, wherever it came from: compiled into this binary, read from a
+/// path, or downloaded from the registry and verified. Everything past
+/// resolution (materialize, cache, install) works the same whichever way it
+/// arrived, so it is written once against this instead of three times.
 enum PackSource {
     Bundled(ResolvedPack),
+    Local(local::LocalPack),
     Registry(registry::RegistryPack),
 }
 
@@ -92,6 +103,7 @@ impl PackSource {
     fn manifest(&self) -> &PackManifest {
         match self {
             Self::Bundled(pack) => &pack.manifest,
+            Self::Local(pack) => pack.archive.manifest(),
             Self::Registry(pack) => pack.archive.manifest(),
         }
     }
@@ -101,6 +113,7 @@ impl PackSource {
     fn digest(&self) -> &str {
         match self {
             Self::Bundled(pack) => &pack.digest,
+            Self::Local(pack) => &pack.digest,
             Self::Registry(pack) => &pack.digest,
         }
     }
@@ -108,6 +121,7 @@ impl PackSource {
     fn asset(&self, path: &str) -> Result<&[u8]> {
         match self {
             Self::Bundled(pack) => pack.asset(path),
+            Self::Local(pack) => pack.archive.asset(path),
             Self::Registry(pack) => pack.archive.asset(path),
         }
     }
@@ -115,15 +129,17 @@ impl PackSource {
     fn label(&self) -> &'static str {
         match self {
             Self::Bundled(_) => "bundled",
+            Self::Local(_) => "local",
             Self::Registry(_) => "registry",
         }
     }
 
-    /// A human-readable resolution note: which coordinate on the registry
-    /// this pack came from, when it did.
+    /// A human-readable resolution note: which path or registry coordinate
+    /// this pack came from, when it came from one.
     fn describe(&self) -> String {
         match self {
             Self::Bundled(_) => self.label().to_owned(),
+            Self::Local(pack) => format!("{} ({})", self.label(), pack.path.display()),
             Self::Registry(pack) => format!(
                 "{} ({}/{}@{})",
                 self.label(),
@@ -142,11 +158,19 @@ pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
     gents::pack_registry::split_pack_coordinate(name)
 }
 
-/// Resolves a pack compiled into this binary first; only when that fails
-/// does it fall back to the registry, downloading, verifying, and caching
-/// the result. Both failures are reported together so a real problem with
-/// the bundled lookup is never masked by a registry error.
+/// Resolves what the operator named.
+///
+/// A path is read from disk and nothing else is tried: someone who typed a
+/// path meant that path, and quietly reaching for a registry pack of a
+/// similar name would install something they did not ask for. Otherwise a
+/// pack compiled into this binary wins, and only when that fails does this
+/// fall back to the registry, downloading, verifying, and caching the
+/// result. Both failures are reported together so a real problem with the
+/// bundled lookup is never masked by a registry error.
 async fn resolve_pack_source(name: &str, registry_override: Option<&str>) -> Result<PackSource> {
+    if let Some(path) = local::local_pack_argument(name) {
+        return Ok(PackSource::Local(local::load(&path)?));
+    }
     match resolve_pack(name) {
         Ok(pack) => Ok(PackSource::Bundled(pack)),
         Err(bundled_error) => {
@@ -301,7 +325,14 @@ fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::pa
 }
 
 fn prune(args: PackPruneArgs) -> Result<()> {
-    let pack = PackSource::Bundled(resolve_pack(&args.package)?);
+    // Pruning is about one pack's asset cache, and the cache is keyed by the
+    // pack's name and digest whichever way it arrived. A pack installed from
+    // a path is pruned by naming that same path, so the version that is
+    // current is the one that survives; there is no bundled copy to ask.
+    let pack = match local::local_pack_argument(&args.package) {
+        Some(path) => PackSource::Local(local::load(&path)?),
+        None => PackSource::Bundled(resolve_pack(&args.package)?),
+    };
     anyhow::ensure!(
         pack.manifest().metadata.kind == PackKind::Assets
             || pack
@@ -363,9 +394,10 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             );
             anyhow::ensure!(
                 matches!(pack, PackSource::Bundled(_)),
-                "{} is a graph pack; only a graph pack compiled into this binary can be \
-                 installed today, so it cannot be installed from the registry yet",
-                args.package
+                "{} is a graph pack resolved from {}; only a graph pack compiled into this \
+                 binary can be installed today",
+                args.package,
+                pack.describe()
             );
             super::graph::install(args, true).await
         }
@@ -405,7 +437,15 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                 .metadata
                 .dependencies
                 .iter()
-                .map(|name| resolve_pack(name))
+                .map(|name| {
+                    resolve_pack(name).with_context(|| {
+                        format!(
+                            "pack {} depends on {name}, and a dependency has to be compiled \
+                             into this binary",
+                            pack.manifest().name
+                        )
+                    })
+                })
                 .collect::<Result<Vec<_>>>()?;
             for dependency in &dependencies {
                 anyhow::ensure!(
@@ -796,6 +836,85 @@ mod tests {
             message.contains("definitely_not_a_bundled_pack"),
             "{message}"
         );
+    }
+
+    /// Writes a bundled pack out as an ordinary directory: the closest thing
+    /// to a pack authored outside this repository that a test can build
+    /// without inventing a fixture that drifts from what a pack looks like.
+    fn pack_as_a_directory(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        materialize(&PackSource::Bundled(resolve_pack(name).unwrap()), &root).unwrap();
+        (dir, root)
+    }
+
+    #[tokio::test]
+    async fn a_pack_under_a_path_resolves_without_a_registry() {
+        let (_guard, root) = pack_as_a_directory("mailbox");
+        let source = resolve_pack_source(root.to_str().unwrap(), Some("http://127.0.0.1:1"))
+            .await
+            .expect("a pack directory must resolve from the path alone");
+        assert!(matches!(source, PackSource::Local(_)));
+        assert_eq!(source.label(), "local");
+        assert_eq!(source.manifest().name, "mailbox");
+        assert_eq!(
+            source.digest(),
+            resolve_pack("mailbox").unwrap().digest,
+            "a pack installed from a path is the same pack as the one compiled in"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_built_archive_resolves_from_its_path() {
+        let (guard, root) = pack_as_a_directory("mailbox");
+        let (bytes, _) = gents::pack_archive::pack_dir(&root).unwrap();
+        let archive = guard.path().join("mailbox-0.1.0.tar.gz");
+        std::fs::write(&archive, bytes).unwrap();
+        let source = resolve_pack_source(archive.to_str().unwrap(), Some("http://127.0.0.1:1"))
+            .await
+            .expect("a built pack must install from the file it was built into");
+        assert!(matches!(source, PackSource::Local(_)));
+        assert_eq!(source.digest(), resolve_pack("mailbox").unwrap().digest);
+    }
+
+    /// A mistyped path must be reported as the path it is. Falling through to
+    /// the registry would turn it into a lookup for a coordinate the operator
+    /// never named, and could install something else entirely.
+    #[tokio::test]
+    async fn a_path_that_names_nothing_never_reaches_the_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("absent_pack");
+        let result =
+            resolve_pack_source(missing.to_str().unwrap(), Some("http://127.0.0.1:1")).await;
+        let Err(error) = result else {
+            panic!("nothing is at that path");
+        };
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(&missing.display().to_string()),
+            "{message}"
+        );
+        assert!(!message.contains("registry"), "{message}");
+    }
+
+    /// The point of the whole change: a pack that was never part of this
+    /// build produces the same installable configuration as one that was.
+    #[test]
+    fn a_document_pack_under_a_path_materializes_a_valid_configuration() {
+        let (_guard, root) = pack_as_a_directory("pipeline");
+        let pack = local::load(&root).unwrap();
+        let config = gents::pack::load_pack_config(
+            pack.archive.manifest(),
+            &gents::pack::PackInstallOptions {
+                agent_did: "did:key:zLocalPackValidationOwner".into(),
+            },
+            &|path| pack.archive.asset(path).map(Vec::from),
+            &|_| None,
+        )
+        .unwrap_or_else(|error| panic!("{error:#}"));
+        gents::config_client::DesiredStateApplyPlan::from_pack_config(&config)
+            .unwrap_or_else(|error| panic!("{error:#}"));
     }
 
     #[test]
