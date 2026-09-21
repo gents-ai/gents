@@ -211,6 +211,10 @@ The table is versioned as `taxonomy_version`, frozen in each run's `origin`, and
   and may carry feedback. A model-authored check can never move a decision.
 - Each case declares a reducer over its acceptance checks: `weighted_mean` (the default; partial
   credit buys statistical power), `all` (1 only when every check passes), or `last_stage`.
+  `all` decides by evidence class, never by comparing a score with 10000: a Fail verdict that
+  carries a full score does not pass, and a Pass with partial credit does.
+- A check with weight 0 is disabled for scoring. It is excluded before classification and before
+  every reducer. A case whose acceptance checks all have weight 0 scores Unknown, never 0.
 - A case-trial takes the class of its worst acceptance verdict: NotEvidence if any verdict is
   NotEvidence; otherwise Unknown if any is Unknown; otherwise it is scored.
 - A case's score is the mean over its evidence trials. A run's headline is the mean over cases,
