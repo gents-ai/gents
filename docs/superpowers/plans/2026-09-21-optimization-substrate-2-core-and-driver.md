@@ -1,5 +1,9 @@
 # Optimization Substrate, Plan 2 of 3: Core and Driver Implementation Plan
 
+> **Superseded on 2026-09-21.** See `specs/2026-09-21-optimization-on-eval-design.md` section 10.
+> `target.rs` and the journal mechanics carry over; the policy, the evaluator seam, the journal
+> vocabulary and the driver do not. Do not execute this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the pure policy core, the evaluator and proposer seams, the local-only `OptimizationJob` record, and the round driver, proven end to end against an embedded node with scripted doubles and no model.

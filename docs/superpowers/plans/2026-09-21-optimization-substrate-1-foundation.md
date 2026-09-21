@@ -1,5 +1,10 @@
 # Optimization Substrate, Plan 1 of 3: Foundation Implementation Plan
 
+> **Status after the 2026-09-21 redesign.** PR 1 Task 1 (`publishIf`) and PR 3 (the Rust
+> compare-and-set) are valid and can start now. PR 1 Task 2 (`Proofs/Optimization.lean`) and PR 2
+> (conformance) are partly valid: the two integer gates and their generated cases are restated in
+> `specs/2026-09-21-optimization-on-eval-design.md` section 8, so re-plan those tasks from that spec.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Land the Lean model, the generated conformance cases, and the Rust digest-precondition (compare-and-set) that the optimization substrate is built on.

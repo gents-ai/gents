@@ -1,5 +1,8 @@
 # Optimization Substrate, Plan 3 of 3: Promotion and Live Demo Implementation Plan
 
+> **Superseded on 2026-09-21.** See `specs/2026-09-21-optimization-on-eval-design.md` section 10.
+> `promote`, `show` and the CLI carry over and gain `revert`; PR 7 is deleted. Do not execute this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add the digest-guarded, operator-only promotion with its CLI, then a throwaway live evaluator that demonstrates one accepted and one rejected candidate against the existing monitor eval harness, plus an A/A calibration run.

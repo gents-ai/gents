@@ -1,5 +1,9 @@
 # Optimization substrate design (issue #1455)
 
+> **Superseded on 2026-09-21** by `2026-09-21-optimization-on-eval-design.md`, under the umbrella
+> `2026-09-21-eval-and-optimization-umbrella.md`. This spec assumed #1515 was owned elsewhere and hid
+> evaluation behind an `Evaluator` trait. Kept for the record of how the design got here.
+
 Status: design, approved section by section on 2026-09-21. Baseline: `main` at `0deb7659c`.
 
 ## Goal
