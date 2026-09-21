@@ -1,8 +1,30 @@
 # Eval runner design (issue #1515, sub-project 2a)
 
-Status: **DRAFT, brainstorm in progress (2026-09-21).** Sections 1 and 2 are approved. Section 3 is presented and awaits approval.
-Section 4 is not yet written. Baseline: `main` at `0deb7659c`.
-Umbrella: `2026-09-21-eval-and-optimization-umbrella.md`. Contract: `2026-09-21-eval-core-contract-design.md`.
+Status: **DRAFT, brainstorm in progress (2026-09-21).** Sections 1 and 2 are approved. Section 3 is
+presented and awaits approval. Section 4 is not yet written. Baseline: `main` at `0deb7659c`.
+
+## What this spec is
+
+This is spec 2 in the umbrella's plan index: the design for milestone **M2, "Runner MVP"**. The
+umbrella (`2026-09-21-eval-and-optimization-umbrella.md`, section 6) fixes M2's deliverable:
+
+> `TrialExecutor` and the scripted executor; run freezing; one fresh embedded home per case-trial;
+> subject pack install onto the trial DID; stage requests; the write-once completion; verdict
+> writing; NotEvidence retries; resume by attempt; the canary test. Needs M1, a minimal M3.
+
+The module it designs is `gents::eval::runner` (umbrella section 4). It consumes the documents and
+vocabulary of spec 1 (`2026-09-21-eval-core-contract-design.md`, milestone M1, being built now) and
+is consumed by M4 (`gents eval run | cancel | invalidate`), by M6b (the optimization driver calls
+`run` twice per round) and by spec 2b (a process-per-trial executor behind the same seam).
+
+Each section below names the part of M2's deliverable it designs.
+
+| Section | M2 deliverable | Downstream milestone it serves |
+|---|---|---|
+| 1. Shape and the seam | `TrialExecutor`, the scripted executor, the module layout | M6b's scripted matrix; spec 2b |
+| 2. The trial lifecycle | one fresh embedded home per case-trial; pack install onto the trial DID; stage requests; evidence capture | M3's monitor cases run through it; #1515's file evidence and retention |
+| 3. The run loop | run freezing; the write-once completion; verdict writing; NotEvidence retries; resume by attempt | M6b's driver; M4's `cancel` and `invalidate` |
+| 4. Testing and phasing | the canary test; the PR stack | the M2 implementation plan |
 
 ## Decisions taken so far
 
@@ -62,6 +84,8 @@ monitor inside the trial. M3 creates the golden subject and chooses its tool cei
 
 ## Section 1: shape and the seam (approved)
 
+*Implements: M2's `TrialExecutor` and scripted executor; the layout of `gents::eval::runner`.*
+
 The runner is a library under `crates/gents/src/eval/runner/`. It holds no state of its own.
 Everything it knows is in the launching home's documents.
 
@@ -112,6 +136,8 @@ attempt wins; abandoned attempts are `infrastructure`" becomes a conformance cas
 `grade.rs`, not a new proof.
 
 ## Section 2: the trial lifecycle inside `EmbeddedExecutor` (approved)
+
+*Implements: M2's one fresh embedded home per case-trial, subject pack install onto the trial DID, stage requests, and evidence capture; #1515's file-evidence references and retention.*
 
 One trial is one call to `execute(spec)`. It runs these steps in order. Every failure in steps 1 to 3
 returns evidence with `failure_kind: infrastructure` and no stages; nothing panics and nothing is
@@ -176,6 +202,8 @@ duplicated and `make live-configurator-eval` keeps working. The `tests/` copies 
 same PR.
 
 ## Section 3: the run loop (awaiting approval)
+
+*Implements: M2's run freezing, write-once completion, verdict writing, NotEvidence retries, and resume by attempt. The API M6b's driver and M4's `cancel`/`invalidate` call.*
 
 `run(access, request, executor, cancel) -> RunOutcome` and `resume(access, run_id, executor,
 cancel) -> RunOutcome`. Both are one async call in the caller's process. `RunOutcome` is counts
