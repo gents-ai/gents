@@ -57,10 +57,14 @@ Throwaway and test code lives in `crates/gents/tests/`: `ScriptedEvaluator`, `Sc
 
 ```rust
 #[async_trait]
-pub trait Evaluator {
+pub trait Evaluator: Send + Sync {
+    async fn provenance(&self) -> Result<String>;
     async fn evaluate(&self, request: EvalRequest) -> Result<EvalReport>;
 }
 ```
+
+`provenance()` is read once at freeze. Every report repeats it, and the driver fails the job as
+`evaluator_changed` when a report disagrees with the frozen value.
 
 `EvalRequest`:
 
@@ -69,8 +73,8 @@ pub trait Evaluator {
   frozen closure with the patch applied.
 - `split`: an opaque `SplitId` of `Train`, `Validation` or `HeldOut`. The evaluator owns which cases
   belong to each split. The substrate never sees case contents.
-- `trials`: the trial count per case.
-- `budget` and `deadline`.
+- `trials`: the trial count per case, and a `trial_offset` so re-runs append instead of colliding.
+- an optional deadline.
 
 `EvalReport`:
 
@@ -134,8 +138,8 @@ new version, never an edit. `Decision` is `Accept`, `Reject(reason)` or `Inconcl
 
 The decision is three ordered gates. The first failing gate decides.
 
-1. **Sufficiency, otherwise `Inconclusive`.** Both arms have the same cases. Each case has at least
-   `min_trials` evidence outcomes per arm. The `NotEvidence` fraction per arm is at most
+1. **Sufficiency, otherwise `Inconclusive`.** Both arms have the same cases, and each case has the
+   same number of trials in both arms. Each case has at least `min_trials` evidence outcomes per arm. The `NotEvidence` fraction per arm is at most
    `max_not_evidence`. The gap in `NotEvidence` between arms is at most `max_asymmetry`, so a
    candidate that breaks the harness more often cannot win by exclusion.
 2. **Per-case non-regression, otherwise `Reject(case_regression)`.** For every case, the candidate's
@@ -153,7 +157,9 @@ once on `HeldOut` at finalization, comparing the retained checkpoint against the
 A gate 2 failure there ends the job as `Failed(held_out_regression)`. A gate 1 failure ends it as
 `Failed(held_out_inconclusive)`: the held-out split is evaluated once and is never re-run.
 
-`alpha`, `min_effect`, `min_trials` and the caps are parameters. Their defaults are placeholders
+All fractions are integer basis points and the significance level is parts per million, so Lean and
+Rust compute the two integer gates identically. `alpha`, `min_effect`, `min_trials` and the caps are
+parameters. Their defaults are placeholders
 marked uncalibrated until the A/A calibration run sets them.
 
 ## 5. The job record
@@ -163,24 +169,31 @@ an action journal on a single document.
 
 - `origin`, frozen at creation and never rewritten: the target (`collection`, `id`, `TargetField`);
   the baseline closure as `(collection, owner, id, digest)` entries from
-  `desired_state_document_digest`; the `PolicyV1` params; the evaluator provenance digest; trial
+  `desired_state_document_digest`. The closure is the owner's full desired configuration, read
+  through `ConfigReferences::load_in_txn`. That is a safe superset of the documents the target
+  reaches, and the repository has no generic reference walker to narrow it; the `PolicyV1` params; the evaluator provenance digest; trial
   counts; budgets (`max_rounds`, total trials, tokens, a wall-clock deadline); the owner DID.
 - `journal`, append-only. Each append is a transaction that checks the expected journal length.
 - `state`, a summary derived from the last journal entry. It is not named `lifecycle_state`.
 
-The collection is local-only and non-replicated, because the journal contains candidate prompts.
+The collection is local-only and non-replicated, because the journal contains candidate prompts. It
+is listed in `LOCAL_AUDIT_COLLECTION_NAMES`, stays out of the `Collection` enum (it is a runtime
+document, not configuration), and stays out of every P2P collection list.
 Empty lists are written as `null`, per the repository rule.
 
 `TargetField` allows exactly `AgentContext.system_prompt` and `Task.prompt_template`.
 
 ### Journal entries
 
-`Frozen`, `BaselineEvaluated`, `Proposed`, `StructuralReject`, `Evaluated`, `Rerun`, `Decided`,
-`Interrupted`, `BudgetExhausted`, `HeldOutConfirmed`, `Finalized`, `Promoted`, `PromotionRefused`.
+`Frozen`, `EvaluationStarted`, `Evaluated`, `Interrupted`, `Proposed`, `StructuralReject`, `Decided`,
+`BudgetExhausted`, `Finalized`, `Promoted`, `PromotionRefused`.
 
-Each `Evaluated` entry stores per-case counts by outcome class for both arms, plus the opaque
-`evidence_ref`s and resource use. Those counts are exactly the input to `policy::decide`, so every
-decision is recomputable from the journal alone.
+`EvaluationStarted` is written before every evaluator call, so an unmatched one identifies an
+interrupted evaluation. `Evaluated` records one arm on one split: per-case tallies, opaque
+`evidence_ref`s and resource use. A re-run is further `Evaluated` entries followed by another
+`Decided` with a higher `attempt`. Each `Decided` entry, including the held-out confirmation, stores
+the two merged tallies it judged. Those are exactly the input to `policy::decide`, so every decision
+is recomputable from the journal alone. Feedback text is never journaled.
 
 ## 6. The driver state machine
 
@@ -192,6 +205,11 @@ Frozen -> BaselineEvaluated
 ReadyToPromote -> Promoted | Stale      (only through promote)
 ```
 
+- **Train evidence.** Each round first evaluates the current checkpoint on `Train`. Those outcomes,
+  with their feedback, are the proposer's evidence. They are held in memory only, so a resumed round
+  evaluates `Train` again.
+- **Baseline drift.** On every start the driver re-reads the closure. If its digests differ from
+  `origin`, the job ends as `Failed(baseline_drifted)` before any further evaluation spend.
 - **Retained checkpoint.** It starts as the baseline. An `Accept` replaces it. Later rounds patch the
   checkpoint and compare against it. The job returns the retained checkpoint, never the best
   candidate it ever saw.
@@ -247,11 +265,17 @@ Theorems, without `sorry`: a stale expectation leaves state unchanged; a matchin
 preservation, all-or-nothing and idempotence carry over. Digest equality stands in for field equality
 at the refinement boundary, and the proof map says so.
 
-New `Proofs/Optimization.lean` models the policy's decision structure and the job journal. The
-improvement test is an abstract predicate assumed monotone. It proves totality over all class
-combinations, that an `Unknown` is never a pass, monotonicity (turning any candidate outcome into
-`Fail` or `Unknown` never flips a decision to `Accept`), that the journal is append-only, and that
-rounds are bounded by `max_rounds`.
+New `Proofs/Optimization.lean` models imputation, the two integer gates, the ordered decision and the
+job journal. The improvement test is an abstract `Bool`. It proves that a candidate `Unknown` is
+never a pass and is treated exactly like `Fail`, that a candidate `Pass` is the best outcome a trial
+can have, that `Accept` holds exactly when every consulted gate holds, that weakening any gate never
+produces an `Accept`, that the length-guarded journal append preserves every prefix, and that rounds
+are bounded by `max_rounds`. Lean functions are total, so totality needs no theorem.
+
+An earlier draft of this spec claimed that turning any candidate outcome into `Fail` never produces
+an `Accept`. That is false: turning a `NotEvidence` into a `Fail` adds evidence and can lift a job
+from `Inconclusive` to `Accept`, which is correct behavior. The true statement is about replacing a
+`Pass`. Its numeric form over the concrete gates is checked by a Rust property test, not in Lean.
 
 ### Rust
 
@@ -261,8 +285,9 @@ rounds are bounded by `max_rounds`.
   write. A mismatch returns a typed `StaleExpectation { drifted }`. Transaction closures already
   re-run on conflict retry, so the check re-runs with them.
 - The `#[cfg(test)]` `verify_existing_desired_state_plan` is generalized into this precondition.
-- `cleanup remove --digest` moves onto the same path if its shape fits, so there is one
-  compare-and-set implementation. The plan stage verifies the fit before committing to it.
+- `cleanup remove --digest` stays as it is. It is already a compare-and-set inside one transaction,
+  but its contract is a single combined digest over the whole target set, which does not fit
+  per-document expectations without changing that contract.
 
 ### What promote checks and writes
 
@@ -336,8 +361,15 @@ Stacked PRs, each targeting its parent, in the repository's Lean, conformance, R
 | 4 | Pure core: `outcome`, `policy`, `target`, the two traits. Independent of PR 3 | unit, conformance |
 | 5 | `OptimizationJob` schema and document, journal, driver, scripted doubles, the matrix except promote | end-to-end |
 | 6 | `promote`, CLI `show` and `promote`, the stale, unauthorized and tool-surface tests | end-to-end, CLI suite |
-| 7 | Throwaway: `HarnessEvaluator`, the live demo target, the A/A calibration | live run, manual |
+| 7 | Throwaway: a golden monitor fixture, `HarnessEvaluator`, the live demo target, the A/A calibration | live run, manual |
 | 8 | LLM proposer and sanitized evidence projection | detailed when reached |
+
+PR 7 caveats. The existing monitor suites have the configurator model author the monitor inside each
+trial, so no fixed baseline exists; PR 7 captures one as a fixture and re-homes it onto each trial
+node's owner DID. Its three splits reuse the same two chained monitor cases, so its held-out split is
+not independent. That is acceptable for a demo and is the eval-supply gap #1515 owns.
+
+Implementation plans: `docs/superpowers/plans/2026-09-21-optimization-substrate-{1-foundation,2-core-and-driver,3-promotion-and-live-demo}.md`.
 
 PR 8 constraints already fixed by this spec: the proposer runs as an ordinary `AgentRequest` on a
 dedicated behavior with no write grants; its evidence is a bounded projection over `InferenceCall`
@@ -348,12 +380,16 @@ PRs 1 and 2; the CLI suite for PR 6.
 
 ## 10. Known limitations and open questions
 
-- **P2P replication.** If config documents replicate between paired devices, a local-transaction
-  compare-and-set does not fence a merge that arrives after commit. This needs an answer from the
-  DefraDB side. The local-only job record is unaffected.
-- **Live sessions.** When a running session picks up a changed `AgentContext.system_prompt` is
-  existing behavior that this design has not verified. The plan stage checks it, because it defines
-  what promotion means to a running agent.
+- **P2P replication, resolved during planning.** Config collections replicate from the runtime to
+  paired clients (`CLIENT_COLLECTIONS`), but the client-to-runtime leg
+  (`CLIENT_TO_RUNTIME_COLLECTIONS`) carries no configuration. A paired device therefore cannot merge
+  a config edit in after a promote commits. A second runtime for the same principal could, and the
+  repository's convention of one active runtime per principal excludes it.
+- **Live sessions, resolved during planning.** `system_prompt` is not re-read per request. A control
+  watcher re-resolves configuration on document changes with a 5 second debounce and swaps the
+  behavior's in-memory slot. A promoted prompt reaches requests claimed after that reconcile.
+- **`pack install --digest`, observed, out of scope.** It compares its artifact digest outside the
+  write transaction, so live drift between the check and the install is not detected.
 - **Statistical power.** Reviewers estimate that ten trials per arm at temperature 1 cannot support a
   decision. The A/A calibration decides whether any `PolicyV1` defaults are defensible on today's
   cases. If they are not, the remedy is more independent cases, which is evaluation work.
