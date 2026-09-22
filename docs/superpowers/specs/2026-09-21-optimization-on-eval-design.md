@@ -241,3 +241,14 @@ was not already there.
 
 - The pure half (Lean model, conformance, `PolicyV2`): `plans/2026-09-21-optimization-policy-and-lean.md`.
 - The job record, driver, `promote`, `show` and `revert` wait for the eval runner's API (eval spec 2).
+
+## Amendments at planning (2026-09-22)
+
+- The v1 target field is exactly `AgentContext.system_prompt`; `Task.prompt_template` as a target is
+  deferred, with its placeholder-set check.
+- The subject pack is operator-supplied; freeze cross-checks that the pack's context `system_prompt`
+  equals the live closure's text and refuses otherwise.
+- Verdict projection (latest attempt per slot, `VerdictRecord → VerdictView`, paired evidence, token
+  totals) lives in `gents::eval::report`, shared by the optimizer and by M4's reports.
+- `gents optimization show | promote | revert` are delivered by M4 (spec 4a) over library functions.
+- Job directories live under `<launching home>/eval/jobs/<job_id>/`; retention is M4's `rm`.
