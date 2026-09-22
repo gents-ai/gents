@@ -24,7 +24,10 @@ drafting. Lean, scoring, runner logic, fix rounds that follow a ruling, and ever
    Foreground commands only: never background a command, never `sleep`, never poll. Long output goes to
    a log file that is then grepped.
 3. **Git.** Commit with `git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com"`.
-   End every commit message with `Co-Authored-By: <the implementing model> <noreply@anthropic.com>`.
+   End every commit message with `Co-Authored-By: <the implementing model> <noreply@anthropic.com>`
+   for a Claude model, and `Co-Authored-By: Grok 4.7 <noreply@x.ai>` for Grok. (Correction 2026-09-22:
+   commits made under the earlier wording carry `Grok 4.7 <noreply@anthropic.com>`; they are rewritten
+   with `git rebase -x` before any push, since nothing is pushed.)
    Never push, never open a PR, never change git config. Worktrees are created with
    `make worktree BRANCH=<branch> DIR=<dir> BASE=<ref>` from the main checkout.
 4. **Repo gates.** `cargo fmt --all --check` is CI. Lean imports are narrow: never `import Mathlib` or
@@ -74,3 +77,13 @@ Filled in by the orchestrator at spin-up.
   implementation task, brief file as the whole interface, and records the fallback in its ledger.
   Reviews stay on Opus when it answers; a task that landed under a Grok-only review gets an Opus
   re-review before the final whole-branch review. The final whole-branch review waits for Opus.
+
+## Completion log
+
+- `m3` complete 2026-09-22: branch `eval/30-monitor-prework` @ `c44cab2c5`, 10 commits, base
+  `eval/03-definition` @ `2629d4a11`. Pack `1e79b6d73`; cases in six axis commits plus `edbe5d1a2`;
+  inventory `3274f49f9` + `c44cab2c5`. `cargo test -p gents --lib pack` 72/72. 22 rulings in its ledger
+  (`gents-eval-definition-monitor/.superpowers/sdd/m3-prework/progress.md`). Not covered by tests:
+  ConfigReferences resolution, EventSource::validate, tool-snapshot build, MiniJinja strict render.
+  Open items for spec 3a: case container layout; capture `fields` union (`_docID`, `title`, `summary`,
+  `payload`); `StageInput::Document`; keyword-matcher brittleness class.
