@@ -203,7 +203,7 @@ under the one-active-runtime convention a local digest check is not bypassed by 
 ## 8. Lean
 
 `Proofs/Optimization.lean` keeps imputation (now the eval contract's kind-to-class projection),
-`decideGates` with its accept-iff and antitone theorems, and the length-guarded journal with bounded
+`decideGates` with its accept-iff and upward-monotone theorems (`accept_monotone`: accept is preserved when any gate flag turns true; it was misnamed `accept_antitone` in the first plan draft), and the length-guarded journal with bounded
 rounds. The two integer gates are restated over per-case basis-point differences. The improvement test
 stays an abstract `Bool`. `decideGates` gains the `cost_regression` reason inside gate 2. Conformance
 cases are regenerated accordingly. Numeric properties of the permutation test are checked by Rust

@@ -205,7 +205,7 @@ theorem inconclusive_iff (mode : Mode) (s r c i : Bool) :
   cases mode <;> cases s <;> cases r <;> cases c <;> cases i <;> decide
 
 /-- Weakening any gate never turns a non-accept into an accept. -/
-theorem accept_antitone (mode : Mode) (s r c i s' r' c' i' : Bool)
+theorem accept_monotone (mode : Mode) (s r c i s' r' c' i' : Bool)
     (hs : s' = true → s = true) (hr : r' = true → r = true)
     (hc : c' = true → c = true) (hi : i' = true → i = true)
     (h : decideGates mode s' r' c' i' = .accept) : decideGates mode s r c i = .accept := by
