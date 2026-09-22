@@ -705,7 +705,7 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
         recall_config.additional_params = Some(serde_json::json!({"seed": 7421}));
         let recalled: LiveCompactionRecall = crate::agent::loop_stream::run_loop_to_typed(
             model,
-            None,
+            None::<crate::hook::DefraSessionHook>,
             Message::user(
                 "Return the active case ID, pagination cursor contract, browser clamp, and \
                  immediate pending action from the checkpoint.",

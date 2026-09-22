@@ -15,13 +15,11 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_MAX_TURNS: usize = 250;
 pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
-/// Output budget for the internal compaction summary completion — independent
-/// of the user turn's `max_output_tokens` (#1017).
-pub const DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
-pub const MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
-/// Most file paths rendered per list in the formatted compaction summary.
-pub const DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 100;
-pub const MAX_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 1_000;
+// Moved to gents-loop (G-1): compaction's own default/clamp constants.
+pub use gents_loop::compaction::{
+    DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX, DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+    MAX_COMPACTION_SUMMARY_FILE_LIST_MAX, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+};
 /// Maximum provider-stream silence before treating the connection as dead.
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 1_800;
 /// Overall wall-clock budget for a claimed request. Long-running goals may

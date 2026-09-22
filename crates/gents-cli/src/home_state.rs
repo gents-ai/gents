@@ -9,7 +9,7 @@ use gents::identity::{
 };
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
-use crate::{DEFAULT_HTTP_PORT, INIT_CONFIG_FILE_NAME, RUNTIME_STATE_FILE_NAME};
+use crate::{DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME};
 
 pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
     explicit
@@ -24,16 +24,21 @@ fn default_home_dir() -> PathBuf {
         .join(".gents")
 }
 
+// default_data_dir, default_key_path, init_config_path, write_init_config,
+// and read_init_config now live in `gents::home` (moved so `gc-cell` can
+// write the same `init.json` shape from outside this binary); these are
+// thin delegations that keep every call site in this crate unchanged.
+
 pub(crate) fn default_data_dir(home_dir: &Path) -> PathBuf {
-    home_dir.join("data")
+    gents::home::default_data_dir(home_dir)
 }
 
 pub(crate) fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
-    home_dir.join("keys").join(format!("{agent_name}.key"))
+    gents::home::default_key_path(home_dir, agent_name)
 }
 
 pub(crate) fn init_config_path(home_dir: &Path) -> PathBuf {
-    home_dir.join(INIT_CONFIG_FILE_NAME)
+    gents::home::init_config_path(home_dir)
 }
 
 pub(crate) fn runtime_state_path(home_dir: &Path) -> PathBuf {
@@ -41,25 +46,11 @@ pub(crate) fn runtime_state_path(home_dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Result<()> {
-    fs::create_dir_all(home_dir)
-        .with_context(|| format!("creating home directory {}", home_dir.display()))?;
-    let path = init_config_path(home_dir);
-    let contents = serde_json::to_vec_pretty(state).context("encoding local init config JSON")?;
-    fs::write(&path, contents)
-        .with_context(|| format!("writing init config {}", path.display()))?;
-    Ok(())
+    gents::home::write_init_config(home_dir, state)
 }
 
 pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
-    let path = init_config_path(home_dir);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes =
-        fs::read(&path).with_context(|| format!("reading init config {}", path.display()))?;
-    let state = serde_json::from_slice(&bytes)
-        .with_context(|| format!("decoding init config {}", path.display()))?;
-    Ok(Some(state))
+    gents::home::read_init_config(home_dir)
 }
 
 /// Load and register the signer recorded by an initialized home.
