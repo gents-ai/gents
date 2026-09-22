@@ -56,7 +56,7 @@ Filled in by the orchestrator at spin-up.
 
 | Name | Commit |
 |---|---|
-| `eval/05-contract` pinned for M6a and M2 | `595fd8bc2` |
+| `eval/05-contract` pinned for M6a and M2 | `851db85d6` (was `595fd8bc2` before the M1 final-review rewrite) |
 | `eval/03-definition` for M3 | `2629d4a11` |
 
 ## Orchestrator rulings
