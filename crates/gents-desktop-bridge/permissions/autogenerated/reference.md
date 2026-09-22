@@ -1246,6 +1246,32 @@ Denies the desktop_open_db_explorer command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-open-external-url`
+
+</td>
+<td>
+
+Enables the desktop_open_external_url command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-open-external-url`
+
+</td>
+<td>
+
+Denies the desktop_open_external_url command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-operations-snapshot`
 
 </td>
@@ -2331,6 +2357,19 @@ Peer status (by saved id) and network status
 <td>
 
 Workspace browser
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:external-links`
+
+</td>
+<td>
+
+Open a web link in the person's own browser
 
 </td>
 </tr>
