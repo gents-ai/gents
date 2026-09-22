@@ -39,10 +39,10 @@ fn host_first_search_path(
     app_image: Option<&Path>,
 ) -> Option<OsString> {
     let entries: Vec<PathBuf> = std::env::split_paths(search?).collect();
-    let (packaged, host): (Vec<PathBuf>, Vec<PathBuf>) = entries
-        .iter()
-        .cloned()
-        .partition(|entry| inside_package_mount(entry, app_dir, app_image));
+    let (packaged, host): (Vec<PathBuf>, Vec<PathBuf>) =
+        entries.iter().cloned().partition(|entry| {
+            gents_server::native_service::inside_temporary_package(entry, app_dir, app_image)
+        });
     if packaged.is_empty() {
         return None;
     }
@@ -51,26 +51,6 @@ fn host_first_search_path(
         return None;
     }
     std::env::join_paths(reordered).ok()
-}
-
-/// Whether a path lives inside a package mount that exists only while the
-/// application that launched it runs.
-//
-// vertexia: the same rule as `inside_temporary_package` in the durable service
-// runtime change; give the two one owner once both have landed.
-fn inside_package_mount(path: &Path, app_dir: Option<&Path>, app_image: Option<&Path>) -> bool {
-    // An extracted AppRun also exports APPDIR. Only an active AppImage
-    // launcher (APPIMAGE present) makes that directory temporary.
-    if app_image.is_none() {
-        return false;
-    }
-    app_dir.is_some_and(|root| path.starts_with(root))
-        || path.components().any(|component| {
-            component
-                .as_os_str()
-                .to_string_lossy()
-                .starts_with(".mount_")
-        })
 }
 
 #[cfg(test)]
