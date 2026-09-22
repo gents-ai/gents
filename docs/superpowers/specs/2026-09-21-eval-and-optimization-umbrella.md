@@ -161,6 +161,11 @@ the LLM proposer and its evidence projection.
     to forbid duplicates in validation or key verdicts by ref index (M1 is frozen; M2 plan minor).
   - Captures are request-level in M2 (`RunRequest.captures`, persisted in `run.json`) because
     `EvalDefinition` has no case-level `capture` field yet; M3's field supersedes them (M2 ruling R18).
+  - For M4 (spec 4a): a report selects the LATEST attempt per `(cell, case, trial_index)` slot, never
+    "trials with a completion", because a NotEvidence attempt is completed and carries
+    `skipped_prerequisite` verdict rows at score 0. `RunOutcome.completed` includes NotEvidence
+    attempts and `not_evidence` is computed only on a planning pass (0 on the breaker and cancel
+    error paths); spec 4a settles the count semantics the CLI prints.
   - A second libp2p dial-timeout failure on this machine:
     `e2e_triggers::event_source_trigger_p2p_e2e::p2p_replicated_doc_fires_event_trigger`, same class
     as the r5 case. Filing is the user's call.
