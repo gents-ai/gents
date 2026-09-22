@@ -152,6 +152,10 @@ beside it, which is additive because `completion` is JSON.
 `home_hint` is a path relative to the launching home's root, so a moved home keeps a valid hint.
 `evidence_digest` is SHA-256 over the canonical JSON (sorted keys) of `stages`, `usage` and
 `anchor`, excluding `locator`, so the digest is the same wherever the home sits.
+*[execution amendment, M2]* It is a per-trial integrity anchor for regrades, not a cross-run
+identity: stage evidence carries request ids and timestamps, so two identical runs yield
+different digests by construction. Cross-run comparability rests on the `anchor` (terminal
+states, request and inference-call counts), which the canary pins across two identical runs.
 
 Because `execute` never fails, the error taxonomy stays in one place: the outcome vocabulary.
 
@@ -336,8 +340,8 @@ into `infrastructure` verdicts, because that would count the harness's fault aga
    `concurrency = 1`. This layer is what M6b's scripted matrix reuses.
 3. *The canary test* on `EmbeddedExecutor` with `MockStreamingBackend`: one real embedded trial
    home, a scripted model, one document fixture and one file fixture, two stages where the second
-   is skipped in the failing variant, a document capture and a file capture, a stable
-   `evidence_digest` across two identical runs, and the freeze-time refusals for `Unrestricted`
+   is skipped in the failing variant, a document capture and a file capture, a well-formed
+   `evidence_digest` per trial and equal `anchor`s across two identical runs *[amended, M2]*, and the freeze-time refusals for `Unrestricted`
    bash and an OAuth binding. The canary uses a hand-built `TrialSpec`, so it does not wait for
    M3's `capture` field on `EvalDefinition`.
 4. *A live smoke test*, ignored by default and gated by the same environment variables #1512 uses:
